@@ -15,14 +15,14 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
-    InstalledIdentity, InstalledRow, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest, MarkSpec,
-    OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest, RecordPoint, RecordRect,
-    RecordReopenOptions, RecordReviewRequest, RecordStartOptions, RecordStopOptions, RecordingHold,
-    RecordingLock, StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec,
-    parse_mark_request, record_archive, record_archive_copy, record_archive_warnings,
-    record_frames, record_hold_status, record_instance_check, record_mark, record_ready,
-    record_reopen, record_review, record_start, record_start_defaults, record_status, record_stop,
-    record_stop_close,
+    InstalledIdentity, InstalledRow, KeyRequest, KeySpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
+    MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest,
+    RecordPoint, RecordRect, RecordReopenOptions, RecordReviewRequest, RecordStartOptions,
+    RecordStopOptions, RecordingHold, RecordingLock, StepAction, StepActionKind,
+    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
+    record_archive_warnings, record_frames, record_hold_status, record_instance_check, record_mark,
+    record_ready, record_reopen, record_review, record_start, record_start_defaults, record_status,
+    record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -581,7 +581,7 @@ fn record_reads(action: &str) -> Option<&'static FlagReads> {
 /// Workflow #434 LAB-5B4: the switches of `record mark` (read with `record_flag_switch`), which
 /// take no value from the next word but `true` or `false` (`FlagArgs::parse_switches`); the
 /// register reads them (`cli_module::own_flags`).
-pub(crate) const RECORD_MARK_SWITCHES: [&str; 8] = [
+pub(crate) const RECORD_MARK_SWITCHES: [&str; 9] = [
     "--dry-run",
     "--replace-click",
     "--replace-transition",
@@ -591,6 +591,8 @@ pub(crate) const RECORD_MARK_SWITCHES: [&str; 8] = [
     "--no-anchor",
     // #463 R2.
     "--ending",
+    // #463 KR-1.
+    "--no-key",
 ];
 
 /// Workflow #434 LAB-5B4: the switch of `record stop` (read with `record_flag_switch`), as
@@ -3185,6 +3187,13 @@ pub(crate) const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--remove-inserted",
     // #463 S2-5: a box drawn on the step's primary frame by two opposite corners.
     "--box",
+    // #463 S2-8': the swipes before a press folded into its scrolling search, and unfolded.
+    "--fold-scan",
+    "--fold-first",
+    "--unfold-scan",
+    // #463 KR-1: the back key a step presses in place of a click, and taking it back.
+    "--key",
+    "--no-key",
 ];
 
 /// Workflow #434 LAB-5B2: the other flags `record mark` takes besides its shortcut flags: the
@@ -3671,6 +3680,17 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         (false, true) => Some(false),
         (false, false) => None,
     };
+    // #463 KR-1: `--key <word>` declares the step's key (the Lab refuses a word that is no key of
+    // its vocabulary, before anything is written), `--no-key` takes it back.
+    let key = match (
+        record_flag_value(flags, "--key")?,
+        record_flag_switch(flags, "--no-key")?,
+    ) {
+        (Some(_), true) => return Err(CliError::usage("give one of --key and --no-key")),
+        (Some(key), false) => Some(KeyRequest::Declare(KeySpec { key })),
+        (None, true) => Some(KeyRequest::TakeBack(false)),
+        (None, false) => None,
+    };
     let mut request = MarkRequest {
         schema_version: LAB_RECORD_MARK_SCHEMA.to_string(),
         step: number("--step")?,
@@ -3713,6 +3733,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         // #463 S2-6: a choice is marked, and its mark taken off, by the request form only, as a
         // select is declared.
         choice: None,
+        key,
     };
     // #463 R2: `--ending` makes `--frame`, `--sample`, `--page`, the marks (`--template`,
     // `--color`) and `--reuse` the ending's, with `--outcome-key`, as the request form's `ending`
@@ -3748,6 +3769,15 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         let Some(frame) = request.frame.take() else {
             return Err(CliError::usage("--optional-after needs --frame <png>"));
         };
+        // #463 KR-1: `--key` is the inserted step's, in place of its click; `--no-key` stays the
+        // request's own, which the Lab refuses beside it.
+        let key = match request.key.take() {
+            Some(KeyRequest::Declare(spec)) => Some(spec),
+            other => {
+                request.key = other;
+                None
+            }
+        };
         request.optional_after = Some(OptionalAfterSpec {
             step,
             frame,
@@ -3757,6 +3787,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             reuse: std::mem::take(&mut request.reuse),
             click: request.click.take(),
             settle_ms: request.optional_settle_ms.take(),
+            key,
         });
     }
     let timeout_ms = millis("--transition-timeout-ms")?;
@@ -3824,6 +3855,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             actions.push(StepAction {
                 kind,
                 step: Some(step),
+                first: None,
             });
         }
     }
@@ -3831,15 +3863,48 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         actions.push(StepAction {
             kind: StepActionKind::CloseStep,
             step: None,
+            first: None,
         });
     }
+    actions.extend(fold_actions(&number)?);
     if actions.len() > 1 {
         return Err(CliError::usage(
-            "give one of --drop-step, --reopen-step, --close-step and --to-transition",
+            "give one of --drop-step, --reopen-step, --close-step, --to-transition, --fold-scan \
+             and --unfold-scan",
         ));
     }
     request.step_action = actions.pop();
     Ok(request)
+}
+
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): `--fold-scan
+/// <b> --fold-first <a>`, the request form's step action `{"kind": "fold_scan", "step": b,
+/// "first": a}`, and `--unfold-scan <b>`, `{"kind": "unfold_scan", "step": b}`, read by `number`;
+/// `--fold-first` needs `--fold-scan` and the other way round (`validation_failed`).
+fn fold_actions(number: &dyn Fn(&str) -> CliOutcome<Option<u32>>) -> CliOutcome<Vec<StepAction>> {
+    let mut actions = Vec::new();
+    match (number("--fold-scan")?, number("--fold-first")?) {
+        (Some(step), Some(first)) => actions.push(StepAction {
+            kind: StepActionKind::FoldScan,
+            step: Some(step),
+            first: Some(first),
+        }),
+        (Some(_), None) => {
+            return Err(CliError::usage(
+                "--fold-scan <b> needs --fold-first <a>, the first swipe it folds",
+            ));
+        }
+        (None, Some(_)) => return Err(CliError::usage("--fold-first needs --fold-scan <b>")),
+        (None, None) => {}
+    }
+    if let Some(step) = number("--unfold-scan")? {
+        actions.push(StepAction {
+            kind: StepActionKind::UnfoldScan,
+            step: Some(step),
+            first: None,
+        });
+    }
+    Ok(actions)
 }
 
 /// Workflow #396 REC-4: `--scales f,...`, the factors in milli of a template mark (REC-5); the
@@ -4298,5 +4363,121 @@ mod lab2_tests {
         .expect_err("--box beside --request-json");
         assert_eq!(error.code, "validation_failed", "{}", error.message);
         assert!(error.message.contains("--box"), "{}", error.message);
+    }
+
+    // #463 S2-8' fix round 1 (contracts/lab-recording.md, "Folding swipes into a scrolling
+    // search"; the review's (h)): `record mark --fold-scan <b> --fold-first <a>` is the request
+    // form's step action `{"kind": "fold_scan", "step": b, "first": a}` and `--unfold-scan <b>` its
+    // `{"kind": "unfold_scan", "step": b}`, so the command line and the MCP tools (which hand the
+    // request form on unchanged) give the Lab the same request. `--fold-scan` without
+    // `--fold-first`, `--fold-first` without `--fold-scan`, and a fold beside another step action
+    // are refused.
+    #[test]
+    fn s28_fix1_the_fold_flags_declare_the_request_forms_step_actions() {
+        let folding =
+            record_mark_request_from_flags(&flags(&["--fold-scan", "5", "--fold-first", "2"]))
+                .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step_action": {"kind": "fold_scan", "step": 5, "first": 2}
+        }))
+        .expect("the request form");
+        assert_eq!(folding, request);
+
+        let unfolding =
+            record_mark_request_from_flags(&flags(&["--unfold-scan", "5"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step_action": {"kind": "unfold_scan", "step": 5}
+        }))
+        .expect("the request form");
+        assert_eq!(unfolding, request);
+
+        for args in [
+            &["--fold-scan", "5"][..],
+            &["--fold-first", "2"][..],
+            &[
+                "--fold-scan",
+                "5",
+                "--fold-first",
+                "2",
+                "--unfold-scan",
+                "5",
+            ][..],
+            &["--unfold-scan", "5", "--drop-step", "3"][..],
+        ] {
+            let error = record_mark_request_from_flags(&flags(args)).expect_err("refused");
+            assert_eq!(
+                error.code, "validation_failed",
+                "{args:?}: {}",
+                error.message
+            );
+        }
+    }
+
+    // #463 KR-1 fix round 1 (the independent review's (h); contracts/lab-recording.md, "Key
+    // steps"): `record mark --key back` is the request form's `"key": {"key": "back"}` and
+    // `--no-key` its `"key": false`, and beside `--optional-after` `--key back` is the inserted
+    // step's `optional_after.key`, so the command line and the MCP tool (which hands the request
+    // form on unchanged) give the Lab the same request; both flags at once are refused.
+    #[test]
+    fn kr1_the_key_flags_declare_the_request_forms_key() {
+        let declared = record_mark_request_from_flags(&flags(&[
+            "--step",
+            "2",
+            "--key",
+            "back",
+            "--replace-click",
+            "--click-guard",
+            "ui/title",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step": 2,
+            "key": {"key": "back"},
+            "replace_click": true,
+            "click_guard": "ui/title"
+        }))
+        .expect("the request form");
+        assert_eq!(declared, request);
+
+        let taken_back =
+            record_mark_request_from_flags(&flags(&["--step", "2", "--no-key"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step": 2,
+            "key": false
+        }))
+        .expect("the request form");
+        assert_eq!(taken_back, request);
+
+        let inserted = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--color",
+            "popup/notice=20,50,4,4",
+            "--key",
+            "back",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "optional_after": {
+                "step": 3,
+                "frame": "notice.png",
+                "add": [{"id": "popup/notice", "family": "color",
+                         "region": {"x": 20, "y": 50, "width": 4, "height": 4}}],
+                "key": {"key": "back"}
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(inserted, request);
+
+        let error = record_mark_request_from_flags(&flags(&["--key", "back", "--no-key"]))
+            .expect_err("--key beside --no-key");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
     }
 }

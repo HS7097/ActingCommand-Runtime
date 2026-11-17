@@ -197,7 +197,8 @@ fn s2_train_each_step_reviews_exactly_its_items_of_the_one_readiness_judgement()
     );
     assert_eq!(second["missing_total"], 4, "{second}");
     assert_eq!(second["checks"], complete(&EVERY_CHECK[..6]), "{second}");
-    assert_eq!(second["checks_after"], json!(["final_package"]), "{second}");
+    // #463 S2-10 (adapted): `cases`, the last check, runs only after the final package.
+    assert_eq!(second["checks_after"], json!(EVERY_CHECK[6..]), "{second}");
     let mut listed = Vec::new();
     for step in 1..=4_u32 {
         let answer = reviewed(&bench, step, &with);

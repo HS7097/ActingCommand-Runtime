@@ -12,15 +12,17 @@ use super::follow::followed_evaluation_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
-    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, SelectDecision,
+    ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
     SelectFrameDecision, StepSelect,
 };
 use super::select::{
-    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, on_empty_key,
+    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, empty_end_key,
+    on_empty_key,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::{EndingAgainst, EndingProblem, LabCode, ReadyCheck, ReadyCheckStop};
+use crate::regression_case::RegressionCheck;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InputAction, LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -29,8 +31,8 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
-    ExternallyVerifiedBundle, OfflineDecision, PreparedContainedTask, simulate_contained_task,
-    simulate_contained_task_at,
+    ExternallyVerifiedBundle, OfflineDecision, OfflineSimulationResult, PreparedContainedTask,
+    simulate_contained_task, simulate_contained_task_at,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, ContentContainer, expand_content_container,
@@ -62,6 +64,10 @@ pub(crate) struct Locus {
     pub(crate) page: Option<String>,
     pub(crate) target: Option<String>,
     pub(crate) outcome_key: Option<String>,
+    /// #463 S2-10: the regression case a failure of the self-check `cases` is about (its id), and
+    /// the checks of it that failed, as the runner answered them.
+    pub(crate) case: Option<String>,
+    pub(crate) checks: Vec<RegressionCheck>,
 }
 
 impl Locus {
@@ -104,6 +110,13 @@ impl Locus {
     /// target that reads a select slot's name.
     pub(crate) fn with_target(mut self, target: &str) -> Self {
         self.target = Some(target.to_string());
+        self
+    }
+
+    /// #463 S2-10: about the regression case `case`, whose checks `checks` failed.
+    pub(crate) fn with_case(mut self, case: &str, checks: Vec<RegressionCheck>) -> Self {
+        self.case = Some(case.to_string());
+        self.checks = checks;
         self
     }
 }
@@ -455,9 +468,24 @@ pub(crate) fn first_decision(
     let frame = first
         .primary()
         .ok_or_else(|| invalid("validation_failed", "step 1 has no frame"))?;
+    // #463 KR-1: a key at step 1 is pressed on its primary frame (`would_press_key`).
+    if let Some(key) = &first.step.key {
+        return key_first_decision(plan, first, key, frame, simulate(frame), failures);
+    }
     // #463 R1: a select at step 1 decides on its primary frame by the kernel's dry run; a slot it
     // selects is then simulated as the run taps it, and an empty decision is the run's normal end.
     if let Some(select) = &first.step.select {
+        // #463 S2-9a: a scrolling select at step 1 decides over its demonstration's screens by the
+        // kernel's offline entry; its tap follows a return that no saved frame shows.
+        if let Some(scan) = &select.scan {
+            return super::scan::scan_first_decision(
+                prepared,
+                plan,
+                (first, select, scan),
+                cache,
+                failures,
+            );
+        }
         return select_first_decision(prepared, plan, first, select, frame, cache, failures);
     }
     let start = failures.count();
@@ -661,6 +689,59 @@ pub(crate) fn first_decision(
     }
     let Some(result) = primary.filter(|_| failures.count() == start) else {
         return Ok(FirstDecision::undecided());
+    };
+    let mut value = serde_json::to_value(&result.decision).map_err(|error| {
+        invalid(
+            "validation_failed",
+            format!("failed to encode the first decision: {error}"),
+        )
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("frame".to_string(), json!(frame.frame_id));
+    }
+    Ok(FirstDecision {
+        value,
+        warning: None,
+    })
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the first decision of a package whose
+/// step 1 presses a key: the offline simulation on step 1's primary frame (`simulated`) presses that
+/// key under its guard (`would_press_key`, the step's operation and its key); a key has no place on
+/// the screen to judge. Anything else is a failure `failures` meets (step 1, its primary frame).
+fn key_first_decision(
+    plan: &Plan,
+    first: &PlanStep,
+    key: &RecordedKey,
+    frame: &RecordedFrame,
+    simulated: LabResult<OfflineSimulationResult>,
+    failures: &mut Failures,
+) -> LabResult<FirstDecision> {
+    let operation = plan.operation_id(first);
+    let decided = simulated.and_then(|result| {
+        let pressed = matches!(
+            &result.decision,
+            OfflineDecision::WouldPressKey { operation_label, key: pressed, .. }
+                if *operation_label == operation && pressed.as_str() == key.key
+        );
+        if pressed {
+            return Ok(result);
+        }
+        Err(admission_failed(
+            "first_decision",
+            format!(
+                "on its primary frame, step 1 must give the press of its key {} ({operation})",
+                key.key
+            ),
+            json!({"decision": result.decision, "frame": frame.frame_id}),
+        ))
+    });
+    let result = match decided {
+        Ok(result) => result,
+        Err(error) => {
+            failures.fail(Locus::on_step(first).with_frame(frame), error)?;
+            return Ok(FirstDecision::undecided());
+        }
     };
     let mut value = serde_json::to_value(&result.decision).map_err(|error| {
         invalid(
@@ -897,7 +978,8 @@ pub(crate) fn select_checks(
             "layout": plan.select_layout_id(step),
             "wanted": spec.wanted,
             "pressed": spec.pressed_name(),
-            "on_empty_key": on_empty_key(&plan.task_id, spec)
+            // #463 S2-9b: `null` for a select that declares no `on_empty`.
+            "on_empty_key": empty_end_key(&plan.task_id, spec)
         });
         if ocr.ocr_provider().is_none() {
             not_evaluated.push(step.number);
@@ -907,6 +989,20 @@ pub(crate) fn select_checks(
                     .map(|frame| json!({"frame_id": frame.frame_id, "result": "undetermined"}))
                     .collect::<Vec<_>>()
             );
+            selects.push(item);
+            continue;
+        }
+        // #463 S2-9a: a scrolling select is checked on its own frames and on the screens of its
+        // demonstration, with the kernel's offline entry over them.
+        if let Some(scan) = &select.scan {
+            super::scan::scan_select_checks(
+                prepared,
+                plan,
+                (step, select, scan),
+                cache,
+                failures,
+                &mut item,
+            )?;
             selects.push(item);
             continue;
         }
@@ -1418,9 +1514,10 @@ impl Against {
                 "on every run without the pop-up this step's click would be executed on that \
                  page"
             }
+            // #463 KR-1 fix round 1: the effect, a different click or a key on another page.
             Self::OtherOptional => {
                 "when only that pop-up appears it would be taken for this one and this step's \
-                 different click executed on it"
+                 effect executed on it"
             }
         }
     }
@@ -1558,9 +1655,8 @@ fn optional_checks(
                     page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
                 let other_step = &plan.steps[other];
                 if !matched.is_empty() {
-                    let same_click = matches!(kind, Against::OtherOptional)
-                        && step.step.click.as_ref().map(|click| click.rect)
-                            == other_step.step.click.as_ref().map(|click| click.rect);
+                    let same_click =
+                        matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                     if !same_click {
                         failures.fail(
                             Locus::on_step(step).with_frames(&matched).with_page(page),
@@ -1651,6 +1747,33 @@ fn optional_checks(
         }
     }
     Ok(checks)
+}
+
+/// Section 4.7c: whether two optional steps of one run, the page of `step` passing on the frames
+/// of `other`, record one pop-up closed one way (`same_as`): the same click rectangle, as before.
+/// #463 KR-1 fix round 1 (the coordinator's ruling on the review's answer 5): what closes them
+/// tells two pop-ups apart, and a key does not, since every pop-up a key closes is closed by the
+/// same key; two optional steps closed by a key are one pop-up only when they also have one page,
+/// the same key on the same marks required and forbidden (a copy that reuses the first's marks),
+/// so that two different optional pages are never taken for one. A key and a click are two.
+fn same_closing(step: &PlanStep, other: &PlanStep) -> bool {
+    match (&step.step.key, &other.step.key) {
+        (Some(key), Some(other_key)) => {
+            key.key == other_key.key
+                && same_ids(&step.required, &other.required)
+                && same_ids(&step.forbidden, &other.forbidden)
+        }
+        (None, None) => {
+            step.step.click.as_ref().map(|click| click.rect)
+                == other.step.click.as_ref().map(|click| click.rect)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `one` and `other` name the same marks, in any order.
+fn same_ids(one: &[String], other: &[String]) -> bool {
+    one.iter().collect::<BTreeSet<_>>() == other.iter().collect::<BTreeSet<_>>()
 }
 
 /// #463 L2 fix 1: every step whose click follows a located-text mark whose names were changed

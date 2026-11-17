@@ -37,14 +37,16 @@ use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_pat
 use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};
 use super::boxes::box_mark_id;
 use super::generate::effective_steps;
+use super::model::FoldDirection;
 use super::model::{
     AfterCaptureRecord, ClickGesture, LabRecording, RecordPoint, RecordRect, RecordedFrame,
-    RecordedMark, RecordingStep, StepChoice,
+    RecordedMark, RecordingStep, StepChoice, StepClick,
 };
 use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
 };
 use super::ready::{ReadyItem, RecordReadyOutcome, one_pixel, press_frame};
+use super::scan::RecordReviewScan;
 use super::steps::{effective_step, live_primary, step_ref};
 use super::store::{lab_dir, read_verified, write_atomic};
 use crate::recording_api::click_outcome;
@@ -118,10 +120,37 @@ pub struct RecordReviewStep {
     /// choice's press is `press`: the select's click as the step table holds it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choice: Option<StepChoice>,
+    /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): on a
+    /// press step that holds a fold, the swipes folded into its scrolling search, in order, each
+    /// with its screens: the list's first screen is the first swipe's screen before, then the
+    /// screen after each swipe, forward or back; absent on every other step.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<RecordReviewFolded>,
+    /// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+    /// end"): on a step whose select scrolls, its sheet: the list's screens in order with the
+    /// regions taken from each and the names read on each, every number with its origin and the
+    /// offline entry's decision, as the select's self-test left them; absent on every other step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan: Option<RecordReviewScan>,
     /// The step's items of `record ready`, as `record ready` answers them: the pre-checks' items
     /// that name this step (#463 S2-6's `select_unrefined` among them) or, once none fails, every
     /// self-check's failure that names it (#463 S2-1c); an item that names no step is no step's.
     pub missing: Vec<ReadyItem>,
+}
+
+/// #463 S2-8': one swipe folded into a press step's scrolling search, as that step's sheet lists
+/// it: its step, its direction against the first swipe's, and its screen before, its swipe and its
+/// screen after, each as a step's own are answered (previews named by the swipe's own step).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecordReviewFolded {
+    pub step: u32,
+    pub direction: FoldDirection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<RecordReviewFrame>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub press: Option<RecordReviewPress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<RecordReviewAfter>,
 }
 
 /// A stored frame and its preview: the preview's path, or `null` when none is written.
@@ -181,6 +210,13 @@ pub struct RecordReviewPress {
     pub gesture: Option<ClickGesture>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application: Option<String>,
+    /// #463 KR-1: the key a key step presses (`back`); absent on every other step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// #463 KR-1: the press a key step's key replaced, as the step table holds it inside the key;
+    /// absent on every other step and on a key that replaced none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<Box<RecordReviewPress>>,
     pub source: String,
     pub outcome: String,
 }
@@ -292,6 +328,15 @@ pub(crate) fn review_outcome(
                 waited_ms: record.map(|record| record.waited_ms),
             }
         });
+        let folded = folded_sheet(
+            recording,
+            step,
+            &sequence,
+            &dir,
+            request.no_preview,
+            &mut planned,
+            &mut missing,
+        );
         steps.push(RecordReviewStep {
             step: step.index,
             artifact_step: u32::try_from(position + 1).unwrap_or(u32::MAX),
@@ -302,6 +347,8 @@ pub(crate) fn review_outcome(
             between,
             marks: step.marks.clone(),
             choice: step.choice.clone(),
+            folded,
+            scan: super::scan::review_sheet(step, &recording.task_id),
             missing: ready
                 .missing
                 .iter()
@@ -332,6 +379,91 @@ pub(crate) fn review_outcome(
     })
 }
 
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the swipes
+/// folded into the scrolling search of `step`, in the fold's order (none on a step that holds no
+/// fold), each answered as a step's screen before, press and screen after are, from the same
+/// sequence, its previews planned as a step's are and named by the swipe's own serial number.
+fn folded_sheet<'r>(
+    recording: &'r LabRecording,
+    step: &RecordingStep,
+    sequence: &[Stored<'r>],
+    dir: &Path,
+    no_preview: bool,
+    planned: &mut Vec<Planned<'r>>,
+    missing: &mut Vec<String>,
+) -> Vec<RecordReviewFolded> {
+    let Some(fold) = &step.scan_fold else {
+        return Vec::new();
+    };
+    let mut folded = Vec::with_capacity(fold.moves.len());
+    for moved in &fold.moves {
+        let Some(swipe) = step_ref(recording, moved.step) else {
+            continue;
+        };
+        let before = before_position(swipe, sequence).map(|at| {
+            let frame = sequence[at].frame;
+            let preview = (!no_preview).then(|| {
+                let path = preview_path(dir, swipe.index, BEFORE);
+                planned.push(Planned {
+                    frame,
+                    overlay: Overlay {
+                        boxes: declared_boxes(swipe),
+                        glyph: glyph(swipe),
+                    },
+                    path: path.clone(),
+                });
+                display(&path)
+            });
+            RecordReviewFrame {
+                frame_id: frame.frame_id.clone(),
+                path: located(dir, frame, missing),
+                preview,
+            }
+        });
+        let after = after_record(swipe)
+            .and_then(|(frame_id, record)| {
+                sequence
+                    .iter()
+                    .position(|stored| stored.frame.frame_id == frame_id)
+                    .map(|at| (at, record))
+            })
+            .map(|(at, record)| {
+                let (frame, next) = (sequence[at].frame, sequence[at].step);
+                let preview = (!no_preview).then(|| {
+                    let path = preview_path(dir, swipe.index, AFTER);
+                    planned.push(Planned {
+                        frame,
+                        overlay: Overlay {
+                            boxes: step_ref(recording, next)
+                                .filter(|shown| shown.is_effective())
+                                .map(declared_boxes)
+                                .unwrap_or_default(),
+                            glyph: None,
+                        },
+                        path: path.clone(),
+                    });
+                    display(&path)
+                });
+                RecordReviewAfter {
+                    step: next,
+                    frame_id: frame.frame_id.clone(),
+                    path: located(dir, frame, missing),
+                    preview,
+                    still: record.and_then(|record| record.still),
+                    waited_ms: record.map(|record| record.waited_ms),
+                }
+            });
+        folded.push(RecordReviewFolded {
+            step: swipe.index,
+            direction: moved.direction,
+            before,
+            press: press_of(swipe),
+            after,
+        });
+    }
+    folded
+}
+
 /// The place in `sequence` of the screen the press of `step` happened on: its `before_frame` as
 /// `record ready` names it (`ready::press_frame`), else the step's live primary frame.
 fn before_position(step: &RecordingStep, sequence: &[Stored<'_>]) -> Option<usize> {
@@ -343,9 +475,10 @@ fn before_position(step: &RecordingStep, sequence: &[Stored<'_>]) -> Option<usiz
 }
 
 /// The frame after the effect of `step` and how it was taken, as its click's execution or its
-/// application operation's completed receipt names them.
+/// application operation's completed receipt names them. #463 KR-1: a key step's, as the execution
+/// of the press its key replaced names them: the step's frames stand.
 fn after_record(step: &RecordingStep) -> Option<(&str, Option<&AfterCaptureRecord>)> {
-    match (&step.click, &step.application) {
+    match (step.recorded_click(), &step.application) {
         (Some(click), _) => click.execution.as_ref().and_then(|execution| {
             execution
                 .after_frame
@@ -362,19 +495,28 @@ fn after_record(step: &RecordingStep) -> Option<(&str, Option<&AfterCaptureRecor
     }
 }
 
-/// What `step` pressed, as the step table holds it; `None` for a step without an effect.
+/// What `step` pressed, as the step table holds it; `None` for a step without an effect. #463
+/// KR-1: a key step's press is its key, declared and never sent while recording, with the press it
+/// replaced beside it.
 fn press_of(step: &RecordingStep) -> Option<RecordReviewPress> {
     if let Some(click) = &step.click {
-        let execution = click.execution.as_ref();
+        return Some(click_press(click));
+    }
+    if let Some(key) = &step.key {
         return Some(RecordReviewPress {
-            point: execution.map(|execution| execution.point),
-            to_point: execution.and_then(|execution| execution.to_point),
-            duration_ms: execution.and_then(|execution| execution.duration_ms),
-            rect: Some(click.rect),
-            gesture: click.gesture,
+            point: None,
+            to_point: None,
+            duration_ms: None,
+            rect: None,
+            gesture: None,
             application: None,
-            source: click.source.clone(),
-            outcome: click_outcome(click).to_owned(),
+            key: Some(key.key.clone()),
+            replaced: key
+                .replaced
+                .as_ref()
+                .map(|click| Box::new(click_press(click))),
+            source: DECLARED.to_owned(),
+            outcome: DECLARED.to_owned(),
         });
     }
     step.application
@@ -386,9 +528,28 @@ fn press_of(step: &RecordingStep) -> Option<RecordReviewPress> {
             rect: None,
             gesture: None,
             application: Some(application.action.clone()),
+            key: None,
+            replaced: None,
             source: application.source.clone(),
             outcome: application_outcome(step),
         })
+}
+
+/// What the click `click` pressed, as the step table holds it.
+fn click_press(click: &StepClick) -> RecordReviewPress {
+    let execution = click.execution.as_ref();
+    RecordReviewPress {
+        point: execution.map(|execution| execution.point),
+        to_point: execution.and_then(|execution| execution.to_point),
+        duration_ms: execution.and_then(|execution| execution.duration_ms),
+        rect: Some(click.rect),
+        gesture: click.gesture,
+        application: None,
+        key: None,
+        replaced: None,
+        source: click.source.clone(),
+        outcome: click_outcome(click).to_owned(),
+    }
 }
 
 /// Fix round 1: the outcome of the application operation of `step`, by the judgement the archive's

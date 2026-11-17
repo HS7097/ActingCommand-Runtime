@@ -434,7 +434,8 @@ naming this file.
   two of them is not seen: a small change away from the press (a counter, a badge) is not seen.
   Whether the press mattered is the agent's judgement; the tool refuses only what the frames
   contradict: `record_drop_unproven` with `drop_problem` `frames_not_recorded`, `screen_changed`
-  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
+  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`
+  (#463 KR-1 fix round 1: `key_declared` for a key step, whose key is taken back first).
   `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
   mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
   step. The train's fix round (0.12.68): a step that holds a choice (marked with `choice`, or
@@ -460,6 +461,138 @@ naming this file.
   value chooses as before), which `ac_goals_set` sets on an application by name; a package
   generated again from an older recording with a select gains that variable, so its content hash
   changes and its bundle declares `package` 14.
+  #463 S2-10 (0.12.70; `contracts/lab-recording.md`, "Regression cases written with the package"):
+  `ac_record_stop` writes the package's regression cases beside it,
+  `lab/out/<package_id>.cases/<case id>/` (`case.json` and `scene.png`, the case contract's form):
+  one per step with a press and a page, on the frame its press was sent on, one for the final
+  screen and one per ending, each a black canvas with exactly the regions the package's
+  recognition targets read pasted where they are; where a target reads the whole frame (its region
+  or a template's search area is the whole frame), the scene is the whole frame, and the answer
+  names each such case with the warning `record_case_whole_frame` and those targets (nothing is
+  refused for it). A case's `source` names the recording's id and the step (or `final`, or the
+  ending) and nothing else; a recording id the Lab made by default holds the time the recording
+  began and a process number, never a path, an instance, an account or a device. Its last
+  self-check, `cases`, runs each on the package first: a real miss (the page not recognised on its
+  scene, a target it expects failing) is not written and the stop refuses `record_case_failed`
+  (`regression_problem`; its `page` as the page detection names it, `<game>/<page>`), nothing
+  written; `ac_record_ready` lists every such case (`what` `cases`, with the case's id and the
+  runner's failed checks in `details`). A page recognised beside another page of the package is no
+  miss (a linear run waits for each step's own page): the case is written without
+  `expect.observe`, every target its page requires passing and every target it forbids failing
+  (it states that this page holds on this scene), run again in that form first, and both tools
+  name it with the warning `record_case_page_ambiguous` and the other pages; such a page with no
+  target to pin gives no case and the warning `record_case_ambiguous_not_written` (mark a target
+  on that page's screen to have it written). Without a text-recognition model for a text target
+  the page detection reads, no case's page is judged, which the warning
+  `record_cases_ocr_unavailable` says once. The answer's
+  `lab.cases` names the directory, `counts` by kind, the `ids`, `not_proven` (a case run in part,
+  with the runner's reasons, `ocr_unavailable` without an OCR model), `warnings`
+  (`record_cases_ocr_unavailable` first, then each case's: `record_case_page_ambiguous` or
+  `record_case_ambiguous_not_written`, `record_case_bare_canvas` (its page is also what the bare
+  canvas answers), `record_case_whole_frame`; each warns, exit 0) and `limits`
+  `["self_agreement"]`: the cases were made from the frames the package was built from and say
+  nothing about screens it did not meet. A regeneration replaces the set whole and keeps the
+  earlier one beside it; `dry_run` writes nothing, and its `lab.would_write` names the cases'
+  directory and each case after the package. The cases are written beside the package only;
+  adoption does not take them into a repository yet (#463 AC-1, another slice).
+  #463 S2-8' (0.12.70; `contracts/lab-recording.md`, "Folding swipes into a scrolling search"): a
+  choice in a scrolling list is recorded as several swipes, each a step, then the press on the
+  wanted row. `ac_record_mark` with `step_action` `{"kind": "fold_scan", "step": b, "first": a}`
+  (or the row's `fold_scan` and `fold_first`), on the active recording or, as an amendment like a
+  mark after stop, on a stopped one (fix round 1: the next `ac_record_stop` generates again; no
+  other step action is taken there), folds the swipes `a` to
+  `b - 1` into the scrolling search of the press `b`: they stay in the file whole, each with
+  `folded_into: b`, and are no steps of the package any more (no page, no operation, no case, no
+  item of `ac_record_ready`); `b` holds `scan_fold` (its first step, the axis and each swipe
+  `forward` or `back`). You name the steps; nothing finds them for you. Swipes of different lengths
+  along one axis in one direction are accepted; the demonstration is forward as often as needed,
+  then back as often as needed, then the press. Every refusal is `record_scan_invalid`, nothing
+  written, its `scan_problem`: `fold_range_invalid` (the range is no run of executed swipes before
+  an executed tap), `inserted_in_range` (a step of it is an optional step inserted after the stop),
+  `would_lose_marks`, `would_lose_page`, `would_lose_optional`, `would_lose_choice`,
+  `would_lose_transition`, `would_lose_inserted` (an optional step inserted after a swipe of it
+  after the stop; take that off the swipe first, or give the inserted step up), `move_axis_unclear`
+  (a swipe whose move along one axis is not at least twice its move across, or along another axis),
+  `move_after_back`. `{"kind": "unfold_scan", "step": b}` (`unfold_scan`) gives the recording back
+  as it was (`not_folded` for a step that holds no fold). Any other step action on a folded swipe or
+  its press step, and marks on a folded swipe, are `step_in_fold`: unfold first. `ac_record_status`
+  shows `folded_into` and `scan_fold`; `ac_record_review`'s sheet of the press step lists the
+  folded swipes in order with their screens (`folded`); `ac_record_frames` reads a folded swipe as
+  any step. Until a scrolling select is declared on the press step (S2-9a below),
+  `ac_record_ready` lists a fold as `scan_without_select` and `ac_record_stop` refuses it
+  (`scan_not_selected`); declare the select, or unfold it to make the package without it.
+  #463 S2-9a (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+  end"): that scan is the press step's select. Send `ac_record_mark` with `request_json`
+  `{"step": b, "select": {"rows": {"row", "anchor", "name", "click"?}, "scan": {"list", "start",
+  "end", "stop": "end"}, "read", "names", "match", "wanted", "pressed"?}}`: every rectangle is
+  yours, drawn on the list's first screen (the first swipe's screen before it in `ac_record_review`'s
+  `folded`), but the end mark, drawn on the last screen after a forward swipe. Scroll to the list's
+  end once while recording: a select without `end` stands, `ac_record_ready` lists
+  `scan_end_not_recorded` and `ac_record_stop` refuses it (`end_not_recorded`). The Lab measures the
+  scan's numbers from your regions and the demonstration and keeps each with what it was measured
+  from; give one in `scan.numbers` by its name to replace it (`origin: "given"`). The self-test reads
+  every screen, checks the start and end marks and the press, and runs the kernel's offline entry
+  over the forward screens for the pressed name and for a name no screen shows; its refusals are
+  `record_mark_rejected` reasons (`select_name_unread`, `scan_start_mark_repeated`,
+  `scan_step_outside_window`, `scan_decision_mismatch`, …), the request's own are
+  `record_select_invalid` (`scan_without_fold`, `rows_with_slots`, `confirm_with_rows`,
+  `scan_stop_missing`, `scan_region_outside_frame`, `scan_region_outside_list`,
+  `scan_region_outside_row`, `scan_number_not_measured`). `ac_record_review` shows the step's
+  `scan` (screens, names read, numbers, the offline entry's decision); `unfold_scan` is refused
+  `scan_selected` while the select stands: `clear_select` first, which keeps the fold. Inertia,
+  settling, a list opened in its middle, the drag's real displacement and a list that loads while
+  it scrolls are judged only by the trial on the device. Fix round 1: swipe shorter than the
+  list's visible length, so that neighbouring screens share a row: a first swipe longer than the
+  kernel admits is `record_select_invalid` `scan_swipe_too_long` (record the scroll again), which no
+  `scan.numbers` cures. Cut the end mark from the list's true last screen: one that passes on an
+  earlier forward screen is `scan_end_mark_early`. Each number in `scan.numbers` says what it is
+  (`origin`: `measured`, `default`, `derived` or `given`).
+  #463 S2-9b (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: straight to the wanted
+  item"): when the wanted item is known, swipe forward until its row shows and press it; mark the
+  select with `"stop": "wanted"`. `end` is then optional: given, the package declares it; left out,
+  `ac_record_ready` lists no `scan_end_not_recorded`, and `ac_record_stop` generates the scan with
+  `early_stop` and without `end` or `on_empty`: found, the run presses; not found, it fails
+  `selection_scan_early_stop_unreached` where the list stops moving. So `on_empty_key` beside it is
+  refused (`record_select_invalid`, `on_empty_without_end`): where the item may be absent some days,
+  record the list's end once and declare the end mark, and the run ends normally. Without an end the
+  numbers taken from the screens up to the list's end are `derived` from what the screens show
+  (`origin: "derived"`: trailing gap the list's length, anchors `b / e + 2` per column,
+  `max_viewports` `2V + 2`, return viewports `2V`, `max_ms`), and the Lab refuses a given
+  `advance_min_content_step_px` above twice
+  `position_tolerance_px` plus one (`scan_min_step_too_large`); the offline entry must stop early on
+  the pressed name, no absent name is run (that is judged only on the device), and the self-check
+  refuses a wanted default no forward screen shows (`scan_default_not_shown`). `ac_record_review`'s
+  `scan.when_absent` says the kind, whether an end is declared and what a run does without the item.
+  #463 KR-1 (0.12.70; `contracts/lab-recording.md`, "Key steps"): the back key is not recorded
+  while playing; stage two or three adds it. `ac_record_mark` with `key` `back` (`request_json`
+  `"key": {"key": "back"}`) makes the step's one effect the back key, declared and never sent: on a
+  step without an effect it is declared; a click of the step, executed or declared, of any form, is
+  replaced only with `replace_click` (`record_step_effect_exists` otherwise) and kept whole inside
+  the key, the step's frames standing, and `no_key` (`"key": false`) takes the key back and gives
+  the click back exactly, with the `click_guard` the step had before the key (fix round 1). It
+  works on the active and the stopped recording (an archived one is reopened first). Its guard (fix
+  round 1) is a click step's: the `click_guard` you name, else its page's first template, colour or
+  colour digest, or check mark you drew; only a page of text or value-test marks alone leaves it
+  none, and then `ac_record_ready` lists it (`key_guard_missing`, add a template to the page) and
+  `ac_record_stop` refuses it (`record_key_invalid`, `guard_missing`). A key step whose replaced
+  press needs review still needs review (`lab.steps_needing_review`); two optional steps closed by
+  the key are one pop-up only on one page (otherwise `record_optional_step_ambiguous`); dropping a
+  key step before the last is `record_drop_unproven` with `drop_problem` `key_declared` (take the
+  key back first); a `key` that is no `{"key": "back"}`, `false` or `null` is `validation_failed`
+  saying the three forms. Refused, nothing written: `record_key_invalid`
+  with `key_problem` `word_unknown` (back alone), `with_click`, `with_application`, `with_retry`
+  (send the key alone), `application_entry`, `application_step`, `holds_choice` (a select or a
+  choice mark on the step) or `step_not_effective`. A pop-up a run met is closed by the key with
+  `optional_after` and its `key` in place of `click` (both `with_click`; neither
+  `record_optional_after_invalid` `no_effect`, the word that replaces `no_click`). `ac_record_stop`
+  generates `step_<nn>_key`; its first decision at step 1 is `would_press_key`; the step has its
+  regression case on the frame of the press it replaced; `ac_record_review` answers its `press`
+  with `key` and `replaced` and draws no press; `ac_record_status` shows its `key`. Beside a fold
+  (the train of 0.12.70): a key on a folded swipe is the fold's `record_scan_invalid`
+  `step_in_fold`, on the press step of a fold `record_key_invalid` `holds_fold` (unfold first), on
+  one whose scrolling select reads the fold `holds_choice`; a fold over a key step, or onto a press
+  whose effect is a key, is `fold_range_invalid`; and while a key stands the guard it gives back is
+  in use (`record_mark_in_use` for its `remove`).
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

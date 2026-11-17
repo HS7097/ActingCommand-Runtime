@@ -678,7 +678,7 @@ fn r4_a_run_presses_the_inserted_pop_up_when_it_shows_and_goes_on_without_it() {
 // R4, item 5 of the brief: each optional_after_problem, refused with its word and nothing written:
 // recording_active (an insertion and a removal on an active recording); with_other_change (beside
 // a step's member, beside remove_inserted, naming them); step_unknown, step_last, no_marks,
-// no_click; step_application (step 1 as `session app --record` leaves an application step, its
+// no_click (#463 KR-1: now no_effect); step_application (step 1 as `session app --record` leaves an application step, its
 // application operation recorded on the step's frame: the test has no device, so the recording's
 // file says it); clears_optional (--not-optional on the inserted step); not_inserted (a recorded
 // step, a serial number no step has). A frame of another ratio is record_frame_size_mismatch.
@@ -738,7 +738,8 @@ fn r4_each_optional_after_problem_is_refused_with_its_word() {
             OptionalAfterProblem::StepLast,
         ),
         (popup_request(1, json!([])), OptionalAfterProblem::NoMarks),
-        (no_click, OptionalAfterProblem::NoClick),
+        // #463 KR-1: the word is `no_effect`, the inserted step declaring neither a click nor a key.
+        (no_click, OptionalAfterProblem::NoEffect),
         (
             json!({"remove_inserted": 1}),
             OptionalAfterProblem::NotInserted,
@@ -1192,6 +1193,11 @@ fn r4_giving_up_an_inserted_step_whose_mark_another_page_forbids_is_refused() {
 // P4, the design's first test: a second record stop of the same recording keeps the output the
 // first one wrote, set aside as <name>.old-<ms> beside the new one and named in lab.kept: its bytes
 // are the first package's, nothing else is left beside them, and the new package is another.
+// Adapted by #463 S2-10 (register §1.441, fix round 2; contracts/lab-recording.md, "Regression
+// cases written with the package"): the output directory also holds the package's regression cases,
+// <package_id>.cases, and after the second stop the first stop's cases set aside as
+// <package_id>.cases.old-<ms> (lab.cases.kept), holding the first stop's cases; the package and the
+// cases one stop sets aside carry the same <ms>. The listing stays exact.
 #[test]
 fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     let recording = Recording::new();
@@ -1199,6 +1205,14 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     let first_path = PathBuf::from(generated["path"].as_str().expect("package path"));
     let first = fs::read(&first_path).expect("the first package");
     assert_eq!(generated.get("kept"), None, "{generated}");
+    let mut first_cases = generated["cases"]["ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no cases in {generated}"))
+        .iter()
+        .map(|id| id.as_str().expect("a case id").to_owned())
+        .collect::<Vec<_>>();
+    assert!(!first_cases.is_empty(), "{generated}");
+    first_cases.sort();
     recording.insert_popup();
 
     let regenerated = recording
@@ -1225,8 +1239,58 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
         "{kept_name}"
     );
     assert_eq!(fs::read(&kept).expect("the kept package"), first);
+    let cases = format!(
+        "{}.cases",
+        regenerated["package_id"].as_str().expect("package id")
+    );
+    let kept_cases = PathBuf::from(
+        regenerated["cases"]["kept"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no kept cases in {regenerated}")),
+    );
+    let kept_cases_name = kept_cases
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("kept cases name")
+        .to_owned();
+    // One stop, one suffix: the package and the cases it set aside carry the same <ms>.
+    let suffix = kept_name
+        .strip_prefix(&format!("{name}.old-"))
+        .expect("the kept package's <ms>");
+    assert_eq!(
+        kept_cases_name,
+        format!("{cases}.old-{suffix}"),
+        "{regenerated}"
+    );
+    // The kept cases are the first stop's: a directory for each of its cases, nothing else.
+    assert_eq!(names_in(&kept_cases), first_cases, "{regenerated}");
     let directory = first_path.parent().expect("out directory");
-    assert_eq!(names_in(directory), [name, kept_name]);
+    // #463 S2-10 fix round 3 (the review of #1797): both kept members of the answer, whole: lab.kept
+    // is the package set aside and nothing else, lab.cases.kept the cases set aside, both in the
+    // output directory under the one suffix.
+    assert_eq!(
+        kept_files
+            .iter()
+            .map(|path| PathBuf::from(path.as_str().expect("kept path")))
+            .collect::<Vec<_>>(),
+        [directory.join(format!("{name}.old-{suffix}"))],
+        "{regenerated}"
+    );
+    assert_eq!(
+        kept_cases,
+        directory.join(format!("{cases}.old-{suffix}")),
+        "{regenerated}"
+    );
+    // The whole output directory, sorted: the cases, the kept cases, the package, the kept package.
+    assert_eq!(
+        names_in(directory),
+        [
+            cases.as_str(),
+            kept_cases_name.as_str(),
+            name.as_str(),
+            kept_name.as_str()
+        ]
+    );
     let second = fs::read(&first_path).expect("the second package");
     assert_ne!(second, first);
     assert_eq!(
@@ -1299,7 +1363,9 @@ fn p4_a_lab_dir_inside_an_installed_root_is_refused() {
 // the answer keeps binding_example and adds adoption_example, the adopt line with the recording's
 // id and state directory and the decision's skeleton. Fix round 2 (item 4, the owner's rule that a
 // package not yet run through on a real device is registered and stays held): the skeleton is a
-// decision of the class held with its reason blank and nothing else.
+// decision of the class held with its reason blank and nothing else. Adapted by #463 S2-10 (register
+// §1.441, fix round 2): the recording's out directory holds, beside the package, its regression
+// cases, <package_id>.cases, and nothing else; --lab-dir holds the package alone.
 #[test]
 fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
     let recording = Recording::new();
@@ -1315,16 +1381,20 @@ fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
 
     assert_eq!(lab["lab_status"], "generated", "{lab}");
     assert_eq!(lab["lab_dir_status"], "written", "{lab}");
+    // #463 S2-10 fix round 3 (the review of #1797): neither kept member of the answer, the
+    // package's (lab.kept) nor the cases' (lab.cases.kept), is there.
     assert_eq!(lab.get("kept"), None, "{lab}");
+    assert_eq!(lab["cases"].get("kept"), None, "{lab}");
     let copy = PathBuf::from(lab["path"].as_str().expect("package path"));
     let name = copy
         .file_name()
         .and_then(|name| name.to_str())
         .expect("file name")
         .to_owned();
+    let cases = format!("{}.cases", lab["package_id"].as_str().expect("package id"));
     assert_eq!(
         names_in(copy.parent().expect("out directory")),
-        [name.as_str()]
+        [cases.as_str(), name.as_str()]
     );
     assert_eq!(names_in(&lab_dir), [name.as_str()]);
     assert_eq!(

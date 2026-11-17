@@ -197,6 +197,9 @@ actingcommand_contract::outcome_codes! {
         SelectionScanInstanceMissing => "selection_scan_instance_missing": error / pack_logic_mismatch,
         SelectionScanIdentityMismatch => "selection_scan_identity_mismatch": error / pack_logic_mismatch,
         SelectionScanEndUnconfirmed => "selection_scan_end_unconfirmed": error / pack_logic_mismatch,
+        // Workflow #463 K-c: a scan that declares no end stopped moving before its early stop
+        // held (the repeats that fail a scan with an end `selection_scan_end_unconfirmed`).
+        SelectionScanEarlyStopUnreached => "selection_scan_early_stop_unreached": error / pack_logic_mismatch,
         SelectionScanPositionUnread => "selection_scan_position_unread": error / pack_logic_mismatch,
         SelectionScanBoundsExceeded => "selection_scan_bounds_exceeded": error / budget_or_permission,
         // Workflow #308 SEL-L3: a scan dry run needed a frame its saved sequence does not hold.

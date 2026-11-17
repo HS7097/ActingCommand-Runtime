@@ -104,6 +104,14 @@ pub(crate) fn on_empty_key(task_id: &str, select: &SelectSpec) -> String {
         .unwrap_or_else(|| format!("{task_id}_not_found"))
 }
 
+/// #463 S2-9b: the `on_empty` key of a select that ends a run normally when the wanted name is in
+/// no slot or row ([`on_empty_key`]); `None` for a scrolling select straight to the wanted item
+/// without an end mark, which declares no `on_empty` (`scan::ends_empty`), so that none of the
+/// key's rules applies to it.
+pub(crate) fn empty_end_key(task_id: &str, select: &SelectSpec) -> Option<String> {
+    super::scan::ends_empty(select).then(|| on_empty_key(task_id, select))
+}
+
 /// `^[a-z][a-z0-9_]{0,63}$`: the parameter grammar of a name's id and of the wanted value's name.
 fn name_id_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -232,7 +240,10 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
         ))
     };
     let slots = super::model::LAB_RECORDING_MAX_SELECT_SLOTS;
-    if !(1..=slots).contains(&select.slots.len()) {
+    // #463 S2-9a: a scrolling select declares rows and a scan in place of slots.
+    if select.rows.is_some() || select.scan.is_some() {
+        super::scan::validate_scan_shape(step, select)?;
+    } else if !(1..=slots).contains(&select.slots.len()) {
         return Err(shape(format!("needs 1..={slots} slots")));
     }
     for (index, slot) in select.slots.iter().enumerate() {
@@ -453,6 +464,7 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
             frames: Vec::new(),
         },
         click_before,
+        scan: None,
     });
     Ok(fresh)
 }
@@ -662,6 +674,8 @@ pub(crate) fn check_step_select(
             "the recording has no frame, so it has no coordinate space",
         )
     })?;
+    // A scrolling select has no slots; its regions are checked with its screens
+    // (`scan::check_scan_select`).
     for (slot, declared) in spec.slots.iter().enumerate() {
         if [declared.rect, declared.click_rect(), declared.name]
             .into_iter()
@@ -687,8 +701,11 @@ pub(crate) fn check_step_select(
             ),
         );
     }
-    let key = on_empty_key(&recording.task_id, spec);
-    if key == done_key(&recording.task_id) {
+    // #463 S2-9b: a select that declares no `on_empty` has no key to keep these rules.
+    let key = empty_end_key(&recording.task_id, spec);
+    if let Some(key) = &key
+        && *key == done_key(&recording.task_id)
+    {
         return refuse(
             SelectProblem::OnEmptyKeyReserved,
             format!("the on_empty key '{key}' is the usual ending's key"),
@@ -702,7 +719,9 @@ pub(crate) fn check_step_select(
         let Some(other_select) = &other.select else {
             continue;
         };
-        if on_empty_key(&recording.task_id, &other_select.declaration) == key {
+        if let Some(key) = &key
+            && empty_end_key(&recording.task_id, &other_select.declaration).as_ref() == Some(key)
+        {
             return refuse(
                 SelectProblem::OnEmptyKeyTaken,
                 format!(
@@ -723,10 +742,11 @@ pub(crate) fn check_step_select(
     }
     // #463 R2 fix 1: the key is no ending's, also for a select declared after the ending; the
     // ending's own check at record stop (`key_of_select`) would refuse it there otherwise.
-    if recording
-        .endings
-        .iter()
-        .any(|ending| ending.outcome_key == key)
+    if let Some(key) = &key
+        && recording
+            .endings
+            .iter()
+            .any(|ending| ending.outcome_key == *key)
     {
         return refuse(
             SelectProblem::OnEmptyKeyOfEnding,
@@ -735,6 +755,12 @@ pub(crate) fn check_step_select(
                  the select an on_empty_key of its own"
             ),
         );
+    }
+
+    // #463 S2-9a: a scrolling select reads its list over the screens of the demonstration folded
+    // into the step, and is self-tested there (`scan::check_scan_select`).
+    if spec.rows.is_some() {
+        return super::scan::check_scan_select(recording, probe, frames, ocr, current).map(Some);
     }
 
     // The probe package: the step as `record stop` generates it, admitted by the kernel.
@@ -935,6 +961,19 @@ pub(crate) struct Decided {
     pub(crate) kind: SelectDecision,
     pub(crate) clicks: BTreeMap<u32, RecordRect>,
     pub(crate) unread: Vec<(u32, Value)>,
+    /// #463 S2-9a: every instance the projection holds, as a scrolling select reads its rows.
+    pub(crate) instances: Vec<DecidedInstance>,
+}
+
+/// #463 S2-9a: one instance of a dry run's projection: its index, whether it is actionable (its
+/// rectangle and click box inside the readable band; a row cut by the list's edge is not), its
+/// rectangle, the name its identity feature read and, when it read none, why.
+pub(crate) struct DecidedInstance {
+    pub(crate) index: u32,
+    pub(crate) actionable: bool,
+    pub(crate) rect: RecordRect,
+    pub(crate) name: Option<String>,
+    pub(crate) unread: Option<Value>,
 }
 
 /// The kernel's dry run of the select operation `operation` of `prepared` on `frame`
@@ -1006,7 +1045,13 @@ pub(crate) fn decide(
         })
         .collect::<Vec<_>>();
     // Fix 1: the decision by its kind, as the run takes it: an empty or insufficient decision
-    // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies).
+    // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies). #463
+    // S2-9a fix round 1: counted over the actionable candidates, the ones the kernel evaluates and
+    // counts unknown (a row the list's edge cuts reads no name and blocks nothing; a fixed slot is
+    // always actionable).
+    let blocking = candidates
+        .iter()
+        .any(|candidate| candidate.actionable && unread_cause(candidate).is_some());
     let kind = match mirrored_outcome(&dry.decision.outcome)? {
         TaskSelectionOutcome::Selected { .. } => {
             let [id] = dry.decision.selected.as_slice() else {
@@ -1030,9 +1075,7 @@ pub(crate) fn decide(
                 })?;
             SelectDecision::Selected { slot }
         }
-        TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. }
-            if !unread.is_empty() =>
-        {
+        TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. } if blocking => {
             SelectDecision::Blocked
         }
         TaskSelectionOutcome::Empty => SelectDecision::Empty,
@@ -1047,13 +1090,31 @@ pub(crate) fn decide(
             .map(|candidate| (candidate.instance_index, click_of(candidate)))
             .collect(),
         unread,
+        instances: candidates
+            .iter()
+            .map(|candidate| DecidedInstance {
+                index: candidate.instance_index,
+                actionable: candidate.actionable,
+                rect: RecordRect {
+                    x: candidate.rect.x,
+                    y: candidate.rect.y,
+                    width: candidate.rect.width,
+                    height: candidate.rect.height,
+                },
+                name: match candidate.features.get(SELECT_FEATURE) {
+                    Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
+                    _ => None,
+                },
+                unread: unread_cause(candidate),
+            })
+            .collect(),
     }))
 }
 
 /// Fix 1: the kernel's decision outcome as the contract mirrors it (`TaskSelectionOutcome`,
 /// through their shared serde shape, as the run's record takes it): the evaluator's `detail`
 /// text of an unknown outcome stays out, as the record leaves it out.
-fn mirrored_outcome(outcome: &impl Serialize) -> LabResult<TaskSelectionOutcome> {
+pub(crate) fn mirrored_outcome(outcome: &impl Serialize) -> LabResult<TaskSelectionOutcome> {
     let mut value = serde_json::to_value(outcome).map_err(|error| {
         invalid(
             "validation_failed",

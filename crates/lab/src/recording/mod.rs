@@ -13,11 +13,15 @@ pub(crate) mod archive;
 pub(crate) mod around;
 // #463 S2-5: boxes drawn on a step's primary frame, a region to recognize by or a region to press.
 pub(crate) mod boxes;
+// #463 S2-10: the regression cases `record stop` writes beside its package, each run first.
+pub(crate) mod cases;
 pub(crate) mod container;
 pub(crate) mod crosscheck;
 // #463 R2: a screen that ends the business another way after the last press, taken by a stopped
 // recording from a frame.
 pub(crate) mod ending;
+// #463 S2-8': the swipes recorded before a press folded into one scrolling search, and unfolded.
+pub(crate) mod fold;
 pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
@@ -26,6 +30,8 @@ pub(crate) mod generate;
 pub(crate) mod hold;
 // #463 R4: an optional step a stopped recording inserts after one of its steps, from a frame.
 pub(crate) mod inserted;
+// #463 KR-1: a step that presses the back key in place of a click, declared after the fact.
+pub(crate) mod key;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;
@@ -35,6 +41,8 @@ pub(crate) mod preview;
 pub(crate) mod ready;
 // #463 S2-2: each step of a recording as the screen before, the press and the screen after.
 pub(crate) mod review;
+// #463 S2-9a: a choice in a list read across its screens to its end, the swipes folded into it.
+pub(crate) mod scan;
 // #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
 pub(crate) mod select;
 pub(crate) mod steps;
@@ -63,3 +71,8 @@ pub use review::{
     RecordReviewAfter, RecordReviewBetween, RecordReviewFrame, RecordReviewOutcome,
     RecordReviewPress, RecordReviewRequest, RecordReviewStep,
 };
+// #463 S2-8': a swipe folded into a press step's scrolling search, in that step's sheet.
+pub use review::RecordReviewFolded;
+// #463 S2-9a: a scrolling select's sheet in its step's `record review`; #463 S2-9b: what a run of
+// it does when the wanted item is in no row.
+pub use scan::{RecordReviewScan, ScanAbsentEnd, ScanWhenAbsent};

@@ -29,6 +29,7 @@ use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
 use super::store::invalid;
 use crate::codes::{ReadyCheck, ReadyMissing, ReadySource, ReadyWarning};
+use crate::regression_case::RegressionCheck;
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,6 +68,14 @@ pub struct ReadyDetails {
     /// select's slot. Never read from a pre-check's refusal.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// #463 S2-10: the id of the regression case a failure of the self-check `cases` is about.
+    /// Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub case: Option<String>,
+    /// #463 S2-10: the checks of that case that failed, as the one runner of the case contract
+    /// answered them. Never read from a pre-check's refusal.
+    #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<RegressionCheck>,
     /// The serial number of the step after a stop (`effect_after_stop`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_step: Option<u32>,
@@ -292,11 +301,13 @@ pub(crate) fn packaged(recording: &LabRecording) -> bool {
 /// declares a retry; #463 stage two, train 1: or a press box, a press recorded by its point whose
 /// rectangle is no longer that one pixel, the test [`point_press_warnings`] makes), a choice (a
 /// select; #463 S2-6: or a step marked as holding a choice, refined or not), an optional flag or a
-/// transition; or the recording took an ending.
+/// transition (#463 S2-8': or a fold of swipes into a press step's scrolling search); or the
+/// recording took an ending.
 fn stage_two_written(recording: &LabRecording) -> bool {
     !recording.endings.is_empty()
         || recording.steps.iter().any(|step| {
-            step.page.is_some()
+            step.scan_fold.is_some()
+                || step.page.is_some()
                 || !step.marks.is_empty()
                 || !step.reused.is_empty()
                 || !step.forbidden.is_empty()
@@ -306,6 +317,8 @@ fn stage_two_written(recording: &LabRecording) -> bool {
                 || step.choice.is_some()
                 || step.optional.is_some()
                 || step.transition.is_some()
+                // #463 KR-1: a key is declared in stage two.
+                || step.key.is_some()
                 || step.click.as_ref().is_some_and(|click| {
                     (click.source != POINT_SOURCE && click.source != SWIPE_SOURCE)
                         || (click.source == POINT_SOURCE && !one_pixel(click.rect))
@@ -318,10 +331,10 @@ fn stage_two_written(recording: &LabRecording) -> bool {
 /// The frame the press of `step` happened on, as stage one recorded it: its click's or its
 /// application operation's `before_frame`. Fix round 2: a click without an execution, whose press
 /// `--reopen-step` moved aside, names its last attempt's (an application operation moved aside
-/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it.
+/// keeps no frame). #463 S2-2: `record review` names a step's screen before by it. #463 KR-1: a key
+/// step's is that of the press its key replaced (none for a key that replaced none).
 pub(crate) fn press_frame(step: &RecordingStep) -> Option<String> {
-    step.click
-        .as_ref()
+    step.recorded_click()
         .and_then(|click| click.execution.as_ref().or_else(|| click.attempts.last()))
         .and_then(|execution| execution.before_frame.clone())
         .or_else(|| {
@@ -355,7 +368,9 @@ fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
         ReadyMissing::Game => identity("--game <g>"),
         ReadyMissing::Server => identity("--server <s>"),
         ReadyMissing::Locale => identity("--locale <l>"),
-        ReadyMissing::PageRecognition => {
+        // #463 KR-1 fix round 1: a key step's page gives it a guard once it has a template of its
+        // own, which the generator's rule takes when the step names none.
+        ReadyMissing::PageRecognition | ReadyMissing::KeyGuardMissing => {
             Some(format!("record mark --step {step} --template <id>=x,y,w,h"))
         }
         ReadyMissing::OptionalFirstStep
@@ -466,6 +481,8 @@ pub(crate) fn check_items(recording: &LabRecording, runs: &[CheckRun]) -> Vec<Re
                     page: locus.page.clone(),
                     frames: locus.frames.clone(),
                     target: locus.target.clone(),
+                    case: locus.case.clone(),
+                    checks: locus.checks.clone(),
                     ..ReadyDetails::default()
                 },
             }

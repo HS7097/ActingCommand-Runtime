@@ -107,6 +107,49 @@ actingcommand_contract::outcome_codes! {
         /// contract does not name is read past, never a failure (optional key `member`: its name);
         /// the case still runs.
         CaseMemberUnknown => "case_member_unknown": warning / none,
+        /// Error. #463 S2-10: a regression case `record stop` made from the recording for the
+        /// package it generated misses on that package when the one runner of the case contract
+        /// runs it: its page is not recognised on its scene, a target it expects fails, or another
+        /// check fails, never only because another page matches too (key `regression_problem`:
+        /// the word of its first failed check); the case is not written and `record stop` refuses
+        /// as at any self-check's failure, nothing written (exit 3; actinglab details `case`,
+        /// `page`, `frame_id`, `step` and `artifact_step` or `outcome_key`, `verdict`, `checks`).
+        RecordCaseFailed => "record_case_failed": error / none,
+        /// Warning. #463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as
+        /// precedent): a regression case's page is recognised on its scene, but so is another page
+        /// of the package, which a linear run never asks; the case is written without
+        /// `expect.observe`, every target its page requires passing and (fix round 3) every target
+        /// it forbids failing. `record stop` and `record ready` name it, with the other pages.
+        RecordCasePageAmbiguous => "record_case_page_ambiguous": warning / none,
+        /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
+        /// page the bare canvas answers, the canvas with no patch at all, so the case proves
+        /// nothing of its page; it is written and named.
+        RecordCaseBareCanvas => "record_case_bare_canvas": warning / none,
+        /// Warning. #463 S2-10 fix round 3 (one cause per word): a regression case's page is
+        /// recognised on its scene beside another page of the package, and the page has no
+        /// recognition target to pin, so without `expect.observe` the case would declare nothing;
+        /// it is not written. `record stop` and `record ready` name it, with the other pages.
+        RecordCaseAmbiguousNotWritten => "record_case_ambiguous_not_written": warning / none,
+        /// Warning. #463 S2-10 fix round 3: a recognition target of the package reads the whole
+        /// frame (its region or its search area is the whole frame), so the scene of the case
+        /// `record stop` wrote is the whole frame; it is written and named, with those targets.
+        RecordCaseWholeFrame => "record_case_whole_frame": warning / none,
+        /// Warning. #463 S2-10 fix round 3: the Lab has no text-recognition model and the package's
+        /// page detection reads a text target, so the runner judged no regression case's page; the
+        /// cases are written without their page judgement, and `record stop` says so once.
+        RecordCasesOcrUnavailable => "record_cases_ocr_unavailable": warning / none,
+        /// Error. #463 S2-8': the swipes recorded before a press cannot be folded into one
+        /// scrolling search of that press (`fold_scan`), the fold cannot be undone (`unfold_scan`),
+        /// a step action or a mark names a step of a fold, or `record stop` meets a fold no
+        /// scrolling select reads yet (key `scan_problem`: why); nothing is written (exit 3;
+        /// actinglab details `step`).
+        RecordScanInvalid => "record_scan_invalid": error / none,
+        /// Error. #463 KR-1: a recording step's key (the back key a step presses in place of a
+        /// click, declared after the fact and never sent while recording: a request's `key`,
+        /// `record mark --key back`, or an inserted optional step's) cannot be declared or
+        /// generated (key `key_problem`: why); the command is refused and nothing is written (exit
+        /// 3; actinglab details `step`).
+        RecordKeyInvalid => "record_key_invalid": error / none,
     }
 }
 
@@ -216,6 +259,34 @@ actingcommand_contract::outcome_vocabulary! {
         /// page transition holds none, so the conversion would lose it; the choice is withdrawn
         /// first.
         TransitionOfChoice => "transition_of_choice",
+        /// #463 S2-9a: a scrolling select (`rows` and `scan`) on a step that holds no fold of the
+        /// swipes recorded before it: it has no screens of the list to read.
+        ScanWithoutFold => "scan_without_fold",
+        /// #463 S2-9a: the request declares `rows` and `slots`, which exclude each other.
+        RowsWithSlots => "rows_with_slots",
+        /// #463 S2-9a: the request declares `confirm` beside `rows`: the kernel confirms a
+        /// scrolled choice itself.
+        ConfirmWithRows => "confirm_with_rows",
+        /// #463 S2-9a: the request's `scan` states no `stop`, the kind of the scrolling choice.
+        ScanStopMissing => "scan_stop_missing",
+        /// #463 S2-9a: a region of a scrolling select does not lie inside the frame.
+        ScanRegionOutsideFrame => "scan_region_outside_frame",
+        /// #463 S2-9a: the row of a scrolling select does not lie inside the list.
+        ScanRegionOutsideList => "scan_region_outside_list",
+        /// #463 S2-9a: the anchor, the name region or the click box of a scrolling select does not
+        /// lie inside the row.
+        ScanRegionOutsideRow => "scan_region_outside_row",
+        /// #463 S2-9a: a number the Lab measures from the demonstration cannot be measured there
+        /// (a swipe recorded without its after loop's record) and the request does not give it.
+        ScanNumberNotMeasured => "scan_number_not_measured",
+        /// #463 S2-9b: a scrolling select straight to the wanted item that declares no end mark
+        /// gives an `on_empty_key`: such a scan never reads its list to an end, so a run cannot end
+        /// normally there; where the item is not found it fails with the kernel's code.
+        OnEmptyWithoutEnd => "on_empty_without_end",
+        /// #463 S2-9a fix round 1: the first forward swipe of the fold, the package's advance, moves
+        /// the finger further along the list than the kernel admits (its length less a row's, less
+        /// one), which no given number changes: the scroll is recorded again with shorter swipes.
+        ScanSwipeTooLong => "scan_swipe_too_long",
     }
 }
 
@@ -284,8 +355,9 @@ actingcommand_contract::outcome_vocabulary! {
         StepApplication => "step_application",
         /// The inserted step adds and reuses no mark, so its page would recognize nothing.
         NoMarks => "no_marks",
-        /// The inserted step declares no click, so nothing would close its pop-up.
-        NoClick => "no_click",
+        /// #463 KR-1 (was `no_click`): the inserted step declares no effect, neither a click nor a
+        /// key, so nothing would close its pop-up.
+        NoEffect => "no_effect",
         /// The request clears `optional` on an inserted step: a step never recorded on the path
         /// stays optional.
         ClearsOptional => "clears_optional",
@@ -389,6 +461,16 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-6: a step marked as holding a choice that no select refines yet
         /// (`record_select_invalid`, `choice_not_refined`).
         SelectUnrefined => "select_unrefined",
+        /// #463 S2-8': a press step whose recorded swipes are folded into it declares no scrolling
+        /// select yet (`record_scan_invalid`, `scan_not_selected`).
+        ScanWithoutSelect => "scan_without_select",
+        /// #463 S2-9a: a scrolling select that reads its list to its end declares no end mark:
+        /// the demonstration never reached the list's end (`record_scan_invalid`,
+        /// `end_not_recorded`).
+        ScanEndNotRecorded => "scan_end_not_recorded",
+        /// #463 KR-1: a step that presses a key gets no guard (`record_key_invalid`,
+        /// `guard_missing`; fix round 1: by a click step's rule, its page gives none).
+        KeyGuardMissing => "key_guard_missing",
     }
 }
 
@@ -413,6 +495,20 @@ actingcommand_contract::outcome_vocabulary! {
         Selects => "selects",
         /// The final package: encoded, expanded again, admitted again, and the same first decision.
         FinalPackage => "final_package",
+        /// #463 S2-10: the regression cases made from the recording, each run on the final
+        /// package by the one runner of the case contract before it is written; the last check.
+        Cases => "cases",
+    }
+}
+
+// #463 S2-10: what the regression cases `record stop` writes say of themselves (`limits`).
+actingcommand_contract::outcome_vocabulary! {
+    /// A limit of the regression cases written with a package (`case_limit`).
+    pub enum CaseLimit: "case_limit" {
+        /// The cases were made from the frames the package was built from: that they pass shows
+        /// the package recognises the screens it was recorded on and says nothing about screens
+        /// it did not meet.
+        SelfAgreement => "self_agreement",
     }
 }
 
@@ -575,6 +671,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// the frame before this press by more than the frame-change bound, by one of the two
         /// comparisons (`drop_comparison`).
         NextScreenDiffers => "next_screen_differs",
+        /// #463 KR-1 fix round 1: the step's effect is a declared key: the frames on record are
+        /// those of the press the key replaced, and nothing shows what the key does; the key is
+        /// taken back first.
+        KeyDeclared => "key_declared",
     }
 }
 
@@ -588,5 +688,92 @@ actingcommand_contract::outcome_vocabulary! {
         /// The neighbourhood of the press (its rectangle grown by one cell of the whole-frame
         /// measure's grid on every side, clamped to the frame), by the same measure.
         PressRegion => "press_region",
+    }
+}
+
+// #463 S2-8': why the swipes recorded before a press cannot be folded into one scrolling search of
+// that press, or the fold undone, or a step of a fold acted on, or the fold generated.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a fold of recorded swipes cannot hold (`scan_problem`).
+    pub enum ScanProblem: "scan_problem" {
+        /// `fold_scan` names no fold: its first step is not below its press step; a step of the
+        /// range is unknown, dropped, converted into a transition, or folded or holding a fold
+        /// already; the press step's effect is no executed tap; or a step between them is no
+        /// executed swipe.
+        FoldRangeInvalid => "fold_range_invalid",
+        /// Fix round 1: a step of the range, the press step included, is an optional step a
+        /// stopped recording inserted after the stop, no step recorded on the path.
+        InsertedInRange => "inserted_in_range",
+        /// A step the fold would fold has marks of its own, which no page of the package would
+        /// read any more.
+        WouldLoseMarks => "would_lose_marks",
+        /// A step the fold would fold names its page.
+        WouldLosePage => "would_lose_page",
+        /// A step the fold would fold is optional.
+        WouldLoseOptional => "would_lose_optional",
+        /// A step the fold would fold holds a choice (marked as holding one, or refined by a
+        /// select).
+        WouldLoseChoice => "would_lose_choice",
+        /// A step the fold would fold has a transition after its effect.
+        WouldLoseTransition => "would_lose_transition",
+        /// Fix round 1: a step the fold would fold has an optional step a stopped recording
+        /// inserted after it after the stop, and not given up, which would run after no step of
+        /// the package.
+        WouldLoseInserted => "would_lose_inserted",
+        /// A swipe of the range runs clearly along neither axis (its move along one axis is not
+        /// at least twice its move across it), or along another axis than the first swipe.
+        MoveAxisUnclear => "move_axis_unclear",
+        /// A swipe in the first swipe's direction after one against it: the demonstration goes
+        /// forward as often as needed, then back as often as needed, then presses.
+        MoveAfterBack => "move_after_back",
+        /// `unfold_scan` names a step that holds no fold.
+        NotFolded => "not_folded",
+        /// A step action or a mark names a step of a fold: a swipe folded into a press step, or (a
+        /// step action) the press step that holds the fold; the fold is undone first.
+        StepInFold => "step_in_fold",
+        /// `record stop` meets a press step whose swipes are folded into it and which declares no
+        /// scrolling select yet, so its package would press without scrolling.
+        ScanNotSelected => "scan_not_selected",
+        /// #463 S2-9a: `unfold_scan` names a press step whose fold a scrolling select reads; the
+        /// select is taken off first (`clear_select`).
+        ScanSelected => "scan_selected",
+        /// #463 S2-9a: `record stop` meets a scrolling select that reads its list to its end and
+        /// declares no end mark: the demonstration never reached the list's end.
+        EndNotRecorded => "end_not_recorded",
+    }
+}
+
+// #463 KR-1: why a recording step cannot press a key, the back key a step presses in place of a
+// click, declared after the fact and never sent while recording.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a Lab recording step's key cannot be declared or generated (`key_problem`).
+    pub enum KeyProblem: "key_problem" {
+        /// The key's word is none of the vocabulary's, which is `back` alone.
+        WordUnknown => "word_unknown",
+        /// The request declares a click beside the key (a rectangle, a source mark, a followed
+        /// mark, a gesture or a press box), or an inserted step declares both a click and a key.
+        WithClick => "with_click",
+        /// The request declares an application operation beside the key.
+        WithApplication => "with_application",
+        /// The request declares a click retry beside the key: a key step declares no retry.
+        WithRetry => "with_retry",
+        /// The step is the application entry step, which has no frame and no page to guard a key
+        /// on.
+        ApplicationEntry => "application_entry",
+        /// The step's effect is an application operation, declared or executed.
+        ApplicationStep => "application_step",
+        /// A key and a choice on one step: the step holds a choice (a select or a choice mark), or
+        /// the request gives one to a step with a key or beside a key.
+        HoldsChoice => "holds_choice",
+        /// The step is dropped or converted into a page transition.
+        StepNotEffective => "step_not_effective",
+        /// `record stop` meets a step that presses a key and gets no guard (fix round 1: by a
+        /// click step's rule, it names none its page requires and its page requires no template,
+        /// colour, colour digest or check mark): a key has no coordinate to trust.
+        GuardMissing => "guard_missing",
+        /// The train of 0.12.70 (#463 S2-8' joined): the step holds a fold, the swipes recorded
+        /// before it folded into its scrolling search, so its press is the press of a scrolling
+        /// search; the fold is undone first.
+        HoldsFold => "holds_fold",
     }
 }

@@ -477,7 +477,8 @@ pub struct RecordingReview {
     /// The first decision was simulated: no `first_decision_not_evaluated` warning and no
     /// application step, which the offline simulation never passes.
     pub first_decision_evaluated: bool,
-    /// The steps whose click the recording marked `needs_review`, by their step number.
+    /// The steps whose click the recording marked `needs_review`, by their step number; #463 KR-1
+    /// fix round 1: a key step whose replaced press it marked so.
     pub steps_needing_review: Vec<u64>,
     /// Workflow #463 S3-12 (the rule of ruling 2 on #464, named for what it is): the recording was
     /// checked offline, a recording's, its cross-check passed, its first decision evaluated and no
@@ -1665,10 +1666,14 @@ impl Package {
                 steps
                     .iter()
                     .filter(|step| {
-                        step.get("click")
-                            .and_then(|click| click.get("needs_review"))
-                            .and_then(Value::as_bool)
-                            == Some(true)
+                        // #463 KR-1 fix round 1: a key step by the press its key replaced, which
+                        // the step's `key` entry says.
+                        ["click", "key"].into_iter().any(|effect| {
+                            step.get(effect)
+                                .and_then(|entry| entry.get("needs_review"))
+                                .and_then(Value::as_bool)
+                                == Some(true)
+                        })
                     })
                     .filter_map(|step| step.get("step").and_then(Value::as_u64))
                     .collect::<Vec<_>>()

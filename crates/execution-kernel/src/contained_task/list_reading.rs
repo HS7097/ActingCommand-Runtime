@@ -286,7 +286,8 @@ impl TaskProgram {
 /// column's feature another feature of the layout, read once, of value `passed`, `ocr_integer` or
 /// `identity`; its `fact_key` lies under `inventory.list.`, is a valid instance fact key and is
 /// unique among every key the task writes; `valid_for_ms` is `1..=31_536_000_000`; and its scan
-/// declares no `early_stop` and passes a select step's static checks. Each refusal is
+/// declares no `early_stop`, declares `end` (Workflow #463 K-c) and passes a select step's static
+/// checks. Each refusal is
 /// `contained_task_resource_reading_invalid`, `<operation id>:<reason>`.
 pub(super) fn prepare_list_readings(
     program: &mut TaskProgram,
@@ -358,6 +359,12 @@ pub(super) fn prepare_list_readings(
         }
         if read.scan.declares_early_stop() {
             return Err(refuse(&member("scan/early_stop")));
+        }
+        // Workflow #463 K-c: a select's scan may leave out `end` beside `early_stop`; a list
+        // reading reads to its end, so its scan declares one (the declaration gate refuses it
+        // first, `MissingField` at `read_list/scan/end`).
+        if !read.scan.declares_end() {
+            return Err(refuse(&member("scan/end")));
         }
         if let Some(detail) = read.scan.admission_refusal(
             layout,
