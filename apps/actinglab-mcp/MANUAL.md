@@ -464,23 +464,36 @@ naming this file.
   `ac_record_stop` writes the package's regression cases beside it,
   `lab/out/<package_id>.cases/<case id>/` (`case.json` and `scene.png`, the case contract's form):
   one per step with a press and a page, on the frame its press was sent on, one for the final
-  screen and one per ending, each a black canvas with the regions every recognition target of the
-  package reads pasted where they are, never a whole frame. Its last self-check, `cases`, runs
-  each on the package first: a real miss (the page not recognised on its scene, a target it
-  expects failing) is not written and the stop refuses `record_case_failed`
-  (`regression_problem`), nothing written; `ac_record_ready` lists every such case (`what`
-  `cases`, with the case's id and the runner's failed checks in `details`). A page recognised
-  beside another page of the package is no miss (a linear run waits for each step's own page): the
-  case is written without `expect.observe`, its page's targets alone, and both tools name it with
-  the warning `record_case_page_ambiguous` and the other pages (a page with no target gives no
-  case, the warning saying so). The answer's
+  screen and one per ending, each a black canvas with exactly the regions the package's
+  recognition targets read pasted where they are; where a target reads the whole frame (its region
+  or a template's search area is the whole frame), the scene is the whole frame, and the answer
+  names each such case with the warning `record_case_whole_frame` and those targets (nothing is
+  refused for it). A case's `source` names the recording's id and the step (or `final`, or the
+  ending) and nothing else; a recording id the Lab made by default holds the time the recording
+  began and a process number, never a path, an instance, an account or a device. Its last
+  self-check, `cases`, runs each on the package first: a real miss (the page not recognised on its
+  scene, a target it expects failing) is not written and the stop refuses `record_case_failed`
+  (`regression_problem`; its `page` as the page detection names it, `<game>/<page>`), nothing
+  written; `ac_record_ready` lists every such case (`what` `cases`, with the case's id and the
+  runner's failed checks in `details`). A page recognised beside another page of the package is no
+  miss (a linear run waits for each step's own page): the case is written without
+  `expect.observe`, every target its page requires passing and every target it forbids failing
+  (it states that this page holds on this scene), run again in that form first, and both tools
+  name it with the warning `record_case_page_ambiguous` and the other pages; such a page with no
+  target to pin gives no case and the warning `record_case_ambiguous_not_written` (mark a target
+  on that page's screen to have it written). Without a text-recognition model for a text target
+  the page detection reads, no case's page is judged, which the warning
+  `record_cases_ocr_unavailable` says once. The answer's
   `lab.cases` names the directory, `counts` by kind, the `ids`, `not_proven` (a case run in part,
   with the runner's reasons, `ocr_unavailable` without an OCR model), `warnings`
-  (`record_case_page_ambiguous`; `record_case_bare_canvas`: its page is also what the bare canvas
-  answers) and `limits`
+  (`record_cases_ocr_unavailable` first, then each case's: `record_case_page_ambiguous` or
+  `record_case_ambiguous_not_written`, `record_case_bare_canvas` (its page is also what the bare
+  canvas answers), `record_case_whole_frame`; each warns, exit 0) and `limits`
   `["self_agreement"]`: the cases were made from the frames the package was built from and say
   nothing about screens it did not meet. A regeneration replaces the set whole and keeps the
-  earlier one beside it; `dry_run` writes nothing and lists what would be.
+  earlier one beside it; `dry_run` writes nothing, and its `lab.would_write` names the cases'
+  directory and each case after the package. The cases are written beside the package only;
+  adoption does not take them into a repository yet (#463 AC-1, another slice).
   #463 S2-8' (0.12.70; `contracts/lab-recording.md`, "Folding swipes into a scrolling search"): a
   choice in a scrolling list is recorded as several swipes, each a step, then the press on the
   wanted row. `ac_record_mark` with `step_action` `{"kind": "fold_scan", "step": b, "first": a}`

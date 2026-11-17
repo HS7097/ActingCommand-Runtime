@@ -54,14 +54,18 @@ regression`, and nothing else.
 `expect.recognize` are closed objects; the top level is open (above). An expectation that is not
 evaluated is read and answered `not_run` with `not_evaluated`, each at its place: never passed. A
 case `record stop` writes (#463 S2-10, 0.12.70; [lab-recording.md](lab-recording.md), "Regression
-cases written with the package") names in `source` only its recording and where it comes from:
-`{record_id, step}` (the step's serial number), `{record_id, final: true}` or `{record_id, ending}`
-(the ending's key), never a path of the machine, an instance, an account or a time. Its `id` is
-`step_<nn>`, `final` or `ending_<outcome_key>`; it expects its page (`expect.observe.page`) and
-every target that page requires to pass (`expect.recognize`), and nothing else; or, when its page is
-recognised on its scene beside another page of the package (`page_conflict` among whose pages its
-page is, which a linear run never asks), every such target alone, without `expect.observe`, named
-where it is written with the warning `record_case_page_ambiguous`.
+cases written with the package") names in `source` the recording's id and where it comes from and
+nothing else: `{record_id, step}` (the step's serial number), `{record_id, final: true}` or
+`{record_id, ending}` (the ending's key); a recording id the Lab made by default
+(`<unix_ms>-<pid>-<task_id>`) holds the time the recording began and a process number, and `source`
+never holds a path of the machine, an instance, an account or a device. Its `id` is `step_<nn>`,
+`final` or `ending_<outcome_key>`; it expects its page (`expect.observe.page`) and every target that
+page requires to pass (`expect.recognize`), and nothing else; or, when its page is recognised on
+its scene beside another page of the package (`page_conflict` among whose pages its page is, which a
+linear run never asks), without `expect.observe`, every target its page requires to pass and every
+target its page forbids to fail (#463 S2-10 fix round 3), so that it states that this page holds on
+this scene, named where it is written with the warning `record_case_page_ambiguous`; such a page
+with no target to pin gives no case (the warning `record_case_ambiguous_not_written`).
 
 `scene_sha256` is, in this contract, the SHA-256 of the scene file's bytes, and a scene whose
 bytes have another is a failure of the case. The value of cases written before this contract was
@@ -116,11 +120,17 @@ directory that is not there is `package_missing`, any other refusal `package_ref
    region; a check, a value test and a click-only target none of their own; [lab-recording.md](lab-recording.md),
    "Regression cases written with the package"), where they are in the frame, each rectangle once with the targets that read it as its
    `content`; not only the targets of the case's page, so that a page told apart from this one by
-   a target it forbids sees that target's region as on the frame. Never a whole frame. A page that
+   a target it forbids sees that target's region as on the frame. It holds exactly those regions;
+   where a target reads the whole frame (its region or a template's search area is the whole
+   frame), that patch is the whole frame and so is the scene, unlike the patches of "A case" above:
+   such a case is named where it is written with the warning `record_case_whole_frame` and the
+   targets that read it (#463 S2-10 fix round 3), and nothing is refused for it. A page that
    the bare canvas answers too (a dark colour, for one) is named where the case is written (the
    warning `record_case_bare_canvas`), and a target that needs several frames leaves the case
    `not_run` or `partial` with `frames_required`, named there too; neither is forced into one
-   scene. `record stop` runs each case before it writes it and writes none that fails.
+   scene. Without a text-recognition model for a text target the page detection reads, no case's
+   page is judged, which `record stop` says once (`record_cases_ocr_unavailable`). `record stop`
+   runs each case before it writes it and writes none that fails.
 3. **The scene in its package's coordinate space**, brought there as the offline commands bring
    a stored image (`scene_in_base`, `crates/lab`, Workflow #392 DA-5cd): a scene of the package's
    `coordinate_space` as it is, a pure scale of it reduced to it. A scene it refuses (another

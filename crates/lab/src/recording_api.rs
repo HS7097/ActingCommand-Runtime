@@ -750,6 +750,15 @@ fn generate_and_write(
         if let Some(dir_plan) = lab_dir_plan.as_ref() {
             would_write.push(absolute_display(&dir_plan.target));
         }
+        // #463 S2-10 fix round 3: and the regression cases' directory with each case it would
+        // hold.
+        would_write.push(absolute_display(&cases_path));
+        would_write.extend(
+            cases
+                .ids()
+                .into_iter()
+                .map(|id| absolute_display(&cases_path.join(id))),
+        );
         lab.insert("would_write".to_string(), json!(would_write));
     } else {
         lab.insert("lab_dir_status".to_string(), json!(lab_dir_status));
@@ -897,8 +906,9 @@ struct PackageChecked {
 struct SelfCheckFailures {
     ran: Vec<CheckRun>,
     not_run: Vec<ReadyCheck>,
-    /// #463 S2-10: the warnings `record_case_page_ambiguous` of the cases that did not fail, when
-    /// the check `cases` ran to its end and another case failed; `record ready` names them.
+    /// #463 S2-10: the warnings `record_case_page_ambiguous` (fix round 3: and
+    /// `record_case_ambiguous_not_written`) of the cases that did not fail, when the check `cases`
+    /// ran to its end and another case failed; `record ready` names them.
     warnings: Vec<Value>,
 }
 
@@ -1059,13 +1069,6 @@ fn self_checks(
         return Err(failed);
     }
     Ok(Checked { package, cases })
-}
-
-/// #463 S2-10: the package without its regression cases, as the self-checks before `cases` build
-/// it, for a test that compares it with the package `record stop` writes.
-#[cfg(test)]
-pub(crate) fn package_without_cases(plan: &Plan, ocr: &LabOcr) -> Option<Vec<u8>> {
-    package_checks(plan, ocr, &mut Runner::new(Failures::first())).map(|package| package.bytes)
 }
 
 /// The self-checks of [`self_checks`] before `cases`, in the order they run, with `runner`: the

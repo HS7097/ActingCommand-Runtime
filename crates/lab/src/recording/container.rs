@@ -355,38 +355,11 @@ pub(crate) fn replace_in_place(
         })?;
     drop(file);
     let old = if replaces {
-        let old = set_aside_name(parent, name, stamp, written)?;
-        fs::rename(target, &old).map_err(|error| {
-            written_details(
-                state_io(format!(
-                    "failed to set {} aside as {} (left in place): {error}",
-                    target.display(),
-                    old.display()
-                )),
-                written,
-                json!({"stage": "replace_set_aside"}),
-            )
-        })?;
-        Some(old)
+        Some(set_aside_name(parent, name, stamp, written)?)
     } else {
         None
     };
-    if let Err(error) = fs::rename(&part, target) {
-        let restored = old.as_ref().map(|old| fs::rename(old, target).is_ok());
-        let left: Vec<String> = old
-            .iter()
-            .filter(|_| restored != Some(true))
-            .map(|old| old.display().to_string())
-            .collect();
-        return Err(written_details(
-            state_io(format!(
-                "failed to rename {part_display} to {}: {error}",
-                target.display()
-            )),
-            written,
-            json!({"stage": "replace_rename", "restored": restored, "left_files": left}),
-        ));
-    }
+    let old = swap_into_place(target, &part, old, written)?;
     written.retain(|path| *path != part_display);
     written.push(target.display().to_string());
     // #464 P4: the output an earlier stop wrote stays beside the new one.
@@ -455,7 +428,7 @@ pub(crate) fn replace_dir_in_place(
             json!({"stage": "replace_write"}),
         )
     })?;
-    written.push(part_display.clone());
+    written.push(part_display);
     for (relative, bytes) in files {
         let file = relative
             .split('/')
@@ -469,23 +442,40 @@ pub(crate) fn replace_dir_in_place(
         })?;
     }
     let old = if replaces {
-        let old = set_aside_name(parent, name, stamp, &written)?;
-        fs::rename(target, &old).map_err(|error| {
+        Some(set_aside_name(parent, name, stamp, &written)?)
+    } else {
+        None
+    };
+    let old = swap_into_place(target, &part, old, &written)?;
+    Ok(old.map(|old| old.display().to_string()))
+}
+
+/// The swap of [`replace_in_place`] (a file) and [`replace_dir_in_place`] (a directory), one
+/// function with two callers (#463 S2-10 fix round 3): an existing `target` is set aside as `old`,
+/// the free `<name>.old-<unix_ms>` its caller sought ([`set_aside_name`]), when one is there, and
+/// `part`, the new output written beside it, is renamed to `target`; when that rename fails the old
+/// one is renamed back (`restored`). Returns `old`. Every failed step is `record_state_io_failed`
+/// naming `written`, what was written before it.
+fn swap_into_place(
+    target: &Path,
+    part: &Path,
+    old: Option<PathBuf>,
+    written: &[String],
+) -> LabResult<Option<PathBuf>> {
+    if let Some(old) = &old {
+        fs::rename(target, old).map_err(|error| {
             written_details(
                 state_io(format!(
                     "failed to set {} aside as {} (left in place): {error}",
                     target.display(),
                     old.display()
                 )),
-                &written,
+                written,
                 json!({"stage": "replace_set_aside"}),
             )
         })?;
-        Some(old)
-    } else {
-        None
-    };
-    if let Err(error) = fs::rename(&part, target) {
+    }
+    if let Err(error) = fs::rename(part, target) {
         let restored = old.as_ref().map(|old| fs::rename(old, target).is_ok());
         let left: Vec<String> = old
             .iter()
@@ -494,14 +484,15 @@ pub(crate) fn replace_dir_in_place(
             .collect();
         return Err(written_details(
             state_io(format!(
-                "failed to rename {part_display} to {}: {error}",
+                "failed to rename {} to {}: {error}",
+                part.display(),
                 target.display()
             )),
-            &written,
+            written,
             json!({"stage": "replace_rename", "restored": restored, "left_files": left}),
         ));
     }
-    Ok(old.map(|old| old.display().to_string()))
+    Ok(old)
 }
 
 /// A new file `path` holding `bytes`, its directories created first, flushed to the disk.

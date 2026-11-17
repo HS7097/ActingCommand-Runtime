@@ -1264,6 +1264,22 @@ fn p4_a_second_stop_keeps_the_output_the_first_wrote() {
     // The kept cases are the first stop's: a directory for each of its cases, nothing else.
     assert_eq!(names_in(&kept_cases), first_cases, "{regenerated}");
     let directory = first_path.parent().expect("out directory");
+    // #463 S2-10 fix round 3 (the review of #1797): both kept members of the answer, whole: lab.kept
+    // is the package set aside and nothing else, lab.cases.kept the cases set aside, both in the
+    // output directory under the one suffix.
+    assert_eq!(
+        kept_files
+            .iter()
+            .map(|path| PathBuf::from(path.as_str().expect("kept path")))
+            .collect::<Vec<_>>(),
+        [directory.join(format!("{name}.old-{suffix}"))],
+        "{regenerated}"
+    );
+    assert_eq!(
+        kept_cases,
+        directory.join(format!("{cases}.old-{suffix}")),
+        "{regenerated}"
+    );
     // The whole output directory, sorted: the cases, the kept cases, the package, the kept package.
     assert_eq!(
         names_in(directory),
@@ -1364,7 +1380,10 @@ fn p4_a_first_stop_writes_as_before_and_answers_the_adoption_skeleton() {
 
     assert_eq!(lab["lab_status"], "generated", "{lab}");
     assert_eq!(lab["lab_dir_status"], "written", "{lab}");
+    // #463 S2-10 fix round 3 (the review of #1797): neither kept member of the answer, the
+    // package's (lab.kept) nor the cases' (lab.cases.kept), is there.
     assert_eq!(lab.get("kept"), None, "{lab}");
+    assert_eq!(lab["cases"].get("kept"), None, "{lab}");
     let copy = PathBuf::from(lab["path"].as_str().expect("package path"));
     let name = copy
         .file_name()
