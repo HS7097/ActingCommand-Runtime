@@ -437,7 +437,8 @@ try {
     }
     $uses = @([regex]::Matches($workflowText, '(?m)^\s*uses:\s*([^\s#]+)') | ForEach-Object { $_.Groups[1].Value })
     # #390 (10-26): checkout, the two acceptance uploads and the release-files upload (same upload-artifact pin).
-    Assert-True -Condition ($uses.Count -eq 4) -Message 'workflow must contain exactly four pinned action uses'
+    # Workflow #479 ACIB-0: and the upload of acib, an artifact of its own outside the two halves.
+    Assert-True -Condition ($uses.Count -eq 5) -Message 'workflow must contain exactly five pinned action uses'
     $uploads = @($uses | Where-Object { $_ -like 'actions/upload-artifact@*' } | Sort-Object -Unique)
     Assert-True -Condition ($uploads.Count -eq 1) -Message 'every upload-artifact use must carry the same pin'
     Assert-True -Condition $workflowText.Contains('- name: Keep the release files') -Message 'workflow does not keep the release files'

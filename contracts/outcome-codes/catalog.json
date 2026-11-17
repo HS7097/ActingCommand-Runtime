@@ -14304,6 +14304,7 @@
     ]
   },
   "fragments": {
+    "acib": "apps/acib",
     "actingctl": "crates/lab-ops",
     "actingctl-app": "apps/actingctl",
     "actingd": "apps/actingd",
