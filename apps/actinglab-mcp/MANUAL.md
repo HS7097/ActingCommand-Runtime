@@ -434,7 +434,8 @@ naming this file.
   two of them is not seen: a small change away from the press (a counter, a badge) is not seen.
   Whether the press mattered is the agent's judgement; the tool refuses only what the frames
   contradict: `record_drop_unproven` with `drop_problem` `frames_not_recorded`, `screen_changed`
-  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`.
+  or `next_screen_differs`, and for the last two `drop_comparison` `frame` or `press_region`
+  (#463 KR-1 fix round 1: `key_declared` for a key step, whose key is taken back first).
   `{"kind": "restore_step", "step": n}` gives a dropped step back (`record_mark_rejected` when a
   mark it reuses or forbids is gone since). Nothing is proposed: the agent names the frame and the
   step. The train's fix round (0.12.68): a step that holds a choice (marked with `choice`, or
@@ -500,10 +501,17 @@ naming this file.
   step without an effect it is declared; a click of the step, executed or declared, of any form, is
   replaced only with `replace_click` (`record_step_effect_exists` otherwise) and kept whole inside
   the key, the step's frames standing, and `no_key` (`"key": false`) takes the key back and gives
-  the click back exactly. It works on the active and the stopped recording (an archived one is
-  reopened first). Its guard is `click_guard`, which you name: `ac_record_ready` lists a key step
-  without one (`key_guard_missing`) and `ac_record_stop` refuses it (`record_key_invalid`,
-  `guard_missing`); no tool picks a guard for a key. Refused, nothing written: `record_key_invalid`
+  the click back exactly, with the `click_guard` the step had before the key (fix round 1). It
+  works on the active and the stopped recording (an archived one is reopened first). Its guard (fix
+  round 1) is a click step's: the `click_guard` you name, else its page's first template, colour or
+  colour digest, or check mark you drew; only a page of text or value-test marks alone leaves it
+  none, and then `ac_record_ready` lists it (`key_guard_missing`, add a template to the page) and
+  `ac_record_stop` refuses it (`record_key_invalid`, `guard_missing`). A key step whose replaced
+  press needs review still needs review (`lab.steps_needing_review`); two optional steps closed by
+  the key are one pop-up only on one page (otherwise `record_optional_step_ambiguous`); dropping a
+  key step before the last is `record_drop_unproven` with `drop_problem` `key_declared` (take the
+  key back first); a `key` that is no `{"key": "back"}`, `false` or `null` is `validation_failed`
+  saying the three forms. Refused, nothing written: `record_key_invalid`
   with `key_problem` `word_unknown` (back alone), `with_click`, `with_application`, `with_retry`
   (send the key alone), `application_entry`, `application_step`, `holds_choice` (a select or a
   choice mark on the step) or `step_not_effective`. A pop-up a run met is closed by the key with

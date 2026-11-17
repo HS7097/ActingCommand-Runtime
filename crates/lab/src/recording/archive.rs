@@ -217,7 +217,7 @@ pub(crate) struct ArchiveRow {
     pub(crate) step: u32,
     /// `tap`, `swipe`, `none` (no input), or the step table's own word for any other effect
     /// (`long_press`, `single_touch_drag_with_vertical_brake_v1`, `single_touch_path_drag_v1`,
-    /// `application`).
+    /// `application`, and #463 KR-1 `key`, whatever press the key replaced).
     pub(crate) kind: String,
     /// #463 S1-5: as the step table has them.
     pub(crate) dropped: bool,

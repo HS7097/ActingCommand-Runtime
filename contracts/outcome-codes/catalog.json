@@ -5431,7 +5431,7 @@
           "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
         },
         "key_guard_missing": {
-          "description": "#463 KR-1 (since 0.12.70): a step that presses a key names no guard (record_key_invalid, guard_missing)."
+          "description": "#463 KR-1 (since 0.12.70): a step that presses a key gets no guard (record_key_invalid, guard_missing; fix round 1: by a click step's rule, its page gives none)."
         }
       }
     },
@@ -5512,7 +5512,7 @@
           "description": "The step is dropped or converted into a page transition."
         },
         "guard_missing": {
-          "description": "record stop meets a step that presses a key and names no guard: a key has no coordinate to trust, so its step is generated only with the guard the agent names."
+          "description": "record stop meets a step that presses a key and gets no guard (fix round 1: by a click step's rule, it names none its page requires and its page requires no template, colour, colour digest or check mark): a key has no coordinate to trust."
         }
       }
     },
@@ -11189,7 +11189,7 @@
       }
     },
     "drop_problem": {
-      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change, or (#463 KR-1 fix round 1, since 0.12.70) the step's effect is a declared key. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
       "review": "pending",
       "source": {
         "file": "crates/lab/src/codes.rs",
@@ -11204,6 +11204,9 @@
         },
         "next_screen_differs": {
           "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "key_declared": {
+          "description": "#463 KR-1 fix round 1 (since 0.12.70): the step's effect is a declared key: the frames on record are those of the press the key replaced, and nothing shows what the key does; the key is taken back first (key false, --no-key)."
         }
       }
     },

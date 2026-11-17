@@ -35360,7 +35360,8 @@ declares it on the recording, and `record stop` generates it with everything els
   the first template, colour, colour digest or check mark of its page the generator finds
   (`generate::guard_target`), or pressed as a trusted coordinate on a page of OCR marks alone; a
   key has no coordinate to trust and the generator picks none for it: `record ready` lists a key
-  step without one (`key_guard_missing`), `record stop` refuses it (`guard_missing`).
+  step without one (`key_guard_missing`), `record stop` refuses it (`guard_missing`). (Replaced by
+  fix round 1 below: a key step takes a click step's rule.)
 - *Taking it back*: `key: false` gives back the click exactly; `recording.json` is byte for byte what
   it was but for `updated_at_unix_ms` (on a stopped recording `amended_at_unix_ms` too), the package
   generated afterwards the one before but for its generation time.
@@ -35379,7 +35380,8 @@ declares it on the recording, and `record stop` generates it with everything els
   the replaced press (`ready::press_frame`), or on its primary frame.
 - *Drop a press that changed nothing* (S2-7): a key step before the last is `record_drop_unproven`
   `frames_not_recorded`, since its `click` is the key's and the stored frames show the press it
-  replaced, not the key; taking the key back first lets the press be judged as recorded.
+  replaced, not the key; taking the key back first lets the press be judged as recorded. (Fix round
+  1 below gives it a word of its own, `key_declared`.)
 
 **Where it is built.**
 
@@ -35439,6 +35441,89 @@ or Runtime interface revision.
 
 **At deploy.** Nothing to configure. A recording that holds a key is not read by a Lab before
 0.12.70.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-kr1-fix1.md`, after the independent
+review of the pull request and the coordinator's rulings on it, not the owner's words; every label
+and `since` 0.12.70).
+- *Taking the key back gives the guard back too* (the review's first required point): the click
+  guard is the step's member, not the click's, so a guard named with the key or after it stayed on
+  the step. `RecordedKey::replaced_guard` keeps the step's click guard as it was when the key was
+  declared (`apply_key` runs before `apply_click` takes the request's guard; a key declared again
+  keeps the first one's), absent when there was none, and `key: false` gives it back with the click:
+  the guard named for the key goes, the click's comes back, none comes back as none.
+- *The contract named the wrong refusal*: a select declared on a key step is `record_key_invalid`
+  with `holds_choice` (the choice is judged first, `check_key_step`), not
+  `record_step_effect_exists`; the sentence is corrected.
+- *A key step's guard by a click step's rule* (the review's answer 1: the first round's premise, that
+  a click step without a named guard is a trusted coordinate, was wrong). The coordinator's ruling:
+  a key step takes the rule a click step and a select step already take, over marks the agent
+  drew, which proposes nothing: the click guard it names when that is a mark its page requires and
+  no OCR mark, else its page's first template, else its first colour or colour digest, else its
+  first check; the default takes no value-test mark and no text mark, and a key, having no click,
+  has no followed mark and no source mark. One function holds the rule, `generate::page_guard`,
+  which `guard_target` gives for every step whose click follows no mark and which the pre-check
+  `key_guards` reads over the marks the page requires: so a named guard the generator passes over
+  (a member of an `any_of` check, the review's "hole") is met at `record ready`, never first at
+  admission. Only a page that gives none (text or value-test marks alone, no value-test mark named)
+  leaves a key step without a guard: then, and only then, `record ready` lists `key_guard_missing`
+  (its hint now `record mark --step k --template <id>=x,y,w,h`) and `record stop` refuses
+  `record_key_invalid` `guard_missing`; `key_operation` answers that refusal should such a step
+  reach it. `lab.key_steps[].guard` names the mark the generator guards the step by.
+- *Drop a middle press on a key step* (one cause, one word): `record_drop_unproven` with the new
+  `drop_problem` `key_declared` in place of `frames_not_recorded`, whose text was untrue there (the
+  replaced press's frames are on record; what is missing is anything that shows what the key does);
+  its text says to take the key back first.
+- *A key step whose replaced press needed review still needs review* (the review's answer 5): the
+  frames after it come from that press. The generator's `lab.steps_needing_review` counts a key step
+  by the press it replaced (`RecordingStep::recorded_click`); the step's provenance records
+  `key.needs_review`; adoption reads `click` or `key` `needs_review`
+  (`crates/resource-tooling/src/adopt.rs`, `RecordingReview::steps_needing_review`, a reader of
+  the Lab's output outside the Lab). `record ready` counts no step needing review, of either kind: nothing to change there.
+- *Two optional key steps are two pop-ups* (the review's answer 5): the check of optional steps
+  told them apart by their click rectangles, both `None` for keys, so any two optional key steps of
+  a run were one pop-up (`same_as`). `crosscheck::same_closing`: two clicks by their rectangles as
+  before; two keys only by the same key on the same page (the same marks required and forbidden, as
+  a copy that reuses the first's marks has); a key and a click never. Two different optional pages
+  are never taken for one; one passing on the other's frames is `record_optional_step_ambiguous`.
+  The refusal's text says "this step's effect" where it said "this step's different click".
+- *A malformed `key`* (the review's answer 7): `KeyRequest` is read by its own deserializer, and a
+  `key` that is no `{"key": "back"}`, `false` or `null` is `validation_failed` with the text
+  `model::KEY_REQUEST_FORMS`, which says the three forms and the vocabulary, as `true` is; not the
+  decoder's "did not match any variant".
+- *Small texts*: the help of `record mark` says a click "may follow a mark" (the first round had
+  dropped the located text; 147 bytes); the manifest's `kind` comment names `key`; the contract says
+  that a text mark the replaced click followed becomes an ordinary mark of the page while the key
+  stands, so the page needs its text read, and that a click guard naming it takes another guard in
+  the request that declares the key.
+- *Where*: `crates/lab/src/recording/model.rs` (`RecordedKey::replaced_guard`, `KeyRequest`'s
+  deserializer, `KEY_REQUEST_FORMS`), `key.rs` (`apply_key`, the `true` text), `generate.rs`
+  (`page_guard`, `guard_target`, `key_guards`, `key_guard_missing`, `key_operation`,
+  `key_steps_summary`, `step_provenance`, the plan's `needs_review`), `steps.rs`
+  (`press_changed_nothing`), `crosscheck.rs` (`same_closing`, `same_ids`, `Against::consequence`),
+  `ready.rs` (the hint), `archive.rs` (a comment), `crates/lab/src/codes.rs` (`DropProblem::KeyDeclared`
+  and two texts), `crates/lab/src/recording_api.rs` (`key_steps_summary` answers a result),
+  `crates/resource-tooling/src/adopt.rs`; [lab-recording.md](lab-recording.md) ("Key steps",
+  "Steps, frames and remediation", the optional steps' check c, the pre-checks, `record ready`'s
+  words, section 4.3), the operation table's row `record mark` (`help`, the `key` and `no_key`
+  notes, `notes`), the MCP manual, the lab fragment, the catalog and the regenerated index.
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `drop_problem` `key_declared` (of `record_drop_unproven`) | the step to drop before the last has a declared key as its effect, whose frames show nothing of what the key does | refuses | 1 (3 on a `--via` line) |
+
+*Tests* (`gate_463_kr1`, the command line's in `apps/actinglab`; exec gate map "#463 KR-1").
+Adapted, as the round changes what they pin: test 2 names a guard with step 2's key and one after
+step 3's (whose click had its own) and still compares `recording.json` byte for byte and the
+regenerated package; test 3, renamed `kr1_a_key_step_whose_page_gives_no_guard_is_listed_and_refused`
+(the name was new in this pull request, so no gate leaves main's map), puts the key on a page of a
+text mark alone, then gives the page a colour mark and pins the guard the package takes from it;
+test 4 adds a followed mark and a drag (`with_click`), a select in the request and a step that
+selects (`holds_choice`) and a converted step (`step_not_effective`); test 5 no longer names the
+pop-up's guard and adds `word_unknown` on an inserted step; test 9 builds the case on a live sample
+the step table names as the press's frame, not the primary frame. New: two optional key steps on two
+pages refused (11); key steps before and after a run of optional steps arriving as their clicks did
+(12); `--key back`, `--no-key` and `--key back` beside `--optional-after` through the command's own
+parsing (`kr1_the_key_flags_declare_the_request_forms_key`).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

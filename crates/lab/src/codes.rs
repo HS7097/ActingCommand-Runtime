@@ -427,8 +427,8 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-6: a step marked as holding a choice that no select refines yet
         /// (`record_select_invalid`, `choice_not_refined`).
         SelectUnrefined => "select_unrefined",
-        /// #463 KR-1: a step that presses a key names no guard (`record_key_invalid`,
-        /// `guard_missing`).
+        /// #463 KR-1: a step that presses a key gets no guard (`record_key_invalid`,
+        /// `guard_missing`; fix round 1: by a click step's rule, its page gives none).
         KeyGuardMissing => "key_guard_missing",
     }
 }
@@ -630,6 +630,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// the frame before this press by more than the frame-change bound, by one of the two
         /// comparisons (`drop_comparison`).
         NextScreenDiffers => "next_screen_differs",
+        /// #463 KR-1 fix round 1: the step's effect is a declared key: the frames on record are
+        /// those of the press the key replaced, and nothing shows what the key does; the key is
+        /// taken back first.
+        KeyDeclared => "key_declared",
     }
 }
 
@@ -670,8 +674,9 @@ actingcommand_contract::outcome_vocabulary! {
         HoldsChoice => "holds_choice",
         /// The step is dropped or converted into a page transition.
         StepNotEffective => "step_not_effective",
-        /// `record stop` meets a step that presses a key and names no guard: a key has no
-        /// coordinate to trust, so its step is generated only with the guard the agent names.
+        /// `record stop` meets a step that presses a key and gets no guard (fix round 1: by a
+        /// click step's rule, it names none its page requires and its page requires no template,
+        /// colour, colour digest or check mark): a key has no coordinate to trust.
         GuardMissing => "guard_missing",
     }
 }

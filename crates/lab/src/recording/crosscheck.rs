@@ -1487,9 +1487,10 @@ impl Against {
                 "on every run without the pop-up this step's click would be executed on that \
                  page"
             }
+            // #463 KR-1 fix round 1: the effect, a different click or a key on another page.
             Self::OtherOptional => {
                 "when only that pop-up appears it would be taken for this one and this step's \
-                 different click executed on it"
+                 effect executed on it"
             }
         }
     }
@@ -1627,9 +1628,8 @@ fn optional_checks(
                     page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
                 let other_step = &plan.steps[other];
                 if !matched.is_empty() {
-                    let same_click = matches!(kind, Against::OtherOptional)
-                        && step.step.click.as_ref().map(|click| click.rect)
-                            == other_step.step.click.as_ref().map(|click| click.rect);
+                    let same_click =
+                        matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                     if !same_click {
                         failures.fail(
                             Locus::on_step(step).with_frames(&matched).with_page(page),
@@ -1720,6 +1720,33 @@ fn optional_checks(
         }
     }
     Ok(checks)
+}
+
+/// Section 4.7c: whether two optional steps of one run, the page of `step` passing on the frames
+/// of `other`, record one pop-up closed one way (`same_as`): the same click rectangle, as before.
+/// #463 KR-1 fix round 1 (the coordinator's ruling on the review's answer 5): what closes them
+/// tells two pop-ups apart, and a key does not, since every pop-up a key closes is closed by the
+/// same key; two optional steps closed by a key are one pop-up only when they also have one page,
+/// the same key on the same marks required and forbidden (a copy that reuses the first's marks),
+/// so that two different optional pages are never taken for one. A key and a click are two.
+fn same_closing(step: &PlanStep, other: &PlanStep) -> bool {
+    match (&step.step.key, &other.step.key) {
+        (Some(key), Some(other_key)) => {
+            key.key == other_key.key
+                && same_ids(&step.required, &other.required)
+                && same_ids(&step.forbidden, &other.forbidden)
+        }
+        (None, None) => {
+            step.step.click.as_ref().map(|click| click.rect)
+                == other.step.click.as_ref().map(|click| click.rect)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `one` and `other` name the same marks, in any order.
+fn same_ids(one: &[String], other: &[String]) -> bool {
+    one.iter().collect::<BTreeSet<_>>() == other.iter().collect::<BTreeSet<_>>()
 }
 
 /// #463 L2 fix 1: every step whose click follows a located-text mark whose names were changed

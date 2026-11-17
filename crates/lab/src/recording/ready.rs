@@ -366,7 +366,9 @@ fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
         ReadyMissing::Game => identity("--game <g>"),
         ReadyMissing::Server => identity("--server <s>"),
         ReadyMissing::Locale => identity("--locale <l>"),
-        ReadyMissing::PageRecognition => {
+        // #463 KR-1 fix round 1: a key step's page gives it a guard once it has a template of its
+        // own, which the generator's rule takes when the step names none.
+        ReadyMissing::PageRecognition | ReadyMissing::KeyGuardMissing => {
             Some(format!("record mark --step {step} --template <id>=x,y,w,h"))
         }
         ReadyMissing::OptionalFirstStep
@@ -374,10 +376,6 @@ fn hint(what: ReadyMissing, step: Option<u32>) -> Option<String> {
         | ReadyMissing::OptionalApplication
         | ReadyMissing::OptionalRestartHome => {
             Some(format!("record mark --step {step} --not-optional"))
-        }
-        // #463 KR-1: the guard the agent names.
-        ReadyMissing::KeyGuardMissing => {
-            Some(format!("record mark --step {step} --click-guard <id>"))
         }
         _ => None,
     }

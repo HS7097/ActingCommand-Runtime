@@ -212,18 +212,48 @@ pub struct KeySpec {
 
 /// #463 KR-1: a request's `key`: `{"key": "back"}` declares the step's effect that key (`--key
 /// back`), `false` takes the step's key back (`--no-key`; `true` is refused); absent or `null`
-/// changes nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// changes nothing. Fix round 1 (the independent review, its answer 7): a `key` of any other shape
+/// is refused in the words of [`KEY_REQUEST_FORMS`], not in the decoder's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum KeyRequest {
     Declare(KeySpec),
     TakeBack(bool),
 }
 
+/// #463 KR-1 fix round 1: the forms a request's `key` takes, and the vocabulary, said where a
+/// `key` is none of them (`validation_failed`).
+pub(crate) const KEY_REQUEST_FORMS: &str = "key takes {\"key\": \"back\"}, which declares the back \
+                                            key (the vocabulary is back alone), false, which takes \
+                                            the key back, or null, which changes nothing";
+
+impl<'de> Deserialize<'de> for KeyRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Given {
+            Declare(KeySpec),
+            TakeBack(bool),
+        }
+
+        Given::deserialize(deserializer)
+            .map(|given| match given {
+                Given::Declare(spec) => Self::Declare(spec),
+                Given::TakeBack(take_back) => Self::TakeBack(take_back),
+            })
+            .map_err(|_| <D::Error as serde::de::Error>::custom(KEY_REQUEST_FORMS))
+    }
+}
+
 /// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the key a step presses in place of a
 /// click, declared after the fact and never sent while recording: its word, when it was declared,
 /// and the click it replaced, kept whole (absent when the step had none), which taking the key back
-/// gives back as it was.
+/// gives back as it was. Fix round 1 (the coordinator's ruling on the review's first point): with
+/// the step's click guard as it was when the key was declared (absent when it had none), which
+/// taking the key back gives back too, a guard named for the key going with it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordedKey {
@@ -231,6 +261,8 @@ pub struct RecordedKey {
     pub declared_at_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced: Option<StepClick>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_guard: Option<String>,
 }
 
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336

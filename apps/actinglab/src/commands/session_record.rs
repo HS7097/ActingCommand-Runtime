@@ -4326,4 +4326,70 @@ mod lab2_tests {
         assert_eq!(error.code, "validation_failed", "{}", error.message);
         assert!(error.message.contains("--box"), "{}", error.message);
     }
+
+    // #463 KR-1 fix round 1 (the independent review's (h); contracts/lab-recording.md, "Key
+    // steps"): `record mark --key back` is the request form's `"key": {"key": "back"}` and
+    // `--no-key` its `"key": false`, and beside `--optional-after` `--key back` is the inserted
+    // step's `optional_after.key`, so the command line and the MCP tool (which hands the request
+    // form on unchanged) give the Lab the same request; both flags at once are refused.
+    #[test]
+    fn kr1_the_key_flags_declare_the_request_forms_key() {
+        let declared = record_mark_request_from_flags(&flags(&[
+            "--step",
+            "2",
+            "--key",
+            "back",
+            "--replace-click",
+            "--click-guard",
+            "ui/title",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step": 2,
+            "key": {"key": "back"},
+            "replace_click": true,
+            "click_guard": "ui/title"
+        }))
+        .expect("the request form");
+        assert_eq!(declared, request);
+
+        let taken_back =
+            record_mark_request_from_flags(&flags(&["--step", "2", "--no-key"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step": 2,
+            "key": false
+        }))
+        .expect("the request form");
+        assert_eq!(taken_back, request);
+
+        let inserted = record_mark_request_from_flags(&flags(&[
+            "--optional-after",
+            "3",
+            "--frame",
+            "notice.png",
+            "--color",
+            "popup/notice=20,50,4,4",
+            "--key",
+            "back",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "optional_after": {
+                "step": 3,
+                "frame": "notice.png",
+                "add": [{"id": "popup/notice", "family": "color",
+                         "region": {"x": 20, "y": 50, "width": 4, "height": 4}}],
+                "key": {"key": "back"}
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(inserted, request);
+
+        let error = record_mark_request_from_flags(&flags(&["--key", "back", "--no-key"]))
+            .expect_err("--key beside --no-key");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
 }

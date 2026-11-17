@@ -4547,6 +4547,24 @@ const PRESS_REGION_MARGIN_CELLS: u32 = 1;
 /// `drop_comparison` that showed it; nothing is proposed.
 fn press_changed_nothing(recording: &LabRecording, index: u32) -> LabResult<()> {
     let step = effective_step(recording, index)?;
+    // #463 KR-1 fix round 1 (the coordinator's ruling: one cause, one word): a step whose effect is
+    // a declared key has the frames of the press its key replaced on record, and nothing that
+    // shows what the key does: `key_declared`, settled by taking the key back first.
+    if step.key.is_some() {
+        return Err(drop_unproven(
+            DropProblem::KeyDeclared,
+            None,
+            index,
+            format!(
+                "step {index} is not the last effective step, and its effect is a declared key: \
+                 the frames stored for it are those of the press the key replaced, and nothing on \
+                 record shows what the key does; take the key back first with key false \
+                 (--no-key), and the press it gives back is judged as recorded; nothing was \
+                 written"
+            ),
+            json!({}),
+        ));
+    }
     let click = step.click.as_ref().filter(|declared| declared.executed());
     let press = click
         .and_then(|declared| declared.execution.as_ref())

@@ -8,14 +8,19 @@
 //! (`optional_after.key`). The key is the step's one effect, as an application operation is: a
 //! click it replaces (only with `replace_click`; executed or declared, of any form) is kept whole
 //! inside it as what it replaced and given back exactly when the key is taken back, and the step's
-//! frames stand. Its guard is the request's click guard, named by the agent: `record stop` writes a
-//! key step only with it (`generate.rs`, `key_guards`). Every refusal of a key is
-//! `record_key_invalid` with its `key_problem`, but for a second effect without `replace_click`,
-//! the existing `record_step_effect_exists`.
+//! frames stand. Its guard is the step's click guard: fix round 1 (the coordinator's rulings on the
+//! independent review), the guard the step had when the key was declared is kept with the click and
+//! given back with it, and the generator guards a key step by the rule it guards a click step by,
+//! the named guard, else the page's first template, colour or check mark (`generate.rs`,
+//! `page_guard`); a key step whose page gives none is listed by `record ready` and refused by
+//! `record stop` (`key_guards`). Every refusal of a key is `record_key_invalid` with its
+//! `key_problem`, but for a second effect without `replace_click`, the existing
+//! `record_step_effect_exists`.
 
 use super::boxes::with_press_click;
 use super::model::{
-    KeyRequest, LabRecording, MarkRequest, OptionalAfterSpec, RecordedKey, RecordingStep,
+    KEY_REQUEST_FORMS, KeyRequest, LabRecording, MarkRequest, OptionalAfterSpec, RecordedKey,
+    RecordingStep,
 };
 use super::steps::{effect_exists, holds_choice, step_ref};
 use super::store::{blocked, invalid, now_unix_ms, with_details};
@@ -104,12 +109,9 @@ pub(crate) fn validate_key_request(request: &MarkRequest) -> LabResult<()> {
     }
     let spec = match change {
         KeyRequest::TakeBack(false) => return Ok(()),
+        // Fix round 1: in the words every other shape of `key` is refused in.
         KeyRequest::TakeBack(true) => {
-            return Err(invalid(
-                "validation_failed",
-                "key takes {\"key\": \"back\"}, which declares the back key, or false, which takes \
-                 it back",
-            ));
+            return Err(invalid("validation_failed", KEY_REQUEST_FORMS));
         }
         KeyRequest::Declare(spec) => spec,
     };
@@ -212,13 +214,18 @@ pub(crate) fn key_on_entry(request: &MarkRequest, target: u32) -> LabResult<()> 
 /// (otherwise the refusal of a second effect, `record_step_effect_exists`), the click kept whole
 /// inside the key as what it replaced; a key declared again with `replace_click` keeps the click
 /// the first replaced. A step whose effect is an application operation (`application_step`) or
-/// that holds a choice (`holds_choice`) is refused. Nothing is sent.
+/// that holds a choice (`holds_choice`) is refused. Nothing is sent. Fix round 1 (the
+/// coordinator's ruling on the review's first point): the step's click guard as it was when the
+/// key was declared is kept beside the click, before the request names one (this runs before
+/// `apply_click` takes the request's guard), and taking the key back gives it back too: a guard
+/// named with the key or after it goes, the click's guard comes back, none comes back as none.
 pub(crate) fn apply_key(step: &mut RecordingStep, request: &MarkRequest) -> LabResult<()> {
     let spec = match &request.key {
         None => return Ok(()),
         Some(KeyRequest::TakeBack(_)) => {
             if let Some(key) = step.key.take() {
                 step.click = key.replaced;
+                step.click_guard = key.replaced_guard;
             }
             return Ok(());
         }
@@ -257,14 +264,16 @@ pub(crate) fn apply_key(step: &mut RecordingStep, request: &MarkRequest) -> LabR
             ));
         }
     }
-    let replaced = match step.key.take() {
-        Some(earlier) => earlier.replaced,
-        None => step.click.take(),
+    // A key declared again keeps what the first one replaced, its guard too.
+    let (replaced, replaced_guard) = match step.key.take() {
+        Some(earlier) => (earlier.replaced, earlier.replaced_guard),
+        None => (step.click.take(), step.click_guard.clone()),
     };
     step.key = Some(RecordedKey {
         key: spec.key.clone(),
         declared_at_unix_ms: now_unix_ms(),
         replaced,
+        replaced_guard,
     });
     Ok(())
 }

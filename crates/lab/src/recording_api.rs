@@ -795,7 +795,7 @@ fn generate_and_write(
         json!(application_steps_summary(&plan)),
     );
     // #463 KR-1: the key steps, present only when the package has one.
-    let key_steps = key_steps_summary(&plan);
+    let key_steps = key_steps_summary(&plan)?;
     if !key_steps.is_empty() {
         lab.insert("key_steps".to_string(), json!(key_steps));
     }

@@ -13,17 +13,25 @@
 //   arrival, a click's post-input wait, no click, no retry, no input recheck), admitted by the one
 //   admission.
 // - `kr1_taking_the_key_back_restores_the_recording_and_the_package` (2): `key: false` gives the
-//   recording back byte for byte but for `updated_at_unix_ms`; on the stopped recording the package
-//   generated again after a key taken back is the one generated before it, but for its generation
-//   time.
-// - `kr1_a_key_step_without_a_guard_is_listed_and_refused_until_one_is_named` (3).
-// - `kr1_each_refusal_of_a_key_writes_nothing` (4).
-// - `kr1_an_optional_step_inserted_after_stop_is_closed_by_the_key` (5).
+//   recording back byte for byte but for `updated_at_unix_ms`, fix round 1 the click guard too (a
+//   guard named with the key or after it goes, the click's comes back); on the stopped recording
+//   the package generated again after a key taken back is the one generated before it, but for its
+//   generation time.
+// - `kr1_a_key_step_whose_page_gives_no_guard_is_listed_and_refused` (3; fix round 1: a key step is
+//   guarded by a click step's rule, so only a page of text marks alone leaves it without one).
+// - `kr1_each_refusal_of_a_key_writes_nothing` (4; fix round 1: a followed mark, a drag, a select in
+//   the request and on the step, a converted step).
+// - `kr1_an_optional_step_inserted_after_stop_is_closed_by_the_key` (5; fix round 1: guarded by the
+//   pop-up's own mark, and `word_unknown` on an inserted step).
 // - `kr1_a_key_on_the_last_step_with_an_effect_arrives_at_the_target_page` (6).
 // - `kr1_a_key_on_the_first_step_is_the_offline_first_decision` (7).
 // - `kr1_record_review_answers_the_key_and_the_press_it_replaced_without_drawing_a_press` (8).
-// - `kr1_a_key_step_has_its_regression_case_on_the_frame_of_the_press_it_replaced` (9).
+// - `kr1_a_key_step_has_its_regression_case_on_the_frame_of_the_press_it_replaced` (9; fix round 1:
+//   that frame is not the step's primary frame).
 // - `kr1_a_word_outside_the_vocabulary_is_refused_before_anything_is_read` (10).
+// Fix round 1 (register §1.449, "Fix round 1"; the coordinator's rulings on the independent review):
+// - `kr1_two_optional_key_steps_on_different_pages_are_two_pop_ups` (11).
+// - `kr1_key_steps_before_and_after_a_run_of_optional_steps_arrive_as_clicks_do` (12).
 
 use crate::codes::{KeyProblem, LabCode, OptionalAfterProblem};
 use crate::recording::crosscheck::admit as admit_entries;
@@ -65,10 +73,15 @@ const GREEN: [u8; 3] = [20, 230, 20];
 const BLUE: [u8; 3] = [20, 20, 230];
 const YELLOW: [u8; 3] = [230, 230, 20];
 const CYAN: [u8; 3] = [20, 230, 230];
+const MAGENTA: [u8; 3] = [230, 20, 230];
+/// Test 9's sample: step 2's square a paler green, which its colour mark still takes.
+const PALE_GREEN: [u8; 3] = [26, 224, 26];
 /// The back key, the vocabulary's one word.
 const BACK: &str = "back";
 /// Test 5's pop-up mark.
 const POPUP_MARK: &str = "popup_mark";
+/// The made-up OCR model of test 3's text mark and test 4's select; no test loads it.
+const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -83,8 +96,18 @@ const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
 const SQUARE: RecordRect = rect(0, 0, 16, 16);
 /// Test 5's pop-up square, gray on every recorded screen.
 const SECOND: RecordRect = rect(32, 0, 16, 16);
-/// A click rectangle of test 4's refusals.
+/// Test 11's second pop-up square, gray on every recorded screen.
+const THIRD: RecordRect = rect(64, 0, 16, 16);
+/// Test 2's second mark of step 3, on the gray of every screen.
+const CORNER: RecordRect = rect(144, 74, 16, 16);
+/// Test 3's text mark.
+const TEXT_AREA: RecordRect = rect(40, 40, 32, 16);
+/// A click rectangle of test 4's refusals, and the end of its drag.
 const CLICK_AREA: RecordRect = rect(100, 40, 16, 16);
+const DRAG_END: RecordRect = rect(20, 60, 16, 16);
+/// Test 4's select: its slots and the regions their names are read in; the first holds `POINT`.
+const SLOTS: [RecordRect; 2] = [rect(120, 60, 24, 20), rect(120, 30, 24, 20)];
+const SLOT_NAMES: [RecordRect; 2] = [rect(120, 60, 24, 8), rect(120, 30, 24, 8)];
 /// The point each press presses, on no square.
 const POINT: RecordPoint = RecordPoint { x: 130, y: 70 };
 
@@ -129,6 +152,37 @@ fn four_screens() -> [Vec<u8>; 4] {
 // The colour mark `id` over `area`.
 fn color(id: &str, area: RecordRect) -> Value {
     json!({"id": id, "family": "color", "region": area})
+}
+
+// The text mark `id` over `area`, of a made-up model: without an OCR model it is never evaluated.
+fn text(id: &str, area: RecordRect) -> Value {
+    json!({"id": id, "family": "ocr", "region": area, "languages": ["en"], "timeout_ms": 1000,
+           "match_mode": "exact", "expected": ["TEXT"], "case_sensitive": false,
+           "minimum_confidence": 0.8, "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256})
+}
+
+// A select over `SLOTS`, its names read by a made-up model.
+fn select_spec() -> Value {
+    json!({
+        "slots": [{"rect": SLOTS[0], "name": SLOT_NAMES[0]},
+                  {"rect": SLOTS[1], "name": SLOT_NAMES[1]}],
+        "read": {"languages": ["en"], "timeout_ms": 1000, "minimum_confidence_milli": 800,
+                 "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256},
+        "names": [{"id": "item_a", "aliases": ["ALPHA"]}, {"id": "item_b", "aliases": ["BRAVO"]}],
+        "match": {"max_distance": 1, "minimum_margin": 1},
+        "wanted": {"name": "list_item", "default": "item_a"}
+    })
+}
+
+// The id of the live frame of `role` of `step`, a step of `recording.json`.
+fn live_frame(step: &Value, role: &str) -> Value {
+    step["frames"]
+        .as_array()
+        .expect("frames")
+        .iter()
+        .find(|frame| frame["role"] == role && frame["superseded"] == false)
+        .map(|frame| frame["frame_id"].clone())
+        .unwrap_or_else(|| panic!("no live {role} frame in {step}"))
 }
 
 fn request(mut value: Value) -> MarkRequest {
@@ -230,12 +284,19 @@ impl Bench {
     }
 
     // The recording of `screens`: one press on each screen but the last, the screen after it one
-    // capture later; then each step marked with the colour mark `square_<step>` on its square.
-    fn marked_recording(screens: &[Vec<u8>]) -> Self {
+    // capture later.
+    fn recorded(screens: &[Vec<u8>]) -> Self {
         let bench = Self::new();
         for pair in screens.windows(2) {
             bench.press(vec![pair[0].clone(), pair[1].clone()]);
         }
+        bench
+    }
+
+    // The recording of `screens` ([`Self::recorded`]), each step marked with the colour mark
+    // `square_<step>` on its square.
+    fn marked_recording(screens: &[Vec<u8>]) -> Self {
+        let bench = Self::recorded(screens);
         let steps = u32::try_from(screens.len()).expect("a step count");
         for step in 1..=steps {
             bench.marked(json!({
@@ -587,26 +648,58 @@ fn kr1_an_executed_press_replaced_by_the_key_generates_the_key_step() {
 
 // The work order's test 2: `key: false` takes the key back and gives back the click it replaced
 // exactly: `recording.json` is byte for byte what it was before the key was declared, but for
-// `updated_at_unix_ms`, which every write sets. On the stopped recording (marking after stop) a key
-// declared and taken back again leaves the package `record stop` generates again the one generated
-// before it, but for its generation time (the task's `provenance.generated_at_unix_ms`, the
-// recording's last update).
+// `updated_at_unix_ms`, which every write sets. Fix round 1 (the coordinator's ruling on the
+// review's first point): the click guard too, which is the step's and not the click's: step 2's
+// key names its guard in the request that declares it, where the click had none; step 3's click
+// was guarded by `square_3`, and its key's guard, `corner_3`, is named after the key; taken back,
+// step 2 has no guard again and step 3 `square_3`. On the stopped recording (marking after stop) a
+// key declared with its guard and taken back again leaves the package `record stop` generates
+// again the one generated before it, but for its generation time (the task's
+// `provenance.generated_at_unix_ms`, the recording's last update).
 #[test]
 fn kr1_taking_the_key_back_restores_the_recording_and_the_package() {
     let bench = Bench::marked_recording(&four_screens());
+    bench.marked(json!({
+        "step": 3,
+        "add": [color("corner_3", CORNER)],
+        "click_guard": "square_3"
+    }));
     let before = bench.recording_bytes();
-    let declared = bench.marked(key_on(2));
+    let mut guarded = key_on(2);
+    guarded["click_guard"] = json!("square_2");
+    let declared = bench.marked(guarded);
     assert_eq!(
         declared["step_state"]["effect"], "key_declared",
         "{declared}"
     );
-    assert_ne!(bench.recording_bytes(), before, "the key is written");
-    let taken_back = bench.marked(json!({"step": 2, "key": false}));
+    bench.marked(key_on(3));
+    bench.marked(json!({"step": 3, "click_guard": "corner_3"}));
+    let keyed = bench.recording();
+    let (step_two, step_three) = (&keyed["steps"][1], &keyed["steps"][2]);
+    assert_eq!(step_two["click_guard"], "square_2", "{step_two}");
     assert_eq!(
-        taken_back["step_state"]["effect"], "click_executed",
-        "{taken_back}"
+        members(&step_two["key"]),
+        names(&["declared_at_unix_ms", "key", "replaced"]),
+        "the click had no guard: {step_two}"
     );
-    assert_eq!(taken_back["key"], Value::Null, "{taken_back}");
+    assert_eq!(step_three["click_guard"], "corner_3", "{step_three}");
+    assert_eq!(
+        members(&step_three["key"]),
+        names(&["declared_at_unix_ms", "key", "replaced", "replaced_guard"]),
+        "{step_three}"
+    );
+    assert_eq!(
+        step_three["key"]["replaced_guard"], "square_3",
+        "{step_three}"
+    );
+    for step in [2, 3] {
+        let taken_back = bench.marked(json!({"step": step, "key": false}));
+        assert_eq!(
+            taken_back["step_state"]["effect"], "click_executed",
+            "{taken_back}"
+        );
+        assert_eq!(taken_back["key"], Value::Null, "{taken_back}");
+    }
     let earlier: LabRecording = serde_json::from_slice(&before).expect("the earlier recording");
     let mut restored: LabRecording =
         serde_json::from_slice(&bench.recording_bytes()).expect("the restored recording");
@@ -634,7 +727,9 @@ fn kr1_taking_the_key_back_restores_the_recording_and_the_package() {
     assert_eq!(generated["key_steps"], Value::Null, "{generated}");
     let first = entries(&generated);
     bench.header("stopped");
-    let stopped_declared = bench.marked(key_on(2));
+    let mut stopped_guarded = key_on(2);
+    stopped_guarded["click_guard"] = json!("square_2");
+    let stopped_declared = bench.marked(stopped_guarded);
     assert_eq!(stopped_declared["after_stop"], true, "{stopped_declared}");
     bench.marked(json!({"step": 2, "key": false}));
     let regenerated = bench.stopped();
@@ -661,13 +756,25 @@ fn kr1_taking_the_key_back_restores_the_recording_and_the_package() {
     assert_eq!(tasks[0], tasks[1], "but for its generation time");
 }
 
-// The work order's test 3: a key step that names no guard is listed by `record ready` with its own
-// word, `key_guard_missing` (the code `record stop` answers, `record_key_invalid`, and the hint that
-// settles it), the one item; `record stop` refuses it (`guard_missing`) and writes nothing; the mark
-// that declared the key was not refused. With the guard named, both pass.
+// The work order's test 3, fix round 1 (the coordinator's ruling on the review's answer 1): a key
+// step is guarded by a click step's rule, the guard it names, else its page's first template,
+// colour or check mark, so only a page that gives none leaves it without a guard: step 2's page is
+// recognised by a text mark alone (of a made-up OCR model, never evaluated without one). `record
+// ready` lists it with its own word, `key_guard_missing` (the code `record stop` answers,
+// `record_key_invalid`, and the hint that settles it), the one item; `record stop` refuses it
+// (`guard_missing`) and writes nothing; the mark that declared the key was not refused. Once its
+// page has a colour mark too, both pass with no guard named: the package guards the key step by
+// that mark, its page's first colour, and `lab.key_steps` names it.
 #[test]
-fn kr1_a_key_step_without_a_guard_is_listed_and_refused_until_one_is_named() {
-    let bench = Bench::marked_recording(&four_screens());
+fn kr1_a_key_step_whose_page_gives_no_guard_is_listed_and_refused() {
+    let bench = Bench::recorded(&four_screens());
+    for step in [1, 3, 4] {
+        bench.marked(json!({
+            "step": step,
+            "add": [color(&format!("square_{step}"), SQUARE)]
+        }));
+    }
+    bench.marked(json!({"step": 2, "add": [text("text_2", TEXT_AREA)]}));
     let press_frame = bench.recording()["steps"][1]["click"]["execution"]["before_frame"].clone();
     assert!(press_frame.is_string(), "{press_frame}");
     bench.marked(key_on(2));
@@ -678,7 +785,7 @@ fn kr1_a_key_step_without_a_guard_is_listed_and_refused_until_one_is_named() {
         ready["missing"],
         json!([{"order": 1, "step": 2, "artifact_step": 2, "frame_id": press_frame,
                 "what": "key_guard_missing", "code": "record_key_invalid",
-                "hint": "record mark --step 2 --click-guard <id>"}]),
+                "hint": "record mark --step 2 --template <id>=x,y,w,h"}]),
         "{ready}"
     );
     assert_eq!(ready["missing_total"], 1, "{ready}");
@@ -708,13 +815,26 @@ fn kr1_a_key_step_without_a_guard_is_listed_and_refused_until_one_is_named() {
     assert_eq!(details["missing_total"], 1, "{details}");
     assert_eq!(bench.recording_bytes(), before, "nothing written");
 
-    bench.marked(json!({"step": 2, "click_guard": "square_2"}));
+    bench.marked(json!({"step": 2, "add": [color("square_2", SQUARE)]}));
     let ready = bench.ready();
     assert_eq!(ready["status"], "ready", "{ready}");
     assert_eq!(ready["missing"], json!([]), "{ready}");
     assert_eq!(ready["checks_after"], json!([]), "{ready}");
     let lab = bench.stopped();
     assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        lab["key_steps"],
+        json!([{"step": 2, "op": "step_02_key", "key": BACK, "guard": "square_2",
+                "replaced_click": true}]),
+        "{lab}"
+    );
+    let task = task(&entries(&lab));
+    assert_eq!(
+        operation(&task, "step_02_key")["guard"],
+        json!({"page_id": "step_02", "target_id": "square_2", "expected_rect": SQUARE,
+               "color_probe": "square_2"}),
+        "{task}"
+    );
 }
 
 // The work order's test 4: each refusal of a key, one word per cause, nothing written:
@@ -724,7 +844,10 @@ fn kr1_a_key_step_without_a_guard_is_listed_and_refused_until_one_is_named() {
 // (`application_step`), the application entry step (`application_entry`), a dropped step
 // (`step_not_effective`); a click without `replace_click`, the refusal of a second effect
 // (`record_step_effect_exists`, effect `click`), and a click on a step whose effect is the key
-// (effect `key`).
+// (effect `key`). Fix round 1 (the review's (h)): beside the key a click that follows a mark and a
+// drag (`with_click`) and a select (`holds_choice`); a step that already selects in a list
+// (`holds_choice`; without an OCR model its select is not evaluated and keeps the recorded press);
+// a step converted into the page transition of the step before it (`step_not_effective`).
 #[test]
 fn kr1_each_refusal_of_a_key_writes_nothing() {
     let bench = Bench::marked_recording(&four_screens());
@@ -750,6 +873,17 @@ fn kr1_each_refusal_of_a_key_writes_nothing() {
         ),
         (beside("boxes", press_box), KeyProblem::WithClick),
         (
+            beside("click", json!({"follow": "square_2"})),
+            KeyProblem::WithClick,
+        ),
+        (
+            beside(
+                "click",
+                json!({"region": CLICK_AREA, "drag_to": DRAG_END, "duration_ms": 300}),
+            ),
+            KeyProblem::WithClick,
+        ),
+        (
             beside("application", json!({"action": "restart"})),
             KeyProblem::WithApplication,
         ),
@@ -758,6 +892,7 @@ fn kr1_each_refusal_of_a_key_writes_nothing() {
             KeyProblem::WithRetry,
         ),
         (beside("choice", json!(true)), KeyProblem::HoldsChoice),
+        (beside("select", select_spec()), KeyProblem::HoldsChoice),
     ] {
         let error = bench.refused(asked.clone());
         assert_eq!(key_problem(&error), word.as_str(), "{asked}");
@@ -801,12 +936,30 @@ fn kr1_each_refusal_of_a_key_writes_nothing() {
     let choice = bench.refused(json!({"step": 2, "choice": true}));
     assert_eq!(key_problem(&choice), KeyProblem::HoldsChoice.as_str());
 
+    // A step that already selects in a list.
+    let selecting = Bench::marked_recording(&four_screens());
+    let selected = selecting.marked(json!({"step": 2, "select": select_spec()}));
+    assert_eq!(selected["click"]["source"], "select", "{selected}");
+    let on_select = selecting.refused(key_on(2));
+    assert_eq!(key_problem(&on_select), KeyProblem::HoldsChoice.as_str());
+    assert_eq!(details(&on_select)["step"], 2);
+
     // A dropped step.
     let dropping = Bench::marked_recording(&four_screens());
     dropping.marked(json!({"step_action": {"kind": "drop_step", "step": 4}}));
     let dropped = dropping.refused(key_on(4));
     assert_eq!(key_problem(&dropped), KeyProblem::StepNotEffective.as_str());
     assert_eq!(details(&dropped)["step"], 4);
+
+    // A step converted into the page transition of the step before it.
+    let converting = Bench::marked_recording(&four_screens());
+    converting.marked(json!({"step_action": {"kind": "to_transition", "step": 4}}));
+    let converted = converting.refused(key_on(4));
+    assert_eq!(
+        key_problem(&converted),
+        KeyProblem::StepNotEffective.as_str()
+    );
+    assert_eq!(details(&converted)["step"], 4);
 
     // The application entry step, which has no frame.
     let entry = Bench::new();
@@ -820,10 +973,12 @@ fn kr1_each_refusal_of_a_key_writes_nothing() {
 
 // The work order's test 5: a pop-up met after step 1's press, inserted after the stop and closed by
 // the key: `optional_after.key` in place of `click`. It is generated as an optional key step,
-// `step_02_key` with `optional` and `key`, once its guard is named (until then `record ready`
-// lists it, `key_guard_missing`); an insertion with both a click and a key is `record_key_invalid`
-// `with_click`, one with neither `record_optional_after_invalid` `no_effect`; neither writes
-// anything.
+// `step_02_key` with `optional` and `key`; fix round 1 (the coordinator's ruling on the review's
+// answer 1): guarded, with no guard named, by the pop-up's own colour mark, its page's first
+// colour, so that `record ready` lists nothing. An insertion with both a click and a key is
+// `record_key_invalid` `with_click`, one with neither `record_optional_after_invalid` `no_effect`,
+// and (fix round 1, the review's (h)) one whose key is no word of the vocabulary `word_unknown`,
+// the step it is inserted after and the word in its details; none writes anything.
 #[test]
 fn kr1_an_optional_step_inserted_after_stop_is_closed_by_the_key() {
     let bench = Bench::marked_recording(&four_screens());
@@ -861,6 +1016,10 @@ fn kr1_an_optional_step_inserted_after_stop_is_closed_by_the_key() {
         details(&neither)["optional_after_problem"],
         OptionalAfterProblem::NoEffect.as_str()
     );
+    let unknown = bench.refused(insertion(json!({"key": {"key": "home"}})));
+    assert_eq!(key_problem(&unknown), KeyProblem::WordUnknown.as_str());
+    assert_eq!(details(&unknown)["step"], 1);
+    assert_eq!(details(&unknown)["key"], "home");
 
     let inserted = bench.marked(insertion(json!({"key": {"key": BACK}})));
     assert_eq!(inserted["status"], "optional_step_inserted", "{inserted}");
@@ -873,15 +1032,8 @@ fn kr1_an_optional_step_inserted_after_stop_is_closed_by_the_key() {
     assert_eq!(inserted["key"]["replaced"], Value::Null, "{inserted}");
 
     let ready = bench.ready();
-    let lacking = ready["missing"]
-        .as_array()
-        .expect("missing")
-        .iter()
-        .map(|item| (item["what"].clone(), item["step"].clone()))
-        .collect::<Vec<_>>();
-    assert_eq!(lacking, [(json!("key_guard_missing"), json!(5))], "{ready}");
+    assert_eq!(ready["missing"], json!([]), "{ready}");
 
-    bench.marked(json!({"step": 5, "click_guard": POPUP_MARK}));
     let lab = bench.stopped();
     assert_eq!(lab["lab_status"], "regenerated", "{lab}");
     let task = task(&entries(&lab));
@@ -1011,11 +1163,27 @@ fn kr1_record_review_answers_the_key_and_the_press_it_replaced_without_drawing_a
 }
 
 // The work order's test 9: a key step is an effective step: its regression case is written, on the
-// frame the press its key replaced was sent on (step 2's green screen), its source the recording
-// and the step, and it passes when read from the disk and run on the written package.
+// frame the press its key replaced was sent on, its source the recording and the step, and it
+// passes when read from the disk and run on the written package. Fix round 1 (the review's (h)):
+// that frame is not the step's primary frame, so the case tells the two apart: step 2 takes a
+// sample, its square a paler green its colour mark still takes, and the step table is made to name
+// that live sample as the frame the press was sent on (as `gate_463_s210`'s test 14 names one);
+// the case's scene shows the paler green, not the primary frame's green.
 #[test]
 fn kr1_a_key_step_has_its_regression_case_on_the_frame_of_the_press_it_replaced() {
     let bench = Bench::marked_recording(&four_screens());
+    let sample = bench.temp.path().join("pale.png");
+    fs::write(&sample, screen(&[(SQUARE, PALE_GREEN)])).expect("the sample's file");
+    bench.marked(json!({"step": 2, "samples": [sample.display().to_string()]}));
+    let mut table = bench.recording();
+    let pale = live_frame(&table["steps"][1], "sample");
+    assert_ne!(pale, live_frame(&table["steps"][1], "primary"), "{table}");
+    table["steps"][1]["click"]["execution"]["before_frame"] = pale;
+    fs::write(
+        recording_path(&bench.state(), RECORD_ID),
+        serde_json::to_vec_pretty(&table).expect("step table JSON"),
+    )
+    .expect("step table");
     let mut declared = key_on(2);
     declared["click_guard"] = json!("square_2");
     bench.marked(declared);
@@ -1049,7 +1217,11 @@ fn kr1_a_key_step_has_its_regression_case_on_the_frame_of_the_press_it_replaced(
     let frame = decode_frame(scene.clone(), "the case's scene")
         .expect("the scene")
         .frame;
-    assert_eq!(frame.pixels[..3], GREEN, "the frame of the replaced press");
+    assert_eq!(
+        frame.pixels[..3],
+        PALE_GREEN,
+        "the frame of the replaced press, not the step's primary frame"
+    );
     let package = bench.package(&lab);
     let verdict = run_regression_case(&package, &case_json, &scene, &bench.ocr);
     assert_eq!(verdict.verdict, RegressionVerdict::Passed, "{verdict:?}");
@@ -1075,4 +1247,116 @@ fn kr1_a_word_outside_the_vocabulary_is_refused_before_anything_is_read() {
         .mark(json!({"step": 2, "key": true}))
         .expect_err("true is no key");
     assert_eq!(not_a_key.code, "validation_failed", "{}", not_a_key.message);
+}
+
+// Fix round 1, test 11 (the coordinator's ruling on the review's answer 5): two optional steps
+// closed by the key are two pop-ups unless they have one page. Two pop-ups are inserted after step
+// 1's press, each closed by the key and guarded by its own colour mark: the first's page, a cyan
+// square, also passes on the second's frame, which shows that square beside its own magenta one.
+// The key does not tell them apart, so the self-check of optional steps refuses the stop
+// (`record_optional_step_ambiguous` against the other optional step, naming the first pop-up,
+// package step 2, serial number 5) where it took them for one pop-up recorded twice before.
+#[test]
+fn kr1_two_optional_key_steps_on_different_pages_are_two_pop_ups() {
+    let bench = Bench::marked_recording(&four_screens());
+    assert_eq!(bench.stopped()["lab_status"], "generated");
+    bench.header("stopped");
+    for (page, squares, area) in [
+        ("popup_a", &[(SECOND, CYAN)][..], SECOND),
+        ("popup_b", &[(SECOND, CYAN), (THIRD, MAGENTA)][..], THIRD),
+    ] {
+        let frame = bench.temp.path().join(format!("{page}.png"));
+        fs::write(&frame, screen(squares)).expect("the pop-up's frame");
+        let inserted = bench.marked(json!({"optional_after": {
+            "step": 1,
+            "frame": frame.display().to_string(),
+            "page": page,
+            "add": [color(page, area)],
+            "key": {"key": BACK}
+        }}));
+        assert_eq!(inserted["status"], "optional_step_inserted", "{inserted}");
+    }
+
+    let before = bench.recording_bytes();
+    let refusal = bench.stop().expect_err("two pop-ups closed by the key");
+    assert_eq!(
+        refusal.code, "record_optional_step_ambiguous",
+        "{}",
+        refusal.message
+    );
+    let details = details(&refusal);
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["record_index"], 5, "{details}");
+    assert_eq!(details["page"], "step_02_popup_a", "{details}");
+    assert_eq!(details["against"], "other_optional", "{details}");
+    assert_eq!(bench.recording_bytes(), before, "nothing written");
+}
+
+// Fix round 1, test 12 (the review's question 4: no test had a key step beside a run of optional
+// steps): a pop-up is inserted after step 1's press, closed by a click; then step 1, the step
+// before the run, and step 2, the step after it, press the key, guarded by their pages' colour
+// marks. Each key step arrives as the click it replaced did: step 1's `to` and `expect_after` are
+// its click's over the same run, the pop-up's page (the kernel derives the run's candidates from
+// it, as after a click), and step 2's the next page; the package is admitted by the one admission.
+#[test]
+fn kr1_key_steps_before_and_after_a_run_of_optional_steps_arrive_as_clicks_do() {
+    let bench = Bench::marked_recording(&four_screens());
+    assert_eq!(bench.stopped()["lab_status"], "generated");
+    bench.header("stopped");
+    let popup = bench.temp.path().join("popup.png");
+    fs::write(&popup, screen(&[(SECOND, CYAN)])).expect("the pop-up's frame");
+    bench.marked(json!({"optional_after": {
+        "step": 1,
+        "frame": popup.display().to_string(),
+        "page": "popup",
+        "add": [color(POPUP_MARK, SECOND)],
+        "click": {"region": CLICK_AREA}
+    }}));
+    let clicked = task(&entries(&bench.stopped()));
+    assert_eq!(
+        operation_ids(&clicked),
+        [
+            "step_01_click",
+            "step_02_click",
+            "step_03_click",
+            "step_04_click"
+        ],
+        "{clicked}"
+    );
+
+    for step in [1, 2] {
+        bench.marked(key_on(step));
+    }
+    let lab = bench.stopped();
+    assert_eq!(lab["lab_status"], "regenerated", "{lab}");
+    let written = entries(&lab);
+    let keyed = task(&written);
+    assert_eq!(
+        operation_ids(&keyed),
+        [
+            "step_01_key",
+            "step_02_click",
+            "step_03_key",
+            "step_04_click"
+        ],
+        "{keyed}"
+    );
+    for (key_id, click_id, to) in [
+        ("step_01_key", "step_01_click", "step_02_popup"),
+        ("step_03_key", "step_03_click", "step_04"),
+    ] {
+        let (key_step, click_step) = (operation(&keyed, key_id), operation(&clicked, click_id));
+        assert_eq!(key_step["to"], to, "{key_step}");
+        assert_eq!(key_step["to"], click_step["to"], "{key_step} {click_step}");
+        assert_eq!(
+            key_step["expect_after"], click_step["expect_after"],
+            "{key_step} {click_step}"
+        );
+    }
+    if let Err(error) = admit_entries(&written, &bench.ocr) {
+        panic!(
+            "the package is not admitted: {}: {} {:?}",
+            error.code, error.message, error.details
+        );
+    }
 }
