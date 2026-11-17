@@ -2583,6 +2583,18 @@ tests = [
 ]
 incident = ["#463 S2-9b"]
 
+# #463 RC-2 (0.12.71; register §1.459; brief rd-1117/brief-463-rc2-case-reader.md; contracts/resource-regression-case.md, "A case" and "The reader"): the case reader reads past a member of scene_construction, of its canvas or of a rectangle the contract does not list, each named once in case_member_unknown with its place (json_pointer) and its name (member); expect, expect.observe and an entry of expect.recognize stay closed. On RC-1's neutral package and checkout, cases made up: a note in scene_construction, and note, pastes, overlays, asset_pastes and constructed there beside a top-level note, answer the verdict and the checks of the same case without them, one warning per place and name (/note told from /scene_construction/note), and resource regression --case answers the row passed with those warnings (1); a member of the canvas and from in each of two rectangles: the same verdict and checks, one warning at each place (2); a member unknown in expect, expect.observe and an entry of expect.recognize each fails member_unknown at its place, no warning (3); canvas.width a text fails member_invalid (a note beside it read past), no scene_sha256 fails member_missing (4); cases of the members record stop writes (a step's, the final screen's, an ending's, one without the page judgement, the bare canvas's) pass with no case_member_unknown (5). Adapted (RC-1 fix round 1's (7)): rc1_fix1_an_unknown_member_of_the_top_level_warns_and_fails_nothing now reads a note inside scene_construction past with the warning at /scene_construction/note, and a note inside expect fails member_unknown
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_notes_on_the_scene_construction_change_no_verdict_and_warn_with_their_place",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_a_member_of_the_canvas_or_of_a_rectangle_is_read_past_with_its_place",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_an_unknown_member_of_an_expectation_still_fails_member_unknown",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_a_wrong_or_missing_listed_member_still_fails_with_its_word",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_a_case_as_record_stop_writes_it_warns_no_unknown_member",
+]
+incident = ["#463 RC-2"]
+
 # Workflow #479 ACIB-0 (apps/acib, the iOS device bridge; its README): every line acib prints is one JSON line of its command's shape, status 0 only when answered, and holds no member for a device's serial number, UDID, name or address or for a pairing record (1); its problem words are its own snake_case words, one per cause (2); a library error is shown by its text, or by its kind alone when the text holds a run of 40 or 24 hexadecimal digits (also 8 and 16 around a dash), an address or a word of letters and digits shaped like a serial number, and a device's refusal word and a service name are cut the same way (3); the command line takes exactly the four commands with --device and --timeout-ms and refuses every other (4). No device and no network in CI.
 [[gate]]
 coverage = "Y"
