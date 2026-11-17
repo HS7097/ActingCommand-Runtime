@@ -7398,6 +7398,9 @@
         "catalog_text_missing": {
           "description": "A group of pack-catalog.json without title, or a package entry that writes a display member without title or summary (a warning: the package shows with its id; Workflow #477 PC-1, since 0.12.68). ui_parameter_undeclared of ui.json went with that file: the catalog has no parameters member, a package's variables carry their own texts."
         },
+        "catalog_group_title_differs": {
+          "description": "A group of the display file standard-pack catalog --displays reads has the id of a group of the catalog with another title (an error: the line adds a group that is not there and never renames one; a group of the same id and the same title, compared as JSON values without the order of its locales, is simply there; Workflow #477 PC-2 fix round 1, since 0.12.71)."
+        },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
         },
@@ -7539,8 +7542,8 @@
     "catalog_refresh_problem": {
       "description": "Why actinglab standard-pack catalog refuses a package its refresh names, before anything is written (Workflow #477 PC-2).",
       "tokens": {
-        "package_unregistered": {
-          "description": "The game root's registry (its bundle.json, or the one a resource repository's checkout's packages make) does not hold the package."
+        "package_not_listed": {
+          "description": "The game root's registry (its bundle.json, or the one a resource repository's checkout's packages make) does not hold the package: the cause and the word of standard_pack_problem's package_not_listed (fix round 1: one cause, one word)."
         },
         "package_repeated": {
           "description": "refresh names the package more than once."

@@ -249,6 +249,10 @@ mod gate_463_s38;
 // the command line and through `serve --stdio`.
 #[path = "gate_477_pc1.rs"]
 mod gate_477_pc1;
+// Workflow #477 PC-2 fix round 1: `standard-pack catalog --refresh` given twice on the command line
+// and as a list through `serve --stdio --front mcp`, the same id twice refused on both.
+#[path = "gate_477_pc2.rs"]
+mod gate_477_pc2;
 // Workflow #463 KP-1 fix round 1: `package check` and `package bundle` take a pack directory whose
 // `linear_steps` task has a key step.
 #[path = "gate_463_kp1.rs"]

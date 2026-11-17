@@ -41,7 +41,10 @@
 //! `standard_pack_catalog_refresh_refused`; a display file the catalog's own checks refuse is
 //! `standard_pack_catalog_display_refused`; either before anything is written. The answer gains
 //! `refreshed` and `display_written`, each only when its option is given, so that the line without
-//! them answers as before, byte for byte.
+//! them answers as before, byte for byte. Fix round 1: the display file carries its
+//! `schema_version` and may carry groups, which the line adds (`groups_added`, with `--displays`
+//! only); a `--refresh` id an answer could not name (over 256 bytes, or with a control character)
+//! is a usage error before the root is read, its value not echoed.
 
 use crate::standard_pack_check::{catalog_refused, read_bounded, root_invalid};
 use crate::{
@@ -49,7 +52,9 @@ use crate::{
     StandardPackRootFiles, installed_root_containing, package_bundle,
 };
 use actingcommand_contract::codes::{ContractCode, SharedCode};
-use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
+use actingcommand_contract::outcome::{
+    Detail, IoOp, KeyKind, NAME_MAX_BYTES, Outcome, key_text_fits,
+};
 use actingcommand_contract::{
     CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits, CatalogMergeRefusal, LabError,
     LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
@@ -83,6 +88,7 @@ static SCRATCH_COUNT: AtomicU64 = AtomicU64::new(0);
 pub fn write_standard_pack_catalog(
     request: StandardPackCatalogRequest,
 ) -> LabResult<StandardPackCatalogResponse> {
+    refresh_ids_fit(&request.refresh)?;
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -206,9 +212,30 @@ pub fn write_standard_pack_catalog(
         display_from_ui: merge.display_from_ui,
         refreshed: (!request.refresh.is_empty()).then_some(merge.refreshed),
         display_written: request.displays.is_some().then_some(merge.display_written),
+        groups_added: request.displays.is_some().then_some(merge.groups_added),
         document,
         warnings,
     })
+}
+
+/// Workflow #477 PC-2 fix round 1 (the independent review): each `--refresh` id is one an answer's
+/// `package_id` (a name of the key table: at most [`NAME_MAX_BYTES`] bytes, no control character)
+/// can carry; the first that is not is a usage error (`validation_failed`) before the root is read,
+/// naming the parameter, the id's place and its length, never its value.
+fn refresh_ids_fit(refresh: &[String]) -> LabResult<()> {
+    match refresh
+        .iter()
+        .enumerate()
+        .find(|(_, package_id)| !key_text_fits(KeyKind::Name, package_id))
+    {
+        Some((index, package_id)) => Err(LabError::usage(format!(
+            "--refresh value {} ({} bytes) is no package id: a package id is at most \
+             {NAME_MAX_BYTES} bytes, without a control character",
+            index + 1,
+            package_id.len()
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Workflow #477 PC-2: the display file `--displays` names, an absolute path, and its bytes. A

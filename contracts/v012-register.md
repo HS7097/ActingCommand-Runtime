@@ -36321,7 +36321,8 @@ tool write a new entry's display, so a new package showed by its id.
   rules, by the function a new entry is made by (`schedule_union` inside
   `merge_standard_pack_catalog`, one rule for both), and they replace what the entry held; its
   display and its place in the file are kept, and an entry that holds its rules' already is left as
-  written. It is the one way an entry's business part changes; an entry not named is never
+  written. It is the one way an entry's business part is brought back to the rules (fix round 1: a
+  plain line already drops a pool `schedule.json` no longer declares); an entry not named is never
   overwritten, as before. A refreshed package's rules are held to `schedule.json` as a new entry's
   are (`standard_pack_root_invalid`, `catalog_pool_undeclared` at the rule). Afterwards no
   `standard_pack_catalog_schedule_differs` names the package. The answer's `refreshed` gives each
@@ -36334,11 +36335,12 @@ tool write a new entry's display, so a new package showed by its id.
   would only send the agent to a second line that gives the entry the same business part, and the
   line already makes that entry whatever `refresh` says.
 - *Refused before anything is written* (`standard_pack_catalog_refresh_refused`): a package the
-  registry does not hold (`package_unregistered`) and one named twice (`package_repeated`), the
-  first in the order named.
+  registry does not hold (`package_not_listed`, fix round 1) and one named twice
+  (`package_repeated`), the first in the order named.
 - *`--displays <file>`* (an absolute path; the tool's `displays`): a display file
-  `{"packs": [{"package_id", "title", "summary", "group"?, "risk"?}]}`, each entry in the catalog's
-  own shape without its business part. Each entry it names has its display replaced whole (the entry
+  `{"schema_version", "groups"?, "packs": [{"package_id", "title", "summary", "group"?, "risk"?}]}`
+  (fix round 1: the version and the groups), each entry in the catalog's own shape without its
+  business part. Each entry it names has its display replaced whole (the entry
   written as its `package_id`, the file's display members in the order a new entry writes them, then
   its business part as it stands; an entry of the file without display members leaves the package
   showing by its id); its business part and its place are untouched, and a new entry it names takes
@@ -36352,21 +36354,60 @@ tool write a new entry's display, so a new package showed by its id.
   display defects. The answer's `display_written` names the packages whose display the file
   replaced, in its order. Since every package of the registry has an entry after the call, "a
   package without an entry after this call" is the same as one the registry does not hold.
-- *Not settled, left refused*: **the option adds no group.** A `group` the file being written does
-  not declare is `catalog_group_unknown`; whether this option, or another tool, may add a group to
-  the catalog's `groups` is a question for the coordinator. The display file carries no schema
-  version (it is an input of one line, never stored); that is the slice's choice.
-- *`--plan`* writes nothing and answers the document as before, with `refreshed` and
-  `display_written`. Both members are present only with their option, so the line without the two
-  answers and writes as before, byte for byte; a second identical line is `unchanged`.
+- *Groups*: the first round left them unsettled (the option added none); the coordinator ruled on
+  them, fix round 1 below.
+- *`--plan`* writes nothing and answers the document as before, with `refreshed`,
+  `display_written` and (fix round 1) `groups_added`. Each member is present only with its option,
+  so the line without the two answers and writes as before, byte for byte; a second identical line
+  is `unchanged`.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-477-pc2-fix1.md`, after the independent
+review; the groups are the coordinator's ruling, not the owner's words):
+- *No stop in a debug build.* An outcome's `package_id` is a name of the key table (at most 256
+  bytes, no control character), and a debug build stops on a value it does not take. A `--refresh`
+  id that is no such name is refused `validation_failed` (usage) before the root is read, the
+  message naming `--refresh`, the id's place on the line and its length, never its value
+  (`refresh_ids_fit` in the writer, by the key table's own rule, `outcome::key_text_fits`, made
+  public with `outcome::NAME_MAX_BYTES`). An issue's pointer is a `json_pointer` (at most 512
+  bytes): one the key table would not take, made of a very long member or locale name, is cut to
+  the entry it lies in (`/packs/<i>`, `/groups/<i>`), else to the document's member, else to the
+  whole document (`issue_pointer`, applied where the reader records an issue, `Check::error` and
+  `Check::warn`), so the display file's refusals and the catalog's own errors and display warnings
+  (PC-1's `catalog_display_outcome`, the same fault) are built whatever the file holds.
+- *Groups* (the coordinator's ruling). The display file may carry the groups it adds, `groups`, in
+  the catalog's own shape (`{id, title}`, read by the reader's own group check, every defect an
+  error). A group whose id the written file's `groups` do not hold is appended after them, in the
+  display file's order; one they hold with the same title (compared as JSON values, the order of
+  the locales not counting: `same_title`) is simply there; one they hold with another title is
+  refused with a word of its own, `catalog_group_title_differs` at its `title`. No group is removed
+  or renamed. A package's `group` is checked against the written file's group ids and the display
+  file's together. The groups in all keep the catalog's limit, 64: more is `catalog_out_of_limits`
+  at `/groups` of the display file. The answer's `groups_added` (with `--displays` only) names
+  the groups added, by id, in the file's order. Without a new group the file's `groups` stay byte
+  for byte; a `groups` that is no list holds no group for the reader, and the new ones are then the
+  list.
+- *The display file's version*: `schema_version` `actingcommand.pack-catalog-displays.v1`
+  (`STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`, named after the catalog's
+  `actingcommand.pack-catalog.v1`); a file without it or with another is refused `malformed` at
+  `/schema_version` before anything else of it is read (a file over 1 MiB or no JSON object is
+  refused as such first).
+- *One cause, one word*: `refresh` answers `package_not_listed`, the word `standard_pack_problem`
+  has for a package the registry does not hold, as the vocabulary `catalog_refresh_problem`'s word
+  for that cause; the slice's own word `package_unregistered`, in no release, is retired from the
+  catalog before it ships.
+- *Texts*: the contract's two sentences (the one way an entry's business part is brought back to
+  the rules; "kept as written" for every entry the line does not name), the row's two parameter
+  notes (the 160-byte bound is the row's `help`'s only: the `displays` note says the path is
+  absolute, the `refresh` note its refusal words and `added`), `output` (`groups_added`) and
+  `notes`, the command line's option texts, the MCP manual.
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
-| The rule | `crates/actingcommand-contract/src/standard_pack_catalog.rs`: `merge_standard_pack_catalog` takes `CatalogEdits` (`refresh`, `displays`: `CatalogDisplayFile`) and answers `CatalogMergeRefusal` (`Refresh`, `Root`, `Display`); `refresh_named`, `schedule_business`, `read_display_file`, `Check::display_file`, `with_display`; `CatalogRefreshed`, `CatalogRefreshState`, `CatalogRefreshRefusal`, `CatalogDisplayFileIssue`; the merge's `refreshed` and `display_written`; the vocabulary `catalog_refresh_problem` |
+| The rule | `crates/actingcommand-contract/src/standard_pack_catalog.rs`: `merge_standard_pack_catalog` takes `CatalogEdits` (`refresh`, `displays`: `CatalogDisplayFile`) and answers `CatalogMergeRefusal` (`Refresh`, `Root`, `Display`); `refresh_named`, `schedule_business`, `read_display_file`, `Check::display_file`, `with_display`; `CatalogRefreshed`, `CatalogRefreshState`, `CatalogRefreshRefusal`, `CatalogDisplayFileIssue`; the merge's `refreshed` and `display_written`; the vocabulary `catalog_refresh_problem`. Fix round 1: `STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`, `DisplayFile`, `WrittenGroups`, `same_title`, `issue_pointer`, the merge's `groups_added`; `standard_pack.rs` (`StandardPackProblem::CatalogGroupTitleDiffers`); `outcome.rs` (`key_text_fits`, `NAME_MAX_BYTES` public) |
 | The codes and the key | `crates/actingcommand-contract/src/codes.rs` (two `SharedCode`s), `outcome/keys.rs` (`catalog_refresh_problem`); the contract fragment, the catalog's key and vocabulary |
-| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`read_display_file`, `display_refused`, the refusals' mapping), `api.rs` (`StandardPackCatalogRequest::{refresh, displays}`, `StandardPackCatalogResponse::{refreshed, display_written}`) |
+| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`read_display_file`, `display_refused`, the refusals' mapping; fix round 1 `refresh_ids_fit`), `api.rs` (`StandardPackCatalogRequest::{refresh, displays}`, `StandardPackCatalogResponse::{refreshed, display_written, groups_added}`) |
 | The command line | `apps/actinglab/src/standard_pack_cli.rs`: `CATALOG_FLAGS` (`--refresh`, `--displays`), `catalog_options`, `run_catalog` (`--refresh` repeatable, `--displays` once, either without its value a usage error) |
 | The row | `standard-pack catalog` in [lab-operations.json](lab-operations.json): the parameters `refresh` (option, string, repeat) and `displays` (option, file), its `help`, `output` and `notes`; the MCP server offers both through its child, the schema from the row |
 | Texts | [pack-catalog.md](pack-catalog.md) "Who writes it"; `apps/actinglab-mcp/MANUAL.md` (the package declaration) |
@@ -36376,14 +36417,17 @@ tool write a new entry's display, so a new package showed by its id.
 | Word | Kind | The one situation | Refuses or warns | Exit (actinglab's own line / a `--via` line / through MCP's `serve` child) |
 |---|---|---|---|---|
 | `standard_pack_catalog_refresh_refused` (contract, error / none; `game`, `package_id`, `catalog_refresh_problem`) | new code | `standard-pack catalog` refuses a package its `refresh` names | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
-| `package_unregistered` (vocabulary `catalog_refresh_problem`, new) | new word | the root's registry does not hold the package | as its code | as its code |
+| `package_not_listed` (vocabulary `catalog_refresh_problem`; fix round 1: the word `standard_pack_problem` has for the same cause, in place of the slice's `package_unregistered`, retired before release) | existing word | the root's registry does not hold the package | as its code | as its code |
 | `package_repeated` (the same vocabulary) | new word | `refresh` names the package more than once | as its code | as its code |
-| `standard_pack_catalog_display_refused` (contract, error / none; `game`, `path` the display file, `standard_pack_problem`, `json_pointer` in it) | new code | `standard-pack catalog` refuses the display file its line gives, by the catalog's own word (`malformed`, `catalog_out_of_limits`, `package_not_listed`, `catalog_duplicate`, `catalog_text_missing`, `catalog_group_unknown`) | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+| `standard_pack_catalog_display_refused` (contract, error / none; `game`, `path` the display file, `standard_pack_problem`, `json_pointer` in it) | new code | `standard-pack catalog` refuses the display file its line gives, by the catalog's own word (`malformed`, `catalog_out_of_limits`, `package_not_listed`, `catalog_duplicate`, `catalog_text_missing`, `catalog_group_unknown`; fix round 1 `catalog_group_title_differs`) | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+| `catalog_group_title_differs` (vocabulary `standard_pack_problem`, fix round 1) | new word | a group of the display file has the id of a group of the catalog with another title | as `standard_pack_catalog_display_refused` | as its code |
 
 The key `catalog_refresh_problem` (`vocab:catalog_refresh_problem`) is new; `standard_pack_problem`
-gains no word. A relative `--displays` path, or one naming no file, is the existing
-`validation_failed` (usage), as a root file that cannot be read is. No decision reads a code or a
-word: the writer maps the merge's refusal by its variant. The outcome-code index is regenerated.
+gains one word in fix round 1, `catalog_group_title_differs`. A relative `--displays` path, or one
+naming no file, is the existing `validation_failed` (usage), as a root file that cannot be read is;
+so is (fix round 1) a `--refresh` id over 256 bytes or with a control character. No decision reads
+a code or a word: the writer maps the merge's refusal by its variant. The outcome-code index is
+regenerated.
 
 **Tests** (`crates/resource-tooling/src/gate_477_pc2.rs`, apps gate map "#477 PC-2", six; a built
 game root of made-up files, no clock): the order agents use (an entry written without a rule is
@@ -36396,7 +36440,19 @@ limit and an undeclared group refused with the catalog's words at their pointers
 a second identical line `unchanged`, `agrees`. Adapted, for the new members only (nothing they pin
 changes): `pc1_the_index_holds_each_relation_once_both_ways` passes `CatalogEdits::default()` to the
 merge, and the PC-1 writer gate's two `StandardPackCatalogRequest` initializers name `refresh` and
-`displays` empty. No golden changes; no test leaves a gate map.
+`displays` empty. No golden changes; no test leaves a gate map. Fix round 1: the slice's own display
+files carry their `schema_version`, and its fourth test answers `package_not_listed`; two more in
+the same file: a display file adding two groups after the catalog's in its order, the one there
+with its locales in another order not added, entries naming either, `groups` unchanged byte for
+byte without a new group, 64 in all planned, and refused with their words at their pointers, nothing
+written: a group of another title, 65 in all, a file without its version and one with another;
+a `--refresh` id of 300 bytes and one with a control character refused `validation_failed` before
+the root is read without their value, a 600-byte locale and member name in the display file refused
+at `/packs/0`, and a 600-byte locale name in the catalog warned of at `/packs/0`; and on the command
+line and through `serve --stdio --front mcp` (`apps/actinglab/src/tests/gate_477_pc2.rs`, the same
+gate), `--refresh` given twice and a list of two answered for both in order, the same id twice
+refused `package_repeated` on both (exit 2 on the `--via`-shaped line the test runs, 1 through
+`serve`), nothing written.
 
 **What is not changed.** The line without the two options, byte for byte; the file's canonical form;
 the refusal of a root inside an installation, first; what `standard-pack check`, the build and

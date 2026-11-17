@@ -258,8 +258,8 @@ pub(crate) fn catalog_options() -> [&'static str; 4] {
     [
         "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
-        "--refresh <package_id> (repeatable, once per package: its entry's consumes and produces computed again from its rules, its display and its place kept; answered in refreshed)",
-        "--displays <absolute path of {packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole; its business part untouched)",
+        "--refresh <package_id> (repeatable, once per package: its entry's consumes and produces computed again from its rules, its display and its place kept; answered in refreshed, a package without an entry added; one the registry does not hold or named twice refused standard_pack_catalog_refresh_refused, package_not_listed or package_repeated)",
+        "--displays <absolute path of {schema_version: actingcommand.pack-catalog-displays.v1, groups?: [{id, title}], packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole, its business part untouched; a group not in the catalog added, answered in groups_added; one there with another title refused)",
     ]
 }
 

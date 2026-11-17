@@ -242,8 +242,10 @@ pub struct StandardPackCatalogRequest {
     /// kept; empty: none, and the line is PC-1's.
     pub refresh: Vec<String>,
     /// Workflow #477 PC-2: `--displays <file>`, an absolute path: a display file
-    /// (`{packs: [{package_id, title, summary, group?, risk?}]}`) whose entries replace the named
-    /// entries' displays whole, their business part untouched.
+    /// (`{schema_version, groups?, packs: [{package_id, title, summary, group?, risk?}]}`, fix
+    /// round 1: `actingcommand.pack-catalog-displays.v1`) whose entries replace the named entries'
+    /// displays whole, their business part untouched, and whose groups the catalog's `groups` gain
+    /// when they do not hold them.
     pub displays: Option<PathBuf>,
 }
 
@@ -282,6 +284,10 @@ pub struct StandardPackCatalogResponse {
     /// order. Absent without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_written: Option<Vec<String>>,
+    /// Workflow #477 PC-2 fix round 1: with `--displays`, the ids of the groups the file added to
+    /// the catalog's `groups`, in its order (empty when it adds none). Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups_added: Option<Vec<String>>,
     /// With `--plan`: the document the line would write.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<Value>,

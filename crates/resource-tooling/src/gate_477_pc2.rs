@@ -18,6 +18,17 @@
 //   refused `standard_pack_catalog_display_refused` with the catalog's own word at its pointer in
 //   the display file, and nothing is written (5);
 // - a second identical line changes nothing (`unchanged`, the refreshed entry `agrees`) (6).
+// Fix round 1 (the independent review; the coordinator's ruling on groups; the fix brief's items
+// 1 to 3 and 5): the display file carries its `schema_version`, and `refresh` answers
+// `package_not_listed`; and
+// - a display file adds a group the catalog does not hold, after its groups and in the file's
+//   order, a group it holds with the same title (its locales in another order) is there already,
+//   and an entry may name a group of either; without a new group `groups` stay as they were; a
+//   group of another title, more than 64 groups in all and a file without its `schema_version`
+//   are refused with their words, nothing written (7);
+// - a `refresh` id over 256 bytes or with a control character is a usage error before the root is
+//   read, its value not echoed; a very long locale or member name in the display file or in the
+//   catalog is answered at its entry's pointer, no debug build stops (8).
 // A made-up game `neutral` in temporary directories; every package, pool, rule and text is a
 // placeholder. No clock is read and nothing sleeps.
 
@@ -38,6 +49,8 @@ const SPEND: &str = "neutral.spend";
 const POINTS: &str = "pool.neutral.points";
 const STOCK: &str = "pool.neutral.stock";
 const CATALOG: &str = "pack-catalog.json";
+/// Fix round 1: the display file's version.
+const DISPLAYS: &str = "actingcommand.pack-catalog-displays.v1";
 
 fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
@@ -333,11 +346,7 @@ fn pc2_refresh_refuses_an_unregistered_or_repeated_package_and_writes_nothing() 
             "{word}: nothing is written"
         );
     };
-    refused(
-        &["neutral.absent"],
-        "neutral.absent",
-        "package_unregistered",
-    );
+    refused(&["neutral.absent"], "neutral.absent", "package_not_listed");
     refused(&[COLLECT, COLLECT], COLLECT, "package_repeated");
 
     let (_other, fresh) = working_root(vec![collect_rule(2), spend_rule()]);
@@ -365,7 +374,7 @@ fn pc2_displays_replace_a_named_entry_s_display_and_a_defect_is_refused_with_its
     let displays = temp.path().join("displays.json");
     write_json(
         &displays,
-        &json!({"packs": [
+        &json!({"schema_version": DISPLAYS, "packs": [
             {"package_id": COLLECT, "title": {"en": "Collect points"},
              "summary": {"en": "Collects points every hour."}, "risk": ["word_one"]},
             {"package_id": SPEND, "title": {"en": "Spend"}, "summary": {"en": "Spends points."},
@@ -419,7 +428,7 @@ fn pc2_displays_replace_a_named_entry_s_display_and_a_defect_is_refused_with_its
             "catalog_group_unknown",
         ),
     ] {
-        let mut defective = json!({"packs": [
+        let mut defective = json!({"schema_version": DISPLAYS, "packs": [
             {"package_id": COLLECT, "title": {"en": "Collect"}, "summary": {"en": "Collects."}}
         ]});
         defective["packs"][0][field] = value;
@@ -457,7 +466,8 @@ fn pc2_a_second_identical_line_changes_nothing() {
     let displays = temp.path().join("displays.json");
     write_json(
         &displays,
-        &json!({"packs": [{"package_id": COLLECT, "title": {"en": "Collect"},
+        &json!({"schema_version": DISPLAYS,
+                "packs": [{"package_id": COLLECT, "title": {"en": "Collect"},
                            "summary": {"en": "Collects points."}}]}),
     );
 
@@ -481,4 +491,235 @@ fn pc2_a_second_identical_line_changes_nothing() {
         json!([{"package_id": COLLECT, "state": "agrees", "before": after, "after": after}])
     );
     assert_eq!(second.display_written, Some(vec![COLLECT.to_owned()]));
+}
+
+/// `count` groups `<prefix>_<i>`, each with one title.
+fn groups(prefix: &str, count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|index| json!({"id": format!("{prefix}_{index}"), "title": {"en": "Group"}}))
+        .collect()
+}
+
+/// (7) Fix round 1, the coordinator's ruling on groups: a display file adds the groups the catalog
+/// does not hold, after its own; one it holds with the same title is there already; one of another
+/// title, more than 64 in all and a file without its version are refused, nothing written.
+#[test]
+fn pc2_displays_add_new_groups_keep_those_there_and_refuse_a_retitled_one() {
+    let (temp, root) = working_root(vec![collect_rule(2), spend_rule()]);
+    let daily = json!({"id": "daily", "title": {"en": "Daily", "fr": "Quotidien"}});
+    write_json(
+        &root.join(CATALOG),
+        &json!({
+            "schema_version": "actingcommand.pack-catalog.v1",
+            "game": GAME,
+            "groups": [daily],
+            "packs": [
+                {"package_id": COLLECT, "consumes": [], "produces": [constant(POINTS, 2)]},
+                {"package_id": SPEND, "consumes": [constant(POINTS, 1)], "produces": []}
+            ]
+        }),
+    );
+    write(&root, false, &[], None);
+    let displays = temp.path().join("displays.json");
+    write_json(
+        &displays,
+        &json!({
+            "schema_version": DISPLAYS,
+            "groups": [
+                {"id": "weekly", "title": {"en": "Weekly"}},
+                {"id": "daily", "title": {"fr": "Quotidien", "en": "Daily"}},
+                {"id": "event", "title": {"en": "Event"}}
+            ],
+            "packs": [
+                {"package_id": COLLECT, "title": {"en": "Collect"},
+                 "summary": {"en": "Collects points."}, "group": "weekly"},
+                {"package_id": SPEND, "title": {"en": "Spend"}, "summary": {"en": "Spends points."},
+                 "group": "daily"}
+            ]
+        }),
+    );
+
+    let answer = write(&root, false, &[], Some(&displays));
+
+    assert_eq!(answer.status, "written");
+    assert_eq!(
+        answer.groups_added,
+        Some(vec!["weekly".to_owned(), "event".to_owned()]),
+        "the groups added, in the file's order; the one there with its title is not"
+    );
+    let after = read_json(&root.join(CATALOG));
+    let expected = json!([
+        daily,
+        {"id": "weekly", "title": {"en": "Weekly"}},
+        {"id": "event", "title": {"en": "Event"}}
+    ]);
+    assert_eq!(
+        serde_json::to_string(&after["groups"]).expect("JSON"),
+        serde_json::to_string(&expected).expect("JSON"),
+        "the new groups follow the catalog's in the file's order; the one there is as written"
+    );
+    assert_eq!(after["packs"][0]["group"], "weekly");
+    assert_eq!(after["packs"][1]["group"], "daily");
+    assert!(
+        !answer
+            .warnings
+            .iter()
+            .any(|warning| warning.is(SharedCode::StandardPackCatalogDisplayInvalid)),
+        "an entry may name a group the file adds: {:?}",
+        answer.warnings
+    );
+
+    let written = serde_json::to_string(&after["groups"]).expect("JSON");
+    write_json(
+        &displays,
+        &json!({"schema_version": DISPLAYS, "groups": [daily], "packs": []}),
+    );
+    let again = write(&root, false, &[], Some(&displays));
+    assert_eq!(again.status, "unchanged");
+    assert_eq!(again.groups_added, Some(Vec::new()));
+    assert_eq!(
+        serde_json::to_string(&read_json(&root.join(CATALOG))["groups"]).expect("JSON"),
+        written,
+        "without a new group the groups are as they were"
+    );
+
+    // The catalog holds 3 groups now: 61 more make 64, the limit.
+    write_json(
+        &displays,
+        &json!({"schema_version": DISPLAYS, "groups": groups("fits", 61), "packs": []}),
+    );
+    let planned = write(&root, true, &[], Some(&displays));
+    let document = planned.document.expect("a plan answers its document");
+    assert_eq!(document["groups"].as_array().map(Vec::len), Some(64));
+    assert_eq!(planned.groups_added.map(|ids| ids.len()), Some(61));
+
+    let bytes = fs::read(root.join(CATALOG)).expect("the file");
+    for (file, pointer, word) in [
+        (
+            json!({"schema_version": DISPLAYS,
+                   "groups": [{"id": "daily", "title": {"en": "Every day"}}], "packs": []}),
+            "/groups/0/title",
+            "catalog_group_title_differs",
+        ),
+        (
+            json!({"schema_version": DISPLAYS, "groups": groups("over", 62), "packs": []}),
+            "/groups",
+            "catalog_out_of_limits",
+        ),
+        (json!({"packs": []}), "/schema_version", "malformed"),
+        (
+            json!({"schema_version": "actingcommand.pack-catalog.v1", "packs": []}),
+            "/schema_version",
+            "malformed",
+        ),
+    ] {
+        write_json(&displays, &file);
+        let error = line(&root, false, &[], Some(&displays)).expect_err("the line is refused");
+        assert_eq!(
+            error.code, "standard_pack_catalog_display_refused",
+            "{word}"
+        );
+        let outcome = refusal(&error);
+        assert_eq!(
+            outcome["values"]["standard_pack_problem"], word,
+            "{pointer}"
+        );
+        assert_eq!(outcome["values"]["json_pointer"], pointer, "{word}");
+        assert_eq!(
+            fs::read(root.join(CATALOG)).expect("the file"),
+            bytes,
+            "{word}: nothing is written"
+        );
+    }
+}
+
+/// (8) Fix round 1, the independent review: a `refresh` id an answer cannot name is a usage error
+/// before the root is read, its value not echoed; a pointer longer than the key table takes is its
+/// entry's, in the display file and in the catalog alike, and no debug build stops.
+#[test]
+fn pc2_a_long_name_is_refused_or_answered_at_its_entry() {
+    let (temp, root) = working_root(vec![collect_rule(2), spend_rule()]);
+    let long = "x".repeat(300);
+    for (id, at, length) in [
+        (long.as_str(), temp.path().join("absent"), 300),
+        ("neutral.collect\u{7}", root.clone(), 16),
+    ] {
+        let error = line(&at, false, &[id], None).expect_err("the id is refused");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+        assert!(
+            error.message.starts_with("--refresh value 1 "),
+            "before the root is read: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains(&format!("({length} bytes)")),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains(id),
+            "never echoed: {}",
+            error.message
+        );
+    }
+    assert!(!root.join(CATALOG).exists(), "nothing is written");
+
+    let name = "l".repeat(600);
+    let displays = temp.path().join("displays.json");
+    for (entry, word) in [
+        (
+            json!({"package_id": COLLECT, "title": {(name.as_str()): "Collect"},
+                   "summary": {"en": "Collects."}}),
+            "catalog_out_of_limits",
+        ),
+        (
+            json!({"package_id": COLLECT, (name.as_str()): true}),
+            "malformed",
+        ),
+    ] {
+        write_json(
+            &displays,
+            &json!({"schema_version": DISPLAYS, "packs": [entry]}),
+        );
+        let error = line(&root, false, &[], Some(&displays)).expect_err("the line is refused");
+        assert_eq!(
+            error.code, "standard_pack_catalog_display_refused",
+            "{word}"
+        );
+        let outcome = refusal(&error);
+        assert_eq!(outcome["values"]["standard_pack_problem"], word);
+        assert_eq!(outcome["values"]["json_pointer"], "/packs/0", "{word}");
+    }
+    assert!(!root.join(CATALOG).exists(), "nothing is written");
+
+    // PC-1's reader: the catalog's own display defect at such a name is warned of at its entry.
+    write_json(
+        &root.join(CATALOG),
+        &json!({
+            "schema_version": "actingcommand.pack-catalog.v1",
+            "game": GAME,
+            "packs": [{"package_id": COLLECT, "title": {(name.as_str()): "Collect"},
+                       "summary": {"en": "Collects."}, "consumes": [],
+                       "produces": [constant(POINTS, 2)]}]
+        }),
+    );
+    let answer = write(&root, false, &[], None);
+    let invalid = answer
+        .warnings
+        .iter()
+        .filter(|warning| warning.is(SharedCode::StandardPackCatalogDisplayInvalid))
+        .map(|warning| {
+            (
+                warning.value("standard_pack_problem").cloned(),
+                warning.value("json_pointer").cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        invalid,
+        vec![(
+            Some(json!("catalog_out_of_limits")),
+            Some(json!("/packs/0"))
+        )]
+    );
 }
