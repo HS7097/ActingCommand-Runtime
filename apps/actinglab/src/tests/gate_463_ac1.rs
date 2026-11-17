@@ -1199,7 +1199,7 @@ fn ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back() {
         .expect("recording.json reads");
     recording["note"] = json!("edited by hand");
     fs::write(
-        &file,
+        file,
         serde_json::to_vec_pretty(&recording).expect("recording.json writes"),
     )
     .expect("recording.json written");
@@ -1231,7 +1231,7 @@ fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lis
             for (name, bytes) in &files {
                 let target = into.join(name);
                 fs::create_dir_all(target.parent().expect("a parent")).expect("the copy");
-                fs::write(&target, bytes).expect("a file of the copy");
+                fs::write(target, bytes).expect("a file of the copy");
             }
         }
     }
@@ -1248,7 +1248,7 @@ fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lis
             .join(case["scene"].as_str().expect("the case names its scene"));
         let mut bytes = fs::read(&scene).expect("the scene");
         bytes.push(0);
-        fs::write(&scene, bytes).expect("the scene changed");
+        fs::write(scene, bytes).expect("the scene changed");
     }
     let before = tree(&repo);
 
