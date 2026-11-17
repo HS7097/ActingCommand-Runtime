@@ -384,11 +384,15 @@ jobs:
             throw "outcome_release_gate_failed: outcome-guard release $release exited with code $LASTEXITCODE"
           }
 
+      # Workflow #479 ACIB-0: acib is left out of this cargo run, so its dependencies take no part
+      # in the feature resolution of the Runtime and Tools executables; they are built exactly as
+      # they were before acib joined the workspace. acib is built in a run of its own below.
       - name: Build Windows executables
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            --workspace --exclude actingcommand-ios-bridge `
             --bin actingcommand-actingd `
             --bin actingctl `
             --bin actingwatch `
@@ -999,6 +1003,31 @@ jobs:
           }
           # The runner ends the step with the last native exit code; every one above was checked.
           $global:LASTEXITCODE = 0
+
+      # Workflow #479 ACIB-0: acib, the iOS device bridge, is no file of the installation. It is
+      # built after the staged artifacts, in a cargo run of its own, so no file of the Runtime or
+      # Tools artifact and neither manifest changes, and it is uploaded as an artifact of its own
+      # (acib-<sha>). A release run builds and publishes nothing of it.
+      - name: Build acib
+        if: ${{ !inputs.release_tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            --package actingcommand-ios-bridge `
+            --bin acib
+          if ($LASTEXITCODE -ne 0) {
+            throw "acib cargo build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload acib artifact
+        if: ${{ !inputs.release_tag }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: acib-${{ steps.source.outputs.source_sha }}
+          path: target/x86_64-pc-windows-msvc/release/acib.exe
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
       # Actions artifacts are acceptance builds only; a release run publishes the Release instead
       # (and keeps the files it publishes, last step below).
