@@ -20,7 +20,8 @@
 //!   by the module, with the initiator `Lab-MCP` (LAB-5G2b's second part), and since Workflow
 //!   #434 LAB-6S0 `deploy` and `rollback` too, always detached, their detached run carrying
 //!   `Lab-MCP` (a row this build does not serve would be refused with `mcp_operation_unsupported`,
-//!   [`codes`]; no offered row is one);
+//!   [`codes`]; no offered row is one); [`rescue_export`] (Workflow #434 PP-1): a rescue row's
+//!   success line over the budget written whole to the export directory and answered its header;
 //! - [`children`] (Workflow #434 LAB-5G4b): every other offered row is served through a child
 //!   `actinglab.exe serve --stdio --front mcp`, one request per child at a time; [`after_child`]
 //!   (its second part): the client action after a capture and the Lab overflow rule, as today's
@@ -56,6 +57,7 @@ mod children;
 mod codes;
 mod jobs;
 mod protocol;
+mod rescue_export;
 mod runtime;
 mod server;
 mod tools;
@@ -90,6 +92,10 @@ mod gate_434_lw1;
 // out (`db1_t5_the_mcp_tool_takes_config_and_leaves_bound_via_out`).
 #[cfg(test)]
 mod gate_398_db1;
+// Test-only: Workflow #434 PP-1, a rescue row's success over the budget written whole and answered
+// its header, and `ac_run_show` of its job.
+#[cfg(test)]
+mod gate_434_pp1;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
