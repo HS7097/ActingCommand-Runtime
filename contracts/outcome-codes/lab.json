@@ -330,14 +330,15 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "member": "optional"
+        "member": "optional",
+        "json_pointer": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.69",
-      "description": "#463 RC-1 fix round 1 (contracts/resource-regression-case.md, the reader): a member of a regression case's top level that the contract does not name. The top level is open: the reader reads past it and names it once in this warning among the case's warnings, first; the case is read and run as if it were not there and its verdict does not change for it (resource regression exits 0 for it). member is its name, when it is a text of at most 256 bytes without a control character. Inside the parts the runner evaluates (scene_construction, expect, expect.observe, an entry of expect.recognize) an unknown member stays the failure member_unknown.",
-      "common_causes": "The repository writes a member of its own into its cases (a note, a reviewer, a date) that its own runner ignores, or a member of a later version of the format.",
-      "handling": "Nothing to do when the member is the repository's own note. If it was meant as one of the contract's members, correct its name."
+      "description": "#463 RC-1 fix round 1 and RC-2 (contracts/resource-regression-case.md, the reader): a member of a regression case's top level, or (RC-2) of its scene_construction, its canvas or a rectangle, that the contract does not name. The top level is open: the reader reads past it and names it once in this warning among the case's warnings, first; the case is read and run as if it were not there and its verdict does not change for it (resource regression exits 0 for it). member is its name, when it is a text of at most 256 bytes without a control character. #463 RC-2 (0.12.71): scene_construction, its canvas and each rectangle of its rects are open the same way (a note on how the scene was made: what the case runs on is the scene file its scene_sha256 pins, and nothing the runner evaluates is read from such a member), one warning per place and name, those of the top level first, then in the order read; json_pointer is the member's place, the JSON pointer a failure there would name (/note at the top level, /scene_construction/note, /scene_construction/canvas/<name>, /scene_construction/rects/<index>/<name>), when it is at most 512 bytes. Inside expect, expect.observe and an entry of expect.recognize an unknown member stays the failure member_unknown.",
+      "common_causes": "The repository writes a member of its own into its cases (a note, a reviewer, a date) that its own runner ignores, or a member of a later version of the format; inside scene_construction, a note of how its scene image was made (a note, the pastes or overlays it was built of, a rectangle's source region) written before the Runtime's reader existed.",
+      "handling": "Nothing to do when the member is the repository's own note. If it was meant as one of the contract's members, correct its name (json_pointer says where it is)."
     },
     "record_case_failed": {
       "category": "error",

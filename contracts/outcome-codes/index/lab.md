@@ -6,7 +6,7 @@ code, sorted by code; nobody edits it by hand. The [summary](README.md) says wha
 
 | Code | Category | Ladder class | Since | Status | Review | Text | Description |
 |---|---|---|---|---|---|---|---|
-| `case_member_unknown` | warning | none | 0.12.69 | active | pending | written | #463 RC-1 fix round 1 (contracts/resource-regression-case.md, the reader): a member of a regression case's top level that the contract does not name. |
+| `case_member_unknown` | warning | none | 0.12.69 | active | pending | written | #463 RC-1 fix round 1 and RC-2 (contracts/resource-regression-case.md, the reader): a member of a regression case's top level, or (RC-2) of its… |
 | `case_schema_unsupported` | warning | none | 0.12.69 | active | pending | written | #463 RC-1 (contracts/resource-regression-case.md): a regression case's case.json declares another schema_version than actingcommand.resource-regression-case.v1,… |
 | `lab_ocr_model_missing` | error | none | 0.12.0 | active | pending | TBD | Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root's models folder (path) holds model folders, but none is an OCR model. |
 | `lab_ocr_runtime_missing` | error | none | 0.12.0 | active | pending | TBD | Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root has no usable ONNX Runtime library at path (ort\onnxruntime.dll). |

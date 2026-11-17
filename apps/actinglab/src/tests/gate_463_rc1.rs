@@ -48,7 +48,10 @@
 //   exit 1.
 // - `rc1_fix1_an_unknown_member_of_the_top_level_warns_and_fails_nothing`: an unknown top-level
 //   member: `passed` with `case_member_unknown` naming it; inside `scene_construction` it stays
-//   the failure `member_unknown`.
+//   the failure `member_unknown`. Adapted by #463 RC-2 (register §1.459), as the requirement
+//   changes what it pins: inside `scene_construction` it is read past too, `passed` with the
+//   warning at `/scene_construction/note`; inside `expect` it stays `member_unknown`.
+// The fixture's helpers are `pub(super)` for #463 RC-2's gate, `gate_463_rc2.rs`.
 // - `rc1_fix1_partial_cases_warn_with_their_count_and_exit_0`: two partial cases beside a passing
 //   one: exit 0, `resource_regression_partial` with `count` 2, once.
 // - `rc1_fix1_a_case_of_another_package_than_its_package_declares_fails`: the case's `package_id`
@@ -72,26 +75,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-const PACKAGE: &str = "neutral.regression.a";
+pub(super) const PACKAGE: &str = "neutral.regression.a";
 /// Fix round 1: a second package of the same content, for the filters and the packages a test
 /// changes.
 const PACKAGE_B: &str = "neutral.regression.b";
-const HOME: &str = "neutral/home";
+pub(super) const HOME: &str = "neutral/home";
 const OTHER: &str = "neutral/other";
-const RED: [u8; 3] = [255, 0, 0];
+pub(super) const RED: [u8; 3] = [255, 0, 0];
 const GREEN: [u8; 3] = [0, 255, 0];
 const BLUE: [u8; 3] = [0, 0, 255];
-const BLACK: [u8; 3] = [0, 0, 0];
-const PAGE_AT: &str = "/expect/observe/page";
+pub(super) const BLACK: [u8; 3] = [0, 0, 0];
+pub(super) const PAGE_AT: &str = "/expect/observe/page";
 
 /// A temporary checkout: the package `packs/<PACKAGE>/`, the packages added, and the cases added
 /// under `regression/<game>/`.
-struct Checkout {
+pub(super) struct Checkout {
     temp: TempDir,
 }
 
 impl Checkout {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let checkout = Self {
             temp: TempDir::new().expect("a temporary directory"),
         };
@@ -119,7 +122,7 @@ impl Checkout {
     }
 
     /// The case directory `regression/neutral/<name>/` ([`Self::add_case_in`]).
-    fn add_case(&self, name: &str, case: &Value, scene: Option<&[u8]>) {
+    pub(super) fn add_case(&self, name: &str, case: &Value, scene: Option<&[u8]>) {
         self.add_case_in("neutral", name, case, scene);
     }
 
@@ -139,7 +142,7 @@ impl Checkout {
     }
 
     /// `resource regression --repo <repo>` with `more` after it, as actinglab runs it.
-    fn run(&self, more: &[&str]) -> crate::CliResult {
+    pub(super) fn run(&self, more: &[&str]) -> crate::CliResult {
         let repo = self.repo();
         let mut line = vec![
             "--json",
@@ -223,12 +226,12 @@ fn write_package(root: &Path, package_id: &str, edit: impl FnOnce(&mut Value)) {
 }
 
 /// A scene of four pixels in a row, as PNG bytes.
-fn scene(pixels: [[u8; 3]; 4]) -> Vec<u8> {
+pub(super) fn scene(pixels: [[u8; 3]; 4]) -> Vec<u8> {
     encode_rgb_png(4, 1, &pixels)
 }
 
 /// A case of the contract over `scene` of the package `PACKAGE` ([`case_of`]).
-fn case(scene: &[u8], rects: Value, expect: Value) -> Value {
+pub(super) fn case(scene: &[u8], rects: Value, expect: Value) -> Value {
     case_of(PACKAGE, scene, rects, expect)
 }
 
@@ -252,12 +255,12 @@ fn case_of(package_id: &str, scene: &[u8], rects: Value, expect: Value) -> Value
 }
 
 /// One rectangle of `scene_construction.rects` on the 4x1 canvas.
-fn rect(x: i64, width: i64) -> Value {
+pub(super) fn rect(x: i64, width: i64) -> Value {
     json!({"x": x, "y": 0, "width": width, "height": 1, "content": "neutral patch"})
 }
 
 /// The Lab's runner on `case` and `scene` over the checkout's package `PACKAGE`.
-fn verdict(checkout: &Checkout, case: &Value, scene: &[u8]) -> RegressionCaseVerdict {
+pub(super) fn verdict(checkout: &Checkout, case: &Value, scene: &[u8]) -> RegressionCaseVerdict {
     verdict_on(&checkout.package(), case, scene)
 }
 
@@ -999,9 +1002,23 @@ fn rc1_fix1_an_unknown_member_of_the_top_level_warns_and_fails_nothing() {
     assert_eq!(outcome.code().as_str(), "case_member_unknown");
     assert_eq!(outcome.value("member"), Some(&json!("note")));
 
-    // Inside a part the runner evaluates it stays a failure.
+    // #463 RC-2 (adapted): inside `scene_construction` it is read past too, with its place.
+    let mut construction = base.clone();
+    construction["scene_construction"]["note"] = json!("a member the contract does not name");
+    let noted = verdict(&checkout, &construction, &bytes);
+    assert_eq!(noted.verdict, RegressionVerdict::Passed, "{noted:?}");
+    assert_eq!(noted.warnings.len(), 1, "{noted:?}");
+    let outcome = &noted.warnings[0].outcome;
+    assert_eq!(outcome.code().as_str(), "case_member_unknown");
+    assert_eq!(
+        outcome.value("json_pointer"),
+        Some(&json!("/scene_construction/note"))
+    );
+    assert_eq!(outcome.value("member"), Some(&json!("note")));
+
+    // Inside an expectation it stays a failure.
     let mut inside = base;
-    inside["scene_construction"]["note"] = json!("a member the contract does not name");
+    inside["expect"]["note"] = json!("a member the contract does not name");
     let refused = verdict(&checkout, &inside, &bytes);
     assert_eq!(refused.verdict, RegressionVerdict::Failed, "{refused:?}");
     let answered = refused
@@ -1011,10 +1028,7 @@ fn rc1_fix1_an_unknown_member_of_the_top_level_warns_and_fails_nothing() {
         .collect::<Vec<_>>();
     assert_eq!(
         answered,
-        [(
-            "/scene_construction/note",
-            Some(RegressionProblem::MemberUnknown)
-        )]
+        [("/expect/note", Some(RegressionProblem::MemberUnknown))]
     );
 }
 
