@@ -363,7 +363,11 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             self.deadline,
         )?;
         let start_check = self.check(&observation.scene, &self.scan.start.check)?;
-        let end_check = self.check(&observation.scene, &self.scan.end.check)?;
+        // Workflow #463 K-c: a scan that declares no end never passes an end check.
+        let end_check = match &self.scan.end {
+            Some(end) => self.check(&observation.scene, &end.check)?,
+            None => false,
+        };
         let instances = projection
             .candidates()
             .iter()
@@ -737,7 +741,10 @@ pub fn replay_scan_with_tables(
 /// of the record lists the evaluated policy declares; a document that declares a shared table
 /// finds none. The session runs as online up to its coverage checks, then decides as the step
 /// does, with its unknown-instance check; nothing returns, confirms or is pressed. A failure
-/// before the decision exists is the error, as `dry_run_scan`'s.
+/// before the decision exists is the error, as `dry_run_scan`'s. Workflow #463 K-c: the session
+/// and `Decide` are the ones a run's select calls (`ScanSession::run`,
+/// `ScanSession::decide_attempt`), so a scan that declares no `end` answers here what it does in a
+/// run: a decision only once its early stop held, else `selection_scan_early_stop_unreached`.
 pub fn dry_run_scan_decide(
     task: &PreparedContainedTask,
     operation_id: &str,

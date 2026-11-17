@@ -35333,6 +35333,220 @@ release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section kee
   pack enters, two leave, one of them a pack the placement added with no rule, which the
   placement's own lists never named).
 
+### 1.453 Slice #463 K-b (0.12.70): the scan select run over a list of several screens, with its moves (Workflow #463; the owner's ruling on board #463 that a scrolling choice has two kinds, scrolling to the end of a list whose content is not known and straight to a known item; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice K-b, and the coordinator's disposition at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-kbc-scan-run-endless.md`, read on main `26698590`)
+
+The coordinator gave this slice 1.453 and §1.454 (K-c) one pull request. It ships in 0.12.70.
+
+**What it is.** Tests only: no change to `linear.rs`, to `scan/` or to any live path (§1.454's
+changes are its own). The kernel already ran a select over a scan in a `linear_steps` package
+(§1.374 K1), but its gate (`gate_463_k1`) covered a list that fits one screen, with no move. The
+Lab's three scrolling slices build on what these tests prove.
+
+**The fixture** (`crates/execution-kernel/src/contained_task/gate_463_kbc.rs`). K-R3a's card list
+(§1.392): a 64 x 96 frame whose rows 4 to 55 show the list, card k a noise marker (the anchor
+template) at content row 10 + 12 k with a patch of its own colour the card reader reads as its name,
+here ten cards (content to 132 px, scrolled 0 to 76 px, four cards a screen) and an eleventh name on
+no card. The package is synthetic and `neutral`, admitted by the kernel's own admission; its policy
+is the one `record stop` writes (§1.442 S2-6): an `ordered` variable read through `keyed_fact`, a
+card scored by its rank, one tie-break key, the lowest candidate ID first; the run reads the
+variable's default, as a run without a dispatch does. The device stand-in draws the list at its
+offset, moves it by each swipe's travel within its ends, opens the detail page on a tap and commits
+every frame as the host does; it keeps every frame, intent, input and completion in order. No
+action seed is drawn, so every drag runs between its rectangles' centres (the advance 24 px on, its
+reverse 24 px back, the reposition's reverse 36 px back). The scan's advance takes steps of 1 to 44
+px, the window a recording's moves give (study, Q3).
+
+**Tests** (exec gate row "#463 K-b"; no clock read; what each would still pass with a kernel that
+is wrong is in the slice's report):
+1. *The first kind* (`kb_the_first_kind_reads_to_the_end_returns_confirms_on_a_fresh_frame_and_taps_once`):
+   wanting card 1, the scan reads to its end check (coverage `complete` over 0, 24, 48, 72 and 76
+   px, start check), selects `layout/cards#00` with nothing unknown, returns with one reposition
+   and one reversed advance (two return viewports), confirms on a fresh F2 at 16 px (captured after
+   the last move, no coverage viewport) and taps once inside card 1's click box, bound to F2.
+2. *The second kind with an end declared* (`kb_the_second_kind_stops_where_its_first_preference_appears`):
+   `early_stop`, the variable ranking card 6 then card 2: the scan stops on the third viewport,
+   where card 6 first appears (coverage `early_stopped` over 0, 24, 48), selects `layout/cards#01`
+   and sends two advances and then the tap; no further move.
+3. *A name on no card* (`kb_a_wanted_name_on_no_card_ends_the_first_kind_with_its_on_empty_key`):
+   with `on_empty`, `empty` over complete coverage with nothing unknown; Completed on the list with
+   the key; four advances, no tap, no completion.
+4. *Every move* (`kb_every_move_is_an_intent_and_its_input_with_no_completion`): from the list's top
+   and from its middle (advances, rewinds, a return's reposition and reversed advance; the bands
+   overlap, so the fixture makes no corrective), each input is the effect intent of the same action
+   right before it, nothing captured between, bound to the frame given last before the intent; the
+   one completion follows the tap.
+5. *The cold path* (`kb_a_list_opened_in_its_middle_is_rewound_to_its_start_before_it_is_covered`):
+   opened at 40 px with `start.rewind`, two rewinds before any advance, start evidence
+   `rewind_check` with two rewind viewports, the coverage from 0 px on the frame after the second
+   rewind.
+
+No code, word, key, interface revision or record shape is added by this section; no existing test
+changes, no golden changes, no test leaves the gate map. **At deploy.** Nothing.
+
+### 1.454 Slice #463 K-c (0.12.70): a scan select that declares no end (Workflow #463; the owner's ruling on board #463, comment 6919996052, option A of question 221: a package of the second kind may carry no end mark; found, it presses; when the list stops moving and the wanted item was not found, the run fails with a named reason; the details below are the coordinator's rulings in the work order, which follow from it, not the owner's words; coordinator work order `rd-1117/brief-463-kbc-scan-run-endless.md`, read on main `26698590`)
+
+The coordinator gave this slice 1.454 and the `package` revision 18 (17 is §1.448 KP-1's). It ships
+in 0.12.70, in §1.453's pull request.
+
+**Why.** A scrolling choice of the second kind knows the item it wants and scrolls straight to it,
+so stage one never reaches the list's end and no end mark can be recorded; until now `scan.end`
+was required.
+
+**The declaration** (`crates/pack-containment/src/source/declarations.rs`, `select_step`, the new
+`scan_end`; the one check, which `resource validate`, every parse and admission run, admission on
+the sealed task through `validate_contained_declarations`, as before): a select step's `scan` may
+leave out `end` when it declares `early_stop`; a `null` member is an absent one, as the Runtime
+reads it. A scan with neither is refused where a missing `end` always was, `MissingField` at
+`/operations/<i>/select/scan/end`: it could only ever fail. A scan without `end` on a step that
+declares `on_empty` is refused, `InvalidValue` at `/operations/<i>/select/on_empty`: rule 1 of
+"Select over a scan" needs complete coverage, which such a scan never has. A `read_list` step's scan
+keeps requiring `end` (`read_list_step`, unchanged: `MissingField` at `…/read_list/scan/end`); the
+kernel's list-reading admission, which deserialized a missing `end` as a failure before, now asks
+it by name (`contained_task_resource_reading_invalid`, `<id>:read_list/scan/end`), after the gate.
+In the kernel `ScanDeclaration::end` became `Option<DeclaredEnd>` (`serde(default)`); a scan that
+declares `end` deserializes as before.
+
+**The run** (`scan.rs`, `scan/online.rs`). The source judges no end check for a scan without `end`
+(`end_check` false), so its coverage is never `complete`: `ScanSession::run` ends it only on the
+early stop (`early_stopped`), an evaluator abort, or a failure. Its decision is acted on only then,
+with `Decide`, `Return`, `Confirm` and the tap unchanged. The list stopping before the early stop
+holds is the one detection that fails a scan with `end` `selection_scan_end_unconfirmed`, `EndTest`'s
+repeats (`forward_repeats >= 2`, two consecutive forward viewports repeating the one before them);
+`ScanSession::stopped_moving` builds the code by the declaration: with `end`
+`selection_scan_end_unconfirmed` as before (its one cause, an end declared and never passed),
+without it the new code. It is a failure after input like every scan failure: no retry, no tap, no
+record of a decision ("Record per path", a failure before the decision). A lower preference that
+was read is not pressed. The bounds fail as before (`selection_scan_bounds_exceeded`). A session
+built from a declaration with neither member (only a `replay --scan` file can bring one) is refused
+`contained_task_select_invalid`, `scan end=absent early_stop=absent`. Not changed: the forward
+window, so a last move to the list's foot shorter than `advance.min_content_step_px` less the
+tolerance fails `selection_scan_alignment_rejected` before the repeats, as it does for a scan whose
+end check does not pass there ([selection-graph.md](selection-graph.md), "A scan without an end";
+the Lab's measured window starts at 1 px, study Q3).
+
+**The offline entry.** `dry_run_scan_decide` runs the same `ScanSession::run` and the same
+`decide_attempt` as a run's `ScanSession::select`: one judgement, two callers, so it answers the
+same on the same frames. Its signature is unchanged.
+
+**Codes and words.**
+
+| Word | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `selection_scan_early_stop_unreached` (execution-kernel, error, `pack_logic_mismatch`, as `selection_scan_end_unconfirmed`; `stage` and `viewport_index` required; since 0.12.70, review pending) | a select's scan that declares no end stopped moving (the repeats) before its early stop held | fails the run after the scan's moves, before any tap | the run's failed terminal, as any task failure (category `error`); a scan replay's `replay_scan_refused` |
+| `resource_declaration_invalid`, `missing_field` at `…/select/scan/end` (existing code and reason) | a scan declares neither `end` nor `early_stop` | refuses the package at the gate and at admission | as `resource_declaration_invalid` |
+| `resource_declaration_invalid`, `invalid_value` at `…/select/on_empty` (existing code and reason) | a step declares `on_empty` beside a scan without `end` | refuses the package at the gate and at admission | as `resource_declaration_invalid` |
+| `contained_task_select_invalid`, detail `scan end=absent early_stop=absent` (existing code) | a scan session is built from a declaration with neither (a `replay --scan` file) | refuses the replay | `replay_scan_refused` |
+| `contained_task_resource_reading_invalid`, detail `<id>:read_list/scan/end` (existing code) | a list reading's scan without `end` reaches the kernel's own check (after the gate, which refuses it first) | refuses admission | as that code |
+
+The catalog fragment `contracts/outcome-codes/execution-kernel.json` gains the code with its texts;
+the outcome code index is regenerated (its `--check` reads "is current"). No location, key or
+vocabulary is new.
+
+**Interface: `package` 18**, by row 13's reasoning ([component-interfaces.md](component-interfaces.md),
+the `package` row 18). A Runtime before this slice refuses a package whose scan declares no `end`
+before `PackageAdmitted`: its declaration gate requires every scan member but `early_stop`
+(`resource_declaration_invalid`, `MissingField` at `/operations/<i>/select/scan/end`; read in
+`Declaration::select_step` on main `26698590` and at tag `v0.12.68`, and admission runs it through
+`validate_contained_declarations` in both). The Runtime declares `package` [3, 18]
+(`distribution/windows/component-interfaces.json`); a bundle whose packs declare such a scan
+declares [18, 18]. The Lab's revision table (`apps/actinglab/src/resource_verify/revision.rs`)
+counts members a pack declares and has no row for one left out, so `standard-pack build` does not
+yet declare 18 for such a pack (no Lab file changes in this slice). `ledger`, `runtime-client`,
+`actingd-config` and `runtime-outcomes` do not move: no record type, member or enum value is new.
+
+**Tests** (kernel `gate_463_kbc.rs`, exec gate row "#463 K-c", on §1.453's fixture):
+`kc_a_scan_without_an_end_finds_its_card_stops_early_and_taps_once` (wanting card 4 on the second
+screen: `early_stopped` over 0 and 24 px, no end evidence, one advance, the tap in card 4's box bound
+to F2, the completion after it); `kc_a_scan_without_an_end_that_stops_moving_first_fails_and_presses_nothing`
+(ranking a name on no card first and card 2 second: the list moves to its foot and twice not at all,
+the new code at `select_scan_end`, `viewport_index` 6, six advances each an intent without a
+completion, card 2 not pressed, no decision record); `kc_the_offline_entry_answers_as_the_run_does_on_the_same_frames`
+(the dry run over the frames those runs showed: the found run's coverage, decision, key,
+unknown-instance check and chosen card; the not-found run's code, stage and viewport);
+`kc_a_scan_with_neither_an_end_nor_an_early_stop_is_refused_by_the_gate_and_admission_alike`,
+`kc_a_scan_without_an_end_beside_on_empty_is_refused_and_with_its_end_admitted` and
+`kc_a_list_readings_scan_without_an_end_is_refused_as_before` (each refusal the same issue at the
+gate, `validate_contained_declarations`, and at admission). Adapted because the requirement changes
+what they pin (the build's `package` range), names kept: the architecture pin
+`the_runtime_declares_each_v0120_interface_revision_once` ([3, 18]), the rescue module's
+`install::gate_463_v1::v1_the_build_declares_package_through_revision_14` ([3, 18], 14 within it;
+its gate row in `apps.toml` gains the incident `#463 K-c`) and the kernel's
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(the build's range [3, 18], 17 within it; its gate row in `exec.toml` gains the incident). No
+existing scan gate changes (SEL-L3, SEL-L3b, SEL-L4b, SEL-L6b, K1 and K-R3a run a scan with `end`
+byte for byte as before), no golden changes, no test leaves the gate map.
+
+**Texts.** [selection-graph.md](selection-graph.md): "Declaration" (the scan's prose and its rule
+table, two rows), "Select over a scan" (step 2 and the paragraph "A scan without an end"), "Record
+per path", "Offline" (the dry run and the `--scan` replay); [linear-steps.md](linear-steps.md),
+"Select steps" ("A list without its end"); [resource-readings.md](resource-readings.md), the
+`scan` row of a `read_list` step; [component-interfaces.md](component-interfaces.md), the `package`
+row 18.
+
+**At deploy.** No installed package declares a scan without `end` (an earlier build refused one), so
+nothing installed changes. **Rollback** (below 0.12.70): no record shape changes; a build below
+refuses such a package before `PackageAdmitted`, and its installer refuses a bundle that declares
+`package` 18 through its `package` edge. A rollback stays open while no root is placed from such a
+bundle.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-kbc-fix1.md`, after the independent
+review of `e1205a87`; main's release commit of 0.12.69, `6a257aed`, merged first, both sides
+whole). Nothing of a live path, the forward window, the new code's class or values, or the Lab
+changes, but the gate's `null` below.
+
+- *The three red tests.* `kc_a_scan_with_neither_an_end_nor_an_early_stop_…`,
+  `kc_a_scan_without_an_end_beside_on_empty_…` and `kc_a_list_readings_scan_without_an_end_…`
+  loaded the package and then called `validate_contained_declarations` on it, but the container
+  load that admission begins with (`PreparedContainedTask::load`, `Containment::load`,
+  `validate_loaded_declarations`) already runs the declaration check, `Declaration::bundle`, and
+  refused there; the kernel was right. Their helper now takes admission's refusal from that load
+  and the gate's from `declaration_file_requests` on the task document as a source tree holds it
+  (the check `resource validate`, `resource convert` and every source parse run first), and asserts
+  both `resource_declaration_invalid` with the same issue but for the file it names: two entries,
+  one check, which refuses in `select_step` (`scan_end`) and in `read_list_step`. Admission's later
+  run of it on the sealed task (`validate_contained_declarations`, in `prepare_bundle`) is never
+  reached for these packages, so "The declaration" above holds of the check, not of that call.
+- *The gaps the Lab's slices rely on* (tests only). The device stand-in can move the list 1 px on
+  at the third capture after an input, after the last move's settled frame and before F2's two
+  captures; `kb_the_first_kind_…`, `kb_the_second_kind_…`, `kb_a_list_opened_in_its_middle_…` and
+  `kc_a_scan_without_an_end_finds_its_card_…` run so and assert the confirmation's offset (17, 49,
+  17 and 25 px) and the tap's point, the centre of the click box F2 gives ((8, 8), (8, 36), (8, 8)
+  and (8, 36)), where a point taken from the frame before F2 lies a pixel lower. New:
+  `kb_a_rewind_that_never_reaches_the_start_fails_and_taps_nothing` (a list without its start mark,
+  opened at 40 px: four rewinds, `selection_scan_start_unconfirmed` at `select_scan_start`,
+  `viewport_index` 0, no advance, no tap, no record) and
+  `kb_an_unreadable_card_blocks_the_empty_end_of_the_first_kind` (wanting a name on no card with
+  `on_empty`, one card drawn in a colour no name has: `selection_result_blocked`, `selection_kind`
+  `empty`, `outcome_key` `card_empty`, `selection_blocking` `unknown_instances`, `count` 1, its record
+  `empty` with that one unknown instance, four advances, no tap), both in the exec gate row
+  "#463 K-b".
+- *Texts.* [selection-graph.md](selection-graph.md), "A scan without an end": the window whole (not
+  widened, the coordinator's ruling: with the tolerance *t*, the smallest step *m* and the last real
+  displacement *d*, the new code when *d* ≤ *t* or *d* ≥ *m* − *t*,
+  `selection_scan_alignment_rejected` first when *t* < *d* < *m* − *t*, so the author declares
+  *m* ≤ 2*t* + 1; two coverage viewports beyond the last that moved the list by more than *t*, which
+  `bounds.max_viewports` must allow), and one sentence for authors: the failure is of class
+  `pack_logic_mismatch` and treated as one, rerun only by the scheduling policy
+  ([policy-suspension.md](policy-suspension.md), "Which failures accumulate") and starting the
+  default recovery ladder by its trigger `pack_logic` ([emulator-control.md](emulator-control.md),
+  "Triggers"); where the item may be absent, the package declares `end` and `on_empty` instead. The
+  description of `replay_scan_invalid` (the actinglab fragment) no longer requires `end`, and names
+  a file with neither `end` nor `early_stop` as `replay_scan_refused`; the index is regenerated.
+- *`null`.* The gate's `read_list_step` reads a `null` `end` as a missing one (`MissingField` at
+  `…/read_list/scan/end`, one condition in its loop over the scan's members); before, it passed the
+  gate and was refused by the kernel's list-reading admission (`contained_task_resource_reading_invalid`).
+  In a select's scan a `null` `end` already was an absent one (`scan_end`): beside `early_stop` a
+  scan without an end, otherwise `MissingField` at `…/select/scan/end`; the kernel deserializes it
+  as no `end`. [resource-readings.md](resource-readings.md), the `scan` row, says so, and
+  `kc_a_list_readings_scan_without_an_end_is_refused_as_before` gains the case.
+- *Revision 18.* No edge test: no kernel-side or interfaces code states a package's revision from
+  its content but `BundleRevisionNeed` (the notices, the goals, the variables), which reads no
+  operation; the one table that does is the Lab's (`apps/actinglab/src/resource_verify/revision.rs`),
+  the next Lab slice's.
+
+No code, word, key, interface revision or record shape is added; no golden changes; no test leaves
+the gate map.
+
 ### 1.456 Slice #463 S2-8' (0.12.70): the swipes recorded before a press folded into one scrolling search (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, and her rule that a scrolling choice has two kinds, to the list's end when what it holds is not known and straight to the wanted item when it is; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 3, Q2 and Q4, and the coordinator's rulings at its end and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s28-fold-scan.md`; stacked on #463 S2-10, §1.441, its branch at `225c1d3c`, which holds main `26698590`, the 0.12.69 train)
 
 This section takes 1.456, the number the work order gives. It ships in 0.12.70.

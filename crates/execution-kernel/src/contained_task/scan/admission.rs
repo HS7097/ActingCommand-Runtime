@@ -48,6 +48,12 @@ impl ScanDeclaration {
         self.early_stop.is_some()
     }
 
+    /// Workflow #463 K-c: whether the scan declares `end`, which a list reading requires: it reads
+    /// to the end of its list and has no early stop.
+    pub(in crate::contained_task) const fn declares_end(&self) -> bool {
+        self.end.is_some()
+    }
+
     /// The static checks of S0 §2.1 on the step's `layout`, `policy` and the evaluator's targets,
     /// in a frame of `frame` (the package's coordinate space) and a task of `task_timeout_ms`;
     /// the first that fails, as its detail, or `None`. Workflow #428 S168-4: a list reading has
@@ -247,7 +253,7 @@ impl ScanDeclaration {
             _ => &[],
         };
         if std::iter::once(&self.start.check)
-            .chain(std::iter::once(&self.end.check))
+            .chain(self.end.as_ref().map(|end| &end.check))
             .chain(page_checks)
             .any(|check| evaluator.target_kind(check).is_err())
         {

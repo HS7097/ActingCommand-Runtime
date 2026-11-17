@@ -2936,6 +2936,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_scan_early_stop_unreached": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.70",
+      "description": "Workflow #463 K-c: a select step's scan that declares no end (it declares early_stop) advanced twice without the list moving (two consecutive forward viewports repeated the one before them, stage select_scan_end, viewport_index the last of them) before its early stop held: the wanted item was not read on the list as far as it moved, and nothing is pressed, a lower preference it read neither.",
+      "common_causes": "The item the package wants (its variable's first preference) is not on the list today; or the list stopped short of it, so that what follows was never shown.",
+      "handling": "Read the step's frames up to the last viewport: if the list ends there and the item is absent, the run's goal does not hold today; if the list goes on, the package's moves or bounds need the pack author's fix. The scan has no end mark, so it never decides that the list holds no wanted item."
+    },
     "selection_scan_position_unread": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
