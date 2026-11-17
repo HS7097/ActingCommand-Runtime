@@ -36227,6 +36227,98 @@ kernel. Nothing proposes a region, a choice or a value.
 **At deploy.** Nothing to configure. A bundle `standard-pack build` makes of a package without an
 end mark declares `package` [18, 18], which an installer whose range ends below 18 refuses.
 
+### 1.461 Slice #463 AC-1 (0.12.71): adoption takes the recording's regression cases into the checkout, and judges the recording by the one judgement of `record ready` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three takes the package into running; the design's S3-17; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ac1-adopt-cases.md`, read on main `240cdb1a`, the 0.12.70 release)
+
+This section takes 1.461, the number the coordinator gave after §1.459 and §1.460 were taken by
+other open pull requests. It ships in 0.12.71.
+
+**Why.** Since #463 S2-10 a stopped recording has, beside its package, the regression cases of
+that package, each run on the package before it was written; adoption named "a regression case" in
+`next` as something a person still had to write. And adoption judged a recording by two checks of
+its own, while stage two has one judgement of what a recording still lacks (`record ready`,
+`recording_api::ready_of`).
+
+**The rule** ([standard-pack-authoring.md](standard-pack-authoring.md), "The cases" and "One
+judgement of the recording").
+- *Which cases*: with `--record-id`, every entry of the recording's `out/<package_id>.cases/`, in
+  the order of the names (`cases.state` `taken`); none when the stop wrote no such directory
+  (`none_found`), none with `--package` (`package_path`); both adopt as before, byte for byte.
+- *Where*: `regression/<game>/<package_id>.<case>/`, `case.json` and its scene byte for byte. The
+  name's safety is shown from the two grammars (a package id is one path segment no root name
+  reserves; a case's name `step_<nn>`, `final` or `ending_<outcome_key>` holds no dot), but they do
+  not bound its length together, so a name whose `.part` exceeds 255 bytes is refused before the
+  first write (`case_name_invalid`, with a dot or a name of more than one segment); nothing is
+  escaped.
+- *Checked before the first write*, after every existing check: each destination free (ASCII lower
+  case) or the earlier set's (`case_place_taken`); each case run by the one runner on the check
+  tree's `packs-root/<package_id>/`, the files adoption writes, admitted once by the runner
+  (`RegressionPackage::load`: adoption's own admission hands it no admitted package); `failed`
+  refuses (`case_failed`, every failing case in the details as the runner answers it), `partial`
+  and `not_run` are taken and named (`cases.not_proven`, the runner's words).
+- *Repeating*: a case is the earlier adoption's when its `case.json` names the package and its
+  `source` is a recording's in the form `record stop` writes, the member `source.record_id` beside
+  exactly one of `step`, `final`, `ending`; without `--replace` such a case refuses `pack_exists`;
+  with it the set is moved to `<state>/adopt/<package_id>.cases.old-<ms>/` (free, `pack_exists`;
+  on the checkout's volume, `replace_across_volumes`). A case written by hand is never moved.
+- *Written last*, after the root files: the earlier set moved, then each case as its `.part`, its
+  files flushed, renamed. A case's `.part` an interrupted call left refuses `pack_exists`; without
+  one the next call meets what any call that put its directory in place leaves, and each advice of
+  the contract ends in a call the checks accept.
+- *The answer*: `cases` `{state, from?, written, would_write, replaced, kept?, not_proven}`;
+  `written` and `would_write` gain the case directories; `next` names a regression case only when
+  none was taken.
+- *One judgement (S3-17)*: with `--record-id`, after the schema and the `record_id`, `record
+  ready`'s one function (`record_ready_by_id`, the recording by its id, no option given); a status
+  other than `packaged` is refused `recording_not_current` with that function's answer as the
+  details' `record_ready`.
+
+**What adoption accepts and refuses, compared.**
+- `recording_not_current`: `packaged` is `stopped`, an artifact and no `amended_at_unix_ms`, the
+  old check's members, so the two refuse the same recordings the function reads, but for two
+  differences, where the old check stays beside the call for that difference only: a packaged
+  recording whose artifact's form is wrong or whose package's file is missing (the function says
+  `packaged`, the old check refuses `member` `artifact`); and a `recording.json` the function
+  cannot read as a whole `actingcommand.lab-recording.v1` (made by hand, or damaged), judged by the
+  old `status` and `amended_at_unix_ms` check, the function's refusal its cause, and named
+  `review.ready_not_read` when it passes. The coordinator decides whether these stay.
+- `recording_unreviewed`: the function checks a packaged recording no further, so it refuses none
+  of the recordings the review refuses (cross-check not `passed`, first decision not evaluated, a
+  step needing review); the review stays whole, `review.recording_checked` unchanged.
+- `standard-pack status` reads no recording's state: unchanged.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The cases, the judgement, the trait the Lab answers | `crates/resource-tooling/src/adopt.rs`: `AdoptLab`, `AdoptCaseRunner`, `RecordingReady`, `AdoptCaseRun`, `AdoptCaseVerdict`, `AdoptCases`, `CaseNotProven`, `ReadyNotRead`, `AdoptWorktree::lab`; `recorded_package`, `case_names`, `CheckoutCases`, `recorded_case`, `case_part_left`, `same_volume`, `plan_cases`, `write_cases`; `write_adoption` answers what it did; `next_items` |
+| The words | `crates/resource-tooling/src/codes.rs`: `AdoptProblem::{CaseNameInvalid, CasePlaceTaken, CaseFailed}`, `AdoptCasesState` |
+| The one judgement by id | `crates/lab/src/recording_api.rs` `record_ready_by_id` (with `recording_of_id`, `session_of_id`, which `record ready` reads with too); `recording/ready.rs` `RecordReadyOutcome::is_packaged` |
+| The Lab's parts | `apps/actinglab/src/standard_pack_cli.rs` `LabAdoption`, `adopted_case`, `case_run`; `GitWorktree::lab` |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md) (the operation, the checks, what it writes, if a call was interrupted, repeating, `--dry-run`, the answer, and the new "The cases", "One judgement of the recording", the codes' table); a sentence each in [lab-recording.md](lab-recording.md) and [resource-regression-case.md](resource-regression-case.md); the row `standard-pack adopt` of [lab-operations.json](lab-operations.json) (`output`); the resource-tooling fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+| Word | What it says | Refuses, warns or informs | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_problem` `case_failed` | a case of the recording fails on the package as adopted | refuses | 1; 2; a refusal |
+| `adopt_problem` `case_place_taken` | a case's destination is there and no case of the earlier set | refuses | 1; 2; a refusal |
+| `adopt_problem` `case_name_invalid` | a case's name gives no directory of one file name | refuses | 1; 2; a refusal |
+| `pack_exists`, `replace_across_volumes`, `recording_not_current` | new causes, each the existing word's (the contract's checks) | refuse | 1; 2; a refusal |
+| `adopt_cases` `taken`, `none_found`, `package_path` | which cases were taken, or why none | inform | 0; 0; the answer |
+
+No decision reads a code by name: adoption decides by the runner's verdict and by the judgement's
+status. The outcome-code index is regenerated.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_ac1.rs`, apps gate map "#463 AC-1"): the nine the gate
+map's comment lists, the work order's seven (its seventh as three). Adapted, not changed in what
+they pin: the trait `AdoptWorktree` gained `lab`, so each test machine of
+`crates/resource-tooling/src/gate_464_p1.rs` and `gate_463_s312.rs` names P1's `NoLab`, whose
+reader reads none of their made-up recordings (as the Lab's reader reads none of them), so the old
+check of the members judges them as before. No golden changes; no test leaves a gate map.
+
+**At deploy.** Nothing to configure. A checkout's `regression/<game>/` gains the cases an adoption
+takes; `resource verify` and `standard-pack build` do not run them yet.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

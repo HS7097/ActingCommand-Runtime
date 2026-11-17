@@ -86,8 +86,25 @@
 //!   (register §1.445, "Train"): `review.trial` is the trial module's one summary
 //!   (`trial_summary`, with `passed_on_record`), each record judged by `PackTrialRecord::passed`,
 //!   which the status row answers too.
+//! - **The cases** (Workflow #463 AC-1, `contracts/standard-pack-authoring.md`, "The cases"): with
+//!   `--record-id`, the regression cases the recording's last stop wrote beside its package
+//!   (`out/<package_id>.cases/<case>/`, #463 S2-10) become `regression/<game>/<package_id>.<case>/`
+//!   of the checkout, byte for byte. Before the first write each is run by the one runner on the
+//!   package as this adoption writes it (the check tree's copy of it, admitted once by the runner);
+//!   a failing one refuses the adoption, a case not proven whole is taken and named; a destination
+//!   that is no case an adoption took from a recording of this package refuses. With `--replace`
+//!   the cases an earlier adoption took are moved as a set beside the replaced pack directory under
+//!   the state directory. They are written last, each as its `.part` and renamed. The runner and
+//!   the judgement below are the Lab's ([`AdoptLab`]), which this crate does not reach.
+//! - **One judgement of the recording** (Workflow #463 S3-17): with `--record-id` the recording is
+//!   judged by `record ready`'s one function ([`AdoptLab::recording_ready`]); a recording it does
+//!   not call `packaged` is refused `recording_not_current` with its list of what is missing. The
+//!   checks of the recording's own members stay beside it where the two differ: the form of its
+//!   artifact and its package's file, and the members' check when that function cannot read the
+//!   recording. The review (`recording_unreviewed`) stays whole: that function checks a packaged
+//!   recording no further.
 
-use crate::codes::{AdoptProblem, ResourceToolingCode};
+use crate::codes::{AdoptCasesState, AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
 use crate::standard_pack_trial::{
@@ -141,6 +158,9 @@ const PACKS_DIRECTORY: &str = "packs";
 /// Below the state directory: the kept copies of replaced pack directories, and the check trees.
 const KEPT_DIRECTORY: &str = "adopt";
 const CHECK_DIRECTORY: &str = "adopt-check";
+/// In a check tree: the repository's pack directories with the adopted package's as it would be
+/// written (Workflow #463 AC-1: the package its cases are run on).
+const CHECK_PACKS_ROOT: &str = "packs-root";
 /// The file adopt writes into the check tree of a checkout, `<state>/adopt-check/<checkout>/`, to
 /// mark it as its own scratch: adopt empties a check tree only when this file is in it, and holds
 /// it locked for the whole call, so that two calls on one checkout never share a tree at once.
@@ -262,6 +282,20 @@ const NEUTRAL_CONFIDENCE_MILLI: u64 = 1_000;
 /// The repository's own items adopt does not write, each named when the checkout holds it.
 const NEXT_FILES: [&str; 2] = ["docs/PACKS.md", "ours/coverage/business-v1.csv"];
 const REGRESSION_DIRECTORY: &str = "regression";
+/// Workflow #463 AC-1: beside a recording's package, the directory of its regression cases,
+/// `out/<package_id>.cases/` (#463 S2-10); the file of a case; and the members of a case's
+/// `source` that `record stop` writes, `{record_id, step}`, `{record_id, final: true}` or
+/// `{record_id, ending}`, by which a case is told to be a recording's.
+const CASES: &str = "cases";
+const CASE_FILE: &str = "case.json";
+const CASE_SOURCE: &str = "source";
+const SOURCE_RECORD_ID: &str = "record_id";
+const SOURCE_STEP: &str = "step";
+const SOURCE_FINAL: &str = "final";
+const SOURCE_ENDING: &str = "ending";
+/// Workflow #463 AC-1: the longest name of a directory entry a file system takes, in bytes; a
+/// case's directory with its `.part` stays within it.
+const NAME_MAX_BYTES: usize = 255;
 /// Workflow #463 S3-12: where a rule's fixed value is registered, relative to `--repo` (the model's
 /// `acmodel.bindings.v1`): by a value binding, which the model's writer `acmodel bindings apply`
 /// writes into the rule with `fixed_value_origin: "model"`, or by a hand entry of a number written
@@ -331,6 +365,122 @@ pub trait AdoptWorktree {
     /// would.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
+    }
+
+    /// Workflow #463 AC-1: the Lab's own parts adopt calls ([`AdoptLab`]): `record ready`'s one
+    /// function and the one runner of a regression case.
+    fn lab(&self) -> &dyn AdoptLab;
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases" and "One judgement of
+/// the recording"): what adopt asks of the Lab, whose crate this one does not reach (the Lab's
+/// crate depends on this one): the one judgement of what a recording still lacks (`record
+/// ready`'s function, #463 S3-17) and the one runner of a regression case
+/// (`contracts/resource-regression-case.md`). actinglab gives the Lab's own; nothing here judges
+/// a recording or runs a case a second way.
+pub trait AdoptLab {
+    /// `record ready`'s answer for the recording `record_id` of the state directory `state_dir`,
+    /// whatever instance it is of, by its one function called with no option given; `Err` when
+    /// the Lab cannot read the recording (its refusal).
+    fn recording_ready(&self, state_dir: &Path, record_id: &str) -> LabResult<RecordingReady>;
+
+    /// The runner of regression cases on the package directory `package_dir`, which it admits
+    /// once as the runner admits a package: a function that answers the case of a directory (its
+    /// `case.json` read by the one reader, the scene it names) run on that package.
+    fn case_runner(&self, package_dir: &Path) -> AdoptCaseRunner<'_>;
+}
+
+/// Workflow #463 AC-1: the runner of one package's cases ([`AdoptLab::case_runner`]): the case of
+/// a directory, run.
+pub type AdoptCaseRunner<'a> = Box<dyn Fn(&Path) -> AdoptCaseRun + 'a>;
+
+/// Workflow #463 S3-17: `record ready`'s answer for a recording, as adopt reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordingReady {
+    /// Its status is `packaged`: stopped, its package written and nothing changed since.
+    pub packaged: bool,
+    /// The answer as `record ready` serializes it: `status`, `missing` (each item as that function
+    /// gives it), `missing_total`, `warnings`, `checks`, `checks_after`, `sources`.
+    pub answer: Value,
+}
+
+/// Workflow #463 AC-1: the one runner's verdict of a case, as adopt decides by it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptCaseVerdict {
+    /// `passed`: every check ran and passed.
+    Passed,
+    /// `failed`: a check failed; the adoption is refused.
+    Failed,
+    /// `partial` or `not_run`: taken, and named with the runner's word for its verdict
+    /// (`verdict`) and its words for the checks that did not run, each once (`reasons`).
+    NotProven {
+        verdict: String,
+        reasons: Vec<String>,
+    },
+}
+
+/// Workflow #463 AC-1: one case as the one runner ran it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptCaseRun {
+    pub verdict: AdoptCaseVerdict,
+    /// The runner's answer of the case as it serializes it, `{id, package_id, verdict, checks,
+    /// warnings?}`.
+    pub answer: Value,
+    /// The case's files as they were read and run, each by its name in the case's directory: its
+    /// `case.json` and, when the reader read it, the scene it names. Written byte for byte.
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
+/// Workflow #463 S3-17: `record ready`'s function did not read the recording (its refusal), so the
+/// check of the recording's own members judged it, as before that slice.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReadyNotRead {
+    /// The function's refusal, with its code.
+    pub outcome: Outcome,
+    /// The same in words.
+    pub text: String,
+}
+
+/// Workflow #463 AC-1: a case taken that the one runner did not prove whole.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CaseNotProven {
+    /// The case, by the name of its directory in the recording's set.
+    pub case: String,
+    /// `partial` or `not_run`, the runner's own word.
+    pub verdict: String,
+    /// The runner's words for the checks that did not run (`ocr_unavailable`, `frames_required`,
+    /// `not_evaluated`), each once.
+    pub reasons: Vec<String>,
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases"): the regression cases
+/// of the adoption.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AdoptCases {
+    /// `taken`, `none_found` or `package_path` (the vocabulary `adopt_cases`).
+    pub state: AdoptCasesState,
+    /// Where they were read from: the recording's `out/<package_id>.cases/`; with `taken` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The directories written, relative to `--repo`, in the order they were renamed into place
+    /// (also in `written`); empty under `--dry-run`.
+    pub written: Vec<String>,
+    /// Under `--dry-run`: the directories it would write (also in `would_write`).
+    pub would_write: Vec<String>,
+    /// The cases an earlier adoption of the package took from a recording, relative to `--repo`,
+    /// which this one moved (under `--dry-run`: would move) to `kept` before it wrote its own.
+    pub replaced: Vec<String>,
+    /// Where the replaced set was moved, `<state>/adopt/<package_id>.cases.old-<ms>/`; absent when
+    /// none was, and under `--dry-run`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kept: Option<String>,
+    /// The cases taken that the runner did not prove whole, with its words.
+    pub not_proven: Vec<CaseNotProven>,
+}
+
+impl Serialize for AdoptCasesState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -492,6 +642,10 @@ pub struct RecordingReview {
     /// Workflow #463 S3-12: why the trial records of the package were not read; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trial_not_read: Option<TrialNotRead>,
+    /// Workflow #463 S3-17: with `--record-id`, why `record ready`'s function did not read the
+    /// recording, which the check of its own members then judged; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_not_read: Option<ReadyNotRead>,
 }
 
 /// One of the repository's own items adopt does not write, by its path relative to `--repo`.
@@ -634,8 +788,11 @@ pub struct StandardPackAdoptResponse {
     /// The repository's own items adopt does not write (a regression case, the census row, the
     /// catalog section), each by its path when the checkout holds it; Workflow #463 S3-12: and
     /// `ours/model/bindings.json` with the two ways of the rule's value when the adopted rule has
-    /// no value yet.
+    /// no value yet. Workflow #463 AC-1: a regression case only when the adoption took none.
     pub next: Vec<AdoptNext>,
+    /// Workflow #463 AC-1: the regression cases the adoption took from its recording, or the word
+    /// why it took none.
+    pub cases: AdoptCases,
 }
 
 /// Workflow #464 P1: `actinglab standard-pack adopt` (module doc).
@@ -646,12 +803,18 @@ pub fn standard_pack_adopt(
     let repo = absolute(&request.repo)?;
     let state = absolute(&request.state_dir)?;
     let root = Repository::read(&repo)?;
-    let (locator, record_id) = match &request.source {
-        AdoptSource::Recording { record_id, lab_dir } => (
-            recorded_package(record_id, lab_dir)?,
-            Some(record_id.clone()),
-        ),
-        AdoptSource::Package(path) => (absolute(path)?, None),
+    // Workflow #463 S3-17: a recording is judged by `record ready`'s one function; Workflow #463
+    // AC-1: with the cases its last stop wrote beside its package.
+    let (locator, record_id, recorded) = match &request.source {
+        AdoptSource::Recording { record_id, lab_dir } => {
+            let recorded = recorded_package(record_id, lab_dir, &state, worktree.lab())?;
+            (
+                recorded.package.clone(),
+                Some(record_id.clone()),
+                Some(recorded),
+            )
+        }
+        AdoptSource::Package(path) => (absolute(path)?, None, None),
     };
     let package = Package::read(&locator)?;
     let game = package.descriptor.game().to_owned();
@@ -698,11 +861,51 @@ pub fn standard_pack_adopt(
             interrupted(&repo, &root.leftovers),
         ));
     }
+    // Workflow #463 AC-1: when this adoption takes cases, what the checkout holds of the package's
+    // cases: a case's `.part` an interrupted adoption left, and the set an earlier adoption took
+    // from a recording.
+    let regression_relative = format!("{REGRESSION_DIRECTORY}/{}", root.game);
+    let regression_dir = repo.join(REGRESSION_DIRECTORY).join(&root.game);
+    let taken = recorded.as_ref().and_then(|read| read.cases.as_ref());
+    let checkout_cases = match taken {
+        Some(_) => Some(CheckoutCases::read(
+            &regression_dir,
+            &regression_relative,
+            &package_id,
+        )?),
+        None => None,
+    };
+    if let Some(part) = checkout_cases
+        .as_ref()
+        .and_then(|cases| cases.parts.first())
+    {
+        let entry = format!("{regression_relative}/{part}");
+        return Err(refused(
+            named_package(adopt(AdoptProblem::PackExists), &package_id).entry(&entry),
+            case_part_left(&entry, &package_id),
+        ));
+    }
     let pack_exists = fs::symlink_metadata(&pack_dir).is_ok();
     if !request.replace && (pack_exists || existing.any()) {
         return Err(refused(
             existing.pointing(adopt(AdoptProblem::PackExists), pack_exists, &pack_relative),
             existing.adopted_before(&root, &package_id, pack_exists),
+        ));
+    }
+    if !request.replace
+        && let Some(earlier) = checkout_cases
+            .as_ref()
+            .and_then(|cases| cases.recorded.first())
+    {
+        let entry = format!("{regression_relative}/{earlier}");
+        return Err(refused(
+            named_package(adopt(AdoptProblem::PackExists), &package_id).entry(&entry),
+            format!(
+                "{entry} is a regression case of {package_id} that an earlier adoption took from a \
+                 recording (its case.json names the package and its source a recording); give \
+                 --replace to adopt the package again, which moves the earlier set of its cases \
+                 to the state directory's adopt/; nothing was written"
+            ),
         ));
     }
     let kept_place = state
@@ -778,6 +981,33 @@ pub fn standard_pack_adopt(
                 ),
             ));
         }
+    }
+    // Workflow #463 AC-1: the earlier set of the package's cases is moved as the replaced pack
+    // directory is, beside it under the state directory: its kept place free and on the
+    // checkout's volume.
+    let cases_kept = state
+        .join(KEPT_DIRECTORY)
+        .join(format!("{package_id}.{CASES}.old-{}", request.at_unix_ms));
+    if request.replace
+        && let Some(earlier) = checkout_cases
+            .as_ref()
+            .and_then(|cases| cases.recorded.first())
+    {
+        if fs::symlink_metadata(&cases_kept).is_ok() {
+            return Err(refused(
+                adopt(AdoptProblem::PackExists).path(&cases_kept),
+                format!(
+                    "the kept place of the earlier cases {} is taken",
+                    cases_kept.display()
+                ),
+            ));
+        }
+        same_volume(
+            worktree,
+            &regression_dir.join(earlier),
+            &cases_kept,
+            &format!("{regression_relative}/{earlier}"),
+        )?;
     }
 
     // The decision; without one, the class of the earlier adoption. Workflow #463 S3-4: a held
@@ -877,6 +1107,11 @@ pub fn standard_pack_adopt(
     if review.record_id.is_none() {
         review.record_id = record_id;
     }
+    // Workflow #463 S3-17: the recording that `record ready`'s function did not read, judged by the
+    // check of its own members instead, says so.
+    review.ready_not_read = recorded
+        .as_ref()
+        .and_then(|read| read.ready_not_read.clone());
     let content = content_hash_prefix_of(&package.files);
     let not_tried = match trial_summary(&state, &package_id, &content) {
         Ok(trial) => {
@@ -990,6 +1225,25 @@ pub fn standard_pack_adopt(
             ));
         }
     }
+    // Workflow #463 AC-1: the cases, checked last, before the first write: each names one
+    // directory of the checkout that is free or the earlier set's, and each is run by the one
+    // runner on the package as this adoption writes it, the check tree's copy of it.
+    let case_plan = match (taken, &checkout_cases) {
+        (Some(recording_cases), Some(checkout)) => {
+            let package_dir = check.tree.join(CHECK_PACKS_ROOT).join(&package_id);
+            Some(plan_cases(
+                &CaseInputs {
+                    taken: recording_cases,
+                    checkout,
+                    regression_relative: &regression_relative,
+                    package_id: &package_id,
+                    package_dir: &package_dir,
+                },
+                worktree.lab(),
+            )?)
+        }
+        _ => None,
+    };
     let coverage = match (&plan.rule, class) {
         (Some(rule), AdoptClass::Business) if plan.held.is_none() => {
             Some(rule_coverage(rule, &root.schedule.pools, &check.answer))
@@ -1071,10 +1325,24 @@ pub fn standard_pack_adopt(
         }
     }
     let replaced = request.replace && pack_exists;
-    let (written, would_write, kept) = if request.dry_run {
-        (Vec::new(), changed, None)
+    // Workflow #463 AC-1: the cases' directories, relative to the checkout, in the order they are
+    // renamed into place, after everything else the adoption writes.
+    let case_directories = case_plan
+        .as_ref()
+        .map(|planned| {
+            planned
+                .cases
+                .iter()
+                .map(|case| format!("{regression_relative}/{}", case.name))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let (written, would_write, kept, cases_kept_at) = if request.dry_run {
+        let mut would_write = changed;
+        would_write.extend(case_directories.iter().cloned());
+        (Vec::new(), would_write, None, None)
     } else {
-        let moved = write_adoption(
+        let (moved, done) = write_adoption(
             &WriteInputs {
                 repo: &repo,
                 files: &package.files,
@@ -1089,11 +1357,62 @@ pub fn standard_pack_adopt(
             },
             worktree,
         )?;
+        let cases_moved = match &case_plan {
+            Some(planned) => write_cases(
+                &CaseWrites {
+                    directory: &regression_dir,
+                    kept: &cases_kept,
+                    plan: planned,
+                },
+                done,
+                worktree,
+            )?,
+            None => None,
+        };
+        let mut written = changed;
+        written.extend(case_directories.iter().cloned());
         (
-            changed,
+            written,
             Vec::new(),
             moved.map(|path| path.display().to_string()),
+            cases_moved.map(|path| path.display().to_string()),
         )
+    };
+    // Workflow #463 AC-1: the cases taken, or the word why none was; `next` names a regression
+    // case only when none was taken.
+    let none_taken = case_directories.is_empty();
+    let (cases_written, cases_would_write) = if request.dry_run {
+        (Vec::new(), case_directories)
+    } else {
+        (case_directories, Vec::new())
+    };
+    let cases = match &case_plan {
+        Some(planned) => AdoptCases {
+            state: AdoptCasesState::Taken,
+            from: Some(planned.from.display().to_string()),
+            written: cases_written,
+            would_write: cases_would_write,
+            replaced: planned
+                .replaced
+                .iter()
+                .map(|name| format!("{regression_relative}/{name}"))
+                .collect(),
+            kept: cases_kept_at,
+            not_proven: planned.not_proven.clone(),
+        },
+        None => AdoptCases {
+            state: if recorded.is_some() {
+                AdoptCasesState::NoneFound
+            } else {
+                AdoptCasesState::PackagePath
+            },
+            from: None,
+            written: Vec::new(),
+            would_write: Vec::new(),
+            replaced: Vec::new(),
+            kept: None,
+            not_proven: Vec::new(),
+        },
     };
     // Workflow #463 S3-5: every check passed (a refused adoption answers no readiness); the
     // adopted pack's readiness on the game root the check tree laid out, by the same path under
@@ -1137,7 +1456,8 @@ pub fn standard_pack_adopt(
         check_tree: check.tree.display().to_string(),
         readiness,
         readiness_not_judged,
-        next: next_items(&repo, &root.game, unvalued_rule.as_deref()),
+        next: next_items(&repo, &root.game, unvalued_rule.as_deref(), none_taken),
+        cases,
     })
 }
 
@@ -1692,6 +2012,7 @@ impl Package {
             recording_checked,
             trial: None,
             trial_not_read: None,
+            ready_not_read: None,
         }
     }
 
@@ -1770,10 +2091,43 @@ impl Package {
     }
 }
 
+/// What adopt reads of a stopped recording (`--record-id`).
+struct Recorded {
+    /// The package its last stop generated, `<lab_dir>/out/<package_id>.<ext>`.
+    package: PathBuf,
+    /// Workflow #463 AC-1: the cases that stop wrote beside it; `None` when it wrote none (a stop
+    /// of a build before #463 S2-10).
+    cases: Option<RecordedCases>,
+    /// Workflow #463 S3-17: why `record ready`'s function did not read the recording, which the
+    /// check of its own members judged instead.
+    ready_not_read: Option<ReadyNotRead>,
+}
+
+/// Workflow #463 AC-1: the regression cases a recording's last stop wrote beside its package.
+struct RecordedCases {
+    /// `<lab_dir>/out/<package_id>.cases/`.
+    directory: PathBuf,
+    /// The names of its entries, each a case's directory named by the case's id, in the order of
+    /// the names.
+    names: Vec<String>,
+}
+
 /// The package a stopped recording's last stop generated, `<lab_dir>/out/<package_id>.<ext>`,
-/// when `recording.json` says that stop is the last change: stopped, not marked again since, with
-/// its artifact.
-fn recorded_package(record_id: &str, lab_dir: &Path) -> LabResult<PathBuf> {
+/// when that stop is the recording's last change. Workflow #463 S3-17: the recording is judged by
+/// `record ready`'s one function (`lab`, on the state directory `state`): a status other than
+/// `packaged` is refused `recording_not_current` with that function's answer in the details
+/// (`record_ready`, its list of what is missing among it). Where the two differ, the check of the
+/// recording's own members stays beside it: its schema and its `record_id`, first, as before; its
+/// `status` and `amended_at_unix_ms` when that function cannot read the recording (its refusal as
+/// the cause, or, when they pass, said as `ready_not_read`); and its artifact, which names the
+/// package by a `package_id` of one path segment and a container `zip` or `json`, and the
+/// package's file. Workflow #463 AC-1: with the cases that stop wrote beside the package.
+fn recorded_package(
+    record_id: &str,
+    lab_dir: &Path,
+    state: &Path,
+    lab: &dyn AdoptLab,
+) -> LabResult<Recorded> {
     let path = lab_dir.join(RECORDING_FILE);
     let not_current = |member: Option<&str>, message: String| {
         let outcome = adopt(AdoptProblem::RecordingNotCurrent).path(&path);
@@ -1800,24 +2154,78 @@ fn recorded_package(record_id: &str, lab_dir: &Path) -> LabResult<PathBuf> {
             format!("{} is the recording of another record_id", path.display()),
         ));
     }
-    if text("status") != Some(RECORDING_STOPPED) {
-        return Err(not_current(
-            Some("status"),
-            format!("the recording {record_id} is not stopped; run record stop"),
-        ));
-    }
-    if recording
-        .get("amended_at_unix_ms")
-        .is_some_and(|amended| !amended.is_null())
-    {
-        return Err(not_current(
-            Some("amended_at_unix_ms"),
-            format!(
-                "the recording {record_id} was marked again after its package was generated; run \
-                 record stop"
-            ),
-        ));
-    }
+    // Workflow #463 S3-17: the one judgement of what the recording still lacks, `record ready`'s.
+    let ready_not_read = match lab.recording_ready(state, record_id) {
+        Ok(ready) if ready.packaged => None,
+        Ok(ready) => {
+            let status = ready
+                .answer
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let missing = ready
+                .answer
+                .get("missing_total")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let outcome = adopt(AdoptProblem::RecordingNotCurrent).path(&path);
+            return Err(refused(
+                outcome.clone(),
+                format!(
+                    "the recording {record_id} is {status} by record ready, not packaged: its \
+                     package is not the current one of its last record stop ({missing} missing, \
+                     each as record ready lists it, in the details' record_ready); run record \
+                     stop, or record ready --record-id {record_id} to see what it lacks; nothing \
+                     was written"
+                ),
+            )
+            .with_details(json!({
+                "outcome": outcome.envelope(Detail::Full),
+                "record_ready": ready.answer
+            })));
+        }
+        // The function cannot read the recording: the check of its own members judges it, kept
+        // beside the function for this difference.
+        Err(unread) => {
+            let cause = cause_of(&unread);
+            let members = |member: &str, message: String| {
+                refused(
+                    adopt(AdoptProblem::RecordingNotCurrent)
+                        .path(&path)
+                        .member(member)
+                        .caused_by(cause.clone()),
+                    message,
+                )
+            };
+            if text("status") != Some(RECORDING_STOPPED) {
+                return Err(members(
+                    "status",
+                    format!("the recording {record_id} is not stopped ({unread}); run record stop"),
+                ));
+            }
+            if recording
+                .get("amended_at_unix_ms")
+                .is_some_and(|amended| !amended.is_null())
+            {
+                return Err(members(
+                    "amended_at_unix_ms",
+                    format!(
+                        "the recording {record_id} was marked again after its package was \
+                         generated ({unread}); run record stop"
+                    ),
+                ));
+            }
+            Some(ReadyNotRead {
+                outcome: cause,
+                text: format!(
+                    "record ready's function did not read the recording {record_id} ({unread}); \
+                     its own members were checked instead: stopped, and not marked again since \
+                     its package was generated"
+                ),
+            })
+        }
+    };
     let artifact = recording.get("artifact");
     let package_id = artifact
         .and_then(|artifact| artifact.get(PACKAGE_ID))
@@ -1842,7 +2250,408 @@ fn recorded_package(record_id: &str, lab_dir: &Path) -> LabResult<PathBuf> {
             format!("{} is missing", locator.display()),
         ));
     }
-    Ok(locator)
+    // Workflow #463 AC-1: the cases that stop wrote beside the package (#463 S2-10); none when it
+    // wrote none.
+    let directory = lab_dir
+        .join(RECORDING_OUT)
+        .join(format!("{package_id}.{CASES}"));
+    let cases = match fs::symlink_metadata(&directory) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        _ => {
+            let names = case_names(&directory)?;
+            Some(RecordedCases { directory, names })
+        }
+    };
+    Ok(Recorded {
+        package: locator,
+        cases,
+        ready_not_read,
+    })
+}
+
+/// Workflow #463 AC-1: the names of the entries of a recording's cases directory, each a case's
+/// directory, in the order of their names. A directory that cannot be listed, or an entry whose
+/// name is no text, is not as a stop leaves it: `recording_not_current` at it.
+fn case_names(directory: &Path) -> LabResult<Vec<String>> {
+    let unlisted = |error: io::Error| {
+        refused(
+            adopt(AdoptProblem::RecordingNotCurrent)
+                .path(directory)
+                .caused_by(Outcome::from_io_error(&error, IoOp::ReadDir).path(directory)),
+            format!(
+                "{}, the cases of the recording's last stop: {error}",
+                directory.display()
+            ),
+        )
+    };
+    let mut names = fs::read_dir(directory)
+        .map_err(unlisted)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(unlisted)?;
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| {
+            name.into_string().map_err(|name| {
+                let entry = directory.join(&name);
+                refused(
+                    adopt(AdoptProblem::RecordingNotCurrent).path(&entry),
+                    format!(
+                        "{} is no case a record stop writes: its name is no text",
+                        entry.display()
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Workflow #463 AC-1: what `regression/<game>/` of the checkout holds of the adopted package's
+/// cases.
+struct CheckoutCases {
+    /// The directories of the package's cases an earlier adoption took from a recording
+    /// ([`recorded_case`]), by name, in the order of the names: replaced as a set.
+    recorded: Vec<String>,
+    /// Every other name there, in ASCII lower case, as a file system that does not tell the
+    /// cases apart compares them: a case's destination named so is taken.
+    others: BTreeSet<String>,
+    /// The `.part` of a case of the package (`<package_id>.<case>.part`) an interrupted adoption
+    /// left, by name.
+    parts: Vec<String>,
+}
+
+impl CheckoutCases {
+    /// Reads `directory`, `regression/<game>/` of the checkout (`relative`), for the cases of
+    /// `package_id`; nothing when it is not there. A directory that cannot be listed is
+    /// `repository_invalid` at it.
+    fn read(directory: &Path, relative: &str, package_id: &str) -> LabResult<Self> {
+        let mut found = Self {
+            recorded: Vec::new(),
+            others: BTreeSet::new(),
+            parts: Vec::new(),
+        };
+        let unlisted = |error: io::Error| {
+            refused(
+                adopt(AdoptProblem::RepositoryInvalid)
+                    .entry(relative)
+                    .caused_by(Outcome::from_io_error(&error, IoOp::ReadDir).path(directory)),
+                format!("{}: {error}", directory.display()),
+            )
+        };
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(found),
+            Err(error) => return Err(unlisted(error)),
+        };
+        let mut names = entries
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<Vec<_>>>()
+            .map_err(unlisted)?;
+        names.sort();
+        let prefix = format!("{package_id}.");
+        let suffix = format!(".{PART}");
+        for name in names {
+            let Some(text) = name.to_str() else {
+                found
+                    .others
+                    .insert(name.to_string_lossy().to_ascii_lowercase());
+                continue;
+            };
+            let part_of_case = text
+                .strip_prefix(prefix.as_str())
+                .and_then(|rest| rest.strip_suffix(suffix.as_str()))
+                .is_some_and(|case| !case.is_empty() && !case.contains('.'));
+            if part_of_case {
+                found.parts.push(text.to_owned());
+            } else if recorded_case(&directory.join(text), package_id) {
+                found.recorded.push(text.to_owned());
+            } else {
+                found.others.insert(text.to_ascii_lowercase());
+            }
+        }
+        Ok(found)
+    }
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases"): whether `directory`
+/// is a case an adoption took from a recording of the package `package_id`, which a later
+/// adoption of the package replaces: a directory (no link) whose `case.json` is a JSON object
+/// whose `package_id` is the package's and whose `source` is a recording's, the form `record stop`
+/// writes (#463 S2-10): an object of `record_id` (a text) and exactly one of `step` (a whole
+/// number), `final` (`true`) and `ending` (a text), and nothing else. The member `source.record_id`
+/// in that form tells it; a case of another source, or of none, is never moved or rewritten.
+fn recorded_case(directory: &Path, package_id: &str) -> bool {
+    if !fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.is_dir()) {
+        return false;
+    }
+    let Ok(bytes) = fs::read(directory.join(CASE_FILE)) else {
+        return false;
+    };
+    let Ok(Value::Object(case)) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    if case.get(PACKAGE_ID).and_then(Value::as_str) != Some(package_id) {
+        return false;
+    }
+    let Some(Value::Object(source)) = case.get(CASE_SOURCE) else {
+        return false;
+    };
+    let pointers = [
+        source.get(SOURCE_STEP).is_some_and(Value::is_u64),
+        source.get(SOURCE_FINAL) == Some(&Value::Bool(true)),
+        source.get(SOURCE_ENDING).is_some_and(Value::is_string),
+    ];
+    source.get(SOURCE_RECORD_ID).is_some_and(Value::is_string)
+        && source.len() == 2
+        && pointers.iter().filter(|held| **held).count() == 1
+}
+
+/// Workflow #463 AC-1: the message of `pack_exists` at a case's `.part`, `entry` relative to the
+/// checkout, that an interrupted adoption of `package_id` left (`contracts/standard-pack-authoring.md`,
+/// "If a call was interrupted").
+fn case_part_left(entry: &str, package_id: &str) -> String {
+    format!(
+        "{entry} is a regression case's directory that an adoption of {package_id} wrote and had \
+         not put in place when it was interrupted, and adopt deletes nothing; an adoption writes \
+         its cases last, after it renamed packs/{package_id} and the root files into place, so that \
+         call had done everything but its cases. Move the .part out of the checkout by hand; then \
+         {}; then run adopt with --replace and the decision that call was given (--decide, or \
+         --held-reason, with --held-reference when that call had one), if any, which moves the \
+         cases of the package that call took to the state directory's adopt/ and writes the whole \
+         set again",
+        new_directory_step(&format!("{PACKS_DIRECTORY}/{package_id}"), "that call")
+    )
+}
+
+/// Workflow #463 AC-1: `from`, a case directory of the checkout (`entry` relative to it), and its
+/// kept place `kept` lie on one volume, so that the case can be moved there; otherwise
+/// `replace_across_volumes`, as for the replaced pack directory.
+fn same_volume(
+    worktree: &dyn AdoptWorktree,
+    from: &Path,
+    kept: &Path,
+    entry: &str,
+) -> LabResult<()> {
+    let volume = |path: &Path| {
+        worktree.volume(path).map_err(|error| {
+            refused(
+                adopt(AdoptProblem::ReplaceAcrossVolumes)
+                    .entry(entry)
+                    .path(kept)
+                    .caused_by(Outcome::from_io_error(&error, IoOp::Inspect).path(path)),
+                format!(
+                    "the volume of {} cannot be told: {error}; nothing was written",
+                    path.display()
+                ),
+            )
+        })
+    };
+    let checkout_volume = volume(from)?;
+    let kept_volume = volume(kept)?;
+    if checkout_volume == kept_volume {
+        return Ok(());
+    }
+    Err(refused(
+        adopt(AdoptProblem::ReplaceAcrossVolumes)
+            .entry(entry)
+            .path(kept),
+        format!(
+            "--replace moves the earlier cases of the package, {entry} among them, to their kept \
+             place {}, and the checkout's volume {checkout_volume} is not the state directory's \
+             {kept_volume}, where a directory cannot be renamed to; give a --state-dir on the \
+             checkout's volume {checkout_volume}; nothing was written",
+            kept.display()
+        ),
+    ))
+}
+
+/// Workflow #463 AC-1: what [`plan_cases`] reads.
+struct CaseInputs<'a> {
+    /// The cases of the recording's last stop.
+    taken: &'a RecordedCases,
+    /// What `regression/<game>/` of the checkout holds of the package's cases.
+    checkout: &'a CheckoutCases,
+    /// `regression/<game>`.
+    regression_relative: &'a str,
+    package_id: &'a str,
+    /// The package as this adoption writes it: the check tree's `packs-root/<package_id>/`, the
+    /// very files it writes into `packs/<package_id>/`.
+    package_dir: &'a Path,
+}
+
+/// Workflow #463 AC-1: the cases an adoption writes, after every check passed.
+struct CasePlan {
+    /// The recording's `out/<package_id>.cases/`.
+    from: PathBuf,
+    /// The cases to write, in the order of their names.
+    cases: Vec<PlannedCase>,
+    /// The earlier set of the package's cases, by their names in `regression/<game>/`, moved
+    /// before the new set is written (with `--replace` only; without it they refuse).
+    replaced: Vec<String>,
+    /// The cases taken that the runner did not prove whole.
+    not_proven: Vec<CaseNotProven>,
+}
+
+/// Workflow #463 AC-1: one case to write.
+struct PlannedCase {
+    /// Its directory's name in `regression/<game>/`, `<package_id>.<case>`.
+    name: String,
+    /// Its files as the runner read and ran them, each by its name in the directory.
+    files: Vec<(String, Vec<u8>)>,
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases"): the cases of the
+/// recording's set, each checked before the first write. Its directory `<package_id>.<case>` of
+/// `regression/<game>/` is one path segment whose `.part` stays within a file name, the case's
+/// name holding no dot, so that the name tells its package and its case apart
+/// (`case_name_invalid` otherwise, at the case in the recording); it is free or holds a case of
+/// the earlier set (`case_place_taken` at it otherwise). Then each case is run by the one runner
+/// on the package as this adoption writes it, admitted once (`lab`'s runner): a case whose
+/// verdict is `failed` refuses the adoption (`case_failed`, every failing case in the details as
+/// the runner answers it); `partial` and `not_run` cases are taken and named with the runner's
+/// words.
+fn plan_cases(inputs: &CaseInputs<'_>, lab: &dyn AdoptLab) -> LabResult<CasePlan> {
+    let mut names = Vec::new();
+    for case in &inputs.taken.names {
+        let name = format!("{}.{case}", inputs.package_id);
+        if case.contains('.')
+            || !package_id_names_one_path_segment(&name)
+            || name.len() + PART.len() + 1 > NAME_MAX_BYTES
+        {
+            let at = inputs.taken.directory.join(case);
+            return Err(refused(
+                named_package(adopt(AdoptProblem::CaseNameInvalid), inputs.package_id).path(&at),
+                format!(
+                    "the case {} of the recording names no directory {name} of {}: a case's name \
+                     holds no dot, and {name} with its .{PART} is one path segment of at most \
+                     {NAME_MAX_BYTES} bytes; nothing was written",
+                    at.display(),
+                    inputs.regression_relative
+                ),
+            ));
+        }
+        if inputs.checkout.others.contains(&name.to_ascii_lowercase()) {
+            let entry = format!("{}/{name}", inputs.regression_relative);
+            return Err(refused(
+                named_package(adopt(AdoptProblem::CasePlaceTaken), inputs.package_id).entry(&entry),
+                format!(
+                    "{entry}, where the recording's case {case} goes, is there and is no case an \
+                     adoption took from a recording of {} (no case.json naming the package with a \
+                     recording's source): adopt neither moves nor overwrites it; move it out of \
+                     the checkout or rename it, then run adopt again; nothing was written",
+                    inputs.package_id
+                ),
+            ));
+        }
+        names.push(name);
+    }
+    let runner = lab.case_runner(inputs.package_dir);
+    let mut failed = Vec::new();
+    let mut failing = Vec::new();
+    let mut not_proven = Vec::new();
+    let mut cases = Vec::new();
+    for (case, name) in inputs.taken.names.iter().zip(names) {
+        let run = runner(&inputs.taken.directory.join(case));
+        match run.verdict {
+            AdoptCaseVerdict::Failed => {
+                failing.push(case.clone());
+                failed.push(run.answer);
+                continue;
+            }
+            AdoptCaseVerdict::Passed => {}
+            AdoptCaseVerdict::NotProven { verdict, reasons } => {
+                not_proven.push(CaseNotProven {
+                    case: case.clone(),
+                    verdict,
+                    reasons,
+                });
+            }
+        }
+        cases.push(PlannedCase {
+            name,
+            files: run.files,
+        });
+    }
+    if !failed.is_empty() {
+        let outcome = named_package(adopt(AdoptProblem::CaseFailed), inputs.package_id)
+            .path(&inputs.taken.directory)
+            .count(failed.len());
+        return Err(refused(
+            outcome.clone(),
+            format!(
+                "{} of the {} regression cases of the recording fail on the package as this \
+                 adoption writes it ({}); the details' cases list each as the runner answers it; \
+                 nothing was written",
+                failed.len(),
+                inputs.taken.names.len(),
+                failing.join(", ")
+            ),
+        )
+        .with_details(json!({"outcome": outcome.envelope(Detail::Full), "cases": failed})));
+    }
+    Ok(CasePlan {
+        from: inputs.taken.directory.clone(),
+        cases,
+        replaced: inputs.checkout.recorded.clone(),
+        not_proven,
+    })
+}
+
+/// Workflow #463 AC-1: what [`write_cases`] writes.
+struct CaseWrites<'a> {
+    /// `regression/<game>/` of the checkout.
+    directory: &'a Path,
+    /// Where the earlier set goes, `<state>/adopt/<package_id>.cases.old-<ms>/`.
+    kept: &'a Path,
+    plan: &'a CasePlan,
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "What it writes"): the cases,
+/// written last, after `done`, what the adoption wrote and moved before, in order: the earlier
+/// set moved one directory at a time into its kept place, then each case written whole as
+/// `<name>.part/` (its files flushed to the disk) and renamed into place, in the order of the
+/// plan. Every rename goes through `worktree`. A failure is `adopt_write_failed` naming where it
+/// stopped and everything written or moved before; nothing is removed. The kept place, when the
+/// earlier set was moved there.
+fn write_cases(
+    inputs: &CaseWrites<'_>,
+    mut done: Vec<PathBuf>,
+    worktree: &dyn AdoptWorktree,
+) -> LabResult<Option<PathBuf>> {
+    let mut kept = None;
+    if !inputs.plan.replaced.is_empty() {
+        fs::create_dir_all(inputs.kept)
+            .map_err(|error| write_failed(inputs.kept, &done, &error, IoOp::CreateDir))?;
+        for name in &inputs.plan.replaced {
+            let from = inputs.directory.join(name);
+            let to = inputs.kept.join(name);
+            worktree
+                .rename(&from, &to)
+                .map_err(|error| write_failed(&from, &done, &error, IoOp::Rename))?;
+            done.push(to);
+        }
+        kept = Some(inputs.kept.to_path_buf());
+    }
+    fs::create_dir_all(inputs.directory)
+        .map_err(|error| write_failed(inputs.directory, &done, &error, IoOp::CreateDir))?;
+    for case in &inputs.plan.cases {
+        let part = inputs.directory.join(format!("{}.{PART}", case.name));
+        fs::create_dir(&part)
+            .map_err(|error| write_failed(&part, &done, &error, IoOp::CreateDir))?;
+        for (file, bytes) in &case.files {
+            let target = part.join(file);
+            write_flushed(&target, bytes)
+                .map_err(|error| write_failed(&target, &done, &error, IoOp::Write))?;
+        }
+        done.push(part.clone());
+        let target = inputs.directory.join(&case.name);
+        worktree
+            .rename(&part, &target)
+            .map_err(|error| write_failed(&target, &done, &error, IoOp::Rename))?;
+        done.push(target);
+    }
+    Ok(kept)
 }
 
 /// What an earlier adoption of the package left in the checkout.
@@ -4102,7 +4911,7 @@ fn gone(path: &Path, removed: io::Result<()>) -> LabResult<()> {
 /// other refusal is answered as it is. Nothing is written in the repository.
 fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
     let (tree, marker) = prepare_check_tree(inputs.state, inputs.repo, inputs.at_unix_ms)?;
-    let packs_root = tree.join("packs-root");
+    let packs_root = tree.join(CHECK_PACKS_ROOT);
     create_dir(&packs_root)?;
     let packs = inputs.repo.join(PACKS_DIRECTORY);
     let mut names = fs::read_dir(&packs)
@@ -4299,11 +5108,12 @@ fn root_order(maintenance_first: bool) -> [&'static str; 2] {
 /// overwrites another's work). Every file it renames into place, or whose directory it renames
 /// into place, is flushed to the disk first ([`write_flushed`]). Every rename goes through
 /// `worktree`. A failure names where it stopped and what was done before; nothing is removed. The
-/// kept place, when a directory was moved there.
+/// kept place, when a directory was moved there; Workflow #463 AC-1: and what it wrote and moved,
+/// in order, after which the cases are written ([`write_cases`]).
 fn write_adoption(
     inputs: &WriteInputs<'_>,
     worktree: &dyn AdoptWorktree,
-) -> LabResult<Option<PathBuf>> {
+) -> LabResult<(Option<PathBuf>, Vec<PathBuf>)> {
     let mut done: Vec<PathBuf> = Vec::new();
     let root_writes = root_order(inputs.maintenance_first).map(|name| {
         if name == STANDARD_PACK_SCHEDULE_FILE {
@@ -4402,7 +5212,7 @@ fn write_adoption(
             .map_err(|error| write_failed(&target, &done, &error, IoOp::Rename))?;
         done.push(target);
     }
-    Ok(moved)
+    Ok((moved, done))
 }
 
 /// The root file `name` of `repo` is still `read` (`None`: absent), the bytes the call computed
@@ -4470,14 +5280,20 @@ fn noted(mut error: LabError, note: &str) -> LabError {
 
 /// The repository's own items adopt does not write, each by its path when the checkout holds it.
 /// Workflow #463 S3-12: then, when the adopted rule `unvalued_rule` has no value yet,
-/// `ours/model/bindings.json` with the two ways its value is registered there.
-fn next_items(repo: &Path, game: &str, unvalued_rule: Option<&str>) -> Vec<AdoptNext> {
+/// `ours/model/bindings.json` with the two ways its value is registered there. Workflow #463
+/// AC-1: a regression case only when the adoption took none (`none_taken`).
+fn next_items(
+    repo: &Path,
+    game: &str,
+    unvalued_rule: Option<&str>,
+    none_taken: bool,
+) -> Vec<AdoptNext> {
     let item = |path: String| AdoptNext {
         path,
         fixed_value: None,
     };
     let mut next = Vec::new();
-    if repo.join(REGRESSION_DIRECTORY).is_dir() {
+    if none_taken && repo.join(REGRESSION_DIRECTORY).is_dir() {
         next.push(item(format!("{REGRESSION_DIRECTORY}/{game}/")));
     }
     for file in NEXT_FILES {

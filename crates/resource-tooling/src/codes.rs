@@ -352,6 +352,32 @@ actingcommand_contract::outcome_vocabulary! {
         /// composer judges by its value, fix round 3), which adopt does not turn into a
         /// maintenance rule (fix round 2).
         BusinessRuleInTheWay => "business_rule_in_the_way",
+        /// Workflow #463 AC-1: the name of a case of the recording's set gives no directory
+        /// `<package_id>.<case>` of the checkout: it holds a dot, is not one path segment, or the
+        /// name with its `.part` is longer than a file name takes (255 bytes).
+        CaseNameInvalid => "case_name_invalid",
+        /// Workflow #463 AC-1: the directory a case of the recording would be written to,
+        /// `regression/<game>/<package_id>.<case>`, is there and is no case an adoption took from
+        /// a recording of this package.
+        CasePlaceTaken => "case_place_taken",
+        /// Workflow #463 AC-1: a case of the recording fails on the package as this adoption
+        /// writes it (the one runner's verdict `failed`); the details list every such case as the
+        /// runner answers it.
+        CaseFailed => "case_failed",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 AC-1: which regression cases `standard-pack adopt` took (the vocabulary
+    /// `adopt_cases`, the member `cases.state` of its answer).
+    pub enum AdoptCasesState: "adopt_cases" {
+        /// The cases of the recording's last stop, read from its `out/<package_id>.cases/`.
+        Taken => "taken",
+        /// The recording's last stop wrote no cases beside its package (a stop of a build before
+        /// #463 S2-10): none is taken.
+        NoneFound => "none_found",
+        /// The package was given by its path (`--package`), which carries no case: none is read.
+        PackagePath => "package_path",
     }
 }
 
