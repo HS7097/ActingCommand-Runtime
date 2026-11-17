@@ -19,15 +19,23 @@
 // - `s28_a_fold_without_a_scrolling_select_is_listed_and_refuses_record_stop` (6).
 // - `s28_a_folded_swipe_has_no_page_and_no_case_and_unfolded_the_cases_are_as_before` (7).
 // - `s28_each_step_action_on_a_step_of_a_fold_is_refused` (8).
+// Fix round 1 (rd-1117/brief-463-s28-fix1.md, after the independent review; the helpers that press
+// are `Bench::tapped` and `Bench::swiped`, since the workspace guard finds a call of a method named
+// `tap` or `swipe` by its name):
+// - `s28_fix1_a_stopped_recording_folds_as_an_amendment_and_unfolded_generates_again`.
+// - `s28_fix1_a_fold_after_the_stop_is_refused_what_only_a_stopped_recording_holds`.
+// - `s28_fix1_every_other_step_operation_stays_refused_on_a_stopped_recording`.
+// - `s28_fix1_the_axis_rule_at_its_edges_and_a_fold_along_the_horizontal_axis`.
+// - `s28_fix1_the_archive_keeps_the_folded_swipes_in_its_material`.
 
 use crate::recording::store::{lab_dir, old_record_path, recording_path};
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabCode, LabOcr, MarkOutcome, MarkRequest, PlanClickRequest,
-    PlannedSwipe, PointPress, RecordFramePorts, RecordFramesRequest, RecordPoint,
-    RecordPressRequest, RecordRect, RecordReviewRequest, RecordStartOptions, RecordStopOptions,
-    RecordingLock, record_frames, record_mark, record_press, record_ready, record_review,
-    record_start, record_status, record_stop,
+    PlannedSwipe, PointPress, RecordArchiveOptions, RecordFramePorts, RecordFramesRequest,
+    RecordPoint, RecordPressRequest, RecordRect, RecordReviewRequest, RecordStartOptions,
+    RecordStopOptions, RecordingLock, record_archive, record_frames, record_mark, record_press,
+    record_ready, record_review, record_start, record_status, record_stop,
 };
 use actingcommand_contract::{InputFrameReference, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -93,6 +101,17 @@ const LONG_FORWARD: Swipe = ((79, 80), (81, 10));
 const DIAGONAL: Swipe = ((80, 70), (110, 40));
 /// 80 px to the left: along the other axis.
 const ACROSS: Swipe = ((120, 45), (40, 45));
+/// Fix round 1: 80 px to the right, back along the axis of `ACROSS`.
+const ACROSS_BACK: Swipe = ((40, 45), (120, 45));
+/// Fix round 1: 40 px up and 20 px across, its move along the axis exactly twice its move across.
+const TWICE: Swipe = ((80, 70), (100, 30));
+/// Fix round 1: 40 px up and 21 px across, its move along the axis less than twice its move across.
+const NEARLY_TWICE: Swipe = ((80, 70), (101, 30));
+/// Fix round 1: a swipe that ends where it began, no move at all.
+const STILL: Swipe = ((80, 50), (80, 50));
+/// Fix round 1: a pop-up's square and its close click, of an optional step inserted after the stop.
+const MAGENTA: [u8; 3] = [230, 20, 230];
+const NOTICE_CLICK: RecordRect = rect(60, 40, 20, 10);
 
 // Whether `area` covers the pixel at `(x, y)`.
 fn covers(area: RecordRect, x: u32, y: u32) -> bool {
@@ -142,6 +161,11 @@ fn detail() -> Vec<u8> {
 
 fn loading() -> Vec<u8> {
     screen(&[(SQUARE, CYAN)])
+}
+
+// Fix round 1: a pop-up a run met, its magenta square.
+fn notice() -> Vec<u8> {
+    screen(&[(SQUARE, MAGENTA)])
 }
 
 // The colour mark `id` over `area`.
@@ -400,8 +424,9 @@ impl Bench {
         }
     }
 
-    // `tap <x> <y> --record` on the first of `shots`.
-    fn tap(&self, at: (i32, i32), shots: [Vec<u8>; 2]) {
+    // `tap <x> <y> --record` on the first of `shots`. (Fix round 1: not named `tap`, a write
+    // method of `LabInputPort` that the workspace guard finds by name.)
+    fn tapped(&self, at: (i32, i32), shots: [Vec<u8>; 2]) {
         let request = RecordPressRequest {
             click: PlanClickRequest::default(),
             point_press: Some(PointPress::Tap { point: point(at) }),
@@ -410,8 +435,9 @@ impl Bench {
         self.press(&request, shots);
     }
 
-    // `swipe <x1> <y1> <x2> <y2> 300 --record` on the first of `shots`.
-    fn swipe(&self, (from, to): Swipe, shots: [Vec<u8>; 2]) {
+    // `swipe <x1> <y1> <x2> <y2> 300 --record` on the first of `shots`. (Fix round 1: not named
+    // `swipe`, as `tapped` is not named `tap`.)
+    fn swiped(&self, (from, to): Swipe, shots: [Vec<u8>; 2]) {
         let request = RecordPressRequest {
             click: PlanClickRequest {
                 swipe: Some(PlannedSwipe {
@@ -542,6 +568,29 @@ impl Bench {
         })
     }
 
+    // Fix round 1: `record stop`, which must generate the package, and the session header then
+    // stopped as the `record` command writes it, so that the recording is stopped with its package
+    // as `record mark` after stop finds it; the stop's `lab`.
+    fn stopped_session(&self) -> Value {
+        let lab = self.stopped();
+        assert_eq!(lab["lab_status"], "generated", "{lab}");
+        let path = old_record_path(&self.state(), INSTANCE);
+        let mut header: Value =
+            serde_json::from_slice(&fs::read(&path).expect("session header")).expect("header");
+        header["status"] = json!("stopped");
+        fs::write(&path, serde_json::to_vec(&header).expect("header bytes"))
+            .expect("the stopped session header");
+        lab
+    }
+
+    // Fix round 1: a frame file on the caller's machine, outside the recording's directory, holding
+    // `bytes`; its path.
+    fn caller_frame(&self, name: &str, bytes: &[u8]) -> String {
+        let path = self.temp.path().join(format!("{name}.png"));
+        fs::write(&path, bytes).expect("frame file");
+        path.display().to_string()
+    }
+
     // Rewrites the step table with `member` of step `step` set to `value`, a recording file changed
     // by hand; the bytes it had before.
     fn edit_step(&self, step: u32, member: &str, value: Value) -> Vec<u8> {
@@ -575,11 +624,11 @@ fn scrolled(swipes: &[Swipe], positions: &[i32]) -> Bench {
         "a position around each swipe"
     );
     let bench = Bench::new();
-    bench.tap(START_POINT, [start(), list(positions[0])]);
+    bench.tapped(START_POINT, [start(), list(positions[0])]);
     for (swipe, pair) in swipes.iter().zip(positions.windows(2)) {
-        bench.swipe(*swipe, [list(pair[0]), list(pair[1])]);
+        bench.swiped(*swipe, [list(pair[0]), list(pair[1])]);
     }
-    bench.tap(ROW_POINT, [list(positions[swipes.len()]), detail()]);
+    bench.tapped(ROW_POINT, [list(positions[swipes.len()]), detail()]);
     bench
 }
 
@@ -853,11 +902,11 @@ fn s28_each_cause_of_a_range_and_of_a_loss_is_refused_and_nothing_is_written() {
 
     // A swipe that moved nothing, dropped (#463 S2-7): steps 2 to 4 the swipes, 3 the dropped one.
     let dropped = Bench::new();
-    dropped.tap(START_POINT, [start(), list(0)]);
-    dropped.swipe(FORWARD, [list(0), list(1)]);
-    dropped.swipe(FORWARD, [list(1), list(1)]);
-    dropped.swipe(FORWARD, [list(1), list(2)]);
-    dropped.tap(ROW_POINT, [list(2), detail()]);
+    dropped.tapped(START_POINT, [start(), list(0)]);
+    dropped.swiped(FORWARD, [list(0), list(1)]);
+    dropped.swiped(FORWARD, [list(1), list(1)]);
+    dropped.swiped(FORWARD, [list(1), list(2)]);
+    dropped.tapped(ROW_POINT, [list(2), detail()]);
     assert_eq!(
         dropped.marked(action("drop_step", 3)).status,
         "step_dropped"
@@ -867,15 +916,15 @@ fn s28_each_cause_of_a_range_and_of_a_loss_is_refused_and_nothing_is_written() {
     // A loading screen after the first swipe converted into its transition: step 3 converted, the
     // next swipe step 4.
     let converted = Bench::new();
-    converted.tap(START_POINT, [start(), list(0)]);
-    converted.swipe(FORWARD, [list(0), loading()]);
+    converted.tapped(START_POINT, [start(), list(0)]);
+    converted.swiped(FORWARD, [list(0), loading()]);
     converted.marked(json!({"step": 3, "add": [color("load/square", SQUARE)]}));
     assert_eq!(
         converted.marked(action("to_transition", 3)).status,
         "step_converted_to_transition"
     );
-    converted.swipe(FORWARD, [list(1), list(2)]);
-    converted.tap(ROW_POINT, [list(2), detail()]);
+    converted.swiped(FORWARD, [list(1), list(2)]);
+    converted.tapped(ROW_POINT, [list(2), detail()]);
     assert_eq!(converted.refused(fold(5, 2), "fold_range_invalid")["at"], 3);
 }
 
@@ -1099,4 +1148,264 @@ fn s28_each_step_action_on_a_step_of_a_fold_is_refused() {
         assert_eq!(details["step"], step, "{value}: {details}");
         assert_eq!(details["fold_step"], 5, "{value}: {details}");
     }
+}
+
+// Fix round 1 (the coordinator's ruling on the review's answer 1): a stopped recording takes a fold
+// and its undoing as an amendment, as it takes a mark. Folded after its package was generated, it
+// stays stopped and is marked again (`amended_at_unix_ms`; the answer `after_stop`); `record ready`
+// lists `scan_without_select`, its one item; `record stop` refuses `scan_not_selected`, nothing
+// written. Unfolded, `record stop` generates the package again (`regenerated`, its package id), the
+// one it generated before the fold but for its generation time, and clears the mark.
+#[test]
+fn s28_fix1_a_stopped_recording_folds_as_an_amendment_and_unfolded_generates_again() {
+    let bench = paged();
+    let generated = bench.stopped_session();
+    let package_before = without_generation_time(package(&generated));
+    let stopped = bench.recording();
+    assert_eq!(stopped["status"], "stopped", "{stopped}");
+    assert!(stopped.get("amended_at_unix_ms").is_none(), "{stopped}");
+
+    let folded = bench.marked(fold(5, 2));
+    assert_eq!(folded.status, "scan_folded");
+    assert!(folded.after_stop);
+    let amended = bench.recording();
+    assert_eq!(amended["status"], "stopped", "{amended}");
+    assert!(amended["amended_at_unix_ms"].is_u64(), "{amended}");
+    assert_eq!(step_of(&amended, 5)["scan_fold"]["first"], 2, "{amended}");
+    for step in [2, 3, 4] {
+        assert_eq!(step_of(&amended, step)["folded_into"], 5, "{amended}");
+    }
+
+    let ready = bench.ready();
+    assert_eq!(ready["session"], "stopped", "{ready}");
+    assert_eq!(ready["status"], "draft", "{ready}");
+    assert_eq!(ready["missing_total"], 1, "{ready}");
+    assert_eq!(
+        ready["missing"][0]["what"], "scan_without_select",
+        "{ready}"
+    );
+    assert_eq!(ready["missing"][0]["step"], 5, "{ready}");
+
+    let files_before = bench.files();
+    let details = scan_refusal(
+        bench.stop(false).expect_err("a fold without a select"),
+        "scan_not_selected",
+    );
+    assert_eq!(details["step"], 5, "{details}");
+    assert_eq!(details["missing_total"], 1, "{details}");
+    assert_eq!(bench.files(), files_before, "a refused stop writes nothing");
+
+    let unfolded = bench.marked(action("unfold_scan", 5));
+    assert_eq!(unfolded.status, "scan_unfolded");
+    assert!(unfolded.after_stop);
+    assert!(bench.recording()["amended_at_unix_ms"].is_u64());
+    let regenerated = bench.stopped();
+    assert_eq!(regenerated["lab_status"], "regenerated", "{regenerated}");
+    assert_eq!(regenerated["package_id"], generated["package_id"]);
+    assert_eq!(
+        without_generation_time(package(&regenerated)),
+        package_before
+    );
+    let after = bench.recording();
+    assert!(after.get("amended_at_unix_ms").is_none(), "{after}");
+}
+
+// Fix round 1: on a stopped recording a fold meets what only a stopped recording holds. An optional
+// step inserted after the stop after the second swipe, step 3 (it takes the serial number 7):
+// folding the swipes is `would_lose_inserted` on step 3, naming step 7; a fold whose press step is
+// that inserted step is `inserted_in_range` on it; nothing is written either time. Given up
+// (`remove_inserted`), the inserted step holds nothing back and the swipes fold.
+#[test]
+fn s28_fix1_a_fold_after_the_stop_is_refused_what_only_a_stopped_recording_holds() {
+    let bench = paged();
+    bench.stopped_session();
+    let inserted = bench.marked(json!({"optional_after": {
+        "step": 3,
+        "frame": bench.caller_frame("caller_notice", &notice()),
+        "page": "notice",
+        "add": [color("popup/notice", SQUARE)],
+        "click": {"region": NOTICE_CLICK},
+        "settle_ms": 1000
+    }}));
+    assert_eq!(inserted.step, Some(7));
+    assert_eq!(step_of(&bench.recording(), 7)["inserted_after"], 3);
+
+    let details = bench.refused(fold(5, 2), "would_lose_inserted");
+    assert_eq!(details["step"], 5, "{details}");
+    assert_eq!(details["at"], 3, "{details}");
+    assert_eq!(details["inserted"], 7, "{details}");
+    let details = bench.refused(fold(7, 2), "inserted_in_range");
+    assert_eq!(details["step"], 7, "{details}");
+    assert_eq!(details["at"], 7, "{details}");
+    assert_eq!(details["inserted_after"], 3, "{details}");
+
+    bench.marked(json!({"remove_inserted": 7}));
+    assert_eq!(bench.marked(fold(5, 2)).status, "scan_folded");
+}
+
+// Fix round 1: every other step operation stays refused on a stopped recording, as before
+// (`record_session_not_active`, reason `recording_stopped`), before and after a fold made after the
+// stop, on a step of no fold and on a folded swipe; nothing is written.
+#[test]
+fn s28_fix1_every_other_step_operation_stays_refused_on_a_stopped_recording() {
+    let bench = paged();
+    bench.stopped_session();
+    for folded in [false, true] {
+        if folded {
+            bench.marked(fold(5, 2));
+        }
+        let before = bench.files();
+        for value in [
+            action("drop_step", 6),
+            action("drop_step", 3),
+            action("restore_step", 3),
+            action("reopen_step", 6),
+            json!({"step_action": {"kind": "close_step"}}),
+            action("to_transition", 3),
+        ] {
+            let error = bench
+                .mark(value.clone())
+                .expect_err("a step operation on a stopped recording");
+            assert_eq!(
+                error.code, "record_session_not_active",
+                "{value}: {}",
+                error.message
+            );
+            assert_eq!(
+                error.details.expect("details")["reason"],
+                "recording_stopped",
+                "{value}"
+            );
+        }
+        assert_eq!(bench.files(), before, "folded {folded}: a file changed");
+    }
+}
+
+// Fix round 1, the review's (h): the rule of one axis at its edges and along the other axis. A
+// swipe 40 px up and 20 px across, its move along the axis exactly twice its move across it, runs
+// along the vertical axis and folds; 40 px up and 21 px across, and a swipe that ends where it
+// began, are `move_axis_unclear` with their two points, nothing written. Two swipes to the left and
+// one back to the right fold along the horizontal axis, the last `back`.
+#[test]
+fn s28_fix1_the_axis_rule_at_its_edges_and_a_fold_along_the_horizontal_axis() {
+    let forward = json!([
+        {"step": 2, "direction": "forward"},
+        {"step": 3, "direction": "forward"},
+        {"step": 4, "direction": "forward"}
+    ]);
+    let twice = scrolled(&[FORWARD, TWICE, FORWARD], &[0, 1, 2, 3]);
+    twice.marked(fold(5, 2));
+    let recorded = twice.recording();
+    assert_eq!(
+        step_of(&recorded, 5)["scan_fold"]["axis"],
+        "vertical",
+        "{recorded}"
+    );
+    assert_eq!(
+        step_of(&recorded, 5)["scan_fold"]["moves"],
+        forward,
+        "{recorded}"
+    );
+
+    for (swipe, from, to) in [
+        (
+            NEARLY_TWICE,
+            json!({"x": 80, "y": 70}),
+            json!({"x": 101, "y": 30}),
+        ),
+        (STILL, json!({"x": 80, "y": 50}), json!({"x": 80, "y": 50})),
+    ] {
+        let other = scrolled(&[FORWARD, swipe, FORWARD], &[0, 1, 2, 3]);
+        let details = other.refused(fold(5, 2), "move_axis_unclear");
+        assert_eq!(details["at"], 3, "{details}");
+        assert_eq!(details["from"], from, "{details}");
+        assert_eq!(details["to"], to, "{details}");
+    }
+
+    let across = scrolled(&[ACROSS, ACROSS, ACROSS_BACK], &[0, 1, 2, 1]);
+    across.marked(fold(5, 2));
+    let recorded = across.recording();
+    let mut written = step_of(&recorded, 5)["scan_fold"].clone();
+    written
+        .as_object_mut()
+        .expect("the fold")
+        .remove("folded_at_unix_ms");
+    assert_eq!(
+        written,
+        json!({"first": 2, "axis": "horizontal", "moves": [
+            {"step": 2, "direction": "forward"},
+            {"step": 3, "direction": "forward"},
+            {"step": 4, "direction": "back"}
+        ]}),
+        "{recorded}"
+    );
+}
+
+// Fix round 1, the review's (h): the archive's material keeps a folded recording's swipes as
+// recorded. Three swipes folded into the press of step 5, then archived: the manifest's material
+// names the press of every step 1 to 5 (each swipe with the frame it was sent on and where it began
+// and ended) and the final screen, step 6's; its rows are the six steps; the step table keeps its
+// bytes, the fold in it.
+#[test]
+fn s28_fix1_the_archive_keeps_the_folded_swipes_in_its_material() {
+    let bench = three_forward();
+    bench.marked(fold(5, 2));
+    let table = bench.recording_bytes();
+    let folded = bench.recording();
+    let archived = record_archive(
+        &bench.lock,
+        &RecordArchiveOptions {
+            written_by: "gate_463_s28".to_owned(),
+            ..RecordArchiveOptions::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("record archive: {}: {:?}", error.code, error.details));
+    assert_eq!(archived.status, "archived");
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(Path::new(&archived.manifest.path)).expect("manifest"))
+            .expect("manifest JSON");
+    let material = &manifest["material"];
+    let pressed = material["clicks"]
+        .as_array()
+        .expect("the material's presses")
+        .iter()
+        .map(|click| (click["step"].clone(), click["kind"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pressed,
+        [
+            (json!(1), json!("tap")),
+            (json!(2), json!("swipe")),
+            (json!(3), json!("swipe")),
+            (json!(4), json!("swipe")),
+            (json!(5), json!("tap"))
+        ],
+        "{material}"
+    );
+    for step in [2, 3, 4] {
+        let click = row(&material["clicks"], "step", step);
+        assert_eq!(
+            click["frame"]["frame_id"],
+            step_of(&folded, step)["click"]["execution"]["before_frame"],
+            "{click}"
+        );
+        assert_eq!(click["point"], json!({"x": 80, "y": 70}), "{click}");
+        assert_eq!(click["to"], json!({"x": 80, "y": 30}), "{click}");
+    }
+    assert_eq!(material["final_frame"]["step"], 6, "{material}");
+    assert_eq!(
+        manifest["steps"].as_array().map(Vec::len),
+        Some(6),
+        "{manifest}"
+    );
+    assert_eq!(
+        row(&manifest["steps"], "step", 3)["kind"],
+        "swipe",
+        "{manifest}"
+    );
+    assert_eq!(
+        bench.recording_bytes(),
+        table,
+        "the step table keeps its bytes"
+    );
 }

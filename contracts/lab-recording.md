@@ -36,7 +36,8 @@ recording meanwhile and listed by `record ready` until it is refined; the wanted
 select, the refined choice's among them, is a variable of the package (fix round 1; "Marking a
 choice first", "The wanted value is a variable of the package"). #463 S2-8': the swipes recorded
 before a press are folded into one scrolling search of that press, no steps of the package any
-more, and unfolded again ("Folding swipes into a scrolling search").
+more, and unfolded again ("Folding swipes into a scrolling search"), on an active recording or
+(fix round 1) on a stopped one as an amendment ("Marking after stop").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -1179,8 +1180,16 @@ record mark --unfold-scan <b>
   search of `b`. `first` is `fold_scan`'s alone (`validation_failed` beside another step action, or
   `fold_scan` without it; on the command line `--fold-first` needs `--fold-scan` and the other way
   round). It is a step operation: beside marks, clicks, samples, frames, pages or transitions it is
-  `validation_failed`, and a stopped recording takes none (`record_session_not_active`,
-  `recording_stopped`): fold on the active recording, a reopened one included.
+  `validation_failed`. Fix round 1 (the coordinator's ruling): a fold changes no screen and sends
+  nothing, so it is an amendment of the kind a mark after stop is, and the two step actions
+  `fold_scan` and `unfold_scan` are taken in these states of a recording: **active** (a reopened one
+  included); **stopped**, its package generated, as an amendment ("Marking after stop"): the write
+  sets `amended_at_unix_ms`, the answer says `after_stop: true`, adoption finds the recording not
+  current until the next `record stop` generates its package again, and that stop meets the fold as
+  every stop does (refused `scan_not_selected` while a fold stands, below; after `unfold_scan` it
+  generates the package it generated before the fold, but for its generation time); **not
+  archived**, as no mark is (`record_session_not_active`; `record reopen` makes it active again).
+  Every other step operation stays refused on a stopped recording.
 - **What it writes.** Each folded step stays in `recording.json` whole, with its frames and its
   press, and takes `folded_into: b`; the press step takes `scan_fold {first, axis, moves,
   folded_at_unix_ms}`: its first step, the axis the swipes run along (`vertical` or `horizontal`),
@@ -1198,23 +1207,34 @@ record mark --unfold-scan <b>
   nothing is written; the details name the press step (`step`), `first` and the step the refusal is
   about (`at`) where it is known. In order:
   - `fold_range_invalid`: `a` is not below `b`; a step of `a..b` does not exist, is dropped, is
-    converted into a transition, is folded or holds a fold already, or is an optional step inserted
-    after the stop; `b`'s effect is no executed tap (a performed click without a gesture, no
-    application operation); a step between them is no executed swipe (a performed drag with its two
-    points on record: a tap, a long press, an application operation, a key or a step without an
-    effect is none).
+    converted into a transition, or is folded or holds a fold already; `b`'s effect is no executed
+    tap (a performed click without a gesture, no application operation); a step between them is no
+    executed swipe (a performed drag with its two points on record: a tap, a long press, an
+    application operation, a key or a step without an effect is none).
+  - `inserted_in_range` (fix round 1): a step of `a..b`, `b` included, is an optional step a
+    stopped recording inserted after the stop ("Inserting an optional step after stop"), no step
+    recorded on the path. Such a step takes the next serial number, above every recorded step, so
+    only `b` can be one; it is checked where the step's other states are, before `b`'s effect.
   - what a folded step would lose, step by step, each with its word: marks of its own
     (`would_lose_marks`), a page name (`would_lose_page`), `optional` (`would_lose_optional`), a
     choice, marked or refined by a select (`would_lose_choice`), a transition after its effect
     (`would_lose_transition`). The agent takes it off first (`remove`, `optional: false`,
     `choice: false`, `transition none`; a page name cannot be taken off, so fold another range),
     or picks another range. A mark the step reuses or forbids is no loss: it stays in the file and
-    comes back with the step.
+    comes back with the step. Fix round 1, after each step's words above: an optional step a stopped
+    recording inserted after it after the stop and has not given up (`would_lose_inserted`, the
+    details' `inserted` naming it), which would run after no step of the package; give it up first
+    (`remove_inserted`), or fold another range. An optional step inserted after the step before the
+    swipes, or after `b`, is not refused. An ending a stopped recording took ("Endings") names no
+    step: its frame is a file the caller gave, its marks carry step 0, and a mark of a step it reuses
+    is that step's own mark, which `would_lose_marks` refuses already; so no ending is checked.
   - `move_axis_unclear`: a swipe does not run clearly along one axis, or the swipes of the range run
     along different axes. The rule, in the numbers of the swipe's own two points (its execution's
     `point` and `to_point`): it runs along the vertical axis when its vertical move is not zero and
     at least twice its horizontal move, along the horizontal axis the other way round, and along
-    neither otherwise (a move of 30 across and 30 up is unclear; 70 up and 2 across is vertical).
+    neither otherwise (a move of 30 across and 30 up is unclear; 70 up and 2 across is vertical;
+    fix round 1: exactly twice is along the axis, so 40 up and 20 across is vertical and 40 up and
+    21 across unclear, and a swipe that ends where it began is unclear).
     Swipes of different lengths along the same axis in the same direction are accepted; nothing
     requires them to be equal. The details add the swipe's `from` and `to`.
   - `move_after_back`: after a swipe against the first swipe's direction, another in the first
@@ -3177,7 +3197,9 @@ today's server (`actingctl mcp-serve`) has no such tool.
   - `after`: the frame the click's execution or the application operation's receipt names as its
     `after_frame`: `step` (the step it is stored under, the next step; #463 stage two, train: when
     the next step was dropped before the last, #463 S2-7, that dropped step, whose screen the drop
-    found the same as the one the next effective step was pressed on), `frame_id`, `path`,
+    found the same as the one the next effective step was pressed on; #463 S2-8' fix round 1: on
+    the step before a fold, the first folded swipe, under which the list's first screen is stored,
+    the screen the press step's sheet lists as that swipe's `before`), `frame_id`, `path`,
     `preview`, and from its `after_capture` `still` (whether the captures after the press found the
     screen still; absent when no stillness test ran) and `waited_ms`; absent where none is named;
   - `between`: the frames stored between the screen before and the screen after, `{frame_id,
@@ -4114,8 +4136,14 @@ one up ("Inserting an optional step after stop"). #463 S2-5: it also takes boxes
 a press box on a tap or a long press recorded by its point gives that click its rectangle without
 `--reopen-step`, the press staying as recorded ("Drawing a box"). #463 S2-6: it also takes a
 step's choice mark, and the select that refines it, on every step but its last ("Marking a choice
-first"). It takes no other new step (a frame that is not
-the targeted step's primary frame; an ending, "Endings", is not a step and is taken), no step
+first"). #463 S2-8' fix round 1: it also takes the two step operations `fold_scan` and
+`unfold_scan` ("Folding swipes into a scrolling search"), which change no screen and send nothing:
+the swipes recorded before a press folded into its scrolling search, and the fold undone, under
+the fold's rules, its refusals of what only a stopped recording holds among them (an inserted
+optional step in the range, `inserted_in_range`, or after a swipe of it, `would_lose_inserted`);
+while a fold stands, the next `record stop` refuses `scan_not_selected` and keeps the package
+generated before. It takes no other new step (a frame that is not
+the targeted step's primary frame; an ending, "Endings", is not a step and is taken), no other step
 operation and no application operation: each is
 `record_session_not_active` (exit 3) with `details{reason: "recording_stopped", change}`, and
 nothing is written; nor does any `--record` device command (`record_session_not_active`).

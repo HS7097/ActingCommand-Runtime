@@ -675,10 +675,13 @@ actingcommand_contract::outcome_vocabulary! {
     /// Why a fold of recorded swipes cannot hold (`scan_problem`).
     pub enum ScanProblem: "scan_problem" {
         /// `fold_scan` names no fold: its first step is not below its press step; a step of the
-        /// range is unknown, dropped, converted into a transition, folded or holding a fold already,
-        /// or inserted after the stop; the press step's effect is no executed tap; or a step between
-        /// them is no executed swipe.
+        /// range is unknown, dropped, converted into a transition, or folded or holding a fold
+        /// already; the press step's effect is no executed tap; or a step between them is no
+        /// executed swipe.
         FoldRangeInvalid => "fold_range_invalid",
+        /// Fix round 1: a step of the range, the press step included, is an optional step a
+        /// stopped recording inserted after the stop, no step recorded on the path.
+        InsertedInRange => "inserted_in_range",
         /// A step the fold would fold has marks of its own, which no page of the package would
         /// read any more.
         WouldLoseMarks => "would_lose_marks",
@@ -691,6 +694,10 @@ actingcommand_contract::outcome_vocabulary! {
         WouldLoseChoice => "would_lose_choice",
         /// A step the fold would fold has a transition after its effect.
         WouldLoseTransition => "would_lose_transition",
+        /// Fix round 1: a step the fold would fold has an optional step a stopped recording
+        /// inserted after it after the stop, and not given up, which would run after no step of
+        /// the package.
+        WouldLoseInserted => "would_lose_inserted",
         /// A swipe of the range runs clearly along neither axis (its move along one axis is not
         /// at least twice its move across it), or along another axis than the first swipe.
         MoveAxisUnclear => "move_axis_unclear",

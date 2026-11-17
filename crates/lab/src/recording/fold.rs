@@ -12,7 +12,10 @@
 //! `record stop` (`scan_without_select`).
 //!
 //! Every refusal is `record_scan_invalid` with its `scan_problem` and writes nothing. The agent
-//! names the steps; the tool finds no range by itself.
+//! names the steps; the tool finds no range by itself. Fix round 1: a fold changes no screen and
+//! sends nothing, so a stopped recording takes it, and its undoing, as an amendment, as it takes a
+//! mark ("Marking after stop"); `record_mark` lets these two step actions through and sets
+//! `amended_at_unix_ms`, and the next `record stop` generates the package again.
 
 use super::model::{
     ClickGesture, FoldAxis, FoldDirection, FoldedMove, LabRecording, RecordPoint, RecordingStep,
@@ -207,11 +210,16 @@ pub(crate) fn scan_not_selected(press: u32, fold: &StepScanFold) -> LabError {
 /// Every check of `fold_scan {step: press, first}`, in order, before anything is changed; the fold's
 /// axis and its folded steps with their directions when they all hold. `fold_range_invalid`: `first`
 /// is not below `press`; a step of `first..=press` is unknown, dropped, converted into a transition,
-/// folded or holding a fold already, or inserted after the stop; the press step's effect is no
-/// executed tap ([`one_tap`]); a step between is no executed swipe with its two points on record
-/// ([`swipe_ends`]). Then, step by step, what a folded step would lose ([`would_lose`]). Then the
-/// swipes' run: each along one axis clearly, the first's ([`run_of`], `move_axis_unclear`), and no
-/// swipe in the first's direction after one against it (`move_after_back`).
+/// or folded or holding a fold already; fix round 1: such a step that is an optional step a stopped
+/// recording inserted after the stop is `inserted_in_range`; the press step's effect is no executed
+/// tap ([`one_tap`]); a step between is no executed swipe with its two points on record
+/// ([`swipe_ends`]). Then, step by step, what a folded step would lose ([`would_lose`]; fix round 1:
+/// then an optional step inserted after it after the stop and not given up, `would_lose_inserted`).
+/// Then the swipes' run: each along one axis clearly, the first's ([`run_of`],
+/// `move_axis_unclear`), and no swipe in the first's direction after one against it
+/// (`move_after_back`). An ending a stopped recording took names no step (its frame is a file the
+/// caller gave, its marks carry step 0, and a mark it reuses is an own mark of a step, which the
+/// fold refuses already, `would_lose_marks`), so nothing of an ending is checked here.
 fn planned_fold(
     recording: &LabRecording,
     press: u32,
@@ -248,6 +256,21 @@ fn planned_fold(
                 format!("step {} is {state}", step.index),
             ));
         }
+        // Fix round 1: a stopped recording takes a fold, and holds what only exists after the
+        // stop. An optional step inserted after the stop is no recorded step of the path.
+        if let Some(after) = step.inserted_after {
+            return Err(scan_invalid(
+                press,
+                ScanProblem::InsertedInRange,
+                format!(
+                    "step {} is an optional step inserted after step {after} after the stop, no \
+                     step recorded on the path; fold the swipes recorded before a recorded press; \
+                     nothing was written",
+                    step.index
+                ),
+                json!({"first": first, "at": step.index, "inserted_after": after}),
+            ));
+        }
     }
     if !one_tap(pressed) {
         return Err(range(
@@ -279,6 +302,26 @@ fn planned_fold(
                     step.index
                 ),
                 json!({"first": first, "at": step.index}),
+            ));
+        }
+        // Fix round 1: an optional step a stopped recording inserted after a swipe of the range
+        // would run after no step of the package.
+        if let Some(inserted) = recording
+            .steps
+            .iter()
+            .find(|other| other.kept_on_path() && other.inserted_after == Some(step.index))
+        {
+            return Err(scan_invalid(
+                press,
+                ScanProblem::WouldLoseInserted,
+                format!(
+                    "step {} has the optional step {} inserted after it after the stop, which the \
+                     fold would lose: a folded step is no step of the package for it to run after; \
+                     give it up first (remove_inserted {}), or fold another range; nothing was \
+                     written",
+                    step.index, inserted.index, inserted.index
+                ),
+                json!({"first": first, "at": step.index, "inserted": inserted.index}),
             ));
         }
     }
@@ -341,8 +384,9 @@ fn planned_fold(
     Ok((axis, moves))
 }
 
-/// Why `step` cannot be in a fold's range: dropped, converted into a transition, folded into
-/// another press step or holding a fold already, or inserted after the stop; `None` when it can.
+/// Why `step` cannot be in a fold's range: dropped, converted into a transition, or folded into
+/// another press step or holding a fold already; `None` when it can. (Fix round 1: a step inserted
+/// after the stop has its own word, `inserted_in_range`, in [`planned_fold`].)
 fn off_path(step: &RecordingStep) -> Option<String> {
     if step.dropped {
         return Some("dropped".to_owned());
@@ -350,11 +394,7 @@ fn off_path(step: &RecordingStep) -> Option<String> {
     if step.converted_to_transition {
         return Some("converted into a transition".to_owned());
     }
-    if let Some(press) = fold_of(step) {
-        return Some(format!("in the fold of step {press} already"));
-    }
-    step.inserted_after
-        .map(|after| format!("an optional step inserted after step {after} after the stop"))
+    fold_of(step).map(|press| format!("in the fold of step {press} already"))
 }
 
 /// Whether the effect of `step` is one executed tap: a performed click without a gesture, and no

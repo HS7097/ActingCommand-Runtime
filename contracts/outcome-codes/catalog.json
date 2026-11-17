@@ -11223,7 +11223,10 @@
       },
       "tokens": {
         "fold_range_invalid": {
-          "description": "fold_scan names no fold: its first step is not below its press step; a step of the range is unknown, dropped, converted into a transition, folded or holding a fold already, or inserted after the stop; the press step's effect is no executed tap; or a step between them is no executed swipe."
+          "description": "fold_scan names no fold: its first step is not below its press step; a step of the range is unknown, dropped, converted into a transition, or folded or holding a fold already; the press step's effect is no executed tap; or a step between them is no executed swipe."
+        },
+        "inserted_in_range": {
+          "description": "#463 S2-8' fix round 1: a step of the range, the press step included, is an optional step a stopped recording inserted after the stop, no step recorded on the path."
         },
         "would_lose_marks": {
           "description": "A step the fold would fold has marks of its own, which no page of the package would read any more."
@@ -11239,6 +11242,9 @@
         },
         "would_lose_transition": {
           "description": "A step the fold would fold has a transition after its effect."
+        },
+        "would_lose_inserted": {
+          "description": "#463 S2-8' fix round 1: a step the fold would fold has an optional step a stopped recording inserted after it after the stop, and not given up, which would run after no step of the package."
         },
         "move_axis_unclear": {
           "description": "A swipe of the range runs clearly along neither axis (its move along one axis is not at least twice its move across it), or along another axis than the first swipe."

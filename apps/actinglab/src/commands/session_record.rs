@@ -4337,4 +4337,54 @@ mod lab2_tests {
         assert_eq!(error.code, "validation_failed", "{}", error.message);
         assert!(error.message.contains("--box"), "{}", error.message);
     }
+
+    // #463 S2-8' fix round 1 (contracts/lab-recording.md, "Folding swipes into a scrolling
+    // search"; the review's (h)): `record mark --fold-scan <b> --fold-first <a>` is the request
+    // form's step action `{"kind": "fold_scan", "step": b, "first": a}` and `--unfold-scan <b>` its
+    // `{"kind": "unfold_scan", "step": b}`, so the command line and the MCP tools (which hand the
+    // request form on unchanged) give the Lab the same request. `--fold-scan` without
+    // `--fold-first`, `--fold-first` without `--fold-scan`, and a fold beside another step action
+    // are refused.
+    #[test]
+    fn s28_fix1_the_fold_flags_declare_the_request_forms_step_actions() {
+        let folding =
+            record_mark_request_from_flags(&flags(&["--fold-scan", "5", "--fold-first", "2"]))
+                .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step_action": {"kind": "fold_scan", "step": 5, "first": 2}
+        }))
+        .expect("the request form");
+        assert_eq!(folding, request);
+
+        let unfolding =
+            record_mark_request_from_flags(&flags(&["--unfold-scan", "5"])).expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "step_action": {"kind": "unfold_scan", "step": 5}
+        }))
+        .expect("the request form");
+        assert_eq!(unfolding, request);
+
+        for args in [
+            &["--fold-scan", "5"][..],
+            &["--fold-first", "2"][..],
+            &[
+                "--fold-scan",
+                "5",
+                "--fold-first",
+                "2",
+                "--unfold-scan",
+                "5",
+            ][..],
+            &["--unfold-scan", "5", "--drop-step", "3"][..],
+        ] {
+            let error = record_mark_request_from_flags(&flags(args)).expect_err("refused");
+            assert_eq!(
+                error.code, "validation_failed",
+                "{args:?}: {}",
+                error.message
+            );
+        }
+    }
 }

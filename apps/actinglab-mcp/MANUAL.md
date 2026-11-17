@@ -497,7 +497,9 @@ naming this file.
   #463 S2-8' (0.12.70; `contracts/lab-recording.md`, "Folding swipes into a scrolling search"): a
   choice in a scrolling list is recorded as several swipes, each a step, then the press on the
   wanted row. `ac_record_mark` with `step_action` `{"kind": "fold_scan", "step": b, "first": a}`
-  (or the row's `fold_scan` and `fold_first`), on the active recording, folds the swipes `a` to
+  (or the row's `fold_scan` and `fold_first`), on the active recording or, as an amendment like a
+  mark after stop, on a stopped one (fix round 1: the next `ac_record_stop` generates again; no
+  other step action is taken there), folds the swipes `a` to
   `b - 1` into the scrolling search of the press `b`: they stay in the file whole, each with
   `folded_into: b`, and are no steps of the package any more (no page, no operation, no case, no
   item of `ac_record_ready`); `b` holds `scan_fold` (its first step, the axis and each swipe
@@ -505,8 +507,10 @@ naming this file.
   along one axis in one direction are accepted; the demonstration is forward as often as needed,
   then back as often as needed, then the press. Every refusal is `record_scan_invalid`, nothing
   written, its `scan_problem`: `fold_range_invalid` (the range is no run of executed swipes before
-  an executed tap), `would_lose_marks`, `would_lose_page`, `would_lose_optional`,
-  `would_lose_choice`, `would_lose_transition` (take that off the swipe first), `move_axis_unclear`
+  an executed tap), `inserted_in_range` (a step of it is an optional step inserted after the stop),
+  `would_lose_marks`, `would_lose_page`, `would_lose_optional`, `would_lose_choice`,
+  `would_lose_transition`, `would_lose_inserted` (an optional step inserted after a swipe of it
+  after the stop; take that off the swipe first, or give the inserted step up), `move_axis_unclear`
   (a swipe whose move along one axis is not at least twice its move across, or along another axis),
   `move_after_back`. `{"kind": "unfold_scan", "step": b}` (`unfold_scan`) gives the recording back
   as it was (`not_folded` for a step that holds no fold). Any other step action on a folded swipe or
