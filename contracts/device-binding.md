@@ -246,7 +246,8 @@ configuration tools of #387 D1b):
 - **The adb** is the install root's, `<install root>\tools\platform-tools\adb.exe` (Workflow #337),
   the install root found as `actingctl packs` finds it (this process's install selection, else
   `--root`, else the install root the executable runs from; `install_root_unresolved` without
-  one). It runs `adb devices -l` once per `list` and once per `bind`.
+  one; against a candidate configuration without the selection, below). It runs `adb devices -l`
+  once per `list` and once per `bind`.
 - **A row** is one device of adb's list: `handle` `<transport>:<transport_id>` (the adb server's
   session number for the device, never a device value; it changes when the device is replugged
   or the server restarts), `transport` `usb` when the row has a `usb:` segment and `tcp`
@@ -265,9 +266,10 @@ configuration tools of #387 D1b):
   file is replaced whole through a temporary sibling (`device_bindings_write_failed` with its
   `path` when that fails).
 - **Against a candidate configuration** (#398 DB-1, 0.12.71; [v012-register.md](v012-register.md)
-  §1.459; the coordinator's ruling on board #398). An installer that binds a phone while it
-  installs lays the files, writes the candidate configuration, binds, runs check-config on the
-  candidate, switches it in and starts. check-config refuses a handset without a binding
+  §1.460; the coordinator's ruling on board #398). An installer that binds a phone while it
+  installs creates the folders (the state root created empty), lays the programs, writes the
+  candidate configuration, binds, runs check-config on the candidate, adopts the root and starts
+  it for the first time. check-config refuses a handset without a binding
   (`device_binding_missing`, above), and `bind` looked its alias up in the selected configuration,
   which a new installation does not have yet: neither could come first. `devices bind <alias>
   <handle> --config <file>` (the Lab's row `devices bind` with `config`; `actingctl devices bind`
@@ -279,12 +281,36 @@ configuration tools of #387 D1b):
     must be absolute (else `install_state_root_unresolved` with `config_path`, the rule the Lab
     locates a state root by): the file actingd's check-config of `file` reads, with or without
     `--install-root`, and so the Lab's rescue row `check-config <file>`, which runs it;
-  - no selected configuration and no located state root is read (the Lab's line carries no
-    `--state-root` then, and `--state-root` beside `--config` is `conflicting`); the install root
-    gives its adb alone, found as above, which a root without a configuration has;
-  - before the bind the candidate and the install root's adb must exist; the bind makes the state
-    root's folder and its `private` folder when they are missing, and the private file, nothing
-    else of the state root;
+  - **no install selection is read**, of the process (one it inherited from another installation
+    included) or of a root, and no located state root: the Lab's line carries neither the
+    located `--state-root` nor the located `--root` then (`--state-root` beside `--config` is
+    `conflicting`). The install root gives its adb alone: the root `--root` names when it is
+    given (on the Lab's command line a further `--root`), else the root the program runs from by
+    its place (`locate::root_of_place`: a program in an A/B slot, `<root>\<A|B>\runtime\` or
+    `tools\`, beside the slot's `runtime\BUILD-MANIFEST.json` and the root's
+    `install\slot-<A|B>.lock`, belongs to `<root>`; a program in a kept build or in a
+    single-location root to that root), else `install_root_unresolved`. So a root whose files are
+    laid and whose configuration is not selected yet binds, from a slot too. check-config of a
+    candidate reads no selection either;
+  - before the bind the candidate and the install root's adb must exist; **the bind creates the
+    state root's folder and its `private` folder when they are missing**, and the private file,
+    nothing else of the state root. So an operation that requires an empty state root must come
+    before the bind. Of today's operations that is one: the rescue row `new` (`install new`), which
+    refuses a state root that exists and is not an empty folder (`install_command_refused`
+    `state_root_not_empty`, answered by `new` alone, `crates/lab-rescue/src/install/new.rs`). The
+    installer does not use `install new`: it creates the folders itself;
+  - **the first start accepts the state root the bind made**, which holds exactly
+    `private\device-bindings.json`: the start reads the state root's installation record before it
+    writes anything (no `installation.json`: `unclaimed`, and it goes on), claims the state root
+    under the owner lock, reading only `installation.json` and the installation's
+    `install\identity.json` (it mints the identity and places the record,
+    [state-root-installation.md](state-root-installation.md), "The claim"), and takes the storage
+    as new while none of `runtime-state.sqlite`, `runtime-state.key`, `ledger`, `release-blobs` and
+    `artifacts` is there. The code that decides it: `RuntimeHost::start_with_provider` in
+    `crates/runtime-host/src/host.rs` (`state_root_installation::check` and `::claim` in
+    `state_root_installation.rs`, then the storage's materials); check-config's catalog preview
+    judges the state root by the same five names (`policy_host/catalog_preview.rs`,
+    `STATE_MATERIALS`). Neither a start nor a check asks a state root to be empty;
   - the answer is `bind`'s and `config`, the file as given.
 - **The channel `ui`** (#398 DB-1). `--bound-via ui` (the row's `bound_via`, not named `via`,
   which is `actinglab`'s global option) writes `bound_via` `ui`, the installer's; another word is

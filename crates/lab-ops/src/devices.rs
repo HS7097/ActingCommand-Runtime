@@ -20,8 +20,10 @@
 //!   --config <file>` checks the alias in the candidate configuration `file` instead, by the same
 //!   rules and codes, and writes into the private file of the state root `file` names, the one a
 //!   check-config of `file` reads, so that a new installation binds its handset before its
-//!   configuration passes check-config and is switched in: no selected configuration is read and
-//!   no `--state-root` is taken; the answer names `config`. `--bound-via ui` writes the channel
+//!   configuration passes check-config and is switched in: no `--state-root` is taken, and no
+//!   install selection is read, of the process or of a root (fix round 1): the install root's adb
+//!   is that of `--root`, else of the root the program runs from by its place
+//!   (`locate::root_of_place`); the answer names `config`. `--bound-via ui` writes the channel
 //!   `ui` (the installer's); without it the channel is the caller's, as before.
 //!
 //! None of them runs the Runtime or records anything in the ledger: the next start reads the
@@ -174,11 +176,28 @@ fn install(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf, Pa
         .or_else(|| root.map(Path::to_path_buf))
         .or_else(crate::packs::executable_install_root)
         .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))?;
-    let adb = install_root
+    Ok((installation, config, adb_of(&install_root)))
+}
+
+/// The adb of the install root `install_root`, `<install root>\tools\platform-tools\adb.exe`.
+fn adb_of(install_root: &Path) -> PathBuf {
+    install_root
         .join("tools")
         .join("platform-tools")
-        .join("adb.exe");
-    Ok((installation, config, adb))
+        .join("adb.exe")
+}
+
+/// #398 DB-1 fix round 1: the adb a bind against a candidate configuration lists the devices
+/// with: that of `root` (`--root`) when it is given, else that of the install root the program
+/// at `program` runs from by its place alone (`locate::root_of_place`). No install selection is
+/// read, of this process (one it inherited from another installation included) or of a root, so
+/// a root whose files are laid and whose configuration is not selected yet binds, from a slot too.
+/// Neither root: `install_root_unresolved`.
+fn candidate_adb(root: Option<&Path>, program: Option<&Path>) -> Result<PathBuf, Outcome> {
+    root.map(Path::to_path_buf)
+        .or_else(|| program.and_then(crate::locate::root_of_place))
+        .map(|install_root| adb_of(&install_root))
+        .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))
 }
 
 /// The private binding file of `state_root`; one that breaks its rules is
@@ -306,18 +325,33 @@ pub fn bind(
 /// #398 DB-1 (`contracts/device-binding.md`, "Choosing a device"): [`bind`] against the candidate
 /// configuration `file` in place of the selected one. The alias is checked in `file` by the same
 /// rules and codes, and the binding goes into the private file of the state root `file` names,
-/// which a check-config of `file` reads; no selected configuration is read, and the install root
-/// is asked for its adb alone. A file that cannot be read is `config_read_failed`, one that does
-/// not decode `config_decode_failed`, each with its `path`; one without an absolute `state_root`
-/// is `install_state_root_unresolved` with `config_path`. The answer is [`bind`]'s and `config`,
-/// the file as given.
+/// which a check-config of `file` reads; no install selection is read, and the install root is
+/// asked for its adb alone ([`candidate_adb`]: `root`, else the root this program runs from by its
+/// place). A file that cannot be read is `config_read_failed`, one that does not decode
+/// `config_decode_failed`, each with its `path`; one without an absolute `state_root` is
+/// `install_state_root_unresolved` with `config_path`. The answer is [`bind`]'s and `config`, the
+/// file as given.
 pub fn bind_candidate(
     file: &Path,
     root: Option<&Path>,
     request: &Bind<'_>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
-    let (_, _, adb) = install(root)?;
+    let program = std::env::current_exe().and_then(fs::canonicalize).ok();
+    bind_candidate_from(file, root, program.as_deref(), request, run)
+}
+
+/// #398 DB-1 fix round 1: [`bind_candidate`] for the program at `program` (this process's own,
+/// canonical, in [`bind_candidate`]), whose place names the install root when `root` is not
+/// given, so that a test binds as a program in a given place does.
+pub fn bind_candidate_from(
+    file: &Path,
+    root: Option<&Path>,
+    program: Option<&Path>,
+    request: &Bind<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    let adb = candidate_adb(root, program)?;
     let candidate = read_candidate(file)?;
     let mut answer = bound(
         &candidate.state_root,

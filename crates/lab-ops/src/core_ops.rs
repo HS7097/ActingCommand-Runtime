@@ -164,15 +164,17 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
             _ => packs::dispatch_within(&argv, caller.budget),
         });
     }
-    let located = (caller.place)();
     // #398 DB-1: `devices bind` against a candidate configuration binds into the state root the
-    // candidate names, not the located one: its line needs none.
-    if let Some(words) = candidate_words(operation, params, located.root.as_deref()) {
+    // candidate names, not the located one: its line needs none. Fix round 1: it is built before
+    // the place is asked for, so that no install selection decides it (`devices` takes the
+    // install root's adb from a `--root` given, else from its program's place).
+    if let Some(words) = candidate_words(operation, params) {
         return match words {
             Ok(argv) => dispatched(devices::dispatch(&argv)),
             Err(exit) => exit,
         };
     }
+    let located = (caller.place)();
     let state_root = match &located.state_root {
         Ok(state_root) => state_root.clone(),
         Err(outcome) => return cli_line::failure(outcome, Some(caller.unlocated)),
@@ -402,15 +404,15 @@ fn dispatched_with_state_root(
 /// a row served here with its parameters; a parameter refused while the words are built is its
 /// line. `remedy set`'s rows given inline are no word: they go beside the words. Workflow #434
 /// LAB-5B1: built from the row's constant, `core_reads::HANDED`; `frame` hands words only with
-/// `out` (without it, it is served here). #398 DB-1: `devices bind` with `config` hands no
-/// `state_root` ([`candidate_words`]).
+/// `out` (without it, it is served here). #398 DB-1: `devices bind` with `config` hands neither
+/// `state_root` nor, since fix round 1, `root` ([`candidate_words`]).
 pub fn handed_words(
     operation: &Operation,
     params: &Map<String, Value>,
     root: Option<&Path>,
     state_root: &Path,
 ) -> Option<Result<Vec<OsString>, Exit>> {
-    if let Some(words) = candidate_words(operation, params, root) {
+    if let Some(words) = candidate_words(operation, params) {
         return Some(words);
     }
     let handed = core_reads::HANDED
@@ -435,12 +437,13 @@ pub fn handed_words(
 /// its command against a candidate configuration (its `config` given): the row's command line
 /// without the module's state root, since the binding goes into the state root the candidate names
 /// (`devices::bind_candidate`), so that a root whose configuration is not switched in yet, and
-/// whose state root cannot be located, binds too; `root` is the install root, when the program
-/// runs from one. `None` for every other call.
+/// whose state root cannot be located, binds too. Fix round 1: without the module's root either,
+/// which the place reads from the process's install selection when there is one; a `--root` the
+/// command line gives is handed on (`Part::Further`), and without it `devices` takes the root its
+/// program runs from by its place. `None` for every other call.
 fn candidate_words(
     operation: &Operation,
     params: &Map<String, Value>,
-    root: Option<&Path>,
 ) -> Option<Result<Vec<OsString>, Exit>> {
     if operation.name != DEVICES_BIND {
         return None;
@@ -452,7 +455,7 @@ fn candidate_words(
     let handed = core_reads::HANDED
         .iter()
         .find(|handed| handed.row == operation.name)?;
-    Some(handed_line(handed, operation, params, root, None))
+    Some(handed_line(handed, operation, params, None, None))
 }
 
 /// Workflow #434 LW-1 (register §1.435): the refusal the parser of a handed command line gives

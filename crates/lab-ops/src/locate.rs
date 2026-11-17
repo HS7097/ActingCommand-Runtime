@@ -244,6 +244,37 @@ pub fn authoring_module_from(
     Ok(AuthoringModule::Configured { config, installed })
 }
 
+/// #398 DB-1 (`contracts/device-binding.md`, "Against a candidate configuration"): the install
+/// root a program at `program` belongs to by its place alone, reading no install selection, of
+/// the process or of a root: an A/B slot's `<root>\<A|B>\runtime\<program>` (or `tools\`) beside
+/// the slot's `runtime\BUILD-MANIFEST.json` and the root's slot locator `install\slot-<A|B>.lock`
+/// gives `<root>`, whether or not `<root>` has selected a configuration yet; any other place is
+/// read as [`installed_root`] reads it (a kept build's root, a single-location root); `None` for
+/// every other place. `devices bind` against a candidate configuration finds the install root's
+/// adb by it when no `--root` is given.
+pub fn root_of_place(program: &Path) -> Option<PathBuf> {
+    let directory = program.parent()?;
+    if directory.file_name() == Some(OsStr::new(RUNTIME_DIRECTORY))
+        || directory.file_name() == Some(OsStr::new(TOOLS_DIRECTORY))
+    {
+        let slot = directory.parent()?;
+        if let Some(name) = slot
+            .file_name()
+            .and_then(OsStr::to_str)
+            .filter(|name| matches!(*name, "A" | "B"))
+            && let Some(root) = slot.parent()
+            && slot.join(RUNTIME_DIRECTORY).join(BUILD_MANIFEST).is_file()
+            && root
+                .join(INSTALL_DIRECTORY)
+                .join(format!("slot-{name}.lock"))
+                .is_file()
+        {
+            return Some(root.to_path_buf());
+        }
+    }
+    installed_root(program)
+}
+
 /// The install root a program at `program` belongs to by its place alone: a kept build's root,
 /// or a single-location root; `None` for any other place.
 fn installed_root(program: &Path) -> Option<PathBuf> {

@@ -395,7 +395,7 @@ pub static HANDED: [Handed; 16] = [
             word("instance"),
             word("handle"),
             // #398 DB-1: the candidate configuration, whose line carries no module's state root
-            // (`core_ops::candidate_words`), and the channel.
+            // and (fix round 1) no module's root (`core_ops::candidate_words`), and the channel.
             flag("config", devices::CONFIG_FLAG),
             flag("bound_via", devices::BOUND_VIA_FLAG),
             Part::StateRoot,

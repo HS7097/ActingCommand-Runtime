@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! #398 DB-1 (register §1.459; `contracts/device-binding.md`, "Choosing a device"; coordinator work
+//! #398 DB-1 (register §1.460; `contracts/device-binding.md`, "Choosing a device"; coordinator work
 //! order `rd-1117/brief-398-db1-bind-candidate-config.md`, its test 5): the MCP part of the slice,
 //! which only this server's code reaches; the rest of the slice's tests are actingd's
 //! `gate_398_db1`, which reaches check-config.

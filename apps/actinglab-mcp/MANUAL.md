@@ -38,7 +38,9 @@ naming this file.
   `ac_deploy` and `ac_rollback` take no `detach` (section 9); `ac_devices_bind` takes no
   `bound_via` (#398 DB-1, 0.12.71: the channel `ui` is the installer's; a binding made through this
   server records `cli`, as the row writes it without one), and takes `config`, a candidate
-  configuration whose state root the binding goes into. These are the only parameters of a
+  configuration whose state root the binding goes into (fix round 1: then the install root's adb is
+  that of the root this server's program runs from by its place, never read from an install
+  selection). These are the only parameters of a
   row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
   given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
   the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
