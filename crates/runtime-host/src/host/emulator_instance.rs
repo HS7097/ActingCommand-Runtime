@@ -254,14 +254,11 @@ pub(super) struct EmulatorControlDriven {
 /// A failed operator control (Workflow #369 S6b): the request's failure and, for a restart
 /// whose Stop failed while its Start succeeded (Workflow #381 B D2 (c)), the startup package the
 /// Start's success path scheduled, or the ladder its failed preparation admitted, which the key
-/// still goes to after the failure record. #480 PG-1 fix round 2: `held` when the hold held an
-/// autostart claim's configured start just before its provider Start (`failure` then closed its
-/// `command.received`; nothing was started or bound).
+/// still goes to after the failure record.
 struct FailedControl {
     failure: RequestFailure,
     startup_package: Option<Box<PendingStartupPackage>>,
     ladder: Option<Box<PendingRecoveryLadder>>,
-    held: Option<AutomaticStartHold>,
 }
 
 impl From<RequestFailure> for FailedControl {
@@ -270,7 +267,6 @@ impl From<RequestFailure> for FailedControl {
             failure,
             startup_package: None,
             ladder: None,
-            held: None,
         }
     }
 }
@@ -296,8 +292,15 @@ enum ControlMode<'key> {
     Ladder(&'key mut HostKey),
     /// emu-watch: an autostart claim's configured start on its key, as an operator `start`,
     /// except that a scheduling pause does not withhold the startup package (Alice's ruling 35:
-    /// the pause holds it queued as a gated entry until the resume).
-    Configured(&'key mut HostKey),
+    /// the pause holds it queued as a gated entry until the resume). #480 PG-1 fix round 3:
+    /// `intent_recorded` is false until the start's `command.received` is written, which comes
+    /// only after the last ask of the hold, just before the provider's Start
+    /// (`drive_configured_control`); a failure before it is returned unrecorded, so that its
+    /// intent is written first.
+    Configured {
+        key: &'key mut HostKey,
+        intent_recorded: bool,
+    },
 }
 
 impl ControlMode<'_> {
@@ -306,25 +309,47 @@ impl ControlMode<'_> {
             Self::Operator(key)
             | Self::RestartPhase(key)
             | Self::Ladder(key)
-            | Self::Configured(key) => &key.token,
+            | Self::Configured { key, .. } => &key.token,
         }
     }
 
     /// The operator's claim key; `None` on the ladder's rung.
     fn operator_key(&self) -> Option<&HostKey> {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured(key) => Some(&**key),
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured { key, .. } => {
+                Some(&**key)
+            }
             Self::Ladder(_) => None,
         }
     }
 
     /// emu-watch: an autostart claim's configured start.
     fn configured(&self) -> bool {
-        matches!(self, Self::Configured(_))
+        matches!(self, Self::Configured { .. })
+    }
+
+    /// #480 PG-1 fix round 3: a configured start whose `command.received` is not written yet.
+    fn intent_pending(&self) -> bool {
+        matches!(
+            self,
+            Self::Configured {
+                intent_recorded: false,
+                ..
+            }
+        )
     }
 
     fn restart_phase(&self) -> bool {
         matches!(self, Self::RestartPhase(_))
+    }
+
+    /// The action a failure is recorded under: a restart phase's is the restart's.
+    fn record_action(&self, action: EmulatorInstanceAction) -> EventAction {
+        if self.restart_phase() {
+            EmulatorInstanceAction::Restart.event_action()
+        } else {
+            action.event_action()
+        }
     }
 
     /// #411 A50: a phase of a restart, the operator's or the ladder's rung.
@@ -343,7 +368,7 @@ impl ControlMode<'_> {
             Self::Operator(key)
             | Self::RestartPhase(key)
             | Self::Ladder(key)
-            | Self::Configured(key) => {
+            | Self::Configured { key, .. } => {
                 host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
             }
         }
@@ -353,7 +378,7 @@ impl ControlMode<'_> {
     /// may exceed what is left of its key; the ladder renews its own key.
     fn renew(&mut self, host: &HostShared, bound_ms: u64) -> Result<(), RequestFailure> {
         match self {
-            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured(key) => {
+            Self::Operator(key) | Self::RestartPhase(key) | Self::Configured { key, .. } => {
                 host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
             }
             Self::Ladder(_) => Ok(()),
@@ -365,16 +390,9 @@ impl ControlMode<'_> {
 enum ControlFailure {
     /// Recorded, or one the Runtime does not survive.
     Request(RequestFailure),
-    /// A restart phase's failure, not recorded yet.
+    /// A restart phase's failure, not recorded yet; #480 PG-1 fix round 3: or a configured
+    /// start's before its `command.received` is written.
     Unrecorded(Box<UnrecordedControl>),
-    /// #480 PG-1 fix round 2: an autostart claim's configured start that `automatic_start_hold`,
-    /// asked with the instance's admission guard in hand just before the provider's Start, held:
-    /// nothing was started or bound, its `command.received` is closed (`failure`, recorded), and
-    /// the claim ends as held on its key.
-    Held {
-        failure: RequestFailure,
-        hold: AutomaticStartHold,
-    },
 }
 
 impl From<RequestFailure> for ControlFailure {
@@ -553,7 +571,7 @@ impl HostShared {
             Ok(resolved) if action == EmulatorInstanceAction::Restart => {
                 self.drive_emulator_restart(&resolved, links, &mut key)
             }
-            Ok(resolved) => self.drive_emulator_control(&resolved, links, action, &mut key, false),
+            Ok(resolved) => self.drive_emulator_control(&resolved, links, action, &mut key),
             Err(failure) => Err(failure.into()),
         };
         let mut driven = match driven {
@@ -706,7 +724,6 @@ impl HostShared {
             failure,
             startup_package,
             ladder,
-            ..
         } = failed;
         if failure.poison_runtime {
             return self.cleanup_composite_failure(key.token, key.connection_id, failure);
@@ -730,21 +747,20 @@ impl HostShared {
     }
 
     /// Workflow #369 S6c (H-5): the configured start of an autostart claim on the claim's own
-    /// `key`: its `command.received` (a Runtime-origin intent under the claim's `links`, written
-    /// only now, so a claim that yielded before left no open command), H-4's start path
-    /// (`drive_emulator_control`: the fence on the key, the close, the renewal before the
-    /// provider step, the provider Start, the binding, the ADB baseline, the renewal before the
-    /// preparation, `command.validated` or the failure pair, `runtime.instance_bound`, the
-    /// preparation on the key), then the hold's end as an operator start's: the key goes to the
-    /// startup package's claim through the gate, or to the ladder a failed preparation admitted;
-    /// a failed start ends it as a failed operator control does. The error is the recorded
-    /// failure, or one the Runtime does not survive. #480 PG-1 fix round 2 (the review's sequence
-    /// 2, to its end): just before the provider's Start, with the instance's admission guard in
-    /// hand (after the wait for that guard, the close and the renewal), the drive asks
-    /// `automatic_start_hold` once more (`drive_control_phase`); held, it starts and binds nothing,
-    /// closes its `command.received` as a start not made is (`command.rejected`, effect
-    /// `not_performed`, and one `runtime.failed` of `emulator_autostart_skipped` with the hold's
-    /// `skip_reason`), and the key comes back to the claim (`KeyedStart::Held`), which ends as held.
+    /// `key`: H-4's start path (`drive_configured_control`: the fence on the key, the close, the
+    /// renewal before the provider step, the start's `command.received`, the provider Start, the
+    /// binding, the ADB baseline, the renewal before the preparation, `command.validated` or the
+    /// failure pair, `runtime.instance_bound`, the preparation on the key), then the hold's end
+    /// as an operator start's: the key goes to the startup package's claim through the gate, or
+    /// to the ladder a failed preparation admitted; a failed start ends it as a failed operator
+    /// control does. The error is the recorded failure, or one the Runtime does not survive.
+    /// #480 PG-1 (fix rounds 2 and 3; the coordinator's ruling of fix round 3: a start that a
+    /// pause stopped was never a command): with the instance's admission guard in hand, as the
+    /// last thing before the provider's Start, the drive asks `automatic_start_hold` once more,
+    /// and the start's `command.received` (a Runtime-origin intent under the claim's `links`) is
+    /// written only after that, so a claim that yielded or was held before left no `command.*`
+    /// record at all; held there, it starts, binds and records nothing, and the key comes back
+    /// to the claim (`KeyedStart::Held`), which ends as held and records its skip.
     pub(super) fn drive_configured_start(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -752,24 +768,13 @@ impl HostShared {
         links: EventLinksDraft,
         mut key: HostKey,
     ) -> Result<KeyedStart, RequestFailure> {
-        let action = EmulatorInstanceAction::Start;
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links.clone(),
-            CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
-        )?;
-        let drive = self.drive_emulator_control(resolved, links, action, &mut key, true);
+        let drive = self.drive_configured_control(resolved, links, &mut key);
         // #480 PG-1, tests: the Start was driven and the claim still holds its key.
         #[cfg(test)]
         self.configured_start_driven_for_test()?;
         let mut driven = match drive {
-            Ok(driven) => driven,
-            Err(FailedControl {
-                held: Some(hold), ..
-            }) => {
+            Ok(Ok(driven)) => driven,
+            Ok(Err(hold)) => {
                 return Ok(KeyedStart::Held {
                     key: Box::new(key),
                     hold,
@@ -828,8 +833,7 @@ impl HostShared {
             links.clone(),
             CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
         )?;
-        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key, false)
-        {
+        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key) {
             Ok(driven) => driven,
             Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
         };
@@ -890,7 +894,6 @@ impl HostShared {
         links: EventLinksDraft,
         action: EmulatorInstanceAction,
         key: &mut HostKey,
-        configured: bool,
     ) -> Result<EmulatorControlDriven, FailedControl> {
         let control_request_id = key.request.request_id();
         // Workflow #429 R-0b (register §1.238): the control shows while it drives, on its own
@@ -906,13 +909,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-        // emu-watch: an autostart claim's configured start is no operator's: a pause does not
-        // withhold its startup package.
-        let mut mode = if configured {
-            ControlMode::Configured(key)
-        } else {
-            ControlMode::Operator(key)
-        };
+        let mut mode = ControlMode::Operator(key);
         match self.drive_control_phase(
             resolved,
             links.clone(),
@@ -926,13 +923,106 @@ impl HostShared {
             Err(ControlFailure::Unrecorded(failure)) => Err(self
                 .record_unrecorded(links, action.event_action(), *failure)
                 .into()),
-            Err(ControlFailure::Held { failure, hold }) => Err(FailedControl {
-                failure,
-                startup_package: None,
-                ladder: None,
-                held: Some(hold),
-            }),
         }
+    }
+
+    /// emu-watch (H-5): an autostart claim's configured Start on its claim's `key`, as
+    /// `drive_emulator_control` drives an operator's (a pause does not withhold its startup
+    /// package). #480 PG-1 fix round 3 (the coordinator's ruling: a start that a pause stopped
+    /// was never a command; the module's rule that the start's `command.received` is written
+    /// only when the Start begins): in this order, the wait for the instance's admission guard,
+    /// the fence on the key, the close of an old session and the renewal before the provider step
+    /// (`ready_control_phase`), then `automatic_start_hold` once more, with the guard in hand, as
+    /// the last thing before the provider's Start (fix round 2's place), and only then the
+    /// start's `command.received` (a Runtime-origin intent under the claim's `links`) and the
+    /// Start itself (`perform_control_phase`). Held there, it answers the hold (`Ok(Err(_))`):
+    /// nothing was started or bound, and no `command.*` or `runtime.failed` record was written. A
+    /// failure before the intent comes back unrecorded and is recorded after its intent
+    /// (`command.received`, `command.rejected`, `runtime.failed`), as `refuse_configured_start`
+    /// records a start refused before anything was driven.
+    fn drive_configured_control(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        key: &mut HostKey,
+    ) -> Result<Result<EmulatorControlDriven, AutomaticStartHold>, FailedControl> {
+        let action = EmulatorInstanceAction::Start;
+        let control_request_id = key.request.request_id();
+        // Workflow #429 R-0b (register §1.238): the control shows while it drives, on its own
+        // claim's key; its guard drops however the drive returns.
+        let _activity = self
+            .begin_instance_activity(
+                resolved.instance_id(),
+                super::instance_activity::ActivityStart::EmulatorControl {
+                    request_id: control_request_id,
+                    key: super::instance_activity::KeyHold::Own,
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let instance_guard = self.instance_guard(resolved.instance_id())?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
+        let readied = self.ready_control_phase(
+            resolved,
+            links.clone(),
+            action,
+            &admission,
+            &mut ControlMode::Configured {
+                key: &mut *key,
+                intent_recorded: false,
+            },
+        );
+        match readied {
+            Ok(()) => {}
+            Err(ControlFailure::Request(failure)) => return Err(failure.into()),
+            Err(ControlFailure::Unrecorded(failure)) => {
+                self.append_configured_start_intent(links.clone())?;
+                return Err(self
+                    .record_unrecorded(links, action.event_action(), *failure)
+                    .into());
+            }
+        }
+        if let Some(hold) =
+            self.automatic_start_hold(&resolved.instance_alias, HostLocation::RunEmulatorAutostart)?
+        {
+            return Ok(Err(hold));
+        }
+        self.append_configured_start_intent(links.clone())?;
+        let mut mode = ControlMode::Configured {
+            key,
+            intent_recorded: true,
+        };
+        match self.perform_control_phase(
+            resolved,
+            links.clone(),
+            action,
+            control_request_id,
+            &admission,
+            &mut mode,
+        ) {
+            Ok(driven) => Ok(Ok(driven)),
+            Err(ControlFailure::Request(failure)) => Err(failure.into()),
+            Err(ControlFailure::Unrecorded(failure)) => Err(self
+                .record_unrecorded(links, action.event_action(), *failure)
+                .into()),
+        }
+    }
+
+    /// emu-watch (H-5): a configured start's `command.received`, a Runtime-origin intent under
+    /// its claim's `links`; #480 PG-1 fix round 3: written by `drive_configured_control` just
+    /// before the provider's Start, or just before the failure that ended the start before it.
+    fn append_configured_start_intent(&self, links: EventLinksDraft) -> Result<(), RequestFailure> {
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::received(
+                EmulatorInstanceAction::Start.event_action(),
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(())
     }
 
     /// Workflow #381 B F1′ (review M1): an operator restart is a Stop phase and then a Start
@@ -1059,7 +1149,6 @@ impl HostShared {
                     failure,
                     startup_package,
                     ladder,
-                    held: None,
                 })
             }
             (Err(stop_failure), Err(start_failure)) => {
@@ -1112,10 +1201,7 @@ impl HostShared {
         ) {
             Ok(driven) => Ok(Ok(driven)),
             Err(ControlFailure::Unrecorded(failure)) => Ok(Err(failure)),
-            // A restart phase is no configured start: the hold is never asked here.
-            Err(ControlFailure::Request(failure) | ControlFailure::Held { failure, .. }) => {
-                Err(failure)
-            }
+            Err(ControlFailure::Request(failure)) => Err(failure),
         }
     }
 
@@ -1156,10 +1242,7 @@ impl HostShared {
             &mut ControlMode::Ladder(key),
         ) {
             Ok(driven) => Ok(driven),
-            // A ladder's rung is no configured start: the hold is never asked here.
-            Err(ControlFailure::Request(failure) | ControlFailure::Held { failure, .. }) => {
-                Err(failure)
-            }
+            Err(ControlFailure::Request(failure)) => Err(failure),
             Err(ControlFailure::Unrecorded(failure)) => {
                 Err(self.record_unrecorded(links, action.event_action(), *failure))
             }
@@ -1167,7 +1250,10 @@ impl HostShared {
     }
 
     /// The drive of one control action (see `drive_emulator_control`) on the key `mode` holds;
-    /// `mode` also decides who records its failure and who renews the key.
+    /// `mode` also decides who records its failure and who renews the key. Its two parts, which
+    /// a configured start drives apart (`drive_configured_control`, #480 PG-1 fix round 3):
+    /// what readies the provider step (`ready_control_phase`), then the provider step and what
+    /// follows it (`perform_control_phase`).
     fn drive_control_phase(
         &self,
         resolved: &RegisteredInstance,
@@ -1177,13 +1263,23 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
         mode: &mut ControlMode<'_>,
     ) -> Result<EmulatorControlDriven, ControlFailure> {
+        self.ready_control_phase(resolved, links.clone(), action, admission, mode)?;
+        self.perform_control_phase(resolved, links, action, control_request_id, admission, mode)
+    }
+
+    /// The first part of a control action's drive, under the instance's admission guard: the
+    /// fence on the control's key, the close of the instance's retained session and the renewal
+    /// before the provider step. A failure here performed nothing.
+    fn ready_control_phase(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        action: EmulatorInstanceAction,
+        admission: &MutexGuard<'_, ()>,
+        mode: &mut ControlMode<'_>,
+    ) -> Result<(), ControlFailure> {
         let instance_id = resolved.instance_id();
-        let event_action = action.event_action();
-        let record_action = if mode.restart_phase() {
-            EmulatorInstanceAction::Restart.event_action()
-        } else {
-            event_action
-        };
+        let record_action = mode.record_action(action);
         // Workflow #369 H-3, H-4: the call-site fence admits the control's own key (lease id and
         // holder id, unexpired, no destructive step open).
         let fence = self
@@ -1279,18 +1375,23 @@ impl HostShared {
                 EffectDisposition::NotPerformed,
             ));
         }
-        // #480 PG-1 fix round 2 (the review's sequence 2, to its end): an autostart claim's
-        // configured start asks `automatic_start_hold` once more, with the instance's admission
-        // guard in hand, as the last thing before the provider's Start, so a pause set while the
-        // claim waited for that guard, closed the old session or renewed its key starts nothing.
-        if mode.configured()
-            && let Some(hold) = self.automatic_start_hold(
-                &resolved.instance_alias,
-                HostLocation::RunEmulatorAutostart,
-            )?
-        {
-            return Err(self.held_before_start(links, record_action, resolved, hold));
-        }
+        Ok(())
+    }
+
+    /// The second part of a control action's drive, still under the instance's admission
+    /// guard: the provider step and what follows it (see `drive_emulator_control`).
+    fn perform_control_phase(
+        &self,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        action: EmulatorInstanceAction,
+        control_request_id: RequestId,
+        admission: &MutexGuard<'_, ()>,
+        mode: &mut ControlMode<'_>,
+    ) -> Result<EmulatorControlDriven, ControlFailure> {
+        let instance_id = resolved.instance_id();
+        let event_action = action.event_action();
+        let record_action = mode.record_action(action);
         // Outside the fact write gate and outside any device session, on the control's key; the
         // per-instance admission guard stays held so no keyless observe meets the changing
         // emulator.
@@ -1682,32 +1783,10 @@ impl HostShared {
         )
     }
 
-    /// #480 PG-1 fix round 2: an autostart claim's configured start that the hold held just
-    /// before its provider Start (`hold`): its `command.received` is closed as a start not made
-    /// is, `command.rejected` (effect `not_performed`) and one `runtime.failed` of
-    /// `emulator_autostart_skipped` (`alias`, the hold's `skip_reason`), the receipt state
-    /// `Denied`; nothing was started or bound. A failed record is the control's failure.
-    fn held_before_start(
-        &self,
-        links: EventLinksDraft,
-        record_action: EventAction,
-        resolved: &RegisteredInstance,
-        hold: AutomaticStartHold,
-    ) -> ControlFailure {
-        match self.emulator_control_failure(
-            links,
-            record_action,
-            held_start_error(resolved, hold),
-            RuntimeReceiptState::Denied,
-            EffectDisposition::NotPerformed,
-        ) {
-            Ok(failure) => ControlFailure::Held { failure, hold },
-            Err(failure) => ControlFailure::Request(failure),
-        }
-    }
-
     /// A failed control action: an operator restart's phase returns a failure the Runtime
-    /// survives unrecorded; every other one is recorded now (`command.rejected` +
+    /// survives unrecorded; #480 PG-1 fix round 3: a configured start whose `command.received`
+    /// is not written yet returns every failure unrecorded (`drive_configured_control` writes
+    /// that intent, then records it); every other one is recorded now (`command.rejected` +
     /// `runtime.failed` under `record_action`).
     #[allow(clippy::too_many_arguments)]
     fn control_failed(
@@ -1720,7 +1799,7 @@ impl HostShared {
         effect: EffectDisposition,
         provider: Option<ProviderControlFailure>,
     ) -> ControlFailure {
-        if mode.restart_phase() && !error.is_fatal() {
+        if (mode.restart_phase() && !error.is_fatal()) || mode.intent_pending() {
             return ControlFailure::Unrecorded(Box::new(UnrecordedControl {
                 error,
                 state,
@@ -2459,25 +2538,6 @@ fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outco
             .adb_port_present(state.adb_port_present),
         None => outcome,
     }
-}
-
-/// #480 PG-1 fix round 2: the failure that closes the `command.received` of a configured start
-/// `hold` held just before its provider Start (`HostShared::held_before_start`):
-/// `emulator_autostart_skipped`, the code of a held automatic start, with the instance's `alias`
-/// and the hold's `skip_reason`.
-fn held_start_error(resolved: &RegisteredInstance, hold: AutomaticStartHold) -> RuntimeHostError {
-    let mut error = RuntimeHostError::request(
-        HostCode::EmulatorAutostartSkipped,
-        HostLocation::RunEmulatorAutostart,
-        RuntimeErrorCode::InvalidRequest,
-    )
-    .with_outcome_values(|outcome| {
-        outcome
-            .alias(resolved.instance_alias.as_str())
-            .skip_reason(hold.reason)
-    });
-    error.lifecycle.instance_id = Some(resolved.instance_id());
-    error
 }
 
 /// The busy denial of the fence (`fence=<reason>` as native detail).

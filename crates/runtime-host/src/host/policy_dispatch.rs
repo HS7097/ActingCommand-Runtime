@@ -881,11 +881,14 @@ fn check_scheduling_pause_expectation(
 /// short of a failure (which lifts the pause).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PauseRelease {
-    /// Nothing uses the instance's device any more: the stage goes on to `released`.
+    /// Nothing uses the instance's device any more: the stage goes on to `released` (fix round
+    /// 3: also when a shutdown finds it so, inside the multi-Nemu gate).
     Released,
     /// R4″: a shutdown came while the hand-back waited for the Runtime's own automatic emulator
-    /// start alone. The pause is kept (stage `paused`, its fact unchanged) and the request fails
-    /// with `scheduling_pause_kept_at_shutdown`; the next start restores it.
+    /// start alone, or (fix round 3) found nothing in the way any more on an instance outside
+    /// the multi-Nemu gate, whose session the hand-back would still close. The pause is kept
+    /// (stage `paused`, its fact unchanged) and the request fails with
+    /// `scheduling_pause_kept_at_shutdown`; the next start restores it.
     KeptAtShutdown,
 }
 
@@ -3378,8 +3381,12 @@ impl HostShared {
     /// a Start), here and at every grant of a dedicated instance lease. A shutdown ends the
     /// hand-back as `PauseRelease::KeptAtShutdown` (R4″) when what is in the way at that moment
     /// (`release_obstacles`, read again for it: fix round 2) is that automatic claim alone: the
-    /// caller does not lift the pause; anything else in the way, or nothing, answers
-    /// `scheduling_pause_release_interrupted` as before. The gate stays closed throughout. The
+    /// caller does not lift the pause. Fix round 3: with nothing in the way any more and no
+    /// refusing queued entry it lifts nothing either: `PauseRelease::Released`, or, outside the
+    /// multi-Nemu gate, where the hand-back would still close the session, `KeptAtShutdown`.
+    /// Anything else in the way (a person's or a client's work, an operator's entry, an owed
+    /// reset) answers `scheduling_pause_release_interrupted` as before. The gate stays closed
+    /// throughout. The
     /// device session then stays open (Workflow #191 H: a pause is not a disconnect). Only an
     /// instance outside the multi-Nemu gate (`keeps_device_session`) closes it, through
     /// `close_retained_instance_while_guarded` without reusing a lease: the dedicated close
@@ -3417,11 +3424,21 @@ impl HostShared {
                 // reading of before, which a change of holder since would turn round, and right
                 // before the first round too); outside the admission guard, which a Start holds
                 // through its readiness wait.
-                if self
-                    .release_obstacles(instance_alias, instance_id)?
-                    .automatic_alone()
-                {
+                let obstacles = self.release_obstacles(instance_alias, instance_id)?;
+                if obstacles.automatic_alone() {
                     return Ok(PauseRelease::KeptAtShutdown);
+                }
+                // Fix round 3 (R4″ completed, the third review's point: the claim can let go
+                // after the check before, inside its 20 ms sleep): nothing in the way any more
+                // and no refusing queued entry lifts nothing either. The hand-back ends as it
+                // would have: `released`, or, outside the multi-Nemu gate, where it would still
+                // close the instance's session, kept.
+                if !obstacles.queue_waiting && obstacles.none_left() {
+                    return Ok(if self.keeps_device_session(instance_id)? {
+                        PauseRelease::Released
+                    } else {
+                        PauseRelease::KeptAtShutdown
+                    });
                 }
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(
                     HostCode::SchedulingPauseReleaseInterrupted,

@@ -61,7 +61,10 @@
 //! emulator control waiting on the instance (superseded: a release and a report line, no failure
 //! pair), and ends without action on an instance that already runs. The Start is H-4's start path
 //! on the claim's own key; its `command.received` is written only then, so a claim that yields
-//! leaves no open command. A passing preparation hands the key to the startup package through the
+//! leaves no open command (#480 PG-1 fix round 3: only once the last ask of the hold, with the
+//! instance's admission guard in hand, has passed, just before the provider's Start, so a claim a
+//! pause held anywhere before leaves no `command.*` record at all). A passing preparation hands
+//! the key to the startup package through the
 //! gate, a failing one to the ladder it admitted; emu-watch: under a scheduling pause the startup
 //! package's claim waits queued as a gated entry and runs after the resume (#411 A71: so does an
 //! operator's start's; W2-B, 0.12.26: `host.idle_state` keeps it, so a restart before the resume
@@ -92,10 +95,11 @@
 //! tick of the hold and so in the last check just before the Start or the recognition, (#480
 //! PG-1 fix round 1) once more after the claim's last status read (`held_after_last_read`), and
 //! (fix round 2) once more with the instance's admission guard in hand: as the last thing before
-//! the provider's Start (`drive_control_phase`, which then closes the start's `command.received`
-//! with `command.rejected` and one `runtime.failed` of `emulator_autostart_skipped`), and before
-//! the recognition's preparation reads the status and binds (`prepare_recognized_instance`,
-//! which records nothing): a claim queued before the pause began ends
+//! the provider's Start (`drive_configured_control`, fix round 3: before the start's
+//! `command.received`, which is written only after that ask, so a start held there records no
+//! `command.*` and no `runtime.failed`), and before the recognition's preparation reads the status
+//! and binds (`prepare_recognized_instance`, which records nothing): a claim queued before the
+//! pause began ends
 //! there, releases its key and starts, binds and prepares nothing, its skip recorded the same way
 //! (an idle wake's with `idle_action` `stop_emulator`, and the wake stays owed,
 //! `withhold_idle_wake`; the watch's with its `watch_kind`, and the request it counted against the
@@ -332,7 +336,8 @@ pub(super) enum KeyedStart {
     Driven,
     /// `automatic_start_hold`, asked once more with the instance's admission guard in hand (just
     /// before the provider's Start, or before the recognition's preparation reads the status and
-    /// binds), held it: nothing was started or bound, and the claim ends as held
+    /// binds), held it: nothing was started, bound or recorded (fix round 3: a start's
+    /// `command.received` comes only after that ask), and the claim ends as held
     /// (`HoldEnd::Held`) on its key, given back here.
     Held {
         key: Box<HostKey>,

@@ -15,7 +15,10 @@
 // queued autostart claim refuses neither the hand-back nor its dedicated close lease; a claim asks
 // the hold once more after its last status read. Fix round 2: a shutdown keeps the pause only when
 // the automatic claim alone is in the way at that moment, whoever held the key at the check
-// before. On the scripted emulator (HOST-I1), a scripted
+// before. Fix round 3: a shutdown that finds nothing in the way any more lifts nothing either, and
+// a configured start's `command.received` is written only after its last ask of the hold, so a
+// start a pause held while it waited for the instance's admission guard records no command. On the
+// scripted emulator (HOST-I1), a scripted
 // connectivity status and, where time moves, the Runtime's manual clock, with the S6c and IDLE-1P
 // helpers. Every wait returns as soon as what it waits for is polled, reported, recorded or seen;
 // `GATE_WAIT` only bounds a broken run.
@@ -35,8 +38,8 @@ use super::instance_workers::{all_events, phases, wait_until};
 use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    FactScalar, FactValue, InstancePauseStage, RuntimeLifecyclePhase, RuntimePayload,
-    SchedulingPauseReason, SchedulingPauseScope,
+    FactScalar, FactValue, InstanceActivityKind, InstancePauseStage, RuntimeLifecyclePhase,
+    RuntimePayload, SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_scheduler::ClaimKind;
@@ -1638,4 +1641,387 @@ fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pau
     };
     assert!(names_instance(record, FIRST), "{record:?}");
     host.close().expect("close the stopping host");
+}
+
+// Fix round 3, R4″ completed (the third review's sequence: the claim lets go after the check
+// before, and the shutdown's own reading finds nothing): as in the second direction above, a
+// restart claim waits queued behind a client's lease and the hand-back of a person's pause meets
+// the client's lease. Before it checks again the client lets go, the queue grants the claim, which
+// meets the pause at its first tick and ends there without a Start, and only then is the Runtime
+// asked to stop. Nothing is in the way at the shutdown, so the pause is not lifted: inside the
+// multi-Nemu gate the hand-back ends as it would have, the pause answers success, `released`, and
+// its one record of the held pauses names the instance; the next start restores it. (On fix round
+// 2's code that shutdown answered `scheduling_pause_release_interrupted` and lifted the pause.)
+#[test]
+fn pg1_fix3_r4b_a_shutdown_that_finds_nothing_in_the_way_keeps_the_pause() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(
+        &root,
+        &[(FIRST, instance, &state)],
+        read.clone(),
+        |config| config.with_runtime_clock(clock.clone()),
+    );
+    let (asked_tx, asked_rx) = mpsc::channel::<()>();
+    let (taken_tx, taken_rx) = mpsc::channel::<()>();
+    host.run_before_autostart_claim_request_for_test(Box::new(move || {
+        let _ = asked_tx.send(());
+        let _ = taken_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim request's hook");
+    host.start_emulator_watch().expect("the watch starts");
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    asked_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the watch asks for its restart claim");
+    let holder = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_holder_id()
+        .expect("holder id");
+    let acquired = send(&host, RuntimeOperation::acquire_lease(FIRST, holder), 951);
+    let Some(RuntimeResult::LeaseGranted { token }) = acquired.result() else {
+        panic!("the client's lease: {acquired:?}");
+    };
+    let token = token.clone();
+    taken_tx.send(()).expect("the watch goes on");
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the poll");
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (Some(ClaimKind::ClientLease), vec![ClaimKind::Autostart]),
+        "the restart claim waits behind the client's lease"
+    );
+    // The hand-back's first check that finds the key held waits until the claim has ended.
+    let (met_tx, met_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_when_pause_release_meets_a_lease_for_test(Box::new(move || {
+        let _ = met_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the hand-back's hook");
+    let before = head(&host);
+    let pause_request = instance_pause(FIRST);
+
+    let kept = thread::scope(|scope| {
+        let pausing = scope.spawn(|| {
+            host.process_request_for_test(
+                &pause_request,
+                ConnectionId::new(952).expect("connection"),
+            )
+        });
+        met_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back meets the client's lease");
+        completed(&send(&host, RuntimeOperation::ReleaseLease { token }, 951));
+        await_reports(&host, skip_reported);
+        wait_until("the claim lets the key go", || {
+            host.instance_claims_for_test(FIRST).expect("claims") == (None, vec![])
+        });
+        host.request_shutdown_for_test()
+            .expect("the Runtime is asked to stop");
+        go_tx.send(()).expect("the hand-back goes on");
+        pausing
+            .join()
+            .expect("the pause's thread")
+            .expect("the pause's receipt")
+    });
+
+    completed(&kept);
+    assert_eq!(
+        pause_stage(&host, FIRST),
+        Some(InstancePauseStage::Released),
+        "the pause is not lifted: its hand-back ended as it would have"
+    );
+    let records = pause_records_after(&host, before);
+    let [record] = &records[..] else {
+        panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
+    };
+    assert!(names_instance(record, FIRST), "{record:?}");
+    let skips = paused_skips(&host, instance);
+    let [skip] = &skips[..] else {
+        panic!("one skip, the claim's at its grant: {skips:?}");
+    };
+    assert_skip(skip, Some("restart"), None, INSTANCE_PAUSED);
+    assert_eq!(control_starts(&state), 0, "no Start");
+    host.close().expect("close the stopping host");
+
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| config);
+    assert_eq!(
+        pause_stage(&host, FIRST),
+        Some(InstancePauseStage::Released),
+        "the next start restores the pause"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Fix round 3: the watch's restart claim of a configured instance found stopped, stopped in its
+// Start's wait for the instance's admission guard. The claim makes its last status read; before it
+// asks the hold once more (`run_after_autostart_last_read_for_test`) the test's thread takes that
+// guard (`instance_admission_for_test`), and the claim goes on: its Start begins on its key (its
+// activity shows) and waits for the guard, which the returned guard holds. No pause holds the
+// instance yet.
+fn start_waiting_for_the_guard<'guard>(
+    host: &RuntimeHost,
+    state: &FakeState,
+    clock: &ManualRuntimeClock,
+    admission: &'guard std::sync::Mutex<()>,
+) -> std::sync::MutexGuard<'guard, ()> {
+    let (read_tx, read_rx) = mpsc::channel::<()>();
+    let (taken_tx, taken_rx) = mpsc::channel::<()>();
+    host.run_after_autostart_last_read_for_test(Box::new(move || {
+        let _ = read_tx.send(());
+        let _ = taken_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim's hook");
+    host.start_emulator_watch().expect("the watch starts");
+    // The poll's read, then the claim's read just before its Start.
+    state.emulator.script_read(stopped_state());
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    read_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the claim read the status before its Start");
+    let taken = admission.lock().expect("the instance's admission guard");
+    taken_tx.send(()).expect("the claim goes on");
+    wait_until("the claim's Start waits for the admission guard", || {
+        host.instance_activities_for_test(FIRST)
+            .expect("the activities")
+            .contains(&(InstanceActivityKind::EmulatorControl, true))
+    });
+    taken
+}
+
+// Fix round 3: what the restart claim requested after `before` left once the hold held it with
+// the instance's admission guard in hand: no Start and no binding; under its request no command
+// record and no failure, its key granted once and released; one skip (`watch_kind` `restart`,
+// `word`); no claim left on the instance.
+fn assert_held_before_its_command(
+    host: &RuntimeHost,
+    state: &FakeState,
+    instance: InstanceId,
+    before: u64,
+    word: &str,
+) {
+    let lines = await_reports(host, skip_reported);
+    assert_eq!(reported(&lines, "emulator_autostart_started"), 0);
+    assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
+    assert_eq!(control_starts(state), 0, "no Start");
+    assert_eq!(
+        recorded_after(host, instance, EventType::RuntimeInstanceBound, before),
+        0,
+        "nothing bound"
+    );
+    let [claim] = claims_after(host, instance, before)[..] else {
+        panic!("one restart claim");
+    };
+    let claim = of_request(host, claim);
+    assert_eq!(count(&claim, EventType::LeaseGranted), 1, "{claim:#?}");
+    assert_eq!(count(&claim, EventType::LeaseReleased), 1, "{claim:#?}");
+    for event_type in [
+        EventType::CommandReceived,
+        EventType::CommandRejected,
+        EventType::RuntimeFailed,
+    ] {
+        assert_eq!(count(&claim, event_type), 0, "{event_type:?}: {claim:#?}");
+    }
+    let skips = paused_skips(host, instance);
+    let [skip] = &skips[..] else {
+        panic!("one skip, the claim's with the guard in hand: {skips:?}");
+    };
+    assert_skip(skip, Some("restart"), None, word);
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (None, vec![]),
+        "the key is released"
+    );
+}
+
+// Fix round 3, the window before the Start pinned at last (the coordinator's ruling: a start that
+// a pause stopped was never a command; the third review's way): the watch's restart claim of a
+// configured instance waits, its Start begun, for the instance's admission guard, which the test's
+// thread holds (`start_waiting_for_the_guard`), and a person presses "pause all" meanwhile. Once
+// the guard is let go the claim asks the hold with the guard in hand, before its
+// `command.received`: no provider Start, no `runtime.instance_bound`, under the claim's request no
+// `command.received`, `command.rejected` or `runtime.failed`, its key released, and one skip
+// (`watch_kind` `restart`, `global_paused`). (On fix round 2's code the claim wrote its
+// `command.received` before that wait and closed it with `command.rejected` and a
+// `runtime.failed`.)
+#[test]
+fn pg1_fix3_a_global_pause_while_the_start_waits_for_the_guard_leaves_no_command() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
+    let admission = host
+        .instance_admission_for_test(FIRST)
+        .expect("the instance's admission guard");
+    let before = head(&host);
+    let taken = start_waiting_for_the_guard(&host, &state, &clock, &admission);
+
+    completed(&pause(&host, SchedulingPauseScope::Global, 961));
+    drop(taken);
+
+    assert_held_before_its_command(&host, &state, instance, before, GLOBAL_PAUSED);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Fix round 3, the same with the instance's own pause: while the restart claim's Start waits for
+// the admission guard the test's thread holds, a person pauses the instance, and the pause's
+// hand-back comes to wait for that guard too. Once it is let go the claim asks the hold with the
+// guard in hand and leaves what the test above pins (its skip `instance_paused`), and the pause
+// stands: success, `released`, its one record of the held pauses naming the instance.
+#[test]
+fn pg1_fix3_an_instance_pause_while_the_start_waits_for_the_guard_leaves_no_command() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
+    let admission = host
+        .instance_admission_for_test(FIRST)
+        .expect("the instance's admission guard");
+    let before = head(&host);
+    let taken = start_waiting_for_the_guard(&host, &state, &clock, &admission);
+    let pause_request = instance_pause(FIRST);
+
+    let paused = thread::scope(|scope| {
+        let pausing = scope.spawn(|| {
+            host.process_request_for_test(
+                &pause_request,
+                ConnectionId::new(972).expect("connection"),
+            )
+        });
+        // The pause holds the instance; its hand-back comes to wait for the guard.
+        wait_until("the pause's hand-back", || {
+            pause_stage(&host, FIRST) == Some(InstancePauseStage::Paused)
+        });
+        drop(taken);
+        pausing
+            .join()
+            .expect("the pause's thread")
+            .expect("the pause's receipt")
+    });
+
+    completed(&paused);
+    assert_eq!(
+        pause_stage(&host, FIRST),
+        Some(InstancePauseStage::Released),
+        "the pause stands"
+    );
+    let records = pause_records_after(&host, before);
+    let [record] = &records[..] else {
+        panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
+    };
+    assert!(names_instance(record, FIRST), "{record:?}");
+    assert_held_before_its_command(&host, &state, instance, before, INSTANCE_PAUSED);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Fix round 3, the same on the recognition path: the watch's recognition claim of a pending
+// instance it read running makes its last status read; before it asks the hold once more the
+// test's thread takes the instance's admission guard, and the claim goes on: it renews its key
+// and waits for that guard before its preparation. "Pause all" is pressed meanwhile. Once the
+// guard is let go the preparation asks the hold with the guard in hand: nothing is read, bound or
+// prepared (the endpoint stays pending, no `runtime.instance_bound`, no emulator control), under
+// the claim's request no `command.*` and no `runtime.failed` record, its key released, and one
+// skip (`watch_kind` `recognize`, `global_paused`), what a recognition's skip records.
+#[test]
+fn pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let state = pending_state();
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(FIRST, instance, Arc::clone(&state))),
+    )
+    .expect("runtime host started before its emulator");
+    let admission = host
+        .instance_admission_for_test(FIRST)
+        .expect("the instance's admission guard");
+    let (read_tx, read_rx) = mpsc::channel::<()>();
+    let (taken_tx, taken_rx) = mpsc::channel::<()>();
+    host.run_after_autostart_last_read_for_test(Box::new(move || {
+        let _ = read_tx.send(());
+        let _ = taken_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim's hook");
+    let before = head(&host);
+    host.start_emulator_watch().expect("the watch starts");
+    // The poll's read, then the claim's read just before its recognition.
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    clock.advance(WATCH_INTERVAL_MS);
+    read_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the claim read the status before its recognition");
+    let [claim] = claims_after(&host, instance, before)[..] else {
+        panic!("one recognition claim");
+    };
+    let renewed = count(&of_request(&host, claim), EventType::LeaseRenewed);
+    let taken = admission.lock().expect("the instance's admission guard");
+    taken_tx.send(()).expect("the claim goes on");
+    wait_until(
+        "the recognition renews its key, then waits for the guard",
+        || count(&of_request(&host, claim), EventType::LeaseRenewed) > renewed,
+    );
+
+    completed(&pause(&host, SchedulingPauseScope::Global, 981));
+    drop(taken);
+
+    let lines = await_reports(&host, skip_reported);
+    assert_eq!(reported(&lines, "emulator_autostart_preparation_failed"), 0);
+    assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
+    assert_eq!(
+        state.emulator.bound_port(),
+        None,
+        "the endpoint stays pending"
+    );
+    assert_eq!(
+        recorded_after(&host, instance, EventType::RuntimeInstanceBound, before),
+        0
+    );
+    assert!(
+        control_calls(&state).is_empty(),
+        "nothing started or stopped"
+    );
+    let claim = of_request(&host, claim);
+    assert_eq!(count(&claim, EventType::LeaseReleased), 1, "{claim:#?}");
+    for event_type in [
+        EventType::CommandReceived,
+        EventType::CommandRejected,
+        EventType::RuntimeFailed,
+    ] {
+        assert_eq!(count(&claim, event_type), 0, "{event_type:?}: {claim:#?}");
+    }
+    let skips = paused_skips(&host, instance);
+    let [skip] = &skips[..] else {
+        panic!("one skip, the recognition's with the guard in hand: {skips:?}");
+    };
+    assert_skip(skip, Some("recognize"), None, GLOBAL_PAUSED);
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (None, vec![]),
+        "the key is released"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
 }
