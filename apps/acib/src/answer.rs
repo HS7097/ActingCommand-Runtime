@@ -8,7 +8,7 @@
 //! text that could carry such a value to the error's kind.
 
 use crate::redact;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 /// The command a line answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -18,6 +18,7 @@ pub enum CommandName {
     Info,
     Services,
     Images,
+    Apps,
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
@@ -25,7 +26,7 @@ pub enum CommandName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
-    /// The command line is not one of the four commands with their options.
+    /// The command line is not one of the five commands with their options.
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
@@ -59,8 +60,8 @@ pub enum Problem {
     RsdUnreachable,
     /// The remote service discovery handshake failed.
     RsdHandshakeFailed,
-    /// The image mounter's lookup failed other than by finding no image.
-    ImageLookupFailed,
+    /// The installation proxy did not answer the list of the user's applications.
+    AppsLookupFailed,
 }
 
 /// A refusal or failure: the word, and the library's error text where the library gave one.
@@ -158,22 +159,215 @@ impl Info {
     }
 }
 
-/// `acib services --device <n>`: the remote services' names, sorted, and their count.
+/// One remote service of the handshake: its name, the port it is served on inside the tunnel
+/// and the entitlement the handshake names for it (which tells whether it needs the trusted
+/// tunnel or is served in the untrusted one too).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceEntry {
+    pub name: String,
+    pub port: u16,
+    pub entitlement: String,
+}
+
+/// `acib services --device <n>`: the remote services, sorted by name, and their count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Services {
     pub command: CommandName,
     pub device: u32,
     pub count: usize,
-    pub services: Vec<String>,
+    pub services: Vec<ServiceEntry>,
 }
 
-/// `acib images --device <n>`: whether a developer image is mounted, and its kind.
+/// Whether a developer image is mounted, as far as the image mounter's answers tell: `true`,
+/// `false` only when the listing of what is mounted answered an empty list, else `"unknown"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mounted {
+    Yes,
+    No,
+    Unknown,
+}
+
+impl Serialize for Mounted {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Yes => serializer.serialize_bool(true),
+            Self::No => serializer.serialize_bool(false),
+            Self::Unknown => serializer.serialize_str("unknown"),
+        }
+    }
+}
+
+impl Mounted {
+    /// The judgement of the queries: an image found by a lookup or a listing that is not empty
+    /// is `Yes`; an empty listing is `No` unless a lookup found an image (`Unknown`, the two
+    /// answers disagree); without a listing and without a found image it is `Unknown`.
+    pub fn judged(queries: &[ImageQuery]) -> Self {
+        let found = queries
+            .iter()
+            .any(|query| query.answer == ImageAnswer::Found);
+        let listed = queries
+            .iter()
+            .find(|query| query.answer == ImageAnswer::Listed)
+            .and_then(|query| query.listed.as_ref())
+            .map(Vec::len);
+        match (listed, found) {
+            (Some(0), false) => Self::No,
+            (Some(0), true) | (None, false) => Self::Unknown,
+            (Some(_), _) | (None, true) => Self::Yes,
+        }
+    }
+}
+
+/// A read-only query of the image mounter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageQueryName {
+    /// The listing of what is mounted (`CopyDevices`).
+    CopyDevices,
+    /// The lookup of the image of one type (`LookupImage`).
+    LookupImage,
+}
+
+/// What a query answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageAnswer {
+    /// The listing answered its list (`listed`, empty when nothing is mounted).
+    Listed,
+    /// The lookup answered a signature (never shown).
+    Found,
+    /// The lookup answered without a signature.
+    NotFound,
+    /// The query failed; `error_kind` is the library's error kind.
+    Failed,
+}
+
+/// One entry of the listing: the names of its members, sorted, when it is a dictionary (`null`
+/// when it is not); no value of a member is shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedImage {
+    pub members: Option<Vec<String>>,
+}
+
+impl ListedImage {
+    /// The entry whose members are named `members` (`None` for an entry that is no dictionary).
+    pub fn of<'a, I>(members: Option<I>) -> Self
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        Self {
+            members: members.map(|names| {
+                let mut shown: Vec<String> = names.into_iter().map(redact::shown_name).collect();
+                shown.sort();
+                shown
+            }),
+        }
+    }
+}
+
+/// One query of `acib images` and its answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImageQuery {
+    pub query: ImageQueryName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_type: Option<String>,
+    pub answer: ImageAnswer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listed: Option<Vec<ListedImage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+}
+
+impl ImageQuery {
+    /// The listing's answer.
+    pub fn listing(listed: Vec<ListedImage>) -> Self {
+        Self {
+            query: ImageQueryName::CopyDevices,
+            image_type: None,
+            answer: ImageAnswer::Listed,
+            listed: Some(listed),
+            error_kind: None,
+        }
+    }
+
+    /// A lookup's answer for `image_type`.
+    pub fn lookup(image_type: &str, found: bool) -> Self {
+        Self {
+            query: ImageQueryName::LookupImage,
+            image_type: Some(image_type.to_owned()),
+            answer: if found {
+                ImageAnswer::Found
+            } else {
+                ImageAnswer::NotFound
+            },
+            listed: None,
+            error_kind: None,
+        }
+    }
+
+    /// A query that failed: the library's error kind alone, never its text.
+    pub fn failed<E: std::fmt::Debug>(
+        query: ImageQueryName,
+        image_type: Option<&str>,
+        error: &E,
+    ) -> Self {
+        Self {
+            query,
+            image_type: image_type.map(str::to_owned),
+            answer: ImageAnswer::Failed,
+            listed: None,
+            error_kind: Some(redact::kind_of(&format!("{error:?}"))),
+        }
+    }
+}
+
+/// `acib images --device <n>`: what each read-only query of the image mounter answered, and
+/// the judgement `mounted`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Images {
     pub command: CommandName,
     pub device: u32,
-    pub mounted: bool,
-    pub kind: Option<String>,
+    pub mounted: Mounted,
+    pub queries: Vec<ImageQuery>,
+}
+
+/// `acib apps --device <n> --contains <text>`: the bundle identifiers of the user's
+/// applications that hold the text (without regard to case), sorted, and how many user
+/// applications there are. No other application is named, and nothing else of a record shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Apps {
+    pub command: CommandName,
+    pub device: u32,
+    pub contains: String,
+    pub matching: Vec<String>,
+    pub user_applications: usize,
+}
+
+impl Apps {
+    /// The answer for the bundle identifiers of all user applications.
+    pub fn of<'a>(
+        device: u32,
+        contains: &str,
+        identifiers: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let wanted = contains.to_lowercase();
+        let mut user_applications = 0;
+        let mut matching = Vec::new();
+        for identifier in identifiers {
+            user_applications += 1;
+            if identifier.to_lowercase().contains(wanted.as_str()) {
+                matching.push(redact::shown_bundle_identifier(identifier));
+            }
+        }
+        matching.sort();
+        Self {
+            command: CommandName::Apps,
+            device,
+            contains: contains.to_owned(),
+            matching,
+            user_applications,
+        }
+    }
 }
 
 /// A refused or failed command.
@@ -196,6 +390,7 @@ pub enum Line {
     Info(Info),
     Services(Services),
     Images(Images),
+    Apps(Apps),
     Refused(Refused),
 }
 
@@ -215,7 +410,7 @@ impl Line {
         match self {
             Self::Refused(_) => false,
             Self::Info(info) => info.problem.is_none(),
-            Self::Devices(_) | Self::Services(_) | Self::Images(_) => true,
+            Self::Devices(_) | Self::Services(_) | Self::Images(_) | Self::Apps(_) => true,
         }
     }
 }
@@ -243,6 +438,22 @@ mod tests {
             problem: None,
             error: None,
         }
+    }
+
+    /// Errors of made-up kinds, as the library's `Debug` form starts with its kind.
+    #[derive(Debug)]
+    enum FakeError {
+        UnexpectedResponse,
+        Socket,
+    }
+
+    fn images(queries: Vec<ImageQuery>) -> Line {
+        Line::Images(Images {
+            command: CommandName::Images,
+            device: 3,
+            mounted: Mounted::judged(&queries),
+            queries,
+        })
     }
 
     /// One line of every shape the program prints.
@@ -324,29 +535,77 @@ mod tests {
                     command: CommandName::Services,
                     device: 3,
                     count: 2,
-                    services: vec!["com.example.one".to_owned(), "com.example.two".to_owned()],
+                    services: vec![
+                        ServiceEntry {
+                            name: "com.example.one".to_owned(),
+                            port: 49152,
+                            entitlement: "com.example.entitlement.trusted".to_owned(),
+                        },
+                        ServiceEntry {
+                            name: "com.example.two".to_owned(),
+                            port: 58783,
+                            entitlement: "com.example.entitlement.untrusted".to_owned(),
+                        },
+                    ],
                 }),
-                r#"{"command":"services","device":3,"count":2,"services":["com.example.one","com.example.two"]}"#,
+                r#"{"command":"services","device":3,"count":2,"services":[{"name":"com.example.one","port":49152,"entitlement":"com.example.entitlement.trusted"},{"name":"com.example.two","port":58783,"entitlement":"com.example.entitlement.untrusted"}]}"#,
                 true,
             ),
             (
-                Line::Images(Images {
-                    command: CommandName::Images,
-                    device: 3,
-                    mounted: true,
-                    kind: Some("Personalized".to_owned()),
-                }),
-                r#"{"command":"images","device":3,"mounted":true,"kind":"Personalized"}"#,
+                images(vec![
+                    ImageQuery::listing(vec![
+                        ListedImage::of(Some(vec!["ImageType", "ImageSignature"])),
+                        ListedImage::of(None::<Vec<&str>>),
+                    ]),
+                    ImageQuery::lookup("Personalized", true),
+                    ImageQuery::failed(
+                        ImageQueryName::LookupImage,
+                        Some("Developer"),
+                        &FakeError::Socket,
+                    ),
+                ]),
+                r#"{"command":"images","device":3,"mounted":true,"queries":[{"query":"copy_devices","answer":"listed","listed":[{"members":["ImageSignature","ImageType"]},{"members":null}]},{"query":"lookup_image","image_type":"Personalized","answer":"found"},{"query":"lookup_image","image_type":"Developer","answer":"failed","error_kind":"Socket"}]}"#,
                 true,
             ),
             (
-                Line::Images(Images {
-                    command: CommandName::Images,
-                    device: 3,
-                    mounted: false,
-                    kind: None,
-                }),
-                r#"{"command":"images","device":3,"mounted":false,"kind":null}"#,
+                images(vec![
+                    ImageQuery::listing(Vec::new()),
+                    ImageQuery::lookup("Personalized", false),
+                    ImageQuery::lookup("Developer", false),
+                ]),
+                r#"{"command":"images","device":3,"mounted":false,"queries":[{"query":"copy_devices","answer":"listed","listed":[]},{"query":"lookup_image","image_type":"Personalized","answer":"not_found"},{"query":"lookup_image","image_type":"Developer","answer":"not_found"}]}"#,
+                true,
+            ),
+            (
+                images(vec![
+                    ImageQuery::failed(
+                        ImageQueryName::CopyDevices,
+                        None,
+                        &FakeError::UnexpectedResponse,
+                    ),
+                    ImageQuery::lookup("Personalized", false),
+                    ImageQuery::lookup("Developer", false),
+                ]),
+                r#"{"command":"images","device":3,"mounted":"unknown","queries":[{"query":"copy_devices","answer":"failed","error_kind":"UnexpectedResponse"},{"query":"lookup_image","image_type":"Personalized","answer":"not_found"},{"query":"lookup_image","image_type":"Developer","answer":"not_found"}]}"#,
+                true,
+            ),
+            (
+                Line::Apps(Apps::of(
+                    3,
+                    "Game",
+                    [
+                        "com.example.GameOne",
+                        "com.example.tool",
+                        "com.example.game-two",
+                        "com.example.endgame_x",
+                    ],
+                )),
+                r#"{"command":"apps","device":3,"contains":"Game","matching":["com.example.GameOne","com.example.game-two","withheld"],"user_applications":4}"#,
+                true,
+            ),
+            (
+                Line::Apps(Apps::of(3, "absent", ["com.example.one"])),
+                r#"{"command":"apps","device":3,"contains":"absent","matching":[],"user_applications":1}"#,
                 true,
             ),
             (
@@ -368,6 +627,18 @@ mod tests {
                     Failure::own(Problem::NotPaired),
                 ),
                 r#"{"command":"images","device":3,"problem":"not_paired"}"#,
+                false,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Apps),
+                    Some(3),
+                    Failure {
+                        problem: Problem::AppsLookupFailed,
+                        error: Some("device socket io failed".to_owned()),
+                    },
+                ),
+                r#"{"command":"apps","device":3,"problem":"apps_lookup_failed","error":"device socket io failed"}"#,
                 false,
             ),
             (
@@ -402,24 +673,36 @@ mod tests {
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
+            "answer",
             "build_version",
             "command",
             "connection",
+            "contains",
             "count",
             "developer_mode",
             "device",
             "device_class",
             "devices",
+            "entitlement",
             "error",
-            "kind",
+            "error_kind",
+            "image_type",
+            "listed",
+            "matching",
+            "members",
             "mounted",
+            "name",
             "paired",
             "password_protected",
+            "port",
             "problem",
             "product_type",
             "product_version",
+            "queries",
+            "query",
             "refused",
             "services",
+            "user_applications",
             "value",
         ];
         fn collect(value: &serde_json::Value, found: &mut BTreeSet<String>) {
@@ -470,7 +753,7 @@ mod tests {
             (Problem::TunnelFailed, "tunnel_failed"),
             (Problem::RsdUnreachable, "rsd_unreachable"),
             (Problem::RsdHandshakeFailed, "rsd_handshake_failed"),
-            (Problem::ImageLookupFailed, "image_lookup_failed"),
+            (Problem::AppsLookupFailed, "apps_lookup_failed"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -515,6 +798,82 @@ mod tests {
                 problem: Problem::PairRecordUnreadable,
                 error: Some("Carrying".to_owned()),
             }
+        );
+    }
+
+    /// `mounted` is `false` only on an empty listing (and no image found), `true` on a listing
+    /// with an entry or a found image, `"unknown"` otherwise.
+    #[test]
+    fn mounted_is_false_only_on_an_empty_listing_and_unknown_without_one() {
+        let entry = || ListedImage::of(Some(vec!["ImageType"]));
+        let failed_listing =
+            || ImageQuery::failed(ImageQueryName::CopyDevices, None, &FakeError::Socket);
+        let failed_lookup = || {
+            ImageQuery::failed(
+                ImageQueryName::LookupImage,
+                Some("Personalized"),
+                &FakeError::UnexpectedResponse,
+            )
+        };
+        let cases = [
+            (
+                vec![ImageQuery::listing(Vec::new())],
+                Mounted::No,
+                "an empty listing",
+            ),
+            (
+                vec![
+                    ImageQuery::listing(Vec::new()),
+                    ImageQuery::lookup("Personalized", false),
+                    failed_lookup(),
+                ],
+                Mounted::No,
+                "an empty listing, nothing found",
+            ),
+            (
+                vec![
+                    ImageQuery::listing(Vec::new()),
+                    ImageQuery::lookup("Personalized", true),
+                ],
+                Mounted::Unknown,
+                "an empty listing and a found image disagree",
+            ),
+            (
+                vec![
+                    ImageQuery::listing(vec![entry()]),
+                    ImageQuery::lookup("Personalized", false),
+                ],
+                Mounted::Yes,
+                "a listed entry",
+            ),
+            (
+                vec![failed_listing(), ImageQuery::lookup("Developer", true)],
+                Mounted::Yes,
+                "a found image without a listing",
+            ),
+            (
+                vec![
+                    failed_listing(),
+                    ImageQuery::lookup("Personalized", false),
+                    ImageQuery::lookup("Developer", false),
+                ],
+                Mounted::Unknown,
+                "lookups that found nothing, without a listing",
+            ),
+            (
+                vec![failed_listing(), failed_lookup()],
+                Mounted::Unknown,
+                "every query failed",
+            ),
+        ];
+        for (queries, expected, case) in cases {
+            assert_eq!(Mounted::judged(&queries), expected, "{case}");
+        }
+        assert_eq!(serde_json::to_string(&Mounted::Yes).unwrap(), "true");
+        assert_eq!(serde_json::to_string(&Mounted::No).unwrap(), "false");
+        assert_eq!(
+            serde_json::to_string(&Mounted::Unknown).unwrap(),
+            r#""unknown""#
         );
     }
 }

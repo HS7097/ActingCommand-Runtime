@@ -2,7 +2,8 @@ name: CI
 
 # Test plan v2.2 §1 (Batch 0a): one lint job, seven module test jobs and the ubuntu summary job
 # `gate`, whose check name stays `rust`. Each module job compiles its selection once
-# (`--no-run`), then runs it with the same selection and features.
+# (`--no-run`; apps once per call of its Test step), then runs it with the same selection and
+# features.
 #
 # One-line forms (`gate_ci_jobs_cover_every_member` in
 # tools/actinglab-architecture/tests/gate_map.rs reads them without a YAML parser):
@@ -531,16 +532,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "actinglab build failed with exit code $LASTEXITCODE"
           }
+      # Built call by call, as the Test step runs them: for a call with a target filter cargo can
+      # build other units than for the whole selection, so one build of the whole selection can
+      # lack the binaries a call runs. Workflow #479 ACIB-0: once acib (a bin target only, with
+      # dependencies no other member has) joined the selection, the `--test '*'` call built
+      # every integration test anew under other names (run 44039549246: each was "missing from
+      # the test build table"). One table per call, both read by the attribution.
       - name: Build tests
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
           $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
-          $messages = Join-Path $build 'build.jsonl'
-          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
+          $messages = Join-Path $build 'build-bins.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection --bins > $messages
           if ($LASTEXITCODE -ne 0) {
-            throw "test build failed with exit code $LASTEXITCODE"
+            throw "test build (--bins) failed with exit code $LASTEXITCODE"
+          }
+          $messages = Join-Path $build 'build-integration.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection --test '*' > $messages
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build (--test '*') failed with exit code $LASTEXITCODE"
           }
       # The dev test profile (test plan §4 #2 retired opt-level=3). Call 1 runs the binaries' unit
       # tests in parallel; call 2 runs every integration test (process, c4_process,

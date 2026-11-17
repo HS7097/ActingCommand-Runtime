@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The four commands against the device, through the `idevice` library (board #479, ACIB-0).
+//! The five commands against the device, through the `idevice` library (board #479, ACIB-0).
 //!
 //! Everything here only reads. usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
@@ -10,14 +10,15 @@
 //! printed with its `Debug` form: only the values the answer types name leave this module.
 
 use crate::answer::{
-    CommandName, DeviceEntry, Devices, Failure, Images, Info, Line, Link, Problem, Reading,
-    Services,
+    Apps, CommandName, DeviceEntry, Devices, Failure, ImageQuery, ImageQueryName, Images, Info,
+    Line, Link, ListedImage, Mounted, Problem, Reading, ServiceEntry, Services,
 };
 use crate::args::Request;
 use crate::redact;
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, UsbmuxdProvider};
 use idevice::services::core_device_proxy::CoreDeviceProxy;
+use idevice::services::installation_proxy::InstallationProxyClient;
 use idevice::services::lockdown::LockdownClient;
 use idevice::services::mobile_image_mounter::ImageMounter;
 use idevice::services::rsd::RsdHandshake;
@@ -29,20 +30,26 @@ use std::borrow::Cow;
 const LABEL: &str = "acib";
 /// The lockdown domain of the developer mode status.
 const AMFI_DOMAIN: &str = "com.apple.security.mac.amfi";
-/// The image types the image mounter is asked for, in this order: the personalized image of
-/// iOS 17 and later, then the developer disk image of earlier versions.
+/// The image types the image mounter's lookup is asked for, in this order: the personalized
+/// image of iOS 17 and later, then the developer disk image of earlier versions.
 const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
+/// The application type the installation proxy is asked for: the user's own applications.
+const USER_APPLICATIONS: &str = "User";
 
 /// Runs one request and gives its line.
 pub async fn answer(request: Request) -> Line {
+    let (command, device) = (request.name(), request.device());
     let answered = match request {
         Request::Devices => devices().await,
         Request::Info(number) => info(number).await,
         Request::Services(number) => services(number).await,
         Request::Images(number) => images(number).await,
+        Request::Apps {
+            device: number,
+            contains,
+        } => apps(number, &contains).await,
     };
-    answered
-        .unwrap_or_else(|failure| Line::refused(Some(request.name()), request.device(), failure))
+    answered.unwrap_or_else(|failure| Line::refused(Some(command), device, failure))
 }
 
 async fn devices() -> Result<Line, Failure> {
@@ -132,17 +139,23 @@ async fn services(number: u32) -> Result<Line, Failure> {
     let handshake = RsdHandshake::new(stream)
         .await
         .map_err(|error| Failure::library(Problem::RsdHandshakeFailed, &error))?;
-    let mut names: Vec<String> = handshake
+    // Of each service the handshake describes, its port and the entitlement it names are
+    // shown; its other members are not.
+    let mut services: Vec<ServiceEntry> = handshake
         .services
-        .keys()
-        .map(|name| redact::shown_name(name.as_str()))
+        .iter()
+        .map(|(name, service)| ServiceEntry {
+            name: redact::shown_name(name),
+            port: service.port,
+            entitlement: redact::shown_name(&service.entitlement),
+        })
         .collect();
-    names.sort();
+    services.sort_by(|one, other| one.name.cmp(&other.name).then(one.port.cmp(&other.port)));
     Ok(Line::Services(Services {
         command: CommandName::Services,
         device: number,
-        count: names.len(),
-        services: names,
+        count: services.len(),
+        services,
     }))
 }
 
@@ -157,27 +170,61 @@ async fn images(number: u32) -> Result<Line, Failure> {
     )
     .await?;
     let mut mounter = ImageMounter::new(connection);
+    let mut queries = Vec::with_capacity(1 + IMAGE_KINDS.len());
+    // The listing of what is mounted: of each entry only the names of its members are kept.
+    queries.push(match mounter.copy_devices().await {
+        Ok(entries) => ImageQuery::listing(
+            entries
+                .iter()
+                .map(|entry| {
+                    ListedImage::of(
+                        entry
+                            .as_dictionary()
+                            .map(|dictionary| dictionary.keys().map(String::as_str)),
+                    )
+                })
+                .collect(),
+        ),
+        Err(error) => ImageQuery::failed(ImageQueryName::CopyDevices, None, &error),
+    });
     for kind in IMAGE_KINDS {
-        // The lookup answers the image's signature, which is dropped unread.
-        match mounter.lookup_image(kind).await {
-            Ok(_) => {
-                return Ok(Line::Images(Images {
-                    command: CommandName::Images,
-                    device: number,
-                    mounted: true,
-                    kind: Some(kind.to_owned()),
-                }));
-            }
-            Err(IdeviceError::NotFound) => {}
-            Err(error) => return Err(Failure::library(Problem::ImageLookupFailed, &error)),
-        }
+        // A lookup answers the image's signature, which is dropped unread.
+        queries.push(match mounter.lookup_image(kind).await {
+            Ok(_) => ImageQuery::lookup(kind, true),
+            Err(IdeviceError::NotFound) => ImageQuery::lookup(kind, false),
+            Err(error) => ImageQuery::failed(ImageQueryName::LookupImage, Some(kind), &error),
+        });
     }
     Ok(Line::Images(Images {
         command: CommandName::Images,
         device: number,
-        mounted: false,
-        kind: None,
+        mounted: Mounted::judged(&queries),
+        queries,
     }))
+}
+
+async fn apps(number: u32, contains: &str) -> Result<Line, Failure> {
+    let device = find(number).await?;
+    let record = paired_record(&device).await?;
+    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+    let connection = open_service(
+        &provider,
+        &record,
+        <InstallationProxyClient as IdeviceService>::service_name(),
+    )
+    .await?;
+    let mut proxy = InstallationProxyClient::new(connection);
+    // The records stay in this function: only the bundle identifiers that hold the text leave
+    // it, with the count of all user applications.
+    let applications = proxy
+        .get_apps(Some(USER_APPLICATIONS), None)
+        .await
+        .map_err(|error| Failure::library(Problem::AppsLookupFailed, &error))?;
+    Ok(Line::Apps(Apps::of(
+        number,
+        contains,
+        applications.keys().map(String::as_str),
+    )))
 }
 
 /// The devices usbmuxd lists now.

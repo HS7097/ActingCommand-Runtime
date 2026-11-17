@@ -4,9 +4,9 @@
 //! devices, a program the Runtime will speak to as a separate process, as it speaks to adb.
 //!
 //! This first version only reads, one command per run (`acib devices`, `info`, `services`,
-//! `images`; see `args.rs` and `README.md`). Each run prints one JSON line on standard output
-//! and ends with status 0 when the command was answered, 1 when it was refused or failed, the
-//! line then naming this program's `problem` word and, where the library gave one, its error
+//! `images`, `apps`; see `args.rs` and `README.md`). Each run prints one JSON line on standard
+//! output and ends with status 0 when the command was answered, 1 when it was refused or failed,
+//! the line then naming this program's `problem` word and, where the library gave one, its error
 //! text. It writes no file and installs no logger, so nothing the library traces is shown.
 
 #![forbid(unsafe_code)]
@@ -39,8 +39,12 @@ fn main() -> ExitCode {
 
 /// Runs the command on a current-thread runtime of its own, within its deadline.
 fn run(invocation: Invocation) -> Line {
-    let request = invocation.request;
-    let refused = |failure| Line::refused(Some(request.name()), request.device(), failure);
+    let Invocation {
+        request,
+        timeout_ms,
+    } = invocation;
+    let (command, device) = (request.name(), request.device());
+    let refused = |failure| Line::refused(Some(command), device, failure);
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -48,7 +52,7 @@ fn run(invocation: Invocation) -> Line {
         Ok(runtime) => runtime,
         Err(error) => return refused(Failure::library(Problem::AsyncRuntimeFailed, &error)),
     };
-    let deadline = Duration::from_millis(invocation.timeout_ms);
+    let deadline = Duration::from_millis(timeout_ms);
     runtime
         .block_on(async { tokio::time::timeout(deadline, bridge::answer(request)).await })
         .unwrap_or_else(|_| refused(Failure::own(Problem::DeadlinePassed)))

@@ -13,12 +13,15 @@ codes) and, where the library gave one, its error text in `error`.
 
 usbmuxd is reached where the library finds it on this platform: on Windows the TCP port 27015
 of 127.0.0.1, which the device service of Apple's own software serves. Pairing is not part of
-this version: a device whose pairing record usbmuxd does not hold answers `not_paired`.
+this version: a device whose pairing record usbmuxd does not hold answers `not_paired` (to
+`services`, `images` and `apps`, and to the second half of `info`).
 
 It never prints, logs or writes a device's serial number, UDID, name or address, nor anything of
 a pairing record (the record is asked for, kept in memory for the command and never shown). It
 installs no logger. A library error whose text could carry such a value is shown by its kind
-alone; a remote service's name that could carry one is shown as `withheld`.
+alone; a remote service's name or entitlement, or a member name of the image mounter's listing,
+that could carry one is shown as `withheld`. Which applications a person has installed is
+theirs: `apps` names only the ones whose bundle identifier holds the text asked for.
 
 ## The commands
 
@@ -36,17 +39,28 @@ Every command takes `--timeout-ms <ms>` (default 30000); a command not finished 
 - `acib services --device <n>`: in a session, the tunnel of iOS 17.4 and later (the lockdown
   service CoreDeviceProxy, with the library's own TCP stack inside this process: no network
   adapter is created and no administrator right is needed), the remote service discovery
-  handshake, and its answer: the services' names, sorted, and their `count`. No service is
-  opened.
-- `acib images --device <n>`: in a session, the image mounter's lookup (read only): `mounted`,
-  and the image type found (`Personalized`, then `Developer`, is asked for) as `kind`, `null`
-  when none is mounted.
+  handshake, and its answer: the services sorted by name, each with its `name`, the `port` it is
+  served on inside the tunnel and the `entitlement` the handshake names for it (which tells
+  whether it needs the trusted tunnel), and their `count`. No service is opened.
+- `acib images --device <n>`: in a session, the image mounter's read-only queries, each in
+  `queries` with what it answered: the listing of what is mounted (`copy_devices`: `listed`,
+  each entry with the names of its members, never a value), then the lookup of the image types
+  `Personalized` and `Developer` (`lookup_image`: `found` or `not_found`; a signature is never
+  shown). A query that failed answers `failed` with the library's `error_kind`. `mounted` is
+  `true` when the listing holds an entry or a lookup found an image, `false` only when the
+  listing answered an empty list (and no lookup found one), else `"unknown"`. Nothing is
+  mounted and nothing uploaded.
+- `acib apps --device <n> --contains <text>`: in a session, the installation proxy's list of the
+  user's applications: the bundle identifiers that hold `<text>` (at least three characters,
+  compared without regard to case), sorted, as `matching`, and the count of all user
+  applications as `user_applications`. The whole list is never printed, and nothing else of an
+  application's record (no display name, path, version or signer).
 
 The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_passed`,
 `usbmuxd_unreachable`, `usbmuxd_list_failed`, `device_not_listed`, `lockdown_unreachable`,
 `lockdown_read_failed`, `lockdown_value_unexpected`, `pair_record_unreadable`, `not_paired`,
 `session_refused`, `service_refused`, `service_unreachable`, `tunnel_failed`,
-`rsd_unreachable`, `rsd_handshake_failed`, `image_lookup_failed`.
+`rsd_unreachable`, `rsd_handshake_failed`, `apps_lookup_failed`.
 
 Not in this version: pairing, mounting an image, a screenshot, any input, starting or stopping an
 application, a daemon mode.

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! What `acib` shows of a text it did not write itself (board #479, ACIB-0): a library error's
-//! text, the word a device refused a value with, a remote service's name. Such a text is shown
-//! only when it cannot carry a device's serial number, UDID, ECID, name fragment with digits or
-//! address; otherwise it is cut to its kind (a library error), to a fixed word (a refusal) or
-//! withheld (a service name). The check is deliberately coarse: it cuts some harmless texts
-//! rather than let one identifier through.
+//! text, the word a device refused a value with, a remote service's name and entitlement, the
+//! name of a member of the image mounter's listing. Such a text is shown only when it cannot
+//! carry a device's serial number, UDID, ECID, name fragment with digits or address; otherwise
+//! it is cut to its kind (a library error), to a fixed word (a refusal) or withheld (a name).
+//! The check is deliberately coarse: it cuts some harmless texts rather than let one identifier
+//! through. A bundle identifier names an application, not the device, and is shown when it is
+//! written in the characters a bundle identifier is made of.
 
 /// The longest run of hexadecimal digits a shown text may hold. A UDID holds 40 (older
 /// devices) or 8 and 16 around a dash (newer ones, 24 without it), an ECID up to 20 decimal
@@ -65,6 +67,19 @@ pub fn refusal_word(text: &str) -> String {
 pub fn shown_name(name: &str) -> String {
     if shareable(name) {
         name.to_owned()
+    } else {
+        WITHHELD_NAME.to_owned()
+    }
+}
+
+/// A bundle identifier as it is shown: as it is when it is made only of the characters Apple
+/// allows in one (ASCII letters and digits, `-` and `.`) and is not too long, else a fixed word.
+pub fn shown_bundle_identifier(identifier: &str) -> String {
+    let own_characters = identifier
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+    if !identifier.is_empty() && identifier.len() <= LONGEST_TEXT && own_characters {
+        identifier.to_owned()
     } else {
         WITHHELD_NAME.to_owned()
     }
@@ -196,5 +211,31 @@ mod tests {
             shown_name(&format!("com.example.{RUN_OF_24}")),
             WITHHELD_NAME
         );
+    }
+
+    #[test]
+    fn a_bundle_identifier_is_shown_only_in_its_own_characters() {
+        for identifier in [
+            "com.example.GameOne",
+            "com.example.game-two",
+            "com.example.game2026",
+            "org.example.app.Release3",
+        ] {
+            assert_eq!(shown_bundle_identifier(identifier), identifier);
+        }
+        for identifier in [
+            String::new(),
+            "com.example.end_game".to_owned(),
+            "com.example.app two".to_owned(),
+            "com.example.app\nline".to_owned(),
+            "com.example.äpp".to_owned(),
+            format!("com.example.{}", "a".repeat(LONGEST_TEXT)),
+        ] {
+            assert_eq!(
+                shown_bundle_identifier(&identifier),
+                WITHHELD_NAME,
+                "{identifier:?}"
+            );
+        }
     }
 }

@@ -2651,7 +2651,7 @@ tests = [
 ]
 incident = ["#477 PC-2"]
 
-# Workflow #479 ACIB-0 (apps/acib, the iOS device bridge; its README): every line acib prints is one JSON line of its command's shape, status 0 only when answered, and holds no member for a device's serial number, UDID, name or address or for a pairing record (1); its problem words are its own snake_case words, one per cause (2); a library error is shown by its text, or by its kind alone when the text holds a run of 40 or 24 hexadecimal digits (also 8 and 16 around a dash), an address or a word of letters and digits shaped like a serial number, and a device's refusal word and a service name are cut the same way (3); the command line takes exactly the four commands with --device and --timeout-ms and refuses every other (4). No device and no network in CI.
+# Workflow #479 ACIB-0 (apps/acib, the iOS device bridge; its README): every line acib prints is one JSON line of its command's shape, status 0 only when answered, and holds no member for a device's serial number, UDID, name or address or for a pairing record (1); its problem words are its own snake_case words, one per cause (2); a library error is shown by its text, or by its kind alone when the text holds a run of 40 or 24 hexadecimal digits (also 8 and 16 around a dash), an address or a word of letters and digits shaped like a serial number, and a device's refusal word and a service name are cut the same way (3); the command line takes exactly the four commands with --device and --timeout-ms and refuses every other (4). No device and no network in CI. Fix round 1 (brief rd-1117/brief-479-acib0-fix1.md): services answers each service's name, port and entitlement; images answers each read-only query of the image mounter (the listing, copy_devices, with each entry's member names and no value; the lookups of Personalized and Developer, found or not_found; failed with the library's error kind alone) and mounted true, false only on an empty listing with nothing found, else "unknown" (5); apps answers the bundle identifiers of the user's applications that hold --contains (without regard to case), sorted, a bundle identifier outside its own characters withheld, and the count of all user applications, never the whole list; apps_lookup_failed replaces image_lookup_failed among the words (1, 2, 5); apps takes --device and --contains of three characters or more, counted as characters, and no other command takes --contains (6). Adapted (this slice's own tests, fix round 1): each_answer_is_one_json_line_of_its_shape_and_its_status and the_answers_hold_no_member_for_an_identifier hold the new shapes of services, images and apps, every_problem_word_is_this_programs_own_snake_case_word the new word list.
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2666,5 +2666,8 @@ tests = [
     "actingcommand-ios-bridge::bin:acib::args::tests::the_four_commands_parse_with_their_options",
     "actingcommand-ios-bridge::bin:acib::args::tests::every_other_command_line_is_refused",
     "actingcommand-ios-bridge::bin:acib::args::tests::a_request_names_its_command_and_its_device",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::mounted_is_false_only_on_an_empty_listing_and_unknown_without_one",
+    "actingcommand-ios-bridge::bin:acib::redact::tests::a_bundle_identifier_is_shown_only_in_its_own_characters",
+    "actingcommand-ios-bridge::bin:acib::args::tests::the_apps_command_takes_a_text_of_three_characters_or_more",
 ]
 incident = ["#479 ACIB-0"]
