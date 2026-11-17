@@ -1057,9 +1057,11 @@ sentence fails that test.
       every list counted (`<name>_total`), else left to the file; `truncated`, JSON pointers into
       the file of every member of the line the header does not hold as the line does (each
       member left out, at the top and beside a kept part on the way to it, and what a reduced
-      part left), so that nothing is in the file that the header neither holds nor names; `export`
-      (`{path, sha256, size}`); `warnings`, `answer_exported` first and the line's own after it;
-      the line's `outcome`. When the file cannot be written, the header with
+      part left), but for the line's own `warnings` and `outcome`, which every header carries
+      (its `warnings` begin with `answer_exported`, or `material_export_failed`) and `truncated`
+      never names, so that nothing is in the file that the header neither holds nor names;
+      `export` (`{path, sha256, size}`); `warnings`, `answer_exported` first and the line's own
+      after it; the line's `outcome`. When the file cannot be written, the header with
       `material_export_failed` first and no `export`; a header that does not fit even so answers
       `output_budget_exceeded` with its job's handle. A refusal of a rescue row, and every line of
       one that fits, is answered as before.

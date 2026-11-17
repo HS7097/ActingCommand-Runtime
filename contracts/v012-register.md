@@ -37099,8 +37099,10 @@ handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comm
 - *The file*: the line whole through the server's export writer (`lab_ops::budget::write_json`,
   `<sha256>.json` in `%TEMP%\actingcommand-mcp\materials`), as a child's line is written; its bytes
   are `serde_json::to_vec` of the line.
-- *The header*: the parts its row keeps, each where the line holds it, then `truncated` when one was
-  reduced or left to the file, then `export` (`{path, sha256, size}`), then `warnings`
+- *The header*: the parts its row keeps, each where the line holds it, then `truncated` when the
+  header leaves anything of the line to the file (since fix round 1 every member of the line the
+  header does not hold as the line does, the line's own `warnings` and `outcome` excepted, below),
+  then `export` (`{path, sha256, size}`), then `warnings`
   (`answer_exported` with `path`, `actual_sha256` and `actual_bytes` first, by the child rule's own
   function `after_child::answer_exported`, the line's own warnings after it), then the line's
   `outcome`. No `overflowed` and no `req_id`: those are a child's (`{req_id, export, overflowed}`);
@@ -37113,7 +37115,7 @@ handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comm
 | `undo` (its plan form and an undo) | `/reverses` (the plan form's), `/schedule_changes` |
 | `op resume` (fix round 1; the end of an undo it finished, answered as the undo answered it) | what `undo` keeps, one constant `UNDONE`: `/reverses`, `/schedule_changes`, where its line carries them |
 | `op status` | `/unfinished`, `/last_operations`, `/journal` (with `op`): the members the manual names as its answer (section 9) |
-| every other rescue row, `deploy` and its plan form among them | none: the outcome alone, which for `deploy --plan` names `plan_id` and `commit_sha`; the manual names no member of that answer, and no summary is designed for it |
+| every other rescue row, `deploy` and its plan form among them | none: of the line the outcome alone, which for `deploy --plan` names `plan_id` and `commit_sha`, `truncated` naming every other member (since fix round 1; `/steps` for `deploy --plan`); the manual names no member of that answer, and no summary is designed for it |
 
 - *One rule for every part* (`rescue_export::forms`): whole; for an object, without the members
   that hold its rows (`ROWS`: `packages`, a row per package with its part before and after), each
@@ -37142,7 +37144,8 @@ handle, and `ac_run_show` gave `budget::job_summary`, the member names. The comm
 | Part | Where |
 |---|---|
 | The rescue row within the budget | `apps/actinglab-mcp/src/calls.rs`: `Service::rescue` (new), from `Service::line`'s `Serving::Rescue` arm |
-| The header, the table, the forms | `apps/actinglab-mcp/src/rescue_export.rs` (new): `answered`, `header`, `HEADERS`, `ROWS`, `forms`, `counted`, `put` |
+| The header, the table, the forms | `apps/actinglab-mcp/src/rescue_export.rs` (new): `answered`, `header`, `HEADERS`, `UNDONE` (fix round 1: what `undo`'s and `op resume`'s headers keep), `ROWS`, `forms`, `counted`, `put` |
+| What `truncated` names (fix round 1) | `apps/actinglab-mcp/src/rescue_export.rs`: `left_out`, the one function that writes it, and `CARRIED`, the line's `warnings` and `outcome`, which every header carries and `left_out` never names |
 | Shared with the child rule | `apps/actinglab-mcp/src/after_child.rs`: `answer_exported` and `listed` are `pub(crate)`, unchanged |
 | Texts | `apps/actinglab-mcp/MANUAL.md` section 5 (a rescue tool's header, its parts and forms, `ac_run_show`; a header that does not fit) and section 6 (`material_export_failed` on a rescue tool's header). The instructions (`tools::INSTRUCTIONS`) already say "in this process an operation answers its header beside the file", now true of the rescue rows too, and are unchanged |
 
@@ -37218,6 +37221,17 @@ the line's, `undo`'s `/operation_id`; test 5's header without its parts names `/
 `/facts`, `/steps`, and so does the job's summary); test 1's `deploy --plan` and `op status` lines
 moved into the functions `deploy_plan` and `op_status`, which the new test shares. No test leaves a
 gate map; no golden changes.
+
+**Fix round 2** (coordinator work order `rd-1118/brief-434-pp1-fix2.md`, after the second
+independent review `rd-1118/review-1814-fix1.md`, which found nothing that must change; texts
+only, no code changes behaviour). The contract (§9.3, "The budget") and the manual (section 5) say
+the exception `CARRIED` makes: the line's own `warnings` and `outcome` are carried by every header
+and not named in `truncated`. The manual names both values a placement with no Runtime answering
+can give as `next` (`composition_at_start`, `composition_at_start_once_bound` when the
+configuration binds no instance to the game). This section's header bullet, its table's last row
+and "Where it is built", the gate file's description and the comment of the gate map's row "#434
+PP-1" say the rule of fix round 1. No test and no golden changes; no gate map row changes but in
+its comment.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -12,8 +12,10 @@
 //!   --plan` line that fits neither way is written whole, the file's bytes the line's; the warning
 //!   `answer_exported` is first and names the file, `export` is its `{path, sha256, size}`, and the
 //!   header holds the plan's `schedule_changes` whole under `plan` and the line's outcome, within
-//!   the limit with its text. What the other rows' headers hold: `deploy --plan` the outcome alone,
-//!   `op status` its `unfinished`, `last_operations` and `journal`.
+//!   the limit with its text, `truncated` naming the plan's other members and the line's (fix
+//!   round 1). What the other rows' headers hold: `deploy --plan` no part beside its outcome,
+//!   `truncated` naming `/steps`; `op status` its `unfinished`, `last_operations` and `journal`,
+//!   `truncated` naming `/root`, `/packs` and `/leftovers`.
 //! - `pp1_a_larger_plan_keeps_the_four_lists_then_the_counts` (test 2): `packages` too large to fit:
 //!   the four lists stay and `packages` is counted, `truncated` naming it; `enters` too large too:
 //!   every list counted, `truncated` naming each; `undo --plan` by the same rule, its `reverses`
@@ -26,8 +28,10 @@
 //!   a line sent in `structuredContent` alone and a refusal over the budget are answered byte for
 //!   byte as before, and nothing is written.
 //! - `pp1_an_export_directory_that_cannot_be_written` (test 5): `material_export_failed` first, no
-//!   `export`, the header's parts and outcome, nothing written; a header that does not fit even so
-//!   answers `output_budget_exceeded` with its job's handle, and `ac_run_show` its summary.
+//!   `export`, the header's parts, `truncated` and outcome, nothing written; a header that does not
+//!   fit even so answers `output_budget_exceeded` with its job's handle, and `ac_run_show` its
+//!   summary, whose `truncated` names `/plan`, `/instances`, `/facts` and `/steps`: nothing of the
+//!   plan kept.
 //!
 //! Fix round 1 (coordinator work order `rd-1117/brief-434-pp1-fix1.md`, after the independent
 //! review): `truncated` names every member of the line the header does not hold as the line does,
@@ -410,7 +414,8 @@ fn pp1_a_plan_over_the_budget_is_exported_whole_beside_what_must_be_read() {
     );
     assert_eq!(assert_answered_with_its_text(&answered), header);
 
-    // `deploy --plan`: the outcome alone beside the export (the manual names no member of it).
+    // `deploy --plan`: no part (the manual names no member of it), its outcome beside the export
+    // and `truncated` naming the rest.
     let deploy = deploy_plan();
     let whole = line_of(&deploy);
     assert!(budget::carried(&whole, ERA, false).is_err(), "setup");

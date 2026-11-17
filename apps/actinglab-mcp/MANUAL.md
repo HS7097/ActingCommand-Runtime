@@ -197,7 +197,8 @@ naming this file.
     `export`, `warnings` (`answer_exported` first, the line's own after it) and the line's
     `outcome`. `ac_place` (with `plan`, and a placement) keeps the plan's `schedule_changes` under
     `plan`, as the line holds it, and its `next` (what a placement with no Runtime running tells
-    you to do next, `composition_at_start`); `ac_undo` and `ac_op_resume`
+    you to do next: `composition_at_start`, or `composition_at_start_once_bound` when the
+    configuration binds no instance to the game); `ac_undo` and `ac_op_resume`
     their `reverses` (`ac_undo` with `plan`) and their `schedule_changes`, where the answer
     carries them; `ac_op_status` its `unfinished`, `last_operations` and, with `op`, `journal`;
     every other rescue tool, `ac_deploy` with `plan` among them, its outcome alone (with `plan`:
@@ -208,7 +209,9 @@ naming this file.
     else the part is left out. `truncated` names, as JSON pointers into the file, every member of
     the answer the header does not hold as the file does: each member left out (`/steps`, and
     beside `schedule_changes` the plan's other members, `/plan/items` among them) and what a
-    reduced part left (`/plan/schedule_changes/packages`). Nothing is in the file that the header
+    reduced part left (`/plan/schedule_changes/packages`). The answer's own `warnings` and
+    `outcome` are not named there: every header carries them (its `warnings` begin with
+    `answer_exported`, or `material_export_failed`). Nothing is in the file that the header
     neither holds nor names there. Read `schedule_changes` before you place: in the header, or in
     the file where `truncated` names its lists. The call's job keeps the header, so `ac_run_show`
     of its handle answers it with its `export`. A refusal is never exported, and no line that the
