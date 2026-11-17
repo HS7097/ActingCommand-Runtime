@@ -9,6 +9,173 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.69
+
+本版是 v0.12.68 之后的 1 次合并、6 张 PR：0.12.69 列车 #1791（#463 KP-1 自己），带 #463 KB-1 #1790（两张先并成「按键」一趟）、#463 K-a #1740、#463 RC-1 #1793、#463 S3-18 #1795 和 #463 S3-15a #1796。
+「按键」那一趟除了两张的头和合并，有自己的提交：返回键的写法收到设备层一处（`DeviceKey::android_code`、`DeviceKey::ALL`）；走 `adb_shell_input` 的后端上拒别的键改用不带后端名的新码 `input_key_unsupported`；一条贯通各层的测试；
+两轮小修（两处只给测试用的函数标成只在测试里编；`android_code` 改成返回数，能力表那一行改读 `DeviceKey::sent_alone_by`，加一条钉 `maatouch` 的测试）。0.12.69 列车自己只有一个提交：在 S3-15a 测试夹具的两条撤销记录里补上 S3-18 新加的成员，断言不变。
+内容是：包里的一步可以按返回键（包格式修订 17）；模拟器自己的输入接口能发返回键，可能还按着的键会被放开；内核对滚动选择的离线试算；回归用例的合同、读取器、运行器和离线操作 `resource regression`；
+撤销放置时说清哪些包重新进调度、哪些离开（`undo --plan`）；`standard-pack status --installation` 读这台安装的放置流水和暂停报告。
+**生产上跑的是 v0.12.68（2026-11-17 01:33 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.68 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**一个接口动了：包格式 `package` 到 [3, 17]**（最低值不动），`runtime-client` 仍是 [3, 11]；
+配置键没加，结果码加了 9 个。**退回 v0.12.68 开着**；回去以后，本版撤销过的放置旧版读不了它的流水，带按键步的包旧版放不了、跑不了。
+
+- **为什么有这一版**：主人 11-15 定了返回键不在玩的时候录，由智能体在第二、三阶段加进包里（看板 #463）；11-16 走 MCP 时又看出，这台机器的模拟器走自己的输入接口，这条路一个键都发不了。
+  资源仓的包自带回归用例，本仓却没有这种用例的合同和读取器，各资源仓用自己的脚本跑。撤销一次放置，被那次放置按下去的包会回到调度，回答和流水里都不说。`standard-pack status` 说不出一个包是凭哪次授权启用的。
+  滚动列表里的挑选要一个离线入口给 Lab 自检用。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **没有按键步的包什么都不变。** 保证它的有三处：运行开始时那一问只在计划里有按键步时才问，没有就直接返回，不问 Runtime、不写记录（`crates/execution-kernel/src/contained_task/linear.rs` 1357–1364）；
+    源解析器只用一个判据 `is_key_step`（这一步声明了 `key`，`crates/pack-containment/src/source/mod.rs` 2182–2186），没有的步走原来的每个分支、产物逐字节不变；声明门只在 `key` 出现时才查它（`source/declarations.rs`）。
+    今天装着的包没有一个带按键步（以前的版本拒这种包），所以装着的东西都不变。
+  - **返回键**（KP-1、KB-1 和「按键」那一趟）。线性包的一步可以写 `"key": {"key": "back"}`（词表只有 `back`）：守卫和点击步一样要声明、不能带重试；内核在守卫通过的那一帧上发 `Key` `4`（安卓的返回键码，只由设备层的
+    `DeviceKey::android_code` 给出，`crates/device/src/input.rs` 361）。各种输入收到的：模拟器自己的接口（`nemu_ipc`）在那一帧上按下、抬起厂商键码 158（`crates/device/src/capture/nemu_input.rs` 32，`press_key` 1284 起）；
+    `adb_shell_input` 发一条 `input keyevent KEYCODE_BACK`（`crates/device/src/adb.rs` 382）；`maatouch` 发 `k 4 o`（`crates/device/src/maatouch.rs` 1199）；`minitouch` 不发键。能力表的 `input.key` 照这个写：`maatouch` 每个键，
+    `nemu_ipc` 和 `adb_shell_input` 只有返回键（读 `DeviceKey::sent_alone_by`），`minitouch` 不支持；这张表不开模拟器的库就建（`crates/runtime-host/src/provider.rs` 1289–1327）。
+    **发不了键的时候**：`minitouch` 上带按键步的运行在开始处就拒 `contained_task_linear_key_unsupported`，在 `RunStarted` 之后、任何截图、输入和效果意图之前（`crates/execution-kernel/src/contained_task.rs` 5276），什么都没发；
+    模拟器的库缺两个键调用时，能力表照样写支持，运行照常开始，前面的步照真按，到按键那一步被拒 `nemu_input_capability_unsupported`，什么都没发，输入记录的效果是 `not_performed`、不算不确定，这一步不重试
+    （`press_key` 1291–1293）。别的键：`nemu_ipc` 上照旧拒 `nemu_input_capability_unsupported`；`adb_shell_input` 上在发出任何东西、写意图之前拒新码 `input_key_unsupported`（回执 `denied`，`crates/runtime-host/src/host/input.rs` 139–158）。
+    **写明的限度：这样被拒的排程任务，每次都由策略在退避的第一档重试，这一对不暂停**：这个码不累计，失败标识每次都不同，连续计数恒为 1，退避不翻倍（`crates/runtime-host/src/policy_control.rs` 1521–1575、2636–2644），
+    出厂的恢复阶梯也不认它；只有任务自己的失败策略（标了 sensitive、`escalation_threshold` 为 1，或 `retry_limit` 为 0 且失败处理是暂停）会在第一次就暂停它。要改这个行为另排一片。
+  - **键也过前台门**：设备实例上（夹具实例除外），键和点按一样要求前台是这台分到的应用（`crates/runtime-host/src/host/foreground_gate.rs` 60–73），包里的键和 Lab 的 `key` 都是；智能体不能再用 `key back` 从别的应用里退出来
+    （拒 `application_not_foreground`）。按键步的守卫刚认出本应用的页，平常门放行。文字和复位照旧不查。
+  - **可能还按着的键会被放开**（KB-1 小修）：模拟器输入的状态记下最后按的键（按下前记「可能按着」，抬起答 0 才算放开，`nemu_input.rs` 681）；复位和关闭会补发一次抬起；在那之前带帧的输入一律拒
+    （`frame_fence`，1242–1244，`contact_unconfirmed`），免得带着一个按着的键去点别的。点按的路只多了这一项检查，调用不变。按下和抬起之间不停顿。
+  - **Lab 的 `key`**：`key back` 走普通按的那条路：先读一次状态，能力表说这台的输入是模拟器自己的接口时，经 Runtime 截一帧、在那一帧上发，回答写 `input_frame`；Runtime 已不持有那一帧时重截一次、再发一次；
+    别的实例不截图。以前这种实例上 `key` 一律被拒。只发返回键的输入上被拒的 `key home`，提示写明这个输入只发 `back`。操作表 `key` 那一行的请求多了 `ObserveReadonly`。
+  - **撤销放置**（S3-18）：`undo` 一个 `pack_place` 操作，在第一步之前用放置预看的同一个判断 `ScheduleChanges::between`，算「从现在的游戏根到撤销以后的游戏根」进出调度的包
+    （`crates/lab-rescue/src/install/place.rs` 3085 起的 `undone`；撤销以后那一侧照撤销自己的逆转规则在盘上逐项看，什么都不挪），回答多 `schedule_changes`。有包重新进调度时给警告 `undo_enters_scheduling`，
+    用 `names` 点名这些包；撤销以后那一侧读不出时给 `undo_scheduling_unknown`、不给清单，撤销照做。两个都是 `install_caveat_noted` 的 note，不拒，退出码 0。新的 `undo --plan` 只认放置（别的种类拒 `unusable`）：
+    判断和次序同真撤销，但不拿写锁、什么都不写，答 `reverses` 和 `schedule_changes`（`install/undo.rs` 159–184、263–272）；`actingctl install undo` 照旧不认 `--plan`。流水的撤销记录多一个可选成员
+    `schedule_changes {enters, leaves}`（不知道时两个都是 `null`），每次撤销放置都写；以前的记录没有它，照读。**撤销中断以后再跑**、它的计划形式和 `op resume` 的收尾，答的都是记录里的清单和由它出的警告，不再重算
+    （重算会漏掉第一次让进来的包）；以前的版本开始、本版接着做的撤销，记录里没有清单，就不答清单、不出警告。撤销仍不问授权：要不要问由主人定，合同里写明还开着。
+  - **`standard-pack status --installation`**（S3-15a）：读这个 `actinglab` 所在的安装（和救急模块的各行一样定位）。先核 `--root` 是安装里那个游戏的根，不是就拒 `package_status_root_not_installed`，什么都不读、不起子进程；
+    然后起一次这台安装自己的 `actingd suspended`（起法和限时同 `diagnose`，24 秒），在它跑的时候读放置流水和组合绑定，最后读它的报告。每个包的 `enabled.authorization` 是启用它的那次放置
+    `{reference, initiator?, at_unix_ms, operation}`：最近一次做完、每个放包步都是 done、没撤销过（撤销开了头也算）、没回退过、`enabled` 点了它的名的放置；后来只换内容的放置不改它。
+    答不出时是 `not_recorded`，一个原因一个词：`journals_not_read`（没带 `--installation`）、`no_journal_names_it`（流水都读了，没有一份算数的点它的名）、`journals_unreadable`（读了的都没点，有读不了的）。
+    每个包多 `pairs`（每一对的暂停和磨合期，来自那份报告）；读不到时是 `suspension_report_not_read`、`bindings_not_read`，或者包自己的 `no_task_bound`（组合绑定里没有任务跑它）。
+    根上多 `installation`（读了几份流水、读不了的、报告读没读到、`report_warnings`）和只放这一行自己的带码对象的 `warnings`。**它仍不读这台机器的六项就绪条件**（I1 到 I6 照旧答 `not_judged`），不跑 check-config 和 `vision check`。
+    不带 `--installation` 时回答和 v0.12.68 逐字节一样。只在 Windows 的构建上有（带救急模块），别处拒 `package_status_installation_unbuilt`。
+  - **`resource regression`**（RC-1）：只读，对一个资源仓的检出跑 `regression/<游戏>/<用例>/`。判的是场景（画布、矩形、场景文件字节的 SHA-256）、`expect.observe.page` 和 `expect.recognize[]`，用的就是离线命令调的那两个内核函数
+    （`ReadonlyRecognitionEngine::current_page`、`recognize`）。合同列出的其余期望（`observe.candidates`、`entry`、`prerequisite`、`step`、`terminal_outcome`、`terminal_effect`、`error_page`、`after`）逐条答 `not_run`（`not_evaluated`），
+    没有文字识别模型时要靠文字认的答 `ocr_unavailable`，多帧共识答 `frames_required`，都不算过。别的 `schema_version` 答 `not_run` 加警告 `case_schema_unsupported`，不拒。有用例失败拒 `resource_regression_failed`
+    （Lab 自己的命令行退出码 1，`--via` 2），只列前 10 条没过的、失败的排前面、另给总数；有用例部分没跑时给警告 `resource_regression_partial`。
+    **这份合同以前写的用例，`scene_sha256` 从来没有任何东西核过**：资源仓的脚本不读、不算它，现有的手写用例对不对得上不知道。
+  - **内核对滚动选择的试算**（K-a）：`dry_run_scan_decide`，只在离线用：给一串录下的帧和一份草稿策略，照运行时同一套规则算到「选了谁」为止，什么都不写、不碰设备；今天只有内核自己的测试调它。
+    实际运行的路径行为不变：线上的选择改成调同一个判决函数 `decide_attempt`，准入里一行比较抽成函数 `on_empty_mode_refusal`，条件、拒绝的文字、在检查次序里的位置都没变（两次审查逐臂对过）。
+  - **盘上的东西**：
+    - **本版撤销过的放置，v0.12.68 读不了它的流水**：撤销记录多了 `schedule_changes`，v0.12.68 的 `UndoRecord` 拒不认识的成员（v0.12.68 的 `crates/lab-rescue/src/install/journal.rs` 112–121），载入答 `state_invalid`：
+      `op status` 的 `last_operations` 不列它（v0.12.68 的 `install/status.rs` 247），`op status --operation <它>` 答 `unusable`（341–342），对它 `undo`、`resume` 都被拒 `state_invalid`。
+      别的操作照常：开一次新操作只读 `current.json`，不读旧流水（v0.12.68 的 `journal.rs` 212–224）。
+    - **带按键步的包，v0.12.68 跑不了**：它的声明门不认 `key` 这个成员，在 `PackageAdmitted` 之前拒（`UnknownField`）；声明 17 的构建包，它的 `place` 在 `package` 边上拒（`interface_edge`，在计划里，
+      v0.12.68 的 `install/place.rs` 1497–1504）。
+    - 录制、账本不变：`crates/lab/src/recording`、`crates/ledger`、契约库 `crates/actingcommand-contract` 一个文件没改；按键步的记录就是点击步那几种，`EffectIntent` 的动作 `Key` 原来就有。
+
+- **改了什么**（按键、撤销、状态、回归用例、内核试算）：
+  - **按键**（§1.447、§1.448，并成「按键」一趟，再当 0.12.69 列车的车头）：设备层 `crates/device`（`input.rs` 的 `DeviceKey`，`capture/nemu_input.rs` 的键调用和 `PressedKey`，`adb.rs`、`touch.rs`、`maatouch.rs`，`error.rs` 的
+    `with_input_unsupported`）；内核（`StepKey`、`refuse_unsendable_key`、运行时的新方法 `key_input_support`、离线首个决定 `would_press_key`）；源解析器和声明门（`crates/pack-containment/src/source/`）；
+    宿主（能力表 `provider.rs`、`host/input.rs`、`host/foreground_gate.rs`、`host/contained_task.rs` 的 `key_input_support`）；Lab 的 `key`（`apps/actinglab/src/commands/device_commands.rs`）和修订表的第 17 行（`apps/actinglab/src/resource_verify/revision.rs`）。
+  - **撤销**（§1.452）：`install/place.rs` 的 `undone`、`side_read_by`（`installed_side` 改成调它，放置的计划回答逐字节不变），`install/undo.rs` 的 `--plan` 和 `reversed_steps`，`install/journal.rs` 的 `UndoSchedule`，`install/mod.rs` 的续做收尾；
+    只给测试用的钩子 `Host::after_undone`，生产里直接返回。
+  - **状态**（§1.451）：救急模块唯一新的公开读取 `rescue::placements_enabling`（流水的读取器没复制）；`lab-ops` 的 `SuspensionReport::document`（`diagnose` 也走它，回答、码、时序不变）；
+    `crates/resource-tooling/src/standard_pack_status.rs` 的 `standard_pack_status_with`；`apps/actinglab/src/standard_pack_cli.rs`。
+  - **回归用例**（§1.450）：新合同 `contracts/resource-regression-case.md`；库 `crates/lab/src/regression_case.rs`（`read_regression_case`、`RegressionPackage`、`run_regression_case`，给下一片留的 `run_regression_case_on_bundle`）；
+    操作 `apps/actinglab/src/resource_verify/regression.rs`。
+  - **内核试算**（§1.392）：`contained_task/scan/online.rs` 的 `dry_run_scan_decide`、`scan/select.rs` 的 `decide_attempt`、`selection.rs` 的 `on_empty_mode_refusal`。
+
+- **部署和退路**：照 v0.12.68 那次的做法，用在线 v0.12.68 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.68 只改了撤销（`install/undo.rs`、`place.rs`、`journal.rs`、`mod.rs` 的续做收尾）和一个只读函数，部署、退回那几条路（`install/plan.rs`、`update.rs`、`deploy.rs`）没动。
+  - 部署前照旧不留开着的录制（录制本版没改）。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：旧进程照样能用，但答的是旧的工具表（没有 `ac_resource_regression`，`ac_undo` 没有 `plan`，
+    `ac_standard_pack_status` 没有 `installation`）；要新的，重开那个客户端的会话。
+  - 部署以后在一台空着的模拟器桌面上真按一次返回键（`actinglab key back`）：核键码 158，按下和抬起之间不停行不行，显示号不是 0 时行不行。
+  - **退路**：回 v0.12.68 用留着的 v0.12.68 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，`runtime-client` 两边都是 [3, 11]，回退门放行。
+    退回之前把没做完的撤销做完（退回本身也会被没做完的操作挡住）；本版撤销过的放置，旧版读不了它的流水；有根放了带按键步的包时，旧版每次运行都拒那个包。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - 模拟器接口的键码 158、按下和抬起之间不停顿，写这份说明的时候还没在真的模拟器上核过（键码取自厂商公开的头文件的注释，`nemu_input.rs` 32）。
+  - 发不了键的排程任务会一直重试：每次在退避的第一档，不暂停，不起恢复阶梯（见上）；库缺键调用时，按键之前的步每次都真按一遍。
+  - 滚动选择的第二种（知道要哪个、直接滚到目标）里，「要的名字不在列表里」离线判不了：录制只录到目标那一屏，换一个名字试算要更多帧，只能在模拟器上实跑。
+  - `standard-pack status` 在只出码的设置下仍有两处带全文：根上的 `warnings`（组合绑定的读取给的警告，原样转出）和流水或根读不了时的拒绝（`apps/actinglab/src/standard_pack_cli.rs` 1317 用 `Detail::Full`）；
+    流水读不了时要先等子进程结束才拒。`--installation` 还没在生产的安装上跑过，「子进程到限被结束」没用真子进程测。
+  - 还没有从录制写回归用例的东西（`record stop` 不写、不跑用例；`run_regression_case_on_bundle` 是给它留的入口）；`resource regression` 还没在真的检出上跑过。
+  - Lab 里滚动的挑选没做（`dry_run_scan_decide` 今天只有内核的测试调它）。
+  - 录制里加按键步没做（`key` 带 `--record` 照旧是 `record_flag_unsupported`）：按键步现在只能写进包的源里进包。
+  - 撤销放置不问授权；生产上还没撤销过一次放置。六片都没在真机上跑过。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`package` 从 [3, 16] 升到 [3, 17]**（`component-interfaces.json` 9；契约表 `package` 第 17 行，`contracts/component-interfaces.md` 173）：包里有按键步的构建包声明 [17, 17]（Lab 的 `standard-pack build` 按修订表的第 17 行算，
+  `apps/actinglab/src/resource_verify/revision.rs`；资源仓的打包自己写）。最低值留 3：不带按键步的包修订不变。v0.12.68 及更早的安装工具（范围到 16）在 `place` 的 `package` 边上拒声明 17 的包（`interface_edge`，
+  在计划里、按住和写任何东西之前）；v0.12.68 及更早的 Runtime 在 `PackageAdmitted` 之前拒带按键步的包（`UnknownField`）。没有东西核这个 17：`place` 只问 10 和 14，Runtime 准入不看包声明的范围，
+  所以声明得更低的包旧安装工具照放、旧 Runtime 每次运行都拒。其余逐行和 v0.12.68 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 11]、
+  `runtime-outcomes` [1, 1]（`component-interfaces.json` 4–8、10）。没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger`、契约库一个文件没改）；状态回执里能力表的 `input.key` 一行只是值变了，
+  没有新成员；放置流水撤销记录的新成员不属于表里任何一个接口，旧版本读不了它写在「退回」里；回归用例的合同是 Lab 自己的，不在表里。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的生产代码 `codes.rs`、`provider.rs` 和 `host/` 下的 `contained_task.rs`、`foreground_gate.rs`、`input.rs`，测试 `tests.rs`、`provider/gate_463_kb1.rs`、`provider/gate_hs4.rs`
+  和 `tests/` 下的 `gate_463_kb1.rs`、`gate_463_kp1.rs`、`gate_463_train_key.rs`、`gate_hs2.rs`、`lifecycle.rs`；内核 `crates/execution-kernel`（按键步、离线试算，和它们的测试）；设备层 `crates/device`
+  （`adb.rs`、`capture.rs`、`capture/nemu_input.rs`、`error.rs`、`input.rs`、`maatouch.rs`、`touch.rs` 和测试）；`crates/pack-containment/src/source/` 的 `declarations.rs`、`mod.rs`。
+  `crates/actingcommand-contract`、`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/policy`、`crates/scheduler`、`crates/display-adapter`、`apps/actingd` 一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 9 个，没有标成 `retired` 的。按片：KP-1 加 `contained_task_linear_key_unsupported`（execution-kernel，error，`declaration_error`，拒这次运行，必带 `pack_operation_id`），准入的两个原因词 `key_unknown`、`key_retry`
+  是 `contained_task_linear_invalid` 的细节值，不进目录；「按键」那一趟加 `input_key_unsupported`（runtime-host，error，拒，回执 `denied`；`actinglab key` 答 `device_error`，退出码 4）；KB-1 没有新码，只改了
+  `nemu_input_capability_unsupported`、`nemu_input_frame_required` 的 `common_causes`、`handling`；K-a 没有新码（多一个拒绝的细节 `scan=undeclared`）；RC-1 加 `case_schema_unsupported`、`case_member_unknown`、
+  `resource_regression_scene_outside_rects`（lab，警告，退出码 0）、`resource_regression_failed`（actinglab，error，拒，Lab 自己的命令行 1、`--via` 2）、`resource_regression_partial`（actinglab，警告，没有失败时退出码 0），
+  词表 `regression_verdict`（4 个词）、`regression_result`（3）、`regression_problem`（22）、`regression_not_run`（3），域 `case_` 多了 lab 这个主人；S3-18 给 `install_caveat` 加 `undo_enters_scheduling`、`undo_scheduling_unknown`，
+  `install_caveat_noted` 多一个可选键 `names`（键表原有）、改了说明；S3-15a 加 `package_status_root_not_installed`、`package_status_installation_unbuilt`（resource-tooling，error，拒，Lab 自己的命令行 1、`--via` 2），
+  `authorization_unrecorded` 加 `no_journal_names_it`、`journals_unreadable`，词表 `pairs_unread`（3 个词，只在回答里）。
+  合计 4008 个码（在用 3919，`retired` 89），1773 个位置、31 个分片；键 685，词表 275，词 2077；在用码按类别 error 3397、warning 166、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.69.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表从 193 行到 194 行：加 `resource regression`（authoring，离线，只读；参数 `repo`、`game`、`case`、`package_id`）。改了 3 行：`key`（请求加 `ObserveReadonly`，说明）、`undo`（加参数 `plan`，输出、说明）、
+  `standard-pack status`（加参数 `installation`，帮助、输出、说明）。命令清单 46 个顶层分派臂、109 条命令（加 `resource regression`）。Lab 的 MCP 服务器在 Windows 上从 166 个工具到 167 个
+  （`ac_resource_regression` 交给 `serve` 子进程，子进程的行从 73 到 74，别的平台从 127 到 128）；第一代 MCP 服务器仍是 46 个工具，一个没改。README 两种语言把工具表标题改成 v0.12.69（命令数 109 列车已改）。
+  两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17、FLK-18（宿主的两条靠机器快慢的门测，在慢的运行上红过，都没有重跑到绿），没有镜像进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue/src/install/` 的 `plan.rs`、`update.rs` 自 v0.12.65 没改，v0.12.66 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.68 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 8]，`previous_max_in_next` 过，`one_way` 不触发，`ledger_verify` 为 false（`install/plan.rs` 924）；`runtime-outcomes`、`install-control` 的边过；
+  `runtime-client` 的 `installer_meets_previous`、`installer_meets_next` 是安装工具 I [3, 11] 对在线的 Rp [3, 11] 和本版 R* [3, 11]，都过（324–340）；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，B 没有、R* 写 [3, 17]，
+  照旧是 `pack_declaration_unknown` 警告，不挡（341–364）。`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。
+- **本版第一次启动多写的**：没有。状态回执里能力表 `input.key` 那一行在 `nemu_ipc`、`adb_shell_input` 的实例上答支持（值变了，没有新成员）；`config.selection` 的默认值哈希不变；v0.12.68 的配置文件照收；
+  `standard-pack check` 没改，对今天的根答法相同。
+- **退回 v0.12.68**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.68；第 1 部分的边都过（`runtime-client` 两边 [3, 11]，`package` 照旧是警告）；第 2 部分用 v0.12.68 自己的 `actingledger events`
+  读部署以来的每一页：本版不写新的记录种类或成员，新码在旧的读者那里照原样读成收到的拼写（`crates/actingcommand-contract/src/outcome.rs` 690），过。
+  - 读不了、放不了的：**本版撤销过的放置的流水**（见「盘上的东西」）；带按键步的包和声明 17 的构建包。
+  - 用不了的功能：`undo --plan`、撤销的清单和警告、`standard-pack status --installation`、`resource regression`；模拟器实例上的 `key back` 又被拒（`nemu_input_capability_unsupported`）。
+  - **除了本版撤销过的放置的流水，这些都不让安装的状态或日志对 v0.12.68 读不了**；那份流水读不了，只影响 `op status` 里那一条和对它的 `undo`、`resume`。
+
+配对：
+
+- **控制台 UI**（UI main `99c6ff24`，即发行 v0.12.21，钉 Runtime v0.12.67 `3a17b927`，`Cargo.toml`；它声明 `runtime-client` [3, 10]，`crates/acui-setup/component-interfaces.json`）：`ui_meets_next` 是 [3, 10] 对 [3, 11]，过。
+  **本版没有东西碰得到它**：没有回答的形状变了，契约库、客户端库、账本库本版一个文件没改；它不发输入（源码里只有一个造测试材料的工具发点按），键的新路碰不到它；能力表只是值变了。它不用为本版改钉。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 11]、**`package` [3, 17]**、`runtime-outcomes` [1, 1]；
+  默认值文件的哈希不变；`git diff --stat v0.12.68 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边没有，`runtime-client` 的两条边写着 I [3, 11]、Rp [3, 11]、R* [3, 11]，都过；
+  警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`（R* 现在写 [3, 17]）；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，
+  别的跑着的程序文件挡住，和 v0.12.68 一样；`standard-pack check` 不出新的警告码；启动日志不多一行；部署前核没有开着的录制；部署以后在空着的模拟器桌面上真按一次返回键。
+- **热放置工具包**：`place` 和它的计划没变（新加的 `undone`、`placements_enabling` 是只读函数，放置计划的回答逐字节不变）。工具包要是按钉住的 `package` 范围核包的 `interfaces.json`，放第一个带按键步的包之前先认 17。
+  重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：Lab 的多 1 个工具 `ac_resource_regression`，`ac_undo` 多 `plan`，`ac_standard_pack_status` 多 `installation`，操作表 `key` 那一行的说明和请求改了；第一代的一个没变。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.68 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`runtime-client` 的边都过。
+- 没有按键步的包和派单都不变。
+- 模拟器实例上能发返回键（包里的按键步、Lab 的 `key back`），键也要过前台门；可能还按着的键在放开之前挡住带帧的输入。部署以后真按一次核键码。
+- 撤销放置会说哪些包进出调度，`undo --plan` 先看；撤销中断以后再跑答的是第一次记下的清单。
+- `standard-pack status --installation` 读流水和暂停报告；`resource regression` 只读跑资源仓的回归用例。
+- 退回 v0.12.68 开着；本版撤销过的放置旧版读不了它的流水，带按键步的包旧版放不了、跑不了。
+
+本版合并的 PR：
+
+- #1791 #463 KP-1（登记 §1.448，同时是「按键」一趟和 0.12.69 列车的车头）：exec 门表 `#463 KP-1` 7 条、宿主门表 1 条、apps 门表 2 条；「按键」一趟的贯通测试（宿主门表）和第二轮钉 `maatouch` 的测试（exec 门表）各 1 条，
+  incident 写 KP-1 和 KB-1；apps 门表 V1 那一行的 incident 加 `#463 KP-1`（钉 [3, 17] 的测试，名字不变）。
+- #1790 #463 KB-1（§1.447）：exec 门表 `#463 KB-1` 8 条、宿主门表 6 条、apps 门表 2 条。
+- #1740 #463 K-a（§1.392）：exec 门表 `#463 K-R3a` 7 条。
+- #1793 #463 RC-1（§1.450）：apps 门表 `#463 RC-1` 19 条。
+- #1795 #463 S3-18（§1.452）：apps 门表 `#463 S3-18` 10 条。
+- #1796 #463 S3-15a（§1.451）：exec 门表 `#463 S3-15a` 14 条（只在 Windows 上）。
+- 合计 78 条新测试；没有测试名记进 `ci/retired-gates.toml`。
+
 ## v0.12.68
 
 本版是 v0.12.67 之后的 1 次合并、8 张 PR：0.12.68 列车 #1789（#463 S3-8、S3-9 自己），带 #477 PC-1 #1782、第三阶段的并车 #1783（#463 S3-12，带 S3-14 #1785）和第二阶段的并车 #1784（#463 S2-7，带 S2-2 #1786、S2-6 #1787、S2-1c #1788）。
@@ -114,6 +281,8 @@ and artifact names bind the complete source SHA.
   - 不是基准尺寸的显示上照旧不能录制。
   - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（`record_frame_unknown`、`record_drop_unproven` 和 `record_select_invalid` 的新词同样）。
   - 八片都没在真机上跑过；`record review` 的预览、列全以后 `record ready` 的回答有多长（超出 MCP 的预算时整份导出）、`standard-pack status` 在生产的根上答什么，都等上线以后看。
+    部署以后在一台模拟器实例上核过（看板 #421）：`record review` 对每一步都答了它的预览；标成挑选的一步列成没细化、丢不掉；`standard-pack status` 答了已装的根里的 82 个包，计数对得上；
+    带一个没声明的变量的直接运行，在任何东西跑起来之前就被拒了。
 
 配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
 
