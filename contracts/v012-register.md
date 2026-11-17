@@ -36455,6 +36455,132 @@ ledger record, configuration key or interface revision.
 read and run: it answers what its scene gives, and the scene rule's warning where its scene holds
 more than its `rects` name.
 
+### 1.460 #398 DB-1 (0.12.71): `devices bind` against a candidate configuration, and the channel `ui` (Workflow #398; the coordinator's ruling on board #398, comment 6940490302, that the bind may name a candidate configuration while check-config and the start stay as they are; the rest the coordinator's rulings in the work orders, not the owner's words; coordinator work order `rd-1117/brief-398-db1-bind-candidate-config.md`, read on main `240cdb1a`, and its fix round `rd-1117/brief-398-db1-fix1.md`, merged with main `ca539cc7`)
+
+This section takes 1.460, the next free number after 1.459 (#463 RC-2's). It ships in 0.12.71.
+
+**Why.** The interface's installer is being redesigned: the person first says what the
+installation is for, and for a phone the installer binds the device while it installs, in the
+order: create the folders (the state root created empty), lay the programs, write the candidate
+configuration, bind, check-config, adopt, first start. check-config refuses a handset the private
+binding file binds no device to (`device_binding_missing`), and `devices bind` looked its alias up
+in the selected configuration, which a new installation does not have yet, and wrote into the state
+root the Lab located from it: neither step could come first.
+
+**The rule** ([device-binding.md](device-binding.md), "Choosing a device", "Against a candidate
+configuration" and "The channel `ui`").
+- *`config`*, a new option (a file) of the row `devices bind` ([lab-operations.json](lab-operations.json)):
+  the alias is checked in that file, not in the selected configuration, by the same rules and codes
+  (`instance_unknown`, `device_kind_unsupported`); a file that cannot be read is
+  `config_read_failed`, one that does not decode `config_decode_failed`, each with its `path` (the
+  two codes the selected configuration's read answers). The binding goes into the private file of
+  the state root the file names, its absolute `state_root` (else `install_state_root_unresolved`
+  with `config_path`, the rule `lab_ops::locate` locates a state root by, now one function,
+  `locate::state_root_of`). The device list is read again with the install root's adb, and the
+  answer is today's with `config`, the file as given.
+- *The state root agrees with check-config's.* actingd's check-config of a file reads the private
+  file of the file's own `state_root`, with `--install-root` or without it (the root changes the
+  adb and the vision root it judges, not the state root); the Lab's rescue row `check-config
+  <file>` runs that check with `--install-root <root>`. The Lab's own line and its MCP server hand
+  `devices bind` the state root they locate (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the selected
+  configuration's `state_root`); a `--via` line (the first face's actinglab child) never reaches
+  `devices bind`, no command of actinglab's own. So against a candidate the row's line carries no
+  module's state root (`core_ops::candidate_words`, which `answer` and `handed_words` take), and
+  `devices` takes the candidate's: no further parameter was needed. `--state-root` beside
+  `--config` is `conflicting`; neither is `--state-root` `required`, as before.
+- *No install selection is read* (fix round 1). Before it, the candidate's bind found its adb as
+  `bind` does (`packs::selected_config`, through `process_installation`): a process that inherited
+  another installation's selection took that installation's adb, and was refused
+  (`install_process_root_mismatch`) when `--root` named another root, and a program in an A/B slot
+  of a root without `install\active.json` was refused (`install_selection_unavailable`), which is
+  the installer's moment, the files laid and nothing selected. Now the candidate's line carries no module's root
+  either (the place reads it from the process's selection when there is one) and is built before
+  the place is asked for; `devices` takes the install root's adb from `--root` when it is given (a
+  further `--root` on the Lab's command line, now taken inside an installed root too), else from
+  the root its program runs from by its place alone, else `install_root_unresolved`
+  (`devices::candidate_adb`). The place is `locate::root_of_place`: a program in an A/B slot,
+  `<root>\<A|B>\runtime\<program>` or `tools\`, beside the slot's `runtime\BUILD-MANIFEST.json`
+  and the root's slot locator `install\slot-<A|B>.lock`, gives `<root>`; any other place is read
+  as the Lab's location reads it without a selection (a kept build's root, a single-location
+  root). check-config of a candidate reads no selection either (`InstallConfigPurpose::CandidateCheck`).
+  Without `--config` nothing changed.
+- *What the bind needs and makes.* The candidate and the install root's adb. `devices`' writer
+  makes the state root's folder and its `private` folder with `create_dir_all` when they are
+  missing, then the private file through a temporary sibling; nothing else of the state root. So
+  an operation that requires an empty state root comes before the bind: of today's operations one,
+  the rescue row `new` (`install new`), which refuses a state root that exists and is not an empty
+  folder (`install_command_refused` `state_root_not_empty`; `crates/lab-rescue/src/install/new.rs`
+  is the one place that answers it). The installer does not use `install new`: it creates the
+  folders itself.
+- *The first start accepts the bound state root* (read in the code; shown by
+  `db1_fix1_the_first_start_claims_the_state_root_the_bind_made`). After the bind the state root
+  holds exactly `private\device-bindings.json`. `RuntimeHost::start_with_provider`
+  (`crates/runtime-host/src/host.rs`) reads the state root's installation record before it writes
+  anything (`state_root_installation::check`: no `installation.json` is `unclaimed`, and the start
+  goes on), claims the state root under the owner lock (`state_root_installation::claim`, which
+  reads only `installation.json` and the installation's `install\identity.json`, mints the
+  identity and places the record), and takes the storage as new when none of
+  `runtime-state.sqlite`, `runtime-state.key`, `ledger`, `release-blobs` and `artifacts` is there;
+  check-config's catalog preview judges the state root by the same five names
+  (`policy_host/catalog_preview.rs`, `STATE_MATERIALS`). Neither a start nor a check asks a state
+  root to be empty, and the start reads the binding when it assembles its configuration.
+- *`bound_via`*, a new option `enum:ui`, not named `via`, which is `actinglab`'s global option
+  (`--via mcp|ui`, the first face's actinglab child): `ui` writes `bound_via` `ui`
+  (`DeviceBoundVia::Ui`, which nothing wrote before). Without it the channel is the entry's, as
+  before: `cli` on the Lab's command line, through `serve --stdio` and through the Lab's MCP server
+  (which serves the row with the command line's code, `devices::dispatch`), `mcp` through
+  `actingctl mcp-serve`'s `ac_device_bind`. The next start records it as `runtime.instance_bound`'s
+  `device.bound_via`; nothing decides by it.
+- *The MCP tool leaves it out*: `tools::SUPPLIED` gains `("devices bind", "bound_via",
+  Supplied::Nothing)`, a member the front gives nothing for: the schema of `ac_devices_bind` has no
+  `bound_via`, and one sent is refused `arguments_invalid` `unknown`, as any argument the tool does
+  not know.
+- *The first face*: `ac_device_bind` of `actingctl mcp-serve` gains no parameter, and no shared
+  function's signature changed (`devices::bind` and `Bind` are as they were; the candidate is
+  `devices::bind_candidate`, which `devices::bind_candidate_from` serves for a given program's
+  place, and `devices::dispatch_with` takes the adb run a test gives). Its command line `actingctl
+  devices bind`, which runs the same parser, takes `--config` and `--bound-via` too.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The candidate and the channel | `crates/lab-ops/src/devices.rs`: `bind_candidate`, `bind_candidate_from`, `candidate_adb`, `adb_of`, `bound` (the body `bind` shares), `read_candidate`, `configuration_bytes`, `decode_failed`, `Against`, `CONFIG_FLAG`, `BOUND_VIA_FLAG`, `dispatch_with`; `parse` and the usage text |
+| The flags | `crates/lab-ops/src/lib.rs` `flags_of` (`devices bind`) |
+| The row's line | `crates/lab-ops/src/core_reads.rs` (`devices bind`'s `config` and `bound_via`); `crates/lab-ops/src/core_ops.rs` `candidate_words`, `answer`, `handed_words` |
+| The state root's rule and the program's place | `crates/lab-ops/src/locate.rs` `state_root_of` (from `configured_state_root`), `root_of_place` |
+| The MCP front | `apps/actinglab-mcp/src/tools.rs` `Supplied::Nothing`, `SUPPLIED`; `calls.rs` `prepare` |
+| Texts | [lab-operations.json](lab-operations.json) (the row's two parameters, its `help`, its `notes`); [device-binding.md](device-binding.md); `apps/actinglab-mcp/MANUAL.md` section 1; the actingctl fragment's description of `device_kind_unsupported` (it names the candidate too) and the regenerated index |
+
+**Codes and words.** None added. `install_state_root_unresolved` (the Lab cannot tell the state
+root) is newly answered by `devices bind --config` for a candidate without an absolute
+`state_root`, with `config_path`, and the value as `path` when it is not absolute, as the Lab's
+location answers it; it refuses: exit status 1 on the Lab's line and on `actingctl`'s, the same
+line through `serve --stdio`, `isError` true through MCP. `install_root_unresolved` is answered,
+as before, when no install root is found: against a candidate, when neither `--root` nor the
+program's place names one. No decision reads a code by name.
+
+**Tests** (`apps/actingd/src/gate_398_db1.rs`, and for the MCP tool
+`apps/actinglab-mcp/src/gate_398_db1.rs`, which only that program's code reaches; apps gate map
+"#398 DB-1"): the five of the work order, test 4 being RD-1c's unchanged tests; fix round 1 makes
+test 2 run check-config with `--install-root` in the installer's order and assert that it passes
+whole after the bind (`db1_t2_check_config_with_install_root_refuses_before_the_bind_and_passes_after`),
+and adds `db1_fix1_a_candidate_bind_reads_no_install_selection` (the two cases above, each binding
+with the adb of the root it names) and `db1_fix1_the_first_start_claims_the_state_root_the_bind_made`
+(one Runtime host started in the test's process, as RD-1b's T9 starts one). actingd takes
+`actingcommand-lab-ops` as a dev-dependency, so that its gate binds through the Lab's code and
+reads the binding back as the start's assembly, check-config and the start read it. Adapted, as the
+requirement adds a member the MCP front leaves out: `gate_434_lab5g2b`'s
+`mcp_front_members_in_one_place` (the pinned `SUPPLIED`) and `gate_434_lw1`'s `LEFT_OUT` (its
+reason). No golden changes; no test leaves a gate map.
+
+**What is not changed.** `devices` and `devices unbind`; what `devices bind` answers and writes
+without the two options; check-config (it still refuses an unbound handset) and the start (it still
+registers one unbound and goes on); the private file's format; no answer, outcome value or line
+names a device serial.
+
+**At deploy.** Nothing to configure.
+
 ### 1.461 Slice #463 AC-1 (0.12.71): adoption takes the recording's regression cases into the checkout, and judges the recording by the one judgement of `record ready` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three takes the package into running; the design's S3-17; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ac1-adopt-cases.md`, read on main `240cdb1a`, the 0.12.70 release)
 
 This section takes 1.461, the number the coordinator gave after §1.459 and §1.460 were taken by

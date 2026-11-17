@@ -278,6 +278,8 @@ fn mcp_front_members_in_one_place() {
             // Workflow #467 RPT-1 (adapted: the ruling Q7 gives the row's out the export
             // directory, as for material and frame).
             ("report export", "out", Supplied::ExportDirectory),
+            // #398 DB-1 (adapted: the work order leaves the row's channel out of its tool).
+            ("devices bind", "bound_via", Supplied::Nothing),
         ],
         "the front's own members, in one place"
     );

@@ -1805,7 +1805,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is bound to a device. actingd reports the same condition of a configuration as device_config_invalid (Workflow #398 RD-1c).",
+      "description": "actingctl devices bind or ac_device_bind: the alias is an instance of the selected configuration, or of the candidate configuration --config names (#398 DB-1), that is not a handset (device.kind handset); only a handset is bound to a device. actingd reports the same condition of a configuration as device_config_invalid (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -53,6 +53,7 @@ dependencies = [
  "actingcommand-device",
  "actingcommand-execution-kernel",
  "actingcommand-host-metrics",
+ "actingcommand-lab-ops",
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
  "actingcommand-policy",

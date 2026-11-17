@@ -377,7 +377,7 @@ pub(crate) fn prepare(
         let value = match supplied {
             Supplied::ExportDirectory => directory(exports)?,
             Supplied::ExportDirectoryOnExport if export => directory(exports)?,
-            Supplied::ExportDirectoryOnExport => continue,
+            Supplied::ExportDirectoryOnExport | Supplied::Nothing => continue,
             Supplied::True => Value::Bool(true),
         };
         params.insert((*param).to_owned(), value);
