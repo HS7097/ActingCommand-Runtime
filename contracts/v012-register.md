@@ -37192,6 +37192,48 @@ was asked for; the test asserts that none touched that directory and that the ol
 and the old cases were moved by it into the state directory. No golden changes; no test leaves a
 gate map.
 
+**The train of 0.12.72** (coordinator work order `rd-1118/brief-train-01272.md`). Before the
+merges each branch took its review's last texts: here "At deploy" above and the contract say that
+the `--state-dir` lies outside the checkout, the handling of `adopt_warnings_not_split` says to
+commit what was written before a `--replace` (`pack_dirty`), and the manual's sentence on other
+packages' warnings names the split that could not be made; on #1815's branch the manual, the
+table's rows of `record ready` and `record review` and the self-check's item 11 say that on a
+packaged recording `--template-margin-bound` is taken, its range checked, and without effect. Pull
+request #1813 (this slice) then takes main (#1814 PP-1, §1.465; #1809, the iOS bridge; #1817 DB-2,
+§1.467) and #1815 (#463 RM-1, §1.466), each by one merge commit, both sides whole: this register
+keeps §1.464 to §1.467, each once, in the order of their numbers; the apps gate map keeps this
+slice's two blocks before PP-1's, the exec gate map RM-1's block; the outcome-code index is
+regenerated. Where the slices meet:
+- *Adoption and `record ready`.* Adoption judges a recording by `record_ready_by_id` with
+  `RecordStopOptions::default()` (`LabAdoption::recording_ready`), so the bound of
+  `record_template_near_threshold` is RM-1's default, 0.03, never a caller's: neither
+  `standard-pack adopt` nor its tool takes `template_margin_bound`. RM-1 changed no signature
+  adoption calls; its new parameter (`bound` of `self_checks`, `package_checks`, `cross_check` and
+  `ending_checks`) and its new members (`RecordStopOptions::template_margin_bound`, the checks'
+  `near_threshold`, a review step's `warnings`) are named by every caller and initializer, all in
+  the Lab's crate and actinglab's record commands. A packaged recording, the only one adoption
+  takes, runs no self-check and is answered no such warning. A recording adoption refuses
+  `recording_not_current` carries `record ready`'s answer whole in `details.record_ready`, whose
+  `warnings` hold `record_template_near_threshold` as `record ready` lists it (every self-check
+  passed, or every one before `cases` and `cases` failed). Nothing else of adoption reads it: the
+  refusal is decided by the status alone, and no adoption is refused or warned because of it. No
+  change.
+- *The two warning lists.* This slice splits the warnings of the check tree (`standard-pack
+  check`'s and packaging's) and adoption's own. `record_template_near_threshold` is a warning of a
+  recording's self-checks, answered by `record stop`, `record ready` and `record review` alone and
+  written into neither the package nor the recording, so it is never among them and never counted
+  in `other_packages_warnings`. No change.
+- *The manual and the table.* The MCP manual's paragraphs and the table's rows of `record stop`,
+  `record ready`, `record review` and `standard-pack adopt` hold each slice's text whole beside
+  PP-1's and DB-2's. No row is added, removed or given another slice, module or status, so the
+  counts stay main's: 194 rows (every help text at most 160 bytes, the longest 159); on Windows 167
+  offered (54 by `core_ops`, 39 by the rescue module, 74 by children), elsewhere 128
+  ([lab-two-entries.md](lab-two-entries.md)); the ratchet's 46 dispatch arms and 109 commands. No
+  change.
+
+The outcome-code index is regenerated and current: 4024 codes, 3935 active, 89 retired. *Tests*:
+none added or adapted; no golden changes; no test leaves a gate map.
+
 ### 1.465 Slice #434 PP-1 (0.12.72): a rescue answer over the MCP budget is exported, not lost (Workflow #434; observed on production 0.12.70; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-434-pp1-mcp-export.md`, on main `8caf51bb`)
 
 This section takes 1.465, the number its work order gives. It ships in 0.12.72.
