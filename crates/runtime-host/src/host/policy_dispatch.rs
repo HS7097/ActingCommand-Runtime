@@ -268,6 +268,21 @@ impl HostShared {
         Ok(())
     }
 
+    /// #480 PG-1, test builds: runs, once, the hook a test set for an instance pause's hand-back
+    /// that finds its instance's key held.
+    #[cfg(test)]
+    fn pause_release_meets_lease_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_release_lease_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
     /// The admission's own check (the race since the evaluation): a held instance refuses the
     /// dispatch with `dispatch_instance_held`, recorded at Info after its intent. A takeover
     /// cooldown is left to the lease's own refusal.
@@ -3209,7 +3224,8 @@ impl HostShared {
                 (instance_alias, instance_id, revision)
             }
         };
-        let staged = SchedulingPauseDeadlines::after(drain_timeout_ms).and_then(|deadlines| {
+        let pause_deadlines = self.scheduling_pause_deadlines(drain_timeout_ms);
+        let staged = pause_deadlines.and_then(|deadlines| {
             let mut drained = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
             lock(
                 &self.scheduling_pause,
@@ -3258,6 +3274,24 @@ impl HostShared {
                 Err(error) => Err(failure.replace_with_poison(error)),
             },
         }
+    }
+
+    /// The two deadlines of an instance pause that starts now (`SchedulingPauseDeadlines::after`).
+    /// #480 PG-1, test builds: both come `scheduling_pause_deadlines_for_test` after the start when
+    /// a test set it.
+    fn scheduling_pause_deadlines(
+        &self,
+        drain_timeout_ms: u64,
+    ) -> Result<SchedulingPauseDeadlines, RequestFailure> {
+        #[cfg(test)]
+        if let Some(after) = self.scheduling_pause_deadlines_for_test {
+            let at = Instant::now() + after;
+            return Ok(SchedulingPauseDeadlines {
+                drain: at,
+                grace: at,
+            });
+        }
+        SchedulingPauseDeadlines::after(drain_timeout_ms)
     }
 
     /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
@@ -3378,6 +3412,11 @@ impl HostShared {
                 };
             }
             drop(admission);
+            // #480 PG-1, tests: the hand-back found its instance's key held.
+            #[cfg(test)]
+            if lease_held {
+                self.pause_release_meets_lease_for_test()?;
+            }
             if run_in_flight {
                 let again = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
                 let overflow = || {

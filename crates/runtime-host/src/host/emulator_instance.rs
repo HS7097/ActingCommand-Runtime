@@ -741,8 +741,11 @@ impl HostShared {
             links.clone(),
             CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
         )?;
-        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key, true)
-        {
+        let drive = self.drive_emulator_control(resolved, links, action, &mut key, true);
+        // #480 PG-1, tests: the Start was driven and the claim still holds its key.
+        #[cfg(test)]
+        self.configured_start_driven_for_test()?;
+        let mut driven = match drive {
             Ok(driven) => driven,
             Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
         };
@@ -757,6 +760,21 @@ impl HostShared {
                 Err(self.cleanup_composite_failure(key.token, key.connection_id, failure))
             }
         }
+    }
+
+    /// #480 PG-1, test builds: runs, once, the hook a test set for a configured emulator start
+    /// whose Start was driven and whose claim still holds its key.
+    #[cfg(test)]
+    fn configured_start_driven_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.configured_start_driven_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// IDLE-1: the idle action `stop_emulator` on its emulator-control claim's own `key`: its

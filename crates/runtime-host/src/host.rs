@@ -620,6 +620,10 @@ pub struct RuntimeHostConfig {
     /// EMU-BIND fix 1 (0.12.28), test only: a Start's ADB baseline wait in place of its 30 s.
     #[cfg(test)]
     adb_baseline_wait_for_test: Option<Duration>,
+    /// #480 PG-1, test only: how long after its start an instance pause's drain and grace
+    /// deadlines both come, in place of the request's drain timeout and the grace after it.
+    #[cfg(test)]
+    scheduling_pause_deadlines_for_test: Option<Duration>,
     /// Workflow #386 SR-3, test only: holds the task package admission after start until the
     /// test releases it.
     #[cfg(test)]
@@ -733,6 +737,8 @@ impl RuntimeHostConfig {
             network_connectivity_for_test: None,
             #[cfg(test)]
             adb_baseline_wait_for_test: None,
+            #[cfg(test)]
+            scheduling_pause_deadlines_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
             #[cfg(test)]
@@ -919,6 +925,15 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_adb_baseline_wait_for_test(mut self, wait: Duration) -> Self {
         self.adb_baseline_wait_for_test = Some(wait);
+        self
+    }
+
+    /// #480 PG-1, test only: an instance pause's drain and grace deadlines both come `after` the
+    /// pause began, instead of its drain timeout and the 30 s grace after it, so a test reaches a
+    /// hand-back past its grace without waiting it out.
+    #[cfg(test)]
+    pub(crate) fn with_scheduling_pause_deadlines_for_test(mut self, after: Duration) -> Self {
+        self.scheduling_pause_deadlines_for_test = Some(after);
         self
     }
 
@@ -2238,6 +2253,12 @@ impl RuntimeHost {
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
             adb_baseline_wait_for_test: config.adb_baseline_wait_for_test,
+            #[cfg(test)]
+            scheduling_pause_deadlines_for_test: config.scheduling_pause_deadlines_for_test,
+            #[cfg(test)]
+            configured_start_driven_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            pause_release_lease_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
@@ -4365,6 +4386,38 @@ impl RuntimeHost {
         *lock(
             &shared.pause_lane_wait_hook_for_test,
             HostLocation::ReadPolicyRunsInFlight,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-1, test builds: runs `hook` once, on the claim's worker, after a configured
+    /// emulator start's Start was driven (the instance's admission guard is free again) and
+    /// before the claim ends its key.
+    #[cfg(test)]
+    pub(crate) fn run_after_configured_start_drive_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::RunEmulatorAutostart)?;
+        *lock(
+            &shared.configured_start_driven_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-1, test builds: runs `hook` once, on the pause's thread, the first time an
+    /// instance pause's hand-back (`release_paused_instance`) finds its instance's key held,
+    /// once it has let the instance's admission guard go.
+    #[cfg(test)]
+    pub(crate) fn run_when_pause_release_meets_a_lease_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.pause_release_lease_hook_for_test,
+            HostLocation::ReleasePausedInstance,
         )? = Some(hook);
         Ok(())
     }
@@ -6531,6 +6584,17 @@ struct HostShared {
     /// [`RuntimeHostConfig::with_adb_baseline_wait_for_test`].
     #[cfg(test)]
     adb_baseline_wait_for_test: Option<Duration>,
+    /// #480 PG-1, test only: see [`RuntimeHostConfig::with_scheduling_pause_deadlines_for_test`].
+    #[cfg(test)]
+    scheduling_pause_deadlines_for_test: Option<Duration>,
+    /// #480 PG-1, test only: the hook a configured emulator start runs once after its Start was
+    /// driven and before its claim ends its key.
+    #[cfg(test)]
+    configured_start_driven_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-1, test only: the hook an instance pause's hand-back runs once when it finds its
+    /// instance's key held.
+    #[cfg(test)]
+    pause_release_lease_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]

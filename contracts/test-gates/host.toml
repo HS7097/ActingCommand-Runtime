@@ -4285,3 +4285,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_ch1::startup_package_run_records_admitted_content",
 ]
 incident = ["#463 CH-1"]
+
+# #480 PG-1 (0.12.72; register §1.468; brief rd-1118/brief-480-pg1-pause-holds-automatic-starts.md; board #480, the owner's requirement of 11-17; production v0.12.70 on 11-17: under the global pause the emulator watch restarted the one instance without a pause of its own, and the instance pause a person then pressed was lifted when the watch's restart, which held the instance through its readiness wait, ended): an instance pause requested while an autostart claim holds the instance through a Start that outlasts the pause's grace (its readiness wait ending timed out) waits for that claim beyond the grace, ends released once the claim has ended and answers success, nothing lifted, its one record of host.scheduling_pause naming the instance (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_7_an_instance_pause_stands_while_an_automatic_start_outlasts_its_grace",
+]
+incident = ["#480", "PG-1"]
