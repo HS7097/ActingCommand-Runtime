@@ -5567,6 +5567,21 @@
         }
       }
     },
+    "template_threshold_side": {
+      "description": "The side of its threshold a template mark lies on, nearer than the bound, where a self-check of record stop needs it (record_template_near_threshold's side; #463 RM-1, since 0.12.72).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "TemplateThresholdSide"
+      },
+      "tokens": {
+        "passes": {
+          "description": "The check needs the mark to pass, and its score lies at or above its threshold by less than the bound."
+        },
+        "misses": {
+          "description": "The check needs the mark not to pass, and its score lies below its threshold by less than the bound."
+        }
+      }
+    },
     "ready_warning": {
       "description": "A warning of record ready, never blocking (#463 S2-1).",
       "source": {
@@ -10451,7 +10466,7 @@
           "description": "schedule.json or maintenance.json must change and is not in the canonical form package fmt writes."
         },
         "replace_across_volumes": {
-          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's package by --package). Workflow #463 AC-1 (since 0.12.71): so does the kept place of the earlier cases of the package (entry the first of them)."
+          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's own directory by --session-state-dir, which adopt only reads, Workflow #463 AD-1 since 0.12.72, or its package by --package). Workflow #463 AC-1 (since 0.12.71): so does the kept place of the earlier cases of the package (entry the first of them)."
         },
         "check_tree_unmarked": {
           "description": "The place of the checkout's check tree under the state directory holds no marker the tool wrote, so it is not the tool's own scratch and nothing in it is touched."

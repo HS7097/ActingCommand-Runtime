@@ -20,9 +20,9 @@ judgement of the recording").
 ## The operation
 
 ```text
-actinglab standard-pack adopt --repo <checkout> (--record-id <id> | --package <path>)
-    [--decide <decision.json> | --held-reason <text> [--held-reference <text>]] [--replace]
-    [--state-dir <dir>]
+actinglab standard-pack adopt --repo <checkout> (--record-id <id> [--session-state-dir <dir>]
+    | --package <path>) [--decide <decision.json> | --held-reason <text> [--held-reference <text>]]
+    [--replace] [--state-dir <dir>]
 ```
 
 The row `standard-pack adopt` of the operation table ([lab-operations.json](lab-operations.json),
@@ -33,13 +33,14 @@ check and writes nothing in the checkout ("`--dry-run`" below).
 | Input | What it is |
 |---|---|
 | `--repo` | The game's working root in the source layout: `applications.json` (its game and servers), `maintenance.json` (a list, `[]` when none), `packs/` (one directory per package) and the root files the repository holds (`schedule.json`, `pages.json`, `navigation.json`, `interrupts.json`, `display-layout.json`, `loading.json`, `goals.json`, `notices/`). |
-| `--record-id` | A stopped recording of the state directory, `<state>/record-artifacts/<record>/lab/`: its `recording.json` and the package its last stop generated, `out/<package_id>.<zip or json>`; Workflow #463 AC-1: and the regression cases that stop wrote beside it, `out/<package_id>.cases/` ("The cases"). |
+| `--record-id` | A stopped recording of the recordings' directory (Workflow #463 AD-1: `--session-state-dir`, or the state directory without it; "The recordings' directory"), `<recordings>/record-artifacts/<record>/lab/`: its `recording.json` and the package its last stop generated, `out/<package_id>.<zip or json>`; Workflow #463 AC-1: and the regression cases that stop wrote beside it, `out/<package_id>.cases/` ("The cases"). |
 | `--package` | Any package instead: a content directory, a `.zip` or a `.json` container; it carries no regression case. |
 | `--decide` | The decision document ("The decision document" below); a first adoption needs it or `--held-reason`. |
 | `--held-reason` | The decision of the class `held` without a document: its reason ("A held decision by two flags" below). Not with `--decide`. |
 | `--held-reference` | With `--held-reason` only: that decision's reference. |
 | `--replace` | Adopt a package adopted before again ("Repeating" below). |
-| `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory): it holds the recordings, the kept copies (`adopt/`) and the check trees (`adopt-check/`), and (Workflow #463 S3-12) the trial records adoption reads (`trials/`, "The trial and the two warnings"). With `--replace` it must lie on the checkout's volume, since the replaced directory is moved into it. |
+| `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory): it holds the recordings, the kept copies (`adopt/`) and the check trees (`adopt-check/`), and (Workflow #463 S3-12) the trial records adoption reads (`trials/`, "The trial and the two warnings"). With `--replace` it must lie on the checkout's volume, since the replaced directory is moved into it. Workflow #463 AD-1: the recordings are read from it only without `--session-state-dir`. |
+| `--session-state-dir` | Workflow #463 AD-1 (since 0.12.72): with `--record-id` only, the directory the recording is read from, the recording commands' session state directory; adoption only reads it ("The recordings' directory"). |
 
 ## The decision document
 
@@ -411,7 +412,8 @@ volume check with its `--state-dir`, which passes again. Committed as that call 
 volume (`replace_across_volumes` otherwise), a check that call never ran when it began without the
 directory; actinglab's default state directory (its session directory under the user's
 application data) may lie on another volume, so give a `--state-dir` on the checkout's volume, and
-with another `--state-dir` a recording's package by `--package` instead of `--record-id`. The
+with another `--state-dir` a recording's own directory by `--session-state-dir` (Workflow #463
+AD-1, "The recordings' directory"), or its package by `--package` instead of `--record-id`. The
 next call refuses as long as a `.part` is there (`pack_exists` for the package's,
 `repository_invalid` for a root file's), and its message names each leftover, says what it tells
 of that call and gives the steps below, each of which a later call accepts:
@@ -546,7 +548,10 @@ recording"), `rule`, `held` and
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and
 `value_not_judged` (`because` `follower` or `manual_request`, and `text`; "A pending value"),
 `warnings` (every warning of the check, the game's included, each once, then adoption's own two,
-below, and, Workflow #463 AC-1 fix round 1, `adopt_cases_left`, "The cases"), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
+below, and, Workflow #463 AC-1 fix round 1, `adopt_cases_left`, "The cases"; Workflow #463 AD-1:
+but each that names another package of the root), `other_packages_warnings` (Workflow #463 AD-1:
+those, counted by code, "The warnings of other packages"; fix round 1: absent beside
+`adopt_warnings_not_split`), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
 `readiness` or `readiness_not_judged` (below), `next` (each item `{path}`; Workflow #463 S3-12:
 `ours/model/bindings.json` with `fixed_value` too, below) and (Workflow #463 AC-1) `cases` ("The
 cases").
@@ -779,3 +784,94 @@ beside it for that difference only:
 No decision reads a code by name: adoption decides by the runner's verdict word and by the
 judgement's status word; fix round 1: the Lab tells a recording it cannot read whole from its other
 refusals by the word its refusal carries (`reason` `lab_recording_unreadable`), never by its code.
+
+## The recordings' directory
+
+Workflow #463 AD-1 (Runtime 0.12.72; [v012-register.md](v012-register.md) §1.464; the
+coordinator's work order on board #463, after what the channel that makes packages observed on
+0.12.70). A recording lives in the recording commands' session state directory, which may lie on
+another volume than the resource repository's checkout, and `--replace` moves the replaced pack
+directory and case set into the state directory, which must lie on the checkout's volume
+(`replace_across_volumes`). Before this slice adopt read the recording from its state directory, so
+the two could not both hold, and an adoption by `--package` takes no case and judges no recording.
+
+What the state directory is to each part:
+
+| Part | Directory |
+|---|---|
+| The recording by its id, `record-artifacts/<record>/lab/` (`recording.json`, `out/<package_id>.<zip or json>`, `out/<package_id>.cases/`), and `record ready`'s judgement of it | the recordings' directory: `--session-state-dir`, or the state directory without it |
+| The check tree, `adopt-check/<checkout>/` | the state directory |
+| The kept copies, `adopt/<package_id>.old-<ms>/` and `adopt/<package_id>.cases.old-<ms>/` | the state directory |
+| The trial records, `trials/<package_id>/` (`review.trial`) | the state directory |
+
+- `--session-state-dir <dir>` is named after the recording commands' own word for that directory,
+  their session state directory (`ACTINGLAB_SESSION_STATE_DIR`; each `record` command takes it as
+  its `--state-dir`). Over MCP its parameter `session_state_dir` is a path: a relative one is
+  refused `not_absolute`, as every path of the table is.
+- With it, `--record-id` finds its recording there, and "The cases" and "One judgement of the
+  recording" hold whole, as when both are one directory: the cases are read from the recording,
+  run on the check tree's copy of the package as it is about to be written, and written last; the
+  recording is judged by `record ready`'s function on that directory; with `--replace` the earlier
+  pack directory and case set are moved under the state directory. Nothing is written in the
+  recordings' directory; its path is one of the local paths a package's text may not hold, as the
+  state directory's is.
+- Without it, every byte and every refusal is as before: the recording is read from the state
+  directory, and one that is not under it is not found (`recording_not_current` at its
+  `recording.json`).
+- With `--package` it has no meaning, since that package is read from its path: the line is
+  refused before anything is read, `validation_failed` naming `--session-state-dir`,
+  `argument_problem` `conflicting`, as `--held-reference` without `--held-reason` is.
+- `standard-pack status` and `standard-pack trial` find no recording by its id (their state
+  directory is where the trial records are read and written) and are not changed.
+- Fix round 1 (the trial's records, older than this slice): `review.trial` is read from the trial
+  records under the state directory adoption is given, `<state>/trials/<package_id>/`, and
+  `standard-pack trial` writes its record under its own `--state-dir`, actinglab's session
+  directory when none is given. So where adoption is given a `--state-dir` of its own (one on the
+  checkout's volume, beside `--session-state-dir`), `standard-pack trial` and `standard-pack
+  status` of the package are given that same `--state-dir`: a trial recorded under another
+  directory is not read there, and the adoption answers `review.trial` `none` and warns
+  `not_tried` for a package that was tried. Where a record is read or written is not changed.
+  At deploy that `--state-dir` lies outside the checkout: `standard-pack trial` refuses a state
+  directory that is or lies inside a repository (`trial_state_dir_refused`, `trial_state_place`
+  `repository`; [standard-pack-trial.md](standard-pack-trial.md), "The record").
+- The advice of `replace_across_volumes`, and of the steps after an interrupted call, names
+  `--session-state-dir` beside `--package`.
+
+## The warnings of other packages
+
+Workflow #463 AD-1. The check lays out and checks the whole game root, so its warnings are of every
+package of the root, and the answer carried every other package's too (some eighty on production),
+past which an agent read to find its own package's.
+
+- A warning names a package as a readiness row reads it ("The adopted pack's readiness";
+  [standard-pack-schedule.md](standard-pack-schedule.md), Workflow #463 S3-6; one function): by
+  its `package_id` when that is a package of the check tree's game root, else by a `path` that is
+  a pack's directory or lies under it; otherwise it names no package.
+- `warnings` holds, whole and in their order, each warning that names the adopted package or no
+  package of the root (a root-level finding; a rule's warning that names only its `task_id`),
+  adoption's own warnings among them.
+- `other_packages_warnings` `{total, counts}` holds those that name another package: `counts` how
+  many there are of each code, by the code, and `total` how many in all. None is dropped. The
+  check tree is kept until the next call on the checkout. Its warnings are of two commands ("The
+  checks"): `standard-pack check --root` on its `installed/<game>/` lists whole the warnings of
+  that check; packaging's own warnings, which `package bundle` answers as it lays the bundle out
+  and which `standard-pack check` does not list again (`recognition_pack_undeclared` among them),
+  are answered whole in the `warnings` of `package bundle` (`actinglab package bundle`) of the
+  checkout's packs and root files as the check tree lays them out.
+- `--dry-run` answers the same two members. No check changes: what refused before refuses, and
+  what warned before is answered whole or counted.
+- Fix round 1 (the coordinator's ruling after the independent review): the reading of the check
+  tree's game root that tells which package each warning names is the readiness's own reading of
+  it, after every check passed. When it refuses, the adoption is not refused, as the readiness is
+  not by the same failure ("The adopted pack's readiness", `readiness_not_judged`): every warning
+  is answered whole in `warnings`, in its order, then one more, `adopt_warnings_not_split` (`path`
+  that `installed/<game>/`, the reader's refusal as its cause), and `other_packages_warnings` is
+  absent. The adoption writes, or under `--dry-run` validates, as without it.
+
+`other_packages_warnings`, `total` and `counts` are members of the answer. Fix round 1 adds one
+code, a warning: `adopt_warnings_not_split` (resource-tooling, `path`), which refuses nothing (exit
+0 on actinglab's line, in `warnings`). The readiness's word for what it did not judge is not taken
+for it: the readiness says it in a member of its own (`readiness_not_judged`) and in
+`package_readiness_unjudged`, an information of a readiness item of a pack, neither a warning of the
+adoption's answer about its warnings. No decision reads a code by name: the warnings are split, or
+not, by whether that reading answered.

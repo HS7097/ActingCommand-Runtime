@@ -394,7 +394,14 @@ pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--record-id", "--game", "--server", "--locale"],
+            // #463 RM-1: and the bound of the warning `record_template_near_threshold`.
+            options: &[
+                "--record-id",
+                "--game",
+                "--server",
+                "--locale",
+                "--template-margin-bound",
+            ],
             switches: &[],
             refused: &[],
         },
@@ -426,7 +433,15 @@ pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--record-id", "--step", "--game", "--server", "--locale"],
+            // #463 RM-1: and the bound of the warning `record_template_near_threshold`.
+            options: &[
+                "--record-id",
+                "--step",
+                "--game",
+                "--server",
+                "--locale",
+                "--template-margin-bound",
+            ],
             switches: &["--no-preview"],
             refused: &[],
         },
@@ -811,7 +826,11 @@ fn run_session_record_inner(
         // offline, under no lock (`record_action_lock` takes none for it), writing nothing.
         // #463 S2-1b: with the game, server and locale `record stop` would take.
         "ready" => {
-            let options = identity_options(global, &config, &flags, &instance_id)?;
+            // #463 RM-1: with the bound of `record_template_near_threshold`, as `record stop`.
+            let options = RecordStopOptions {
+                template_margin_bound: template_margin_bound(&flags)?,
+                ..identity_options(global, &config, &flags, &instance_id)?
+            };
             let ready = record_ready(
                 &state_dir,
                 &instance_id,
@@ -2946,6 +2965,8 @@ pub(crate) const RECORD_STOP_FLAGS: &[&str] = &[
     "--dry-run",
     "--state-dir",
     "--instance",
+    // #463 RM-1.
+    "--template-margin-bound",
 ];
 
 /// `record stop` options (Workflow #336 L4). Unknown flags and positional arguments are
@@ -2992,8 +3013,25 @@ fn record_stop_options(
         arrival_timeout_ms: millis("--arrival-timeout-ms")?,
         application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
         dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
+        template_margin_bound: template_margin_bound(flags)?,
         ..identity
     })
+}
+
+/// #463 RM-1: `--template-margin-bound <d>` of `record stop`, `record ready` and `record review`, the
+/// bound of the warning `record_template_near_threshold`, as its text gives it; a text that is no
+/// decimal number is refused here (`validation_failed`, exit 1 on actinglab's own line), one outside
+/// 0..=1 by the Lab, before anything is read; absent: the Lab's default.
+fn template_margin_bound(flags: &FlagArgs) -> CliOutcome<Option<f64>> {
+    record_flag_value(flags, "--template-margin-bound")?
+        .map(|value| {
+            value.parse::<f64>().map_err(|error| {
+                CliError::usage(format!(
+                    "--template-margin-bound '{value}' is not a decimal number: {error}"
+                ))
+            })
+        })
+        .transpose()
 }
 
 /// #463 S2-1b: the options that name the package's game, server and locale, read alike by `record
@@ -3547,7 +3585,11 @@ fn run_record_review(
         step: frames_number(flags, "--step", "step")?,
         no_preview,
     };
-    let options = identity_options(global, config, flags, instance_id)?;
+    // #463 RM-1: with the bound of `record_template_near_threshold`, as `record ready`.
+    let options = RecordStopOptions {
+        template_margin_bound: template_margin_bound(flags)?,
+        ..identity_options(global, config, flags, instance_id)?
+    };
     let outcome = record_review(
         state_dir,
         instance_id,

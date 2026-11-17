@@ -629,6 +629,21 @@ naming this file.
   one whose scrolling select reads the fold `holds_choice`; a fold over a key step, or onto a press
   whose effect is a key, is `fold_range_invalid`; and while a key stands the guard it gives back is
   in use (`record_mark_in_use` for its `remove`).
+  #463 RM-1 (0.12.72; `contracts/lab-recording.md`, "Self-checks", item 11): `ac_record_stop` (its
+  dry run too), `ac_record_ready` and `ac_record_review` take `template_margin_bound` (0 to 1,
+  default 0.03) and answer the warning `record_template_near_threshold` for a template mark whose
+  score lies nearer its threshold than that, on the side a self-check needs it on: `side` `passes`
+  (a mark a page requires passes on the page's own frames by less) or `misses` (a mark a page
+  forbids misses there, or the one template a page is told from a screen it must not pass on by
+  misses there, by less), with `check`, where it is, `mark_id`, `frame_id`, `score`, `threshold`,
+  `margin` and `bound`; in `lab.warnings` after the other warnings, among `ac_record_ready`'s
+  warnings once every self-check before `cases` passed (fix round 2: whatever `cases` then finds),
+  at its step in `ac_record_review` (`steps[].warnings`). It is the fact only, refuses nothing and
+  changes no exit status; the package is the same whatever the bound. On a recording whose package
+  is made and that has not changed since (`packaged`; `ac_record_stop` answers it
+  `already_generated`) no self-check runs: `template_margin_bound` is taken there, its range is
+  checked (outside 0 to 1 `validation_failed`) and it has no effect. What to do with a mark that
+  barely passes is yours to decide.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
@@ -643,7 +658,9 @@ naming this file.
   `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
-  optional `held_reference`, `replace`, `state_dir`) makes a stopped recording's package, or any
+  optional `held_reference`, `replace`, `state_dir`, and, #463 AD-1, 0.12.72, `session_state_dir`
+  beside `record_id`: the directory the recording is read from, only read, so that `state_dir`
+  may lie on the checkout's volume) makes a stopped recording's package, or any
   package, a member of its game's standard pack in a resource repository's checkout, through a
   child: the pack directory, its rule (or held entry, or maintenance entry) and the `requires`
   words, each derived member answered with where it came from. `held_reason` and `held_reference`
@@ -652,7 +669,10 @@ naming this file.
   Every check runs before the first write; a refusal is `adopt_refused`, its `adopt_problem` naming
   the check, and wrote nothing; with `dry_run` nothing is written in the checkout. Its `value` is
   `"pending"` or a number of the pack's own: a decision that names the origin `model` is refused
-  (`value_origin_model`).
+  (`value_origin_model`). Its `warnings` are those of the adopted package and of no package
+  (#463 AD-1, 0.12.72); those of the root's other packages are counted by code in
+  `other_packages_warnings` (`total`, `counts`), unless the split could not be made: then every
+  warning is in `warnings` whole, `adopt_warnings_not_split` last, and no `other_packages_warnings`.
 - **Where a pack stands** (#463 S3-14, 0.12.68; `contracts/standard-pack-schedule.md`, "Where a
   pack stands"). `ac_standard_pack_status` (`root`, `repo`, `package_id`, `state_dir`,
   `installation`) answers, for

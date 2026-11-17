@@ -487,6 +487,8 @@ fn recording(fixture: &Fixture, document: &Value, files: &[(String, Value)]) -> 
     AdoptSource::Recording {
         record_id: RECORD.to_owned(),
         lab_dir,
+        // Workflow #463 AD-1 (the new member only): the recording lies in the state directory.
+        session_state_dir: fixture.state(),
     }
 }
 
