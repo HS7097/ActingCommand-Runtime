@@ -125,6 +125,8 @@ fn s2_t1_a_run_s_package_facts_read_back_by_label_and_a_digest_member_is_not_rea
                 package_label: "neutral.main".to_owned(),
                 task_label: "task".to_owned(),
                 response_deadline_monotonic_ms: Some(60_000),
+                content_hash: None,
+                variables: None,
             },
         ),
         run.append(

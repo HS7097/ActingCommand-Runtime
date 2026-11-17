@@ -45,6 +45,8 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
             package_label: "neutral.semantic.task".to_owned(),
             task_label: "task".to_owned(),
             response_deadline_monotonic_ms: None,
+            content_hash: None,
+            variables: None,
         },
     )
     .expect("append old package admission");

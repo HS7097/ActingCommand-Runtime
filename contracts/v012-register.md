@@ -22,7 +22,10 @@ owner slice is in v0.12.0 and brings its own shape says so. A writer that arrive
 a shape that v0.12.0 already reads.
 
 **Rules every shape below follows.** No member carries a task-package content digest (option 丙;
-the package identity is `package_id`, recorded as `package_label`). No reader accepts a ledger or
+the package identity is `package_id`, recorded as `package_label`), but one: since ledger revision
+9 the run's admission record `task.requested` carries the content hash its admission measured
+(`content_hash`, only computed and recorded, compared with nothing; the owner's ruling of 11-16,
+which relaxes option 丙 in this respect alone, §1.455). No reader accepts a ledger or
 configuration written before v0.12.0 (no old-version compatibility); every 0.12 build reads what
 earlier 0.12 builds wrote on the same root, which is why this register exists
 ([ledger-observer.md](ledger-observer.md), "Later rulings applied", item 2). Field and type
@@ -595,7 +598,7 @@ optional, and what replaces each removed one.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| P2-1 | `TaskSemanticFact::PackageAdmitted {package_label, task_label, response_deadline_monotonic_ms?}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `package_label` is the package's `package_id` (a task semantic label, `invalid_task_semantic_label`); the code `invalid_task_package_fingerprint` is deleted (pending) |
+| P2-1 | `TaskSemanticFact::PackageAdmitted {package_label, task_label, response_deadline_monotonic_ms?}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `package_label` is the package's `package_id` (a task semantic label, `invalid_task_semantic_label`); the code `invalid_task_package_fingerprint` is deleted (pending). Since ledger revision 9 (Workflow #463 CH-1, §1.455) the fact also carries the optional `content_hash` (the content hash its admission measured, recorded only and compared with nothing) and `variables` (the run's values); `package_sha256` stays refused |
 | P2-2 | `EntryRecoveryPackageAdmitted.package_label`, `EntryRecoveryCompleted.package_label` (required), `EntryRecoveryFailed.package_label` (optional, omitted when absent) | changed persisted members (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | each the layer's own `package_id`; a failure has none only when the layer's package was refused before its `package_id` was read (a request's own recovery binding names a path only); the run recovery view pairs a failure with a later completion of the same label; the failure identity's `pre:` scope is `pre:<I>`, `I` the id hash of that label (§2 format v2 scope; the rest of the format stays with PKG-S3) |
 | P2-3 | `EffectiveConfigurationFacts::EntryRecovery.package_label` | changed artifact member (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | ledger-forensics refuses an empty, overlong or control-character label (`effective_configuration_fields_invalid`) |
 | P2-4 | `TaskSelectionPolicy {path, policy_sha256, policy_id}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `policy_sha256` is the evaluator's identity of the document, not a package digest; it stays |
@@ -11554,10 +11557,11 @@ coordinator cut LAB-6 into slices that each leave main deployable: LAB-6S0 (`dep
 word, after LAB-6S1a and LAB-6S1b have been deployed by themselves), LAB-6S3 (the UI list on
 `ui`), LAB-6S4a (the five kinds deleted; `install-control` [0, 0]), LAB-6S4b (`cli`, `mcp` and a
 `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30)
-and LAB-6S5 (the initiator in the ledger and the settings rows; `ledger` 9). Each has a way back
+and LAB-6S5 (the initiator in the ledger and the settings rows; the next free `ledger` revision
+when it ships: 9 went to Workflow #463 CH-1, §1.455). Each has a way back
 but LAB-6S5. The contract's slice table carries the staging; the numbers LAB-0 planned for LAB-6
 (`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices, and are now 8
-(LAB-6S1a), 9 (LAB-6S5) and 30 (LAB-6S4b).
+(LAB-6S1a), the next free `ledger` revision (LAB-6S5; 9 went to §1.455) and 30 (LAB-6S4b).
 
 **This slice is additive.** Every connection that binds today binds as today and reads the bytes
 it reads today; the only new thing is a connection that declares a word, and no program of this
@@ -35781,6 +35785,154 @@ changes, but the gate's `null` below.
 No code, word, key, interface revision or record shape is added; no golden changes; no test leaves
 the gate map.
 
+### 1.455 Slice #463 CH-1 (0.12.71): the run's admission record carries the content hash its admission measured and the values handed to the run (Workflow #463; the owner's ruling of 11-16 on board #463, option A of question 220, which relaxes her ruling of 10-11, option 丙 of Workflow #336, for computing and recording only; the read-only study `rd-1116/report-463-run-content-identity-study.md`, its slices S1 and S2, with the coordinator's notes at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ch1-admitted-content.md`, on main `26698590`)
+
+The coordinator gave this slice 1.455. It ships in 0.12.71, released alone after 0.12.70; two
+followers (the Lab's `run show` and the trial's comparison) are other slices.
+
+**Why.** A run's record said which package label ran, not which content, nor which values it was
+given. A trial reads the package directory when it plans and the Runtime reads it again when it
+admits; if the directory changed in between, nothing told. A scheduled run whose package was
+replaced after its dispatch could read a default while the dispatch's record said `set`
+([package-variables.md](package-variables.md), "A limit, now recorded").
+
+**The rule.**
+- *`content_hash`* (`PackageAdmitted`, `task.requested`): optional; 64 lowercase hexadecimal
+  digits; the measure of [policy-suspension.md](policy-suspension.md) ("Content hash"), computed
+  by one private function of the containment (`content_hash_of`), which
+  `Containment::measure_content_hash` and the admission of a run's package
+  (`Containment::load_path_measured`) both call: in the one bounded read the admission does, on
+  the bytes in memory, before the source compile adds its derived files; the package is not read
+  a second time and `measure_content_hash`'s output is byte for byte what it was. A run's package
+  is admitted so (`PreparedContainedTask::load_path_with_resident_bytes`, through
+  `ExternallyVerifiedBundle::load_path_measured`), so every run admitted by its path records it:
+  a direct run, the trial's run (a direct run), a scheduled run, and a run the host starts itself
+  (a startup package, a return-home or idle return-home package, a ladder rung's package). A
+  layer of a run (a prerequisite, a return home, an interrupt handler, a navigation hop) writes no
+  `PackageAdmitted` of its own: it writes its own entry-recovery record
+  (`EntryRecoveryPackageAdmitted`), which carries neither a content hash nor values (fix round 1:
+  this sentence said "no admission record"). Every other admission (by bytes, by a content
+  table already in memory, the metadata reads, `package bundle`, `standard-pack check`, the Lab's
+  validation) computes nothing; every path form has the measure (a directory, a `.json` or `.zip`
+  content container, an assembled ZIP), so no run's package has a form where it has no meaning.
+- *`variables`*: optional; the values handed to the run from outside, sorted by name, 1 to 16
+  `AdmittedVariable`s: `{variable_name, value_json}` with a value's compact JSON text of at most
+  1024 bytes, else `{variable_name, value_sha256, value_bytes}`. A direct run: the values its
+  request gave; a policy run: the values of its dispatch it read under its prepared package's
+  declaration (`PreparedContainedTask::dispatched_variables_read`, the rule of
+  `dispatched_variable_values`, one helper `dispatched_value` for both); none otherwise. A run
+  handed no value writes no member, so its record is byte for byte the record with `content_hash`
+  alone.
+- *Only computed and recorded.* Admission compares nothing and refuses nothing for them; the
+  failure identity, the break-in, the lift of a suspension and their own measuring do not change
+  and read neither member.
+- *The record's validation* (`TaskSemanticFact::validate`): a `content_hash` that is not 64
+  lowercase hexadecimal digits, and `variables` that are empty, more than 16, not in strictly
+  ascending order of names, under a name outside a variable's form or of neither form, are
+  refused `invalid_task_semantic_payload` (the writer at `content_hash` or `variables`; the
+  stored reader at `task_semantic_fact`, as for every fact refusal but the geometry phase's). An
+  old record without them reads as before; `package_sha256` stays refused.
+- *The public projection* (the coordinator's ruling): `TaskSemanticFact::public_summary` strips
+  both, so the projection of a record with them is byte for byte the projection without them and
+  a console of the older client library reads every page of public projections as before. The
+  full record (the Lab's own reading, the ledger tools) carries them.
+- *`ledger` 9*, one way ([component-interfaces.md](component-interfaces.md), the `ledger` row 9):
+  a build that declares [3, 8] refuses a ledger that holds such a record. `runtime-client` stays
+  [3, 11]: no request, receipt or answer type changes; the fact is a ledger record type, which a
+  client meets in a full-detail page or the ledger itself, as for revisions 4 to 8.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The record | `crates/actingcommand-contract/src/event/payload.rs`: `AdmittedVariable` (`of`, `list`), `TaskSemanticFact::PackageAdmitted` (`content_hash`, `variables`), `validate` (`is_lower_hex_64`, `validate_admitted_variables`), `public_summary` |
+| The measure | `crates/pack-containment/src/lib.rs`: `content_hash_of`, `Containment::load_path_measured`, `read_and_admit`, `LoadedBundle::content_hash`; `measure_content_hash` calls `content_hash_of` |
+| The kernel | `crates/execution-kernel/src/bundle.rs`: `ExternallyVerifiedBundle::load_path_measured`; `contained_task.rs`: `load_path_with_resident_bytes` answers the hash; `contained_task/remedies.rs`: `dispatched_value`, `dispatched_variables_read` |
+| The host | `crates/runtime-host/src/host/contained_task.rs`: `PackageLoad::content_hash`, `prepare_measured_naming_refusal`, `execute_contained_task_with_lease` (the values), `RuntimeContainedTask` (`admitted_content_hash`, `admitted_variables`) and its record of `PackageAdmitted` |
+| The declaration | `distribution/windows/component-interfaces.json`: `ledger` [3, 9]; the pin `tools/actinglab-architecture/tests/component_interfaces.rs` (`V0120`) |
+| Texts | [ledger-observer.md](ledger-observer.md), "Later rulings applied", item 1; this register's "Rules every shape below follows" and §1.31 P2-1; [policy-suspension.md](policy-suspension.md), "Content hash"; [linear-steps.md](linear-steps.md), "Ledger"; [package-variables.md](package-variables.md), "Not built", "A limit, now recorded", "A direct run given values", "The run's admission record", "Interface"; [component-interfaces.md](component-interfaces.md), the `ledger` row 9 and "Planned: Workflow #434"; [lab-operations.json](lab-operations.json), the notes of `run start`; the comments at the record, `content_directory_digest` and `suspension_lift.rs` |
+
+**Codes and words.** None added: a malformed member is the existing
+`invalid_task_semantic_payload`. No vocabulary, key or location is added; no fragment of
+`contracts/outcome-codes/` changes.
+
+**What the console re-pins for** (the coordinator's order: this commit is pinned and the console
+ships before this Runtime is released). The types are in one file,
+`crates/actingcommand-contract/src/event/payload.rs` (crate `actingcommand-contract`):
+`TaskSemanticFact` (its variant `PackageAdmitted` gains `content_hash` and `variables`) and
+`AdmittedVariable`, with the projection `TaskSemanticFact::public_summary`. A client of the older
+library decodes a page of public projections that holds the new record as before; a full-detail
+page that holds it, and the ledger read offline (the console's ledger window), it cannot decode.
+
+**Tests.** `crates/runtime-host/src/tests/gate_463_ch1.rs`, gate map `host.toml` "#463 CH-1", no
+clock read: the kernel's admission of a directory answers a content hash equal to
+`measure_content_hash` of it (`admitted_hash_equals_measure_content_hash_of_directory`); of an
+assembled ZIP the SHA-256 of the whole file, what the measure is for that form
+(`assembled_zip_hash_is_file_sha256`); a direct run's record with both members reads back
+unchanged, and without them too (`package_admitted_reads_back_with_and_without_hash`); a hash out
+of its form is refused (`hash_not_64_lower_hex_refused`); a direct run records its directory's
+content hash, and a changed content's after a change (`direct_run_records_admitted_content`);
+given values are listed sorted, whole (`direct_run_records_given_values`); a value of 2145 bytes
+by its SHA-256 and length, one of 1024 bytes whole
+(`value_over_1024_recorded_by_sha256_and_length`); a run given no value writes the bytes of the
+fact with the hash alone (`run_without_values_writes_the_bytes_of_the_hash_alone`); a scheduled
+run lists what its dispatch handed down and it read, and nothing when its package was replaced
+after the dispatch so that it read its default (`scheduled_run_records_values_it_read`); the
+public projection of a record with both members is the projection without them
+(`public_projection_carries_neither_member`). **Adapted**: the pinned member set of
+`event::tests::pkg_s2::s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest`
+(contract gate K22) gains the two members and still refuses `package_sha256`; the golden of
+actinglab's `lab run` (`apps/actinglab/tests/golden/expected.json`) gains the record's
+`content_hash`, which its normalizer writes `<CONTENT_HASH>` as it writes the other hashes of the
+files a case writes (edited by hand, not recorded); every construction of the fact in a test
+names the two members `None`. No test leaves the gate map.
+
+**What is not changed.** What admission accepts and refuses; `measure_content_hash`'s output; the
+failure identity, the break-in and the suspension; `QueryRuns` rows; every record other than
+`PackageAdmitted`; `run show`; a run's timing, beyond one SHA-256 pass over the bytes already in
+memory, inside the package load the run's timing evidence measures (`package_load_ms`; no gate
+test reads a clock, so none shows it).
+
+**At deploy.** Nothing to do on the root. The console that reads `ledger` 9 ships first; once this
+Runtime has run on a root, no build that declares [3, 8] runs on it again.
+
+**Fix round 1** (the independent review of the pull request; coordinator work order
+`rd-1117/brief-463-ch1-fix1.md`). *The architecture guard*
+`contract_has_no_public_value_payload_or_persisted_fact` (`light`) refuses a public function of
+the contract crate's event module that takes a `serde_json::Value`, which `AdmittedVariable::of`
+and `AdmittedVariable::list` did. Of the two ways the review named, the value is now handed in as
+its compact JSON text: `AdmittedVariable::of(name, value_json: String)` and
+`AdmittedVariable::list` of `(name, text)` pairs, so the one place where a value becomes a
+recorded value, and the one rule "at most 1024 bytes whole, else SHA-256 and length", stay in the
+contract crate beside the record's validation that checks the same form; the host turns each value
+into its text (`serde_json::Value`'s `Display`) at its one call in
+`execute_contained_task_with_lease`, for a policy run and a direct run alike. The guard is
+unchanged, and the file's other guards were read for this slice's public surface (nothing else
+there takes or answers a `serde_json::Value`). *Texts*: [policy-suspension.md](policy-suspension.md),
+"What is suspended" (the suspension takes no hash from admission); [package-reference.md](package-reference.md),
+"Content-directory admission" (the one computed hash) and its item 1 (the admission record's
+`content_hash`); [lab-two-entries.md](lab-two-entries.md), the slice table, §4.1 and §10, and
+§1.287 here, "Slice LAB-6S1a" (LAB-6S5 takes the next free `ledger` revision, 9 being this
+slice's); the layer's sentence in "The rule" above (no `PackageAdmitted`, its own entry-recovery
+record); §2's "Failure identity" (the suspension's measuring, beside this record);
+[standard-pack-trial.md](standard-pack-trial.md), "What `--collect` can know" (one sentence: the
+record now carries them, the trial reads them in #463 CH-3); [package-variables.md](package-variables.md),
+"The run's admission record" (a policy run's `variables` holds every value its dispatch carried
+and the run read, defaults included, without saying which were set; a direct run's has no
+default) and "The admission record's size" (about 20 KB at most, nothing refuses, cuts or fails
+on it); [ledger-observer.md](ledger-observer.md), "Later rulings applied", item 1 (the public
+tiers carry neither member; the Lab's and the forensic tiers, so the Lab's `events`, the ledger
+tool's exports and an exported evidence package, carry both; `QueryRuns`, `run show` and `report
+export` do not carry the record). *Tests*: `hash_not_64_lower_hex_refused` also refuses
+`variables` of no entry, of 17 entries, of names not strictly ascending (descending, or one twice),
+with an entry of both forms or of neither, or with a `value_sha256` out of its form, while 16
+ascending entries and one hashed entry validate; `startup_package_run_records_admitted_content`
+(gate map `host.toml` "#463 CH-1"): the instance's startup package, a run the host starts itself,
+run on a key the test holds as `gate_463_u1` runs one, records its directory's content hash and no
+`variables`; `s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest` builds its
+values by the new signature. What is recorded and when, the public projection, `ledger` 9,
+`measure_content_hash` and `runtime-client` do not change; no code, key or word is added.
+
 ### 1.456 Slice #463 S2-8' (0.12.70): the swipes recorded before a press folded into one scrolling search (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, and her rule that a scrolling choice has two kinds, to the list's end when what it holds is not known and straight to the wanted item when it is; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 3, Q2 and Q4, and the coordinator's rulings at its end and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s28-fold-scan.md`; stacked on #463 S2-10, §1.441, its branch at `225c1d3c`, which holds main `26698590`, the 0.12.69 train)
 
 This section takes 1.456, the number the work order gives. It ships in 0.12.70.
@@ -36303,6 +36455,617 @@ ledger record, configuration key or interface revision.
 read and run: it answers what its scene gives, and the scene rule's warning where its scene holds
 more than its `rects` name.
 
+### 1.460 #398 DB-1 (0.12.71): `devices bind` against a candidate configuration, and the channel `ui` (Workflow #398; the coordinator's ruling on board #398, comment 6940490302, that the bind may name a candidate configuration while check-config and the start stay as they are; the rest the coordinator's rulings in the work orders, not the owner's words; coordinator work order `rd-1117/brief-398-db1-bind-candidate-config.md`, read on main `240cdb1a`, and its fix round `rd-1117/brief-398-db1-fix1.md`, merged with main `ca539cc7`)
+
+This section takes 1.460, the next free number after 1.459 (#463 RC-2's). It ships in 0.12.71.
+
+**Why.** The interface's installer is being redesigned: the person first says what the
+installation is for, and for a phone the installer binds the device while it installs, in the
+order: create the folders (the state root created empty), lay the programs, write the candidate
+configuration, bind, check-config, adopt, first start. check-config refuses a handset the private
+binding file binds no device to (`device_binding_missing`), and `devices bind` looked its alias up
+in the selected configuration, which a new installation does not have yet, and wrote into the state
+root the Lab located from it: neither step could come first.
+
+**The rule** ([device-binding.md](device-binding.md), "Choosing a device", "Against a candidate
+configuration" and "The channel `ui`").
+- *`config`*, a new option (a file) of the row `devices bind` ([lab-operations.json](lab-operations.json)):
+  the alias is checked in that file, not in the selected configuration, by the same rules and codes
+  (`instance_unknown`, `device_kind_unsupported`); a file that cannot be read is
+  `config_read_failed`, one that does not decode `config_decode_failed`, each with its `path` (the
+  two codes the selected configuration's read answers). The binding goes into the private file of
+  the state root the file names, its absolute `state_root` (else `install_state_root_unresolved`
+  with `config_path`, the rule `lab_ops::locate` locates a state root by, now one function,
+  `locate::state_root_of`). The device list is read again with the install root's adb, and the
+  answer is today's with `config`, the file as given.
+- *The state root agrees with check-config's.* actingd's check-config of a file reads the private
+  file of the file's own `state_root`, with `--install-root` or without it (the root changes the
+  adb and the vision root it judges, not the state root); the Lab's rescue row `check-config
+  <file>` runs that check with `--install-root <root>`. The Lab's own line and its MCP server hand
+  `devices bind` the state root they locate (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, else the selected
+  configuration's `state_root`); a `--via` line (the first face's actinglab child) never reaches
+  `devices bind`, no command of actinglab's own. So against a candidate the row's line carries no
+  module's state root (`core_ops::candidate_words`, which `answer` and `handed_words` take), and
+  `devices` takes the candidate's: no further parameter was needed. `--state-root` beside
+  `--config` is `conflicting`; neither is `--state-root` `required`, as before.
+- *No install selection is read* (fix round 1). Before it, the candidate's bind found its adb as
+  `bind` does (`packs::selected_config`, through `process_installation`): a process that inherited
+  another installation's selection took that installation's adb, and was refused
+  (`install_process_root_mismatch`) when `--root` named another root, and a program in an A/B slot
+  of a root without `install\active.json` was refused (`install_selection_unavailable`), which is
+  the installer's moment, the files laid and nothing selected. Now the candidate's line carries no module's root
+  either (the place reads it from the process's selection when there is one) and is built before
+  the place is asked for; `devices` takes the install root's adb from `--root` when it is given (a
+  further `--root` on the Lab's command line, now taken inside an installed root too), else from
+  the root its program runs from by its place alone, else `install_root_unresolved`
+  (`devices::candidate_adb`). The place is `locate::root_of_place`: a program in an A/B slot,
+  `<root>\<A|B>\runtime\<program>` or `tools\`, beside the slot's `runtime\BUILD-MANIFEST.json`
+  and the root's slot locator `install\slot-<A|B>.lock`, gives `<root>`; any other place is read
+  as the Lab's location reads it without a selection (a kept build's root, a single-location
+  root). check-config of a candidate reads no selection either (`InstallConfigPurpose::CandidateCheck`).
+  Without `--config` nothing changed.
+- *What the bind needs and makes.* The candidate and the install root's adb. `devices`' writer
+  makes the state root's folder and its `private` folder with `create_dir_all` when they are
+  missing, then the private file through a temporary sibling; nothing else of the state root. So
+  an operation that requires an empty state root comes before the bind: of today's operations one,
+  the rescue row `new` (`install new`), which refuses a state root that exists and is not an empty
+  folder (`install_command_refused` `state_root_not_empty`; `crates/lab-rescue/src/install/new.rs`
+  is the one place that answers it). The installer does not use `install new`: it creates the
+  folders itself.
+- *The first start accepts the bound state root* (read in the code; shown by
+  `db1_fix1_the_first_start_claims_the_state_root_the_bind_made`). After the bind the state root
+  holds exactly `private\device-bindings.json`. `RuntimeHost::start_with_provider`
+  (`crates/runtime-host/src/host.rs`) reads the state root's installation record before it writes
+  anything (`state_root_installation::check`: no `installation.json` is `unclaimed`, and the start
+  goes on), claims the state root under the owner lock (`state_root_installation::claim`, which
+  reads only `installation.json` and the installation's `install\identity.json`, mints the
+  identity and places the record), and takes the storage as new when none of
+  `runtime-state.sqlite`, `runtime-state.key`, `ledger`, `release-blobs` and `artifacts` is there;
+  check-config's catalog preview judges the state root by the same five names
+  (`policy_host/catalog_preview.rs`, `STATE_MATERIALS`). Neither a start nor a check asks a state
+  root to be empty, and the start reads the binding when it assembles its configuration.
+- *`bound_via`*, a new option `enum:ui`, not named `via`, which is `actinglab`'s global option
+  (`--via mcp|ui`, the first face's actinglab child): `ui` writes `bound_via` `ui`
+  (`DeviceBoundVia::Ui`, which nothing wrote before). Without it the channel is the entry's, as
+  before: `cli` on the Lab's command line, through `serve --stdio` and through the Lab's MCP server
+  (which serves the row with the command line's code, `devices::dispatch`), `mcp` through
+  `actingctl mcp-serve`'s `ac_device_bind`. The next start records it as `runtime.instance_bound`'s
+  `device.bound_via`; nothing decides by it.
+- *The MCP tool leaves it out*: `tools::SUPPLIED` gains `("devices bind", "bound_via",
+  Supplied::Nothing)`, a member the front gives nothing for: the schema of `ac_devices_bind` has no
+  `bound_via`, and one sent is refused `arguments_invalid` `unknown`, as any argument the tool does
+  not know.
+- *The first face*: `ac_device_bind` of `actingctl mcp-serve` gains no parameter, and no shared
+  function's signature changed (`devices::bind` and `Bind` are as they were; the candidate is
+  `devices::bind_candidate`, which `devices::bind_candidate_from` serves for a given program's
+  place, and `devices::dispatch_with` takes the adb run a test gives). Its command line `actingctl
+  devices bind`, which runs the same parser, takes `--config` and `--bound-via` too.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The candidate and the channel | `crates/lab-ops/src/devices.rs`: `bind_candidate`, `bind_candidate_from`, `candidate_adb`, `adb_of`, `bound` (the body `bind` shares), `read_candidate`, `configuration_bytes`, `decode_failed`, `Against`, `CONFIG_FLAG`, `BOUND_VIA_FLAG`, `dispatch_with`; `parse` and the usage text |
+| The flags | `crates/lab-ops/src/lib.rs` `flags_of` (`devices bind`) |
+| The row's line | `crates/lab-ops/src/core_reads.rs` (`devices bind`'s `config` and `bound_via`); `crates/lab-ops/src/core_ops.rs` `candidate_words`, `answer`, `handed_words` |
+| The state root's rule and the program's place | `crates/lab-ops/src/locate.rs` `state_root_of` (from `configured_state_root`), `root_of_place` |
+| The MCP front | `apps/actinglab-mcp/src/tools.rs` `Supplied::Nothing`, `SUPPLIED`; `calls.rs` `prepare` |
+| Texts | [lab-operations.json](lab-operations.json) (the row's two parameters, its `help`, its `notes`); [device-binding.md](device-binding.md); `apps/actinglab-mcp/MANUAL.md` section 1; the actingctl fragment's description of `device_kind_unsupported` (it names the candidate too) and the regenerated index |
+
+**Codes and words.** None added. `install_state_root_unresolved` (the Lab cannot tell the state
+root) is newly answered by `devices bind --config` for a candidate without an absolute
+`state_root`, with `config_path`, and the value as `path` when it is not absolute, as the Lab's
+location answers it; it refuses: exit status 1 on the Lab's line and on `actingctl`'s, the same
+line through `serve --stdio`, `isError` true through MCP. `install_root_unresolved` is answered,
+as before, when no install root is found: against a candidate, when neither `--root` nor the
+program's place names one. No decision reads a code by name.
+
+**Tests** (`apps/actingd/src/gate_398_db1.rs`, and for the MCP tool
+`apps/actinglab-mcp/src/gate_398_db1.rs`, which only that program's code reaches; apps gate map
+"#398 DB-1"): the five of the work order, test 4 being RD-1c's unchanged tests; fix round 1 makes
+test 2 run check-config with `--install-root` in the installer's order and assert that it passes
+whole after the bind (`db1_t2_check_config_with_install_root_refuses_before_the_bind_and_passes_after`),
+and adds `db1_fix1_a_candidate_bind_reads_no_install_selection` (the two cases above, each binding
+with the adb of the root it names) and `db1_fix1_the_first_start_claims_the_state_root_the_bind_made`
+(one Runtime host started in the test's process, as RD-1b's T9 starts one). actingd takes
+`actingcommand-lab-ops` as a dev-dependency, so that its gate binds through the Lab's code and
+reads the binding back as the start's assembly, check-config and the start read it. Adapted, as the
+requirement adds a member the MCP front leaves out: `gate_434_lab5g2b`'s
+`mcp_front_members_in_one_place` (the pinned `SUPPLIED`) and `gate_434_lw1`'s `LEFT_OUT` (its
+reason). No golden changes; no test leaves a gate map.
+
+**What is not changed.** `devices` and `devices unbind`; what `devices bind` answers and writes
+without the two options; check-config (it still refuses an unbound handset) and the start (it still
+registers one unbound and goes on); the private file's format; no answer, outcome value or line
+names a device serial.
+
+**At deploy.** Nothing to configure.
+
+### 1.461 Slice #463 AC-1 (0.12.71): adoption takes the recording's regression cases into the checkout, and judges the recording by the one judgement of `record ready` (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, whose stage three takes the package into running; the design's S3-17; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ac1-adopt-cases.md`, read on main `240cdb1a`, the 0.12.70 release)
+
+This section takes 1.461, the number the coordinator gave after §1.459 and §1.460 were taken by
+other open pull requests. It ships in 0.12.71.
+
+**Why.** Since #463 S2-10 a stopped recording has, beside its package, the regression cases of
+that package, each run on the package before it was written; adoption named "a regression case" in
+`next` as something a person still had to write. And adoption judged a recording by two checks of
+its own, while stage two has one judgement of what a recording still lacks (`record ready`,
+`recording_api::ready_of`).
+
+**The rule** ([standard-pack-authoring.md](standard-pack-authoring.md), "The cases" and "One
+judgement of the recording").
+- *Which cases*: with `--record-id`, every entry of the recording's `out/<package_id>.cases/`, in
+  the order of the names (`cases.state` `taken`); none when the stop wrote no such directory
+  (`none_found`), none with `--package` (`package_path`); both adopt as before, byte for byte.
+- *Where*: `regression/<game>/<package_id>.<case>/`, `case.json` and its scene byte for byte. The
+  name's safety is shown from the two grammars (a package id is one path segment no root name
+  reserves; a case's name `step_<nn>`, `final` or `ending_<outcome_key>` holds no dot), but they do
+  not bound its length together, so a name whose `.part` exceeds 255 bytes is refused before the
+  first write (`case_name_invalid`, with a dot or a name of more than one segment); nothing is
+  escaped.
+- *Checked before the first write*, after every existing check: each destination free (ASCII lower
+  case) or the earlier set's (`case_place_taken`); each case run by the one runner on the check
+  tree's `packs-root/<package_id>/`, the files adoption writes, admitted once by the runner
+  (`RegressionPackage::load`: adoption's own admission hands it no admitted package); `failed`
+  refuses (`case_failed`, every failing case in the details as the runner answers it), `partial`
+  and `not_run` are taken and named (`cases.not_proven`, the runner's words).
+- *Repeating*: a case is the earlier adoption's when its `case.json` names the package and its
+  `source` is a recording's in the form `record stop` writes, the member `source.record_id` beside
+  exactly one of `step`, `final`, `ending`; without `--replace` such a case refuses `pack_exists`;
+  with it the set is moved to `<state>/adopt/<package_id>.cases.old-<ms>/` (free, `pack_exists`;
+  on the checkout's volume, `replace_across_volumes`). A case written by hand is never moved.
+- *Written last*, after the root files: the earlier set moved, then each case as its `.part`, its
+  files flushed, renamed. A case's `.part` an interrupted call left refuses `pack_exists`; without
+  one the next call meets what any call that put its directory in place leaves, and each advice of
+  the contract ends in a call the checks accept.
+- *The answer*: `cases` `{state, from?, written, would_write, replaced, kept?, not_proven}`;
+  `written` and `would_write` gain the case directories; `next` names a regression case only when
+  none was taken.
+- *One judgement (S3-17)*: with `--record-id`, after the schema and the `record_id`, `record
+  ready`'s one function (`record_ready_by_id`, the recording by its id, no option given); a status
+  other than `packaged` is refused `recording_not_current` with that function's answer as the
+  details' `record_ready`.
+
+**What adoption accepts and refuses, compared.**
+- `recording_not_current`: `packaged` is `stopped`, an artifact and no `amended_at_unix_ms`, the
+  old check's members, so the two refuse the same recordings the function reads, but for two
+  differences, where the old check stays beside the call for that difference only: a packaged
+  recording whose artifact's form is wrong or whose package's file is missing (the function says
+  `packaged`, the old check refuses `member` `artifact`); and a `recording.json` the function
+  cannot read as a whole `actingcommand.lab-recording.v1` (made by hand, or damaged), judged by the
+  old `status` and `amended_at_unix_ms` check, the function's refusal its cause, and named
+  `review.ready_not_read` when it passes. The coordinator decides whether these stay.
+- `recording_unreviewed`: the function checks a packaged recording no further, so it refuses none
+  of the recordings the review refuses (cross-check not `passed`, first decision not evaluated, a
+  step needing review); the review stays whole, `review.recording_checked` unchanged.
+- `standard-pack status` reads no recording's state: unchanged.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The cases, the judgement, the trait the Lab answers | `crates/resource-tooling/src/adopt.rs`: `AdoptLab`, `AdoptCaseRunner`, `RecordingReady`, `AdoptCaseRun`, `AdoptCaseVerdict`, `AdoptCases`, `CaseNotProven`, `ReadyNotRead`, `AdoptWorktree::lab`; `recorded_package`, `case_names`, `CheckoutCases`, `recorded_case`, `case_part_left`, `same_volume`, `plan_cases`, `write_cases`; `write_adoption` answers what it did; `next_items` |
+| The words | `crates/resource-tooling/src/codes.rs`: `AdoptProblem::{CaseNameInvalid, CasePlaceTaken, CaseFailed}`, `AdoptCasesState` |
+| The one judgement by id | `crates/lab/src/recording_api.rs` `record_ready_by_id` (with `recording_of_id`, `session_of_id`, which `record ready` reads with too); `recording/ready.rs` `RecordReadyOutcome::is_packaged` |
+| The Lab's parts | `apps/actinglab/src/standard_pack_cli.rs` `LabAdoption`, `adopted_case`, `case_run`; `GitWorktree::lab` |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md) (the operation, the checks, what it writes, if a call was interrupted, repeating, `--dry-run`, the answer, and the new "The cases", "One judgement of the recording", the codes' table); a sentence each in [lab-recording.md](lab-recording.md) and [resource-regression-case.md](resource-regression-case.md); the row `standard-pack adopt` of [lab-operations.json](lab-operations.json) (`output`); the resource-tooling fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+| Word | What it says | Refuses, warns or informs | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_problem` `case_failed` | a case of the recording fails on the package as adopted | refuses | 1; 2; a refusal |
+| `adopt_problem` `case_place_taken` | a case's destination is there and no case of the earlier set | refuses | 1; 2; a refusal |
+| `adopt_problem` `case_name_invalid` | a case's name gives no directory of one file name | refuses | 1; 2; a refusal |
+| `pack_exists`, `replace_across_volumes`, `recording_not_current` | new causes, each the existing word's (the contract's checks) | refuse | 1; 2; a refusal |
+| `adopt_cases` `taken`, `none_found`, `package_path` | which cases were taken, or why none | inform | 0; 0; the answer |
+
+No decision reads a code by name: adoption decides by the runner's verdict and by the judgement's
+status. The outcome-code index is regenerated.
+
+**Tests** (`apps/actinglab/src/tests/gate_463_ac1.rs`, apps gate map "#463 AC-1"): the nine the gate
+map's comment lists, the work order's seven (its seventh as three). Adapted, not changed in what
+they pin: the trait `AdoptWorktree` gained `lab`, so each test machine of
+`crates/resource-tooling/src/gate_464_p1.rs` and `gate_463_s312.rs` names P1's `NoLab`, whose
+reader reads none of their made-up recordings (as the Lab's reader reads none of them), so the old
+check of the members judges them as before. No golden changes; no test leaves a gate map.
+
+**At deploy.** Nothing to configure. A checkout's `regression/<game>/` gains the cases an adoption
+takes; `resource verify` and `standard-pack build` do not run them yet.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-ac1-fix1.md`, after the independent
+review `rd-1117/review-1808.md` on `dbfdc483`, the coordinator's rulings; main `ca539cc7` merged).
+
+- *Main merged.* #1806 (#463 RC-2, §1.459) merged locally: the apps gate map keeps both blocks,
+  and this register keeps §1.459 whole, as main has it, before this section.
+- *A failure on the Lab's side is never a pass* (ruling 2). `AdoptLab::recording_ready` answers
+  `ReadyRefused` when `record ready`'s function answers nothing: `Unreadable` when the Lab's
+  refusal carries the word `lab_recording_unreadable` (`standard_pack_cli`'s `ready_refused`, by
+  the carried `reason`, never by the code), the one refusal the check of the recording's own
+  members still judges, said in `review.ready_not_read` as before, so that what adoption accepts
+  and refuses does not move for such a recording; `Failed` for every other refusal (the state not
+  read, `lab_recording_missing`, `lab_recording_mismatch`, an answer that does not serialize),
+  refused with the new word `recording_not_judged`, `path` the `recording.json`, the Lab's refusal
+  the cause, nothing written. P1's test Lab `NoLab` answers `Unreadable`.
+- *`case_failed` is bounded as the runner's own listing is* (ruling 3). The trait's `case_runner`
+  became `run_cases`: the set run at once, one run of each case, and beside them the cases that did
+  not pass listed by `resource regression`'s one rule, `resource_verify/regression.rs`'s
+  `not_passed` (its `ROWS_LISTED_MAX`, 10, the one constant; the failed cases first, rows without a
+  check's `detail`), which that operation and `LabAdoption` both call. The details are
+  `failed_total`, `listed` and `cases`, each row `{path, id, package_id, verdict, checks,
+  warnings?}` with `path` the directory `regression/<game>/<package_id>.<case>` the case would be
+  written to; the message names the first failing case. `AdoptCaseRun` carries no `answer`.
+- *One reading of a case directory* (the review's first "may change"). `regression.rs`'s
+  `case_of_directory`, beside the trait `CasePackages` (which cases are taken, the package a case
+  is run on): what a `case.json` that cannot be read, a missing scene and a refused package become,
+  with the files read. `resource regression` calls it with `CheckoutPackages` (`packs/<package_id>/`
+  admitted once per run, `--package-id`), adoption with `AdoptedPackage` (the package it writes,
+  every case taken); `adopted_case` and `run_read_case` are gone.
+- *What an adoption that takes no case leaves* (the review's second "may change"). With
+  `none_found` or `package_path` the checkout's `regression/<game>/` is read for the package's
+  cases as an adoption that takes cases reads it (`CheckoutCases::read`, a directory that cannot be
+  listed `repository_invalid`), and the earlier set from a recording and a case's `.part` are named
+  in the new warning `adopt_cases_left`; nothing is moved or removed.
+
+| Word | What it says | Refuses or warns | Exit (own line; `--via`; MCP) |
+|---|---|---|---|
+| `adopt_refused` `recording_not_judged` | `record ready`'s function refused the recording otherwise than as one the Lab cannot read whole | refuses | 1; 2; a refusal |
+| `adopt_cases_left` (resource-tooling, `package_id`, `paths`) | an adoption that took no case leaves cases of the package in `regression/<game>/`: an earlier adoption's from a recording, a case's `.part` | warns | 0; 0; the answer's `warnings` |
+
+No decision reads a code by name. The outcome-code index is regenerated. **Tests**
+(`gate_463_ac1.rs`, apps gate map "#463 AC-1 fix round 1"):
+`ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back` and
+`ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them`, as the gate
+map's comment lists them. No test is adapted in what it pins (P1's `NoLab` follows the trait); no
+golden changes; no test leaves a gate map.
+
+**The train of 0.12.71** (coordinator work order `rd-1117/brief-train-01271.md`). Pull request
+#1800 (#463 CH-1, §1.455) carries #1810 (#463 RG-1, §1.463), this slice (#1808) and #1807 (#398
+DB-1, §1.460), each joined whole by one merge commit: this register keeps §1.455, §1.459, §1.460,
+§1.461 and §1.463, each once, in the order of their numbers; the apps gate map keeps DB-1's block
+before this slice's two. Where the slices meet:
+- *Adoption and the admission record.* Adoption runs its cases on the package it writes through
+  the runner's loader, `RegressionPackage::load`, which admits by
+  `ExternallyVerifiedBundle::load_path`, whose signature CH-1 keeps; CH-1's measuring admission
+  (`Containment::load_path_measured`, `PreparedContainedTask::load_path_with_resident_bytes`, which
+  now answers the content hash beside the resident bytes) is the Runtime's run's alone, and no other
+  slice of the train calls it or builds a `PackageAdmitted`. The cases adoption runs reach no
+  Runtime and record nothing in any ledger: the reader, `case_of_directory` and
+  `RegressionPackage::run` read files and evaluate a scene, and `record_ready_by_id` only reads.
+- *A checkout without `regression/<game>/`.* With `none_found` or `package_path`,
+  `CheckoutCases::read` answers nothing for a directory that is not there (`NotFound`), so such a
+  checkout adopts as before, with no refusal and no warning; a directory that is there and cannot
+  be listed is `repository_invalid`, as fix round 1 says. No change.
+- *Two cases of one id.* The reader reads a case's `id` as a text it answers; `case_of_directory`
+  reads and runs each case directory by itself, `not_passed` lists rows by their paths, and
+  adoption names a case by its directory: nothing compares two cases' ids, so two cases of one id
+  are two cases, each its own row. The test of fix round 1's bound stands on it now: its ten copies
+  keep the `id` of the case each copies, each row carries the `id` of its own `case.json`, and rows
+  of one id are listed, each by its own path.
+- *One box.* RG-1's `located_text_box` stays the one computation of a found text's box: the Lab's
+  `follow.rs` calls it, and no other slice brings a computation of it.
+- *DB-1* shares with the others only the register, the operation table and the apps gate map (its
+  outcome fragment and its page of the index are its own); its line in `Cargo.lock` (actingd's
+  dev-dependency on `actingcommand-lab-ops`) is DB-1's byte for byte, as no other slice adds a
+  dependency.
+
+The outcome-code index is regenerated and current: 4018 codes, 3929 active, 89 retired. The
+operation table keeps its 194 rows (every help text at most 160 bytes), the ratchet its 46
+dispatch arms and 109 commands. *Tests*: one adapted, as the work order asks of it, its assertions
+kept: `ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them` also
+asserts each row's `id` and that rows of one id are listed (apps gate map, its comment). No test is
+added; no golden changes; no test leaves a gate map.
+
+### 1.462 Slice #477 PC-2 (0.12.71): `standard-pack catalog` brings a named entry up to date from the rules, and writes a named entry's display (Workflow #477; the owner's approval on board #477 on 11-16 of one package declaration per game root, written by tools and not by hand; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-477-pc2-catalog-refresh.md`, on main `ca539cc7`)
+
+This section takes 1.462, the number the work order gives: §1.459 is on main, §1.460 and §1.461 are
+held by other open pull requests and §1.463 by another slice of the same day. It ships in 0.12.71.
+
+**Why.** `standard-pack catalog` (§1.438) gives a package without an entry one from the rules of
+`schedule.json` as they stand, and never overwrites an entry already there. Agents now make a
+package in this order: adopt it held (no rule yet), try it, then write its rule. An entry written
+before the rule stayed empty for good, and a rule changed later could never reach its entry: no
+tool brought an entry up to date, and the contract forbids editing the file by hand. Nor did any
+tool write a new entry's display, so a new package showed by its id.
+
+**The rule** ([pack-catalog.md](pack-catalog.md), "Who writes it").
+- *`--refresh <package_id>`* (repeatable, once per package; the MCP tool's `refresh`, a list): the
+  entry of each named package has its `consumes` and `produces` computed again from the package's
+  rules, by the function a new entry is made by (`schedule_union` inside
+  `merge_standard_pack_catalog`, one rule for both), and they replace what the entry held; its
+  display and its place in the file are kept, and an entry that holds its rules' already is left as
+  written. It is the one way an entry's business part is brought back to the rules (fix round 1: a
+  plain line already drops a pool `schedule.json` no longer declares); an entry not named is never
+  overwritten, as before. A refreshed package's rules are held to `schedule.json` as a new entry's
+  are (`standard_pack_root_invalid`, `catalog_pool_undeclared` at the rule). Afterwards no
+  `standard_pack_catalog_schedule_differs` names the package. The answer's `refreshed` gives each
+  named package in the order named: `{package_id, state, before?, after}`, `state` `replaced`,
+  `agrees` (no failure) or `added`, `before` and `after` each `{consumes, produces}` as the file
+  writes them.
+- *A named package that has no entry yet* is **not refused** (the coordinator left the choice to the
+  slice, "by what is least surprising"): it gets its new entry in the same call, by the plain rule,
+  which is its rules' already, and `refreshed` answers it `added`, without `before`. Refusing it
+  would only send the agent to a second line that gives the entry the same business part, and the
+  line already makes that entry whatever `refresh` says.
+- *Refused before anything is written* (`standard_pack_catalog_refresh_refused`): a package the
+  registry does not hold (`package_not_listed`, fix round 1) and one named twice
+  (`package_repeated`), the first in the order named.
+- *`--displays <file>`* (an absolute path; the tool's `displays`): a display file
+  `{"schema_version", "groups"?, "packs": [{"package_id", "title", "summary", "group"?, "risk"?}]}`
+  (fix round 1: the version and the groups), each entry in the catalog's own shape without its
+  business part. Each entry it names has its display replaced whole (the entry
+  written as its `package_id`, the file's display members in the order a new entry writes them, then
+  its business part as it stands; an entry of the file without display members leaves the package
+  showing by its id); its business part and its place are untouched, and a new entry it names takes
+  no display from `ui.json`. The file is checked before anything is written by the catalog's own
+  checks: its size and `packs` limit, a member repeated or unknown, a `package_id` that is no
+  string, one the registry does not hold (`package_not_listed`) or named twice
+  (`catalog_duplicate`), and each entry's display by the reader's own display check
+  (`Check::entry_display`, the same words and limits) against the groups of the file being written;
+  every display defect, a warning in the catalog, is an error here. Any error is
+  `standard_pack_catalog_display_refused`, the first of the file's shape and packages before its
+  display defects. The answer's `display_written` names the packages whose display the file
+  replaced, in its order. Since every package of the registry has an entry after the call, "a
+  package without an entry after this call" is the same as one the registry does not hold.
+- *Groups*: the first round left them unsettled (the option added none); the coordinator ruled on
+  them, fix round 1 below.
+- *`--plan`* writes nothing and answers the document as before, with `refreshed`,
+  `display_written` and (fix round 1) `groups_added`. Each member is present only with its option,
+  so the line without the two answers and writes as before, byte for byte; a second identical line
+  is `unchanged`.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-477-pc2-fix1.md`, after the independent
+review; the groups are the coordinator's ruling, not the owner's words):
+- *No stop in a debug build.* An outcome's `package_id` is a name of the key table (at most 256
+  bytes, no control character), and a debug build stops on a value it does not take. A `--refresh`
+  id that is no such name is refused `validation_failed` (usage) before the root is read, the
+  message naming `--refresh`, the id's place on the line and its length, never its value
+  (`refresh_ids_fit` in the writer, by the key table's own rule, `outcome::key_text_fits`, made
+  public with `outcome::NAME_MAX_BYTES`). An issue's pointer is a `json_pointer` (at most 512
+  bytes): one the key table would not take, made of a very long member or locale name, is cut to
+  the entry it lies in (`/packs/<i>`, `/groups/<i>`), else to the document's member, else to the
+  whole document (`issue_pointer`, applied where the reader records an issue, `Check::error` and
+  `Check::warn`), so the display file's refusals and the catalog's own errors and display warnings
+  (PC-1's `catalog_display_outcome`, the same fault) are built whatever the file holds.
+- *Groups* (the coordinator's ruling). The display file may carry the groups it adds, `groups`, in
+  the catalog's own shape (`{id, title}`, read by the reader's own group check, every defect an
+  error). A group whose id the written file's `groups` do not hold is appended after them, in the
+  display file's order; one they hold with the same title (compared as JSON values, the order of
+  the locales not counting: `same_title`) is simply there; one they hold with another title is
+  refused with a word of its own, `catalog_group_title_differs` at its `title`. No group is removed
+  or renamed. A package's `group` is checked against the written file's group ids and the display
+  file's together. The groups in all keep the catalog's limit, 64: more is `catalog_out_of_limits`
+  at `/groups` of the display file. The answer's `groups_added` (with `--displays` only) names
+  the groups added, by id, in the file's order. Without a new group the file's `groups` stay byte
+  for byte; a `groups` that is no list holds no group for the reader, and the new ones are then the
+  list.
+- *The display file's version*: `schema_version` `actingcommand.pack-catalog-displays.v1`
+  (`STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`, named after the catalog's
+  `actingcommand.pack-catalog.v1`); a file without it or with another is refused `malformed` at
+  `/schema_version` before anything else of it is read (a file over 1 MiB or no JSON object is
+  refused as such first).
+- *One cause, one word*: `refresh` answers `package_not_listed`, the word `standard_pack_problem`
+  has for a package the registry does not hold, as the vocabulary `catalog_refresh_problem`'s word
+  for that cause; the slice's own word `package_unregistered`, in no release, is retired from the
+  catalog before it ships.
+- *Texts*: the contract's two sentences (the one way an entry's business part is brought back to
+  the rules; "kept as written" for every entry the line does not name), the row's two parameter
+  notes (the 160-byte bound is the row's `help`'s only: the `displays` note says the path is
+  absolute, the `refresh` note its refusal words and `added`), `output` (`groups_added`) and
+  `notes`, the command line's option texts, the MCP manual.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The rule | `crates/actingcommand-contract/src/standard_pack_catalog.rs`: `merge_standard_pack_catalog` takes `CatalogEdits` (`refresh`, `displays`: `CatalogDisplayFile`) and answers `CatalogMergeRefusal` (`Refresh`, `Root`, `Display`); `refresh_named`, `schedule_business`, `read_display_file`, `Check::display_file`, `with_display`; `CatalogRefreshed`, `CatalogRefreshState`, `CatalogRefreshRefusal`, `CatalogDisplayFileIssue`; the merge's `refreshed` and `display_written`; the vocabulary `catalog_refresh_problem`. Fix round 1: `STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`, `DisplayFile`, `WrittenGroups`, `same_title`, `issue_pointer`, the merge's `groups_added`; `standard_pack.rs` (`StandardPackProblem::CatalogGroupTitleDiffers`); `outcome.rs` (`key_text_fits`, `NAME_MAX_BYTES` public) |
+| The codes and the key | `crates/actingcommand-contract/src/codes.rs` (two `SharedCode`s), `outcome/keys.rs` (`catalog_refresh_problem`); the contract fragment, the catalog's key and vocabulary |
+| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`read_display_file`, `display_refused`, the refusals' mapping; fix round 1 `refresh_ids_fit`), `api.rs` (`StandardPackCatalogRequest::{refresh, displays}`, `StandardPackCatalogResponse::{refreshed, display_written, groups_added}`) |
+| The command line | `apps/actinglab/src/standard_pack_cli.rs`: `CATALOG_FLAGS` (`--refresh`, `--displays`), `catalog_options`, `run_catalog` (`--refresh` repeatable, `--displays` once, either without its value a usage error) |
+| The row | `standard-pack catalog` in [lab-operations.json](lab-operations.json): the parameters `refresh` (option, string, repeat) and `displays` (option, file), its `help`, `output` and `notes`; the MCP server offers both through its child, the schema from the row |
+| Texts | [pack-catalog.md](pack-catalog.md) "Who writes it"; `apps/actinglab-mcp/MANUAL.md` (the package declaration) |
+
+**Codes and words.**
+
+| Word | Kind | The one situation | Refuses or warns | Exit (actinglab's own line / a `--via` line / through MCP's `serve` child) |
+|---|---|---|---|---|
+| `standard_pack_catalog_refresh_refused` (contract, error / none; `game`, `package_id`, `catalog_refresh_problem`) | new code | `standard-pack catalog` refuses a package its `refresh` names | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+| `package_not_listed` (vocabulary `catalog_refresh_problem`; fix round 1: the word `standard_pack_problem` has for the same cause, in place of the slice's `package_unregistered`, retired before release) | existing word | the root's registry does not hold the package | as its code | as its code |
+| `package_repeated` (the same vocabulary) | new word | `refresh` names the package more than once | as its code | as its code |
+| `standard_pack_catalog_display_refused` (contract, error / none; `game`, `path` the display file, `standard_pack_problem`, `json_pointer` in it) | new code | `standard-pack catalog` refuses the display file its line gives, by the catalog's own word (`malformed`, `catalog_out_of_limits`, `package_not_listed`, `catalog_duplicate`, `catalog_text_missing`, `catalog_group_unknown`; fix round 1 `catalog_group_title_differs`) | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+| `catalog_group_title_differs` (vocabulary `standard_pack_problem`, fix round 1) | new word | a group of the display file has the id of a group of the catalog with another title | as `standard_pack_catalog_display_refused` | as its code |
+
+The key `catalog_refresh_problem` (`vocab:catalog_refresh_problem`) is new; `standard_pack_problem`
+gains one word in fix round 1, `catalog_group_title_differs`. A relative `--displays` path, or one
+naming no file, is the existing `validation_failed` (usage), as a root file that cannot be read is;
+so is (fix round 1) a `--refresh` id over 256 bytes or with a control character. No decision reads
+a code or a word: the writer maps the merge's refusal by its variant. The outcome-code index is
+regenerated.
+
+**Tests** (`crates/resource-tooling/src/gate_477_pc2.rs`, apps gate map "#477 PC-2", six; a built
+game root of made-up files, no clock): the order agents use (an entry written without a rule is
+empty, a plain line after the rule is unchanged and warns, `refresh` writes the rule's pools, keeps
+the display and the place, and the warning is gone); an entry not named untouched though it
+differs; `--plan` writing nothing and answering before and after; each refusal of `refresh` with its
+word and nothing written, and a named package without an entry answered `added`; a display file
+replacing two entries' displays whole with their business parts untouched, and a title over its
+limit and an undeclared group refused with the catalog's words at their pointers, nothing written;
+a second identical line `unchanged`, `agrees`. Adapted, for the new members only (nothing they pin
+changes): `pc1_the_index_holds_each_relation_once_both_ways` passes `CatalogEdits::default()` to the
+merge, and the PC-1 writer gate's two `StandardPackCatalogRequest` initializers name `refresh` and
+`displays` empty. No golden changes; no test leaves a gate map. Fix round 1: the slice's own display
+files carry their `schema_version`, and its fourth test answers `package_not_listed`; two more in
+the same file: a display file adding two groups after the catalog's in its order, the one there
+with its locales in another order not added, entries naming either, `groups` unchanged byte for
+byte without a new group, 64 in all planned, and refused with their words at their pointers, nothing
+written: a group of another title, 65 in all, a file without its version and one with another;
+a `--refresh` id of 300 bytes and one with a control character refused `validation_failed` before
+the root is read without their value, a 600-byte locale and member name in the display file refused
+at `/packs/0`, and a 600-byte locale name in the catalog warned of at `/packs/0`; and on the command
+line and through `serve --stdio --front mcp` (`apps/actinglab/src/tests/gate_477_pc2.rs`, the same
+gate), `--refresh` given twice and a list of two answered for both in order, the same id twice
+refused `package_repeated` on both (exit 2 on the `--via`-shaped line the test runs, 1 through
+`serve`), nothing written.
+
+**What is not changed.** The line without the two options, byte for byte; the file's canonical form;
+the refusal of a root inside an installation, first; what `standard-pack check`, the build and
+`place` read of the file; the dry run (`--plan` no effect, without it `dry_run_unsupported`).
+Nothing here lifts a hold or changes scheduling: the Runtime still reads no member of the file. No
+ledger record, configuration key or interface revision.
+
+**At deploy.** Nothing to configure. After a package's rule is written, run `actinglab standard-pack
+catalog --root <the checkout> --refresh <package_id>` (`--plan` first to read `refreshed`), and give
+a new package its display with `--displays <a display file>`; commit `pack-catalog.json` as before.
+
+**The train of 0.12.71** (coordinator work order `rd-1117/brief-train-01271-add-pc2.md`). Pull
+request #1800 (#463 CH-1, §1.455), which carries RG-1 (§1.463), AC-1 (§1.461) and DB-1 (§1.460)
+(§1.461, "The train of 0.12.71"), takes this slice (#1811, at the head of its fix round) by one
+merge commit, both sides whole: this register keeps §1.455, §1.459, §1.460, §1.461, §1.462 and
+§1.463, each once, in the order of their numbers, §1.461 with the train's paragraph at its end; the
+apps gate map keeps this slice's block after AC-1's two; the outcome-code index is regenerated.
+Where the slice meets the train:
+- *One interface, extended on both sides.* AC-1 and this slice both change `standard_pack_cli.rs`
+  and the resource tooling's public interface, in different items. This slice's
+  `StandardPackCatalogRequest::{refresh, displays}` are named by each of its four initializers
+  (the command line, the PC-1 writer gate's two, this slice's gate), the merge's `edits` by both its
+  callers (the writer, the contract crate's PC-1 test), and `StandardPackCatalogResponse`'s three
+  members by its one constructor (the writer); AC-1's trait `AdoptLab` is taken by
+  `standard_pack_adopt` alone, which this slice never calls, and no name one side adds is a name
+  of the other. No change.
+- *The vocabularies.* One word stands in two vocabularies: `package_not_listed`, in
+  `standard_pack_problem` and in `catalog_refresh_problem`, with one meaning (the game root's
+  registry does not hold the package), as fix round 1 chose it. Every other word the five slices add
+  stands in one vocabulary: AC-1's `case_name_invalid`, `case_place_taken`, `case_failed` and
+  `recording_not_judged` (`adopt_problem`) and `taken`, `none_found` and `package_path`
+  (`adopt_cases`), this slice's `package_repeated` and `catalog_group_title_differs`. No change.
+- *A warning that cannot name what it left out.* `standard_pack_catalog_left_out` names the package
+  (required) and the pool, names of the key table (at most 256 bytes, no control character), and a
+  debug build stops on a value it does not take: an old entry of a package the registry no longer
+  holds whose `package_id` is longer or holds a control character, or (the same warning) a dropped
+  pool whose `pool_id` holds a control character (the reader refuses one over 128 bytes already),
+  stopped it. No registry holds such a package. As fix round 1 refused a `--refresh` id that is no
+  name, the merge now refuses such an entry or pool before any warning is built
+  (`CatalogLeftOut::nameable`, by `key_text_fits`): `standard_pack_root_invalid`,
+  `catalog_out_of_limits` at its pointer in the existing file (`/packs/<i>/package_id`,
+  `/packs/<i>/<side>/<j>/pool_id`), its value in neither the message nor the outcome, nothing
+  written, as a file wrong in anything else is (usage or validation: exit 1 on actinglab's own line
+  and through `serve`, 2 on a `--via` line). An entry or pool the warning can name is left out and
+  warned of as before. No new code or word; the description of `catalog_out_of_limits` and
+  [pack-catalog.md](pack-catalog.md) "Who writes it" say it.
+
+The outcome-code index is regenerated and current: 4020 codes, 3931 active, 89 retired. The
+operation table keeps its 194 rows (every help text at most 160 bytes, the longest 159), the
+ratchet its 46 dispatch arms and 109 commands. *Tests*: one added in this slice's gate file,
+`pc2_train_a_left_out_name_no_warning_can_carry_is_refused_at_its_pointer` (apps gate map, this
+slice's block): an unregistered entry's `package_id` of 300 bytes and one with a control
+character, and a dropped pool's `pool_id` with a control character, refused at their pointers with
+and without `--plan`, no `package_id` built, the value not echoed, nothing written; an unregistered
+entry with a nameable id still removed and warned of. No test is adapted; no golden changes; no
+test leaves a gate map.
+
+### 1.463 Slice #463 RG-1 (0.12.71): `recognize` answers the box of a text it located (Workflow #463; observed on production 0.12.70 by the channel that keeps the resource repositories; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rg1-recognize-located-box.md`, on main `ca539cc7`)
+
+This section takes 1.463 (1.460, 1.461 and 1.462 are held by other open slices of the same day).
+It ships in 0.12.71.
+
+**Why.** A package's click may follow a text an OCR target with `locate` found
+([ocr-fields.md](ocr-fields.md), "Located text"; [lab-recording.md](lab-recording.md),
+"Following a located text"). The resource repositories check such a click offline: their
+regression asks `recognize` for the target on a stored scene and takes the answer's `matched_rect`
+as the place the click must lie in. For a template target the answer carried that rectangle; for
+a locate target that passed it answered `"passed": true`, `"message": "ocr text located"` and
+`"matched_rect": null`. The text was read and found, and the answer did not say where, so a click
+that follows a found text could not be checked offline and the packages fell back to fixed boxes.
+
+**What it rests on** (read in the code). The run takes a `target` or `offset` click's box from
+`target_click_box` (`crates/execution-kernel/src/contained_task.rs`): a template's matched
+rectangle, or for a located text the declared cell holding the found block, else the block (the
+OCR evaluation's `located`, `cell_rect` or `rect`). `recognize` (the Lab's `Lab::recognize`, MCP
+`ac_recognize`) answers through `ReadonlyRecognitionEngine::recognize_frames`, whose
+`target_evaluation_response` (`readonly.rs`) built `matched_rect` from the template's evidence
+alone and never read the OCR evidence: that is why the answer named no box. `unique` is applied
+inside the evaluation before either reads it: a second match within the margin makes the target
+not pass and drops `located` (`target_match_not_unique`), so the run refuses the guard and the
+answer has no box; otherwise the found block is the one the run presses.
+
+**The rule.**
+- *One computation*: the box of a found text is one function, `located_text_box`
+  (`contained_task.rs`), which `target_click_box` now calls for a located text and which
+  `target_evaluation_response` calls for the answer; no second copy.
+- *The answer*: for an OCR target that passed, `matched_rect` (and `evaluation.matched_rect`, the
+  same member of the shared evaluation answer) is that box, `{x, y, width, height}` in the
+  coordinates of a template's `matched_rect` in the same answer (the package's base when the scene
+  was reduced to it). A template's `matched_rect` is built as before. Every other target, and a
+  target that did not pass (not found, outside every cell, not unique: answered as the refusal
+  is answered today, `passed: false` with its message), names none, as before.
+- *What else changes*: the answers built by the same function, `is-visible`'s `evaluation` and
+  `tap-target`'s (the drive record of its recognition, and its dry run's answer where the OCR
+  target declares a static `click`; fix round 1 below), carry the box too, where they carried
+  `null`. Nothing else.
+
+**The other answers that carry a target's rectangle** (the work order's item 4; read, not changed
+unless they share the function):
+
+| Answer | The box of a found text today |
+|---|---|
+| `is-visible`, `tap-target` (`evaluation`) | carried since this slice: built by the same function |
+| `navigate` dry run (a step's `recognition.evaluation`) | the same function, but a route step's box comes from `target_evaluation_rect` (`crates/lab/src/drive.rs`), which takes a template's match only and refuses any other target before an answer; following a found text in a route needs its own design |
+| offline `observe` (`targets[].evaluation`, `target_center`), `do`, `ensure` and `wait` dry runs (`guard_result.evaluation`) | not carried: actinglab builds these with its own `target_eval_json` (`apps/actinglab/src/commands/navigation_recovery.rs`) from the template's evidence; online `observe` answers the Runtime's page projection, which this function does not build (not read further) |
+| `detect-page`, `current-page` | no rectangle for any target: each page target is `{id, role, passed, message}` |
+| a recording's self-tests (`record mark`) | `self_test.matched_rect` is set for a template mark alone; a located-text mark's self-test names none. The step's `click.rect` of a click that follows a found text (`record status`, `record review`'s `press.rect`) is that box on the primary frame, which the Lab's `crates/lab/src/recording/follow.rs` takes from `located_text_box` since fix round 1 (before it, its own `located_rect`, the same rule written a second time) |
+| `run evidence` of a step that followed a text | no `matched_rect`: `targets[].box` of an OCR target is its read region (a ledger fact), and in a recorded package the followed text is no page target; the step's `action.rect`, the box its point was drawn in, comes from `target_click_box` and so from the same function; the overlay (task diagnostic stream) carries `located` with the block and the cell |
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The box | `crates/execution-kernel/src/contained_task.rs`: `located_text_box` (new, `pub` since fix round 1, exported by the kernel's `pub use contained_task::*`), called by `target_click_box` and by the Lab's `crates/lab/src/recording/follow.rs` |
+| The answer | `crates/execution-kernel/src/readonly.rs`: `target_evaluation_response` takes `matched_rect` from `matched_rect`, the template's match or, for an OCR target that passed, `located_text_box` |
+| Texts | [ocr-fields.md](ocr-fields.md), "Located text": what `recognize` answers for a locate target; no manual lists the answer's members (`apps/actinglab-mcp/MANUAL.md` does not) |
+
+**Codes and words.** None. No decision reads a code.
+
+**Tests** (`crates/execution-kernel/src/tests/gate_463_rg1.rs`, exec gate map "#463 RG-1"; a
+scripted text reader that answers two blocks at fixed places of the requested region when the
+scene shows a marker pixel, as the kernel's tests of a located text script theirs; no model, no
+clock): the four of the work order, as the gate map's comment lists them. The first asserts the
+equality by calling `located_text_box` on the same scene and target, not by a number. No existing
+test is adapted; no golden changes; no test leaves a gate map.
+
+**What is not changed.** Where the run presses and what it refuses (`target_click_box` gives the
+same box through the function); what `recognize` answers for template, colour, colour digest,
+check and value-test targets; every other member of the answer. No new record or member, no
+configuration key, outcome code or interface revision.
+
+**At deploy.** Nothing to configure. `recognize` on a scene where a locate target passes now
+answers its box in `matched_rect`, so a regression may check a click that follows a found text
+against it.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-rg1-fix1.md`, after the independent
+review of pull request #1810 at `70c73f2c`: its first and third points that may change, nothing
+else; main still `ca539cc7`, nothing merged).
+- *One copy.* `located_text_box` is `pub`, exported by the kernel's `pub use contained_task::*`.
+  The Lab's `crates/lab/src/recording/follow.rs` takes a found text's box from it at both places
+  that computed it with their own `located_rect`, which is removed: `followed_evaluation_box` (the
+  first decision's click box, `crosscheck.rs`) and `check_located_follow_frames` (`record mark`'s
+  check of a following click, whose box on the primary frame is the step's `click.rect`). Each
+  keeps its own
+  check of `passed`: in `followed_evaluation_box` it also guards the template branch, whose match a
+  failed template keeps; for a located text it changes nothing today (an evaluation carries
+  `located` only when it passed), but `located_text_box` itself reads no `passed`, and `recognize`'s
+  answer checks it before calling it as well. The rule is the same, so the recording's answers are
+  byte for byte what they were; the lab gate tests of #463 L2 pin them
+  (`l2_a_followed_located_text_generates_…`, the cell;
+  `l2_a_rectangle_with_a_located_text_follow_…`, the block and the offset from it;
+  `l2_a_click_box_that_leaves_a_sample_frame_…` and `l2_an_executed_press_outside_the_found_box_…`,
+  the box on a sample and on the primary frame; `l2_fix1_names_changed_after_the_press_…` and
+  `l2_fix2_a_later_change_that_passes_the_press_check_…`, the cell after a change). No test is
+  added or adapted.
+- *Text.* [ocr-fields.md](ocr-fields.md), "Located text": `tap-target`'s dry run carries the box
+  in its answer only where the OCR target declares a static `click`, which is what it plans to
+  press, not the located box; without one it is refused `validation_failed` (no click field) after
+  the drive record of its recognition, which carries the box, is written.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -36319,10 +37082,12 @@ readers in one PR.
 `<base>~v2~k<K>~m<I><H>[~p<I><H>]…[~r<Kh><I><H>]~f<F>`. `I` = the first 8 hex digits of the
 SHA-256 of `package_id`; `H` = the first 12 hex digits of the package's content hash measured at
 suspension (`x` when it could not be measured, D18); the `pre:<digest>` scope becomes `pre:<I>`.
-A v1 string is not read. The content hash is measured only at suspension and at lift checks
-(never on admission) and is stored only inside this string (the failure record's
+A v1 string is not read. For the suspension, the content hash is measured only at suspension and
+at lift checks (never on admission) and is stored only inside this string (the failure record's
 `failure_identity`, §1.15 Q1) and in SR-3's suspension event key
-`actual_digest`. A lift check of one package runs at most once per
+`actual_digest`; since Workflow #463 CH-1 (§1.455) the admission of a run's package also computes
+it once and records it in the run's admission record, which nothing of the suspension reads. A
+lift check of one package runs at most once per
 `scheduling.suspension.lift_check_min_interval_ms` (§5).
 
 ## 3 Wire shapes handed to AO-0 (runtime-client revisions)

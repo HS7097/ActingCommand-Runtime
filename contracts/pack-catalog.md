@@ -107,7 +107,8 @@ defect, a warning, and that group or that `display` is left out ("Warnings: a di
 ### Errors: the root's declaration is wrong
 
 Each an issue with its `standard_pack_problem` at its JSON pointer (empty for the whole
-document), at most 64 in the reader's order:
+document; Workflow #477 PC-2 fix round 1: a pointer longer than 512 bytes is cut to its entry's,
+"Who writes it"), at most 64 in the reader's order:
 
 | Problem | When |
 |---|---|
@@ -223,7 +224,9 @@ it is `bundle_missing`).
 
 `actinglab standard-pack catalog --root <root> [--plan]` (the Lab's MCP tool
 `ac_standard_pack_catalog`, `root` and `plan`, through a `serve` child), so that nobody edits the
-file by hand. Fix round 1: `--root` takes either of two directories.
+file by hand. Fix round 1: `--root` takes either of two directories. Workflow #477 PC-2 (0.12.71;
+[v012-register.md](v012-register.md) §1.462): `[--refresh <package_id>]... [--displays <file>]`
+(the tool's `refresh`, a list, and `displays`), below.
 
 - **A resource repository's checkout**, the way to write a repository's file: a directory that holds
   `applications.json` and no `bundle.json`. Its game is the `game` of `applications.json`; its
@@ -241,15 +244,17 @@ It builds or brings up to date the file from what the root already declares, by 
 (`merge_standard_pack_catalog` of the contract crate):
 
 - An entry for every package of the registry: the entries already in the file first, in its order,
-  each **kept as written**, display and business part; then one new entry per package without one,
-  in the registry's order.
+  each **kept as written**, display and business part, unless the line names it (PC-2: for every
+  entry the line does not name this holds as it is written here); then one new entry per package
+  without one, in the registry's order.
 - A new entry's display is the leftover `ui.json`'s entry for the package (`title`, `summary`,
   `group`, `risk` as written), else none; its `consumes` and `produces` are the union over the
   package's rules in `schedule.json`, each pool once in the order the rules first name it, with a
   constant quantity when every rule that names it states the same whole amount, else `pending`.
 - `groups` and `display` are the file's when it writes them, else the leftover `ui.json`'s, else
-  absent.
-- **An entry already there is never overwritten**: its differences from the rules are answered
+  absent (PC-2 fix round 1: the groups a display file adds after them, "Groups" below).
+- **An entry already there is never overwritten** unless the line names it (PC-2, the next two
+  points): its differences from the rules are answered
   (`differences`) and are warnings. What no longer holds is left out and answered: the entry of a
   package the registry no longer holds (`removed`) and a pool of a kept entry `schedule.json` no
   longer declares (`dropped`); fix round 1: each is also the warning
@@ -260,7 +265,79 @@ It builds or brings up to date the file from what the root already declares, by 
   its first error. Fix round 1: so is a rule of a package that is to get a new entry when it names
   a pool `schedule.json` does not declare: `standard_pack_root_invalid` at `schedule.json`, the
   file the pool is missing from, `catalog_pool_undeclared` at the rule's
-  `/rules/<i>/<side>/<j>/pool_id`.
+  `/rules/<i>/<side>/<j>/pool_id`. The 0.12.71 train ([v012-register.md](v012-register.md) §1.462,
+  "The train of 0.12.71"): so is an entry the line would leave out whose `package_id`, or a pool it
+  would drop whose `pool_id`, the warning cannot name (over 256 bytes, or with a control character:
+  no registry holds such a package, and a pool over 128 bytes is refused already):
+  `standard_pack_root_invalid`, `catalog_out_of_limits` at its pointer in the existing file, before
+  any warning is built and without its value.
+- **`--refresh <package_id>`** (PC-2; repeatable, once per package) is **the one way an entry's
+  business part is brought back to the rules** (fix round 1: a plain line already drops a pool
+  `schedule.json` no longer declares, `dropped` above, but never adds one or changes a quantity).
+  The entry of each package it names has its `consumes` and `produces`
+  computed again from the package's rules in `schedule.json`, by the rule a new entry is made by
+  (the same function), and they replace what the entry held; its display and its place in the file
+  are kept. An entry that holds its rules' already is left as written. A named package without an
+  entry is not refused: it gets its new entry in the same call, which is its rules' by the rule
+  above (refusing it would only send the agent to a second line that gives the same entry). Its
+  rules' pools are held to `schedule.json` as a new entry's are (`catalog_pool_undeclared` at the
+  rule). The answer's `refreshed` gives each named package in the order named, `{package_id,
+  state, before?, after}`: `state` `replaced`, `agrees` (no failure) or `added`, `before` and
+  `after` each `{consumes, produces}` as the file writes them (`before` absent for `added`), so
+  that a reader sees the change without comparing files; afterwards no
+  `standard_pack_catalog_schedule_differs` names the package. Refused before anything is written,
+  `standard_pack_catalog_refresh_refused` (`game`, `package_id`, `catalog_refresh_problem`): a
+  package the registry does not hold (`package_not_listed`, fix round 1: the word
+  `standard_pack_problem` has for the same cause) or one named twice (`package_repeated`), the
+  first in the order named. Before the root is read, fix round 1: an id an answer's `package_id`
+  cannot carry (over 256 bytes, or with a control character) is `validation_failed`, a usage
+  error naming `--refresh`, the id's place on the line and its length, never its value. An entry
+  not named is never overwritten.
+- **`--displays <file>`** (PC-2; an absolute path) gives a display file,
+  `{"schema_version", "groups"?, "packs": [{"package_id", "title", "summary", "group"?, "risk"?}]}`,
+  each entry in the catalog's own shape without its business part. Fix round 1: its
+  `schema_version` is `actingcommand.pack-catalog-displays.v1` (the input of one line, never
+  stored); a file without it or with another is refused `malformed` at `/schema_version` before
+  anything else of it is read (only a file over its size or no JSON object is refused first, as
+  such). Each entry it names has its display replaced whole by the
+  file's: the entry is written as its `package_id`, the display members the file gives in the order
+  a new entry writes them, then its business part as it stands; an entry of the file that writes no
+  display member leaves the package without a display (it shows by its id). Its business part and
+  its place are untouched, and a new entry it names takes no display from `ui.json`. The file is
+  read whole and checked before anything is written by the catalog's own checks: its size (1 MiB)
+  and `packs` (1024 entries), `catalog_out_of_limits`; no JSON object, a member repeated, a member
+  this shape does not know (a business member included) or a `package_id` that is no string,
+  `malformed`; a package the registry does not hold, `package_not_listed`; one named twice,
+  `catalog_duplicate` at the later one; and each entry's display by the reader's own display check
+  ("Warnings: a display defect", the same words and limits) against the group ids of the file
+  being written and of the display file's `groups` together, every display defect an error here.
+  Any error refuses the line, `standard_pack_catalog_display_refused` (`game`, `path` the display
+  file, `standard_pack_problem`, `json_pointer` in it), the first of its shape, groups and packages
+  before its display defects. The answer's `display_written` names the packages whose display the
+  file replaced, in its order. A package without an entry before the call has one after it, so "a
+  package without an entry" is the same as one the registry does not hold.
+- **Groups** (fix round 1, the coordinator's ruling): the display file may carry the groups it
+  adds, `groups`, in the catalog's own shape (`{id, title}`, checked by the catalog's own group
+  check, "Warnings: a display defect", every defect an error here). **The option adds a group that
+  is not there**: a group whose id the `groups` of the file being written do not hold is appended
+  after them, in the display file's order (a `groups` that is absent or no list holds no group,
+  and the new ones are then the list). A group they hold with the same title, compared as JSON
+  values without the order of its locales, is simply there. **One they hold with another title is
+  refused**, `catalog_group_title_differs` at its `title` in the display file (a group of this id
+  exists with another title). The option never removes and never renames a group. The groups
+  after the line keep the catalog's limit, 64 in all: more is `catalog_out_of_limits` at `/groups`
+  of the display file. The answer's `groups_added` names the groups added, by id, in the display
+  file's order (present with `--displays` only, empty when it adds none). Without a new group the
+  file's `groups` stay byte for byte what they were.
+- Fix round 1: a pointer of an issue of the display file, or of the catalog itself, that an
+  outcome's `json_pointer` cannot carry (over 512 bytes: a very long member or locale name in it)
+  is cut to the entry it lies in (`/packs/<i>`, `/groups/<i>`), else to the member of the document
+  it lies in (`/display`), else to the whole document (empty).
+- The answer members are present only with their option (`refreshed` with `--refresh`,
+  `display_written` and `groups_added` with `--displays`): without the two, the line answers and
+  writes as before, byte for byte. A second line with the same options changes nothing
+  (`unchanged`; each refreshed package `agrees`). Both refusals are of the class usage or
+  validation: exit status 1 on actinglab's own line and through `serve`, 2 on a `--via` line.
 - With `--plan` it writes nothing and answers the `document` it would write (`status` `planned`).
   Without it, it writes the file atomically (a `.part` beside it, synced and renamed over it) when
   its bytes differ (`written`), and leaves it as it is when they do not (`unchanged`); a second run
@@ -272,7 +349,8 @@ It builds or brings up to date the file from what the root already declares, by 
   status 4 on the command line), as the Lab's other local write failures, not a usage refusal; so
   is an OS failure of a checkout's `packs/` or of the scratch directory (`foreign_os_error`).
 - Of the root it reads `bundle.json` (of a checkout, `applications.json` and `packs/` instead),
-  `schedule.json`, `pack-catalog.json` and `ui.json` only; in the root it writes only
+  `schedule.json`, `pack-catalog.json` and `ui.json` only (PC-2: and the display file `--displays`
+  names, wherever it is); in the root it writes only
   `pack-catalog.json` and deletes nothing: a leftover `ui.json` stays, with its warning. Under the
   global `--dry-run` the line without `--plan` is `dry_run_unsupported`
   ([actinglab-dry-run.md](actinglab-dry-run.md)).

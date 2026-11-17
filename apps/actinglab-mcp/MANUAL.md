@@ -35,7 +35,12 @@ naming this file.
   `ac_material` takes `export` and no `out`, `ac_frame` and `ac_report_export` take no `out`
   (section 6); `ac_run_show`
   and `ac_run_stop` take `wait_s`, `ac_events` and `ac_codes` take `cursor` (section 4);
-  `ac_deploy` and `ac_rollback` take no `detach` (section 9). These are the only parameters of a
+  `ac_deploy` and `ac_rollback` take no `detach` (section 9); `ac_devices_bind` takes no
+  `bound_via` (#398 DB-1, 0.12.71: the channel `ui` is the installer's; a binding made through this
+  server records `cli`, as the row writes it without one), and takes `config`, a candidate
+  configuration whose state root the binding goes into (fix round 1: then the install root's adb is
+  that of the root this server's program runs from by its place, never read from an install
+  selection). These are the only parameters of a
   row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
   given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
   the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
@@ -661,7 +666,19 @@ naming this file.
   through `ac_standard_pack_build` and `ac_place`. What it leaves out of an existing file (an entry
   of a package no longer registered, a pool `schedule.json` no longer declares) is answered in
   `removed` and `dropped` and warned of (`standard_pack_catalog_left_out`). Do not edit the file by
-  hand. `ac_packs` answers each
+  hand. Workflow #477 PC-2 (0.12.71): `refresh`, a list of package ids, each once, brings each
+  named entry's `consumes` and `produces` up to date from its rules (the one way an entry's business
+  part is brought back to the rules), its display and its place kept, and answers `refreshed` (each
+  `{package_id, state replaced|agrees|added, before?, after}`); the order agents use is adopt held,
+  try, write the rule, then call with `refresh`. `displays`, an absolute path of a file
+  `{"schema_version": "actingcommand.pack-catalog-displays.v1", "groups"?: [{id, title}], "packs":
+  [{package_id, title, summary, group?, risk?}]}`, replaces each named entry's display whole and
+  answers `display_written`; a group the catalog does not hold is added after its groups and
+  answered in `groups_added`, one it holds with the same title is there already, one it holds with
+  another title is refused (`catalog_group_title_differs`), and no group is removed or renamed.
+  The file is checked by the catalog's own checks first. A package the registry does not hold
+  (`package_not_listed`), or named twice, is refused (`standard_pack_catalog_refresh_refused`,
+  `standard_pack_catalog_display_refused`) before anything is written. `ac_packs` answers each
   game's `index` (per pool the packages that produce and consume it) and each composed row's
   `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
 - **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).

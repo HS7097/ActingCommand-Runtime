@@ -13,9 +13,27 @@ the same PR that changes the code.
 
 **Later rulings applied** (they override the frozen model where the two differ):
 
-1. *No package digests* (Alice 10-11, option 丙, Workflow #336). No shape, key, code or contract
-   text below computes, pins or compares a task-package content digest. The ledger event hash
-   chain, download SHA-256 checks of release assets and the screenshot self-check stay.
+1. *No package digests* (the owner, 10-11, option 丙, Workflow #336), relaxed in one respect by
+   her ruling of 11-16 (board #463, option A of question 220; Workflow #463 CH-1, Runtime
+   0.12.71, [v0.12.0 register](v012-register.md) §1.455): the admission of a run's package by its
+   path computes the package's content hash once, on the bytes it already read, with the measure
+   of [policy-suspension.md](policy-suspension.md) ("Content hash"), and records it in the run's
+   admission record `task.requested` (`content_hash`, ledger revision 9), beside the values handed
+   to the run (`variables`). It is only computed and recorded: no admission compares it or
+   refuses for it, nothing pins it, the public projection does not carry it, and the failure
+   identity, the break-in and the lift of a suspension measure the content themselves as before.
+   Where the hash and the values travel (CH-1 fix round 1): the public tiers of the projection
+   (`ui` and `normal`, which carry the public projection; `cli` and `concise` carry no payload)
+   carry neither; the Lab's and the forensic tiers (`lab`, `verbose`, `forensic`) carry the full
+   record, so the Lab's `events`, the ledger tool's exports (`actingledger`) and an exported
+   evidence package (`export evidence`, its `evidence/events.jsonl`) carry the hash and the
+   values: a person who hands such a package to someone else hands them too. `QueryRuns`,
+   `run show` and `report export` do not carry the record. Its size, about 20 KB at most, and
+   why nothing refuses, cuts or fails on it: [package-variables.md](package-variables.md),
+   "The admission record's size".
+   Beyond that, no shape, key, code or contract text below computes, pins or compares a
+   task-package content digest. The ledger event hash chain, download SHA-256 checks of release
+   assets and the screenshot self-check stay.
 2. *No old-version compatibility* (Alice 10-11). The v0.12.0 ledger is a new ledger (revision 3).
    Nothing here reads a ledger, a state root or a configuration written before v0.12.0. What
    must hold is that a build reads back exactly what it writes itself, and, within the 0.12

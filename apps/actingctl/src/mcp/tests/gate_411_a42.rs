@@ -615,6 +615,8 @@ impl Recorder {
                 package_label: "neutral.package".to_owned(),
                 task_label: "neutral.task".to_owned(),
                 response_deadline_monotonic_ms: None,
+                content_hash: None,
+                variables: None,
             },
         );
         self.fact(
@@ -668,6 +670,8 @@ impl Recorder {
                     package_label: "neutral.package".to_owned(),
                     task_label: "neutral.task".to_owned(),
                     response_deadline_monotonic_ms: None,
+                    content_hash: None,
+                    variables: None,
                 },
             );
             self.fact(

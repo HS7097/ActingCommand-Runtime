@@ -98,6 +98,8 @@ fn admitted(sequence: u64, run: u64) -> Recorded {
             package_label: PACKAGE.to_owned(),
             task_label: "neutral.task".to_owned(),
             response_deadline_monotonic_ms: None,
+            content_hash: None,
+            variables: None,
         },
     )
 }

@@ -187,6 +187,10 @@ crate::outcome_vocabulary! {
         /// PC-1: a group without `title`, or a package that writes a display member without
         /// `title` or `summary` (a warning).
         CatalogTextMissing => "catalog_text_missing",
+        /// Workflow #477 PC-2 fix round 1 (since 0.12.71): a group of the display file
+        /// `standard-pack catalog --displays` reads has the id of a group of the catalog with
+        /// another title (an error: the line adds a group and never renames one).
+        CatalogGroupTitleDiffers => "catalog_group_title_differs",
         /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
         /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
         /// template target's `template` is not `loading/<file>.png`.

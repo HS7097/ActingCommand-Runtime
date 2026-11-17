@@ -473,6 +473,8 @@ fn run_ledger(
             package_label: package_id.to_owned(),
             task_label: "task".to_owned(),
             response_deadline_monotonic_ms: None,
+            content_hash: None,
+            variables: None,
         }),
     ));
     let terminal = match end {

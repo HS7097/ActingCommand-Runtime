@@ -203,6 +203,8 @@ impl Recorder {
                 package_label: PACKAGE.to_owned(),
                 task_label: TASK_LABEL.to_owned(),
                 response_deadline_monotonic_ms: None,
+                content_hash: None,
+                variables: None,
             },
         )
     }

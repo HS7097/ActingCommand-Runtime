@@ -105,6 +105,22 @@ use actingcommand_resource_tooling::{
     standard_pack_adopt, standard_pack_status_with, trial_record_of_run,
     write_standard_pack_catalog, write_trial_record,
 };
+// Workflow #463 AC-1: the Lab's own parts adoption calls: `record ready`'s one function (#463
+// S3-17) and the one runner of a regression case; fix round 1: `resource regression`'s one reading
+// of a case directory and its one listing of the cases that did not pass.
+use crate::resource_verify::regression::{
+    CasePackages, CaseRead, CaseRun, NotPassed, case_of_directory, not_passed,
+};
+use actingcommand_contract::{LabError, LabResult};
+use actingcommand_lab::{
+    RecordStopOptions, RegressionCaseVerdict, RegressionCheck, RegressionPackage,
+    RegressionVerdict, record_ready_by_id,
+};
+use actingcommand_resource_tooling::{
+    AdoptCaseAt, AdoptCaseRun, AdoptCaseVerdict, AdoptCasesRun, AdoptLab, ReadyRefused,
+    RecordingReady,
+};
+use std::collections::BTreeSet;
 // Workflow #463 S3-15a: what `standard-pack status --installation` reads, where the rescue module
 // is built (Windows), and the refusal of a build without it.
 #[cfg(windows)]
@@ -212,8 +228,13 @@ pub(crate) const STATUS_SWITCHES: [&str; 1] = [INSTALLATION_FLAG];
 const STATUS: &str = "standard-pack status";
 /// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
 /// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
-pub(crate) const CATALOG_FLAGS: [&str; 2] = ["--root", "--plan"];
+/// Workflow #477 PC-2: and `--refresh`, repeatable, and `--displays`.
+pub(crate) const CATALOG_FLAGS: [&str; 4] = ["--root", "--plan", REFRESH_FLAG, DISPLAYS_FLAG];
 pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
+/// Workflow #477 PC-2: the package whose entry's business part is brought up to date from its
+/// rules, once per package; and the display file whose entries replace named entries' displays.
+const REFRESH_FLAG: &str = "--refresh";
+const DISPLAYS_FLAG: &str = "--displays";
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -247,11 +268,14 @@ pub(crate) fn adopt_options() -> [&'static str; 8] {
     ]
 }
 
-/// Workflow #477 PC-1: the flags of `standard-pack catalog`.
-pub(crate) fn catalog_options() -> [&'static str; 2] {
+/// Workflow #477 PC-1: the flags of `standard-pack catalog`. Workflow #477 PC-2: `--refresh` and
+/// `--displays`.
+pub(crate) fn catalog_options() -> [&'static str; 4] {
     [
         "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
+        "--refresh <package_id> (repeatable, once per package: its entry's consumes and produces computed again from its rules, its display and its place kept; answered in refreshed, a package without an entry added; one the registry does not hold or named twice refused standard_pack_catalog_refresh_refused, package_not_listed or package_repeated)",
+        "--displays <absolute path of {schema_version: actingcommand.pack-catalog-displays.v1, groups?: [{id, title}], packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole, its business part untouched; a group not in the catalog added, answered in groups_added; one there with another title refused)",
     ]
 }
 
@@ -396,7 +420,9 @@ pub(crate) fn run_standard_pack(
 /// Workflow #477 PC-1: `standard-pack catalog` (module doc). A flag off its list, a positional
 /// word, `--root` twice or without its value is a usage error before anything is read; under the
 /// global `--dry-run` the line without `--plan` is `dry_run_unsupported` (it writes the file), its
-/// read-only form `--plan`.
+/// read-only form `--plan`. Workflow #477 PC-2: `--refresh <package_id>` may be given once per
+/// package (the resource tooling refuses a package named twice, by its word), `--displays <file>`
+/// once; either without its value is a usage error before anything is read.
 fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse_switches(args, &CATALOG_SWITCHES);
     if let Some(flag) = flags
@@ -410,7 +436,7 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     flags.expect_positionals("standard-pack catalog", 0)?;
     for flag in CATALOG_FLAGS {
-        if flags.count(flag) > 1 {
+        if flag != REFRESH_FLAG && flags.count(flag) > 1 {
             return Err(CliError::usage(format!(
                 "standard-pack catalog takes {flag} once"
             )));
@@ -418,6 +444,18 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     let root = flags.required_path("--root")?;
     let plan = flags.bool("--plan");
+    let refresh = flags.values(REFRESH_FLAG);
+    // A flag without its value takes `true` (`FlagArgs::parse_switches`), as `required` reads it.
+    if refresh.iter().any(|package_id| package_id == "true") {
+        return Err(CliError::usage(format!(
+            "missing {REFRESH_FLAG} <package_id>"
+        )));
+    }
+    let displays = if flags.given(DISPLAYS_FLAG) {
+        Some(flags.required_path(DISPLAYS_FLAG)?)
+    } else {
+        None
+    };
     if !plan {
         crate::dry_run_gate::refuse(
             global,
@@ -426,7 +464,12 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             Value::Null,
         )?;
     }
-    let response = write_standard_pack_catalog(StandardPackCatalogRequest { root, plan })?;
+    let response = write_standard_pack_catalog(StandardPackCatalogRequest {
+        root,
+        plan,
+        refresh,
+        displays,
+    })?;
     serde_json::to_value(response).map_err(|error| {
         CliError::device(format!(
             "failed to serialize the standard-pack catalog answer: {error}"
@@ -1510,6 +1553,145 @@ impl AdoptWorktree for GitWorktree {
             return Err(cause);
         }
         Ok(changed_paths(&output.stdout))
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &LabAdoption
+    }
+}
+
+/// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases" and "One judgement of
+/// the recording"): the Lab's own parts `standard-pack adopt` calls, each with the process's OCR
+/// (`offline_ocr::lab_ocr`), as `record ready` and `resource regression` have it.
+pub(crate) struct LabAdoption;
+
+impl AdoptLab for LabAdoption {
+    /// `record ready`'s one function on the recording by its id (`record_ready_by_id`), with no
+    /// option given: adoption has no instance. Fix round 1: its refusal told apart by the word it
+    /// carries ([`ready_refused`]); an answer that does not serialize is a failure of its own.
+    fn recording_ready(
+        &self,
+        state_dir: &Path,
+        record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
+        let ready = record_ready_by_id(
+            state_dir,
+            record_id,
+            &RecordStopOptions::default(),
+            crate::offline_ocr::lab_ocr(),
+        )
+        .map_err(ready_refused)?;
+        let answer = serde_json::to_value(&ready).map_err(|error| {
+            ReadyRefused::Failed(LabError::device(format!(
+                "the answer of record ready does not serialize: {error}"
+            )))
+        })?;
+        Ok(RecordingReady {
+            packaged: ready.is_packaged(),
+            answer,
+        })
+    }
+
+    /// The package directory admitted once as `resource regression` admits a checkout's package
+    /// (`RegressionPackage::load`), and each case read and run on it as `resource regression`
+    /// reads and runs a case of a checkout (fix round 1: its one reading, [`case_of_directory`]),
+    /// every case taken; the cases that did not pass listed by its one rule ([`not_passed`]), each
+    /// row by the directory adoption writes it to.
+    fn run_cases(&self, package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        let mut package = AdoptedPackage(RegressionPackage::load(
+            package_dir,
+            crate::offline_ocr::lab_ocr(),
+        ));
+        let mut runs = Vec::new();
+        let mut read = Vec::new();
+        for case in cases {
+            let CaseRead { verdict, files } = case_of_directory(&case.directory, &mut package)
+                .ok_or_else(|| {
+                    LabError::device(format!(
+                        "the case {} of the recording was not read",
+                        case.directory.display()
+                    ))
+                })?;
+            runs.push(case_run(&verdict, files));
+            read.push(CaseRun {
+                path: case.path.clone(),
+                verdict,
+            });
+        }
+        let NotPassed { total, rows } = not_passed(&read);
+        let listed = rows
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                LabError::device(format!(
+                    "the rows of the cases that did not pass do not serialize: {error}"
+                ))
+            })?;
+        Ok(AdoptCasesRun {
+            runs,
+            not_passed: total,
+            listed,
+        })
+    }
+}
+
+/// Workflow #463 AC-1 fix round 1 (the coordinator's ruling): `record ready`'s refusal of a
+/// recording as adoption decides by it, by the word that refusal carries (`details.reason`,
+/// `contracts/lab-recording.md`): `lab_recording_unreadable`, a `recording.json` that does not
+/// decode as the Lab writes it, is [`ReadyRefused::Unreadable`]; every other refusal is
+/// [`ReadyRefused::Failed`].
+fn ready_refused(error: LabError) -> ReadyRefused {
+    let unreadable = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get(LAB_UNAVAILABLE_WORD))
+        .and_then(Value::as_str)
+        == Some(LAB_RECORDING_UNREADABLE);
+    if unreadable {
+        ReadyRefused::Unreadable(error)
+    } else {
+        ReadyRefused::Failed(error)
+    }
+}
+
+/// Workflow #463 AC-1 fix round 1: the member of the details of the Lab's refusal of a recording
+/// that names why it is unavailable, and its word for a `recording.json` that does not decode.
+const LAB_UNAVAILABLE_WORD: &str = "reason";
+const LAB_RECORDING_UNREADABLE: &str = "lab_recording_unreadable";
+
+/// Workflow #463 AC-1 fix round 1: the one package an adoption's cases are run on, as the runner
+/// admitted it, whatever package a case names; every case is taken.
+struct AdoptedPackage(Result<RegressionPackage, RegressionCheck>);
+
+impl CasePackages for AdoptedPackage {
+    fn package(&mut self, _package_id: &str) -> &Result<RegressionPackage, RegressionCheck> {
+        &self.0
+    }
+}
+
+/// Workflow #463 AC-1: `verdict` as adoption decides by it, with `files`. A case not proven whole
+/// (`partial`, `not_run`) carries the runner's word for its verdict and its words for the checks
+/// that did not run, each once.
+fn case_run(verdict: &RegressionCaseVerdict, files: Vec<(String, Vec<u8>)>) -> AdoptCaseRun {
+    let decided = match verdict.verdict {
+        RegressionVerdict::Passed => AdoptCaseVerdict::Passed,
+        RegressionVerdict::Failed => AdoptCaseVerdict::Failed,
+        RegressionVerdict::Partial | RegressionVerdict::NotRun => AdoptCaseVerdict::NotProven {
+            verdict: verdict.verdict.as_str().to_owned(),
+            reasons: verdict
+                .checks
+                .iter()
+                .filter_map(|check| check.reason)
+                .map(|reason| reason.as_str().to_owned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        },
+    };
+    AdoptCaseRun {
+        verdict: decided,
+        files,
     }
 }
 

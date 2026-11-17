@@ -3,12 +3,14 @@
 //! Workflow #336 PKG-S3 (M-PKG §3.3, §3.4, D1, D18; `contracts/policy-suspension.md`,
 //! "Lifting"): the content hash of a task package, and the lift rule of a paused pair.
 //!
-//! The content hash has one use left (option 丙): the live settlement of a scheduled failure
-//! records the hash of each package its run went through in the failure identity, and a lift
-//! check measures those packages again; a pause lifts once a package's hash differs from the
-//! one recorded. Admission never computes it. A lift check measures one package at most once per
-//! `scheduling.suspension.lift_check_min_interval_ms` and reuses that measurement until then. A
-//! package that cannot be measured does not lift the pause: the check reports
+//! The content hash's use here (option 丙): the live settlement of a scheduled failure records
+//! the hash of each package its run went through in the failure identity, and a lift check
+//! measures those packages again; a pause lifts once a package's hash differs from the one
+//! recorded. The admission of a run's package computes the same hash once and records it in the
+//! run's `task.requested` (Workflow #463 CH-1); nothing here reads that record, and the
+//! suspension measures its packages itself as before. A lift check measures one package at most
+//! once per `scheduling.suspension.lift_check_min_interval_ms` and reuses that measurement until
+//! then. A package that cannot be measured does not lift the pause: the check reports
 //! `lift_check_hash_unmeasured` and measures it again at a later check (D18). Everything here is
 //! memory; a restart rebuilds the recorded hashes from the failure identities and checks again.
 

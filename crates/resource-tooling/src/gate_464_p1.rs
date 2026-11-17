@@ -66,6 +66,8 @@ use crate::{
     StandardPackAdoptRequest, StandardPackAdoptResponse, StandardPackRootFiles, package_bundle,
     standard_pack_adopt,
 };
+// Workflow #463 AC-1: the Lab adoption asks, which these tests give as `NoLab`.
+use crate::{AdoptCaseAt, AdoptCasesRun, AdoptLab, ReadyRefused, RecordingReady};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{LabError, LabResult, canonical_json_bytes};
@@ -158,12 +160,41 @@ impl Fixture {
     }
 }
 
+/// Workflow #463 AC-1 (added, not adapted: the trait `AdoptWorktree` gained `lab`): the Lab of
+/// these tests. Their recordings are made up, no whole `actingcommand.lab-recording.v1`, which the
+/// Lab's own reader reads none of: `record ready`'s function reads none here either, so the check
+/// of a recording's own members judges it, as it did before that slice. No recording here holds a
+/// case, so no case is run. AC-1 fix round 1 (adapted, not changed in what the tests pin): it
+/// answers that it cannot read the recording whole, the one refusal the check of a recording's
+/// own members still judges, so that every test here keeps what it asserts.
+pub(crate) struct NoLab;
+
+impl AdoptLab for NoLab {
+    fn recording_ready(
+        &self,
+        _state_dir: &Path,
+        _record_id: &str,
+    ) -> Result<RecordingReady, ReadyRefused> {
+        Err(ReadyRefused::Unreadable(LabError::usage(
+            "the recordings of these tests are made up: no reader of the Lab reads them",
+        )))
+    }
+
+    fn run_cases(&self, _package_dir: &Path, cases: &[AdoptCaseAt]) -> LabResult<AdoptCasesRun> {
+        panic!("no case is run in these tests: {cases:?}")
+    }
+}
+
 /// The version control of a checkout whose every change is committed.
 struct Committed;
 
 impl AdoptWorktree for Committed {
     fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
         Ok(Vec::new())
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 
@@ -173,6 +204,10 @@ struct Changed;
 impl AdoptWorktree for Changed {
     fn changes_under(&self, _repo: &Path, relative: &str) -> Result<Vec<String>, Outcome> {
         Ok(vec![format!("{relative}/control.json")])
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 
@@ -194,6 +229,10 @@ impl AdoptWorktree for TwoVolumes {
             "the checkout's volume"
         };
         Ok(volume.to_owned())
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 
@@ -217,6 +256,10 @@ impl AdoptWorktree for OtherWriter {
         }
         Ok(())
     }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
+    }
 }
 
 /// A machine on which the new pack directory cannot take its place (on Windows a file in use
@@ -233,6 +276,10 @@ impl AdoptWorktree for NewDirectoryInUse {
             return Err(io::Error::other("a file of the new directory is in use"));
         }
         fs::rename(from, to)
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 
@@ -252,6 +299,10 @@ impl AdoptWorktree for StopsBetweenTheRenames {
             return Err(io::Error::other("the call stops here"));
         }
         fs::rename(from, to)
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 

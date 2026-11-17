@@ -249,6 +249,10 @@ mod gate_463_s38;
 // the command line and through `serve --stdio`.
 #[path = "gate_477_pc1.rs"]
 mod gate_477_pc1;
+// Workflow #477 PC-2 fix round 1: `standard-pack catalog --refresh` given twice on the command line
+// and as a list through `serve --stdio --front mcp`, the same id twice refused on both.
+#[path = "gate_477_pc2.rs"]
+mod gate_477_pc2;
 // Workflow #463 KP-1 fix round 1: `package check` and `package bundle` take a pack directory whose
 // `linear_steps` task has a key step.
 #[path = "gate_463_kp1.rs"]
@@ -266,6 +270,11 @@ mod gate_463_rc2;
 #[cfg(windows)]
 #[path = "gate_463_s315.rs"]
 mod gate_463_s315;
+// #463 AC-1: `standard-pack adopt --record-id` takes the recording's regression cases into the
+// checkout, each run first by the one runner, and judges the recording by `record ready`'s one
+// function (S3-17).
+#[path = "gate_463_ac1.rs"]
+mod gate_463_ac1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

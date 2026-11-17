@@ -1348,12 +1348,15 @@ package update are in `policy-suspension.md`.
 
 A linear run writes only existing records with existing fields and enum values: no event
 type, payload field or enum value (`ResourceDeclarationReason`,
-`TaskTimingStage`, `TaskTimingScope`, `TaskTimingBoundary`) is added, so a ledger written by a
-linear run is read by older builds.
+`TaskTimingStage`, `TaskTimingScope`, `TaskTimingBoundary`) is added for it. Since Workflow #463
+CH-1 (Runtime 0.12.71, ledger revision 9, [v012-register.md](v012-register.md) §1.455) the
+admission record of every run, a linear run's included, carries the optional members
+`content_hash` and `variables` (the table below), which a build that declares `ledger` [3, 8]
+refuses; a ledger written by a linear run is read by every build from that revision on.
 
 | When | Existing record | Values |
 |---|---|---|
-| Admission | `PackageAdmitted` | the package's `package_id` (`package_label`) and entry task (Workflow #336 PKG-S2: no package digest) |
+| Admission | `PackageAdmitted` | the package's `package_id` (`package_label`) and entry task (Workflow #336 PKG-S2: no package digest); since Workflow #463 CH-1 (ledger revision 9) also the content hash its admission measured on the bytes it read (`content_hash`, recorded only, compared with nothing) and the values handed to the run (`variables`, [package-variables.md](package-variables.md), "The run's admission record") |
 | Each capture | the capture records and their evidence | unchanged |
 | Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), at the path's end with the ending pages before the target page (Workflow #463 K2), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
 | Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
@@ -1375,8 +1378,8 @@ K2) an ending page off the path and named by one mapping. Phase evidence is
 not used.
 
 The ledger cannot tell that a run was linear, which window it declared, that it declared an
-intermediate page or which steps are optional: the package reference of `PackageAdmitted`
-names the content that carries them. Operation ids and page names are conventions, not types. No capture precedes an
+intermediate page or which steps are optional: the `package_label` of `PackageAdmitted` and,
+since Workflow #463 CH-1, its `content_hash` name the content that carries them. Operation ids and page names are conventions, not types. No capture precedes an
 application entry, so its step has no pre-input frame evidence; the entry itself shows only as
 `from_page` `<unrecognized>` and in the package.
 

@@ -43,6 +43,9 @@
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::codes::{AdoptProblem, ResourceToolingCode, TrialState};
+// Workflow #463 AC-1: the Lab adoption asks (`AdoptWorktree::lab`), P1's made-up one.
+use crate::AdoptLab;
+use crate::gate_464_p1::NoLab;
 use crate::{
     AdoptClass, AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord,
     StandardPackAdoptRequest, StandardPackAdoptResponse, StandardPackTrialRequest, TrialRunEnd,
@@ -135,6 +138,10 @@ struct Committed;
 impl AdoptWorktree for Committed {
     fn changes_under(&self, _repo: &Path, _relative: &str) -> Result<Vec<String>, Outcome> {
         Ok(Vec::new())
+    }
+
+    fn lab(&self) -> &dyn AdoptLab {
+        &NoLab
     }
 }
 

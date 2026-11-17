@@ -83,6 +83,27 @@ impl ExternallyVerifiedBundle {
         Ok(Self { bundle })
     }
 
+    /// Workflow #463 CH-1 (register §1.455): [`Self::load_path`] of a run's package (never an
+    /// observation), whose admission also measures the content hash of what it read, once, on the
+    /// bytes in memory ([`Containment::load_path_measured`], `LoadedBundle::content_hash`).
+    pub(crate) fn load_path_measured(
+        instance_label: &str,
+        locator: &std::path::Path,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<Self, ExecutionBundleError> {
+        let instance = InstanceId::new(instance_label)?;
+        let mut containment = match vision_provider {
+            Some(provider) => Containment::with_vision_provider(provider),
+            None => Containment::new(),
+        };
+        containment.load_path_measured(&instance, locator, deadline)?;
+        let bundle = containment
+            .take_loaded(&instance)
+            .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
+        Ok(Self { bundle })
+    }
+
     /// Workflow #336: `load_path` for a content table already in memory.
     pub fn load_content_entries(
         instance_label: &str,

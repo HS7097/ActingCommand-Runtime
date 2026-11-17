@@ -7101,6 +7101,8 @@ mod run_summary_package_tests {
                     package_label: package_label.to_string(),
                     task_label: "task".to_string(),
                     response_deadline_monotonic_ms: Some(60_000),
+                    content_hash: None,
+                    variables: None,
                 },
                 AuditInput::new(),
             )
