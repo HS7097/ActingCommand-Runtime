@@ -40,7 +40,7 @@ use super::generate::effective_steps;
 use super::model::FoldDirection;
 use super::model::{
     AfterCaptureRecord, ClickGesture, LabRecording, RecordPoint, RecordRect, RecordedFrame,
-    RecordedMark, RecordingStep, StepChoice,
+    RecordedMark, RecordingStep, StepChoice, StepClick,
 };
 use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
@@ -210,6 +210,13 @@ pub struct RecordReviewPress {
     pub gesture: Option<ClickGesture>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application: Option<String>,
+    /// #463 KR-1: the key a key step presses (`back`); absent on every other step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// #463 KR-1: the press a key step's key replaced, as the step table holds it inside the key;
+    /// absent on every other step and on a key that replaced none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<Box<RecordReviewPress>>,
     pub source: String,
     pub outcome: String,
 }
@@ -468,9 +475,10 @@ fn before_position(step: &RecordingStep, sequence: &[Stored<'_>]) -> Option<usiz
 }
 
 /// The frame after the effect of `step` and how it was taken, as its click's execution or its
-/// application operation's completed receipt names them.
+/// application operation's completed receipt names them. #463 KR-1: a key step's, as the execution
+/// of the press its key replaced names them: the step's frames stand.
 fn after_record(step: &RecordingStep) -> Option<(&str, Option<&AfterCaptureRecord>)> {
-    match (&step.click, &step.application) {
+    match (step.recorded_click(), &step.application) {
         (Some(click), _) => click.execution.as_ref().and_then(|execution| {
             execution
                 .after_frame
@@ -487,19 +495,28 @@ fn after_record(step: &RecordingStep) -> Option<(&str, Option<&AfterCaptureRecor
     }
 }
 
-/// What `step` pressed, as the step table holds it; `None` for a step without an effect.
+/// What `step` pressed, as the step table holds it; `None` for a step without an effect. #463
+/// KR-1: a key step's press is its key, declared and never sent while recording, with the press it
+/// replaced beside it.
 fn press_of(step: &RecordingStep) -> Option<RecordReviewPress> {
     if let Some(click) = &step.click {
-        let execution = click.execution.as_ref();
+        return Some(click_press(click));
+    }
+    if let Some(key) = &step.key {
         return Some(RecordReviewPress {
-            point: execution.map(|execution| execution.point),
-            to_point: execution.and_then(|execution| execution.to_point),
-            duration_ms: execution.and_then(|execution| execution.duration_ms),
-            rect: Some(click.rect),
-            gesture: click.gesture,
+            point: None,
+            to_point: None,
+            duration_ms: None,
+            rect: None,
+            gesture: None,
             application: None,
-            source: click.source.clone(),
-            outcome: click_outcome(click).to_owned(),
+            key: Some(key.key.clone()),
+            replaced: key
+                .replaced
+                .as_ref()
+                .map(|click| Box::new(click_press(click))),
+            source: DECLARED.to_owned(),
+            outcome: DECLARED.to_owned(),
         });
     }
     step.application
@@ -511,9 +528,28 @@ fn press_of(step: &RecordingStep) -> Option<RecordReviewPress> {
             rect: None,
             gesture: None,
             application: Some(application.action.clone()),
+            key: None,
+            replaced: None,
             source: application.source.clone(),
             outcome: application_outcome(step),
         })
+}
+
+/// What the click `click` pressed, as the step table holds it.
+fn click_press(click: &StepClick) -> RecordReviewPress {
+    let execution = click.execution.as_ref();
+    RecordReviewPress {
+        point: execution.map(|execution| execution.point),
+        to_point: execution.and_then(|execution| execution.to_point),
+        duration_ms: execution.and_then(|execution| execution.duration_ms),
+        rect: Some(click.rect),
+        gesture: click.gesture,
+        application: None,
+        key: None,
+        replaced: None,
+        source: click.source.clone(),
+        outcome: click_outcome(click).to_owned(),
+    }
 }
 
 /// Fix round 1: the outcome of the application operation of `step`, by the judgement the archive's

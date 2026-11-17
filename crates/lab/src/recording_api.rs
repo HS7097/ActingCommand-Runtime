@@ -22,10 +22,11 @@ use crate::recording::crosscheck::{
 use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings, Survey,
-    application_steps_summary, optional_steps_summary, plan as generate_plan, render, survey,
-    transitions_summary, validate_timeout_option,
+    application_steps_summary, key_steps_summary, optional_steps_summary, plan as generate_plan,
+    render, survey, transitions_summary, validate_timeout_option,
 };
 use crate::recording::inserted::validate_optional_after_request;
+use crate::recording::key::validate_key_request;
 use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     AfterCapture, AfterCaptureRecord, AfterFrame, ApplicationPlan, AttachFrameOutcome,
@@ -794,6 +795,11 @@ fn generate_and_write(
         "application_steps".to_string(),
         json!(application_steps_summary(&plan)),
     );
+    // #463 KR-1: the key steps, present only when the package has one.
+    let key_steps = key_steps_summary(&plan)?;
+    if !key_steps.is_empty() {
+        lab.insert("key_steps".to_string(), json!(key_steps));
+    }
     // #463 R2: the endings' pages after the steps' and the transitions'.
     let pages = plan
         .steps
@@ -1846,6 +1852,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
     if request.optional_after.is_some() || request.remove_inserted.is_some() {
         return validate_optional_after_request(request);
     }
+    // #463 KR-1: a key's word and what stands beside it, before anything is read.
+    validate_key_request(request)?;
     // #463 S2-5: boxes are members of a step: never beside a step operation or a transition, one
     // press box beside no click, each recognize box once.
     validate_boxes(request)?;
@@ -2073,6 +2081,7 @@ fn mark_session(
         boxes: Vec::new(),
         choice: None,
         scan_fold: None,
+        key: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -2153,6 +2162,8 @@ fn mark_session(
         outcome.choice = recorded.choice.clone();
         // #463 S2-8': the swipes folded into the step's scrolling search.
         outcome.scan_fold = recorded.scan_fold.clone();
+        // #463 KR-1: the step's key with the click it replaced.
+        outcome.key = recorded.key.clone();
     }
     Ok(outcome)
 }
@@ -3711,7 +3722,8 @@ pub(crate) fn click_outcome(click: &StepClick) -> &'static str {
     }
 }
 
-/// `none`, `click_<declared|executed|indeterminate>` or `application_<declared|executed>`.
+/// `none`, `click_<declared|executed|indeterminate>`, `application_<declared|executed>` or (#463
+/// KR-1) `key_declared`, a key being never sent while recording.
 fn effect_state(step: &RecordingStep) -> String {
     match (&step.click, &step.application) {
         (Some(click), _) => format!("click_{}", click_outcome(click)),
@@ -3719,6 +3731,7 @@ fn effect_state(step: &RecordingStep) -> String {
             "application_executed".to_string()
         }
         (None, Some(_)) => "application_declared".to_string(),
+        (None, None) if step.key.is_some() => "key_declared".to_string(),
         (None, None) => "none".to_string(),
     }
 }
@@ -3808,5 +3821,7 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         // #463 S2-8': what a folded swipe is folded into, and the fold of its press step.
         folded_into: step.folded_into,
         scan_fold: step.scan_fold.clone(),
+        // #463 KR-1: the key with the click it replaced.
+        key: step.key.clone(),
     }
 }

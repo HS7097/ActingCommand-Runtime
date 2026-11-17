@@ -34916,6 +34916,198 @@ no revision of it), so row 17's sentence on what `place` asks (10 and 14, never 
 was. The key step's key is now made from the number `DeviceKey::android_code` (§1.447, "Train,
 round 2"); the string it gives is the one it gave.
 
+### 1.449 Slice #463 KR-1 (0.12.70): a recording's step may press the back key, declared after the fact and never sent while recording (Workflow #463; the owner's ruling on board #463 of the night of 11-15 that the back key is not recorded while playing and that an agent adds such a step in stage two or three; the rules below are the coordinator's rulings in the work order and on the study of the key step, not the owner's words; coordinator work order `rd-1117/brief-463-kr1-record-key-step.md`, study `rd-1116/report-463-key-step-study.md`, part (d); stacked on #463 S2-10, §1.441, its branch at `c49176f7`, which holds main `26698590`, the 0.12.69 train with KB-1 and KP-1, §1.447 and §1.448)
+
+This section takes 1.449, the number the work order gives. It ships in 0.12.70.
+
+**Why.** Since 0.12.69 a package's step may press the back key ([linear-steps.md](linear-steps.md),
+"Key steps"), and such a step entered a package only by editing its source by hand. The agent now
+declares it on the recording, and `record stop` generates it with everything else.
+
+**The rule** ([lab-recording.md](lab-recording.md), "Key steps").
+- *The request*: `"key": null | {"key": "back"} | false` (`--key back`, `--no-key`); the word of the
+  closed vocabulary, `back` alone (the kernel's `StepKey`), checked at the request before anything
+  is read. `optional_after.key` closes an inserted pop-up in place of its click.
+- *Where it lands*, one effect per step, as an application operation: on a step without an effect,
+  declared; on a step with a click of any form, executed or declared, only with `replace_click`
+  (otherwise `record_step_effect_exists`, `effect: "click"`), the click kept whole inside the key
+  (`key.replaced`) and the step's frames standing; an executed click is replaced without
+  `--reopen-step`, which is new. Refused, nothing written, `record_key_invalid` with its word. Once
+  a step's effect is a key no other effect lands on it (`record_step_effect_exists`, `effect:
+  "key"`, from `record mark` and from `tap`, `swipe`, `long-tap`, `do --capture` and `session app`
+  with `record`, before anything is sent); a device frame on an open key step is
+  `record_step_click_not_executed`, an offline frame closes it, `--close-step` accepts it.
+- *Which recordings*: active and stopped (a key is none of the changes "Marking after stop"
+  refuses); an archived one is reopened first (`record_session_not_active`).
+- *The guard*: the click guard, named by the agent. A click step without a named guard is guarded by
+  the first template, colour, colour digest or check mark of its page the generator finds
+  (`generate::guard_target`), or pressed as a trusted coordinate on a page of OCR marks alone; a
+  key has no coordinate to trust and the generator picks none for it: `record ready` lists a key
+  step without one (`key_guard_missing`), `record stop` refuses it (`guard_missing`). (Replaced by
+  fix round 1 below: a key step takes a click step's rule.)
+- *Taking it back*: `key: false` gives back the click exactly; `recording.json` is byte for byte what
+  it was but for `updated_at_unix_ms` (on a stopped recording `amended_at_unix_ms` too), the package
+  generated afterwards the one before but for its generation time.
+- *Generation*: `step_<nn>_key` with `from`, `to`, `key`, the named guard, `expect_after` of the page
+  that follows, a click's `post_delay_ms`, `optional` and a page `transition` when the step has them;
+  no click, no retry, no input recheck. The task's `goal` names key steps (only when there is one),
+  `lab.key_steps` lists them (only then), the step's provenance records `key`. After an application
+  `stop` a key is `record_step_after_stop_invalid`, as a click is.
+- *The readers*: `record status` (`key`, `step_state.effect` `key_declared`); `record review` (`kind`
+  `key`, `press.key` and `press.replaced`, the replaced press's frames, no press drawn); `record
+  ready` (no `press_point_only`, a stage-two write); `record frames`, the archive's manifest and
+  S2-5's stage-one captures read the replaced press as the step's recorded press
+  (`RecordingStep::recorded_click`), the manifest's `kind` `key`; the first decision of a key step 1
+  is `would_press_key`; the cross-check judges the key step's page and its arrival as a click's,
+  and no check of a press's place applies; S2-10's cases give a key step its case on the frame of
+  the replaced press (`ready::press_frame`), or on its primary frame.
+- *Drop a press that changed nothing* (S2-7): a key step before the last is `record_drop_unproven`
+  `frames_not_recorded`, since its `click` is the key's and the stored frames show the press it
+  replaced, not the key; taking the key back first lets the press be judged as recorded. (Fix round
+  1 below gives it a word of its own, `key_declared`.)
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The members | `crates/lab/src/recording/model.rs`: `KeySpec`, `KeyRequest`, `RecordedKey`; `MarkRequest::key`, `OptionalAfterSpec::key`, `RecordingStep::key`, `MarkOutcome::key`, `StepView::key`; `RecordingStep::has_effect`, `RecordingStep::recorded_click` |
+| The rules of a key | `crates/lab/src/recording/key.rs` (new): `validate_key_request`, `validate_inserted_key`, `key_on_dropped`, `key_on_entry`, `apply_key`, `check_key_step`, `key_effect_exists`, `key_invalid` |
+| Where they are called | `crates/lab/src/recording/steps.rs`: `apply_marks` (the dropped step, the entry step, `apply_key` before the click, `check_key_step` after the select rules), `apply_click` (a click on a key step; a guard on a key step), `plan_arrival` (`key_arrival`), `plan_click`, `plan_press`, `plan_application`, `--close-step`, `to_transition`, `apply_transition` (an effect), `apply_optional_after` (the inserted key), `screen_before`; `effect_exists` and `holds_choice` made `pub(crate)`; `crates/lab/src/recording_api.rs`: `validate_mark_request`, `effect_state`, `step_view`, `mark_session`, `lab.key_steps`; `crates/lab/src/recording/inserted.rs`, `ending.rs`: the member `key` among the other members, `no_effect` |
+| Generation | `crates/lab/src/recording/generate.rs`: `PlanStep::has_effect`, `Plan::operation_id` (`key`), `key_guards` (the pre-check), `guard_target` (the named guard alone), `key_operation`, `key_steps_summary`, `step_provenance`, the goal, `effect_after_stop` |
+| The readers | `crosscheck.rs` (`key_first_decision`), `ready.rs` (`press_frame`, `stage_two_written`, the hint), `review.rs` (`press_of`, `click_press`, `after_record`), `around.rs` (`press_record`), `archive.rs` (`step_kind`, `relation`, `outcome_of`, `click_of`, `row_of`, `final_frame`), `boxes.rs` (`stage_one_captures`) |
+| The words | `crates/lab/src/codes.rs`: `LabCode::RecordKeyInvalid`, `KeyProblem`, `ReadyMissing::KeyGuardMissing`, `OptionalAfterProblem::NoEffect` (was `NoClick`); `crates/actingcommand-contract/src/outcome/keys.rs`: the key `key_problem` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--key`, `--no-key` (`RECORD_MARK_SHORTCUT_FLAGS`, `RECORD_MARK_SWITCHES`), `--key` beside `--optional-after` the inserted step's; the help's flag list (`lab2_cli.rs`) |
+| Texts | [lab-recording.md](lab-recording.md): the new "Key steps", the introduction, `recording.json`, `record mark` (its forms, `step_state.effect`, `key`), `record status`, "Inserting an optional step after stop" (`key`, `no_effect`), "Marking after stop", `record ready`'s words, the pre-checks, self-check item 3, the error codes; the row `record mark` of [lab-operations.json](lab-operations.json) (`key`, `no_key`, `help`, `notes`); `apps/actinglab-mcp/MANUAL.md`; the lab fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+The exit is actinglab's own command line's, where every refusal exits 1 (the class's exit, 3, on a
+`--via` line).
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `record_key_invalid` (lab, error, `key_problem` required) | a step's key cannot be declared or generated | refuses `record mark` and `record stop`; an item of `record ready` (`key_guard_missing`) | 1 |
+| `key_problem` `word_unknown` | the key's word is none of the vocabulary's | refuses | 1 |
+| `key_problem` `with_click` | a click beside the key, or an inserted step with both | refuses | 1 |
+| `key_problem` `with_application` | an application operation beside the key | refuses | 1 |
+| `key_problem` `with_retry` | a click retry beside the key | refuses | 1 |
+| `key_problem` `application_entry` | the step is the application entry step | refuses | 1 |
+| `key_problem` `application_step` | the step's effect is an application operation | refuses | 1 |
+| `key_problem` `holds_choice` | a key and a choice on one step | refuses | 1 |
+| `key_problem` `step_not_effective` | the step is dropped or converted | refuses | 1 |
+| `key_problem` `guard_missing` | a key step names no guard | refuses `record stop` | 1 |
+| `ready_missing` `key_guard_missing` | the same, as `record ready` lists it | informs (`record ready` answers) | 0 |
+| `optional_after_problem` `no_effect` (in place of `no_click`) | an inserted step declares neither a click nor a key | refuses | 1 |
+| `step_state.effect` `key_declared` | the step's effect is a key, declared | informs | 0 |
+
+A second effect without `replace_click` keeps its code, `record_step_effect_exists` (`effect`
+`click`, or `key` for an effect on a key step), and a device frame on an open key step
+`record_step_click_not_executed`. The decisions the slice adds read the request's members and the
+step's, no code. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_kr1.rs`, exec gate map "#463 KR-1"; recordings made as stage one
+makes them, synthetic 160x90 screens, colour marks, no OCR model, no clock): an executed press
+replaced by the key, its record, the generated operation and its admission (1); `key: false` byte
+for byte, and the regenerated package but for its generation time (2); a key step without a guard
+listed and refused, then passing (3); each refusal, nothing written (4); a pop-up inserted after
+the stop closed by the key, both and neither refused (5); the last step with an effect a key step,
+its arrival the target page (6); step 1 a key step, the first decision `would_press_key` (7);
+`record review` of a key step (8); its regression case from disk (9); a word outside the
+vocabulary refused before the recording is read (10). Adapted, as the requirement changes what it
+pins: `gate_463_r4::r4_each_optional_after_problem_is_refused_with_its_word` (`no_effect` for the
+insertion without a click). No golden changes; no test leaves a gate map.
+
+**What is not changed.** A recording without a key and the package generated from it, byte for
+byte; the kernel, the host, the device layer and the source parser; S2-10's cases of steps without
+a key; nothing proposes a region, a choice, a value or a guard. No ledger record, configuration key
+or Runtime interface revision.
+
+**At deploy.** Nothing to configure. A recording that holds a key is not read by a Lab before
+0.12.70.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-kr1-fix1.md`, after the independent
+review of the pull request and the coordinator's rulings on it, not the owner's words; every label
+and `since` 0.12.70).
+- *Taking the key back gives the guard back too* (the review's first required point): the click
+  guard is the step's member, not the click's, so a guard named with the key or after it stayed on
+  the step. `RecordedKey::replaced_guard` keeps the step's click guard as it was when the key was
+  declared (`apply_key` runs before `apply_click` takes the request's guard; a key declared again
+  keeps the first one's), absent when there was none, and `key: false` gives it back with the click:
+  the guard named for the key goes, the click's comes back, none comes back as none.
+- *The contract named the wrong refusal*: a select declared on a key step is `record_key_invalid`
+  with `holds_choice` (the choice is judged first, `check_key_step`), not
+  `record_step_effect_exists`; the sentence is corrected.
+- *A key step's guard by a click step's rule* (the review's answer 1: the first round's premise, that
+  a click step without a named guard is a trusted coordinate, was wrong). The coordinator's ruling:
+  a key step takes the rule a click step and a select step already take, over marks the agent
+  drew, which proposes nothing: the click guard it names when that is a mark its page requires and
+  no OCR mark, else its page's first template, else its first colour or colour digest, else its
+  first check; the default takes no value-test mark and no text mark, and a key, having no click,
+  has no followed mark and no source mark. One function holds the rule, `generate::page_guard`,
+  which `guard_target` gives for every step whose click follows no mark and which the pre-check
+  `key_guards` reads over the marks the page requires: so a named guard the generator passes over
+  (a member of an `any_of` check, the review's "hole") is met at `record ready`, never first at
+  admission. Only a page that gives none (text or value-test marks alone, no value-test mark named)
+  leaves a key step without a guard: then, and only then, `record ready` lists `key_guard_missing`
+  (its hint now `record mark --step k --template <id>=x,y,w,h`) and `record stop` refuses
+  `record_key_invalid` `guard_missing`; `key_operation` answers that refusal should such a step
+  reach it. `lab.key_steps[].guard` names the mark the generator guards the step by.
+- *Drop a middle press on a key step* (one cause, one word): `record_drop_unproven` with the new
+  `drop_problem` `key_declared` in place of `frames_not_recorded`, whose text was untrue there (the
+  replaced press's frames are on record; what is missing is anything that shows what the key does);
+  its text says to take the key back first.
+- *A key step whose replaced press needed review still needs review* (the review's answer 5): the
+  frames after it come from that press. The generator's `lab.steps_needing_review` counts a key step
+  by the press it replaced (`RecordingStep::recorded_click`); the step's provenance records
+  `key.needs_review`; adoption reads `click` or `key` `needs_review`
+  (`crates/resource-tooling/src/adopt.rs`, `RecordingReview::steps_needing_review`, a reader of
+  the Lab's output outside the Lab). `record ready` counts no step needing review, of either kind: nothing to change there.
+- *Two optional key steps are two pop-ups* (the review's answer 5): the check of optional steps
+  told them apart by their click rectangles, both `None` for keys, so any two optional key steps of
+  a run were one pop-up (`same_as`). `crosscheck::same_closing`: two clicks by their rectangles as
+  before; two keys only by the same key on the same page (the same marks required and forbidden, as
+  a copy that reuses the first's marks has); a key and a click never. Two different optional pages
+  are never taken for one; one passing on the other's frames is `record_optional_step_ambiguous`.
+  The refusal's text says "this step's effect" where it said "this step's different click".
+- *A malformed `key`* (the review's answer 7): `KeyRequest` is read by its own deserializer, and a
+  `key` that is no `{"key": "back"}`, `false` or `null` is `validation_failed` with the text
+  `model::KEY_REQUEST_FORMS`, which says the three forms and the vocabulary, as `true` is; not the
+  decoder's "did not match any variant".
+- *Small texts*: the help of `record mark` says a click "may follow a mark" (the first round had
+  dropped the located text; 147 bytes); the manifest's `kind` comment names `key`; the contract says
+  that a text mark the replaced click followed becomes an ordinary mark of the page while the key
+  stands, so the page needs its text read, and that a click guard naming it takes another guard in
+  the request that declares the key.
+- *Where*: `crates/lab/src/recording/model.rs` (`RecordedKey::replaced_guard`, `KeyRequest`'s
+  deserializer, `KEY_REQUEST_FORMS`), `key.rs` (`apply_key`, the `true` text), `generate.rs`
+  (`page_guard`, `guard_target`, `key_guards`, `key_guard_missing`, `key_operation`,
+  `key_steps_summary`, `step_provenance`, the plan's `needs_review`), `steps.rs`
+  (`press_changed_nothing`), `crosscheck.rs` (`same_closing`, `same_ids`, `Against::consequence`),
+  `ready.rs` (the hint), `archive.rs` (a comment), `crates/lab/src/codes.rs` (`DropProblem::KeyDeclared`
+  and two texts), `crates/lab/src/recording_api.rs` (`key_steps_summary` answers a result),
+  `crates/resource-tooling/src/adopt.rs`; [lab-recording.md](lab-recording.md) ("Key steps",
+  "Steps, frames and remediation", the optional steps' check c, the pre-checks, `record ready`'s
+  words, section 4.3), the operation table's row `record mark` (`help`, the `key` and `no_key`
+  notes, `notes`), the MCP manual, the lab fragment, the catalog and the regenerated index.
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `drop_problem` `key_declared` (of `record_drop_unproven`) | the step to drop before the last has a declared key as its effect, whose frames show nothing of what the key does | refuses | 1 (3 on a `--via` line) |
+
+*Tests* (`gate_463_kr1`, the command line's in `apps/actinglab`; exec gate map "#463 KR-1").
+Adapted, as the round changes what they pin: test 2 names a guard with step 2's key and one after
+step 3's (whose click had its own) and still compares `recording.json` byte for byte and the
+regenerated package; test 3, renamed `kr1_a_key_step_whose_page_gives_no_guard_is_listed_and_refused`
+(the name was new in this pull request, so no gate leaves main's map), puts the key on a page of a
+text mark alone, then gives the page a colour mark and pins the guard the package takes from it;
+test 4 adds a followed mark and a drag (`with_click`), a select in the request and a step that
+selects (`holds_choice`) and a converted step (`step_not_effective`); test 5 no longer names the
+pop-up's guard and adds `word_unknown` on an inserted step; test 9 builds the case on a live sample
+the step table names as the press's frame, not the primary frame. New: two optional key steps on two
+pages refused (11); key steps before and after a run of optional steps arriving as their clicks did
+(12); `--key back`, `--no-key` and `--key back` beside `--optional-after` through the command's own
+parsing (`kr1_the_key_flags_declare_the_request_forms_key`).
+
 ### 1.450 Slice #463 RC-1 (0.12.69): the regression case of a resource repository as a contract of the Runtime, with a reader and an offline runner (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two checks a package against its recorded material and whose stage three builds it; the read-only study `rd-1116/report-463-case-format-study.md` and the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-rc1-regression-case-runner.md`, read on main `40abd08b`, taken over at its breakpoint under `rd-1116/brief-463-continue.md`)
 
 This section takes 1.450, the number the work order gives. It ships in 0.12.69.

@@ -2891,6 +2891,10 @@
     "scan_problem": {
       "type": "vocab:scan_problem",
       "description": "Why the swipes recorded before a press of a Lab recording cannot be folded into one scrolling search of that press, the fold undone, a step of the fold acted on, or the fold generated (record_scan_invalid; #463 S2-8', since 0.12.70)."
+    },
+    "key_problem": {
+      "type": "vocab:key_problem",
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70)."
     }
   },
   "vocabularies": {
@@ -5343,8 +5347,8 @@
         "no_marks": {
           "description": "The inserted step adds and reuses no mark, so its page would recognize nothing."
         },
-        "no_click": {
-          "description": "The inserted step declares no click, so nothing would close its pop-up."
+        "no_effect": {
+          "description": "#463 KR-1 (since 0.12.70, in place of no_click): the inserted step declares no effect, neither a click nor a key, so nothing would close its pop-up."
         },
         "clears_optional": {
           "description": "The request clears optional on an inserted step: a step never recorded on the path stays optional."
@@ -5465,6 +5469,9 @@
         },
         "scan_end_not_recorded": {
           "description": "#463 S2-9a (since 0.12.70): a scrolling select that reads its list to its end declares no end mark: the demonstration never reached the list's end (record_scan_invalid, end_not_recorded)."
+        },
+        "key_guard_missing": {
+          "description": "#463 KR-1 (since 0.12.70): a step that presses a key gets no guard (record_key_invalid, guard_missing; fix round 1: by a click step's rule, its page gives none)."
         }
       }
     },
@@ -5510,6 +5517,42 @@
       "tokens": {
         "self_agreement": {
           "description": "The cases were made from the frames the package was built from: that they pass shows the package recognises the screens it was recorded on and says nothing about screens it did not meet."
+        }
+      }
+    },
+    "key_problem": {
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "KeyProblem"
+      },
+      "tokens": {
+        "word_unknown": {
+          "description": "The key's word is none of the vocabulary's, which is back alone."
+        },
+        "with_click": {
+          "description": "The request declares a click beside the key (a rectangle, a source mark, a followed mark, a gesture or a press box), or an inserted step declares both a click and a key."
+        },
+        "with_application": {
+          "description": "The request declares an application operation beside the key."
+        },
+        "with_retry": {
+          "description": "The request declares a click retry beside the key: a key step declares no retry."
+        },
+        "application_entry": {
+          "description": "The step is the application entry step, which has no frame and no page to guard a key on."
+        },
+        "application_step": {
+          "description": "The step's effect is an application operation, declared or executed."
+        },
+        "holds_choice": {
+          "description": "A key and a choice on one step: the step holds a choice (a select or a choice mark), or the request gives one to a step with a key or beside a key."
+        },
+        "step_not_effective": {
+          "description": "The step is dropped or converted into a page transition."
+        },
+        "guard_missing": {
+          "description": "record stop meets a step that presses a key and gets no guard (fix round 1: by a click step's rule, it names none its page requires and its page requires no template, colour, colour digest or check mark): a key has no coordinate to trust."
         }
       }
     },
@@ -11186,7 +11229,7 @@
       }
     },
     "drop_problem": {
-      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change, or (#463 KR-1 fix round 1, since 0.12.70) the step's effect is a declared key. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
       "review": "pending",
       "source": {
         "file": "crates/lab/src/codes.rs",
@@ -11201,6 +11244,9 @@
         },
         "next_screen_differs": {
           "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "key_declared": {
+          "description": "#463 KR-1 fix round 1 (since 0.12.70): the step's effect is a declared key: the frames on record are those of the press the key replaced, and nothing shows what the key does; the key is taken back first (key false, --no-key)."
         }
       }
     },

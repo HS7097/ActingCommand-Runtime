@@ -8,17 +8,18 @@
 use super::ending::{ending_page_id, ending_rule_refusals};
 use super::fold::scan_not_selected;
 use super::follow::{follow_invalid, located_page_problem};
+use super::key::key_invalid;
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
-    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, ScanNumber, SelectConfirmSpec,
-    SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect,
-    StepTransition,
+    RecordedKey, RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, ScanNumber,
+    SelectConfirmSpec, SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick,
+    StepOptional, StepSelect, StepTransition,
 };
 use super::select::{empty_end_key, on_empty_key, select_invalid};
 use super::steps::path_order;
 use super::store::{blocked, invalid, with_details};
-use crate::codes::{ClickFollowProblem, ReadyMissing, SelectProblem};
+use crate::codes::{ClickFollowProblem, KeyProblem, ReadyMissing, SelectProblem};
 use actingcommand_contract::{
     LabError, LabResult, MAX_FACT_TTL_MS, MAX_GOAL_ORDERED_COUNT, MAX_PACK_CATALOG_TITLE_BYTES,
     ORDERED_VARIABLE_KEY_COLUMN, ORDERED_VARIABLE_RANK_COLUMN, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
@@ -86,8 +87,9 @@ impl PlanStep {
         self.step.is_application_entry()
     }
 
+    /// A click, an application operation or (#463 KR-1) a key.
     pub(crate) fn has_effect(&self) -> bool {
-        self.step.click.is_some() || self.step.application.is_some()
+        self.step.has_effect()
     }
 
     /// The live (not superseded) frames of the step: its primary frame and samples.
@@ -247,7 +249,8 @@ pub(crate) struct Plan {
     pub(crate) timeout_ms: u64,
     /// Warnings known before the self-checks: clamps, the requires prefix, stop targets.
     pub(crate) warnings: Vec<Value>,
-    /// Steps with a click or application operation marked `needs_review`.
+    /// Steps with a click or application operation marked `needs_review`; #463 KR-1 fix round 1: a
+    /// key step whose replaced press is marked so.
     pub(crate) needs_review: Vec<Value>,
     /// #463 R2: the recording's endings, in the order it took them.
     pub(crate) endings: Vec<PlanEnding>,
@@ -261,6 +264,9 @@ impl Plan {
     pub(crate) fn operation_id(&self, step: &PlanStep) -> String {
         let kind = if step.step.application.is_some() {
             "app"
+        } else if step.step.key.is_some() {
+            // #463 KR-1: a key step's operation.
+            "key"
         } else if step.step.select.is_some() {
             // #463 R1: a select step's operation.
             "select"
@@ -764,6 +770,53 @@ fn unrecorded_scan_ends(steps: &[PlanStep], lacks: &mut Lacks) {
     }
 }
 
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): every step of the package that presses a
+/// key and gets no guard is a failed pre-check (`key_guard_missing`; `record_key_invalid` with
+/// `guard_missing`), by step. Fix round 1 (the coordinator's ruling on the review's answer 1): a
+/// key step is guarded by the rule a click step is ([`page_guard`], the one [`guard_target`]
+/// writes for a step whose click follows no mark): the guard it names, else its page's first
+/// template, colour or colour digest, or check mark. A click step whose page gives none is pressed
+/// as a trusted coordinate; a key has no coordinate to trust, so only then is a key step listed
+/// here. The judgement reads what the generator will write, so that a named guard it passes over
+/// (no mark the page requires, a member of an `any_of` check) is never met first at admission. A
+/// mark the page names that no effective step has is a failed pre-check of its own
+/// (`reused_mark_missing`); the guard is looked for among the others.
+fn key_guards(steps: &[PlanStep], marks: &BTreeMap<String, RecordedMark>, lacks: &mut Lacks) {
+    for step in steps.iter().filter(|step| step.step.key.is_some()) {
+        let required = step
+            .required
+            .iter()
+            .filter_map(|id| marks.get(id))
+            .collect::<Vec<_>>();
+        if page_guard(&required, &step.step).is_none() {
+            lacks.push(
+                ReadyMissing::KeyGuardMissing,
+                plan_step_number(step),
+                key_guard_missing(step),
+            );
+        }
+    }
+}
+
+/// #463 KR-1: `record_key_invalid` with `guard_missing` for the key step `step`, whose page gives
+/// it no guard ([`key_guards`]).
+fn key_guard_missing(step: &PlanStep) -> LabError {
+    let index = step.step.index;
+    key_invalid(
+        KeyProblem::GuardMissing,
+        Some(index),
+        format!(
+            "step {index} presses a key and gets no guard: a key step is guarded by the click \
+             guard it names, else by the first template, color, color digest or check mark its \
+             page requires, and its page requires none of these (only text or value-test marks) \
+             and it names none the page requires; a key has no coordinate to trust: add such a \
+             mark to its page (`record mark --step {index} --template <id>=x,y,w,h`), or name a \
+             value-test mark of its page with --click-guard; nothing was written"
+        ),
+        json!({"artifact_step": step.number}),
+    )
+}
+
 /// The key of the usual ending, `<task_id>_done`.
 pub(crate) fn done_key(task_id: &str) -> String {
     format!("{task_id}_done")
@@ -910,7 +963,8 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
         }
     }
     for (position, step) in effective.iter().enumerate() {
-        let effect = step.click.is_some() || step.application.is_some();
+        // #463 KR-1: a key is an effect too.
+        let effect = step.has_effect();
         let number = position + 1;
         if number < n && !effect {
             lacks.push(
@@ -1093,7 +1147,9 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
             .application
             .as_ref()
             .is_some_and(|application| application.action == "stop");
+        // #463 KR-1: a key is an input, refused after a stop as a click is.
         let next_invalid = pair[1].click.is_some()
+            || pair[1].key.is_some()
             || pair[1]
                 .application
                 .as_ref()
@@ -1295,6 +1351,9 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
     unselected_scans(&steps, &mut lacks);
     // #463 S2-9a: nor does a scrolling select whose demonstration never reached the list's end.
     unrecorded_scan_ends(&steps, &mut lacks);
+    // #463 KR-1: a key step is generated only with a guard (fix round 1: the one the generator
+    // writes, by a click step's rule).
+    key_guards(&steps, &marks, &mut lacks);
     // #463 R2: so are an ending's, a select declared after it among them; then each ending's page
     // `ending_kk` (or `ending_kk_<page>`), numbered to the width of the steps' pages.
     for (what, refusal) in ending_rule_refusals(recording) {
@@ -1406,12 +1465,13 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
                         was recorded on"
         }));
     }
+    // #463 KR-1 fix round 1 (the coordinator's ruling on the review's answer 5): a key step by the
+    // press it replaced, whose frames the steps after it come from.
     let needs_review = steps
         .iter()
         .filter(|step| {
             step.step
-                .click
-                .as_ref()
+                .recorded_click()
                 .is_some_and(|click| click.needs_review)
                 || step
                     .step
@@ -1645,7 +1705,8 @@ pub(crate) fn follows_located_text(plan: &Plan, step: &PlanStep) -> LabResult<bo
 /// by that template, which the kernel requires of a `target` or `offset` click; #463 L2: one that
 /// follows a located-text mark by that mark (`verify_text`), which (fix 1) is a mark of the step
 /// but none of its page: the page stands on the step's other marks (`page_needs_followed_text`
-/// otherwise).
+/// otherwise). #463 KR-1 fix round 1 (the coordinator's ruling): a key step, which has no click and
+/// so follows no mark, by [`page_guard`], as a click step that follows none.
 pub(crate) fn guard_target<'p>(
     plan: &'p Plan,
     step: &PlanStep,
@@ -1719,36 +1780,38 @@ pub(crate) fn guard_target<'p>(
             )),
         };
     }
-    let guardable = |mark: &&RecordedMark| mark.family != MarkFamily::Ocr;
+    Ok(page_guard(&required, &step.step))
+}
+
+/// The guard of `step`, a step whose click follows no mark (section 4.3), from `required`, the
+/// marks its page requires: the click guard it names, then its click's source mark, each only when
+/// it is one of them and no OCR mark; then the first template, the first color or color digest,
+/// the first check. `None` when none is (a page of OCR and value-test marks alone, none named): a
+/// click is then a trusted coordinate. #463 KR-1 fix round 1 (the coordinator's ruling on the
+/// review's answer 1): a key step's by this one rule; it has no click, so no source mark.
+fn page_guard<'m>(required: &[&'m RecordedMark], step: &RecordingStep) -> Option<&'m RecordedMark> {
     let named = |id: Option<&String>| {
         id.and_then(|id| required.iter().copied().find(|mark| &mark.id == id))
-            .filter(guardable)
+            .filter(|mark| mark.family != MarkFamily::Ocr)
     };
-    if let Some(mark) = named(step.step.click_guard.as_ref()) {
-        return Ok(Some(mark));
+    if let Some(mark) = named(step.click_guard.as_ref()) {
+        return Some(mark);
     }
-    if let Some(mark) = named(
-        step.step
-            .click
-            .as_ref()
-            .and_then(|click| click.from.as_ref()),
-    ) {
-        return Ok(Some(mark));
+    if let Some(mark) = named(step.click.as_ref().and_then(|click| click.from.as_ref())) {
+        return Some(mark);
     }
-    for families in [
+    [
         &[MarkFamily::Template][..],
         &[MarkFamily::Color, MarkFamily::ColorDigest][..],
         &[MarkFamily::Check][..],
-    ] {
-        if let Some(mark) = required
+    ]
+    .into_iter()
+    .find_map(|families| {
+        required
             .iter()
             .copied()
             .find(|mark| families.contains(&mark.family))
-        {
-            return Ok(Some(mark));
-        }
-    }
-    Ok(None)
+    })
 }
 
 fn guard_json(plan: &Plan, step: &PlanStep, page: &str) -> LabResult<Option<Value>> {
@@ -1874,6 +1937,27 @@ pub(crate) fn application_steps_summary(plan: &Plan) -> Vec<Value> {
         .collect()
 }
 
+/// #463 KR-1: the `key_steps` summary of the output: every key step with its operation, its key,
+/// the guard (fix round 1: the mark the generator guards it by, [`guard_target`], named or by the
+/// page's rule) and whether it replaced a recorded click.
+pub(crate) fn key_steps_summary(plan: &Plan) -> LabResult<Vec<Value>> {
+    let mut summary = Vec::new();
+    for step in &plan.steps {
+        let Some(key) = &step.step.key else {
+            continue;
+        };
+        let guard = guard_target(plan, step)?.map(|mark| mark.id.clone());
+        summary.push(json!({
+            "step": step.number,
+            "op": plan.operation_id(step),
+            "key": key.key,
+            "guard": guard,
+            "replaced_click": key.replaced.is_some()
+        }));
+    }
+    Ok(summary)
+}
+
 fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
     let mut entry = Map::new();
     entry.insert("step".into(), json!(step.number));
@@ -1923,6 +2007,18 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
             object.insert("gesture".into(), json!(gesture));
         }
         entry.insert("click".into(), provenance);
+    }
+    // #463 KR-1: only a key step records its key and whether it replaced a recorded click; fix
+    // round 1: and whether that press needs review, which adoption reads as a click's.
+    if let Some(key) = &step.step.key {
+        entry.insert(
+            "key".into(),
+            json!({
+                "key": key.key,
+                "replaced_click": key.replaced.is_some(),
+                "needs_review": key.replaced.as_ref().is_some_and(|click| click.needs_review)
+            }),
+        );
     }
     // #463 R1: only a select step records its select: the declaration, the name its demonstration
     // pressed, its `on_empty` key (#463 S2-9b: `null` for a select that declares none) and the
@@ -2640,6 +2736,7 @@ pub(crate) fn select_probe_plan(
         inserted_after: None,
         folded_into: None,
         scan_fold: None,
+        key: None,
         transition: None,
         closed: true,
         closed_by: None,
@@ -2735,6 +2832,8 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
                 "request_id": application.executed.as_ref().map(|executed| executed.request_id.clone())
             }),
         );
+    } else if let Some(key) = &step.step.key {
+        key_operation(plan, step, key, next_page, &mut operation, &mut provenance)?;
     } else if let Some(select) = &step.step.select {
         // #463 R1: a select step chooses in its list of fixed slots by the names read there and
         // taps the chosen slot once; it has no click of its own, declares no retry and needs a
@@ -2841,6 +2940,49 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
     }
     operation.insert("provenance".into(), Value::Object(provenance));
     Ok(Value::Object(operation))
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"; `contracts/linear-steps.md`, "Key steps"):
+/// the members of the operation of the key step `step`, whose effect is `key`: from its page to
+/// `next_page`, the key, its guard (fix round 1: by a click step's rule, [`guard_target`]; a key
+/// step without one never comes here, [`key_guards`] lists it, and should one come the refusal is
+/// that pre-check's), the arrival at the next page and the post-input wait of a click; no click,
+/// no retry, no input recheck. Its provenance says whether the key replaced a recorded click.
+fn key_operation(
+    plan: &Plan,
+    step: &PlanStep,
+    key: &RecordedKey,
+    next_page: &str,
+    operation: &mut Map<String, Value>,
+    provenance: &mut Map<String, Value>,
+) -> LabResult<()> {
+    let page = step.page_id()?.to_string();
+    operation.insert(
+        "purpose".into(),
+        json!(format!(
+            "Lab recording step {} (key {})",
+            step.number, key.key
+        )),
+    );
+    operation.insert("from".into(), json!(page));
+    operation.insert("to".into(), json!(next_page));
+    operation.insert("key".into(), json!({"key": key.key}));
+    let guard = guard_json(plan, step, &page)?.ok_or_else(|| key_guard_missing(step))?;
+    operation.insert("guard".into(), guard);
+    operation.insert(
+        "expect_after".into(),
+        json!({
+            "page_id": next_page,
+            "timeout_ms": plan.arrival_timeout_ms,
+            "interval_ms": ARRIVAL_INTERVAL_MS
+        }),
+    );
+    operation.insert("post_delay_ms".into(), json!(CLICK_POST_DELAY_MS));
+    provenance.insert(
+        "key".into(),
+        json!({"key": key.key, "replaced_click": key.replaced.is_some()}),
+    );
+    Ok(())
 }
 
 /// The click of a click step: the recorded rectangle, or (Workflow #396 REC-4) the box of the
@@ -3011,7 +3153,13 @@ pub(crate) fn render(
         .iter()
         .filter(|step| step.step.application.is_some())
         .count();
-    let click_steps = effect_steps - application_steps;
+    // #463 KR-1: a key step is no click step.
+    let key_steps = plan
+        .steps
+        .iter()
+        .filter(|step| step.step.key.is_some())
+        .count();
+    let click_steps = effect_steps - application_steps - key_steps;
 
     let mut control = Map::new();
     control.insert("schema_version".into(), json!(CONTROL_SCHEMA));
@@ -3088,15 +3236,21 @@ pub(crate) fn render(
     task.insert("game".into(), json!(plan.game));
     task.insert("server_scope".into(), json!([plan.server]));
     task.insert("locale".into(), json!(plan.locale));
+    // #463 KR-1: the key steps are named only when the package has one.
+    let keys = if key_steps == 0 {
+        String::new()
+    } else {
+        format!(", {key_steps} key step(s)")
+    };
     let goal = if application_steps == 0 {
         format!(
-            "Lab recording {}: {click_steps} click step(s)",
+            "Lab recording {}: {click_steps} click step(s){keys}",
             plan.record_id
         )
     } else {
         format!(
             "Lab recording {}: {click_steps} click step(s), {application_steps} application \
-             step(s)",
+             step(s){keys}",
             plan.record_id
         )
     };

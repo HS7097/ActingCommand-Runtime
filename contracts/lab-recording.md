@@ -37,7 +37,10 @@ select, the refined choice's among them, is a variable of the package (fix round
 choice first", "The wanted value is a variable of the package"). #463 S2-8': the swipes recorded
 before a press are folded into one scrolling search of that press, no steps of the package any
 more, and unfolded again ("Folding swipes into a scrolling search"), on an active recording or
-(fix round 1) on a stopped one as an amendment ("Marking after stop").
+(fix round 1) on a stopped one as an amendment ("Marking after stop"). #463 KR-1: a step's effect
+may be the back key in place of a click, declared on the recording after the fact and never sent
+while recording; a click it replaces is kept inside it and given back when the key is taken back
+("Key steps").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -162,7 +165,11 @@ command deletes nothing and names the files it already wrote.
   folded swipe's `folded_into` and its press step's `scan_fold` ("Folding swipes into a scrolling
   search") are absent on every other step, so a recording without a fold is byte-identical to one
   an earlier build wrote; a build before 0.12.70 does not decode a recording that holds one (the
-  step refuses the unknown member), `lab_recording_unreadable` as above.
+  step refuses the unknown member), `lab_recording_unreadable` as above. #463 KR-1 (since 0.12.70):
+  a step's `key` (`{key, declared_at_unix_ms, replaced?, replaced_guard?}`, "Key steps") is absent
+  on every step without one, so a recording without a key is byte-identical to one an earlier build
+  wrote; a build before 0.12.70 does not decode a recording that holds one,
+  `lab_recording_unreadable` as above, and nothing is owed to it.
 
 ## Commands
 
@@ -234,8 +241,13 @@ record mark --optional-after <k> --frame <png> [--sample <png>]… [--page <name
             [--template …]… [--scales <f>,…] [--color …]… [--reuse <id>]…
             (--click x,y,w,h | --click-from <id> | --click-follow <id> | …) [--settle-ms <0..60000>]
 record mark --remove-inserted <n>
+record mark [--step <k>] [--click-guard <id>] [marks…] --key back [--replace-click]
+record mark [--step <k>] --no-key
 record mark --request <file> | --request-json <json>
 ```
+
+#463 KR-1: `--key back` (request form `"key": {"key": "back"}`) makes the step's effect the back
+key, declared and never sent; `--no-key` (`"key": false`) takes it back ("Key steps").
 
 The request form (`actingcommand.lab-record-mark.v1`) carries every capability, including
 the color digest, OCR, check and value-test families:
@@ -454,8 +466,10 @@ R1: `select`, the step's select with its self-test, is present only on a step th
 Workflow #390 LAB-2: `forbidden` lists the page's forbidden marks tested on the step's frames, and
 `after_stop: true` says the recording is stopped and `record stop` will generate its package
 again; both are absent otherwise). `step_state.effect` is `none`, `click_declared`,
-`click_executed`, `click_indeterminate`, `application_declared` or `application_executed`;
-`step_state.optional` is `null` or `{settle_ms}`.
+`click_executed`, `click_indeterminate`, `application_declared` or `application_executed`, or
+(#463 KR-1) `key_declared`, a key being never sent; `step_state.optional` is `null` or
+`{settle_ms}`. #463 KR-1: `key`, the step's key as `recording.json` holds it (with the click it
+replaced), is present only on a step that presses one ("Key steps").
 
 ### record status
 
@@ -474,7 +488,7 @@ reason}`, or
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
          closed, closed_by, forbidden?, anchor?, select?, choice?, inserted_after?,
-         folded_into?, scan_fold?}],
+         folded_into?, scan_fold?, key?}],
  artifact|null, amended_at_unix_ms?, endings?, record_flag_state_dir, record_flag_reachable}
 ```
 
@@ -482,6 +496,11 @@ reason}`, or
 step's serial number) and `artifact_step: null`, as it is no effective step; the press step carries
 `scan_fold`, as `recording.json` holds it ("Folding swipes into a scrolling search"). Both are
 absent on every other step.
+
+#463 KR-1: a step's `key` (`{key, declared_at_unix_ms, replaced?, replaced_guard?}`, fix round 1:
+`replaced_guard` the click guard the step had when the key was declared) is present only on a step
+that presses the back key, as `recording.json` holds it; such a step's `click` is `null`, the click
+the key replaced being `key.replaced` ("Key steps").
 
 #463 S2-6: a step's `choice` (`{marked_at_unix_ms}`) is present only on a step marked as holding a
 choice, as `recording.json` holds it, refined when the step has a `select` too ("Marking a choice
@@ -2035,7 +2054,10 @@ arrival: `record mark --frame` without `--step` then targets that open step exac
     on a capture that was not stored; or a frame the comparison needs is not on record),
     `screen_changed` (the stored frames show a change: the frame after the press differs from the
     frame before it) or `next_screen_differs` (the stored frames show a change: the next step was
-    pressed on another screen). Beside these two, `drop_comparison` (in the details and the
+    pressed on another screen); #463 KR-1 fix round 1: `key_declared` (the step's effect is a
+    declared key, `details{step, drop_problem, outcome}`: its stored frames are those of the press
+    the key replaced and nothing shows what the key does; take the key back first, "Key steps").
+    Beside `screen_changed` and `next_screen_differs`, `drop_comparison` (in the details and the
     outcome's values) names the comparison that showed it, `frame` or `press_region` (the whole
     frame is compared first), and `frame_change_milli` its value. The last effective step is
     dropped as before, without these comparisons.
@@ -3196,6 +3218,167 @@ $lab = 'C:\ActingCommand\tools\actinglab.exe'
 & $lab --json --instance emu-a record archive
 ```
 
+## Key steps
+
+#463 KR-1 (since 0.12.70, [v012-register.md](v012-register.md) §1.449; the owner's ruling on board
+#463 that the back key is not recorded while playing and that an agent adds such a step in stage
+two or three; the rules here are the coordinator's, in the work order). A step's effect may be a
+key in place of a click: the step presses the back key on its page, a key step of
+[linear-steps.md](linear-steps.md), "Key steps". The key is declared on the recording after the
+fact and never sent while recording: there is no `--record` form of the Lab's `key`, and nothing of
+this section sends anything to a device.
+
+```
+record mark [--step <k>] [--click-guard <id>] [marks…] --key back [--replace-click]
+record mark [--step <k>] --no-key
+record mark --optional-after <k> --frame <png> [marks…] --key back [--settle-ms <0..60000>]
+```
+
+In the request form `"key": null | {"key": "back"} | false` (absent or `null` changes nothing;
+`true` is `validation_failed`, exit 2), and an inserted step's `optional_after.key`
+`{"key": "back"}`. Through the Lab's MCP server the row's parameters `key` (`back`) and `no_key`.
+Fix round 1: a request's `key` of any other shape (a string, a number, an object with another
+member) is `validation_failed` (exit 2) in words that say the three forms and the vocabulary, not
+the decoder's.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":4,"key":{"key":"back"},
+ "click_guard":"ui/title","replace_click":true}
+```
+
+- **The word.** The vocabulary is the package's, closed: `back` alone (the kernel's `StepKey`). Any
+  other word is refused at the request, before anything is read or written (`record_key_invalid`,
+  `word_unknown`, the word in `details.key`).
+- **Where it lands**, one effect per step, as an application operation:
+  - on a step without an effect the key is its effect, declared;
+  - on a step with a click, executed or declared, of any form (a tap, a drag, a long press, a press
+    recorded by its point, a click that follows a mark) only with `replace_click`, otherwise the
+    refusal of a second effect, `record_step_effect_exists` with `effect: "click"`. Unlike every
+    other effect, an executed click is replaced by a key without `--reopen-step`: the click is kept
+    whole inside the key as what it replaced (`key.replaced`), and the step's frames (the screen
+    before the press, the screens after it) stand; a run presses the key on this page where the
+    recording pressed the screen. A key declared again needs `replace_click` (`effect: "key"`) and
+    keeps the click the first one replaced;
+  - refused, nothing written, `record_key_invalid` (exit 3, `details{step, key_problem,
+    outcome}`), one word per cause: the application entry step (`application_entry`), a step whose
+    effect is an application operation (`application_step`), a step that holds a choice, a select
+    or a choice mark, or a request that gives one beside the key (`holds_choice`), a dropped or
+    converted step (`step_not_effective`; a step the recording does not hold stays
+    `record_step_not_found`), and a key in one request with a click (a rectangle, a source mark, a
+    followed mark, a gesture or a press box: `with_click`), an application operation
+    (`with_application`) or a click retry (`with_retry`: a key step declares no retry).
+  - Once a step's effect is a key, no other effect lands on it before the key is taken back: a
+    click or an application operation that `record mark` declares on it is
+    `record_step_effect_exists` with `effect: "key"`, and a select or a choice `record_key_invalid`
+    with `holds_choice` (fix round 1: the choice is judged first); on the open step,
+    `tap`, `swipe`, `long-tap` and `do --capture --record` and `session app --record` refuse
+    with `record_step_effect_exists` (`effect: "key"`) before anything is sent; a device frame
+    (`capture --record`) is `record_step_click_not_executed` (`details.effect: "key"`), an offline
+    frame closes the step (`closed_by: "offline_frame"`) and `--close-step` accepts it, as a click
+    declared and never executed. A transition follows a key step as it follows a click.
+- **Which recordings take it.** An active recording, and a stopped one: "Marking after stop"
+  refuses a new step, a step operation and an application operation, and a key is none of them,
+  so the stopped recording takes it (its `amended_at_unix_ms` is set, and `record stop`
+  generates the package again); an executed click is replaced by a key there too, without the
+  `--reopen-step` a stopped recording does not take. An archived recording takes no `record mark`
+  (`record_session_not_active`): `record reopen` makes it active first.
+- **The guard** is the step's click guard, the same member of the request (`click_guard`,
+  `--click-guard`), named in the request that declares the key or a later one. Fix round 1 (the
+  coordinator's ruling on the independent review; it replaces "the generator picks no guard for
+  it"): the generator guards a key step by the one rule it guards a click step and a select step by
+  ("Package generation", section 4.3), over the marks the agent drew: the click guard it names
+  when that is a mark its page requires and no OCR mark (a template, colour, colour digest, check
+  or value-test mark), else its page's first template, else its first colour or colour digest,
+  else its first check; the default takes no value-test mark and no text mark. Only "the mark the
+  click follows" and "the click's source mark" of a click step's rule have no counterpart, a key
+  having no click. It proposes nothing: it is the generator's own rule over the agent's marks. A
+  click step whose page gives none of these is pressed as a trusted coordinate; a key has no
+  coordinate to trust, so only a key step whose page gives none (a page of text or value-test marks
+  alone, with no value-test mark named) is without a guard: then, and only then, `record ready`
+  lists it (`key_guard_missing`, its hint `record mark --step k --template <id>=x,y,w,h`) and
+  `record stop` refuses it with it among its failed pre-checks (`record_key_invalid`,
+  `guard_missing`); the mark that declares the key is not refused for it. The pre-check reads the
+  guard the generator will write, so a named guard it passes over (a mark the page does not require,
+  such as a member of an `any_of` check) is never met first at admission.
+- **Taking it back.** `"key": false` (`--no-key`) removes the key and gives back the click it
+  replaced, exactly: `recording.json` is byte for byte what it was before the key was declared, but
+  for `updated_at_unix_ms`, which every write sets (on a stopped recording `amended_at_unix_ms` as
+  well, "Marking after stop"), and the package generated afterwards is the one generated before, but
+  for its generation time. Fix round 1: the click guard is the step's member, not the click's, so
+  the key keeps the step's click guard as it was when the key was declared (`key.replaced_guard`,
+  before the request that declares it names one) and taking the key back gives it back: a guard
+  named with the key or after it goes, the guard the click had comes back, none comes back as none.
+  On a step without a key it changes nothing.
+- **An inserted optional step** ("Inserting an optional step after stop") may be closed by the key:
+  `optional_after.key` (`--key back` beside `--optional-after`) in place of `click`, exactly one of
+  the two: both is `record_key_invalid` with `with_click`, neither `record_optional_after_invalid`
+  with `no_effect`, a word outside the vocabulary `word_unknown` (`details.step` the step it is
+  inserted after). Its guard is the guard above, by its own marks; another is named afterwards with
+  `record mark --step <n> --click-guard <id>`, as a retry or a guard of any inserted step is.
+- **In `recording.json`** the step carries `key: {key, declared_at_unix_ms, replaced?,
+  replaced_guard?}` only when one is declared, `replaced` the click it replaced, whole, and
+  `replaced_guard` the step's click guard when the key was declared (each absent when there was
+  none); a recording without a key is byte for byte what it is without this section. A build
+  before 0.12.70 refuses a recording that holds one (the step refuses the unknown member,
+  `lab_recording_unreadable`); nothing is owed to it.
+- **A text mark the replaced click followed** (#463 L2, a click that follows a located-text mark):
+  that mark is the click's guard and target and no mark of the click's page (`page_required`).
+  While the key stands the step has no click, so it follows nothing, and that mark becomes an
+  ordinary mark of the step's page: the page requires its text, so recognising the page, in the
+  package and in every self-check, reads that text (an OCR model; without one the page is not
+  evaluated), and the default guard above passes over it (no text mark is a guard). A click guard
+  that names that mark guards only a click that follows it, so a key replaces such a click only in
+  a request that names another guard (`record_guard_family_invalid` otherwise). Taking the key back
+  gives the click that follows it back, with its guard, and the mark is the click's again.
+- **Generation** (`record stop`, its dry run, its regeneration). The key step's operation is a key
+  step of [linear-steps.md](linear-steps.md): `step_<nn>_key`, `from` its page, `to` the page that
+  follows it, `key: {"key": "back"}`, the guard above, `expect_after` that page (the next step's;
+  the target page when it is the last step with an effect; over a run of optional steps the
+  candidates the kernel derives, as after a click), a click's `post_delay_ms`, `optional` when it
+  is optional and a page `transition` when it has one; no click, no retry, no input recheck. The
+  task's `goal` names its key steps, the answer's `lab.key_steps` lists them (`{step, op, key,
+  guard, replaced_click}`, present only then; fix round 1: `guard` the mark the generator guards it
+  by) and the step's provenance records `key: {key, replaced_click, needs_review}` (fix round 1:
+  `needs_review` that of the press it replaced, `false` without one). The package is admitted by the
+  one admission, the source parser and the kernel's rules. A key is an input: after an application
+  `stop` it is `record_step_after_stop_invalid`, as a click is.
+- **Needing review** (fix round 1, the coordinator's ruling): the frames after a key step come from
+  the press it replaced, and replacing that press by a key does not make them trustworthy, so a key
+  step whose replaced press is marked `needs_review` needs review still: it is listed in
+  `lab.steps_needing_review`, and adoption reads its `key` provenance's `needs_review` as a click's
+  ([standard-pack-authoring.md](standard-pack-authoring.md), `review.steps_needing_review`, so its
+  recording is not `recording_checked`). `record ready` counts no step needing review, of either
+  kind.
+- **The readers.**
+  - `record status`: the step's `key`, its `click` `null`; `step_state.effect` `key_declared`.
+  - `record review`: `kind` `key`; `press` `{key, replaced?, source: "declared", outcome:
+    "declared"}`, `replaced` the press the key replaced, answered as a click's press is; `before`
+    and `after` the frames of that press; the preview draws the step's marks and no press.
+  - `record ready`: no item only a press can have (no `press_point_only`), `key_guard_missing`
+    above, and a key is a write of stage two (`material` no longer).
+  - `record frames`: `kind` `key`, and `press` the press the key replaced, with its frames.
+  - the archive's manifest: the row's `kind` `key`; its frames, outcome and `material.clicks` entry
+    those of the press the key replaced, stage one's material.
+  - the self-checks: the first decision of a package whose step 1 presses a key is
+    `would_press_key` of `step_01_key` with the key `back` on its primary frame; the cross-check
+    judges the step's page on its own frames and the arrival after it as after a click; a check of
+    a press's place (a click inside its rectangle, inside a followed mark's box) has none to judge.
+    Fix round 1 (the coordinator's ruling): the check of optional steps (self-check item 7, c)
+    tells two optional steps of a run apart by what closes them, and every pop-up a key closes is
+    closed by the same key, so two optional steps closed by the key are one pop-up recorded twice
+    (`same_as`) only when they also have one page, the same marks required and forbidden (a copy
+    that reuses the first's marks); with two pages, one passing on the other's frames is
+    `record_optional_step_ambiguous` (`against: "other_optional"`), as for two clicks of two
+    rectangles. A key and a click are never one pop-up.
+  - the regression cases ("Regression cases written with the package"): a key step is an effective
+    step and has its case, on the frame the press it replaced was sent on while that frame is one of
+    the step's live frames (not always its primary frame), or, without one (an inserted step, a key
+    declared on a step without a press), on its primary frame.
+  - `--drop-step` of a key step before the last is `record_drop_unproven` with (fix round 1, one
+    cause, one word) `drop_problem` `key_declared`: the frames stored for it are those of the press
+    its key replaced, and nothing on record shows what the key does; take the key back first
+    (`--no-key`), and the press it gives back is judged as recorded.
+
 ## The frames around a press: `record frames`
 
 #463 S2-13 (0.12.65; the owner on board #463: in stage two the Lab may need to give an agent that
@@ -3454,7 +3637,8 @@ Right after the effect of the step before it was executed:
 4. A second copy of the same pop-up from the same PNG also needs `--close-step` first: an
    offline frame byte-identical to the open step's primary frame does not open a new step
    (it targets that step). The copy takes the first copy's marks with `--reuse <id>` and
-   the same click rectangle.
+   the same click rectangle (#463 KR-1 fix round 1: or, closed by the key, the key and only the
+   first copy's marks, "Key steps").
 
 An active recording appends its steps with new serial numbers. #463 R4: a pop-up found missing
 after the recording is inserted after the stop, from its frame, without recording again
@@ -3491,6 +3675,8 @@ step k's effect and before the step that follows it:
   `samples`, more frames of it; `page`, its page's name (a step's grammar); `add` and `reuse`, its
   marks, as a step's; `click`, the click that closes it, as a step's `click` (declared, never
   executed: it is the click the package presses); `settle_ms`, its settle (0..60000, default 2000).
+  #463 KR-1: `key`, `{"key": "back"}`, the back key that closes it, in place of `click`, exactly
+  one of the two ("Key steps").
   The command form is `record mark --optional-after <k> --frame <png> …`: `--optional-after` makes
   `--frame`, `--sample`, `--page`, the marks, `--reuse`, the click flags and `--settle-ms` the
   inserted step's. `record mark --remove-inserted <n>` gives the inserted step `n` up. The MCP tool
@@ -3536,7 +3722,7 @@ the command and nothing is written:
 | `step_last` | `step` names the last step: nothing is pressed after it (a screen after the last press is an ending) |
 | `step_application` | `step` names a step whose effect is an application operation |
 | `no_marks` | the inserted step adds and reuses no mark |
-| `no_click` | the inserted step declares no click |
+| `no_effect` | #463 KR-1 (in place of `no_click`, one cause): the inserted step declares no effect, neither a click nor a key; one that declares both is `record_key_invalid` with `with_click` ("Key steps") |
 | `clears_optional` | `optional: false` (`--not-optional`) on an inserted step |
 | `not_inserted` | `remove_inserted` names no inserted step that is not given up yet (`details.inserted`, the ones there are) |
 
@@ -4104,6 +4290,7 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
 | `select_unrefined` | #463 S2-6: a step marked as holding a choice that no select refines yet ("Marking a choice first"); listed by its step, after the step's effect and recognition items | `record_select_invalid` (`choice_not_refined`) |
 | `scan_without_select` | #463 S2-8': a press step whose recorded swipes are folded into its scrolling search declares no scrolling select yet ("Folding swipes into a scrolling search"); listed by its step, after its select items | `record_scan_invalid` (`scan_not_selected`) |
 | `scan_end_not_recorded` | #463 S2-9a: a scrolling select that reads its list to its end declares no end mark: the demonstration never reached the list's end; record again and scroll to the end once ("A scrolling choice: reading the list to its end"); listed by its step, after `scan_without_select` | `record_scan_invalid` (`end_not_recorded`) |
+| `key_guard_missing` | #463 KR-1: a step that presses a key gets no guard ("Key steps"; fix round 1: by a click step's rule, so only on a page of text or value-test marks alone with no value-test mark named); listed by its step, after its select items and `scan_end_not_recorded`; its hint `record mark --step k --template <id>=x,y,w,h` | `record_key_invalid` (`guard_missing`) |
 
   The select and ending rules are those `record mark` holds when it takes a select or an ending,
   checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
@@ -4247,9 +4434,10 @@ the swipes recorded before a press folded into its scrolling search, and the fol
 the fold's rules, its refusals of what only a stopped recording holds among them (an inserted
 optional step in the range, `inserted_in_range`, or after a swipe of it, `would_lose_inserted`);
 while a fold stands, the next `record stop` refuses `scan_not_selected` and keeps the package
-generated before. It takes no other new step (a frame that is not
-the targeted step's primary frame; an ending, "Endings", is not a step and is taken), no other step
-operation and no application operation: each is
+generated before. #463 KR-1: it also takes a key, declared on a step or taken back, an executed
+click replaced by it without `--reopen-step` ("Key steps"). It takes no other new step (a frame
+that is not the targeted step's primary frame; an ending, "Endings", is not a step and is taken),
+no other step operation and no application operation: each is
 `record_session_not_active` (exit 3) with `details{reason: "recording_stopped", change}`, and
 nothing is written; nor does any `--record` device command (`record_session_not_active`).
 
@@ -4285,7 +4473,7 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 |---|---|
 | at least two steps | `record_no_steps` (3) |
 | an application entry step is step 1 only | `record_application_entry_not_first` (3) |
-| steps 1..n−1 each have one effect (a click, a select step's demonstrated press, or an application operation) | `record_step_click_missing` (3) |
+| steps 1..n−1 each have one effect (a click, a select step's demonstrated press, an application operation or, #463 KR-1, a key) | `record_step_click_missing` (3) |
 | step n only recognizes | `record_final_step_has_click` (3) |
 | every step but the application entry step has a mark; every page transition has a mark | `record_step_without_recognition` (3) |
 | at most 1000 steps with an effect | `record_too_many_steps` (3) |
@@ -4300,10 +4488,12 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 | #463 S2-6: every step marked as holding a choice is refined by its select (checked after the optional steps' positions and before the select steps' rules; "Marking a choice first") | `record_select_invalid`, `choice_not_refined` (3) |
 | #463 S2-8': no press step holds a fold that no scrolling select reads (checked after the select steps' rules; a folded swipe is no effective step and is numbered nowhere; "Folding swipes into a scrolling search") | `record_scan_invalid`, `scan_not_selected` (3) |
 | #463 S2-9a: every scrolling select that reads its list to its end declares its end mark (checked after the folds; "A scrolling choice: reading the list to its end") | `record_scan_invalid`, `end_not_recorded` (3) |
+| #463 KR-1: every step that presses a key gets a guard (fix round 1: by a click step's rule, the guard it names, else its page's first template, colour or colour digest, or check mark; checked after the select steps' rules and the scrolling selects' ends; "Key steps") | `record_key_invalid`, `guard_missing` (3) |
 
 A `--requires` that does not start with `<game>.<server>.` adds the warning
 `requires_prefix_mismatch`. Steps whose click or application operation is marked
-`needs_review` are not refused; they are listed in `lab.steps_needing_review`.
+`needs_review` are not refused; they are listed in `lab.steps_needing_review` (#463 KR-1 fix round
+1: a key step by the press it replaced, "Key steps").
 
 #463 S2-1: a recording that fails pre-checks is refused with the first of them the generator meets
 (the code and details above, as before), its `details` adding `missing_total`, how many
@@ -4391,7 +4581,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `unguarded_trusted_coordinate: true`, unless the click follows one of them, a located-text
   mark, which then guards it (`verify_text`). #463 R1: a select step needs a guard: its page needs
   a template, color, color digest or check mark (`record_select_invalid`, `select_problem:
-  guard_missing`).
+  guard_missing`). #463 KR-1 fix round 1: a key step's guard target by the same rule, the click
+  guard, then the first template, color or color digest, check (it has no click, so no followed
+  mark and no source); a page that gives none is a failed pre-check, `key_guard_missing` ("Key
+  steps").
 - #463 R1: a select step's operation is `step_ii_select`, with its `select`, its guard, its
   `expect_after` and its `post_delay_ms` and no click; its layout is in `candidate_layouts[]`, its
   slots' targets in `ocr_targets[]` and its policy document is `policies/step_ii_select.json`
@@ -4518,6 +4711,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      taps it (with the evaluation instant `generated_at_unix_ms`, the confirmation on the same
      frame): `would_click` of `step_01_select` with its point inside that slot's click box, the
      decision with its `slot`.
+   - #463 KR-1: a key at step 1 ("Key steps") is simulated on its primary frame and must give
+     `would_press_key` of `step_01_key` with its key, `back`, the decision shown with its `frame`;
+     a key has no place on the screen to judge.
 
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
@@ -4600,7 +4796,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      that the pop-up darkens (or, for a small pop-up that does not darken, a mark in the area it
      covers); the stored frames suffice.
    - c. One pop-up recorded more than once: an optional page that passes on another optional
-     step's frames with exactly the same click rectangle is not refused. `optional_steps[]`
+     step's frames with exactly the same click rectangle (#463 KR-1 fix round 1: or, both closed
+     by the key, with the same key and the same marks required and forbidden, "Key steps") is not
+     refused. `optional_steps[]`
      names the earlier copy in `same_as`, and each such pair adds one `arrival_unconfirmed`
      warning (`same_as`, `gate`, `frames`) on the step whose old screen passes as the other's
      page: after its click the same position may be clicked again. With a window transition
@@ -4999,7 +5197,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed` (Workflow #449 REC-ARCH fix 1: also `record archive --copy-to` empty, blank or relative), `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4), `record_frame_unknown`, `record_drop_unproven` (#463 S2-7; the stage-two train named them here), `record_scan_invalid` (#463 S2-8'); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_case_failed` (#463 S2-10), `record_scan_invalid` (#463 S2-8', `scan_not_selected`), `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect` (#463 S2-5: also, with `details.reason: "recorded_point_outside_box"`, a press box that does not hold the point a press recorded by its point pressed), `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`, `record_select_invalid` (#463 R1), `record_ending_invalid` (#463 R2), `record_optional_after_invalid` (#463 R4), `record_frame_unknown`, `record_drop_unproven` (#463 S2-7; the stage-two train named them here), `record_scan_invalid` (#463 S2-8'), `record_key_invalid` (#463 KR-1, "Key steps"); stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_select_invalid` (#463 R1), `record_ending_invalid`, `record_ending_ambiguous` (#463 R2), `record_artifact_admission_failed`, `record_case_failed` (#463 S2-10), `record_scan_invalid` (#463 S2-8', `scan_not_selected`), `record_key_invalid` (#463 KR-1, `guard_missing`), `record_requires_conflict`, `record_stop_option_conflict`, and (Workflow #449 REC-ARCH) `record_session_not_active` with `details.reason: "recording_archived"`, and (Workflow #392 DA-5cd fix round 1) `record_size_not_base`; start (Workflow #392 DA-5cd): `record_display_not_base`; every recording path before it sends anything (the train of DA-5): `record_display_not_base`, `record_size_not_base`, `record_frame_size_mismatch`; archive and reopen (Workflow #449 REC-ARCH): `record_session_not_active`, `record_session_active` (reopen), `record_not_archived`, `record_archive_target_not_empty`, `record_instance_mismatch`, `record_lab_unavailable` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written; Workflow #449 REC-ARCH: also a copy file that cannot be written), the state directory cannot be created, `record_archive_verify_failed` (Workflow #449 REC-ARCH) |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

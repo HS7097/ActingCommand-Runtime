@@ -376,7 +376,8 @@ pub(crate) fn stage_one_captures(recording: &LabRecording, target: u32) -> Vec<R
     };
     let mut captured = vec![false; step.frames.len()];
     for other in &recording.steps {
-        let after = match (&other.click, &other.application) {
+        // #463 KR-1: a key step's press is the one its key replaced.
+        let after = match (other.recorded_click(), &other.application) {
             (Some(click), _) => click
                 .execution
                 .as_ref()

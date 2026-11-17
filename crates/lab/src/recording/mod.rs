@@ -30,6 +30,8 @@ pub(crate) mod generate;
 pub(crate) mod hold;
 // #463 R4: an optional step a stopped recording inserts after one of its steps, from a frame.
 pub(crate) mod inserted;
+// #463 KR-1: a step that presses the back key in place of a click, declared after the fact.
+pub(crate) mod key;
 pub(crate) mod lock;
 pub(crate) mod marks;
 pub(crate) mod model;

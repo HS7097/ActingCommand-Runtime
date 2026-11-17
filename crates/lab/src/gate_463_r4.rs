@@ -678,7 +678,7 @@ fn r4_a_run_presses_the_inserted_pop_up_when_it_shows_and_goes_on_without_it() {
 // R4, item 5 of the brief: each optional_after_problem, refused with its word and nothing written:
 // recording_active (an insertion and a removal on an active recording); with_other_change (beside
 // a step's member, beside remove_inserted, naming them); step_unknown, step_last, no_marks,
-// no_click; step_application (step 1 as `session app --record` leaves an application step, its
+// no_click (#463 KR-1: now no_effect); step_application (step 1 as `session app --record` leaves an application step, its
 // application operation recorded on the step's frame: the test has no device, so the recording's
 // file says it); clears_optional (--not-optional on the inserted step); not_inserted (a recorded
 // step, a serial number no step has). A frame of another ratio is record_frame_size_mismatch.
@@ -738,7 +738,8 @@ fn r4_each_optional_after_problem_is_refused_with_its_word() {
             OptionalAfterProblem::StepLast,
         ),
         (popup_request(1, json!([])), OptionalAfterProblem::NoMarks),
-        (no_click, OptionalAfterProblem::NoClick),
+        // #463 KR-1: the word is `no_effect`, the inserted step declaring neither a click nor a key.
+        (no_click, OptionalAfterProblem::NoEffect),
         (
             json!({"remove_inserted": 1}),
             OptionalAfterProblem::NotInserted,

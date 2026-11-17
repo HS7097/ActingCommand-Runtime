@@ -144,6 +144,12 @@ actingcommand_contract::outcome_codes! {
         /// scrolling select reads yet (key `scan_problem`: why); nothing is written (exit 3;
         /// actinglab details `step`).
         RecordScanInvalid => "record_scan_invalid": error / none,
+        /// Error. #463 KR-1: a recording step's key (the back key a step presses in place of a
+        /// click, declared after the fact and never sent while recording: a request's `key`,
+        /// `record mark --key back`, or an inserted optional step's) cannot be declared or
+        /// generated (key `key_problem`: why); the command is refused and nothing is written (exit
+        /// 3; actinglab details `step`).
+        RecordKeyInvalid => "record_key_invalid": error / none,
     }
 }
 
@@ -349,8 +355,9 @@ actingcommand_contract::outcome_vocabulary! {
         StepApplication => "step_application",
         /// The inserted step adds and reuses no mark, so its page would recognize nothing.
         NoMarks => "no_marks",
-        /// The inserted step declares no click, so nothing would close its pop-up.
-        NoClick => "no_click",
+        /// #463 KR-1 (was `no_click`): the inserted step declares no effect, neither a click nor a
+        /// key, so nothing would close its pop-up.
+        NoEffect => "no_effect",
         /// The request clears `optional` on an inserted step: a step never recorded on the path
         /// stays optional.
         ClearsOptional => "clears_optional",
@@ -461,6 +468,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// the demonstration never reached the list's end (`record_scan_invalid`,
         /// `end_not_recorded`).
         ScanEndNotRecorded => "scan_end_not_recorded",
+        /// #463 KR-1: a step that presses a key gets no guard (`record_key_invalid`,
+        /// `guard_missing`; fix round 1: by a click step's rule, its page gives none).
+        KeyGuardMissing => "key_guard_missing",
     }
 }
 
@@ -661,6 +671,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// the frame before this press by more than the frame-change bound, by one of the two
         /// comparisons (`drop_comparison`).
         NextScreenDiffers => "next_screen_differs",
+        /// #463 KR-1 fix round 1: the step's effect is a declared key: the frames on record are
+        /// those of the press the key replaced, and nothing shows what the key does; the key is
+        /// taken back first.
+        KeyDeclared => "key_declared",
     }
 }
 
@@ -726,5 +740,36 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-9a: `record stop` meets a scrolling select that reads its list to its end and
         /// declares no end mark: the demonstration never reached the list's end.
         EndNotRecorded => "end_not_recorded",
+    }
+}
+
+// #463 KR-1: why a recording step cannot press a key, the back key a step presses in place of a
+// click, declared after the fact and never sent while recording.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a Lab recording step's key cannot be declared or generated (`key_problem`).
+    pub enum KeyProblem: "key_problem" {
+        /// The key's word is none of the vocabulary's, which is `back` alone.
+        WordUnknown => "word_unknown",
+        /// The request declares a click beside the key (a rectangle, a source mark, a followed
+        /// mark, a gesture or a press box), or an inserted step declares both a click and a key.
+        WithClick => "with_click",
+        /// The request declares an application operation beside the key.
+        WithApplication => "with_application",
+        /// The request declares a click retry beside the key: a key step declares no retry.
+        WithRetry => "with_retry",
+        /// The step is the application entry step, which has no frame and no page to guard a key
+        /// on.
+        ApplicationEntry => "application_entry",
+        /// The step's effect is an application operation, declared or executed.
+        ApplicationStep => "application_step",
+        /// A key and a choice on one step: the step holds a choice (a select or a choice mark), or
+        /// the request gives one to a step with a key or beside a key.
+        HoldsChoice => "holds_choice",
+        /// The step is dropped or converted into a page transition.
+        StepNotEffective => "step_not_effective",
+        /// `record stop` meets a step that presses a key and gets no guard (fix round 1: by a
+        /// click step's rule, it names none its page requires and its page requires no template,
+        /// colour, colour digest or check mark): a key has no coordinate to trust.
+        GuardMissing => "guard_missing",
     }
 }

@@ -899,4 +899,7 @@ outcome_keys! {
     // "Folding swipes into a scrolling search"): why the swipes recorded before a press cannot be
     // folded into its scrolling search, the fold undone or generated (`record_scan_invalid`). ----
     scan_problem: vocab(scan_problem),
+    // ---- #463 KR-1 (a recording's step may press the back key, contracts/lab-recording.md "Key
+    // steps"): why a step's key cannot be declared or generated (`record_key_invalid`). ----
+    key_problem: vocab(key_problem),
 }
