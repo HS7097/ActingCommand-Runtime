@@ -1484,7 +1484,8 @@ pub enum ScanNumberOrigin {
 /// (`first_forward_swipe`), the fold's swipes and their after loops (`fold_swipes`), the rows the
 /// demonstration's screens show (`screens`), the Runtime's frame-change bound
 /// (`frame_change_bound`), the names read, by which every pair of rows matches (`names_read`), and
-/// the moves, their settle and one screen's reads (`scan_moves`).
+/// the moves, their settle and one screen's reads (`scan_moves`). #463 S2-9a fix round 1: a
+/// constant of the generator, which the contract names (`generator`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanNumberSource {
@@ -1496,11 +1497,14 @@ pub enum ScanNumberSource {
     FrameChangeBound,
     NamesRead,
     ScanMoves,
+    Generator,
 }
 
 /// #463 S2-9a: one number as the select's scan holds it: its value, whether it was measured or
 /// given, what it is measured from, and, when given, the value the Lab measured (absent when it
-/// could not measure it).
+/// could not measure it). Fix round 1: `origin` says what the number is (`measured`, `default`,
+/// `derived` or `given`), and `measured`, beside a given one, is the value the Lab would have
+/// written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanNumberValue {

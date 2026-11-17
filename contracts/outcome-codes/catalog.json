@@ -5255,6 +5255,9 @@
         },
         "on_empty_without_end": {
           "description": "A scrolling select straight to the wanted item (scan.stop wanted) that declares no end mark gives an on_empty_key: such a scan never reads its list to an end, so a run cannot end normally there; where the item is not found it fails with the kernel's selection_scan_early_stop_unreached (#463 S2-9b, since 0.12.70)."
+        },
+        "scan_swipe_too_long": {
+          "description": "The first forward swipe of the fold, the package's advance, moves the finger further along the list than the kernel's admission allows (the list's length less a row's, less one), which no given number changes; details displacement_px and most_px; the scroll is recorded again with shorter swipes, so that neighbouring screens share at least one row (#463 S2-9a fix round 1, since 0.12.70)."
         }
       }
     },

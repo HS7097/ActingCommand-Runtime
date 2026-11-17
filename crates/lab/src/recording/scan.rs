@@ -93,6 +93,9 @@ const START_MARK_MISSING: &str = "scan_start_mark_missing";
 const START_MARK_REPEATED: &str = "scan_start_mark_repeated";
 const END_MARK_MISSING: &str = "scan_end_mark_missing";
 const END_MARK_LOST: &str = "scan_end_mark_lost";
+/// Fix round 1: the end mark passes on a forward screen before the last one (and on every one
+/// after it), where the kernel would end the coverage.
+const END_MARK_EARLY: &str = "scan_end_mark_early";
 const STEP_OUTSIDE_WINDOW: &str = "scan_step_outside_window";
 const COVERAGE_INCOMPLETE: &str = "scan_coverage_incomplete";
 const POSITION_UNREAD: &str = "scan_position_unread";
@@ -906,8 +909,12 @@ fn swipe_duration(swipe: &RecordingStep) -> Option<u64> {
 }
 
 /// #463 S2-9a: every number of a scrolling select's scan and layout, in this order, each the
-/// request's given value or the one the Lab measures (`b` and `e` the list's and the row's extents
-/// along the axis, `V` the screens after the forward swipes and the first one):
+/// request's given value or the one the Lab writes (`b` and `e` the list's and the row's extents
+/// along the axis, `V` the screens after the forward swipes and the first one). Fix round 1 (the
+/// coordinator's ruling after the review): each labelled by what it is: `measured` the advance's
+/// duration, the settle interval and the spacing's columns; `default` the smallest step 1, the
+/// signature distance (the Runtime's frame-change bound) and the one overlapping row; `derived`
+/// every other, by the formula below; `given` the request's:
 /// the advance's window, 1 to `b − e`, and the reposition's largest step `b − e`, from the list and
 /// the row; the advance's duration, the first forward swipe's; the settle's interval, the first
 /// forward swipe's after loop's, and its timeout, twice the longest time a swipe's screen took to
@@ -958,25 +965,28 @@ fn scan_numbers(
         .and_then(|waited| waited.into_iter().max());
     let screen_count = u64::try_from(forward.len()).unwrap_or(u64::MAX) + 1;
 
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::AdvanceMinContentStepPx,
-        ScanNumberSource::ListAndRow,
+        ScanNumberSource::Generator,
         Some(1),
+        ScanNumberOrigin::Default,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::AdvanceMaxContentStepPx,
         ScanNumberSource::ListAndRow,
         Some(room),
+        ScanNumberOrigin::Derived,
     )?;
     let duration = numbers.take(
         ScanNumber::AdvanceDurationMs,
         ScanNumberSource::FirstForwardSwipe,
         first_forward.and_then(swipe_duration),
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::RepositionMaxContentStepPx,
         ScanNumberSource::ListAndRow,
         Some(room),
+        ScanNumberOrigin::Derived,
     )?;
     let interval = numbers.take(
         ScanNumber::SettleIntervalMs,
@@ -985,45 +995,52 @@ fn scan_numbers(
             .and_then(after_of)
             .and_then(|record| record.interval_ms),
     )?;
-    let timeout = numbers.take(
+    let timeout = numbers.take_labelled(
         ScanNumber::SettleTimeoutMs,
         ScanNumberSource::FoldSwipes,
         waited.map(|waited| waited.saturating_mul(2).saturating_add(interval)),
+        ScanNumberOrigin::Derived,
     )?;
-    let tolerance = numbers.take(
+    let tolerance = numbers.take_labelled(
         ScanNumber::PositionTolerancePx,
         ScanNumberSource::Row,
         Some((unsigned(row_length) / 10).max(2)),
+        ScanNumberOrigin::Derived,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::EdgeMarginPx,
         ScanNumberSource::Row,
         Some(tolerance),
+        ScanNumberOrigin::Derived,
     )?;
     let cells = (unsigned(row_cross) / unsigned(row_length).max(1)).clamp(1, 8);
     let (columns, signature_rows) = match axis {
         FoldAxis::Vertical => (cells, 1),
         FoldAxis::Horizontal => (1, cells),
     };
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SignatureColumns,
         ScanNumberSource::Row,
         Some(columns),
+        ScanNumberOrigin::Derived,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SignatureRows,
         ScanNumberSource::Row,
         Some(signature_rows),
+        ScanNumberOrigin::Derived,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SignatureMaxDistanceMilli,
         ScanNumberSource::FrameChangeBound,
         Some(u64::from(FRAME_CHANGE_MAX_MILLI)),
+        ScanNumberOrigin::Default,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::MinOverlapInstances,
-        ScanNumberSource::NamesRead,
+        ScanNumberSource::Generator,
         Some(1),
+        ScanNumberOrigin::Default,
     )?;
     let measure = screens.map(|screens| {
         measure_rows(
@@ -1041,23 +1058,19 @@ fn scan_numbers(
         )
     };
     // #463 S2-9b: a scan without an end mark was demonstrated up to the wanted row, not to the
-    // list's end, so the numbers the first kind measures on the screens up to the end are derived
-    // from what its screens do show (`derived`), each by its stated formula below.
+    // list's end, so the numbers the first kind takes from the screens up to the end are derived
+    // from what its screens do show, each by its stated formula below.
     let endless = without_end(scan);
-    let label = if endless {
-        ScanNumberOrigin::Derived
-    } else {
-        ScanNumberOrigin::Measured
-    };
-    let columns = numbers.take(
+    let spacing_columns = numbers.take(
         ScanNumber::SpacingColumns,
         ScanNumberSource::Screens,
         Some(measure.as_ref().map_or(1, |found| found.columns.max(1))),
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SpacingMaxAxisGapPx,
         ScanNumberSource::Screens,
         spaced(|measure| measure.axis_gap, unsigned(list_length)),
+        ScanNumberOrigin::Derived,
     )?;
     // #463 S2-9b: the kernel checks the trailing gap only on the screen where the end check passes,
     // which a scan without an end never reaches: the widest the list allows, `b`.
@@ -1066,24 +1079,27 @@ fn scan_numbers(
             ScanNumber::SpacingMaxTrailingGapPx,
             ScanNumberSource::ListAndRow,
             Some(unsigned(list_length)),
-            label,
+            ScanNumberOrigin::Derived,
         )?;
     } else {
-        numbers.take(
+        numbers.take_labelled(
             ScanNumber::SpacingMaxTrailingGapPx,
             ScanNumberSource::Screens,
             spaced(|measure| measure.trailing, unsigned(list_length)),
+            ScanNumberOrigin::Derived,
         )?;
     }
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SpacingMaxCrossLeadPx,
         ScanNumberSource::Screens,
         spaced(|measure| measure.cross_lead, unsigned(list_cross)),
+        ScanNumberOrigin::Derived,
     )?;
-    numbers.take(
+    numbers.take_labelled(
         ScanNumber::SpacingMaxCrossGapPx,
         ScanNumberSource::Screens,
         spaced(|measure| measure.cross_gap, unsigned(list_cross)),
+        ScanNumberOrigin::Derived,
     )?;
     let shown_anchors = measure.as_ref().map_or(MAX_INSTANCES, |found| {
         found.anchors.saturating_add(2).min(MAX_INSTANCES)
@@ -1094,18 +1110,19 @@ fn scan_numbers(
         // than a screen showed plus 2, at most 64.
         let fitting = (unsigned(list_length) / unsigned(row_length).max(1))
             .saturating_add(2)
-            .saturating_mul(columns);
+            .saturating_mul(spacing_columns);
         numbers.take_labelled(
             ScanNumber::MaxInstances,
             ScanNumberSource::ListAndRow,
             Some(fitting.max(shown_anchors).min(MAX_INSTANCES)),
-            label,
+            ScanNumberOrigin::Derived,
         )?
     } else {
-        numbers.take(
+        numbers.take_labelled(
             ScanNumber::MaxInstances,
             ScanNumberSource::Screens,
             Some(shown_anchors),
+            ScanNumberOrigin::Derived,
         )?
     };
     // #463 S2-9b: a scan without an end mark tells that the list stopped moving only on two more
@@ -1121,13 +1138,13 @@ fn scan_numbers(
                 .saturating_add(stopping)
                 .clamp(2, MAX_VIEWPORTS),
         ),
-        label,
+        ScanNumberOrigin::Derived,
     )?;
     let returns = numbers.take_labelled(
         ScanNumber::MaxRepositionViewports,
         ScanNumberSource::FoldSwipes,
         Some(screen_count.saturating_mul(2).clamp(1, MAX_VIEWPORTS)),
-        label,
+        ScanNumberOrigin::Derived,
     )?;
     numbers.take_labelled(
         ScanNumber::MaxMs,
@@ -1139,7 +1156,7 @@ fn scan_numbers(
                 .saturating_mul(duration.saturating_add(timeout))
                 .saturating_add(instances.saturating_mul(spec.read.timeout_ms)),
         ),
-        label,
+        ScanNumberOrigin::Derived,
     )?;
     Ok(numbers.taken)
 }
@@ -1515,6 +1532,53 @@ fn widest(state: &SelectScanState, room: u64) -> SelectScanState {
     wide
 }
 
+/// Fix round 1: what a refusal `scan_swipe_too_long` tells the agent to do.
+const SWIPE_HINT: &str = "record the scroll again with shorter swipes, each shorter than the \
+    list's visible length, so that neighbouring screens share at least one row";
+
+/// Fix round 1 (the review's answer 1): `scan_swipe_too_long` when the first swipe of the fold of
+/// step `index` (forward, from `from` to `to`: the package's advance and reposition, a drag between
+/// one-pixel boxes at those points) moves the finger further along the fold's axis than the
+/// kernel's admission allows: the move plus one at most the list's length less the row's,
+/// `b − e`, so the move at most `b − e − 1`. No given number changes it (the kernel holds the
+/// declared largest step to `b − e` too); `None` when it holds.
+fn swipe_too_long(
+    index: u32,
+    fold: &StepScanFold,
+    (rows, scan): (SelectRowsSpec, &SelectScanSpec),
+    (from, to): (RecordPoint, RecordPoint),
+) -> Option<LabError> {
+    let (_, list_length) = along(fold.axis, scan.list);
+    let (_, row_length) = along(fold.axis, rows.row);
+    let room = unsigned(list_length - row_length);
+    let moved = match fold.axis {
+        FoldAxis::Vertical => (i64::from(to.y) - i64::from(from.y)).unsigned_abs(),
+        FoldAxis::Horizontal => (i64::from(to.x) - i64::from(from.x)).unsigned_abs(),
+    };
+    if moved.saturating_add(1) <= room {
+        return None;
+    }
+    let most = room.saturating_sub(1);
+    let swipe = fold.moves.first().map(|first| first.step);
+    let mut refused = select_invalid(
+        Some(index),
+        SelectProblem::ScanSwipeTooLong,
+        format!(
+            "the first swipe of the fold of step {index} moves the finger {moved} px along the \
+             list, and the kernel admits a drag of at most {most} px on a list of {list_length} px \
+             whose row is {row_length} px (the list's length less a row's, less one), which no \
+             given number changes: {SWIPE_HINT}; nothing was written"
+        ),
+    );
+    if let Some(details) = refused.details.as_mut().and_then(Value::as_object_mut) {
+        details.insert("swipe".to_owned(), json!(swipe));
+        details.insert("displacement_px".to_owned(), json!(moved));
+        details.insert("most_px".to_owned(), json!(most));
+        details.insert("hint".to_owned(), json!(SWIPE_HINT));
+    }
+    Some(refused)
+}
+
 /// #463 S2-9a: the self-test of a scrolling select at mark time (its rules shared with a fixed-slot
 /// select already held, `select::check_step_select`): the step holds a fold (`scan_without_fold`);
 /// every region lies inside the frame (`scan_region_outside_frame`), the row inside the list
@@ -1526,8 +1590,10 @@ fn widest(state: &SelectScanState, room: u64) -> SelectScanState {
 /// mark passing on the first screen and on no later forward screen (`scan_start_mark_missing`,
 /// `scan_start_mark_repeated`), the end mark on the last screen after a forward swipe and, from the
 /// first forward screen it passes on, on every later one (`scan_end_mark_missing`,
-/// `scan_end_mark_lost`); the content step of every forward swipe, measured in the widest window,
-/// inside the declared window (`scan_step_outside_window`); the kernel's offline entry over the
+/// `scan_end_mark_lost`), fix round 1: and on no forward screen before the last one
+/// (`scan_end_mark_early`: the kernel ends its coverage where the end check first passes); the
+/// first swipe no longer than the kernel admits (`scan_swipe_too_long`); the content step of every
+/// forward swipe, measured in the widest window, inside the declared window (`scan_step_outside_window`); the kernel's offline entry over the
 /// forward screens deciding the pressed name over complete coverage with every position read
 /// (`scan_coverage_incomplete`, `scan_position_unread`, `scan_decision_mismatch`), and a name no
 /// screen shows empty over complete coverage (`scan_absent_not_empty`); and on the step's own live
@@ -1652,6 +1718,12 @@ pub(crate) fn check_scan_select(
         .and_then(|click| click.execution.as_ref())
         .and_then(|execution| Some((execution.point, execution.to_point?)))
         .ok_or_else(|| screen_missing(index, None))?;
+    // Fix round 1 (the review's answer 1): the package's advance is the first forward swipe, and
+    // the kernel's admission holds its finger's move along the list to the list's length less a
+    // row's, less one; a longer one no number cures, so it is judged before any probe.
+    if let Some(refused) = swipe_too_long(index, &fold, (rows, scan), (advance_from, advance_to)) {
+        return Err(refused);
+    }
     let mut state = SelectScanState {
         axis: fold.axis,
         advance_from,
@@ -1818,6 +1890,17 @@ pub(crate) fn check_scan_select(
                         END_MARK_LOST,
                         json!({"frame_id": frame_at(from + at), "passed_on": frame_at(from)}),
                     );
+                } else if let Some(from) = passes.iter().position(|passed| *passed)
+                    && from < last
+                {
+                    // Fix round 1 (the review's answer 5): the kernel ends its coverage on the first
+                    // screen where the end check passes, so an end mark that passes before the last
+                    // forward screen would end the scan there.
+                    reject(
+                        &mut rejections,
+                        END_MARK_EARLY,
+                        json!({"frame_id": frame_at(from), "last_frame_id": frame_at(last)}),
+                    );
                 }
             }
         }
@@ -1842,89 +1925,31 @@ pub(crate) fn check_scan_select(
     let mut decisions = Vec::new();
     let mut click_rect = None;
     for frame in frames {
-        let frame_id = frame.entry.frame_id.as_str();
-        let default = match decide(
-            &checked.prepared,
-            &checked.operation,
-            &frame.loaded.frame,
-            None,
-            instant,
-        )? {
-            Ok(decided) => decided,
-            Err(failure) => {
-                reject(
-                    &mut rejections,
-                    SELF_TEST_ERROR,
-                    json!({"frame_id": frame_id, "failure": failure}),
-                );
-                continue;
-            }
-        };
-        let unread = unread_rows(&default);
-        if !unread.is_empty() {
-            for (instance, cause) in unread {
-                reject(
-                    &mut rejections,
-                    NAME_UNREAD,
-                    json!({"frame_id": frame_id, "row": instance, "cause": cause}),
-                );
-            }
-            continue;
-        }
-        let pressed = match &pressed_document {
-            None => default.kind,
-            Some(document) => match decide(
-                &checked.prepared,
-                &checked.operation,
+        let judged = judge_live_frame(
+            (&checked.prepared, checked.operation.as_str()),
+            (
+                index,
+                frame.entry.frame_id.as_str(),
                 &frame.loaded.frame,
-                Some(document),
-                instant,
-            )? {
-                Ok(decided) => decided.kind,
-                Err(failure) => {
-                    reject(
-                        &mut rejections,
-                        SELF_TEST_ERROR,
-                        json!({"frame_id": frame_id, "failure": failure}),
-                    );
-                    continue;
+                frame.entry.role == "primary",
+            ),
+            &spec,
+            (pressed_document.as_ref(), executed),
+            instant,
+        )?;
+        match judged {
+            Err(refusals) => {
+                for (reason, detail) in refusals {
+                    reject(&mut rejections, reason, detail);
                 }
-            },
-        };
-        if frame.entry.role == "primary" {
-            let Some(row) = pressed.slot() else {
-                reject(
-                    &mut rejections,
-                    PRESSED_ABSENT,
-                    json!({"frame_id": frame_id, "pressed": spec.pressed_name(),
-                           "decision": pressed}),
-                );
-                continue;
-            };
-            let rect = default.clicks.get(&row).copied().ok_or_else(|| {
-                invalid(
-                    "validation_failed",
-                    format!("the dry run of step {index} selected row {row}, which it lacks"),
-                )
-            })?;
-            if let Some(point) = executed
-                && !holds(point, rect)
-            {
-                reject(
-                    &mut rejections,
-                    PRESS_MISMATCH,
-                    json!({"frame_id": frame_id, "pressed": spec.pressed_name(), "row": row,
-                           "click_rect": rect, "point": point}),
-                );
-                continue;
             }
-            click_rect = Some(rect);
+            Ok(live) => {
+                if let Some(rect) = live.click_rect {
+                    click_rect = Some(rect);
+                }
+                decisions.push(live.decision);
+            }
         }
-        decisions.push(SelectFrameDecision {
-            frame_id: frame_id.to_owned(),
-            pressed,
-            default: default.kind,
-        });
     }
 
     // The kernel's offline entry over the forward screens, once the end of the list is declared
@@ -2015,51 +2040,21 @@ pub(crate) fn check_scan_select(
                     {
                         screen.content_offset_px = Some(*offset);
                     }
-                    // #463 S2-9b: without an end mark a name no screen shows is not judged here.
-                    let absent_run = if without_end(scan) {
-                        None
-                    } else {
-                        absent_name(&spec, &screens)
-                    };
-                    let absent = match absent_run {
+                    // Fix round 1: one judgement of the absent name, the self-check's too.
+                    let absent = match judge_absent(
+                        (&checked.prepared, checked.operation.as_str()),
+                        (&checked.plan, first),
+                        &spec,
+                        &screens,
+                        &loaded,
+                        instant,
+                    )? {
                         None => None,
-                        Some(name) => {
-                            let document =
-                                select_policy_document(&checked.plan, first, &spec, &name);
-                            match offline_entry(
-                                &checked.prepared,
-                                &checked.operation,
-                                &loaded,
-                                Some(&document),
-                                instant,
-                            )? {
-                                Err(failure) => {
-                                    reject(
-                                        &mut rejections,
-                                        SELF_TEST_ERROR,
-                                        json!({"absent": name, "failure": failure}),
-                                    );
-                                    None
-                                }
-                                Ok(decided) => {
-                                    let absent = offline_of(&decided)?;
-                                    if absent.coverage != ScanCoverageState::Complete
-                                        || absent.decision != ScanDecision::Empty
-                                    {
-                                        reject(
-                                            &mut rejections,
-                                            ABSENT_NOT_EMPTY,
-                                            json!({"name": name, "coverage": absent.coverage,
-                                                   "decision": absent.decision}),
-                                        );
-                                    }
-                                    Some(ScanAbsentRun {
-                                        name,
-                                        coverage: absent.coverage,
-                                        decision: absent.decision,
-                                    })
-                                }
+                        Some(judged) => {
+                            if let Some((reason, detail)) = judged.refusal {
+                                reject(&mut rejections, reason, detail);
                             }
+                            judged.run
                         }
                     };
                     state.outcome = Some(ScanSelfTestOutcome {
@@ -2116,6 +2111,165 @@ fn stop_window_rejection(scan: &SelectScanSpec, state: &SelectScanState) -> Opti
                    "most": most}),
         )
     })
+}
+
+/// Fix round 1 (the review's (d)): the refusals of one judgement, each its reason and the members
+/// of its detail; the mark-time self-test makes each a refused mark's, the self-check `selects` a
+/// `record_step_self_mismatch`.
+type Refusals = Vec<(&'static str, Value)>;
+
+/// Fix round 1: what [`judge_live_frame`] gives a frame that holds: its decisions and, on the
+/// primary frame, the click box of the row the pressed name selects.
+struct LiveDecision {
+    decision: SelectFrameDecision,
+    click_rect: Option<RecordRect>,
+}
+
+/// #463 S2-9a fix round 1 (the review's (d): one judgement where the mark-time self-test and the
+/// self-check `selects` held two that disagreed): the live frame `frame_id` (`primary` or not) of
+/// the step `index`'s scrolling select, judged by the kernel's dry run of the select `operation` of
+/// `prepared` as a fixed-slot select's frames are: its decision with the default values, every
+/// actionable row reading a known name (`select_name_unread`), the pressed name's decision (with
+/// its constant policy `document` when it is not the default) and, on the primary frame, a row it
+/// selects (`select_pressed_absent`) whose click box holds the recorded press `executed`
+/// (`select_press_mismatch`); a refusal of the dry run is `self_test_error`. Each refusal names the
+/// frame. A selected row the dry run gives no click box is an invariant broken,
+/// `validation_failed`: the mark-time self-test always said so, and that is kept (the self-check
+/// skipped the press then without a word, a silent pass of a broken run).
+fn judge_live_frame(
+    (prepared, operation): (&PreparedContainedTask, &str),
+    (index, frame_id, frame, primary): (u32, &str, &Frame, bool),
+    spec: &SelectSpec,
+    (document, executed): (Option<&Value>, Option<RecordPoint>),
+    instant: u64,
+) -> LabResult<Result<LiveDecision, Refusals>> {
+    let default = match decide(prepared, operation, frame, None, instant)? {
+        Ok(decided) => decided,
+        Err(failure) => {
+            return Ok(Err(vec![(
+                SELF_TEST_ERROR,
+                json!({"frame_id": frame_id, "failure": failure}),
+            )]));
+        }
+    };
+    let unread = unread_rows(&default);
+    if !unread.is_empty() {
+        return Ok(Err(unread
+            .into_iter()
+            .map(|(row, cause)| {
+                (
+                    NAME_UNREAD,
+                    json!({"frame_id": frame_id, "row": row, "cause": cause}),
+                )
+            })
+            .collect()));
+    }
+    let pressed = match document {
+        None => default.kind,
+        Some(document) => match decide(prepared, operation, frame, Some(document), instant)? {
+            Ok(decided) => decided.kind,
+            Err(failure) => {
+                return Ok(Err(vec![(
+                    SELF_TEST_ERROR,
+                    json!({"frame_id": frame_id, "failure": failure}),
+                )]));
+            }
+        },
+    };
+    let mut click_rect = None;
+    if primary {
+        let Some(row) = pressed.slot() else {
+            return Ok(Err(vec![(
+                PRESSED_ABSENT,
+                json!({"frame_id": frame_id, "pressed": spec.pressed_name(),
+                       "decision": pressed}),
+            )]));
+        };
+        let rect = default.clicks.get(&row).copied().ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("the dry run of step {index} selected row {row}, which it lacks"),
+            )
+        })?;
+        if let Some(point) = executed
+            && !holds(point, rect)
+        {
+            return Ok(Err(vec![(
+                PRESS_MISMATCH,
+                json!({"frame_id": frame_id, "pressed": spec.pressed_name(), "row": row,
+                       "click_rect": rect, "point": point}),
+            )]));
+        }
+        click_rect = Some(rect);
+    }
+    Ok(Ok(LiveDecision {
+        decision: SelectFrameDecision {
+            frame_id: frame_id.to_owned(),
+            pressed,
+            default: default.kind,
+        },
+        click_rect,
+    }))
+}
+
+/// Fix round 1: what [`judge_absent`] gives: the run for the name no screen shows, when it ran, and
+/// its refusal, when it fails.
+struct AbsentJudgement {
+    run: Option<ScanAbsentRun>,
+    refusal: Option<(&'static str, Value)>,
+}
+
+/// #463 S2-9a fix round 1 (the review's (d): one judgement where the mark-time self-test and the
+/// self-check `selects` held two): the kernel's offline entry over the forward screens `loaded` of
+/// the select `operation` of `prepared` (the step `step` of `plan`) for the first name of `spec`
+/// that no screen of `screens` shows, with that name's constant policy: it must decide empty over
+/// complete coverage (`scan_absent_not_empty`; a failure of the run is `self_test_error`). `None`
+/// when every name is on a screen, and (#463 S2-9b) for a scan without an end mark, which judges
+/// an absent item only where the list stops moving, beyond the recorded screens.
+fn judge_absent(
+    (prepared, operation): (&PreparedContainedTask, &str),
+    (plan, step): (&Plan, &PlanStep),
+    spec: &SelectSpec,
+    screens: &[ScanScreen],
+    loaded: &[&LoadedFrame],
+    instant: u64,
+) -> LabResult<Option<AbsentJudgement>> {
+    let (_, scan) = rows_and_scan(spec)?;
+    if without_end(scan) {
+        return Ok(None);
+    }
+    let Some(name) = absent_name(spec, screens) else {
+        return Ok(None);
+    };
+    let document = select_policy_document(plan, step, spec, &name);
+    Ok(Some(
+        match offline_entry(prepared, operation, loaded, Some(&document), instant)? {
+            Err(failure) => AbsentJudgement {
+                run: None,
+                refusal: Some((SELF_TEST_ERROR, json!({"absent": name, "failure": failure}))),
+            },
+            Ok(decided) => {
+                let absent = offline_of(&decided)?;
+                let refusal = (absent.coverage != ScanCoverageState::Complete
+                    || absent.decision != ScanDecision::Empty)
+                    .then(|| {
+                        (
+                            ABSENT_NOT_EMPTY,
+                            json!({"name": name, "coverage": absent.coverage,
+                                   "decision": absent.decision}),
+                        )
+                    });
+                AbsentJudgement {
+                    run: Some(ScanAbsentRun {
+                        name,
+                        coverage: absent.coverage,
+                        decision: absent.decision,
+                    }),
+                    refusal,
+                }
+            }
+        },
+    ))
 }
 
 /// The refusals of the offline run for the pressed name `pressed` of the scan `scan`: its coverage
@@ -2224,80 +2378,33 @@ pub(crate) fn scan_select_checks(
         let ids = std::slice::from_ref(&frame.frame_id);
         let frame_id = Some(frame.frame_id.as_str());
         let loaded = loaded_of(cache, frame)?;
-        let default = match decide(prepared, &operation, &loaded.frame, None, instant)? {
-            Ok(decided) => decided,
-            Err(failure) => {
-                failures.fail(
-                    on(ids),
-                    mismatch(step, frame_id, SELF_TEST_ERROR, json!({"failure": failure})),
-                )?;
-                continue;
-            }
-        };
-        let unread = unread_rows(&default);
-        if !unread.is_empty() {
-            for (row, cause) in unread {
-                failures.fail(
-                    on(ids).with_target(&target_id(plan, step, NAME)),
-                    mismatch(
-                        step,
-                        frame_id,
-                        NAME_UNREAD,
-                        json!({"row": row, "cause": cause}),
-                    ),
-                )?;
-            }
-            continue;
-        }
-        let pressed = match &pressed_document {
-            None => default.kind,
-            Some(document) => {
-                match decide(prepared, &operation, &loaded.frame, Some(document), instant)? {
-                    Ok(decided) => decided.kind,
-                    Err(failure) => {
-                        failures.fail(
-                            on(ids),
-                            mismatch(step, frame_id, SELF_TEST_ERROR, json!({"failure": failure})),
-                        )?;
-                        continue;
-                    }
+        // Fix round 1: the mark-time self-test's judgement of the frame, one function.
+        let judged = judge_live_frame(
+            (prepared, operation.as_str()),
+            (
+                step.step.index,
+                frame.frame_id.as_str(),
+                &loaded.frame,
+                frame.role == "primary",
+            ),
+            spec,
+            (pressed_document.as_ref(), executed),
+            instant,
+        )?;
+        match judged {
+            Err(refusals) => {
+                for (reason, detail) in refusals {
+                    // A row's name unread is about the target that reads it.
+                    let locus = if reason == NAME_UNREAD {
+                        on(ids).with_target(&target_id(plan, step, NAME))
+                    } else {
+                        on(ids)
+                    };
+                    failures.fail(locus, mismatch(step, frame_id, reason, detail))?;
                 }
             }
-        };
-        if frame.role == "primary" {
-            let Some(row) = pressed.slot() else {
-                failures.fail(
-                    on(ids),
-                    mismatch(
-                        step,
-                        frame_id,
-                        PRESSED_ABSENT,
-                        json!({"pressed": spec.pressed_name(), "decision": pressed}),
-                    ),
-                )?;
-                continue;
-            };
-            if let Some(point) = executed
-                && let Some(rect) = default.clicks.get(&row).copied()
-                && !holds(point, rect)
-            {
-                failures.fail(
-                    on(ids),
-                    mismatch(
-                        step,
-                        frame_id,
-                        PRESS_MISMATCH,
-                        json!({"row": row, "click_rect": rect, "point": point}),
-                    ),
-                )?;
-                continue;
-            }
+            Ok(live) => decisions.push(json!(live.decision)),
         }
-        decisions.push(json!(SelectFrameDecision {
-            frame_id: frame.frame_id.clone(),
-            pressed,
-            default: default.kind,
-        }));
     }
     item["frames"] = json!(decisions);
 
@@ -2379,43 +2486,21 @@ pub(crate) fn scan_select_checks(
             result["steps"] = json!(content_steps(&state.screens, &run.offsets));
         }
     }
-    // #463 S2-9b: without an end mark a name no screen shows is not judged offline.
-    if !without_end(scan)
-        && let Some(name) = absent_name(spec, &state.screens)
-    {
-        let document = select_policy_document(plan, step, spec, &name);
-        match offline_entry(prepared, &operation, &loaded, Some(&document), instant)? {
-            Err(failure) => failures.fail(
-                on(ids.as_slice()),
-                mismatch(
-                    step,
-                    first_id,
-                    SELF_TEST_ERROR,
-                    json!({"absent": name, "failure": failure}),
-                ),
-            )?,
-            Ok(decided) => {
-                let absent = offline_of(&decided)?;
-                if absent.coverage != ScanCoverageState::Complete
-                    || absent.decision != ScanDecision::Empty
-                {
-                    failures.fail(
-                        on(ids.as_slice()),
-                        mismatch(
-                            step,
-                            first_id,
-                            ABSENT_NOT_EMPTY,
-                            json!({"name": name, "coverage": absent.coverage,
-                                   "decision": absent.decision}),
-                        ),
-                    )?;
-                }
-                result["absent"] = json!(ScanAbsentRun {
-                    name,
-                    coverage: absent.coverage,
-                    decision: absent.decision,
-                });
-            }
+    // Fix round 1: the mark-time self-test's judgement of the absent name, one function (#463
+    // S2-9b: none without an end mark).
+    if let Some(judged) = judge_absent(
+        (prepared, operation.as_str()),
+        (plan, step),
+        spec,
+        &state.screens,
+        &loaded,
+        instant,
+    )? {
+        if let Some((reason, detail)) = judged.refusal {
+            failures.fail(on(ids.as_slice()), mismatch(step, first_id, reason, detail))?;
+        }
+        if let Some(run) = judged.run {
+            result["absent"] = json!(run);
         }
     }
     // #463 S2-9b: without an end mark a run with the package's default values finds its item only

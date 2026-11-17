@@ -277,6 +277,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// gives an `on_empty_key`: such a scan never reads its list to an end, so a run cannot end
         /// normally there; where the item is not found it fails with the kernel's code.
         OnEmptyWithoutEnd => "on_empty_without_end",
+        /// #463 S2-9a fix round 1: the first forward swipe of the fold, the package's advance, moves
+        /// the finger further along the list than the kernel admits (its length less a row's, less
+        /// one), which no given number changes: the scroll is recorded again with shorter swipes.
+        ScanSwipeTooLong => "scan_swipe_too_long",
     }
 }
 

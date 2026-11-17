@@ -517,10 +517,9 @@ naming this file.
   its press step, and marks on a folded swipe, are `step_in_fold`: unfold first. `ac_record_status`
   shows `folded_into` and `scan_fold`; `ac_record_review`'s sheet of the press step lists the
   folded swipes in order with their screens (`folded`); `ac_record_frames` reads a folded swipe as
-  any step. No scrolling select is declared yet: `ac_record_ready` lists a fold as
-  `scan_without_select` and `ac_record_stop` refuses it (`scan_not_selected`), so a recording with
-  a fold makes no package until the slice that declares the scan; unfold it to make the package
-  without it.
+  any step. Until a scrolling select is declared on the press step (S2-9a below),
+  `ac_record_ready` lists a fold as `scan_without_select` and `ac_record_stop` refuses it
+  (`scan_not_selected`); declare the select, or unfold it to make the package without it.
   #463 S2-9a (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: reading the list to its
   end"): that scan is the press step's select. Send `ac_record_mark` with `request_json`
   `{"step": b, "select": {"rows": {"row", "anchor", "name", "click"?}, "scan": {"list", "start",
@@ -541,7 +540,12 @@ naming this file.
   `scan` (screens, names read, numbers, the offline entry's decision); `unfold_scan` is refused
   `scan_selected` while the select stands: `clear_select` first, which keeps the fold. Inertia,
   settling, a list opened in its middle, the drag's real displacement and a list that loads while
-  it scrolls are judged only by the trial on the device.
+  it scrolls are judged only by the trial on the device. Fix round 1: swipe shorter than the
+  list's visible length, so that neighbouring screens share a row: a first swipe longer than the
+  kernel admits is `record_select_invalid` `scan_swipe_too_long` (record the scroll again), which no
+  `scan.numbers` cures. Cut the end mark from the list's true last screen: one that passes on an
+  earlier forward screen is `scan_end_mark_early`. Each number in `scan.numbers` says what it is
+  (`origin`: `measured`, `default`, `derived` or `given`).
   #463 S2-9b (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: straight to the wanted
   item"): when the wanted item is known, swipe forward until its row shows and press it; mark the
   select with `"stop": "wanted"`. `end` is then optional: given, the package declares it; left out,

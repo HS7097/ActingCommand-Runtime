@@ -1045,7 +1045,13 @@ pub(crate) fn decide(
         })
         .collect::<Vec<_>>();
     // Fix 1: the decision by its kind, as the run takes it: an empty or insufficient decision
-    // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies).
+    // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies). #463
+    // S2-9a fix round 1: counted over the actionable candidates, the ones the kernel evaluates and
+    // counts unknown (a row the list's edge cuts reads no name and blocks nothing; a fixed slot is
+    // always actionable).
+    let blocking = candidates
+        .iter()
+        .any(|candidate| candidate.actionable && unread_cause(candidate).is_some());
     let kind = match mirrored_outcome(&dry.decision.outcome)? {
         TaskSelectionOutcome::Selected { .. } => {
             let [id] = dry.decision.selected.as_slice() else {
@@ -1069,9 +1075,7 @@ pub(crate) fn decide(
                 })?;
             SelectDecision::Selected { slot }
         }
-        TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. }
-            if !unread.is_empty() =>
-        {
+        TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. } if blocking => {
             SelectDecision::Blocked
         }
         TaskSelectionOutcome::Empty => SelectDecision::Empty,

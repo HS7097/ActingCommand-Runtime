@@ -1329,36 +1329,56 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   press step's screen, is the same case. The package's templates are those regions cut from those
   screens (the anchor searched in the list, the start and end marks each at its own region, unmoved,
   so that each passes only where the list stands at that end); the name is an OCR target at the
-  first screen's name region, which the layout moves to every row's anchor.
-- **The numbers the Lab measures** from those regions and from the demonstration (`b` and `e` the
+  first screen's name region, which the layout moves to every row's anchor. The start and the end
+  mark may lie anywhere in the frame: they are checks, not rows (a header above the list, a footer
+  below it). **An end mark cut from a screen that is not the list's true end cannot be told
+  offline: the package then ends its coverage early and takes later names as not in the list; cut
+  the end mark from the list's true last screen.** A swipe recorded without its screens (`do
+  --capture --record` stores no screen after it) leaves the select a screen it cannot read: the
+  mark is refused `record_step_frame_missing` (`details.step`, the press step). A list that fits
+  on one screen has no swipe to fold and takes the fixed-slot select ("Selecting in a list").
+- **The numbers** the Lab writes from those regions and from the demonstration (`b` and `e` the
   list's and the row's extents along the fold's axis, `V` the first screen and the screens after a
-  forward swipe), each kept in the select with what it is measured from (`from`): the advance's
-  window, 1 to `b − e`, and the reposition's largest step, `b − e` (`list_and_row`); the advance's
-  duration, the first forward swipe's (`first_forward_swipe`; the package's advance and reposition
-  are a drag between one-pixel boxes at that swipe's two points, whatever the other forward swipes
-  measured); the settle's interval, that swipe's after loop's (`first_forward_swipe`), and its
-  timeout, twice the longest time a swipe's screen was captured after it plus the interval
-  (`fold_swipes`); the position tolerance, `max(2, e / 10)`, the edge margin, the tolerance, and the
-  signature's grid, the row in as many square cells as its shape gives (at most 8) along its long
-  side and one across (`row`); the signature distance, the Runtime's frame-change bound
-  (`frame_change_bound`); one overlapping row, since every pair of rows matches by the name read
-  (`names_read`); the spacing (rows across the axis at one place, the largest gap along it and the
-  first screen's first row from the list's leading edge, the last row of the last screen after a
-  forward swipe from the list's trailing edge, the lead and the gap across it, each plus the
-  tolerance) and the most anchors on a screen plus 2, at most 64 (`screens`, as the kernel's dry
-  run reads each screen); the viewports and the return viewports, `2V`, at most 128 (`fold_swipes`);
-  and the scan's time, the viewports and the return viewports and one more, each an advance and its
-  settle, plus one screen's reads of every anchor (`scan_moves`). **A number given** in
-  `scan.numbers` (by its name: `advance_min_content_step_px`, `advance_max_content_step_px`,
-  `advance_duration_ms`, `reposition_max_content_step_px`, `settle_interval_ms`, `settle_timeout_ms`,
-  `position_tolerance_px`, `edge_margin_px`, `signature_columns`, `signature_rows`,
-  `signature_max_distance_milli`, `min_overlap_instances`, `spacing_columns`,
-  `spacing_max_axis_gap_px`, `spacing_max_trailing_gap_px`, `spacing_max_cross_lead_px`,
-  `spacing_max_cross_gap_px`, `max_instances`, `max_viewports`, `max_reposition_viewports`,
-  `max_ms`) wins: it is kept with `origin: "given"` and the value the Lab measured beside it
-  (`measured`), and the numbers computed from it follow it. A bound only the kernel checks (a window
-  beyond `b − e`, a swipe longer than the window's largest step, a scan's time above the task's) is
-  the kernel's admission of the probe, `kernel_refused`.
+  forward swipe), each kept in the select with its label (`origin`; fix round 1, the coordinator's
+  ruling: `measured`, read off the agent's regions or the demonstration; `default`, a constant of
+  the generator, named in the table; `derived`, the table's formula over measured numbers;
+  `given`, the request's) and what it comes from (`from`), and listed so in `record review`. The
+  package's advance and reposition are a drag between one-pixel boxes at the first forward swipe's
+  two points, whatever the other forward swipes measured.
+
+| Number | Label | From | The constant or the formula |
+|---|---|---|---|
+| `advance_min_content_step_px` | default | `generator` | 1 |
+| `advance_max_content_step_px` | derived | `list_and_row` | `b − e` |
+| `advance_duration_ms` | measured | `first_forward_swipe` | that swipe's duration |
+| `reposition_max_content_step_px` | derived | `list_and_row` | `b − e` |
+| `settle_interval_ms` | measured | `first_forward_swipe` | that swipe's after loop's interval |
+| `settle_timeout_ms` | derived | `fold_swipes` | twice the longest time a swipe's screen was captured after it, plus the interval |
+| `position_tolerance_px` | derived | `row` | `max(2, e / 10)` |
+| `edge_margin_px` | derived | `row` | the tolerance |
+| `signature_columns`, `signature_rows` | derived | `row` | the row in as many square cells as its shape gives (at most 8) along its long side, one across |
+| `signature_max_distance_milli` | default | `frame_change_bound` | the Runtime's frame-change bound, 1500 |
+| `min_overlap_instances` | default | `generator` | 1 (every pair of rows matches by the name read) |
+| `spacing_columns` | measured | `screens` | the most rows across the axis at one place on a screen |
+| `spacing_max_axis_gap_px` | derived | `screens` | the largest gap along the axis between two rows of a screen, and the first screen's first row from the list's leading edge, plus the tolerance |
+| `spacing_max_trailing_gap_px` | derived | `screens` | the last row of the last screen after a forward swipe from the list's trailing edge, plus the tolerance (#463 S2-9b, a scan without an end: `b`, from `list_and_row`) |
+| `spacing_max_cross_lead_px`, `spacing_max_cross_gap_px` | derived | `screens` | the rows' lead and gap across the axis, plus the tolerance |
+| `max_instances` | derived | `screens` | the most anchors on a screen plus 2, at most 64 (a scan without an end: `(b / e + 2)` in each column and no fewer, from `list_and_row`) |
+| `max_viewports` | derived | `fold_swipes` | `2V`, at least 2, at most 128 (a scan without an end: `2V + 2`) |
+| `max_reposition_viewports` | derived | `fold_swipes` | `2V`, at most 128 |
+| `max_ms` | derived | `scan_moves` | the viewports and the return viewports and one more, each an advance and its settle, plus one screen's reads of every anchor |
+
+- **A number given** in `scan.numbers` (by its name, any of the table's) wins: it is kept with
+  `origin: "given"` and the value the Lab would have written beside it (`measured`), and the
+  numbers computed from it follow it. A bound only the kernel checks (a window beyond `b − e`, a
+  declared largest step shorter than the first swipe's finger move) is the kernel's admission of
+  the probe, `kernel_refused`. A scan's time above the task's is not met by the probe, which takes
+  the largest budgets a package declares, but by `record stop`'s self-check `admission` of the
+  package (`record_artifact_admission_failed` with the kernel's `loader_code`). **A first swipe
+  longer than the kernel admits** (the finger's move along the list more than `b − e − 1`) no number
+  cures: the self-test refuses it before any probe, `record_select_invalid` with
+  `scan_swipe_too_long` (`details.swipe`, `displacement_px`, `most_px`, `hint`): record the scroll
+  again with shorter swipes, so that neighbouring screens share at least one row (fix round 1).
 - **The self-test at mark time**, on probe packages the kernel admits (`kernel_refused` with
   `details.loader_code` otherwise), refusals of `record_mark_rejected` (`{id: "select", reason,
   frame_id, …}`): every screen of the demonstration is read by the kernel's dry run of the step,
@@ -1366,9 +1386,11 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   `self_test_error` with the kernel's failure, `scan_rows_not_found` when the first screen shows no
   row); the start mark passes on the first screen and on no later forward screen
   (`scan_start_mark_missing`, `scan_start_mark_repeated`); the end mark passes on the last screen
-  after a forward swipe and, from the first forward screen it passes on, on every later one
-  (`scan_end_mark_missing`, `scan_end_mark_lost`): the kernel's end check is its template passing,
-  so a mark that passes and then not again would end the scan early; on the step's own frames the
+  after a forward swipe (`scan_end_mark_missing`) and on no forward screen before it: the kernel's
+  end check is its template passing, and the kernel ends its coverage on the first screen where it
+  passes, so a mark that passes earlier and then not is `scan_end_mark_lost`, and one that passes
+  earlier and on every later screen `scan_end_mark_early` (fix round 1; both with the frame it
+  first fails or passes on, and `passed_on` or `last_frame_id`); on the step's own frames the
   pressed name selects a row whose click box holds the recorded press (`select_pressed_absent`,
   `select_press_mismatch`), which becomes the step's click box; the content step of each forward
   swipe, measured by the kernel's offline entry in the widest window `[1, b − e]`, lies in the
@@ -1461,8 +1483,9 @@ the numbers the Lab measures, listed and given in their place).
   without an end mark, whose demonstration stops at the wanted row and not at the list's end. A
   number is labelled by what it is (`origin`; the coordinator's ruling after S2-9a's review):
   `measured`, read off the agent's regions or the demonstration; `default`, a constant of the
-  generator; `derived`, a stated formula over measured numbers; `given`. The numbers the first kind
-  takes from the screens up to the list's end are `derived` here, each by its formula (`b` and `e`
+  generator; `derived`, a stated formula over measured numbers; `given` (the first kind's table). The
+  numbers the first kind derives from the screens up to the list's end are derived here by other
+  formulas, from what the screens up to the wanted row show (`b` and `e`
   the list's and the row's extents along the axis, `V` the first screen and the screens after a
   forward swipe, up to the wanted row): the trailing gap `b` (`list_and_row`; the kernel checks it
   only on the screen where an end check passes, which such a scan never reaches); the most anchors

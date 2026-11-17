@@ -35827,6 +35827,70 @@ likewise.
 
 **At deploy.** Nothing to configure.
 
+**Fix round 1** (coordinator work order `rd-1117/brief-463-scroll-fix1.md`, after the independent
+review of pull request #1803 at `553f6647`, `rd-1117/review-1803.md`, and the coordinator's rulings
+at its end; made on the head of #463 S2-9b, §1.458, `3d0f3863`, so that `recording/scan.rs` is
+changed by one hand; nothing merged).
+- *An end mark that passes early* (the review's first required point, its answer 5). The kernel
+  ends its coverage on the first screen where the end check passes; the self-test asked only that
+  the end mark pass on the last forward screen and on every one after its first pass, so a mark that
+  also matched an earlier forward screen stood, and the offline entry stopped there. It is refused
+  `scan_end_mark_early` (the end mark passes on a forward screen before the last one and on every
+  later one; `frame_id`, `last_frame_id`), beside `scan_end_mark_lost` (passes, then not), wherever
+  an end is declared, both kinds. The contract says it, and that an end mark cut from a screen that
+  is not the list's true end cannot be told offline (the package then ends its coverage early and
+  takes later names as not in the list: cut it from the list's true last screen).
+- *The labels of the numbers* (the coordinator's ruling). `ScanNumberOrigin` holds `measured`,
+  `default`, `derived` and `given`, `ScanNumberSource` gains `generator`; each number is labelled by
+  what it is: measured the advance's duration, the settle interval and the spacing's columns;
+  default the smallest step 1 (`generator`), the signature distance (the Runtime's frame-change
+  bound, 1500) and the one overlapping row (`generator`); derived every other (the window's top and
+  the reposition `b − e`, the settle timeout, the tolerance and the edge margin, the signature grid,
+  the spacing, the anchors, the bounds and the scan's time, and S2-9b's numbers). `record review`
+  lists each with its label and `from`; the contract's table names the constant or the formula of
+  each. The given number's `measured` member is the value the Lab would have written.
+- *A swipe longer than the kernel admits* (the review's answer 1; the coordinator's ruling). The
+  kernel's admission holds the advance's finger move to the list's length less a row's, less one;
+  such a demonstration ended in a `kernel_refused` no number cures. The self-test judges the first
+  swipe (the package's advance and reposition) before any probe: `record_select_invalid` with
+  `scan_swipe_too_long` (`swipe`, `displacement_px`, `most_px`, `hint`: record the scroll again with
+  shorter swipes, so that neighbouring screens share at least one row). The contract and the MCP
+  manual say it.
+- *One judgement where there were two* (the review's (d)). The judgement of a live frame of the step
+  (`scan::judge_live_frame`) and of the name no screen shows (`scan::judge_absent`) are one function
+  each, called by the mark-time self-test and by the self-check `selects`. The two judgements of the
+  press disagreed: at mark time a selected row the dry run gave no click box for was
+  `validation_failed`, in the self-check the press was skipped without a word; the refusal is kept
+  (a broken invariant fails loud, never a silent pass). The self-check's `select_press_mismatch`
+  details gain `pressed` and every live frame's refusal names its `frame_id`, as at mark time.
+- *`decide`'s kind* (the review's first "may change"): an empty or insufficient decision is
+  blocked only by an actionable candidate whose name reads no known name, the candidates the kernel
+  evaluates (a row the list's edge cuts no longer turns `empty` into `blocked`); a fixed slot is
+  always actionable, so the fixed-slot select's decisions and bytes do not change.
+- *Texts*: the start and end marks may lie anywhere in the frame (checks, not rows); a list that
+  fits on one screen takes the fixed-slot select; a swipe recorded without its screens (`do
+  --capture --record`) leaves the select a screen it cannot read, `record_step_frame_missing`; a
+  scan's time above the task's is met by `record stop`'s self-check `admission`
+  (`record_artifact_admission_failed`), not by the probe, which takes the largest budgets; the MCP
+  manual's sentence that no scrolling select is declared yet is corrected.
+- *The test-only helper* `recording_api::package_without_cases`, which S2-9b kept for this slice's
+  test 6, stays: rebuilding the package the way S2-10's test does (`render` and `encode` with the
+  provenance read back) needs the templates the scrolling select cuts from its screens, which only
+  the private `load_package_inputs` makes; that is more than a few lines.
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `record_mark_rejected` reason `scan_end_mark_early` | the end mark passes on a forward screen before the last one, and on every later one | refuses | 3 |
+| `select_problem` `scan_swipe_too_long` | the first swipe moves the finger along the list more than its length less a row's, less one | refuses | 3 |
+
+Tests (`crates/lab/src/gate_463_s29a.rs`, a new gate of the exec gate map, incident "#463 S2-9a"):
+`select_pressed_absent` for a pressed name the press screen does not show; `scan_end_mark_lost`
+and `scan_end_mark_early` on lists that carry a copy of the end mark; `scan_swipe_too_long` on one
+swipe of 72 px over a list of 80 px whose row is 8; `record_step_frame_missing` for a folded swipe
+without its screen after; the first decision of a scrolling select that is the package's first
+step. Adapted, as the requirement relabels the numbers: `every_number` and test 4's `max_ms` in
+`gate_463_s29a.rs`. No golden changes; no test leaves a gate map.
+
 ### 1.458 Slice #463 S2-9b (0.12.70): a scrolling choice straight to the wanted item (Workflow #463; the owner's rule on board #463 that a scrolling choice has two kinds, straight to the wanted item when it is known, her ruling there on 11-16, option A of question 221, that a package of the second kind may carry no end mark, found it presses and not found it fails with a named reason, and her ruling that no tool proposes a region, a choice or a value; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 5 and Q1, the coordinator's rulings on the kernel slice's review and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s29b-scan-select-wanted.md`; stacked on #463 S2-9a, §1.457, its branch at `553f6647`, with three merges first: #463 S2-10's fix round 3 `c49176f7`, #463 S2-8''s fix round 1 `ad4c39c1` and #463 K-b, K-c's fix round 1 `dfc9200e`, §1.453 and §1.454, which holds main's release 0.12.69 `6a257aed`)
 
 This section takes 1.458, the number the work order gives. It ships in 0.12.70.

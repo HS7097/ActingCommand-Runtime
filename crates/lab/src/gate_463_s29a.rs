@@ -24,6 +24,13 @@
 // - `s29a_the_package_is_generated_byte_for_byte_again` (6)
 // - `s29a_unfold_is_refused_while_the_select_stands_and_clearing_it_keeps_the_fold` (7)
 // - `s29a_the_regression_case_of_the_step_is_on_its_first_screen_and_passes` (8)
+// Fix round 1 (the independent review; the coordinator's rulings):
+// - `s29a_fix1_a_pressed_name_the_press_screen_does_not_show_is_refused`
+// - `s29a_fix1_an_end_mark_that_passes_and_then_not_is_lost`
+// - `s29a_fix1_an_end_mark_that_passes_before_the_last_forward_screen_is_refused`
+// - `s29a_fix1_a_first_swipe_longer_than_the_kernel_admits_has_its_own_word`
+// - `s29a_fix1_a_folded_swipe_without_its_screen_after_is_refused`
+// - `s29a_fix1_a_scrolling_select_on_the_first_step_decides_first_over_its_screens`
 
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, StopSettings,
@@ -181,6 +188,16 @@ fn detail() -> Vec<u8> {
 
 // The list scrolled by `offset` px, row `unreadable` (if any) with a name marker no name maps to.
 fn list_at(offset: u32, unreadable: Option<u32>) -> Vec<u8> {
+    list_drawn(offset, unreadable, None)
+}
+
+// Fix round 1: the list scrolled by `offset` px with a copy of the end mark's noise at the
+// content rows `copy` to `copy + 5` too, at the end mark's columns.
+fn list_copying_end(offset: u32, copy: u32) -> Vec<u8> {
+    list_drawn(offset, None, Some(copy))
+}
+
+fn list_drawn(offset: u32, unreadable: Option<u32>, end_copy: Option<u32>) -> Vec<u8> {
     image(|x, y| {
         if covers(SQUARE, x, y) {
             return GREEN;
@@ -195,6 +212,11 @@ fn list_at(offset: u32, unreadable: Option<u32>) -> Vec<u8> {
             }
             if (END_TOP..END_TOP + END_ROWS).contains(&row) {
                 return noise(x - MARK_X + 150, row - END_TOP + 150);
+            }
+            if let Some(copy) = end_copy
+                && (copy..copy + END_ROWS).contains(&row)
+            {
+                return noise(x - MARK_X + 150, row - copy + 150);
             }
         }
         for k in 0..ROWS {
@@ -662,8 +684,12 @@ impl Bench {
 // 2 to 4 (forward), 5 and 6 (back), 7 (the press on `delta`), 8 (the detail screen); each page
 // marked (steps 1, 7 and 8), the swipes not yet folded.
 fn demonstrated(unreadable: Option<u32>) -> Bench {
+    demonstrated_on(&|offset| list_at(offset, unreadable))
+}
+
+// Fix round 1: the same demonstration on the list screens `screen` draws at each offset.
+fn demonstrated_on(screen: &dyn Fn(u32) -> Vec<u8>) -> Bench {
     let bench = Bench::new();
-    let screen = |offset: u32| list_at(offset, unreadable);
     bench.press_at(START_POINT, [start(), screen(0)]);
     for (swipe, (from, to)) in [FORWARD, FORWARD, FORWARD, BACK, BACK].into_iter().zip([
         (0, 24),
@@ -688,43 +714,67 @@ fn folded(unreadable: Option<u32>) -> Bench {
     bench
 }
 
-// One number as the select's scan holds it.
-fn measured(name: &str, value: u64, from: &str) -> Value {
-    json!({"name": name, "value": value, "origin": "measured", "from": from})
+// Fix round 1: the demonstration on the screens `screen` draws, its swipes folded into step 7.
+fn folded_on(screen: &dyn Fn(u32) -> Vec<u8>) -> Bench {
+    let bench = demonstrated_on(screen);
+    bench.marked(json!({"step_action": {"kind": "fold_scan", "step": 7, "first": 2}}));
+    bench
 }
 
-// Every number the select measures on this demonstration, in order, by the work order's rules and
-// the geometry: the list 80 px and the row 8 px along the axis (window 1 to 72); the first forward
-// swipe 300 ms with its after loop's interval 100; every swipe's screen captured 800 ms after it
-// (settle 2 x 800 + 100); tolerance max(2, 8 / 10) = 2; the row 40 x 8, 5 cells of it; one row
-// across; rows 12 apart and the first 4 below the list's top (12 + 2); the last row on the screen at
-// offset 72 starting at frame row 72, 28 above the list's end (28 + 2); the rows 2 px from the
-// list's left edge (2 + 2), no gap across (0 + 2); six anchors on a screen at most (6 + 2); four
-// forward screens (8 viewports, 8 return viewports); the scan's time (8 + 8 + 1) x (300 + 1700) +
-// 8 x 1000.
+// One number as the select's scan holds it, labelled `origin` (fix round 1: what it is).
+fn labelled(name: &str, value: u64, origin: &str, from: &str) -> Value {
+    json!({"name": name, "value": value, "origin": origin, "from": from})
+}
+
+// A number read off the agent's regions or the demonstration.
+fn measured(name: &str, value: u64, from: &str) -> Value {
+    labelled(name, value, "measured", from)
+}
+
+// A number computed from measured ones by a stated formula.
+fn derived(name: &str, value: u64, from: &str) -> Value {
+    labelled(name, value, "derived", from)
+}
+
+// Every number the select writes on this demonstration, in order, by the work order's rules and
+// the geometry, each labelled by what it is (fix round 1, the coordinator's ruling): the list 80 px
+// and the row 8 px along the axis (window 1, a constant, to 72 = 80 - 8, derived); the first
+// forward swipe 300 ms with its after loop's interval 100 (measured); every swipe's screen captured
+// 800 ms after it (settle 2 x 800 + 100, derived); tolerance max(2, 8 / 10) = 2 and the edge margin
+// (derived); the row 40 x 8, 5 cells of it, one across (derived); the Runtime's frame-change bound
+// 1500 and one overlapping row (constants); one row across (measured); rows 12 apart and the first 4
+// below the list's top (12 + 2); the last row on the screen at offset 72 starting at frame row 72,
+// 28 above the list's end (28 + 2); the rows 2 px from the list's left edge (2 + 2), no gap across
+// (0 + 2); six anchors on a screen at most (6 + 2); four forward screens (8 viewports, 8 return
+// viewports); the scan's time (8 + 8 + 1) x (300 + 1700) + 8 x 1000 (all derived).
 fn every_number() -> Value {
     json!([
-        measured("advance_min_content_step_px", 1, "list_and_row"),
-        measured("advance_max_content_step_px", 72, "list_and_row"),
+        labelled("advance_min_content_step_px", 1, "default", "generator"),
+        derived("advance_max_content_step_px", 72, "list_and_row"),
         measured("advance_duration_ms", 300, "first_forward_swipe"),
-        measured("reposition_max_content_step_px", 72, "list_and_row"),
+        derived("reposition_max_content_step_px", 72, "list_and_row"),
         measured("settle_interval_ms", 100, "first_forward_swipe"),
-        measured("settle_timeout_ms", 1700, "fold_swipes"),
-        measured("position_tolerance_px", 2, "row"),
-        measured("edge_margin_px", 2, "row"),
-        measured("signature_columns", 5, "row"),
-        measured("signature_rows", 1, "row"),
-        measured("signature_max_distance_milli", 1500, "frame_change_bound"),
-        measured("min_overlap_instances", 1, "names_read"),
+        derived("settle_timeout_ms", 1700, "fold_swipes"),
+        derived("position_tolerance_px", 2, "row"),
+        derived("edge_margin_px", 2, "row"),
+        derived("signature_columns", 5, "row"),
+        derived("signature_rows", 1, "row"),
+        labelled(
+            "signature_max_distance_milli",
+            1500,
+            "default",
+            "frame_change_bound",
+        ),
+        labelled("min_overlap_instances", 1, "default", "generator"),
         measured("spacing_columns", 1, "screens"),
-        measured("spacing_max_axis_gap_px", 14, "screens"),
-        measured("spacing_max_trailing_gap_px", 30, "screens"),
-        measured("spacing_max_cross_lead_px", 4, "screens"),
-        measured("spacing_max_cross_gap_px", 2, "screens"),
-        measured("max_instances", 8, "screens"),
-        measured("max_viewports", 8, "fold_swipes"),
-        measured("max_reposition_viewports", 8, "fold_swipes"),
-        measured("max_ms", 42_000, "scan_moves"),
+        derived("spacing_max_axis_gap_px", 14, "screens"),
+        derived("spacing_max_trailing_gap_px", 30, "screens"),
+        derived("spacing_max_cross_lead_px", 4, "screens"),
+        derived("spacing_max_cross_gap_px", 2, "screens"),
+        derived("max_instances", 8, "screens"),
+        derived("max_viewports", 8, "fold_swipes"),
+        derived("max_reposition_viewports", 8, "fold_swipes"),
+        derived("max_ms", 42_000, "scan_moves"),
     ])
 }
 
@@ -1015,7 +1065,7 @@ fn s29a_a_given_number_replaces_the_measured_one_and_is_marked_given() {
         json!({"name": "settle_timeout_ms", "value": 2500, "origin": "given",
                "from": "fold_swipes", "measured": 1700})
     );
-    assert_eq!(entry("max_ms"), measured("max_ms", 55_600, "scan_moves"));
+    assert_eq!(entry("max_ms"), derived("max_ms", 55_600, "scan_moves"));
     let lab = bench.stopped();
     let task = task_of(&package(&lab));
     let operation = task["operations"]
@@ -1173,4 +1223,136 @@ fn s29a_the_regression_case_of_the_step_is_on_its_first_screen_and_passes() {
         ["frame"]["frame_id"]
         .clone();
     assert_eq!(select, first_screen);
+}
+
+// Fix round 1: the frame stored as the screen after the swipe `step`.
+fn screen_after(bench: &Bench, step: u32) -> Value {
+    row(&bench.recording()["steps"], "index", step)["click"]["execution"]["after_frame"].clone()
+}
+
+// Fix round 1 (the review's required point 2): the pressed name `alpha` (row 0) is on no row of the
+// press step's frame, the screen at offset 24, which shows rows 2 to 7: the self-test refuses
+// `select_pressed_absent`, naming the pressed name, nothing written.
+#[test]
+fn s29a_fix1_a_pressed_name_the_press_screen_does_not_show_is_refused() {
+    let bench = folded(None);
+    let mut select = scrolling();
+    select["pressed"] = json!("alpha");
+    let detail = rejection(bench.refused(on_press(select)), "select_pressed_absent");
+    assert_eq!(detail["pressed"], "alpha", "{detail}");
+}
+
+// Fix round 1 (the review's required point 2, its answer 8): a copy of the end mark at content rows
+// 88 to 93 shows in the end mark's region on the screen at offset 24, not on the one at 48, and the
+// list's real end does at 72: the end mark passes, then not, then again: `scan_end_mark_lost` on
+// the screen at 48 (swipe 3's screen after), passed on the one at 24 (swipe 2's), nothing written.
+#[test]
+fn s29a_fix1_an_end_mark_that_passes_and_then_not_is_lost() {
+    let bench = folded_on(&|offset| list_copying_end(offset, 88));
+    let detail = rejection(bench.refused(on_press(scrolling())), "scan_end_mark_lost");
+    assert_eq!(detail["frame_id"], screen_after(&bench, 3), "{detail}");
+    assert_eq!(detail["passed_on"], screen_after(&bench, 2), "{detail}");
+}
+
+// Fix round 1 (the review's required point 1, its answer 5): a copy of the end mark at content rows
+// 112 to 117 shows in the end mark's region on the screen at offset 48 and on every later forward
+// screen: the kernel would end its coverage there, before the list's end at 72, so the self-test
+// refuses `scan_end_mark_early` on the screen at 48 (swipe 3's screen after), naming the last
+// forward screen (swipe 4's), nothing written.
+#[test]
+fn s29a_fix1_an_end_mark_that_passes_before_the_last_forward_screen_is_refused() {
+    let bench = folded_on(&|offset| list_copying_end(offset, 112));
+    let detail = rejection(bench.refused(on_press(scrolling())), "scan_end_mark_early");
+    assert_eq!(detail["frame_id"], screen_after(&bench, 3), "{detail}");
+    assert_eq!(detail["last_frame_id"], screen_after(&bench, 4), "{detail}");
+}
+
+// Fix round 1 (the review's answer 1): one forward swipe from the list's top to its end, the finger
+// from y 90 to y 18 (72 px), then the press on `kilo` at offset 72: the list's 80 px less the row's
+// 8 is 72, so the kernel admits a drag of at most 71 px, and no number cures it:
+// `record_select_invalid` with `scan_swipe_too_long`, the swipe, 72 and 71 and the hint, before any
+// probe, nothing written.
+#[test]
+fn s29a_fix1_a_first_swipe_longer_than_the_kernel_admits_has_its_own_word() {
+    let bench = Bench::new();
+    bench.press_at(START_POINT, [start(), list_at(0, None)]);
+    bench.drag_list(((64, 90), (64, 18)), [list_at(0, None), list_at(72, None)]);
+    bench.press_at((10, 76), [list_at(72, None), detail()]);
+    bench.marked(json!({"step": 1, "add": [color("ui/start", SQUARE)]}));
+    bench.marked(json!({"step": 3, "add": [color("ui/list", SQUARE)]}));
+    bench.marked(json!({"step": 4, "add": [color("ui/detail", SQUARE)]}));
+    bench.marked(json!({"step_action": {"kind": "fold_scan", "step": 3, "first": 2}}));
+    let mut select = scrolling();
+    select["wanted"]["default"] = json!("kilo");
+    let details = refusal(
+        bench.refused(json!({"step": 3, "select": select})),
+        LabCode::RecordSelectInvalid.as_str(),
+        "select_problem",
+        "scan_swipe_too_long",
+    );
+    assert_eq!(details["swipe"], 2, "{details}");
+    assert_eq!(details["displacement_px"], 72, "{details}");
+    assert_eq!(details["most_px"], 71, "{details}");
+    assert!(details["hint"].is_string(), "{details}");
+}
+
+// Fix round 1 (the review's answer 6): a swipe recorded without its screen after (as `do --capture
+// --record` records one), here the folded swipe 3 with its after frame taken out of the step table
+// by hand: the scrolling select cannot read the list's screens, and the mark is refused
+// `record_step_frame_missing` on the press step, nothing written.
+#[test]
+fn s29a_fix1_a_folded_swipe_without_its_screen_after_is_refused() {
+    let bench = folded(None);
+    let path = recording_path(&bench.state(), RECORD_ID);
+    let mut table: Value =
+        serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
+    let swipe = table["steps"]
+        .as_array_mut()
+        .expect("steps")
+        .iter_mut()
+        .find(|entry| entry["index"] == 3)
+        .expect("swipe 3");
+    swipe["click"]["execution"]["after_frame"] = Value::Null;
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&table).expect("step table bytes"),
+    )
+    .expect("the edited step table");
+    let error = bench.refused(on_press(scrolling()));
+    assert_eq!(
+        error.code, "record_step_frame_missing",
+        "{}: {:?}",
+        error.message, error.details
+    );
+    assert_eq!(error.details.expect("details")["step"], 7);
+}
+
+// Fix round 1 (the review's answer 6): the swipes open the recording (no tap before them), so the
+// press step 6 they fold into (`first` 1) is the package's first step: record stop's self-check
+// `first_decision` is the kernel's offline entry over its forward screens with the default values:
+// `would_select` of `step_01_select`, `delta` at position 3.
+#[test]
+fn s29a_fix1_a_scrolling_select_on_the_first_step_decides_first_over_its_screens() {
+    let bench = Bench::new();
+    for (swipe, (from, to)) in [FORWARD, FORWARD, FORWARD, BACK, BACK].into_iter().zip([
+        (0, 24),
+        (24, 48),
+        (48, 72),
+        (72, 48),
+        (48, 24),
+    ]) {
+        bench.drag_list(swipe, [list_at(from, None), list_at(to, None)]);
+    }
+    bench.press_at(ROW_POINT, [list_at(24, None), detail()]);
+    bench.marked(json!({"step": 6, "add": [color("ui/list", SQUARE)]}));
+    bench.marked(json!({"step": 7, "add": [color("ui/detail", SQUARE)]}));
+    bench.marked(json!({"step_action": {"kind": "fold_scan", "step": 6, "first": 1}}));
+    bench.marked(json!({"step": 6, "select": scrolling()}));
+    let lab = bench.stopped();
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let decision = &lab["first_decision"];
+    assert_eq!(decision["status"], "would_select", "{lab}");
+    assert_eq!(decision["operation_label"], "step_01_select", "{lab}");
+    assert_eq!(decision["name"], "delta", "{lab}");
+    assert_eq!(decision["position"], 3, "{lab}");
 }
