@@ -200,7 +200,9 @@ availability"); the other instances run. Binding it and restarting makes it a bo
   adb output and error text name a bound serial only as `[device:<label>]`, with
   `raw_text_redacted` (RD-1a, [adb-target-recovery.md](adb-target-recovery.md)).
 - **Fingerprint.** The ledger's salted SHA-256 (`secret_fingerprint_salt`) of the serial under
-  the field `device_serial`: `sha256:<64 hex>`, never equal to the serial.
+  the field `device_serial`: `sha256:<64 hex>`, never equal to the serial. #398 DB-2: a device
+  listing's `device_key` is this fingerprint, made by the same function under the caller's salt
+  or under the installation's own `secret_fingerprint_salt` ("Choosing a device", below).
 
 `runtime.instance_bound` ([provider-startup.md](provider-startup.md), "Instance binding"):
 
@@ -234,8 +236,8 @@ configuration tools of #387 D1b):
 
 | CLI | MCP | Answer |
 |---|---|---|
-| `actingctl devices list --state-root <dir> [--root <install root>]` | `ac_devices` | `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}` |
-| `actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]` | `ac_device_bind {alias, handle}` | `{alias, handle, model?, restart_required: true}` |
+| `actingctl devices list [--state-root <dir> \| --config <file>] [--root <install root>] [--key-salt <text> \| --key-salt-env <NAME>]` | `ac_devices` | `{devices: [{handle?, device_key?, transport, state, model?, bound_alias?, endpoint?}], bindings_unread?}` |
+| `actingctl devices bind <alias> (<handle> \| --device-key <key> [--key-salt <text> \| --key-salt-env <NAME>]) (--state-root <dir> \| --config <file>) [--root <install root>]` | `ac_device_bind {alias, handle}` | `{alias, handle, model?, restart_required: true}`; by key `{alias, device_key, handle?, model?, restart_required: true}` |
 | `actingctl devices unbind <alias> --state-root <dir>` | `ac_device_unbind {alias}` | `{alias, unbound, restart_required}` |
 
 - They never run the Runtime and record nothing in the ledger; the next start records a binding
@@ -246,8 +248,8 @@ configuration tools of #387 D1b):
 - **The adb** is the install root's, `<install root>\tools\platform-tools\adb.exe` (Workflow #337),
   the install root found as `actingctl packs` finds it (this process's install selection, else
   `--root`, else the install root the executable runs from; `install_root_unresolved` without
-  one; against a candidate configuration without the selection, below). It runs `adb devices -l`
-  once per `list` and once per `bind`.
+  one; against a candidate configuration, and for a listing without a state root, without the
+  selection, below). It runs `adb devices -l` once per `list` and once per `bind`.
 - **A row** is one device of adb's list: `handle` `<transport>:<transport_id>` (the adb server's
   session number for the device, never a device value; it changes when the device is replugged
   or the server restarts), `transport` `usb` when the row has a `usb:` segment and `tcp`
@@ -260,7 +262,9 @@ configuration tools of #387 D1b):
   when the instance is not a handset; actingd reports a handset's broken fields as
   `device_config_invalid`), reads adb's list again (`device_handle_unknown` with `handle` when
   the handle is not in it), and writes the device's serial for the alias, with
-  `bound_at_unix_ms` and `bound_via` `cli` or `mcp` (or `ui`, below). The new file is checked by the file's own
+  `bound_at_unix_ms` and `bound_via` `cli` or `mcp` (or `ui`, below). #398 DB-2: before anything
+  is written it refuses a row that cannot be the handset's device ("What a bind refuses", below).
+  The new file is checked by the file's own
   rules before it is written, so a device bound to another alias already is refused
   (`device_bindings_invalid`, `duplicate_serial`); a binding of the same alias is replaced. The
   file is replaced whole through a temporary sibling (`device_bindings_write_failed` with its
@@ -321,6 +325,64 @@ configuration tools of #387 D1b):
   `ac_devices_bind` does not offer it (its schema has `instance`, `handle` and `config`), and one
   sent there is refused `arguments_invalid` `unknown`. The next start records `ui` as
   `runtime.instance_bound`'s `device.bound_via`; nothing decides by it.
+- **Before an installation is selected** (#398 DB-2, 0.12.72; [v012-register.md](v012-register.md)
+  §1.467). An installer shows the attached phones on a page that comes before it installs, when
+  the root holds only its tools: no configuration, no state root. `devices` lists there:
+  - with neither `--state-root` nor `--config` (the Lab's row where its place locates no state
+    root: its line then carries neither the module's state root nor its root) it reads no binding,
+    takes its adb as a bind against a candidate does (the root `--root` names, else the root the
+    program runs from by its place, never an install selection; else `install_root_unresolved`),
+    and its answer says so: `bindings_unread` `state_root_unknown`, so that rows without
+    `bound_alias` never read as "nothing is bound". The place's own refusal is then not the
+    answer: a listing needs no state root;
+  - with `--config <file>` it reads the bindings of the state root the candidate names, its adb
+    found the same way, the line carrying neither the module's state root nor its root;
+  - with a state root (the located installation, as before) it reads that state root's bindings
+    and the adb as before. The Lab's row takes `root`, which stands for the located root.
+- **Device keys** (#398 DB-2). A handle lives only as long as the adb server's session; a row
+  also carries `device_key`, the same at every listing while its key is the same, which tells
+  nothing of the serial to whoever lacks the key: the fingerprint above (the contract's one
+  function, `sha256:` and 64 lowercase hexadecimal digits). Its key is, in this order: the
+  caller's salt, 16 to 1024 bytes of text, given as `--key-salt <text>` or read from the
+  environment variable `--key-salt-env <NAME>` names in the Lab's own process; else the
+  installation's own `secret_fingerprint_salt`, of the selected configuration (read as `bind`
+  reads it: `config_read_failed`, `config_decode_failed`) or of the candidate `--config` names,
+  when it is text of 16 to 1024 bytes; else the row has no `device_key`. Under the installation's
+  secret the key is the fingerprint the ledger records for the device. A command line is visible
+  to the other processes of the same user (process listings, and the system's log where it records
+  command lines), so `--key-salt-env` is the form for a salt that must not be. The salt and the
+  variable's value are never printed, logged or written; a refusal names the flag only:
+  `--key-salt` outside its bounds `out_of_range` (`range_min` 16, `range_max` 1024);
+  `--key-salt-env` naming no possible variable (empty, or holding `=` or NUL) `not_recognised`,
+  an unset, empty or non-UTF-8 variable `unusable`, a value outside the bounds `out_of_range`;
+  both forms `--key-salt-env` `conflicting` (each `actingctl_usage_invalid`).
+- **Bind by key** (#398 DB-2). `devices bind <alias> --device-key <key>` names the device by its key
+  in place of its handle (neither: `handle` `required`; both: `--device-key` `conflicting`). The
+  bind lists the devices again and takes the row whose key, under the salt given with it, else
+  under the installation's own secret, is the key; neither salt nor secret is `--key-salt`
+  `required`, a salt without `--device-key` its flag `conflicting`. No such row is
+  `device_key_unknown` (nothing written). The binding written is the one a bind by the row's
+  handle writes; the answer names the `device_key` and the row's current `handle`.
+- **What a bind refuses** (#398 DB-2). By handle or by key, before anything is written: a row
+  adb reports in another state than `device`, the state of an authorized device online
+  (`unauthorized`, `offline`, no permissions, which `adb devices -l` prints as `no`,
+  `authorizing`, `recovery` and the rest), and a row whose transport is not the one the handset
+  declares (`device.transport`, `usb` when it names none: a handset on USB is not bound to a `tcp`
+  row, an emulator's loopback row among them). Each is `device_row_unbindable` with `alias`, the
+  row's `handle` when it has one and `device_row_problem` (`state_not_device`,
+  `transport_mismatch`). This changes what `bind` accepted before 0.12.72, which bound any row
+  adb listed by its handle.
+- **What a client asks the Lab** (#398 DB-2). No interface name says what a Lab can do: a client
+  asks the Lab it carries for the rows of the operation table its build embeds,
+  `actinglab --json help devices` and `actinglab --json help devices bind` (`command.params`, each
+  parameter's `name`, `form`, `type`, `required`, `note`), which reads nothing else and sends
+  nothing. A Lab whose `devices` declares `root`, `key_salt` and `key_salt_env` and whose
+  `devices bind` declares `config` and `device_key` lists before an installation and binds by key.
+- **Through MCP** (#398 DB-2). The Lab's MCP tools take `config`, `root` and `device_key` as the
+  table gives them, and neither `key_salt` nor `key_salt_env` (a tool call's arguments stay in the
+  client's transcript, and a variable of the server's process is no caller's to name): there a
+  device key is made with the installation's own secret alone. `actingctl mcp-serve`'s
+  `ac_devices` carries the keys of the installation's secret too; its tools take no new argument.
 - **`unbind`** removes the alias's binding; an alias without one answers `unbound: false` and
   writes nothing. A start then registers the handset unbound (above).
 - A private file that breaks its rules is refused before anything is listed or written

@@ -386,7 +386,19 @@ pub static HANDED: [Handed; 16] = [
     handed(
         "devices",
         &[devices::COMMAND, devices::LIST],
-        &[Part::StateRoot, Part::Root, Part::Further],
+        &[
+            // #398 DB-2: the candidate configuration, whose line carries no module's state root and
+            // no module's root (`core_ops::candidate_words`); the module's own state root and root
+            // where it locates them (else neither, `core_ops::unlocated_words`); a root the call
+            // names, which stands for the module's (`core_ops::handed_words`); the caller's salt.
+            flag("config", devices::CONFIG_FLAG),
+            Part::StateRoot,
+            Part::Root,
+            flag("root", ROOT_FLAG),
+            flag("key_salt", devices::KEY_SALT_FLAG),
+            flag("key_salt_env", devices::KEY_SALT_ENV_FLAG),
+            Part::Further,
+        ],
     ),
     handed(
         "devices bind",
@@ -398,6 +410,10 @@ pub static HANDED: [Handed; 16] = [
             // and (fix round 1) no module's root (`core_ops::candidate_words`), and the channel.
             flag("config", devices::CONFIG_FLAG),
             flag("bound_via", devices::BOUND_VIA_FLAG),
+            // #398 DB-2: the device key in place of the handle, and the caller's salt.
+            flag("device_key", devices::DEVICE_KEY_FLAG),
+            flag("key_salt", devices::KEY_SALT_FLAG),
+            flag("key_salt_env", devices::KEY_SALT_ENV_FLAG),
             Part::StateRoot,
             Part::Root,
             Part::Further,

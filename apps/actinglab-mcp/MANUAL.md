@@ -40,7 +40,11 @@ naming this file.
   server records `cli`, as the row writes it without one), and takes `config`, a candidate
   configuration whose state root the binding goes into (fix round 1: then the install root's adb is
   that of the root this server's program runs from by its place, never read from an install
-  selection). These are the only parameters of a
+  selection); `ac_devices` and `ac_devices_bind` take neither `key_salt` nor `key_salt_env`
+  (#398 DB-2, 0.12.72: a salt in a tool call stays in the client's transcript, and a variable of
+  this server's process is no caller's to name; through this server a row's `device_key` is made
+  with the installation's own secret, and `ac_devices_bind` takes `device_key` in place of
+  `handle`). These are the only parameters of a
   row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
   given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
   the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):

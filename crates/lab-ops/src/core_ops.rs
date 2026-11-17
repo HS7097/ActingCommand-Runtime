@@ -87,6 +87,11 @@ const MATERIAL: &str = "material";
 /// one ([`candidate_words`]).
 const DEVICES_BIND: &str = "devices bind";
 const CANDIDATE: &str = "config";
+/// #398 DB-2: the row that lists the devices, also against a candidate ([`candidate_words`]) and
+/// where the place locates no state root ([`unlocated_words`]), and its parameter that names the
+/// install root in place of the module's ([`handed_words`]).
+const DEVICES: &str = "devices";
+const ROOT_PARAM: &str = "root";
 
 /// Workflow #434 LAB-5G1: where the program acts, as it finds it (actinglab's CLI module: from its
 /// own place, `apps/actinglab/src/cli_module/place.rs`).
@@ -167,7 +172,8 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     // #398 DB-1: `devices bind` against a candidate configuration binds into the state root the
     // candidate names, not the located one: its line needs none. Fix round 1: it is built before
     // the place is asked for, so that no install selection decides it (`devices` takes the
-    // install root's adb from a `--root` given, else from its program's place).
+    // install root's adb from a `--root` given, else from its program's place). #398 DB-2:
+    // `devices` against a candidate the same way.
     if let Some(words) = candidate_words(operation, params) {
         return match words {
             Ok(argv) => dispatched(devices::dispatch(&argv)),
@@ -177,7 +183,14 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     let located = (caller.place)();
     let state_root = match &located.state_root {
         Ok(state_root) => state_root.clone(),
-        Err(outcome) => return cli_line::failure(outcome, Some(caller.unlocated)),
+        // #398 DB-2: `devices` lists where no state root is located, and says it read no binding.
+        Err(outcome) => {
+            return match unlocated_words(operation, params) {
+                Some(Ok(argv)) => dispatched(devices::dispatch(&argv)),
+                Some(Err(exit)) => exit,
+                None => cli_line::failure(outcome, Some(caller.unlocated)),
+            };
+        }
     };
     if let Some(exit) = dispatched_with_state_root(operation, params, &located, &state_root, caller)
     {
@@ -405,7 +418,8 @@ fn dispatched_with_state_root(
 /// line. `remedy set`'s rows given inline are no word: they go beside the words. Workflow #434
 /// LAB-5B1: built from the row's constant, `core_reads::HANDED`; `frame` hands words only with
 /// `out` (without it, it is served here). #398 DB-1: `devices bind` with `config` hands neither
-/// `state_root` nor, since fix round 1, `root` ([`candidate_words`]).
+/// `state_root` nor, since fix round 1, `root` ([`candidate_words`]). #398 DB-2: nor does
+/// `devices` with `config`; `devices` with `root` hands that root in place of the module's.
 pub fn handed_words(
     operation: &Operation,
     params: &Map<String, Value>,
@@ -424,12 +438,44 @@ pub fn handed_words(
     {
         return None;
     }
+    // #398 DB-2: `devices` takes one `--root`: the one the call names stands for the module's.
+    let root = if operation.name == DEVICES && params.contains_key(ROOT_PARAM) {
+        None
+    } else {
+        root
+    };
     Some(handed_line(
         handed,
         operation,
         params,
         root,
         Some(state_root),
+    ))
+}
+
+/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): the words `devices` gives its
+/// command where the program's place locates no state root (a root whose configuration is not
+/// selected yet, an installer's root that holds only its tools): the row's command line without the
+/// module's state root and without its root, so that `devices` lists with the adb of the root the
+/// call names (`root`), else of the root its program runs from by its place, reads no binding and
+/// says so (`bindings_unread`). The place's own refusal is then not the answer: a listing needs no
+/// state root. `None` for every other row, which answers the place's refusal as before.
+pub fn unlocated_words(
+    operation: &Operation,
+    params: &Map<String, Value>,
+) -> Option<Result<Vec<OsString>, Exit>> {
+    if operation.name != DEVICES {
+        return None;
+    }
+    let handed = core_reads::HANDED
+        .iter()
+        .find(|handed| handed.row == operation.name)?;
+    Some(handed_line(
+        handed,
+        operation,
+        Params::of(&operation.name, params),
+        None,
+        None,
     ))
 }
 
@@ -440,12 +486,14 @@ pub fn handed_words(
 /// whose state root cannot be located, binds too. Fix round 1: without the module's root either,
 /// which the place reads from the process's install selection when there is one; a `--root` the
 /// command line gives is handed on (`Part::Further`), and without it `devices` takes the root its
-/// program runs from by its place. `None` for every other call.
+/// program runs from by its place. `None` for every other call. #398 DB-2: `devices` with `config`
+/// the same way, listing the bindings of the state root the candidate names (its `root` written
+/// as its row writes it).
 fn candidate_words(
     operation: &Operation,
     params: &Map<String, Value>,
 ) -> Option<Result<Vec<OsString>, Exit>> {
-    if operation.name != DEVICES_BIND {
+    if operation.name != DEVICES_BIND && operation.name != DEVICES {
         return None;
     }
     let params = Params::of(&operation.name, params);

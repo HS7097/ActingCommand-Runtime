@@ -167,7 +167,8 @@ pub(crate) enum Supplied {
     True,
     /// #398 DB-1: nothing; the row runs as without the parameter. `devices bind`'s `bound_via`,
     /// whose one channel `ui` is the installer's: a binding made through this server keeps the
-    /// channel the row writes without it.
+    /// channel the row writes without it. #398 DB-2: the two forms of the salt of `devices` and
+    /// `devices bind`, whose keys are then the installation's own.
     Nothing,
 }
 
@@ -177,13 +178,20 @@ pub(crate) enum Supplied {
 /// [`Supplied::ExportDirectoryOnExport`] also takes the boolean [`EXPORT`] beside its parameters.
 /// Workflow #467 RPT-1 (the coordinator's ruling Q7): `report export` writes its archive into
 /// the export directory too. #398 DB-1: `devices bind`'s `bound_via` is never given through MCP.
-pub(crate) const SUPPLIED: [(&str, &str, Supplied); 6] = [
+/// #398 DB-2: nor is a salt of the device keys, in either form, on `devices` or `devices bind`:
+/// a tool call's arguments stay in its client's transcript, so through MCP a device key is made
+/// with the installation's own secret alone.
+pub(crate) const SUPPLIED: [(&str, &str, Supplied); 10] = [
     ("material", "out", Supplied::ExportDirectoryOnExport),
     ("frame", "out", Supplied::ExportDirectory),
     ("deploy", "detach", Supplied::True),
     ("rollback", "detach", Supplied::True),
     ("report export", "out", Supplied::ExportDirectory),
     ("devices bind", "bound_via", Supplied::Nothing),
+    ("devices", "key_salt", Supplied::Nothing),
+    ("devices", "key_salt_env", Supplied::Nothing),
+    ("devices bind", "key_salt", Supplied::Nothing),
+    ("devices bind", "key_salt_env", Supplied::Nothing),
 ];
 /// Workflow #434 LAB-5G2b: the tool's own member of a row whose parameter is
 /// [`Supplied::ExportDirectoryOnExport`].

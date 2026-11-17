@@ -25,6 +25,18 @@
 //!   is that of `--root`, else of the root the program runs from by its place
 //!   (`locate::root_of_place`); the answer names `config`. `--bound-via ui` writes the channel
 //!   `ui` (the installer's); without it the channel is the caller's, as before.
+//! - #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"; register §1.467): `list` also
+//!   lists for a root that has nothing selected: with neither `--state-root` nor `--config` it
+//!   reads no binding, takes its adb as a bind against a candidate does (`--root`, else the root
+//!   the program runs from by its place) and says so (`bindings_unread`); `list --config <file>`
+//!   reads the bindings of the state root a candidate names. A row may carry `device_key`, the
+//!   contract's fingerprint of the device's serial ([`Keyer`]) under the caller's salt
+//!   (`--key-salt`, [`KeySalt`]), else under the installation's own secret (the selected or
+//!   candidate configuration's `secret_fingerprint_salt`), else none. `bind <alias> --device-key
+//!   <key>` names the device by its key in place of the handle, found in a fresh listing
+//!   (`device_key_unknown` when no row carries it). Every bind refuses a row that cannot be a
+//!   handset's device (`device_row_unbindable`): adb reports it in another state than `device`,
+//!   or its transport is not the one the handset declares.
 //!
 //! None of them runs the Runtime or records anything in the ledger: the next start reads the
 //! file and records the binding by fingerprint, so a change answers `restart_required`. No
@@ -33,17 +45,19 @@
 //! (`raw_text_redacted`, model-398 §3.5 rule 4).
 
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem};
-use actingcommand_contract::codes::{ContractCode, SharedCode};
+use crate::codes::{ActingctlCode, ArgumentProblem, DeviceRowProblem};
+use actingcommand_contract::codes::{ContractCode, SanitizationCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     DEVICE_BINDINGS_SCHEMA, DeviceBinding, DeviceBindings, DeviceBindingsFile, DeviceBoundVia,
-    InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, device_bindings_path,
-    parse_device_bindings, read_device_bindings,
+    InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, SecretField, SecretFingerprinter,
+    device_bindings_path, parse_device_bindings, read_device_bindings,
 };
+use actingcommand_ledger::Sha256SecretFingerprinter;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -54,16 +68,45 @@ pub const COMMAND: &str = "devices";
 pub const LIST: &str = "list";
 pub const BIND: &str = "bind";
 pub const UNBIND: &str = "unbind";
-/// #398 DB-1: `bind`'s candidate configuration, a file, in place of `--state-root`.
+/// #398 DB-1: `bind`'s candidate configuration, a file, in place of `--state-root`; #398 DB-2:
+/// `list`'s too.
 pub const CONFIG_FLAG: &str = "--config";
 /// #398 DB-1: the channel `bind` writes; absent, the caller's own.
 pub const BOUND_VIA_FLAG: &str = "--bound-via";
+/// #398 DB-2: the salt the caller makes the device keys with ([`KeySalt`]), as text on the command
+/// line (for scripts and tests: a command line is visible to the user's other processes).
+pub const KEY_SALT_FLAG: &str = "--key-salt";
+/// #398 DB-2 (the coordinator's addition to ruling 2): the same salt read from the environment
+/// variable this flag names, of the Lab's own process: the form for a salt no other process may
+/// see (the installer's).
+pub const KEY_SALT_ENV_FLAG: &str = "--key-salt-env";
+/// #398 DB-2: `bind`'s device key, in place of its handle.
+pub const DEVICE_KEY_FLAG: &str = "--device-key";
+/// #398 DB-2: the shortest salt, in bytes: the bound actingd holds the installation's own secret
+/// (`secret_fingerprint_salt`) to.
+pub const MIN_KEY_SALT_BYTES: usize = 16;
+/// #398 DB-2: the longest salt, in bytes, the installation's own secret's bound too.
+pub const MAX_KEY_SALT_BYTES: usize = 1024;
 /// #398 DB-1: the one word [`BOUND_VIA_FLAG`] takes.
 const UI: &str = "ui";
 /// #398 DB-1: the member of `bind`'s answer that names the candidate configuration the alias was
 /// checked in.
 const CONFIG_MEMBER: &str = "config";
-const USAGE: &str = "usage: actingctl devices list --state-root <dir> [--root <install root>]\n       actingctl devices bind <alias> <handle> (--state-root <dir> | --config <file>) [--root <install root>] [--bound-via ui]\n       actingctl devices unbind <alias> --state-root <dir>";
+/// #398 DB-2: the member of a row, and of a bind by key's answer, that carries the device key.
+const DEVICE_KEY_MEMBER: &str = "device_key";
+/// #398 DB-2: the member of a listing that read no binding, and the one word it says why with: no
+/// state root is known (none was given or located, and no candidate configuration named one).
+const BINDINGS_UNREAD_MEMBER: &str = "bindings_unread";
+const STATE_ROOT_UNKNOWN: &str = "state_root_unknown";
+/// #398 DB-2: the configuration member that holds the installation's own secret.
+const SECRET_MEMBER: &str = "secret_fingerprint_salt";
+/// #398 DB-2: the state adb reports for an authorized device that is online, the one state a
+/// handset's device is bound in.
+const STATE_DEVICE: &str = "device";
+/// The transports of a row; a handset that declares none is on USB (actingd's reading).
+const USB: &str = "usb";
+const TCP: &str = "tcp";
+const USAGE: &str = "usage: actingctl devices list [--state-root <dir> | --config <file>] [--root <install root>] [--key-salt <text> | --key-salt-env <NAME>]\n       actingctl devices bind <alias> (<handle> | --device-key <key> [--key-salt <text> | --key-salt-env <NAME>]) (--state-root <dir> | --config <file>) [--root <install root>] [--bound-via ui]\n       actingctl devices unbind <alias> --state-root <dir>";
 
 /// One run of `adb devices -l`: what it printed, or why it printed nothing.
 pub enum AdbRun {
@@ -102,7 +145,7 @@ struct Listed {
 
 impl Listed {
     fn transport(&self) -> &'static str {
-        if self.usb { "usb" } else { "tcp" }
+        if self.usb { USB } else { TCP }
     }
 
     /// `<transport>:<transport_id>`; none when adb gave no transport id.
@@ -162,6 +205,115 @@ struct ConfigInstance {
 #[derive(Deserialize)]
 struct ConfigDevice {
     kind: InstanceDeviceKind,
+    /// #398 DB-2: a handset's transport; absent, [`USB`], as actingd reads it.
+    #[serde(default)]
+    transport: Option<String>,
+}
+
+/// #398 DB-2: a salt the caller gives for the device keys (`--key-salt <text>`, or
+/// `--key-salt-env <NAME>`, the variable of the Lab's own process): [`MIN_KEY_SALT_BYTES`] to
+/// [`MAX_KEY_SALT_BYTES`] bytes of text, the bounds of the installation's own secret. The
+/// installer makes a random one for each run and gives it to the listing and to the bind. It is
+/// never printed, logged or written: its `Debug` shows none of it, and no answer, outcome value
+/// or developer line carries it.
+pub struct KeySalt(Vec<u8>);
+
+impl KeySalt {
+    /// The salt `text`; one outside the bounds is `actingctl_usage_invalid` naming
+    /// [`KEY_SALT_FLAG`], `out_of_range` with the bounds (never the text).
+    pub fn new(text: &str) -> Result<Self, Outcome> {
+        Self::given(text, KEY_SALT_FLAG)
+    }
+
+    /// The salt `text`, given by `flag`; one outside the bounds is refused naming `flag`.
+    fn given(text: &str, flag: &str) -> Result<Self, Outcome> {
+        if !(MIN_KEY_SALT_BYTES..=MAX_KEY_SALT_BYTES).contains(&text.len()) {
+            return Err(
+                cli_line::usage_invalid(Some(flag), ArgumentProblem::OutOfRange)
+                    .range_min(MIN_KEY_SALT_BYTES)
+                    .range_max(MAX_KEY_SALT_BYTES),
+            );
+        }
+        Ok(Self(text.as_bytes().to_vec()))
+    }
+
+    /// #398 DB-2: the salt of the environment variable `name` of this process, as `environment`
+    /// reads it (`std::env::var_os` in [`dispatch`]). A name that no variable can have (empty, or
+    /// holding `=` or NUL) is `actingctl_usage_invalid` [`KEY_SALT_ENV_FLAG`] `not_recognised`; a
+    /// variable that is unset, empty or not UTF-8 `unusable`; one outside the bounds
+    /// `out_of_range`. No refusal carries the value; the flag names the variable.
+    fn from_environment(
+        name: &str,
+        environment: &dyn Fn(&str) -> Option<OsString>,
+    ) -> Result<Self, Outcome> {
+        let refused = |problem| cli_line::usage_invalid(Some(KEY_SALT_ENV_FLAG), problem);
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return Err(refused(ArgumentProblem::NotRecognised));
+        }
+        let value = environment(name).ok_or_else(|| refused(ArgumentProblem::Unusable))?;
+        let text = value
+            .to_str()
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| refused(ArgumentProblem::Unusable))?;
+        Self::given(text, KEY_SALT_ENV_FLAG)
+    }
+}
+
+impl fmt::Debug for KeySalt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("KeySalt(<redacted>)")
+    }
+}
+
+/// #398 DB-2 (`contracts/device-binding.md`, "Identity, label and fingerprint"): what a row's
+/// device key is made with. The key is the contract's fingerprint of the device's serial, made by
+/// the one function the ledger fingerprints a handset's serial with (`Sha256SecretFingerprinter`,
+/// the field `device_serial`), keyed by the caller's salt or by the installation's own secret:
+/// `sha256:` and 64 lowercase hexadecimal digits, the same at every listing while its key is the
+/// same, never the serial. Under the installation's secret it is the fingerprint the ledger
+/// records for the device (`runtime.instance_bound`'s `device.fingerprint`).
+struct Keyer(Sha256SecretFingerprinter);
+
+impl Keyer {
+    /// The keys of `salt`, a salt or a secret of [`MIN_KEY_SALT_BYTES`] bytes at least, so never
+    /// empty, the one thing the fingerprinter refuses; were it refused, `fingerprinter_failed`.
+    fn new(salt: &[u8]) -> Result<Self, Outcome> {
+        Sha256SecretFingerprinter::new(salt)
+            .map(Self)
+            .map_err(|_| Outcome::new(SanitizationCode::FingerprinterFailed))
+    }
+
+    /// The device key of `serial`; a fingerprint the contract refuses is its refusal's code.
+    fn device_key(&self, serial: &str) -> Result<String, Outcome> {
+        self.0
+            .fingerprint(SecretField::DeviceSerial, serial)
+            .map(|fingerprint| fingerprint.as_str().to_owned())
+            .map_err(|error| Outcome::new(error.code()))
+    }
+}
+
+/// #398 DB-2: the installation's own secret the configuration `document` provides: its
+/// `secret_fingerprint_salt` when that is text of [`MIN_KEY_SALT_BYTES`] to
+/// [`MAX_KEY_SALT_BYTES`] bytes, the bounds actingd holds it to; none otherwise (a configuration
+/// without one, or with one actingd refuses, provides no secret).
+fn secret_of(document: &Value) -> Option<Vec<u8>> {
+    document
+        .get(SECRET_MEMBER)
+        .and_then(Value::as_str)
+        .filter(|secret| (MIN_KEY_SALT_BYTES..=MAX_KEY_SALT_BYTES).contains(&secret.len()))
+        .map(|secret| secret.as_bytes().to_vec())
+}
+
+/// #398 DB-2: the secret of the selected configuration `config`, read as [`configured_instances`]
+/// reads it (`config_read_failed`, `config_decode_failed`, each with its `path`).
+fn installation_secret(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+) -> Result<Option<Vec<u8>>, Outcome> {
+    let bytes = configuration_bytes(installation, config)?;
+    let document =
+        serde_json::from_slice::<Value>(&bytes).map_err(|error| decode_failed(config, &error))?;
+    Ok(secret_of(&document))
 }
 
 /// The selected configuration of the install root and its adb, found as `actingctl packs` finds
@@ -257,32 +409,117 @@ fn listing(
     }
 }
 
-/// `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}`: every device adb
-/// lists now, in its order, with the alias the private file of `state_root` binds it to. No row
-/// names a serial; a loopback `tcp` row (an emulator) names its `endpoint`.
+/// `{devices: [{handle?, device_key?, transport, state, model?, bound_alias?, endpoint?}]}`: every
+/// device adb lists now, in its order, with the alias the private file of `state_root` binds it
+/// to. No row names a serial; a loopback `tcp` row (an emulator) names its `endpoint`. #398 DB-2:
+/// each row carries its `device_key` when the selected configuration provides the installation's
+/// own secret ([`list_from`], the state root given).
 pub fn list(
     state_root: &Path,
     root: Option<&Path>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
-    let bindings = bindings(state_root)?;
-    let (_, _, adb) = install(root)?;
-    let rows = listing(&adb, &bindings, run)?
+    let against = Against::StateRoot(state_root.to_path_buf());
+    let request = ListRequest {
+        against: &against,
+        root,
+        key_salt: None,
+    };
+    list_from(&request, None, run)
+}
+
+/// #398 DB-2: one listing: whose private binding file it reads (`against`), the install root a
+/// call names (`--root`) and the caller's salt (`--key-salt`).
+pub struct ListRequest<'a> {
+    pub against: &'a Against,
+    pub root: Option<&'a Path>,
+    pub key_salt: Option<&'a KeySalt>,
+}
+
+/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): [`list`] for the program at
+/// `program`, whose place names the install root where neither the state root nor `root` does.
+/// - Against a state root: its bindings, and the adb of the install root found as before
+///   ([`install`]: the install selection, else `root`, else the root the executable runs from);
+///   the device keys under the salt, else under the selected configuration's secret (read as
+///   `bind` reads it: `config_read_failed`, `config_decode_failed`).
+/// - Against a candidate configuration: the bindings of the state root it names, the adb of
+///   `root`, else of the root the program runs from by its place ([`candidate_adb`]; no install
+///   selection is read), the keys under the salt, else under the candidate's secret.
+/// - Against neither: no binding is read, the adb as against a candidate, the keys under the salt
+///   alone; the answer says that the bindings were not read, and why (`bindings_unread`
+///   `state_root_unknown`), so that no row's missing `bound_alias` reads as "nothing is bound".
+pub fn list_from(
+    request: &ListRequest<'_>,
+    program: Option<&Path>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    let salt = request.key_salt.map(|salt| salt.0.as_slice());
+    let (bindings, adb, secret) = match request.against {
+        Against::StateRoot(state_root) => {
+            let bindings = bindings(state_root)?;
+            let (installation, config, adb) = install(request.root)?;
+            let secret = match salt {
+                Some(_) => None,
+                None => installation_secret(installation.as_ref(), &config)?,
+            };
+            (Some(bindings), adb, secret)
+        }
+        Against::Candidate(file) => {
+            let adb = candidate_adb(request.root, program)?;
+            let candidate = read_candidate(file)?;
+            (
+                Some(bindings(&candidate.state_root)?),
+                adb,
+                candidate.secret,
+            )
+        }
+        Against::Unnamed => (None, candidate_adb(request.root, program)?, None),
+    };
+    let keyer = salt.or(secret.as_deref()).map(Keyer::new).transpose()?;
+    let unread = DeviceBindings::default();
+    let listed = listing(&adb, bindings.as_ref().unwrap_or(&unread), run)?;
+    let mut answer = Map::new();
+    answer.insert(
+        "devices".to_owned(),
+        Value::Array(rows(&listed, bindings.as_ref(), keyer.as_ref())?),
+    );
+    if bindings.is_none() {
+        answer.insert(BINDINGS_UNREAD_MEMBER.to_owned(), json!(STATE_ROOT_UNKNOWN));
+    }
+    Ok(Value::Object(answer))
+}
+
+/// The rows of `listed`, in adb's order: each with its handle, its device key when `keyer` makes
+/// them, its transport, state and model, the alias `bindings` binds it to and, for a loopback
+/// `tcp` row (an emulator), its `endpoint`.
+fn rows(
+    listed: &[Listed],
+    bindings: Option<&DeviceBindings>,
+    keyer: Option<&Keyer>,
+) -> Result<Vec<Value>, Outcome> {
+    listed
         .iter()
-        .map(|listed| {
+        .map(|listed| -> Result<Value, Outcome> {
             let mut row = Map::new();
             if let Some(handle) = listed.handle() {
                 row.insert("handle".to_owned(), json!(handle));
+            }
+            if let Some(keyer) = keyer {
+                row.insert(
+                    DEVICE_KEY_MEMBER.to_owned(),
+                    json!(keyer.device_key(&listed.serial)?),
+                );
             }
             row.insert("transport".to_owned(), json!(listed.transport()));
             row.insert("state".to_owned(), json!(listed.state));
             if let Some(model) = &listed.model {
                 row.insert("model".to_owned(), json!(model));
             }
-            if let Some(binding) = bindings
-                .iter()
-                .find(|binding| binding.serial() == listed.serial)
-            {
+            if let Some(binding) = bindings.and_then(|bindings| {
+                bindings
+                    .iter()
+                    .find(|binding| binding.serial() == listed.serial)
+            }) {
                 row.insert("bound_alias".to_owned(), json!(binding.alias));
             }
             let loopback = listed
@@ -292,10 +529,9 @@ pub fn list(
             if !listed.usb && loopback {
                 row.insert("endpoint".to_owned(), json!(listed.serial));
             }
-            Value::Object(row)
+            Ok(Value::Object(row))
         })
-        .collect::<Vec<_>>();
-    Ok(json!({"devices": rows}))
+        .collect()
 }
 
 /// One binding request: the handset's alias and the handle of the device `list` showed.
@@ -305,21 +541,137 @@ pub struct Bind<'a> {
     pub via: DeviceBoundVia,
 }
 
+impl<'a> Bind<'a> {
+    /// #398 DB-2: the request [`bound`] writes.
+    fn by_handle(&self) -> Request<'a> {
+        Request {
+            alias: self.alias,
+            chosen: Chosen::Handle(self.handle),
+            via: self.via,
+        }
+    }
+}
+
+/// #398 DB-2: a binding request by device key: the handset's alias, the `device_key` of the
+/// device a listing showed, and the salt that listing made it with (absent: the installation's
+/// own secret).
+pub struct BindByKey<'a> {
+    pub alias: &'a str,
+    pub device_key: &'a str,
+    pub key_salt: Option<&'a KeySalt>,
+    pub via: DeviceBoundVia,
+}
+
+/// #398 DB-2: how a bind names its device.
+#[derive(Clone, Copy)]
+enum Chosen<'a> {
+    /// The row of this handle.
+    Handle(&'a str),
+    /// The row of this device key, made with the salt (absent: the installation's secret).
+    Key {
+        device_key: &'a str,
+        salt: Option<&'a KeySalt>,
+    },
+}
+
+/// #398 DB-2: one binding [`bound`] writes: the alias, how its device is named, the channel.
+struct Request<'a> {
+    alias: &'a str,
+    chosen: Chosen<'a>,
+    via: DeviceBoundVia,
+}
+
+/// #398 DB-2: how [`bound`] finds the device in its listing.
+enum Finder<'a> {
+    Handle(&'a str),
+    Key { device_key: &'a str, keyer: Keyer },
+}
+
 /// Binds the device of `handle` to the handset `alias`: `{alias, handle, model?,
 /// restart_required: true}`. An alias the selected configuration does not have is
 /// `instance_unknown`; one that is not a handset `device_kind_unsupported`; a handle adb does not
 /// list now `device_handle_unknown`; a binding the file's rules refuse (the device already bound
 /// to another alias) `device_bindings_invalid`; a file that cannot be written
 /// `device_bindings_write_failed`.
+/// #398 DB-2: a row that cannot be a handset's device is `device_row_unbindable` ([`bindable`]).
 pub fn bind(
     state_root: &Path,
     root: Option<&Path>,
     request: &Bind<'_>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
-    let (installation, config, adb) = install(root)?;
-    let instances = configured_instances(installation.as_ref(), &config)?;
-    bound(state_root, &adb, &instances, request, run).map(Value::Object)
+    let against = Against::StateRoot(state_root.to_path_buf());
+    bind_against(&against, root, None, &request.by_handle(), run)
+}
+
+/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): [`bind`], or
+/// [`bind_candidate_from`] against a candidate, with the device named by its key in place of its
+/// handle: the alias checked as before, the device found in a fresh listing by the key under the
+/// request's salt, else under the installation's own secret (the selected configuration's, read as
+/// `bind` reads it, or the candidate's); neither is `actingctl_usage_invalid` [`KEY_SALT_FLAG`]
+/// `required`. No row with the key is `device_key_unknown`. The binding written is the one a bind
+/// by the row's handle writes; the answer is `{alias, device_key, handle?, model?,
+/// restart_required: true}` and, against a candidate, `config`. Against neither a state root nor a
+/// candidate it is `actingctl_usage_invalid` `--state-root` `required`, as `bind` is.
+pub fn bind_by_key(
+    against: &Against,
+    root: Option<&Path>,
+    program: Option<&Path>,
+    request: &BindByKey<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    let binding = Request {
+        alias: request.alias,
+        chosen: Chosen::Key {
+            device_key: request.device_key,
+            salt: request.key_salt,
+        },
+        via: request.via,
+    };
+    bind_against(against, root, program, &binding, run)
+}
+
+/// #398 DB-2: the binding `request` against the state root (its configuration the selected one,
+/// its adb found by [`install`]), against the candidate configuration (its adb by
+/// [`candidate_adb`] for the program at `program`, the answer naming the file as `config`), or
+/// against neither (`--state-root` `required`).
+fn bind_against(
+    against: &Against,
+    root: Option<&Path>,
+    program: Option<&Path>,
+    request: &Request<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    match against {
+        Against::StateRoot(state_root) => {
+            let (installation, config, adb) = install(root)?;
+            let instances = configured_instances(installation.as_ref(), &config)?;
+            let secret = || installation_secret(installation.as_ref(), &config);
+            bound(state_root, &adb, &instances, request, &secret, run).map(Value::Object)
+        }
+        Against::Candidate(file) => {
+            let adb = candidate_adb(root, program)?;
+            let candidate = read_candidate(file)?;
+            let secret = || -> Result<Option<Vec<u8>>, Outcome> { Ok(candidate.secret.clone()) };
+            let mut answer = bound(
+                &candidate.state_root,
+                &adb,
+                &candidate.instances,
+                request,
+                &secret,
+                run,
+            )?;
+            answer.insert(
+                CONFIG_MEMBER.to_owned(),
+                Value::String(file.to_string_lossy().into_owned()),
+            );
+            Ok(Value::Object(answer))
+        }
+        Against::Unnamed => Err(cli_line::usage_invalid(
+            Some("--state-root"),
+            ArgumentProblem::Required,
+        )),
+    }
 }
 
 /// #398 DB-1 (`contracts/device-binding.md`, "Choosing a device"): [`bind`] against the candidate
@@ -351,29 +703,21 @@ pub fn bind_candidate_from(
     request: &Bind<'_>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
-    let adb = candidate_adb(root, program)?;
-    let candidate = read_candidate(file)?;
-    let mut answer = bound(
-        &candidate.state_root,
-        &adb,
-        &candidate.instances,
-        request,
-        run,
-    )?;
-    answer.insert(
-        CONFIG_MEMBER.to_owned(),
-        Value::String(file.to_string_lossy().into_owned()),
-    );
-    Ok(Value::Object(answer))
+    let against = Against::Candidate(file.to_path_buf());
+    bind_against(&against, root, program, &request.by_handle(), run)
 }
 
 /// The binding of `request` into the private file of `state_root`: its alias checked among
-/// `instances` (the configuration's), the device read from adb at `adb`. The answer's members.
+/// `instances` (the configuration's), the device read from adb at `adb`, by its handle or by its
+/// key (#398 DB-2: under the request's salt, else under `secret`, the installation's, read only
+/// for a bind by key), and refused before anything is written when it cannot be the handset's
+/// ([`bindable`]). The answer's members.
 fn bound(
     state_root: &Path,
     adb: &Path,
     instances: &[ConfigInstance],
-    request: &Bind<'_>,
+    request: &Request<'_>,
+    secret: &dyn Fn() -> Result<Option<Vec<u8>>, Outcome>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Map<String, Value>, Outcome> {
     let instance = instances
@@ -382,14 +726,30 @@ fn bound(
         .ok_or_else(|| {
             Outcome::new(RuntimeErrorCode::InstanceUnknown).instance_selector(request.alias)
         })?;
-    if instance.device.as_ref().map(|device| device.kind) != Some(InstanceDeviceKind::Handset) {
-        return Err(Outcome::new(ActingctlCode::DeviceKindUnsupported).alias(request.alias));
-    }
+    let declared = match &instance.device {
+        Some(device) if device.kind == InstanceDeviceKind::Handset => {
+            device.transport.as_deref().unwrap_or(USB)
+        }
+        _ => return Err(Outcome::new(ActingctlCode::DeviceKindUnsupported).alias(request.alias)),
+    };
+    let finder = match request.chosen {
+        Chosen::Handle(handle) => Finder::Handle(handle),
+        Chosen::Key { device_key, salt } => Finder::Key {
+            device_key,
+            keyer: key_maker(salt, secret)?,
+        },
+    };
     let bindings = bindings(state_root)?;
-    let listed = listing(adb, &bindings, run)?
-        .into_iter()
-        .find(|listed| listed.handle().as_deref() == Some(request.handle))
-        .ok_or_else(|| Outcome::new(ActingctlCode::DeviceHandleUnknown).handle(request.handle))?;
+    let rows = listing(adb, &bindings, run)?;
+    let listed = match &finder {
+        Finder::Handle(handle) => rows
+            .into_iter()
+            .find(|listed| listed.handle().as_deref() == Some(*handle))
+            .ok_or_else(|| Outcome::new(ActingctlCode::DeviceHandleUnknown).handle(*handle))?,
+        Finder::Key { device_key, keyer } => keyed(rows, keyer, device_key)?
+            .ok_or_else(|| Outcome::new(ActingctlCode::DeviceKeyUnknown))?,
+    };
+    bindable(&listed, declared, request.alias)?;
     let mut kept = bindings
         .iter()
         .filter(|binding| binding.alias != request.alias)
@@ -404,12 +764,75 @@ fn bound(
     write(state_root, kept)?;
     let mut answer = Map::new();
     answer.insert("alias".to_owned(), json!(request.alias));
-    answer.insert("handle".to_owned(), json!(request.handle));
+    match request.chosen {
+        Chosen::Handle(handle) => {
+            answer.insert("handle".to_owned(), json!(handle));
+        }
+        Chosen::Key { device_key, .. } => {
+            answer.insert(DEVICE_KEY_MEMBER.to_owned(), json!(device_key));
+            if let Some(handle) = listed.handle() {
+                answer.insert("handle".to_owned(), json!(handle));
+            }
+        }
+    }
     if let Some(model) = &listed.model {
         answer.insert("model".to_owned(), json!(model));
     }
     answer.insert("restart_required".to_owned(), json!(true));
     Ok(answer)
+}
+
+/// #398 DB-2: the keyer a bind by key finds its device with: the caller's `salt`, else the
+/// installation's own `secret`; neither is `actingctl_usage_invalid` [`KEY_SALT_FLAG`]
+/// `required`, since no row could carry a key.
+fn key_maker(
+    salt: Option<&KeySalt>,
+    secret: &dyn Fn() -> Result<Option<Vec<u8>>, Outcome>,
+) -> Result<Keyer, Outcome> {
+    if let Some(salt) = salt {
+        return Keyer::new(&salt.0);
+    }
+    match secret()? {
+        Some(secret) => Keyer::new(&secret),
+        None => Err(cli_line::usage_invalid(
+            Some(KEY_SALT_FLAG),
+            ArgumentProblem::Required,
+        )),
+    }
+}
+
+/// #398 DB-2: the row of `rows` whose device key under `keyer` is `device_key`, if any.
+fn keyed(rows: Vec<Listed>, keyer: &Keyer, device_key: &str) -> Result<Option<Listed>, Outcome> {
+    for listed in rows {
+        if keyer.device_key(&listed.serial)? == device_key {
+            return Ok(Some(listed));
+        }
+    }
+    Ok(None)
+}
+
+/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): whether the row `listed` can be
+/// the device of the handset `alias`, whose transport is `declared`: adb must report it
+/// [`STATE_DEVICE`], the state of an authorized device online (not `unauthorized`, `offline`, `no
+/// permissions`, `authorizing`, `recovery` or another), and its transport must be the declared
+/// one (a handset on USB is not bound to a `tcp` row, an emulator's loopback row among them).
+/// Otherwise `device_row_unbindable` with the alias, the row's handle when it has one, and
+/// `device_row_problem` (`state_not_device`, `transport_mismatch`), before anything is written.
+fn bindable(listed: &Listed, declared: &str, alias: &str) -> Result<(), Outcome> {
+    let problem = if listed.state != STATE_DEVICE {
+        DeviceRowProblem::StateNotDevice
+    } else if listed.transport() != declared {
+        DeviceRowProblem::TransportMismatch
+    } else {
+        return Ok(());
+    };
+    let refused = Outcome::new(ActingctlCode::DeviceRowUnbindable)
+        .alias(alias)
+        .device_row_problem(problem);
+    Err(match listed.handle() {
+        Some(handle) => refused.handle(handle),
+        None => refused,
+    })
 }
 
 /// Removes the binding of `alias`: `{alias, unbound, restart_required}`, both true when the file
@@ -474,10 +897,12 @@ fn decode_failed(config: &Path, error: &serde_json::Error) -> Outcome {
         )
 }
 
-/// #398 DB-1: a candidate configuration's instances and the state root it names.
+/// #398 DB-1: a candidate configuration's instances and the state root it names; #398 DB-2: and
+/// the installation's own secret it provides ([`secret_of`]).
 struct Candidate {
     instances: Vec<ConfigInstance>,
     state_root: PathBuf,
+    secret: Option<Vec<u8>>,
 }
 
 /// #398 DB-1: the candidate configuration `file`, read as the configuration of a root without a
@@ -495,6 +920,7 @@ fn read_candidate(file: &Path) -> Result<Candidate, Outcome> {
     Ok(Candidate {
         instances,
         state_root,
+        secret: secret_of(&document),
     })
 }
 
@@ -546,6 +972,10 @@ struct Parsed {
     action: &'static str,
     alias: Option<String>,
     handle: Option<String>,
+    /// #398 DB-2: `bind --device-key <key>`, in place of the handle.
+    device_key: Option<String>,
+    /// #398 DB-2: the caller's salt, `--key-salt` or `--key-salt-env`.
+    key_salt: Option<KeySalt>,
     against: Against,
     root: Option<PathBuf>,
     /// #398 DB-1: `bind --bound-via ui`; absent, the command's own channel, `cli`.
@@ -553,20 +983,24 @@ struct Parsed {
 }
 
 /// Where a `devices` call reads and writes the private binding file.
-enum Against {
+pub enum Against {
     /// The state root `--state-root` names; `bind` checks its alias in the selected configuration.
     StateRoot(PathBuf),
     /// #398 DB-1: `bind --config <file>`: the candidate configuration, which names its own state
-    /// root.
+    /// root; #398 DB-2: `list --config <file>` too.
     Candidate(PathBuf),
+    /// #398 DB-2: neither: `list` reads no binding; `bind` and `unbind` refuse it
+    /// (`--state-root` `required`).
+    Unnamed,
 }
 
 /// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
 /// `core_ops::handed_refusal`): [`parse`]'s refusal of the words [`dispatch`] is given
-/// (its command's word first), if any.
+/// (its command's word first), if any. #398 DB-2: in no environment (nothing is read): a
+/// `--key-salt-env` names an unset variable here.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
-    parse(&arguments[1..]).err()
+    parse(&arguments[1..], &|_: &str| -> Option<OsString> { None }).err()
 }
 
 /// `devices <list|bind <alias> <handle>|unbind <alias>>` and the flags `flags_of` names for the
@@ -574,8 +1008,16 @@ pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
 /// is `actingctl_usage_invalid` naming it (`argument`, `argument_problem`; Workflow #382
 /// A1-FLAG). #398 DB-1: `bind` takes `--config <file>` in place of `--state-root` (both:
 /// `--state-root` `conflicting`; neither: `--state-root` `required`) and `--bound-via ui` (another
-/// word: `not_recognised`).
-fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
+/// word: `not_recognised`). #398 DB-2: `list` takes `--config` too, and neither it nor
+/// `--state-root` (it then reads no binding); `bind` takes `--device-key <key>` in place of its
+/// handle (neither: `handle` `required`; both: `--device-key` `conflicting`); both take the salt
+/// as `--key-salt <text>` or `--key-salt-env <NAME>`, read from `environment` ([`KeySalt`]; both
+/// forms: `--key-salt-env` `conflicting`; on `bind` without `--device-key` the salt's flag
+/// `conflicting`).
+fn parse(
+    arguments: &[OsString],
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Parsed, Outcome> {
     let usage = |argument: &str, problem: ArgumentProblem| {
         Outcome::new(ActingctlCode::ActingctlUsageInvalid)
             .argument(argument)
@@ -599,7 +1041,26 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
         other => return Err(usage(other, ArgumentProblem::Unknown)),
     };
     let (alias, handle, mut index) = match action {
-        BIND => (Some(word(1, "alias")?), Some(word(2, "handle")?), 3),
+        // #398 DB-2: the handle is the word after the alias when one stands there: a device key
+        // may take its place.
+        BIND => {
+            let alias = word(1, "alias")?;
+            match arguments.get(2) {
+                Some(given) => {
+                    let given = given
+                        .to_str()
+                        .ok_or_else(|| usage("handle", ArgumentProblem::NotUtf8))?;
+                    if given.starts_with("--") {
+                        (Some(alias), None, 2)
+                    } else if given.trim().is_empty() {
+                        return Err(usage("handle", ArgumentProblem::Required));
+                    } else {
+                        (Some(alias), Some(given.to_owned()), 3)
+                    }
+                }
+                None => (Some(alias), None, 2),
+            }
+        }
         UNBIND => (Some(word(1, "alias")?), None, 2),
         _ => (None, None, 1),
     };
@@ -608,6 +1069,9 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
     let mut root = None;
     let mut config = None;
     let mut bound_via = None;
+    let mut device_key = None;
+    // #398 DB-2: the salt and the flag that gave it.
+    let mut key_salt: Option<(KeySalt, &str)> = None;
     while index < arguments.len() {
         let text = arguments[index]
             .to_str()
@@ -629,6 +1093,36 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
             }
             continue;
         }
+        // #398 DB-2: the salt, as text or from a variable of this process; one form, once.
+        if flag == KEY_SALT_FLAG || flag == KEY_SALT_ENV_FLAG {
+            if let Some((_, first)) = &key_salt {
+                return Err(if *first == flag {
+                    usage(flag, ArgumentProblem::Repeated)
+                } else {
+                    usage(KEY_SALT_ENV_FLAG, ArgumentProblem::Conflicting)
+                });
+            }
+            let text = value
+                .to_str()
+                .ok_or_else(|| usage(flag, ArgumentProblem::NotUtf8))?;
+            let salt = if flag == KEY_SALT_FLAG {
+                KeySalt::new(text)?
+            } else {
+                KeySalt::from_environment(text, environment)?
+            };
+            key_salt = Some((salt, flag));
+            continue;
+        }
+        // #398 DB-2: the device key, in place of the handle.
+        if flag == DEVICE_KEY_FLAG {
+            let text = value
+                .to_str()
+                .ok_or_else(|| usage(flag, ArgumentProblem::NotUtf8))?;
+            if device_key.replace(text.to_owned()).is_some() {
+                return Err(usage(flag, ArgumentProblem::Repeated));
+            }
+            continue;
+        }
         let slot = if flag == "--root" {
             &mut root
         } else if flag == CONFIG_FLAG {
@@ -640,18 +1134,35 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
             return Err(usage(flag, ArgumentProblem::Repeated));
         }
     }
+    // #398 DB-2: `bind` names its device by its handle or by its key, never both; a salt goes
+    // with the key.
+    if action == BIND {
+        match (&handle, &device_key) {
+            (None, None) => return Err(usage("handle", ArgumentProblem::Required)),
+            (Some(_), Some(_)) => {
+                return Err(usage(DEVICE_KEY_FLAG, ArgumentProblem::Conflicting));
+            }
+            _ => {}
+        }
+        if let (Some((_, flag)), None) = (&key_salt, &device_key) {
+            return Err(usage(*flag, ArgumentProblem::Conflicting));
+        }
+    }
     // #398 DB-1: the state root `--state-root` names, or the candidate configuration, which names
-    // its own; never both.
+    // its own; never both. #398 DB-2: a listing may name neither.
     let against = match (state_root, config) {
         (Some(_), Some(_)) => return Err(usage("--state-root", ArgumentProblem::Conflicting)),
         (Some(state_root), None) => Against::StateRoot(state_root),
         (None, Some(config)) => Against::Candidate(config),
+        (None, None) if action == LIST => Against::Unnamed,
         (None, None) => return Err(usage("--state-root", ArgumentProblem::Required)),
     };
     Ok(Parsed {
         action,
         alias,
         handle,
+        device_key,
+        key_salt: key_salt.map(|(salt, _)| salt),
         against,
         root,
         bound_via,
@@ -671,42 +1182,73 @@ pub fn dispatch_with(
     arguments: &[OsString],
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Option<cli_line::Exit> {
+    dispatch_in(arguments, run, &|name: &str| std::env::var_os(name))
+}
+
+/// #398 DB-2: [`dispatch_with`] in the environment `environment` (this process's own,
+/// `std::env::var_os`, in [`dispatch_with`]), which `--key-salt-env` reads its variable from, so
+/// that a test gives a variable without touching the environment of the process that runs it.
+pub fn dispatch_in(
+    arguments: &[OsString],
+    run: &dyn Fn(&Path) -> AdbRun,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
-    let parsed = match parse(&arguments[1..]) {
+    let parsed = match parse(&arguments[1..], environment) {
         Ok(parsed) => parsed,
         Err(outcome) => return Some(cli_line::failure(&outcome, Some(USAGE))),
     };
+    let program = std::env::current_exe().and_then(fs::canonicalize).ok();
     let root = parsed.root.as_deref();
-    let answer = match (
-        parsed.action,
-        parsed.alias.as_deref(),
-        parsed.handle.as_deref(),
-        &parsed.against,
-    ) {
-        (BIND, Some(alias), Some(handle), against) => {
-            let request = Bind {
+    let answer = match (parsed.action, parsed.alias.as_deref()) {
+        (BIND, Some(alias)) => {
+            // #398 DB-2: by the handle, or by the device key under the caller's salt.
+            let chosen = match (parsed.handle.as_deref(), parsed.device_key.as_deref()) {
+                (Some(handle), _) => Chosen::Handle(handle),
+                (None, Some(device_key)) => Chosen::Key {
+                    device_key,
+                    salt: parsed.key_salt.as_ref(),
+                },
+                (None, None) => {
+                    return Some(cli_line::failure(
+                        &cli_line::usage_invalid(Some("handle"), ArgumentProblem::Required),
+                        Some(USAGE),
+                    ));
+                }
+            };
+            let request = Request {
                 alias,
-                handle,
+                chosen,
                 via: parsed.bound_via.unwrap_or(DeviceBoundVia::Cli),
             };
-            match against {
-                Against::StateRoot(state_root) => bind(state_root, root, &request, run),
-                Against::Candidate(file) => bind_candidate(file, root, &request, run),
-            }
-            .map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
+            bind_against(&parsed.against, root, program.as_deref(), &request, run)
+                .map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
         }
-        (UNBIND, Some(alias), _, Against::StateRoot(state_root)) => {
-            unbind(state_root, alias).map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
+        (UNBIND, Some(alias)) => match &parsed.against {
+            Against::StateRoot(state_root) => unbind(state_root, alias)
+                .map(|answer| (answer, ActingctlCode::DeviceBindingChanged)),
+            // `--config` is `bind`'s and `list`'s alone (`flags_of`): `unbind` refuses it as
+            // unknown, and a state root is required.
+            Against::Candidate(_) => Err(cli_line::usage_invalid(
+                Some(CONFIG_FLAG),
+                ArgumentProblem::Unknown,
+            )),
+            Against::Unnamed => Err(cli_line::usage_invalid(
+                Some("--state-root"),
+                ArgumentProblem::Required,
+            )),
+        },
+        _ => {
+            let request = ListRequest {
+                against: &parsed.against,
+                root,
+                key_salt: parsed.key_salt.as_ref(),
+            };
+            list_from(&request, program.as_deref(), run)
+                .map(|answer| (answer, ActingctlCode::DeviceListReported))
         }
-        (_, _, _, Against::StateRoot(state_root)) => {
-            list(state_root, root, run).map(|answer| (answer, ActingctlCode::DeviceListReported))
-        }
-        // `--config` is `bind`'s alone (`flags_of`): `list` and `unbind` refuse it as unknown.
-        (_, _, _, Against::Candidate(_)) => Err(Outcome::new(ActingctlCode::ActingctlUsageInvalid)
-            .argument(CONFIG_FLAG)
-            .argument_problem(ArgumentProblem::Unknown)),
     };
     Some(match answer {
         Ok((answer, code)) => {

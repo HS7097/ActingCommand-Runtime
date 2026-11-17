@@ -96,7 +96,7 @@ const IDENTIFIERS: [(&str, &str); 6] = [
 /// every name outside the table that the command line of a row this server serves in its own
 /// process takes and its schema does not offer (`*`: every such row). A rescue row's only where the
 /// rescue module runs.
-const LEFT_OUT: [(&str, &str, &str); 8] = [
+const LEFT_OUT: [(&str, &str, &str); 12] = [
     (
         "material",
         "out",
@@ -132,6 +132,28 @@ const LEFT_OUT: [(&str, &str, &str); 8] = [
         "devices bind",
         "bound_via",
         "its one channel ui is the installer's: a binding made through MCP keeps the channel the row writes without it",
+    ),
+    // #398 DB-2 (adapted: ruling 6 and the coordinator's addition leave both forms of the salt out
+    // of the two rows' tools).
+    (
+        "devices",
+        "key_salt",
+        "a salt in a tool call stays in the client's transcript: through MCP a device key is made with the installation's own secret",
+    ),
+    (
+        "devices",
+        "key_salt_env",
+        "a variable of the server's process is no caller's to name: through MCP a device key is made with the installation's own secret",
+    ),
+    (
+        "devices bind",
+        "key_salt",
+        "a salt in a tool call stays in the client's transcript: through MCP a device key is found with the installation's own secret",
+    ),
+    (
+        "devices bind",
+        "key_salt_env",
+        "a variable of the server's process is no caller's to name: through MCP a device key is found with the installation's own secret",
     ),
     (
         "*",
