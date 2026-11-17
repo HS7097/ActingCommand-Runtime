@@ -205,15 +205,21 @@ their next checkpoint `30_000` ms after the drain timeout
 (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) fails with `scheduling_pause_drain_incomplete`
 (`ContainedTaskBusy`); a Runtime shutdown during the drain fails it with
 `scheduling_pause_drain_interrupted`, during the hand-back with
-`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). The one exception (#480 PG-1 fix
-round 1, since 0.12.72): a shutdown that interrupts the hand-back while the Runtime's own
-automatic emulator start alone is in the way (above) answers
-`scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and lifts nothing. Since fix
-round 2 that is judged on the moment of the shutdown: the hand-back reads again then what is in
-the way (the lease's kind, a refusing queued entry, a run in flight, an owed reset, a policy run
-on the worker), whatever its last check found and before its first check too; anything else in
-the way, or nothing, answers `scheduling_pause_release_interrupted` and lifts the pause as
-before. The kept
+`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). The exceptions (#480 PG-1, since
+0.12.72) are judged on the moment of the shutdown (since fix round 2): the hand-back reads again
+then what is in the way (the lease's kind, a refusing queued entry, a run in flight, an owed
+reset, a policy run on the worker), whatever its last check found and before its first check
+too. When the Runtime's own automatic emulator start alone is in the way (above; fix round 1),
+the request answers `scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and
+lifts nothing. When nothing is in the way any more and no refusing entry is queued (fix round 3:
+the automatic claim may let go between the last check and the shutdown), the pause is not lifted
+either and the hand-back ends as it would have: inside the multi-Nemu gate the stage becomes
+`released` and the request answers success; outside it, where the hand-back would still close
+the instance's session, the pause is kept and the request answers
+`scheduling_pause_kept_at_shutdown`. Only work that is not the Runtime's own automatic claim in
+the way (a person's or a client's run or lease, an operator's entry, an owed reset, a policy run
+on the worker) answers `scheduling_pause_release_interrupted` and lifts the pause as before. The
+kept
 pause stays in stage `paused` until the Runtime stops, its row of `host.scheduling_pause` stays as
 it was recorded, and the next start restores it as every persisted pause is restored ("Persistence,
 no expiry" below; stage `released`). A failed pause writes no ledger event of its own: its code
@@ -390,8 +396,8 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   instance pause stage lifts its gate and records the rows without it; if that record fails
   the request poisons the Runtime. Since 0.12.72 (#480 PG-1 fix round 1) a hand-back a shutdown
   interrupted while the Runtime's own automatic emulator start alone was in the way (fix round 2:
-  at the moment of the shutdown; `scheduling_pause_kept_at_shutdown`) lifts nothing and records
-  nothing: the rows that set the
+  at the moment of the shutdown; `scheduling_pause_kept_at_shutdown`), or (fix round 3) at which
+  nothing was in the way any more, lifts nothing and records nothing: the rows that set the
   pause stay, and the next start restores it.
 - **Restore at start.** A start that is not installer-held reads the fact before any physical
   instance is prepared and before the policy driver: the global pause comes back at revision 1

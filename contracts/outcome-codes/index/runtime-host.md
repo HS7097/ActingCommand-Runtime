@@ -1099,7 +1099,7 @@ hand. The [summary](README.md) says what each column means. 1165 codes.
 | `scheduling_pause_epoch_encode_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause epoch encode failed. |
 | `scheduling_pause_fact_clock_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause fact clock overflow. |
 | `scheduling_pause_fact_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause fact invalid. |
-| `scheduling_pause_kept_at_shutdown` | error | none | 0.12.72 | active | pending | written | An instance pause (PauseScheduling of one instance) did not reach stage released because the Runtime was asked to stop while the pause's hand-back of the device… |
+| `scheduling_pause_kept_at_shutdown` | error | none | 0.12.72 | active | pending | written | An instance pause (PauseScheduling of one instance) did not reach stage released because the Runtime was asked to stop during the pause's hand-back of the… |
 | `scheduling_pause_origin_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause origin missing. |
 | `scheduling_pause_owner_epoch_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause owner epoch mismatch. |
 | `scheduling_pause_persist_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause persist failed. |

@@ -1356,13 +1356,18 @@ configuration does not carry it (a host started without actingd's manifest).
   to just before the Start (the watch's request given back to its bound, an idle wake owed again);
   since PG-1's fix round the claim asks once more after its last status read, so a pause pressed
   while that read runs stops the Start too, and since its fix round 2 once more with the
-  instance's admission guard in hand: as the last thing before the provider's Start (after the
-  start's `command.received`, its wait for that guard, the close of the old session and the
-  renewal), where a held start closes its `command.received` as a start not made is
-  (`command.rejected`, effect `not_performed`, and one `runtime.failed` of
-  `emulator_autostart_skipped` with the hold's `skip_reason`), and, for a recognition, once it has
-  that guard, before its preparation reads the status and binds, where it records nothing. Either
-  then ends as held on its key, as above, nothing started or bound. A pause pressed during the
+  instance's admission guard in hand: as the last thing before the provider's Start (after its
+  wait for that guard, the close of the old session and the renewal), and, for a recognition, once
+  it has that guard, before its preparation reads the status and binds. Since fix round 3 (the
+  coordinator's ruling: a start that a pause stopped was never a command) the start's
+  `command.received` is written only after that last ask, just before the provider's Start, so a
+  start held anywhere before it records no `command.*` and no `runtime.failed` record at all, only
+  its skip, as every held start does; a start that fails before that ask (its fence, the close of
+  the old session, its renewal) records its `command.received` and then its failure pair, as a
+  start refused before anything was driven does. Either then ends as held on its key, as above,
+  nothing started or bound. A person's, an agent's or the Lab's explicit emulator control records
+  its `command.received` first, as before, and its records and their order are unchanged. A pause
+  pressed during the
   recognition's own bounded status read, under the guard, does not stop its bind; the startup
   package it queues then waits behind the pause's gate.
   Its skip is `emulator_autostart_skipped` with `skip_reason` `global_paused` (info; its own word,
@@ -1601,8 +1606,10 @@ met the instance's `start_emulator` off on its key, and an IDLE-1 wake that foun
 makes the existing key settable. #480 PG-1 (since 0.12.72) adds the token `global_paused` of
 `skip_reason` (info), which marks a start the global pause held, and, on the pause's side, one code:
 `scheduling_pause_kept_at_shutdown` (error), the answer of an instance pause whose hand-back a
-shutdown interrupted while it waited for an automatic start alone, which keeps the pause
-([scheduling-pause.md](scheduling-pause.md), "Instance pause: three stages").
+shutdown interrupted while it waited for an automatic start alone, or (fix round 3) found nothing
+in the way any more on an instance outside the multi-Nemu gate, whose session it would still have
+closed; it keeps the pause ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three
+stages").
 
 ## Client and CLI
 
