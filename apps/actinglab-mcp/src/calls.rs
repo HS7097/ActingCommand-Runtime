@@ -7,7 +7,8 @@
 //! - **Which rows are served** (`tools::serving`): a row `lab_ops::core_ops` serves, by
 //!   `core_ops` in this process ([`Service::core`]); and (the slice's second part) on Windows a
 //!   rescue row the rescue module serves, by the module in this process with the initiator
-//!   `Lab-MCP` ([`rescue_line`]); Workflow #434 LAB-6S0: `deploy` and `rollback` among them, with
+//!   `Lab-MCP` ([`rescue_line`]; Workflow #434 PP-1: its line within this server's budget,
+//!   [`Service::rescue`]); Workflow #434 LAB-6S0: `deploy` and `rollback` among them, with
 //!   the `detach` the front gives true, so the module answers at once and its detached run
 //!   carries `Lab-MCP`. Workflow #434
 //!   LAB-5G4b: every other offered row through a `serve` child (`crate::children`), its
@@ -36,6 +37,7 @@ use crate::after_child;
 use crate::budget;
 use crate::children::{self, Children};
 use crate::protocol::Era;
+use crate::rescue_export;
 use crate::runtime::{self, Runtime};
 use crate::tools::{self, Added, Serving, Supplied};
 use actingcommand_contract::outcome::Outcome;
@@ -113,7 +115,7 @@ impl Service {
             return cli_line::failure(&tools::unsupported(tool), None);
         }
         match prepare(operation, arguments, &self.exports) {
-            Ok(params) if serving == Serving::Rescue => rescue_line(operation, &params),
+            Ok(params) if serving == Serving::Rescue => self.rescue(operation, &params, era),
             Ok(params) if serving == Serving::Child => self.child(operation, tool, &params, era),
             Ok(params) => self.core(operation, &params, era),
             Err(refused) => cli_line::failure(&refused.outcome, refused.text),
@@ -134,6 +136,18 @@ impl Service {
         let answer = self.children.line(operation, params);
         self.within_budget(era, |answer_budget| {
             after_child::answered(&operation.name, tool, params, answer, answer_budget)
+        })
+    }
+
+    /// Workflow #434 PP-1 (register §1.465): a rescue row, served by the rescue module in this
+    /// process ([`rescue_line`]), whose code takes no budget, then answered within this server's
+    /// budget in `era` (`rescue_export::answered`): a success line that fits neither way is
+    /// written whole to the export directory and answered its header. Before, the line went
+    /// unshaped to `call_result`, which only measures it, and answered `output_budget_exceeded`.
+    fn rescue(&self, operation: &Operation, params: &Map<String, Value>, era: Era) -> Exit {
+        let exit = rescue_line(operation, params);
+        self.within_budget(era, |answer_budget| {
+            rescue_export::answered(&operation.name, exit, era, answer_budget)
         })
     }
 
@@ -251,7 +265,8 @@ impl Service {
 /// notice the line `agent_channel_reported` with its `text`, a hook that did its work that line
 /// without members, a registered session's failed hook its failure, refused. No provenance is
 /// recorded here: the module makes its own connection on its own channel and its journal records
-/// the initiator (ruling 17 of 6775192250). Its budget is the core rows' (`call_result`).
+/// the initiator (ruling 17 of 6775192250). Its budget: Workflow #434 PP-1, [`Service::rescue`]
+/// (until then this line said "the core rows' (`call_result`)", which only measures a line).
 #[cfg(windows)]
 fn rescue_line(operation: &Operation, params: &Map<String, Value>) -> Exit {
     use actingcommand_lab_ops::initiator::Initiator;

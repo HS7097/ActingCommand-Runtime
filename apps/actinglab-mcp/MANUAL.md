@@ -191,16 +191,33 @@ naming this file.
     answer goes to `ac_record_draft` as `record_stop_export` (`{path, sha256}`). #463 RC-1
     (0.12.69): `ac_resource_regression` keeps `counts` the same way (its refusal lists at most 10
     rows and fits);
+  - a rescue tool's success line (served in the server's own process, on Windows; section 8)
+    that the next point could send neither way (Workflow #434 PP-1, 0.12.72) is written whole to
+    the export directory and answered its header: the parts its tool keeps, `truncated` when one
+    of them was reduced or left to the file, `export`, `warnings` (`answer_exported` first, the
+    line's own after it) and the line's `outcome`. `ac_place` (with `plan`, and a placement)
+    keeps the plan's `schedule_changes` under `plan`, as the line holds it; `ac_undo` its
+    `reverses` (with `plan`) and its `schedule_changes`; `ac_op_status` its `unfinished`,
+    `last_operations` and, with `op`, `journal`; every other rescue tool, `ac_deploy` with `plan`
+    among them, its outcome alone (with `plan`: `plan_id`, `commit_sha`). A part is kept whole
+    while the header still fits; else `schedule_changes` without its rows `packages`, which
+    `packages_total` counts, its four lists `enters`, `leaves`, `content_only` and `unread` kept;
+    else every list counted the same way (`enters_total` and the others); a list (`reverses`,
+    `last_operations`) is counted so too; else the part is left out. `truncated` names what went
+    to the file as JSON pointers into it (`/plan/schedule_changes/packages`). Read
+    `schedule_changes` before you place: in the header, or in the file where `truncated` names its
+    lists. The call's job keeps the header, so `ac_run_show` of its handle answers it with its
+    `export`. A refusal is never exported, and no line that the next point sends is;
   - any other line, a refusal and a child's failure line too, that does not fit with its text
     repeated is sent in `structuredContent` alone, beside a summary text `{outcome,
     structured_content_only, warnings?, warnings_omitted?, truncated?, narrow}` (from protocol
     2025-06-18 on);
-  - a line that fits neither way answers `output_budget_exceeded` (`actual_bytes`, `limit_bytes`)
-    and, for a call that ran as a job, the job's `handle`: its work was done, the job keeps the
-    line unread, and `ac_run_show` of the handle answers the same refusal with `job_phase` and
-    `summary` (`{outcome, members, warnings_total, truncated?}`, the line's own outcome saying
-    whether the work succeeded). Narrow the call (filters, a lower `limit`) to have the whole
-    answer.
+  - a line that fits neither way, a rescue tool's header too, answers `output_budget_exceeded`
+    (`actual_bytes`, `limit_bytes`) and, for a call that ran as a job, the job's `handle`: its
+    work was done, the job keeps the line unread, and `ac_run_show` of the handle answers the
+    same refusal with `job_phase` and `summary` (`{outcome, members, warnings_total,
+    truncated?}`, the line's own outcome saying whether the work succeeded). Narrow the call
+    (filters, a lower `limit`) to have the whole answer.
 
 ## 6 Exports
 
@@ -215,8 +232,10 @@ naming this file.
   file. `ac_report_export` (Workflow #467 RPT-1) always writes its problem report archive there,
   `problem-report-<YYYYMMDD-HHMMSS>Z-<8 hex>.zip`, and answers its `path`, `sha256` and `size`
   (`contracts/problem-report.md`). None of them takes `out`: the server gives its own directory.
-- A file that cannot be written is `material_export_failed`; on a child's overflow it is the first
-  warning instead, and the answer has no `export`.
+- A file that cannot be written is `material_export_failed`; on a child's overflow and on a rescue
+  tool's header (section 5; Workflow #434 PP-1) it is the first warning instead, and the answer
+  has no `export`: the header's parts are all of the answer there is, and a header that does not
+  fit even so answers `output_budget_exceeded` with its job's handle.
 - Every other row that takes a place on disk (an `out`, a `dir`, a `state_dir`) uses the place the
   caller gives, as an absolute path (section 7).
 
