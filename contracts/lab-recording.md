@@ -3453,7 +3453,7 @@ answered as any step, its `artifact_step` `null`: its frames are the screens of 
 
 ```
 record review [--record-id <id>] [--step <k>] [--no-preview] [--game <g>] [--server <s>]
-              [--locale <l>] [--state-dir <dir>]
+              [--locale <l>] [--template-margin-bound <d>] [--state-dir <dir>]
 ```
 
 #463 S2-2 (0.12.68; the owner approved the three-stage blueprint of package making on board #463:
@@ -3461,7 +3461,8 @@ stage two turns the recorded material into a package offline, the tool hands bac
 the agent decides; her ruling there: a preview's boxes are rendered onto a copy, and the stored
 frames carry no box; the rules here are the coordinator's). Through the Lab's MCP server
 (`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`,
-`locale`, `state_dir`; [lab-operations.json](lab-operations.json), the row `record review`);
+`locale`, `template_margin_bound`, `state_dir`; [lab-operations.json](lab-operations.json), the
+row `record review`);
 today's server (`actingctl mcp-serve`) has no such tool.
 
 - **Which recording, which steps.** The recording `record ready` reads, found by the same function
@@ -4103,7 +4104,8 @@ Makes an archived recording of the instance its active recording again:
 ## What a recording still lacks: `record ready`
 
 ```
-record ready [--record-id <id>] [--game <g>] [--server <s>] [--locale <l>] [--state-dir <dir>]
+record ready [--record-id <id>] [--game <g>] [--server <s>] [--locale <l>]
+             [--template-margin-bound <d>] [--state-dir <dir>]
 ```
 
 #463 S2-1 (0.12.65; the owner approved the three-stage blueprint of package making on board #463:
@@ -4111,8 +4113,9 @@ stage two turns the recorded material into a package offline; the rules here are
 coordinator's). `record stop` refuses at the first pre-check a recording fails ("Pre-checks"), so an
 agent would learn what a recording lacks one refusal at a time; `record ready` lists all of it at
 once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`record_id`, `game`,
-`server`, `locale`, `state_dir`; [lab-operations.json](lab-operations.json), the row `record
-ready`); today's server (`actingctl mcp-serve`) has no such tool. #463 stage two, train: its answer
+`server`, `locale`, `template_margin_bound`, `state_dir`;
+[lab-operations.json](lab-operations.json), the row `record ready`); today's server
+(`actingctl mcp-serve`) has no such tool. #463 stage two, train: its answer
 is one function's (`recording_api::ready_of`), which `record review` calls too and of which it
 gives each step the items that name it ("Reviewing a recording step by step: `record review`");
 neither command has a judgement of its own. #463 S3-17 (0.12.71): `standard-pack adopt --record-id`
@@ -4409,7 +4412,10 @@ record stop [--lab-dir <dir>] [--package-id <id>] [--requires <package_id>]
 #463 RM-1 (0.12.72): `--template-margin-bound <d>` (0 to 1, default 0.03; `record ready` and `record
 review` take it too) is the bound of the warning `record_template_near_threshold` ("Self-checks",
 item 11); it changes nothing that passes or refuses and nothing of the package. A value outside 0
-to 1 is `validation_failed` before anything is read.
+to 1 is `validation_failed` before anything is read. Fix round 2: on a recording whose package is
+made and that has not changed since (`record ready`'s and `record review`'s `packaged`, `record
+stop`'s `already_generated`) no self-check runs, so the bound is taken, checked as above, and has
+no effect: no warning `record_template_near_threshold` is answered there.
 
 `record stop` turns a recording with steps into one `linear_steps` package
 (`linear-steps.md`) in a content container (`package-reference.md`, "Containers"), checks it
@@ -4911,7 +4917,8 @@ guard execution still requires the corresponding frames, provider and Runtime ev
       on each frame where every other mark it requires passes, none is undetermined, no mark it
       forbids passes and that one fails with its score below its threshold: the arrival gate on the
       frames of the step after whose effect it is awaited (item 4), an optional step's page against
-      the step before its run, its skip target and another optional step of the run, the skip
+      the step before its run, its skip target and another optional step of the run (fix round 2:
+      not one closed by the same press, on whose frames item 7c lets the page pass), the skip
       target on an optional step's frames (item 7 a and b), an ending's page against `previous`,
       `usual` and `other_ending`, and the usual ending's page on an ending's frames (item 9). A
       screen on which the page passes is the check's own refusal or warning, as before; the entry
@@ -4931,10 +4938,13 @@ guard execution still requires the corresponding frames, provider and Runtime ev
     refuses nothing (exit 0 on actinglab's own line, on the `--via` line and through MCP: a
     warning changes no exit status). Colour, colour digest, OCR, value-test and check marks are
     not judged so. `lab.warnings` lists these warnings after the others, `record ready` lists
-    them among its warnings once every self-check passed (its readiness unchanged), and `record
-    review` shows each at the step its `record_index` names (`steps[].warnings`, absent when none;
-    a warning of an ending names no step). The package's provenance does not carry them, so the
-    package is byte for byte the same whatever the bound.
+    them among its warnings once every self-check passed (its readiness unchanged; fix round 2:
+    also when every self-check before `cases` passed and `cases` failed, by a case that misses or
+    an error that ends it, its failures listed in `missing` as before), and `record review` shows
+    each at the step its `record_index` names (`steps[].warnings`, absent when none; a warning of an
+    ending names no step). The package's provenance does not carry them, so the package is byte for
+    byte the same whatever the bound. On a recording whose package is made and that has not changed
+    since (`packaged`) no self-check runs: the bound is taken and has no effect (fix round 2).
 
 Warnings never refuse. The provenance and the output carry the same warnings, but (#463 RM-1)
 `record_template_near_threshold`, which only the output carries.

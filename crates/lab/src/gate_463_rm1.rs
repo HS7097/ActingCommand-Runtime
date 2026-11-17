@@ -26,6 +26,23 @@
 // - `rm1_a_recording_without_template_marks_answers_as_with_any_bound` (test 5): colour marks only:
 //   the stop's dry run and `record ready` with the bound 1 are what they are with the default, no
 //   warning, and the package is the same with the bounds 0 and 1.
+// Fix round 2 (brief rd-1118/brief-463-rm1-fix2.md, items 3 and 4), each judgement a case that
+// warns (a gap of about 0.01 between score and threshold) and one that does not (about 0.05):
+// - `rm1_an_optional_page_and_the_skip_target_near_their_threshold_are_warned`: an optional step's
+//   page on the frame of the step before its run (`record_optional_step_ambiguous`, `against`
+//   `previous`) and the skip target on the optional step's frame
+//   (`record_optional_skip_target_insensitive`, `optional_step`), each `misses`;
+// - `rm1_no_warning_on_another_optional_steps_frames_closed_by_the_same_press` (item 3): an
+//   optional page missing by about 0.01 on the frame of another optional step of its run is
+//   warned (`against` `other_optional`) when the two are closed by different presses, and not
+//   when they are closed by the same press, where section 4.7c lets the page pass;
+// - `rm1_an_endings_page_and_the_usual_page_near_their_threshold_are_warned`: an ending's page on
+//   the frames of the step before the last, of the last step and of another ending
+//   (`record_ending_ambiguous`, `against` `previous`, `usual`, `other_ending`) and the usual
+//   ending's page on the ending's frame (`ending_usual_insensitive`), each `misses`;
+// - `rm1_a_transitions_and_an_endings_own_template_near_their_threshold_is_warned`: a page
+//   transition's template on the transition's frame and an ending's on the ending's frame
+//   (`record_step_self_mismatch`), each `passes`.
 // Frames are synthetic 96x64 screens of flat gray with neutral noise patches, as the gates of
 // Workflow #390 LAB-2 make them; a perturbed patch has its top-left 6x6 block replaced by other
 // noise, and its score is read with the function the admitted evaluator reads it with. Steps are
@@ -36,7 +53,7 @@ use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings,
     plan as generate_plan,
 };
-use crate::recording::model::LabRecording;
+use crate::recording::model::{EndingSpec, LabRecording, TransitionSpec};
 use crate::recording::store::{old_record_path, recording_path};
 use crate::recording_api::package_with_bound;
 use crate::{
@@ -71,6 +88,17 @@ const PRESS: RecordRect = rect(60, 10, 8, 8);
 // Test 5's colour squares.
 const SQUARE_1: RecordRect = rect(20, 20, 12, 12);
 const SQUARE_2: RecordRect = rect(40, 46, 12, 12);
+// Fix round 2: an optional pop-up's patch, its close click and another close click, an ending's
+// patch, the patch of a second ending or a second pop-up, and a page transition's patch.
+const POPUP: RecordRect = rect(4, 4, 12, 12);
+const CLOSE: RecordRect = rect(80, 10, 8, 8);
+const CLOSE_OTHER: RecordRect = rect(80, 30, 8, 8);
+const ENDING: RecordRect = rect(64, 30, 12, 12);
+const SPARE: RecordRect = rect(4, 46, 12, 12);
+const LOADING: RecordRect = rect(4, 26, 12, 12);
+// Fix round 2: the outcome keys of two endings.
+const SHORT_KEY: &str = "neutral_task_short";
+const SPARE_KEY: &str = "neutral_task_spare";
 
 const fn rect(x: i32, y: i32, width: i32, height: i32) -> RecordRect {
     RecordRect {
@@ -174,6 +202,23 @@ fn button() -> Gray {
 
 fn next() -> Gray {
     Gray::noise(12, 12, 0x0463_0102)
+}
+
+// Fix round 2: the patches of a pop-up, an ending, a second ending or pop-up, a page transition.
+fn popup() -> Gray {
+    Gray::noise(12, 12, 0x0463_0103)
+}
+
+fn ending() -> Gray {
+    Gray::noise(12, 12, 0x0463_0104)
+}
+
+fn spare() -> Gray {
+    Gray::noise(12, 12, 0x0463_0105)
+}
+
+fn loading() -> Gray {
+    Gray::noise(12, 12, 0x0463_0106)
 }
 
 // `patch` with its top-left 6x6 block replaced by other noise.
@@ -357,6 +402,91 @@ impl Recording {
         })
     }
 
+    // Fix round 2: `record mark` of `request`, about `what`, which must stand.
+    fn marked(&self, what: &str, request: &MarkRequest) {
+        if let Err(error) = record_mark(&self.lock, request, false, &self.ocr) {
+            panic!(
+                "record mark of {what}: {}: {} {:?}",
+                error.code, error.message, error.details
+            );
+        }
+    }
+
+    // Fix round 2: an optional step of its own frame `image` and its marks, closed by a click on
+    // `close`, which must stand.
+    fn optional_step(&self, name: &str, image: &Gray, add: Vec<MarkSpec>, close: RecordRect) {
+        self.marked(
+            name,
+            &MarkRequest {
+                schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+                frame: Some(self.frame(name, image)),
+                add,
+                click: Some(ClickSpec {
+                    region: Some(close),
+                    ..ClickSpec::default()
+                }),
+                optional: Some(true),
+                ..MarkRequest::default()
+            },
+        );
+    }
+
+    // Fix round 2: `record stop` of the steps recorded, which generates the package, then the
+    // session file stopped as the command leaves it, so that the stopped recording takes `record
+    // mark` ("Marking after stop").
+    fn stop_for_marks(&self) {
+        let lab = self.stopped(&stop_options(false, None));
+        assert_eq!(lab["lab_status"], "generated", "{lab}");
+        let path = old_record_path(&self.state(), INSTANCE);
+        let mut session: Value =
+            serde_json::from_slice(&fs::read(&path).expect("session file")).expect("session");
+        session["status"] = json!("stopped");
+        fs::write(&path, serde_json::to_vec(&session).expect("session JSON"))
+            .expect("session file");
+    }
+
+    // Fix round 2: on the stopped recording, the ending `key` taken from its frame `image` with
+    // its marks; its page is named `ending_kk`.
+    fn ending(&self, name: &str, image: &Gray, key: &str, add: Vec<MarkSpec>) {
+        self.marked(
+            name,
+            &MarkRequest {
+                schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+                ending: Some(EndingSpec {
+                    frame: self.frame(name, image),
+                    samples: Vec::new(),
+                    page: None,
+                    outcome_key: key.to_owned(),
+                    add,
+                    reuse: Vec::new(),
+                }),
+                ..MarkRequest::default()
+            },
+        );
+    }
+
+    // Fix round 2: on the stopped recording, a page transition after the effect of step `step`,
+    // taken from its frame `image` with its marks.
+    fn transition(&self, step: u32, name: &str, image: &Gray, add: Vec<MarkSpec>) {
+        self.marked(
+            name,
+            &MarkRequest {
+                schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
+                step: Some(step),
+                transition: Some(TransitionSpec::Page {
+                    frame: Some(self.frame(name, image)),
+                    samples: Vec::new(),
+                    add,
+                    reuse: Vec::new(),
+                    timeout_ms: None,
+                    frame_id: None,
+                    sample_frame_ids: Vec::new(),
+                }),
+                ..MarkRequest::default()
+            },
+        );
+    }
+
     // `record stop` with `options`: the `lab` output with its status.
     fn stop_with(&self, options: &RecordStopOptions) -> Result<Value, LabError> {
         record_stop(&self.lock, options, &self.ocr).map(|outcome| {
@@ -422,6 +552,34 @@ impl Recording {
             .and_then(|frames| frames.iter().find(|frame| frame["role"] == role))
             .and_then(|frame| frame["frame_id"].as_str())
             .unwrap_or_else(|| panic!("no {role} frame on step {} in {recording}", index + 1))
+            .to_owned()
+    }
+
+    // Fix round 2: the step table as JSON.
+    fn table(&self) -> Value {
+        serde_json::from_slice(
+            &fs::read(recording_path(&self.state(), RECORD_ID)).expect("step table"),
+        )
+        .expect("step table JSON")
+    }
+
+    // Fix round 2: the id of the frame the ending `key` was taken from.
+    fn ending_frame_id(&self, key: &str) -> String {
+        let recording = self.table();
+        recording["endings"]
+            .as_array()
+            .and_then(|endings| endings.iter().find(|ending| ending["outcome_key"] == key))
+            .and_then(|ending| ending["frames"][0]["frame_id"].as_str())
+            .unwrap_or_else(|| panic!("no frame of the ending {key} in {recording}"))
+            .to_owned()
+    }
+
+    // Fix round 2: the id of the frame the page transition of the step at `index` was taken from.
+    fn transition_frame_id(&self, index: usize) -> String {
+        let recording = self.table();
+        recording["steps"][index]["transition"]["frames"][0]["frame_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no transition frame on step {} in {recording}", index + 1))
             .to_owned()
     }
 
@@ -872,4 +1030,566 @@ fn rm1_a_recording_without_template_marks_answers_as_with_any_bound() {
         package_with_bound(&plan, &recording.ocr, 1.0).expect("the package with the bound 1");
     assert!(zero_near.is_empty() && one_near.is_empty(), "{one_near:?}");
     assert_eq!(one_bytes, zero_bytes);
+}
+
+// Fix round 2: what a warning must name of its mark: the score the fixture reads with the
+// evaluator's function, the threshold the fixture gave the mark, and the frame of that score.
+struct Expected {
+    score: f64,
+    threshold: f64,
+    frame_id: String,
+}
+
+// Fix round 2: the warnings `record_template_near_threshold` of `warnings` whose judgement is
+// `check`.
+fn of_check(warnings: &Value, check: &str) -> Vec<Value> {
+    near(warnings)
+        .into_iter()
+        .filter(|warning| warning["check"] == check)
+        .collect()
+}
+
+// Fix round 2: the one warning of `found`, checked against `expected`: its score the fixture's, its
+// threshold the one given (as the package's `f32` holds it), its margin the distance of the two as
+// the warning gives them, about a hundredth and so less than the bound 0.03, its frame the one of
+// that score; the warning as JSON.
+fn the_one(found: &[Value], expected: &Expected) -> Value {
+    assert_eq!(found.len(), 1, "{found:?}");
+    let warning = found[0].clone();
+    let (score, threshold, margin) = (
+        number(&warning["score"]),
+        number(&warning["threshold"]),
+        number(&warning["margin"]),
+    );
+    assert!((score - expected.score).abs() < 1e-6, "{warning}");
+    assert!((threshold - expected.threshold).abs() < 1e-6, "{warning}");
+    assert_eq!(
+        warning["margin"],
+        json!((score - threshold).abs()),
+        "{warning}"
+    );
+    assert!((0.0099..0.0111).contains(&margin), "{warning}");
+    assert_eq!(warning["frame_id"], json!(expected.frame_id), "{warning}");
+    warning
+}
+
+// Fix round 2: three steps, step 2 an optional pop-up closed by a click. Step 1's frame shows a
+// perturbed copy of the pop-up's patch, and the pop-up's template has its threshold `gap` above its
+// score there (rounded up to a thousandth); step 2's frame shows a perturbed copy of step 3's
+// patch, and step 3's template, the skip target's, has its threshold `gap` above its score there.
+struct Optional {
+    recording: Recording,
+    // The pop-up's template on step 1's frame.
+    page: Expected,
+    // The skip target's template on step 2's frame.
+    skip: Expected,
+}
+
+impl Optional {
+    fn recorded(gap: f64) -> Self {
+        let recording = Recording::new();
+        let first = Gray::frame()
+            .draw_at(BUTTON, &button())
+            .draw_at(POPUP, &perturbed(&popup(), 0x0463_0211));
+        let second = Gray::frame()
+            .draw_at(POPUP, &popup())
+            .draw_at(NEXT, &perturbed(&next(), 0x0463_0212));
+        let popup_score = near_copy(score(&first, &popup(), POPUP));
+        let popup_threshold = thousandth_above(popup_score + gap);
+        let next_score = near_copy(score(&second, &next(), NEXT));
+        let next_threshold = thousandth_above(next_score + gap);
+        recording.step(
+            "first",
+            &first,
+            &[],
+            vec![template("ui/button", BUTTON, None)],
+            &[],
+            Some(click()),
+        );
+        recording.optional_step(
+            "popup",
+            &second,
+            vec![template("ui/popup", POPUP, Some(popup_threshold))],
+            CLOSE,
+        );
+        recording.step(
+            "second",
+            &Gray::frame().draw_at(NEXT, &next()),
+            &[],
+            vec![template("ui/next", NEXT, Some(next_threshold))],
+            &[],
+            None,
+        );
+        let page = Expected {
+            score: popup_score,
+            threshold: popup_threshold,
+            frame_id: recording.frame_id(0, "primary"),
+        };
+        let skip = Expected {
+            score: next_score,
+            threshold: next_threshold,
+            frame_id: recording.frame_id(1, "primary"),
+        };
+        Self {
+            recording,
+            page,
+            skip,
+        }
+    }
+}
+
+// Fix round 2, item 4: an optional step's page and the skip target, each told from a screen it
+// must not pass on by its one template ([`Optional`]). With a gap of about 0.01 the stop's dry run
+// warns of each, `misses`: the pop-up's template on step 1's frame, judged by
+// `record_optional_step_ambiguous` at step 2 against `previous`, and the skip target's template on
+// step 2's frame, judged by `record_optional_skip_target_insensitive` at step 3 with the optional
+// step 2; with a gap of about 0.05 neither check is warned of.
+#[test]
+fn rm1_an_optional_page_and_the_skip_target_near_their_threshold_are_warned() {
+    for (gap, warned) in [(0.01, true), (0.05, false)] {
+        let fixture = Optional::recorded(gap);
+        let dry = fixture.recording.stopped(&stop_options(true, None));
+        assert_eq!(dry["lab_status"], "validated", "{dry}");
+        let page = of_check(&dry["warnings"], "record_optional_step_ambiguous");
+        let skip = of_check(&dry["warnings"], "record_optional_skip_target_insensitive");
+        if !warned {
+            assert!(page.is_empty() && skip.is_empty(), "gap {gap}: {dry}");
+            continue;
+        }
+        let warning = the_one(&page, &fixture.page);
+        assert_eq!(
+            warning,
+            json!({
+                "code": NEAR,
+                "side": "misses",
+                "check": "record_optional_step_ambiguous",
+                "step": 2,
+                "record_index": 2,
+                "page": dry["pages"][1],
+                "against": "previous",
+                "mark_id": "ui/popup",
+                "frame_id": fixture.page.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            }),
+            "{dry}"
+        );
+        let warning = the_one(&skip, &fixture.skip);
+        assert_eq!(
+            warning,
+            json!({
+                "code": NEAR,
+                "side": "misses",
+                "check": "record_optional_skip_target_insensitive",
+                "step": 3,
+                "record_index": 3,
+                "page": dry["pages"][2],
+                "optional_step": 2,
+                "mark_id": "ui/next",
+                "frame_id": fixture.skip.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            }),
+            "{dry}"
+        );
+    }
+}
+
+// Fix round 2: four steps, steps 2 and 3 a run of two optional pop-ups. Step 3's frame shows a
+// perturbed copy of step 2's patch beside its own, and step 2's template has its threshold about
+// 0.01 above its score there (rounded up to a thousandth); step 3 is closed by a click on the
+// region step 2 is closed by (`same_press`) or on another.
+struct TwoOptional {
+    recording: Recording,
+    // Step 2's template on step 3's frame.
+    page: Expected,
+}
+
+impl TwoOptional {
+    fn recorded(same_press: bool) -> Self {
+        let recording = Recording::new();
+        let third = Gray::frame()
+            .draw_at(SPARE, &spare())
+            .draw_at(POPUP, &perturbed(&popup(), 0x0463_0213));
+        let popup_score = near_copy(score(&third, &popup(), POPUP));
+        let popup_threshold = thousandth_above(popup_score + 0.01);
+        recording.step(
+            "first",
+            &Gray::frame().draw_at(BUTTON, &button()),
+            &[],
+            vec![template("ui/button", BUTTON, None)],
+            &[],
+            Some(click()),
+        );
+        recording.optional_step(
+            "popup",
+            &Gray::frame().draw_at(POPUP, &popup()),
+            vec![template("ui/popup", POPUP, Some(popup_threshold))],
+            CLOSE,
+        );
+        recording.optional_step(
+            "popup_again",
+            &third,
+            vec![template("ui/spare", SPARE, None)],
+            if same_press { CLOSE } else { CLOSE_OTHER },
+        );
+        recording.step(
+            "second",
+            &Gray::frame().draw_at(NEXT, &next()),
+            &[],
+            vec![template("ui/next", NEXT, None)],
+            &[],
+            None,
+        );
+        let page = Expected {
+            score: popup_score,
+            threshold: popup_threshold,
+            frame_id: recording.frame_id(2, "primary"),
+        };
+        Self { recording, page }
+    }
+}
+
+// Fix round 2, item 3: section 4.7c lets an optional page pass on the frames of another optional
+// step of its run closed by the same press (one pop-up recorded twice), so that its missing there
+// is no risk. Step 2's template misses on step 3's frame by about 0.01 ([`TwoOptional`]): with
+// step 3 closed by a click on another region the stop's dry run warns of it, `misses`, judged by
+// `record_optional_step_ambiguous` at step 2 against `other_optional`; with step 3 closed by a
+// click on the same region (`same_closing`) that check is warned of for no page.
+#[test]
+fn rm1_no_warning_on_another_optional_steps_frames_closed_by_the_same_press() {
+    let other = TwoOptional::recorded(false);
+    let dry = other.recording.stopped(&stop_options(true, None));
+    assert_eq!(dry["lab_status"], "validated", "{dry}");
+    let warning = the_one(
+        &of_check(&dry["warnings"], "record_optional_step_ambiguous"),
+        &other.page,
+    );
+    assert_eq!(
+        warning,
+        json!({
+            "code": NEAR,
+            "side": "misses",
+            "check": "record_optional_step_ambiguous",
+            "step": 2,
+            "record_index": 2,
+            "page": dry["pages"][1],
+            "against": "other_optional",
+            "mark_id": "ui/popup",
+            "frame_id": other.page.frame_id,
+            "score": warning["score"],
+            "threshold": warning["threshold"],
+            "margin": warning["margin"],
+            "bound": DEFAULT_BOUND
+        }),
+        "{dry}"
+    );
+
+    let same = TwoOptional::recorded(true);
+    let dry = same.recording.stopped(&stop_options(true, None));
+    assert_eq!(dry["lab_status"], "validated", "{dry}");
+    assert!(
+        of_check(&dry["warnings"], "record_optional_step_ambiguous").is_empty(),
+        "{dry}"
+    );
+}
+
+// Fix round 2: two steps and, on the stopped recording, two endings. Step 1's frame, step 2's frame
+// and the second ending's frame show one perturbed copy of the first ending's patch, and the first
+// ending's template has its threshold `gap` above its score there (rounded up to a thousandth); the
+// first ending's frame shows a perturbed copy of step 2's patch, and step 2's template, the usual
+// ending's page, has its threshold `gap` above its score there.
+struct Endings {
+    recording: Recording,
+    // The first ending's template on step 1's frame, on step 2's and on the second ending's.
+    previous: Expected,
+    usual: Expected,
+    other: Expected,
+    // Step 2's template on the first ending's frame.
+    usual_page: Expected,
+}
+
+impl Endings {
+    fn recorded(gap: f64) -> Self {
+        let recording = Recording::new();
+        let copy = perturbed(&ending(), 0x0463_0214);
+        let first = Gray::frame()
+            .draw_at(BUTTON, &button())
+            .draw_at(ENDING, &copy);
+        let second = Gray::frame().draw_at(NEXT, &next()).draw_at(ENDING, &copy);
+        let short = Gray::frame()
+            .draw_at(ENDING, &ending())
+            .draw_at(NEXT, &perturbed(&next(), 0x0463_0215));
+        let spare_screen = Gray::frame()
+            .draw_at(SPARE, &spare())
+            .draw_at(ENDING, &copy);
+        let ending_threshold = thousandth_above(near_copy(score(&first, &ending(), ENDING)) + gap);
+        let next_score = near_copy(score(&short, &next(), NEXT));
+        let next_threshold = thousandth_above(next_score + gap);
+        recording.step(
+            "first",
+            &first,
+            &[],
+            vec![template("ui/button", BUTTON, None)],
+            &[],
+            Some(click()),
+        );
+        recording.step(
+            "second",
+            &second,
+            &[],
+            vec![template("ui/next", NEXT, Some(next_threshold))],
+            &[],
+            None,
+        );
+        recording.stop_for_marks();
+        recording.ending(
+            "short",
+            &short,
+            SHORT_KEY,
+            vec![template("ending/short", ENDING, Some(ending_threshold))],
+        );
+        recording.ending(
+            "spare",
+            &spare_screen,
+            SPARE_KEY,
+            vec![template("ending/spare", SPARE, None)],
+        );
+        let on = |image: &Gray, frame_id: String| Expected {
+            score: f64::from(score(image, &ending(), ENDING)),
+            threshold: ending_threshold,
+            frame_id,
+        };
+        let previous = on(&first, recording.frame_id(0, "primary"));
+        let usual = on(&second, recording.frame_id(1, "primary"));
+        let other = on(&spare_screen, recording.ending_frame_id(SPARE_KEY));
+        let usual_page = Expected {
+            score: next_score,
+            threshold: next_threshold,
+            frame_id: recording.ending_frame_id(SHORT_KEY),
+        };
+        Self {
+            recording,
+            previous,
+            usual,
+            other,
+            usual_page,
+        }
+    }
+}
+
+// Fix round 2, item 4: an ending's page told from each screen a run may show instead of it by its
+// one template, and the usual ending's page told from the ending's screen by its one template
+// ([`Endings`]). With a gap of about 0.01 the stop's dry run of the stopped recording marked again
+// warns, `misses`: the first ending's template, judged by `record_ending_ambiguous` against
+// `previous` (step 1), `usual` (step 2) and `other_ending` (the second ending), and step 2's
+// template on the first ending's frame, judged by `ending_usual_insensitive`; with a gap of about
+// 0.05 neither check is warned of.
+#[test]
+fn rm1_an_endings_page_and_the_usual_page_near_their_threshold_are_warned() {
+    for (gap, warned) in [(0.01, true), (0.05, false)] {
+        let fixture = Endings::recorded(gap);
+        let dry = fixture.recording.stopped(&stop_options(true, None));
+        assert_eq!(dry["lab_status"], "validated", "{dry}");
+        let ambiguous = of_check(&dry["warnings"], "record_ending_ambiguous");
+        let usual_page = of_check(&dry["warnings"], "ending_usual_insensitive");
+        if !warned {
+            assert!(
+                ambiguous.is_empty() && usual_page.is_empty(),
+                "gap {gap}: {dry}"
+            );
+            continue;
+        }
+        assert_eq!(ambiguous.len(), 3, "{dry}");
+        for (against, member, value, expected) in [
+            ("previous", "step", json!(1), &fixture.previous),
+            ("usual", "step", json!(2), &fixture.usual),
+            (
+                "other_ending",
+                "other_outcome_key",
+                json!(SPARE_KEY),
+                &fixture.other,
+            ),
+        ] {
+            let found = ambiguous
+                .iter()
+                .filter(|warning| warning["against"] == against)
+                .cloned()
+                .collect::<Vec<_>>();
+            let warning = the_one(&found, expected);
+            let mut wanted = json!({
+                "code": NEAR,
+                "side": "misses",
+                "check": "record_ending_ambiguous",
+                "against": against,
+                "outcome_key": SHORT_KEY,
+                "page": "ending_01",
+                "mark_id": "ending/short",
+                "frame_id": expected.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            });
+            wanted[member] = value;
+            assert_eq!(warning, wanted, "{dry}");
+        }
+        let warning = the_one(&usual_page, &fixture.usual_page);
+        assert_eq!(
+            warning,
+            json!({
+                "code": NEAR,
+                "side": "misses",
+                "check": "ending_usual_insensitive",
+                "outcome_key": SHORT_KEY,
+                "page": "ending_01",
+                "usual_page": dry["pages"][1],
+                "mark_id": "ui/next",
+                "frame_id": fixture.usual_page.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            }),
+            "{dry}"
+        );
+    }
+}
+
+// Fix round 2: two steps and, on the stopped recording, a page transition after step 1's press and
+// an ending, each with a template exact on its one frame whose threshold lies `gap` below its score
+// there (rounded down to a thousandth).
+struct Own {
+    recording: Recording,
+    // The transition's template on the transition's frame, the ending's on the ending's.
+    transition: Expected,
+    ending: Expected,
+}
+
+impl Own {
+    fn recorded(gap: f64) -> Self {
+        let recording = Recording::new();
+        recording.step(
+            "first",
+            &Gray::frame().draw_at(BUTTON, &button()),
+            &[],
+            vec![template("ui/button", BUTTON, None)],
+            &[],
+            Some(click()),
+        );
+        recording.step(
+            "second",
+            &Gray::frame().draw_at(NEXT, &next()),
+            &[],
+            vec![template("ui/next", NEXT, None)],
+            &[],
+            None,
+        );
+        recording.stop_for_marks();
+        let loading_screen = Gray::frame().draw_at(LOADING, &loading());
+        let loading_score = f64::from(score(&loading_screen, &loading(), LOADING));
+        let loading_threshold = thousandth_below(loading_score - gap);
+        recording.transition(
+            1,
+            "loading",
+            &loading_screen,
+            vec![template("loading/state", LOADING, Some(loading_threshold))],
+        );
+        let short = Gray::frame().draw_at(ENDING, &ending());
+        let short_score = f64::from(score(&short, &ending(), ENDING));
+        let short_threshold = thousandth_below(short_score - gap);
+        recording.ending(
+            "short",
+            &short,
+            SHORT_KEY,
+            vec![template("ending/short", ENDING, Some(short_threshold))],
+        );
+        let transition = Expected {
+            score: loading_score,
+            threshold: loading_threshold,
+            frame_id: recording.transition_frame_id(0),
+        };
+        let own_ending = Expected {
+            score: short_score,
+            threshold: short_threshold,
+            frame_id: recording.ending_frame_id(SHORT_KEY),
+        };
+        Self {
+            recording,
+            transition,
+            ending: own_ending,
+        }
+    }
+}
+
+// Fix round 2, item 4: the side `passes` on a page transition's own frame and on an ending's own
+// frame ([`Own`]). With a gap of about 0.01 the stop's dry run of the stopped recording marked
+// again warns of each, judged by `record_step_self_mismatch`: the transition's template at step 1
+// with the transition's page, the ending's template with its outcome key and its page; with a gap
+// of about 0.05 that check is warned of for no mark.
+#[test]
+fn rm1_a_transitions_and_an_endings_own_template_near_their_threshold_is_warned() {
+    for (gap, warned) in [(0.01, true), (0.05, false)] {
+        let fixture = Own::recorded(gap);
+        let dry = fixture.recording.stopped(&stop_options(true, None));
+        assert_eq!(dry["lab_status"], "validated", "{dry}");
+        let own = of_check(&dry["warnings"], "record_step_self_mismatch");
+        if !warned {
+            assert!(own.is_empty(), "gap {gap}: {dry}");
+            continue;
+        }
+        assert_eq!(own.len(), 2, "{dry}");
+        let transition_page = dry["cross_check"]["self"]
+            .as_array()
+            .and_then(|pages| pages.iter().find(|entry| entry["transition"] == true))
+            .map(|entry| entry["page"].clone())
+            .unwrap_or_else(|| panic!("no transition page in {dry}"));
+        let of_mark = |id: &str| {
+            own.iter()
+                .filter(|warning| warning["mark_id"] == id)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let warning = the_one(&of_mark("loading/state"), &fixture.transition);
+        assert_eq!(
+            warning,
+            json!({
+                "code": NEAR,
+                "side": "passes",
+                "check": "record_step_self_mismatch",
+                "step": 1,
+                "record_index": 1,
+                "page": transition_page,
+                "mark_id": "loading/state",
+                "frame_id": fixture.transition.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            }),
+            "{dry}"
+        );
+        let warning = the_one(&of_mark("ending/short"), &fixture.ending);
+        assert_eq!(
+            warning,
+            json!({
+                "code": NEAR,
+                "side": "passes",
+                "check": "record_step_self_mismatch",
+                "outcome_key": SHORT_KEY,
+                "page": "ending_01",
+                "mark_id": "ending/short",
+                "frame_id": fixture.ending.frame_id,
+                "score": warning["score"],
+                "threshold": warning["threshold"],
+                "margin": warning["margin"],
+                "bound": DEFAULT_BOUND
+            }),
+            "{dry}"
+        );
+    }
 }

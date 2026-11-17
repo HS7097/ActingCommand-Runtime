@@ -215,9 +215,9 @@ pub struct RecordReadyOutcome {
     pub missing_total: usize,
     /// `press_point_only` for each step whose press is a recorded point without a press region,
     /// then the generator's own warnings as `record stop` prints them (#463 RM-1: with its
-    /// `record_template_near_threshold` after them, once every self-check passed); on a packaged
-    /// recording (#463 S2-1b fix round 1), then each given part of its identity that is not its
-    /// package's.
+    /// `record_template_near_threshold` after them, once every self-check before `cases` passed,
+    /// fix round 2: whatever `cases` finds); on a packaged recording (#463 S2-1b fix round 1), then
+    /// each given part of its identity that is not its package's, and no self-check runs.
     pub warnings: Vec<ReadyWarningItem>,
     /// #463 S2-1c: each self-check that ran, in the order they ran, and whether its failures in
     /// `missing` are all it has; empty when none ran.

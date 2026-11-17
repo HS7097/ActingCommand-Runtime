@@ -498,6 +498,16 @@ fn ready_of(
                     return Err(error);
                 }
                 warnings.extend(generator_warnings(&plan.warnings)?);
+                // #463 RM-1 fix round 2: a template mark near its threshold, found by the checks
+                // before `cases` when they all passed and `cases` failed, before the cases' own
+                // warnings, as on a recording that is ready.
+                warnings.extend(
+                    failed
+                        .near_threshold
+                        .iter()
+                        .cloned()
+                        .map(ReadyWarningItem::NearThreshold),
+                );
                 warnings.extend(generator_warnings(&failed.warnings)?);
                 (
                     check_items(recording, &failed.ran),
@@ -983,6 +993,10 @@ struct SelfCheckFailures {
     /// `record_case_ambiguous_not_written`) of the cases that did not fail, when the check `cases`
     /// ran to its end and another case failed; `record ready` names them.
     warnings: Vec<Value>,
+    /// #463 RM-1 fix round 2: the warnings `record_template_near_threshold` of the self-checks
+    /// before `cases`, when every one of them passed and `cases` failed (a case that misses, or an
+    /// error that ends the check); `record ready` names them, as it names `warnings`.
+    near_threshold: Vec<TemplateNearThreshold>,
 }
 
 impl SelfCheckFailures {
@@ -1096,6 +1110,7 @@ impl Runner {
             ran: self.ran,
             not_run,
             warnings: Vec::new(),
+            near_threshold: Vec::new(),
         }
     }
 }
@@ -1117,7 +1132,9 @@ impl Runner {
 /// `cases`, makes the regression cases of the final package and runs each on it; it reads the final
 /// package, so it runs only when every check before it passed. #463 RM-1: `bound` is the bound the
 /// cross-check and the endings warn of a template mark near its threshold by; it changes no check's
-/// verdict and nothing of the package.
+/// verdict and nothing of the package. Fix round 2: when `cases` fails, the warnings
+/// `record_template_near_threshold` of the checks before it, which all passed, go with its failures
+/// (`SelfCheckFailures::near_threshold`), so that `record ready` names them in the same answer.
 fn self_checks(
     plan: &Plan,
     ocr: &LabOcr,
@@ -1136,12 +1153,15 @@ fn self_checks(
         &mut runner.failures,
     );
     let Some(cases) = runner.last(ReadyCheck::Cases, ReadyCheckStop::CheckError, built) else {
-        return Err(runner.into_failures());
+        let mut failed = runner.into_failures();
+        failed.near_threshold = package.near_threshold;
+        return Err(failed);
     };
     if runner.failed() {
         // `record ready` lists every failing case and names the ambiguity of the others.
         let mut failed = runner.into_failures();
         failed.warnings = cases.ambiguity_warnings().to_vec();
+        failed.near_threshold = package.near_threshold;
         return Err(failed);
     }
     Ok(Checked { package, cases })

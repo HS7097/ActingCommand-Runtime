@@ -606,9 +606,12 @@ naming this file.
   forbids misses there, or the one template a page is told from a screen it must not pass on by
   misses there, by less), with `check`, where it is, `mark_id`, `frame_id`, `score`, `threshold`,
   `margin` and `bound`; in `lab.warnings` after the other warnings, among `ac_record_ready`'s
-  warnings once every self-check passed, at its step in `ac_record_review` (`steps[].warnings`). It
-  is the fact only, refuses nothing and changes no exit status; the package is the same whatever
-  the bound. What to do with a mark that barely passes is yours to decide.
+  warnings once every self-check before `cases` passed (fix round 2: whatever `cases` then finds),
+  at its step in `ac_record_review` (`steps[].warnings`). It is the fact only, refuses nothing and
+  changes no exit status; the package is the same whatever the bound. On a recording whose package
+  is made and that has not changed since (`packaged`; `ac_record_stop` answers it
+  `already_generated`) no self-check runs: `template_margin_bound` is taken there and has no effect.
+  What to do with a mark that barely passes is yours to decide.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

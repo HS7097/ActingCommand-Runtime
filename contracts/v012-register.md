@@ -37165,6 +37165,33 @@ record, no configuration key, no interface revision.
 answer the warning where a template mark lies within 0.03 of its threshold; `--template-margin-bound`
 changes the bound for one call.
 
+**Fix round 2** (coordinator work order `rd-1118/brief-463-rm1-fix2.md`, after the independent
+review of the pull request; the coordinator's rulings on the review's points, not the owner's
+words).
+- *Texts.* The usage of `record ready` and of `record review` names `[--template-margin-bound <d>]`
+  as `record stop`'s does, and their MCP parameter lists `template_margin_bound`. On a recording
+  whose package is made and that has not changed since (`packaged`; `record stop` answers it
+  `already_generated`) no self-check runs: the bound is taken, checked, and has no effect
+  (`contracts/lab-recording.md`, "Package generation" and "Self-checks" item 11; the manual; the
+  rows `record ready` and `record review`).
+- *A failing case no longer drops the warning.* When every self-check before `cases` passed, the
+  warnings `record_template_near_threshold` they found are carried with the failures of `cases` (a
+  case that misses, or an error that ends the check; `SelfCheckFailures::near_threshold`), and
+  `record ready` lists them after the generator's warnings and before the cases' own, as on a
+  recording that is ready; `record review` shows them at their steps. `record stop` still answers
+  the refusal alone.
+- *No warning where item 7c allows the pass.* An optional step's page on the frames of another
+  optional step of its run closed by the same press (`same_closing`: the same click rectangle, or
+  the same key on the same marks), where section 4.7c lets it pass as one pop-up recorded twice, is
+  not judged `misses` there.
+- *Tests.* Four more in `gate_463_rm1.rs` (the gate map's comment, items 6 to 9), each judgement
+  once with a gap of about 0.01 (warned) and once with about 0.05 (not warned): an optional page
+  against `previous` and the skip target; an optional page against `other_optional`, warned with
+  different presses and not with the same press; an ending's page against `previous`, `usual` and
+  `other_ending` and the usual page on an ending's frame; a page transition's and an ending's
+  template on their own frames (`passes`). No existing test is adapted. The older MCP server's
+  `record stop` is not changed (it is being removed).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

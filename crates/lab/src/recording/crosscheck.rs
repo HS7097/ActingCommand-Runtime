@@ -1756,7 +1756,9 @@ fn skip_target_insensitive(
 /// target, the optional step's frames it passes on, its page), and under `record ready` the next
 /// is judged; a member whose skip target failed has no gate result. #463 RM-1: a page that does not
 /// pass on such a screen only because one template mark it requires misses there by less than
-/// `bound` is that mark's warning `record_template_near_threshold` (`misses`).
+/// `bound` is that mark's warning `record_template_near_threshold` (`misses`); fix round 2: but for
+/// the frames of another optional step closed by the same press ([`same_closing`]), on which c lets
+/// the page pass.
 fn optional_checks(
     evaluation: &Evaluation<'_>,
     plan: &Plan,
@@ -1804,9 +1806,11 @@ fn optional_checks(
                     held,
                 } = page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
                 let other_step = &plan.steps[other];
+                // Section 4.7c: on the frames of another optional step of the run closed by the
+                // same press the page may pass (one pop-up recorded twice).
+                let same_click =
+                    matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                 if !matched.is_empty() {
-                    let same_click =
-                        matches!(kind, Against::OtherOptional) && same_closing(step, other_step);
                     if !same_click {
                         failures.fail(
                             Locus::on_step(step).with_frames(&matched).with_page(page),
@@ -1817,19 +1821,22 @@ fn optional_checks(
                     same_pairs.insert((member.min(other), member.max(other)));
                     same_pages.insert((other, member), matched);
                 } else {
-                    // #463 RM-1: told from that screen by one template mark alone.
-                    checks.near.extend(held.within(
-                        bound,
-                        TemplateThresholdSide::Misses,
-                        OPTIONAL_AMBIGUOUS,
-                        &NearThresholdAt {
-                            step: Some(step.number),
-                            record_index: Some(step.step.index),
-                            page: Some(page.to_owned()),
-                            against: Some(kind.as_str().to_owned()),
-                            ..NearThresholdAt::default()
-                        },
-                    ));
+                    // #463 RM-1: told from that screen by one template mark alone; fix round 2:
+                    // not on a screen section 4.7c lets the page pass on, where it need not miss.
+                    if !same_click {
+                        checks.near.extend(held.within(
+                            bound,
+                            TemplateThresholdSide::Misses,
+                            OPTIONAL_AMBIGUOUS,
+                            &NearThresholdAt {
+                                step: Some(step.number),
+                                record_index: Some(step.step.index),
+                                page: Some(page.to_owned()),
+                                against: Some(kind.as_str().to_owned()),
+                                ..NearThresholdAt::default()
+                            },
+                        ));
+                    }
                     if !undetermined.is_empty() {
                         checks.partial = true;
                         checks.warnings.push(json!({
