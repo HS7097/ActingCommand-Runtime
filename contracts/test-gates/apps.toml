@@ -2582,3 +2582,21 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_464_p2::p2_revision_18_a_select_scan_without_an_end",
 ]
 incident = ["#463 S2-9b"]
+
+# Workflow #479 ACIB-0 (apps/acib, the iOS device bridge; its README): every line acib prints is one JSON line of its command's shape, status 0 only when answered, and holds no member for a device's serial number, UDID, name or address or for a pairing record (1); its problem words are its own snake_case words, one per cause (2); a library error is shown by its text, or by its kind alone when the text holds a run of 40 or 24 hexadecimal digits (also 8 and 16 around a dash), an address or a word of letters and digits shaped like a serial number, and a device's refusal word and a service name are cut the same way (3); the command line takes exactly the four commands with --device and --timeout-ms and refuses every other (4). No device and no network in CI.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ios-bridge::bin:acib::answer::tests::each_answer_is_one_json_line_of_its_shape_and_its_status",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::the_answers_hold_no_member_for_an_identifier",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::every_problem_word_is_this_programs_own_snake_case_word",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::a_library_error_shows_its_text_or_only_its_kind",
+    "actingcommand-ios-bridge::bin:acib::redact::tests::a_library_error_with_a_40_or_a_24_digit_hex_run_is_cut_to_its_kind",
+    "actingcommand-ios-bridge::bin:acib::redact::tests::a_plain_library_error_is_shown_as_it_is",
+    "actingcommand-ios-bridge::bin:acib::redact::tests::a_text_shaped_like_an_address_or_a_serial_is_cut",
+    "actingcommand-ios-bridge::bin:acib::redact::tests::kinds_refusal_words_and_service_names",
+    "actingcommand-ios-bridge::bin:acib::args::tests::the_four_commands_parse_with_their_options",
+    "actingcommand-ios-bridge::bin:acib::args::tests::every_other_command_line_is_refused",
+    "actingcommand-ios-bridge::bin:acib::args::tests::a_request_names_its_command_and_its_device",
+]
+incident = ["#479 ACIB-0"]

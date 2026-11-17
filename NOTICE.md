@@ -125,6 +125,13 @@ No source code of another automation project is in this repository. Where the Ru
 - Rust dependency license check: `wide` 1.7.1 and `safe_arch` 1.2.0 report `Zlib OR Apache-2.0 OR MIT`; `nasm-rs` 0.3.2 reports `MIT OR Apache-2.0`; `walkdir` 2.5.0 and `same-file` 1.0.6 report `Unlicense/MIT`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
 - Notes: `wide` 0.7.33 and `safe_arch` 0.7.4 were already dependencies of other crates; `Cargo.lock` names both versions of each. `cc`, `log`, `winapi-util`, `bytemuck` and `sha2`, which these crates also use, were already dependencies.
 
+### The iOS device library of `acib`
+
+- Role (Workflow #479 ACIB-0): `apps/acib`, the iOS device bridge, reads iOS devices through the `idevice` library (usbmuxd, lockdown, the CoreDeviceProxy tunnel with the `jktcp` TCP stack, the remote service discovery handshake, the image mounter's lookup), with TLS by `rustls` on `ring`, on a `tokio` runtime of its own. No other crate of the workspace uses them, and `acib.exe` is in neither the Runtime nor the Tools artifact: a pull request's build uploads it as an artifact of its own, and a release carries nothing of it.
+- Source: crates.io, compiled from source into `acib.exe` only; `Cargo.toml` pins `idevice` to exactly 0.1.68 and `Cargo.lock` pins each crate it brings in with its crates.io SHA-256 checksum. No source file is copied into this repository, and no code or build of another project (another iOS library or tool) is used: the owner allowed `idevice` alone as a dependency (board #479).
+- Rust dependency license check: `idevice` 0.1.68 and `jktcp` 0.1.8 report `MIT` (their crates.io metadata, checked on 2026-11-17). The licences of the other crates they bring in, which `Cargo.lock` lists, are the ones each crate's crates.io metadata states; they are not yet checked one by one here.
+- Notes: `idevice` is to be noted in the umbrella repository's licence matrix (board #479).
+
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 
 - upstream project name
