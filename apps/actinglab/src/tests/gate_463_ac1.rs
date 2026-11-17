@@ -58,7 +58,10 @@
 //   failing cases (the five of a recording and two copies of each in its set, every scene changed
 //   after the stop): `case_failed` with `count` 15, `failed_total` 15, `listed` and the rows the
 //   first `ROWS_LISTED_MAX` in the order of their names, each a short row without a check's
-//   `detail`; nothing written.
+//   `detail`; nothing written. The 0.12.71 train: a copy keeps the `id` of the case it copies, and
+//   nothing compares two cases' ids (the reader reads it as a text it answers, the runner runs each
+//   directory by itself): each row carries the `id` of its own `case.json`, and rows of one id are
+//   listed, each by its own path.
 // No Runtime (the state root's variable names a folder that does not exist), no device, no clock,
 // no sleep: made-up recordings, checkouts and values.
 
@@ -80,7 +83,7 @@ use actingcommand_resource_tooling::{
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -1238,11 +1241,18 @@ fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lis
     let names = names_in(&set);
     assert_eq!(names.len(), 15, "{names:?}");
     // Every scene changed after the stop: no case's scene is the one its `case.json` pins.
+    // The 0.12.71 train: a copy's `case.json` keeps the `id` of the case it copies, so ten cases
+    // repeat an id. The reader reads `id` as a text it answers and nothing else; the runner reads
+    // and runs each case directory by itself, by its own path; adoption names a case by its
+    // directory; none of them compares two cases' ids. So the fifteen are fifteen cases, each run
+    // and listed by its own directory, two rows of one id told apart by their paths.
+    let mut id_of = BTreeMap::new();
     for name in &names {
         let case = serde_json::from_slice::<Value>(
             &fs::read(set.join(name).join("case.json")).expect("case.json"),
         )
         .expect("case.json reads");
+        id_of.insert(name.clone(), case["id"].clone());
         let scene = set
             .join(name)
             .join(case["scene"].as_str().expect("the case names its scene"));
@@ -1275,9 +1285,12 @@ fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lis
         expected,
         "{details}"
     );
-    for row in rows {
+    for (row, name) in rows.iter().zip(&names) {
         assert_eq!(row["verdict"], "failed", "{row}");
         assert_eq!(row["package_id"], PACKAGE, "{row}");
+        // The 0.12.71 train: each row carries the `id` its own `case.json` gives, the copied
+        // case's for a copy.
+        assert_eq!(row["id"], id_of[name], "{row}");
         let checks = row["checks"].as_array().expect("the checks not passed");
         assert!(!checks.is_empty(), "{row}");
         assert!(
@@ -1285,6 +1298,12 @@ fn ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lis
             "{row}"
         );
     }
+    // Among the rows listed, cases that share one id: each its own row.
+    let listed_ids = rows
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(listed_ids.len() < rows.len(), "{details}");
     assert_eq!(tree(&repo), before, "nothing written in the checkout");
     assert!(!Path::new(&state).join("adopt").exists(), "nothing kept");
 }

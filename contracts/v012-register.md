@@ -36719,6 +36719,43 @@ No decision reads a code by name. The outcome-code index is regenerated. **Tests
 map's comment lists them. No test is adapted in what it pins (P1's `NoLab` follows the trait); no
 golden changes; no test leaves a gate map.
 
+**The train of 0.12.71** (coordinator work order `rd-1117/brief-train-01271.md`). Pull request
+#1800 (#463 CH-1, §1.455) carries #1810 (#463 RG-1, §1.463), this slice (#1808) and #1807 (#398
+DB-1, §1.460), each joined whole by one merge commit: this register keeps §1.455, §1.459, §1.460,
+§1.461 and §1.463, each once, in the order of their numbers; the apps gate map keeps DB-1's block
+before this slice's two. Where the slices meet:
+- *Adoption and the admission record.* Adoption runs its cases on the package it writes through
+  the runner's loader, `RegressionPackage::load`, which admits by
+  `ExternallyVerifiedBundle::load_path`, whose signature CH-1 keeps; CH-1's measuring admission
+  (`Containment::load_path_measured`, `PreparedContainedTask::load_path_with_resident_bytes`, which
+  now answers the content hash beside the resident bytes) is the Runtime's run's alone, and no other
+  slice of the train calls it or builds a `PackageAdmitted`. The cases adoption runs reach no
+  Runtime and record nothing in any ledger: the reader, `case_of_directory` and
+  `RegressionPackage::run` read files and evaluate a scene, and `record_ready_by_id` only reads.
+- *A checkout without `regression/<game>/`.* With `none_found` or `package_path`,
+  `CheckoutCases::read` answers nothing for a directory that is not there (`NotFound`), so such a
+  checkout adopts as before, with no refusal and no warning; a directory that is there and cannot
+  be listed is `repository_invalid`, as fix round 1 says. No change.
+- *Two cases of one id.* The reader reads a case's `id` as a text it answers; `case_of_directory`
+  reads and runs each case directory by itself, `not_passed` lists rows by their paths, and
+  adoption names a case by its directory: nothing compares two cases' ids, so two cases of one id
+  are two cases, each its own row. The test of fix round 1's bound stands on it now: its ten copies
+  keep the `id` of the case each copies, each row carries the `id` of its own `case.json`, and rows
+  of one id are listed, each by its own path.
+- *One box.* RG-1's `located_text_box` stays the one computation of a found text's box: the Lab's
+  `follow.rs` calls it, and no other slice brings a computation of it.
+- *DB-1* shares with the others only the register, the operation table and the apps gate map (its
+  outcome fragment and its page of the index are its own); its line in `Cargo.lock` (actingd's
+  dev-dependency on `actingcommand-lab-ops`) is DB-1's byte for byte, as no other slice adds a
+  dependency.
+
+The outcome-code index is regenerated and current: 4018 codes, 3929 active, 89 retired. The
+operation table keeps its 194 rows (every help text at most 160 bytes), the ratchet its 46
+dispatch arms and 109 commands. *Tests*: one adapted, as the work order asks of it, its assertions
+kept: `ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them` also
+asserts each row's `id` and that rows of one id are listed (apps gate map, its comment). No test is
+added; no golden changes; no test leaves a gate map.
+
 ### 1.463 Slice #463 RG-1 (0.12.71): `recognize` answers the box of a text it located (Workflow #463; observed on production 0.12.70 by the channel that keeps the resource repositories; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rg1-recognize-located-box.md`, on main `ca539cc7`)
 
 This section takes 1.463 (1.460, 1.461 and 1.462 are held by other open slices of the same day).
