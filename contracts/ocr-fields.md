@@ -533,8 +533,12 @@ and the answer's `evaluation.matched_rect` is the same box. A locate target that
 hit, a hit outside every cell, or a second match within its `unique` margin, the refusal the run
 gives as well) and an OCR target without `locate` answer `matched_rect` `null`, as before; every
 other target, and every other member of the answer, is answered as before. The answers built by
-the same function carry the box too: the `evaluation` of `is-visible` and of `tap-target`'s dry
-run.
+the same function carry the box too: the `evaluation` of `is-visible`, and that of `tap-target` in
+the drive record of its recognition. What `tap-target`'s dry run plans to press is the target's
+declared static `click`, not the located box: where the OCR target declares one, the dry run plans
+that `click` and its answer's `evaluation` carries the box; where it declares none, the dry run is
+refused `validation_failed` (the target has no click field) after that drive record is written,
+and answers no box.
 
 Reads are counted per consumer: one page recognition (every page rule of the page set) or
 one guard evaluation. The reads are those of locate targets and (Workflow #396 REC-6) of value

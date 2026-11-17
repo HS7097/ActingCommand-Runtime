@@ -36339,8 +36339,9 @@ answer has no box; otherwise the found block is the one the run presses.
   target that did not pass (not found, outside every cell, not unique: answered as the refusal
   is answered today, `passed: false` with its message), names none, as before.
 - *What else changes*: the answers built by the same function, `is-visible`'s `evaluation` and
-  `tap-target`'s (its dry run's answer and the drive record it writes), carry the box too, where
-  they carried `null`. Nothing else.
+  `tap-target`'s (the drive record of its recognition, and its dry run's answer where the OCR
+  target declares a static `click`; fix round 1 below), carry the box too, where they carried
+  `null`. Nothing else.
 
 **The other answers that carry a target's rectangle** (the work order's item 4; read, not changed
 unless they share the function):
@@ -36351,14 +36352,14 @@ unless they share the function):
 | `navigate` dry run (a step's `recognition.evaluation`) | the same function, but a route step's box comes from `target_evaluation_rect` (`crates/lab/src/drive.rs`), which takes a template's match only and refuses any other target before an answer; following a found text in a route needs its own design |
 | offline `observe` (`targets[].evaluation`, `target_center`), `do`, `ensure` and `wait` dry runs (`guard_result.evaluation`) | not carried: actinglab builds these with its own `target_eval_json` (`apps/actinglab/src/commands/navigation_recovery.rs`) from the template's evidence; online `observe` answers the Runtime's page projection, which this function does not build (not read further) |
 | `detect-page`, `current-page` | no rectangle for any target: each page target is `{id, role, passed, message}` |
-| a recording's self-tests (`record mark`) | `self_test.matched_rect` is set for a template mark alone; a located-text mark's self-test names none. The step's `click.rect` of a click that follows a found text (`record status`, `record review`'s `press.rect`) is that box on the primary frame, computed by the Lab's own `located_rect` (`crates/lab/src/recording/follow.rs`), the same rule written a second time |
+| a recording's self-tests (`record mark`) | `self_test.matched_rect` is set for a template mark alone; a located-text mark's self-test names none. The step's `click.rect` of a click that follows a found text (`record status`, `record review`'s `press.rect`) is that box on the primary frame, which the Lab's `crates/lab/src/recording/follow.rs` takes from `located_text_box` since fix round 1 (before it, its own `located_rect`, the same rule written a second time) |
 | `run evidence` of a step that followed a text | no `matched_rect`: `targets[].box` of an OCR target is its read region (a ledger fact), and in a recorded package the followed text is no page target; the step's `action.rect`, the box its point was drawn in, comes from `target_click_box` and so from the same function; the overlay (task diagnostic stream) carries `located` with the block and the cell |
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
-| The box | `crates/execution-kernel/src/contained_task.rs`: `located_text_box` (new, `pub(crate)`), called by `target_click_box` |
+| The box | `crates/execution-kernel/src/contained_task.rs`: `located_text_box` (new, `pub` since fix round 1, exported by the kernel's `pub use contained_task::*`), called by `target_click_box` and by the Lab's `crates/lab/src/recording/follow.rs` |
 | The answer | `crates/execution-kernel/src/readonly.rs`: `target_evaluation_response` takes `matched_rect` from `matched_rect`, the template's match or, for an OCR target that passed, `located_text_box` |
 | Texts | [ocr-fields.md](ocr-fields.md), "Located text": what `recognize` answers for a locate target; no manual lists the answer's members (`apps/actinglab-mcp/MANUAL.md` does not) |
 
@@ -36379,6 +36380,31 @@ configuration key, outcome code or interface revision.
 **At deploy.** Nothing to configure. `recognize` on a scene where a locate target passes now
 answers its box in `matched_rect`, so a regression may check a click that follows a found text
 against it.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-rg1-fix1.md`, after the independent
+review of pull request #1810 at `70c73f2c`: its first and third points that may change, nothing
+else; main still `ca539cc7`, nothing merged).
+- *One copy.* `located_text_box` is `pub`, exported by the kernel's `pub use contained_task::*`.
+  The Lab's `crates/lab/src/recording/follow.rs` takes a found text's box from it at both places
+  that computed it with their own `located_rect`, which is removed: `followed_evaluation_box` (the
+  first decision's click box, `crosscheck.rs`) and `check_located_follow_frames` (`record mark`'s
+  check of a following click, whose box on the primary frame is the step's `click.rect`). Each
+  keeps its own
+  check of `passed`: in `followed_evaluation_box` it also guards the template branch, whose match a
+  failed template keeps; for a located text it changes nothing today (an evaluation carries
+  `located` only when it passed), but `located_text_box` itself reads no `passed`, and `recognize`'s
+  answer checks it before calling it as well. The rule is the same, so the recording's answers are
+  byte for byte what they were; the lab gate tests of #463 L2 pin them
+  (`l2_a_followed_located_text_generates_…`, the cell;
+  `l2_a_rectangle_with_a_located_text_follow_…`, the block and the offset from it;
+  `l2_a_click_box_that_leaves_a_sample_frame_…` and `l2_an_executed_press_outside_the_found_box_…`,
+  the box on a sample and on the primary frame; `l2_fix1_names_changed_after_the_press_…` and
+  `l2_fix2_a_later_change_that_passes_the_press_check_…`, the cell after a change). No test is
+  added or adapted.
+- *Text.* [ocr-fields.md](ocr-fields.md), "Located text": `tap-target`'s dry run carries the box
+  in its answer only where the OCR target declares a static `click`, which is what it plans to
+  press, not the located box; without one it is refused `validation_failed` (no click field) after
+  the drive record of its recognition, which carries the box, is written.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

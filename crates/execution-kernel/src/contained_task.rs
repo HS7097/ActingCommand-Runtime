@@ -12785,8 +12785,9 @@ fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), Cont
 /// `offset` click that follows the text starts: the declared cell holding the found block, else
 /// the block; `None` when the evaluation located no text. #463 RG-1: the one computation of that
 /// box; `recognize` answers it as the target's `matched_rect` from here
-/// ([`crate::target_evaluation_response`]).
-pub(crate) fn located_text_box(target: &TargetEvaluation) -> Option<PackRect> {
+/// ([`crate::target_evaluation_response`]), and the Lab's recording takes the box of a click that
+/// follows a located-text mark from here.
+pub fn located_text_box(target: &TargetEvaluation) -> Option<PackRect> {
     target
         .ocr
         .as_ref()
