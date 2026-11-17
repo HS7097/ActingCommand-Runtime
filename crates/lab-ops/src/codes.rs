@@ -142,6 +142,10 @@ actingcommand_contract::outcome_codes! {
         DeviceKindUnsupported => "device_kind_unsupported": error / none,
         DeviceBindingsInvalid => "device_bindings_invalid": error / none,
         DeviceBindingsWriteFailed => "device_bindings_write_failed": error / none,
+        // #398 DB-2 (since 0.12.72): `devices bind --device-key`, a key no row adb lists now
+        // carries; every bind, a row that cannot be a handset's device (`device_row_problem`).
+        DeviceKeyUnknown => "device_key_unknown": error / none,
+        DeviceRowUnbindable => "device_row_unbindable": error / none,
         // ---- end of RD-1c
         // ---- Workflow #410 item 6: `capability-gap` / `ac_capability_gap`.
         ActingctlCapabilityGapRecorded => "actingctl_capability_gap_recorded": success / none,
@@ -295,6 +299,19 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #434 LAB-5G2b: a path that is not absolute where an absolute one is required
         /// (the Lab's MCP server, whose current directory means nothing to its caller).
         NotAbsolute => "not_absolute",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// #398 DB-2: why a device row adb lists cannot be bound to a handset instance (vocabulary
+    /// `device_row_problem`, the value of `device_row_unbindable`).
+    pub enum DeviceRowProblem: "device_row_problem" {
+        /// adb reports the row in another state than `device`, the state of an authorized device
+        /// that is online (`unauthorized`, `offline`, no permissions and the like).
+        StateNotDevice => "state_not_device",
+        /// The row's transport is not the one the handset instance declares (`device.transport`,
+        /// `usb` when it names none): a `tcp` row, an emulator's loopback row among them.
+        TransportMismatch => "transport_mismatch",
     }
 }
 

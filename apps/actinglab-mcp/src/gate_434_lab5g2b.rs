@@ -280,6 +280,15 @@ fn mcp_front_members_in_one_place() {
             ("report export", "out", Supplied::ExportDirectory),
             // #398 DB-1 (adapted: the work order leaves the row's channel out of its tool).
             ("devices bind", "bound_via", Supplied::Nothing),
+            // #398 DB-2 (adapted: ruling 6 and the coordinator's addition leave both forms of the
+            // salt out of the two rows' tools).
+            ("devices", "key_salt", Supplied::Nothing),
+            ("devices", "key_salt_env", Supplied::Nothing),
+            ("devices bind", "key_salt", Supplied::Nothing),
+            ("devices bind", "key_salt_env", Supplied::Nothing),
+            // #398 DB-2 fix round 1 (adapted: the work order has `help devices bind` name the
+            // row's `--root`, declared now; its tool still takes none).
+            ("devices bind", "root", Supplied::Nothing),
         ],
         "the front's own members, in one place"
     );

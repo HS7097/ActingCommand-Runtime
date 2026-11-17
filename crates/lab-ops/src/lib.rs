@@ -181,6 +181,10 @@ mod gate_467_rpt1;
 // operation (`s13_the_app_line_carries_record_and_its_waits_when_asked`).
 #[cfg(test)]
 mod gate_463_s13;
+// Test-only: #398 DB-2, `devices` before an installation is selected, the device key, the bind by
+// key and the rows a bind refuses (register §1.467).
+#[cfg(test)]
+mod gate_398_db2;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]
@@ -240,14 +244,25 @@ pub fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'stati
             "--detail",
         ],
         // Workflow #398 RD-1c: `devices`; the alias and the handle are positional words.
-        "devices" if action == Some(devices::LIST) => &["--state-root", "--root"],
+        // #398 DB-2: `list` also takes a candidate configuration, or neither it nor a state root,
+        // and the caller's salt, as text or from a variable.
+        "devices" if action == Some(devices::LIST) => &[
+            "--state-root",
+            "--root",
+            devices::CONFIG_FLAG,
+            devices::KEY_SALT_FLAG,
+            devices::KEY_SALT_ENV_FLAG,
+        ],
         // #398 DB-1: `bind` also takes a candidate configuration in place of `--state-root`, and
-        // the channel `ui`.
+        // the channel `ui`; #398 DB-2: the device key in place of its handle, and the salt.
         "devices" if action == Some(devices::BIND) => &[
             "--state-root",
             "--root",
             devices::CONFIG_FLAG,
             devices::BOUND_VIA_FLAG,
+            devices::DEVICE_KEY_FLAG,
+            devices::KEY_SALT_FLAG,
+            devices::KEY_SALT_ENV_FLAG,
         ],
         "devices" if action == Some(devices::UNBIND) => &["--state-root"],
         // Workflow #410 item 6: both texts are required; no root is read.

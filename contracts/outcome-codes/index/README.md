@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3931 |
+| active | 3933 |
 | retired | 89 |
-| all | 4020 |
+| all | 4022 |
 
 ## Active codes by category
 
@@ -33,7 +33,7 @@ here.
 | success | 125 |
 | info | 214 |
 | warning | 172 |
-| error | 3403 |
+| error | 3405 |
 | fatal | 17 |
 
 ## Text and review of the active codes
@@ -42,17 +42,17 @@ here.
 |---|---:|
 | `common_causes` and `handling` both written | 781 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3146 |
+| neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
-| `pending` | 3777 |
-| all active codes | 3931 |
+| `pending` | 3779 |
+| all active codes | 3933 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 204 | 199 | 40 | 8 |
+| [actingctl](actingctl.md) | 206 | 201 | 40 | 8 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
 | [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4020 | 3931 | 781 | 154 |
+| all | 4022 | 3933 | 781 | 154 |
