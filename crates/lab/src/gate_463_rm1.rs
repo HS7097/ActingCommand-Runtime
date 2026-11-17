@@ -633,7 +633,11 @@ fn rm1_a_template_that_passes_its_frames_by_less_than_the_bound_is_warned_and_ch
     let ready_zero = recording.readied(Some(0.0));
     assert_eq!(ready["status"], "ready", "{ready}");
     assert_eq!(ready["missing"], json!([]), "{ready}");
-    assert_eq!(near(&ready["warnings"]), [warning.clone()], "{ready}");
+    assert_eq!(
+        near(&ready["warnings"]),
+        std::slice::from_ref(&warning),
+        "{ready}"
+    );
     assert!(near(&ready_zero["warnings"]).is_empty(), "{ready_zero}");
     assert_eq!(without_near(&ready), ready_zero);
 

@@ -2352,7 +2352,7 @@
         {"name": "template_margin_bound", "form": "option", "type": "decimal", "required": false, "note": "#463 RM-1 (0.12.72): as record ready's, 0 to 1, default 0.03: the bound of the warnings record_template_near_threshold each step shows"}
       ],
       "help": "Shows each step of a recording as the screen before, the press and the screen after, and writes previews with the press and boxes drawn.",
-      "output": "record_id, session, steps[{step, artifact_step, kind, before{frame_id, path, preview}?, press{point?, to_point?, duration_ms?, rect?, gesture?, application?, source, outcome}?, after{step, frame_id, path, preview, still?, waited_ms?}?, between[{frame_id, path}], marks, choice?, missing}], steps_total: how many effective steps the recording has, where steps may be cut, warnings[{code: frame_file_missing, frame_ids}]; a path is null when its file is not there",
+      "output": "record_id, session, steps[{step, artifact_step, kind, before{frame_id, path, preview}?, press{point?, to_point?, duration_ms?, rect?, gesture?, application?, source, outcome}?, after{step, frame_id, path, preview, still?, waited_ms?}?, between[{frame_id, path}], marks, choice?, missing, warnings?}], steps_total: how many effective steps the recording has, where steps may be cut, warnings[{code: frame_file_missing, frame_ids}]; a path is null when its file is not there",
       "writes": true,
       "irreversible": false,
       "runtime": "offline",
