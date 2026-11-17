@@ -13,14 +13,16 @@
 // the policy the Lab writes for an ordered variable, stops on the screen where its first preference
 // appears; a wanted card on no screen ends the first kind normally with its `on_empty` key; every
 // move is an effect intent followed by its input and by no completion; a list opened in its middle
-// is rewound to its start before it is covered.
+// is rewound to its start before it is covered. Fix round 1 (the independent review's gaps): the
+// tap is the point F2 gives, the list having drifted by a pixel after the last move; a list whose
+// start check never passes fails the rewind; an unreadable card blocks the empty end.
 //
 // K-c: a scan that declares `early_stop` may declare no `end`. It never covers its list: found, the
 // card is pressed once the early stop holds; when the list stops moving first, the run fails with a
 // code of its own, nothing is pressed and no decision is recorded; the offline entry answers the
 // same on the same frames. A scan with neither `end` nor `early_stop`, one without `end` beside
-// `on_empty`, and a list reading's scan without `end` are refused, by the declaration gate and by
-// admission alike.
+// `on_empty`, and a list reading's scan without `end` (or with a `null` one) are refused, by the
+// declaration gate and by admission alike.
 //
 // Every expected value comes from those lines and the package below, never from the code. The
 // package is a synthetic `neutral` package admitted by the kernel's own admission, built on K-R3a's
@@ -39,7 +41,11 @@
 // travel (from y1 to y2) within 0 to 76 px, a tap on the list opens the detail page, and every frame
 // it gives is committed with a reference of its own, as the host's are. No action seed is drawn, so
 // every drag runs between its rectangles' centres: the declared advance moves the list 24 px on, its
-// reverse 24 px back, the declared reposition's reverse 36 px back.
+// reverse 24 px back, the declared reposition's reverse 36 px back; and a tap lands on its box's
+// centre. As a test asks (`Stand`), it shows no start mark, draws one card's patch in a colour no
+// name has, or lets the list drift 1 px on at the third capture after an input: a move's frame
+// settles on its first two captures, so that drift falls after the last move's settled frame and
+// before the two captures of F2.
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
@@ -51,12 +57,14 @@ use actingcommand_contract::{
     TaskSelectionUnknownCheck, TaskSelectionUpperBound,
 };
 use actingcommand_device::CaptureBackendName;
+use actingcommand_pack_containment::source::{Bundle, declaration_file_requests};
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
     VisionProviderError, VisionProviderErrorCode,
 };
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
+use std::path::PathBuf;
 use zip::{ZipWriter, write::FileOptions};
 
 const WIDTH: u32 = 64;
@@ -166,8 +174,35 @@ enum Shown {
     Detail,
 }
 
+// How the stand-in shows its list beyond its offset (fix round 1): whether the start mark shows at
+// the list's top (none: the start check never passes), the card, if any, whose patch is of a colour
+// no name has (the card reader reads no name on it), and whether the list drifts 1 px on at the
+// third capture after an input.
+#[derive(Clone, Copy)]
+struct Stand {
+    start_mark: bool,
+    unreadable: Option<u32>,
+    drift: bool,
+}
+
+// The list as every test but fix round 1's shows it.
+const PLAIN: Stand = Stand {
+    start_mark: true,
+    unreadable: None,
+    drift: false,
+};
+
+// The list that drifts 1 px on after a move's frame settled, before F2.
+const DRIFTING: Stand = Stand {
+    drift: true,
+    ..PLAIN
+};
+
+// The patch of the card no name has: its red level is no card's.
+const UNREADABLE_PATCH: [u8; 3] = [250, 10, 250];
+
 // One pixel of what the stand-in shows.
-fn shown_pixel(shown: Shown, x: u32, y: u32) -> [u8; 3] {
+fn shown_pixel(shown: Shown, stand: Stand, x: u32, y: u32) -> [u8; 3] {
     let Shown::List(offset) = shown else {
         return if (x, y) == (0, 0) {
             [0, 0, 255]
@@ -178,7 +213,7 @@ fn shown_pixel(shown: Shown, x: u32, y: u32) -> [u8; 3] {
     if y == 0 && x < 4 {
         return match x {
             0 => [255, 0, 0],
-            1 if offset == 0 => [0, 255, 0],
+            1 if offset == 0 && stand.start_mark => [0, 255, 0],
             2 if offset == MAX_OFFSET => [0, 0, 255],
             3 => [0, 255, 0],
             _ => BACKGROUND,
@@ -194,6 +229,9 @@ fn shown_pixel(shown: Shown, x: u32, y: u32) -> [u8; 3] {
             return noise(x - 4, row - top);
         }
         if (top..top + 4).contains(&row) && (12..16).contains(&x) {
+            if stand.unreadable == Some(card) {
+                return UNREADABLE_PATCH;
+            }
             let red = patch_level(card);
             return [red, 220 - red / 2, 90];
         }
@@ -201,8 +239,8 @@ fn shown_pixel(shown: Shown, x: u32, y: u32) -> [u8; 3] {
     BACKGROUND
 }
 
-fn screen(shown: Shown) -> Frame {
-    image(WIDTH, HEIGHT, |x, y| shown_pixel(shown, x, y))
+fn screen(shown: Shown, stand: Stand) -> Frame {
+    image(WIDTH, HEIGHT, |x, y| shown_pixel(shown, stand, x, y))
 }
 
 // The frames a forward run over the list scrolled by `offsets` records, each viewport twice as the
@@ -211,7 +249,12 @@ fn screen(shown: Shown) -> Frame {
 fn forward(offsets: &[u32]) -> Vec<Frame> {
     offsets
         .iter()
-        .flat_map(|&offset| [screen(Shown::List(offset)), screen(Shown::List(offset))])
+        .flat_map(|&offset| {
+            [
+                screen(Shown::List(offset), PLAIN),
+                screen(Shown::List(offset), PLAIN),
+            ]
+        })
         .collect()
 }
 
@@ -221,7 +264,8 @@ fn marker_png() -> Vec<u8> {
 }
 
 // Reads a card's name from the colour of its patch, as K1's reader does: the name region starts at
-// the card's anchor, and the patch lies 8 px to its right.
+// the card's anchor, and the patch lies 8 px to its right; a patch of a colour no card has reads no
+// text, which names no card (fix round 1's unreadable card).
 #[derive(Debug)]
 struct CardNames;
 
@@ -414,10 +458,31 @@ fn bytes(value: &Value) -> Vec<u8> {
     serde_json::to_vec(value).expect("JSON bytes")
 }
 
-// The linear package of the one step `step`, its control declaring the ordered variable `card`
-// over every name with the default `wanted`; with `on_empty`, its scheduling outcome maps the list
-// to `NOT_FOUND` beside the detail page; with `policy`, the step's document.
-fn package_of(step: Value, wanted: &[&str], on_empty: bool, policy: Option<Value>) -> Vec<u8> {
+// The task document of the one step `step` over the list; with `on_empty`, its scheduling outcome
+// maps the list to `NOT_FOUND` beside the detail page.
+fn task_of(step: Value, on_empty: bool) -> Value {
+    let mut task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": WIDTH, "height": HEIGHT},
+        "entry_page": "list",
+        "target_page": "detail",
+        "max_steps": 1,
+        "candidate_layouts": [card_layout()],
+        "operations": [step]
+    });
+    if on_empty {
+        task["scheduling_outcome"] = json!({"mappings": [mapping("card_selected", "detail"),
+                                                         mapping(NOT_FOUND, "list")]});
+    }
+    task
+}
+
+// The linear package of the task `task`, its control declaring the ordered variable `card` over
+// every name with the default `wanted`; with `policy`, the step's document.
+fn package_of(task: &Value, wanted: &[&str], policy: Option<Value>) -> Vec<u8> {
     let options = IDS
         .iter()
         .zip(NAMES)
@@ -439,22 +504,6 @@ fn package_of(step: Value, wanted: &[&str], on_empty: bool, policy: Option<Value
                        "options": options, "min_count": 1, "max_count": IDS.len(),
                        "default": wanted}]
     });
-    let mut task = json!({
-        "schema_version": "0.9",
-        "task_id": "task",
-        "game": "neutral",
-        "server_scope": ["test"],
-        "coordinate_space": {"width": WIDTH, "height": HEIGHT},
-        "entry_page": "list",
-        "target_page": "detail",
-        "max_steps": 1,
-        "candidate_layouts": [card_layout()],
-        "operations": [step]
-    });
-    if on_empty {
-        task["scheduling_outcome"] = json!({"mappings": [mapping("card_selected", "detail"),
-                                                         mapping(NOT_FOUND, "list")]});
-    }
     let colour = |id: &str, x: u32, expected: [u8; 3]| {
         json!({"type": "color", "id": id,
                "region": {"x": x, "y": 0, "width": 1, "height": 1}, "expected": expected})
@@ -491,7 +540,7 @@ fn package_of(step: Value, wanted: &[&str], on_empty: bool, policy: Option<Value
             "resources/manifest.json",
             bytes(&json!({"schema_version": "0.3", "entry_task_id": "task"})),
         ),
-        ("resources/operations/task/task.json", bytes(&task)),
+        ("resources/operations/task/task.json", bytes(task)),
         ("resources/assets/card.png", marker_png()),
         ("resources/recognition/neutral.test.pack.json", bytes(&pack)),
         (
@@ -508,9 +557,14 @@ fn package_of(step: Value, wanted: &[&str], on_empty: bool, policy: Option<Value
     zip_entries(&entries)
 }
 
+// The task whose one step `pick` selects over `scan`.
+fn pick_task(scan: Value, on_empty: bool) -> Value {
+    task_of(pick(scan, on_empty), on_empty)
+}
+
 // The package whose one step `pick` selects over `scan`, its variable's default `wanted`.
 fn package(scan: Value, wanted: &[&str], on_empty: bool) -> Vec<u8> {
-    package_of(pick(scan, on_empty), wanted, on_empty, Some(policy()))
+    package_of(&pick_task(scan, on_empty), wanted, Some(policy()))
 }
 
 // Contained task admission of `bytes`, with the card reader.
@@ -554,6 +608,9 @@ enum Seen {
 struct ListDevice {
     clock: ScriptedRuntime,
     shown: Shown,
+    stand: Stand,
+    // The captures since the latest input; none before the first input.
+    since_input: Option<usize>,
     // The instance's facts with the package's variables overlaid at their defaults, as the host
     // hands a run without a dispatch.
     snapshot: InstanceFactSnapshot,
@@ -563,14 +620,16 @@ struct ListDevice {
 }
 
 impl ListDevice {
-    // The stand-in for a run of `task`, its list scrolled by `offset`.
-    fn new(task: &PreparedContainedTask, offset: u32) -> Self {
+    // The stand-in for a run of `task`, its list scrolled by `offset` and shown as `stand` says.
+    fn new(task: &PreparedContainedTask, offset: u32, stand: Stand) -> Self {
         let mut snapshot = snapshot();
         task.default_run_values()
             .overlay(&mut snapshot, NOW_UNIX_MS);
         Self {
             clock: ScriptedRuntime::new(vec![vec![ScriptedFrame::rgb(1, 1, &[BACKGROUND])]]),
             shown: Shown::List(offset),
+            stand,
+            since_input: None,
             snapshot,
             ids: IdentifierIssuer::new().expect("identifier issuer"),
             captured: Vec::new(),
@@ -647,7 +706,16 @@ impl ContainedTaskRuntime for ListDevice {
     type Error = &'static str;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
-        let mut observed = ObservedFrame::from(screen(self.shown));
+        // Fix round 1: the drift, once after each input, at its third capture.
+        let captures = self.since_input.map(|captures| captures + 1);
+        self.since_input = captures;
+        if self.stand.drift
+            && captures == Some(3)
+            && let Shown::List(offset) = self.shown
+        {
+            self.shown = Shown::List(moved(offset, 1));
+        }
+        let mut observed = ObservedFrame::from(screen(self.shown, self.stand));
         let frame_id = *self
             .ids
             .mint_frame_id()
@@ -683,6 +751,7 @@ impl ContainedTaskRuntime for ListDevice {
             action.clone(),
             frame.as_ref().map(InputFrameContext::reference),
         ));
+        self.since_input = Some(0);
         self.shown = match (self.shown, &action) {
             (Shown::List(offset), InputAction::Swipe { y1, y2, .. }) => {
                 Shown::List(moved(offset, *y1 - *y2))
@@ -741,7 +810,12 @@ impl ContainedTaskRuntime for ListDevice {
 
 // A run of `task` on the stand-in, its list scrolled by `offset` when the run starts.
 fn run(task: &PreparedContainedTask, offset: u32) -> (RunResult, ListDevice) {
-    let mut device = ListDevice::new(task, offset);
+    run_on(task, offset, PLAIN)
+}
+
+// A run of `task` on the stand-in, its list scrolled by `offset` and shown as `stand` says.
+fn run_on(task: &PreparedContainedTask, offset: u32, stand: Stand) -> (RunResult, ListDevice) {
+    let mut device = ListDevice::new(task, offset, stand);
     let result = task.run(&mut device);
     (result, device)
 }
@@ -790,11 +864,12 @@ fn offsets(projection: &ScanCandidateProjection) -> Vec<i32> {
         .collect()
 }
 
-// Whether `action` is a tap inside the click box of the card whose instance starts at row `top` of
-// the confirmation frame: the layout's `click` (2, 1, 4 x 4) placed by the instance at (4, top).
-fn tap_in_card(action: &InputAction, top: i32) -> bool {
-    matches!(action, InputAction::Tap { x, y }
-        if (6..10).contains(x) && (top + 1..top + 5).contains(y))
+// The tap on the card whose instance starts at row `row` of the confirmation frame F2: the centre
+// of the layout's `click` (2, 1, 4 x 4) placed by the instance at (4, row), as no action seed is
+// drawn. Fix round 1: the point itself, not only its box, so that a point computed from another
+// frame, where the card stands a pixel off, fails.
+fn tap_at(row: i32) -> InputAction {
+    InputAction::Tap { x: 8, y: row + 3 }
 }
 
 // The confirmation of a select over a scan that confirmed the member `candidate_id` on a frame at
@@ -865,16 +940,18 @@ fn assert_intents_then_inputs(case: &str, device: &ListDevice, tapped: bool) {
 // at its top. The scan reads to its end, the end check passing at 76 px (coverage `complete`, start
 // check on the first viewport, the coverage viewports at 0, 24, 48, 72 and 76), and decides
 // `selected` with the one member `layout/cards#00`, nothing unknown. It returns to card 1 with one
-// reposition (76 to 40 px) and one reversed advance (40 to 16 px), two return viewports, confirms the
-// card on a fresh frame F2 at 16 px, captured after the last move and no coverage viewport, and taps
-// once inside card 1's click box on F2 (its instance at row 6), the tap bound to F2. The run is
-// Completed on the detail page.
+// reposition (76 to 40 px) and one reversed advance (40 to 16 px), two return viewports. The list
+// then drifts to 17 px (fix round 1), so the scan confirms the card on a fresh frame F2 at 17 px,
+// captured after the last move and no coverage viewport, and taps once at the centre of card 1's
+// click box on F2 (its instance at row 5, the tap at (8, 8); computed from the last return frame,
+// where the instance is at row 6, it would be (8, 9)), the tap bound to F2. The run is Completed on
+// the detail page.
 #[test]
 fn kb_the_first_kind_reads_to_the_end_returns_confirms_on_a_fresh_frame_and_taps_once() {
     let case = "the first kind";
     let task = admitted(case, &package(first_kind(), &[CARD_B], true));
 
-    let (result, device) = run(&task, 0);
+    let (result, device) = run_on(&task, 0, DRIFTING);
 
     assert_eq!(ended(case, result), completed(DETAIL_PAGE, None));
     let record = device.decision_record(case);
@@ -900,9 +977,9 @@ fn kb_the_first_kind_reads_to_the_end_returns_confirms_on_a_fresh_frame_and_taps
         device.inputs()[..6],
         [ADVANCE, ADVANCE, ADVANCE, ADVANCE, REWIND, BACK]
     );
-    let f2 = confirmed_frame(case, record, "layout/cards#00", 16);
+    let f2 = confirmed_frame(case, record, "layout/cards#00", 17);
     let (tap, bound) = device.last_input(case);
-    assert!(tap_in_card(tap, 6), "{tap:?}");
+    assert_eq!(*tap, tap_at(5));
     assert_eq!(bound.frame_id, f2);
     assert!(device.captured_at(f2) > device.input_at(5));
     assert!(
@@ -920,14 +997,16 @@ fn kb_the_first_kind_reads_to_the_end_returns_confirms_on_a_fresh_frame_and_taps
 // viewport (48 px), where the early stop holds (a tie with the lowest candidate ID first): coverage
 // `early_stopped` over 0, 24 and 48, the end never reached, `selected` with `layout/cards#01`
 // (card 6, numbered after card 2), nothing unknown. Card 6 is in the band, so the return takes no
-// move: the run sends the two advances and then the one tap, inside card 6's click box on F2 at
-// 48 px (its instance at row 34), bound to F2. The run is Completed on the detail page.
+// move: the run sends the two advances and then the one tap. The list drifts to 49 px after the
+// last advance's frame settled (fix round 1), so F2 is at 49 px and the tap is the centre of card
+// 6's click box on F2 (its instance at row 33, the tap at (8, 36), not the (8, 37) of the last
+// coverage frame), bound to F2. The run is Completed on the detail page.
 #[test]
 fn kb_the_second_kind_stops_where_its_first_preference_appears() {
     let case = "the second kind";
     let task = admitted(case, &package(scan(true, true), &[CARD_G, CARD_C], false));
 
-    let (result, device) = run(&task, 0);
+    let (result, device) = run_on(&task, 0, DRIFTING);
 
     assert_eq!(ended(case, result), completed(DETAIL_PAGE, None));
     let record = device.decision_record(case);
@@ -944,9 +1023,9 @@ fn kb_the_second_kind_stops_where_its_first_preference_appears() {
     assert_eq!(scan.candidates().len(), 2);
     assert_eq!(device.inputs().len(), 3, "{:?}", device.inputs());
     assert_eq!(device.inputs()[..2], [ADVANCE, ADVANCE]);
-    let f2 = confirmed_frame(case, record, "layout/cards#01", 48);
+    let f2 = confirmed_frame(case, record, "layout/cards#01", 49);
     let (tap, bound) = device.last_input(case);
-    assert!(tap_in_card(tap, 34), "{tap:?}");
+    assert_eq!(*tap, tap_at(33));
     assert_eq!(bound.frame_id, f2);
 }
 
@@ -1012,13 +1091,14 @@ fn kb_every_move_is_an_intent_and_its_input_with_no_completion() {
 // check fails on the dispatched frame, so the scan rewinds twice (40 to 4 px, 4 to 0 px) until it
 // passes, before any advance: the record's start evidence is the rewind check, with two rewind
 // viewports; the coverage begins at the list's top, on the frame given after the second rewind, and
-// reads to the end as from the top; card 1 is returned to, confirmed at 16 px and tapped once.
+// reads to the end as from the top; card 1 is returned to (16 px) and, the list drifting to 17 px
+// (fix round 1), confirmed at 17 px and tapped once at the point F2 gives, (8, 8).
 #[test]
 fn kb_a_list_opened_in_its_middle_is_rewound_to_its_start_before_it_is_covered() {
     let case = "the cold path";
     let task = admitted(case, &package(first_kind(), &[CARD_B], true));
 
-    let (result, device) = run(&task, 40);
+    let (result, device) = run_on(&task, 40, DRIFTING);
 
     assert_eq!(ended(case, result), completed(DETAIL_PAGE, None));
     assert_eq!(device.inputs()[..3], [REWIND, REWIND, ADVANCE]);
@@ -1037,24 +1117,106 @@ fn kb_a_list_opened_in_its_middle_is_rewound_to_its_start_before_it_is_covered()
     let first = scan.viewports()[0].frame_id;
     assert!(device.captured_at(first) > device.input_at(1));
     assert!(device.captured_at(first) < device.input_at(2));
-    let f2 = confirmed_frame(case, record, "layout/cards#00", 16);
+    let f2 = confirmed_frame(case, record, "layout/cards#00", 17);
     let (tap, bound) = device.last_input(case);
-    assert!(tap_in_card(tap, 6), "{tap:?}");
+    assert_eq!(*tap, tap_at(5));
     assert_eq!(bound.frame_id, f2);
+}
+
+// K-b 5's other end (fix round 1): the list shows no start mark, so its start check never passes;
+// it opens at 40 px and the scan declares `start.rewind`. The scan rewinds 40 to 4 px and 4 to 0
+// px, and twice more with the list at its top: the second of two consecutive rewind viewports that
+// repeat the one before them fails the scan `selection_scan_start_unconfirmed` (stage
+// `select_scan_start`, `viewport_index` 0) before any advance. The four rewinds are the run's only
+// inputs, each an intent before it and no completion after it; nothing is tapped and no decision is
+// recorded.
+#[test]
+fn kb_a_rewind_that_never_reaches_the_start_fails_and_taps_nothing() {
+    let case = "no start";
+    let task = admitted(case, &package(first_kind(), &[CARD_B], true));
+    let unmarked = Stand {
+        start_mark: false,
+        ..PLAIN
+    };
+
+    let (result, device) = run_on(&task, 40, unmarked);
+
+    let error = failed(case, result);
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::SelectionScanStartUnconfirmed.as_str(),
+        "{error}"
+    );
+    assert_eq!(value(&error, "stage"), json!("select_scan_start"));
+    assert_eq!(value(&error, "viewport_index"), json!(0));
+    assert_eq!(device.inputs(), [REWIND, REWIND, REWIND, REWIND].as_slice());
+    assert!(device.records().is_empty(), "no decision is recorded");
+    assert_intents_then_inputs(case, &device, false);
+}
+
+// K-b 3 with an unreadable card (fix round 1): the variable wants `card_k`, the name on no card, the
+// step declares `on_empty`, and card 3 (`card_d`, content row 46) is drawn in a colour no name has,
+// so its name never reads. The scan covers the list (coverage `complete`), but `empty` does not
+// stand over an unknown instance that could be the wanted card (rule 2): the run fails
+// `selection_result_blocked` (`selection_kind` `empty`, `outcome_key` `card_empty`,
+// `selection_blocking` `unknown_instances`, `count` 1) instead of ending normally; the one decision
+// record keeps `empty` with one unknown instance and no confirmation, and the four advances are the
+// run's only inputs, with no completion.
+#[test]
+fn kb_an_unreadable_card_blocks_the_empty_end_of_the_first_kind() {
+    let case = "an unreadable card";
+    let task = admitted(case, &package(first_kind(), &[CARD_K], true));
+    let unreadable = Stand {
+        unreadable: Some(3),
+        ..PLAIN
+    };
+
+    let (result, device) = run_on(&task, 0, unreadable);
+
+    let error = failed(case, result);
+    assert_eq!(
+        error.code().as_str(),
+        ExecutionKernelCode::SelectionResultBlocked.as_str(),
+        "{error}"
+    );
+    assert_eq!(value(&error, "selection_kind"), json!("empty"));
+    assert_eq!(value(&error, "outcome_key"), json!(NOT_FOUND));
+    assert_eq!(
+        value(&error, "selection_blocking"),
+        json!("unknown_instances")
+    );
+    assert_eq!(value(&error, "count"), json!(1));
+    let record = device.decision_record(case);
+    assert_eq!(record.selection_result, TaskSelectionOutcome::Empty);
+    let check = record.unknown_check.expect("the unknown-instance check");
+    assert_eq!(check.unknown_instances, 1);
+    assert_eq!(check.blocking, TaskSelectionBlocking::UnknownInstances);
+    assert_eq!(record.confirmation, TaskSelectionConfirmation::NotAttempted);
+    assert_eq!(
+        projection(record).coverage().state,
+        ScanCoverageState::Complete
+    );
+    assert_eq!(
+        device.inputs(),
+        [ADVANCE, ADVANCE, ADVANCE, ADVANCE].as_slice()
+    );
+    assert_intents_then_inputs(case, &device, false);
 }
 
 // K-c 1: the scan declares `early_stop` and no `end`, and the variable wants card 4 (`card_e`,
 // content row 58), first shown on the second screen (24 px). The scan stops there (coverage
 // `early_stopped` over 0 and 24, no end evidence) and decides `selected` with `layout/cards#00`,
-// nothing unknown; card 4 is in the band, so the return takes no move; it is confirmed on F2 at
-// 24 px and tapped once inside its click box (its instance at row 34), bound to F2, after the one
-// advance; the step's one completion follows the tap. The run is Completed on the detail page.
+// nothing unknown; card 4 is in the band, so the return takes no move; the list drifts to 25 px
+// after the advance's frame settled (fix round 1), so the card is confirmed on F2 at 25 px and
+// tapped once at the centre of its click box on F2 (its instance at row 33, the tap at (8, 36)),
+// bound to F2, after the one advance; the step's one completion follows the tap. The run is
+// Completed on the detail page.
 #[test]
 fn kc_a_scan_without_an_end_finds_its_card_stops_early_and_taps_once() {
     let case = "found without an end";
     let task = admitted(case, &package(scan(false, true), &[CARD_E], false));
 
-    let (result, device) = run(&task, 0);
+    let (result, device) = run_on(&task, 0, DRIFTING);
 
     assert_eq!(ended(case, result), completed(DETAIL_PAGE, None));
     let record = device.decision_record(case);
@@ -1070,9 +1232,9 @@ fn kc_a_scan_without_an_end_finds_its_card_stops_early_and_taps_once() {
     assert_eq!(offsets(scan), [0, 24]);
     assert_eq!(device.inputs().len(), 2, "{:?}", device.inputs());
     assert_eq!(device.inputs()[0], ADVANCE);
-    let f2 = confirmed_frame(case, record, "layout/cards#00", 24);
+    let f2 = confirmed_frame(case, record, "layout/cards#00", 25);
     let (tap, bound) = device.last_input(case);
-    assert!(tap_in_card(tap, 34), "{tap:?}");
+    assert_eq!(*tap, tap_at(33));
     assert_eq!(bound.frame_id, f2);
     assert_intents_then_inputs(case, &device, true);
 }
@@ -1171,23 +1333,30 @@ fn kc_the_offline_entry_answers_as_the_run_does_on_the_same_frames() {
     }
 }
 
-// The declaration gate's refusal of `bytes` (the check `resource validate`, every parse and
-// admission run) and admission's: `resource_declaration_invalid` both, with one and the same issue.
-fn refused_alike(case: &str, bytes: &[u8]) -> ResourceDeclarationIssue {
-    let bundle =
-        ExternallyVerifiedBundle::load_with_vision_provider(INSTANCE, bytes, Arc::new(CardNames))
-            .unwrap_or_else(|error| panic!("{case}: the package does not load: {error}"));
-    let gate = actingcommand_pack_containment::source::validate_contained_declarations(
-        bundle.loaded_bundle(),
-    )
-    .expect_err("the declaration gate refuses the package");
+// The declaration gate's refusal of the task document `task` and admission's of the package `bytes`
+// that carries it: `resource_declaration_invalid` both, with one and the same issue but for the file
+// it names. Fix round 1: the gate is `declaration_file_requests` on the task as a source tree holds
+// it, the check `resource validate`, `resource convert` and every source parse run first.
+// Admission is `PreparedContainedTask::load`, whose container load runs that same check,
+// `Declaration::bundle`, on the packaged task (`validate_loaded_declarations`) and refuses there;
+// admission's later run of it on the sealed task (`validate_contained_declarations`, in
+// `prepare_bundle`) is therefore never reached. Both entries reach the one check, which refuses
+// in `select_step` (`scan_end`) and in `read_list_step`.
+fn refused_alike(case: &str, task: &Value, bytes: &[u8]) -> ResourceDeclarationIssue {
+    let Err(refused) = declaration_file_requests(&[Bundle {
+        task_id: "task".to_owned(),
+        dir: PathBuf::from("operations/task"),
+        data: task.clone(),
+    }]) else {
+        panic!("{case}: the declaration gate takes the task");
+    };
     assert_eq!(
-        gate.code,
+        refused.code,
         SharedCode::ResourceDeclarationInvalid.as_str(),
         "{case}"
     );
-    let issue: ResourceDeclarationIssue =
-        serde_json::from_value(gate.details.expect("the gate's issue")).expect("an issue");
+    let mut gate: ResourceDeclarationIssue =
+        serde_json::from_value(refused.details.expect("the gate's issue")).expect("an issue");
     let error = match load(bytes) {
         Ok(_) => panic!("{case}: admitted"),
         Err(error) => error,
@@ -1197,7 +1366,12 @@ fn refused_alike(case: &str, bytes: &[u8]) -> ResourceDeclarationIssue {
         SharedCode::ResourceDeclarationInvalid.as_str(),
         "{case}: {error}"
     );
-    assert_eq!(error.declaration_issue(), Some(&issue), "{case}");
+    let issue = error
+        .declaration_issue()
+        .cloned()
+        .unwrap_or_else(|| panic!("{case}: admission's issue"));
+    gate.declaration_file.clone_from(&issue.declaration_file);
+    assert_eq!(issue, gate, "{case}");
     issue
 }
 
@@ -1206,7 +1380,13 @@ fn refused_alike(case: &str, bytes: &[u8]) -> ResourceDeclarationIssue {
 // `select/scan/end`.
 #[test]
 fn kc_a_scan_with_neither_an_end_nor_an_early_stop_is_refused_by_the_gate_and_admission_alike() {
-    let issue = refused_alike("neither", &package(scan(false, false), &[CARD_E], false));
+    let task = pick_task(scan(false, false), false);
+
+    let issue = refused_alike(
+        "neither",
+        &task,
+        &package_of(&task, &[CARD_E], Some(policy())),
+    );
 
     assert_eq!(issue.field_path, "/operations/0/select/scan/end");
     assert_eq!(issue.reason, ResourceDeclarationReason::MissingField);
@@ -1218,10 +1398,12 @@ fn kc_a_scan_with_neither_an_end_nor_an_early_stop_is_refused_by_the_gate_and_ad
 #[test]
 fn kc_a_scan_without_an_end_beside_on_empty_is_refused_and_with_its_end_admitted() {
     admitted("with its end", &package(scan(true, true), &[CARD_E], true));
+    let task = pick_task(scan(false, true), true);
 
     let issue = refused_alike(
         "without its end",
-        &package(scan(false, true), &[CARD_E], true),
+        &task,
+        &package_of(&task, &[CARD_E], Some(policy())),
     );
 
     assert_eq!(issue.field_path, "/operations/0/select/on_empty");
@@ -1230,19 +1412,35 @@ fn kc_a_scan_without_an_end_beside_on_empty_is_refused_and_with_its_end_admitted
 
 // K-c 6: a list reading reads to its end and has no early stop, so its scan still declares `end`:
 // a `read_list` step whose scan declares none is refused as before, by the declaration gate and
-// admission alike, `MissingField` at the step's `read_list/scan/end`.
+// admission alike, `MissingField` at the step's `read_list/scan/end`; fix round 1: so is one whose
+// `end` is `null`, a missing `end` as in a select's scan.
 #[test]
 fn kc_a_list_readings_scan_without_an_end_is_refused_as_before() {
-    let read = json!({
-        "id": "read_cards", "from": "list", "to": "list",
-        "guard": guard(),
-        "read_list": {"layout_id": "layout/cards", "key_feature": "member", "key_column": "id",
-                      "columns": [], "fact_key": "inventory.list.example_kind_a",
-                      "valid_for_ms": 86_400_000, "scan": scan(false, false)}
-    });
+    let read = |declared: Value| {
+        json!({
+            "id": "read_cards", "from": "list", "to": "list",
+            "guard": guard(),
+            "read_list": {"layout_id": "layout/cards", "key_feature": "member",
+                          "key_column": "id", "columns": [],
+                          "fact_key": "inventory.list.example_kind_a",
+                          "valid_for_ms": 86_400_000, "scan": declared}
+        })
+    };
+    let mut null_end = scan(false, false);
+    null_end["end"] = Value::Null;
 
-    let issue = refused_alike("a list reading", &package_of(read, &[CARD_E], false, None));
+    for (case, declared) in [("no end", scan(false, false)), ("a null end", null_end)] {
+        let task = task_of(read(declared), false);
+        let issue = refused_alike(case, &task, &package_of(&task, &[CARD_E], None));
 
-    assert_eq!(issue.field_path, "/operations/0/read_list/scan/end");
-    assert_eq!(issue.reason, ResourceDeclarationReason::MissingField);
+        assert_eq!(
+            issue.field_path, "/operations/0/read_list/scan/end",
+            "{case}"
+        );
+        assert_eq!(
+            issue.reason,
+            ResourceDeclarationReason::MissingField,
+            "{case}"
+        );
+    }
 }

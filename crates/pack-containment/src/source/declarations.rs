@@ -1384,6 +1384,13 @@ impl Declaration<'_> {
             .iter()
             .filter(|member| **member != "early_stop")
         {
+            // Workflow #463 K-c fix round 1: a `null` `end` is a missing one, as a select's is.
+            if *member == "end" && !declares(scan, member) {
+                return Err(self.error(
+                    &child(&scan_pointer, member),
+                    ResourceDeclarationReason::MissingField,
+                ));
+            }
             self.required(scan, &scan_pointer, member)?;
         }
         Ok(())

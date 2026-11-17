@@ -35282,6 +35282,64 @@ refuses such a package before `PackageAdmitted`, and its installer refuses a bun
 `package` 18 through its `package` edge. A rollback stays open while no root is placed from such a
 bundle.
 
+**Fix round 1** (coordinator work order `rd-1117/brief-463-kbc-fix1.md`, after the independent
+review of `e1205a87`; main's release commit of 0.12.69, `6a257aed`, merged first, both sides
+whole). Nothing of a live path, the forward window, the new code's class or values, or the Lab
+changes, but the gate's `null` below.
+
+- *The three red tests.* `kc_a_scan_with_neither_an_end_nor_an_early_stop_…`,
+  `kc_a_scan_without_an_end_beside_on_empty_…` and `kc_a_list_readings_scan_without_an_end_…`
+  loaded the package and then called `validate_contained_declarations` on it, but the container
+  load that admission begins with (`PreparedContainedTask::load`, `Containment::load`,
+  `validate_loaded_declarations`) already runs the declaration check, `Declaration::bundle`, and
+  refused there; the kernel was right. Their helper now takes admission's refusal from that load
+  and the gate's from `declaration_file_requests` on the task document as a source tree holds it
+  (the check `resource validate`, `resource convert` and every source parse run first), and asserts
+  both `resource_declaration_invalid` with the same issue but for the file it names: two entries,
+  one check, which refuses in `select_step` (`scan_end`) and in `read_list_step`. Admission's later
+  run of it on the sealed task (`validate_contained_declarations`, in `prepare_bundle`) is never
+  reached for these packages, so "The declaration" above holds of the check, not of that call.
+- *The gaps the Lab's slices rely on* (tests only). The device stand-in can move the list 1 px on
+  at the third capture after an input, after the last move's settled frame and before F2's two
+  captures; `kb_the_first_kind_…`, `kb_the_second_kind_…`, `kb_a_list_opened_in_its_middle_…` and
+  `kc_a_scan_without_an_end_finds_its_card_…` run so and assert the confirmation's offset (17, 49,
+  17 and 25 px) and the tap's point, the centre of the click box F2 gives ((8, 8), (8, 36), (8, 8)
+  and (8, 36)), where a point taken from the frame before F2 lies a pixel lower. New:
+  `kb_a_rewind_that_never_reaches_the_start_fails_and_taps_nothing` (a list without its start mark,
+  opened at 40 px: four rewinds, `selection_scan_start_unconfirmed` at `select_scan_start`,
+  `viewport_index` 0, no advance, no tap, no record) and
+  `kb_an_unreadable_card_blocks_the_empty_end_of_the_first_kind` (wanting a name on no card with
+  `on_empty`, one card drawn in a colour no name has: `selection_result_blocked`, `selection_kind`
+  `empty`, `outcome_key` `card_empty`, `selection_blocking` `unknown_instances`, `count` 1, its record
+  `empty` with that one unknown instance, four advances, no tap), both in the exec gate row
+  "#463 K-b".
+- *Texts.* [selection-graph.md](selection-graph.md), "A scan without an end": the window whole (not
+  widened, the coordinator's ruling: with the tolerance *t*, the smallest step *m* and the last real
+  displacement *d*, the new code when *d* ≤ *t* or *d* ≥ *m* − *t*,
+  `selection_scan_alignment_rejected` first when *t* < *d* < *m* − *t*, so the author declares
+  *m* ≤ 2*t* + 1; two coverage viewports beyond the last that moved the list by more than *t*, which
+  `bounds.max_viewports` must allow), and one sentence for authors: the failure is of class
+  `pack_logic_mismatch` and treated as one, rerun only by the scheduling policy
+  ([policy-suspension.md](policy-suspension.md), "Which failures accumulate") and starting the
+  default recovery ladder by its trigger `pack_logic` ([emulator-control.md](emulator-control.md),
+  "Triggers"); where the item may be absent, the package declares `end` and `on_empty` instead. The
+  description of `replay_scan_invalid` (the actinglab fragment) no longer requires `end`, and names
+  a file with neither `end` nor `early_stop` as `replay_scan_refused`; the index is regenerated.
+- *`null`.* The gate's `read_list_step` reads a `null` `end` as a missing one (`MissingField` at
+  `…/read_list/scan/end`, one condition in its loop over the scan's members); before, it passed the
+  gate and was refused by the kernel's list-reading admission (`contained_task_resource_reading_invalid`).
+  In a select's scan a `null` `end` already was an absent one (`scan_end`): beside `early_stop` a
+  scan without an end, otherwise `MissingField` at `…/select/scan/end`; the kernel deserializes it
+  as no `end`. [resource-readings.md](resource-readings.md), the `scan` row, says so, and
+  `kc_a_list_readings_scan_without_an_end_is_refused_as_before` gains the case.
+- *Revision 18.* No edge test: no kernel-side or interfaces code states a package's revision from
+  its content but `BundleRevisionNeed` (the notices, the goals, the variables), which reads no
+  operation; the one table that does is the Lab's (`apps/actinglab/src/resource_verify/revision.rs`),
+  the next Lab slice's.
+
+No code, word, key, interface revision or record shape is added; no golden changes; no test leaves
+the gate map.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

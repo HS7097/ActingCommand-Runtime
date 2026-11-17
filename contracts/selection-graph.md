@@ -961,12 +961,33 @@ path, "a failure before the decision"). A lower preference the scan read is not 
 positive evidence of the list's end, that nothing better follows is not known. Nothing ends such
 a step empty, so it declares no `on_empty`. `selection_scan_end_unconfirmed` keeps its one cause,
 a declared end that never passed; the bounds (`max_viewports`, `max_reposition_viewports`,
-`max_ms`) fail with `selection_scan_bounds_exceeded` as for every scan. The forward window is the
-one a scan with `end` has before its end passes, no move or a step within the advance's steps; a
-last move to the list's foot shorter than `advance.min_content_step_px` (less the tolerance)
-therefore fails `selection_scan_alignment_rejected` before the repeats are seen, as it does for a
-scan whose end check does not pass there. The offline entry `dry_run_scan_decide` (section
-Offline) runs the same session and the same `Decide`, so it answers the same on the same frames.
+`max_ms`) fail with `selection_scan_bounds_exceeded` as for every scan. The forward window is not
+widened for a scan without an end (so a move in the middle of a list that falls short stays a
+failure): each forward viewport is aligned in the window a scan with `end` has before its end
+passes, no move, [*p* − *t*, *p* + *t*], or a step, [*p* + *m* − *t*, *p* + *M* + *t*], where
+*p* is the previous viewport's offset, *t* is `track.position_tolerance_px`, and *m* and *M* are
+`advance.min_content_step_px` and `advance.max_content_step_px`. Let *d* be the displacement of
+the list's last move that still moved it, the move onto its foot. When *d* ≤ *t* or
+*d* ≥ *m* − *t*, that viewport aligns and the repeats that follow reach
+`selection_scan_early_stop_unreached`; when *t* < *d* < *m* − *t*, no part of the window holds it
+and the viewport fails `selection_scan_alignment_rejected` (stage `select_scan_align`) first. A
+declaration with *m* ≤ 2*t* + 1 therefore always reaches the new code, and that is what the author
+of a scan without an end declares instead of a wider window (a recording's measured
+`min_content_step_px` of 1 is such a value); with a larger *m*, a last move that falls between
+ends as an alignment failure. A scan whose pages are placed by page-order evidence (SEL-L3b) is
+not aligned in this window, so this failure never comes before the new code there. The scan judges
+that the list stopped on the second consecutive forward viewport that repeats the one before it,
+so it takes two coverage viewports beyond the last one that moved the list by more than *t*: the
+author declares a `bounds.max_viewports` that allows them, or `selection_scan_bounds_exceeded`
+(`scan_bound` `coverage_viewports`) comes first. For authors: this failure is of the class of a
+package-logic failure (`pack_logic_mismatch`) and is treated as one, rerun by the scheduling policy
+and never pausing its pair by repeating, for it is not among the failures that accumulate
+([policy-suspension.md](policy-suspension.md), "Which failures accumulate"), and starting the
+default recovery ladder by its trigger `pack_logic` ([emulator-control.md](emulator-control.md),
+"Triggers"), so where the wanted item may be absent on some days the package declares an end and
+an ending instead (`end` and `on_empty`, rule 1 above). The offline entry `dry_run_scan_decide`
+(section Offline) runs the same session and the same `Decide`, so it answers the same on the same
+frames.
 
 The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
 [resource-readings.md](resource-readings.md), "List readings"): steps 1 and 2 only, with no
