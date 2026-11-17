@@ -1353,7 +1353,9 @@ configuration does not carry it (a host started without actingd's manifest).
   every automatic emulator start as the instance's own pause does: the configured start at daemon
   start, the watch's restart and its recognition (both paths), IDLE-1's wake after
   `stop_emulator`, and on its key every claim of them requested before the global pause began, up
-  to just before the Start (the watch's request given back to its bound, an idle wake owed again).
+  to just before the Start (the watch's request given back to its bound, an idle wake owed again);
+  since PG-1's fix round the claim asks once more after its last status read, so a pause pressed
+  while that read runs stops the Start too.
   Its skip is `emulator_autostart_skipped` with `skip_reason` `global_paused` (info; its own word,
   one cause), once per global pause revision, start and instance, counted against no bound and
   reporting no used-up bound; a lifted and set again global pause is a new revision and records
@@ -1367,8 +1369,9 @@ configuration does not carry it (a host started without actingd's manifest).
   instance's `emulator_state`) already shows both halves of that, so no member is added; the skip
   is a `device_state_observed` record under the instance and the same daemon report line. A Start
   that has begun is not interrupted (its readiness wait is shared with a person's control): an
-  instance pause waits it out ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three
-  stages", (c)). An explicit emulator control still never asks.
+  instance pause waits it out, with no bound of its own, and is never lifted because of it
+  ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three stages", (c)). An explicit
+  emulator control still never asks.
 - **Order.** The claims holding their keys take a start turn one at a time, the first in
   configuration order first, so their Starts follow one another in that order; a claim that
   waits queued takes part once it is granted. The turn holds no key and no queue position, and
@@ -1586,9 +1589,10 @@ daemon start or IDLE-1's wake did not request, or that ended on its key, and `id
 (already on `emulator_autostart_queued`) tells the wake's from the daemon start's. Workflow #429
 R-3 (since 0.12.39) adds no code: the token `start_emulator_off` of `skip_reason` marks a claim that
 met the instance's `start_emulator` off on its key, and an IDLE-1 wake that found it off, and it
-makes the existing key settable. #480 PG-1 (since 0.12.72) adds no code either: the token
-`global_paused` of `skip_reason` (info) marks a start the global pause held, and the existing
-`scheduling_pause_release_busy` may carry `holder_kind` `autostart`
+makes the existing key settable. #480 PG-1 (since 0.12.72) adds the token `global_paused` of
+`skip_reason` (info), which marks a start the global pause held, and, on the pause's side, one code:
+`scheduling_pause_kept_at_shutdown` (error), the answer of an instance pause whose hand-back a
+shutdown interrupted while it waited for an automatic start alone, which keeps the pause
 ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three stages").
 
 ## Client and CLI

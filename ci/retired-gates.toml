@@ -1429,3 +1429,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_duri
 ruling = "#480 PG-1 (0.12.72; register §1.468; the owner's requirement on board #480 of 11-17: after pause all the Runtime starts no emulator and launches no game by itself; the coordinator's work order rd-1118/brief-480-pg1-pause-holds-automatic-starts.md, ruling 1)"
 reason = "Removed: the test pinned that a global pause that arrives while the configured start's claim waits for the network lets it start the emulator. The global pause now ends such a claim at its next tick without a Start, as the instance's own pause does (PAUSE-AUTO)."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_3_a_watch_restart_requested_before_the_global_pause_ends_on_its_key_refunded, in the host.toml row of #480 PG-1 (the same hold on the claim's key, for the watch's claim, with its refund); for the daemon start's claim on its key, the shared check autostart_hold_ends that actingcommand-runtime-host::lib::tests::gate_pause_auto::pause_auto_3_a_configured_start_queued_before_the_pause_is_skipped_on_its_key pins for the instance's own pause."
+
+# host.toml, the row of #480 PG-1, test (9).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_9_an_automatic_start_that_outlasts_its_own_deadline_fails_the_pause_naming_it"
+ruling = "#480 PG-1 fix round 1 (0.12.72; register §1.468, Fix round 1; the coordinator's work order rd-1118/brief-480-pg1-fix1.md, R4′: a person's pause is never lifted because of the Runtime's own automatic claim; no upper bound of the pause's own)"
+reason = "Replaced: the test pinned the first round's bound on an instance pause's wait for an automatic emulator start (the claim's key lapse plus 30 s), past which the pause failed with scheduling_pause_release_busy and holder_kind autostart and was lifted. R4′ removes that bound and the holder_kind: the hand-back waits for the claim as long as it is there."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound, in the host.toml row of #480 PG-1 fix round 1: with the clock ten minutes past that bound and the sweep held, the pause stays paused with nothing lifted, and answers success once the claim ends."

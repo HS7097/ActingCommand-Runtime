@@ -79,11 +79,16 @@ entry from the first moment, and the resume (or the sweep that follows it) grant
 (Alice's ruling 35: a pause holds only dispatches; #414 option 3): the autostart claim of a
 configured emulator start, at daemon start or by the emulator watch (`contracts/emulator-control.md`,
 "Configured start at daemon start", "Emulator watch"), is no routine claim: a pause, a restored one
-included, never holds or queues it and never makes it yield, so the emulator is started under the
-pause; the pause holds that start's startup package, whose claim waits queued as a gated entry and
-runs after the resume. An instance pause whose hand-back (step (c)) meets such a start holding the
-instance's key waits for it, since 0.12.72 (#480 PG-1) beyond the grace up to the claim's own
-deadline ("Instance pause: three stages", (c)). WATCH-P (since 0.12.32,
+included, never holds or queues it and never makes it yield. Before WATCH-P and PAUSE-AUTO the
+emulator was so started under the pause; it is not under the instance's own pause since 0.12.32
+for the watch (WATCH-P) and 0.12.34 for the daemon start and IDLE-1's wake (PAUSE-AUTO), and not
+under the global pause since 0.12.72 (#480 PG-1), all below: the start asks before it requests
+the claim, and the claim asks on its key and ends there without a Start. The pause holds that
+start's startup package, whose claim
+waits queued as a gated entry and runs after the resume. An instance pause whose hand-back (step
+(c)) meets such a start holding the instance's key waits for it, since 0.12.72 (#480 PG-1) beyond
+the grace with no bound of the pause's own, and is never lifted because of it ("Instance pause:
+three stages", (c)). WATCH-P (since 0.12.32,
 Alice's ruling 112, which replaces ruling 35 here for the watch): the emulator watch requests no
 such claim, neither a restart nor a recognition, for an instance its own pause holds in any stage;
 it only reads and records the emulator's status, records the skip once per pause revision
@@ -118,7 +123,8 @@ touches no in-flight run.
 ## Instance pause: three stages
 
 `Status` shows the stage of an instance pause: `draining` during (a) and (b), `paused` once (b)
-is done while (c) runs, `released` once (c) is done. The request answers after (c).
+is done while (c) runs, `released` once (c) is done. The request answers after (c); a caller whose
+own wait ends first finds the pause standing (the end of this section).
 
 1. **(a) Stop dispatch.** The instance's gate closes at once; `Status` shows its pause with
    `stage: draining`.
@@ -140,7 +146,13 @@ is done while (c) runs, `released` once (c) is done. The request answers after (
    using nothing of it while the gate is closed. Under the instance admission guard the pause
    re-checks that nothing still uses the device:
    - a non-empty lease queue fails the pause at once with the close path's own rule
-     (`prepare_resource_close`: `TransferNotSafe`): a queued client waits for the device;
+     (`prepare_resource_close`: `TransferNotSafe`): a queued client waits for the device. Since
+     0.12.72 (#480 PG-1, fix round 1) the instance's own queued autostart claim is the exception:
+     granted under the pause, it ends at its first tick on its key without a Start, touching
+     nothing (its skip recorded, the watch's request given back, an idle wake owed again), so it
+     refuses neither the hand-back nor, outside the multi-Nemu gate, the dedicated close lease
+     below, which is granted ahead of it (the claim keeps its place and is granted after the
+     close). It is not cancelled in the queue;
    - a contained run that started after (b) (a policy dispatch admitted just before the gate
      closed; the pause first waits for policy admissions that read the gate before it closed)
      is drained again under the same drain and grace deadlines; the device is never closed
@@ -151,22 +163,20 @@ is done while (c) runs, `released` once (c) is done. The request answers after (
    - an active lease is waited for until it is released.
 
    These waits end at the grace deadline (the drain timeout plus `30_000` ms); past it the
-   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). #480 PG-1 (since 0.12.72,
-   ruling 4; production 11-17: a watch restart held the instance through its readiness wait, and
-   the pause a person pressed was lifted when it ended): an instance pause never fails because a
-   Runtime-internal automatic emulator start holds its instance. When the active lease is the
-   autostart claim's (`ClaimKind::Autostart`, whoever asked for it: the configured start at
-   daemon start, the watch's restart or recognition, IDLE-1's wake) and nothing else is waited
-   for, the hand-back waits for it beyond the grace, up to the claim's own deadline (the time its
-   key lapses as the claim last renewed it: before its Start's provider step to the Start's bound
-   plus 5 s, 225 s, and before its connection preparation to `CONNECTION_PREPARATION_WAIT_MS` plus
-   5 s, 35 s) plus the same `30_000` ms;
-   the gate stays closed throughout, and the stages go `draining`, `paused`, `released` as before,
-   only later. A claim that has not ended within that bound fails the pause with the same
-   `scheduling_pause_release_busy`, its `holder_kind` `autostart` naming the holder. The grace keeps
-   its meaning for everything else (a person's or a client's run and lease, an operator's entry, an
-   owed reset), which fails the pause as before, with no `holder_kind`. A client whose own receipt
-   wait (below) ends first reads the pause's stage in `Status`. With nothing left the stage
+   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). #480 PG-1 (since 0.12.72;
+   production 11-17: a watch restart held the instance through its readiness wait, and the pause
+   a person pressed was lifted when it ended; the coordinator's ruling of the fix round: a
+   person's pause is never lifted because of the Runtime's own automatic claim): when the active
+   lease is the autostart claim's (`ClaimKind::Autostart`, whoever asked for it: the configured
+   start at daemon start, the watch's restart or recognition, IDLE-1's wake) and nothing else is
+   waited for (no run to drain again, no owed reset, no policy run on the instance's worker), the
+   hand-back waits for it beyond the grace for as long as the claim is there, with no bound of the
+   pause's own. The wait ends when the claim ends: by its own deadlines, or once its key has lapsed
+   and the lease sweep has taken it back. The gate stays closed throughout, and the stages go
+   `draining`, `paused`, `released` as before, only later. A Runtime shutdown during such a wait
+   does not lift the pause either (below). The grace keeps its meaning for everything else (a
+   person's or a client's run and lease, an operator's entry, an owed reset), which fails the
+   pause as before. With nothing left the stage
    becomes `released`; the device session stays as it is and nothing is recorded. Only an
    instance outside the multi-Nemu gate (`read-session-resource-close.md`, "Device session
    lifetime") closes its session here, through the existing fenced resource-close path
@@ -185,10 +195,23 @@ their next checkpoint `30_000` ms after the drain timeout
 (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) fails with `scheduling_pause_drain_incomplete`
 (`ContainedTaskBusy`); a Runtime shutdown during the drain fails it with
 `scheduling_pause_drain_interrupted`, during the hand-back with
-`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). A failed device close (an
-instance outside the multi-Nemu gate) fails the request with the close's own error; an
+`scheduling_pause_release_interrupted` (`RuntimeUnavailable`). The one exception (#480 PG-1 fix
+round 1, since 0.12.72): a shutdown that interrupts the hand-back while it waits for the
+Runtime's own automatic emulator start alone (above) answers
+`scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and lifts nothing: the
+pause stays in stage `paused` until the Runtime stops, its row of `host.scheduling_pause` stays as
+it was recorded, and the next start restores it as every persisted pause is restored ("Persistence,
+no expiry" below; stage `released`). A failed pause writes no ledger event of its own: its code
+is in the request's receipt only, and the ledger shows the two records of `host.scheduling_pause`,
+the one that set the pause and the one that lifted it (none for a kept one). A failed device close
+(an instance outside the multi-Nemu gate) fails the request with the close's own error; an
 unconfirmed close stays fatal as on every close path. The
-client's receipt wait is the drain timeout plus that grace plus its IO timeout.
+client's receipt wait is the drain timeout plus that grace plus its IO timeout. Since 0.12.72 the
+hand-back can last longer than that wait (it waits for an automatic emulator start with no bound
+of its own), and no client timeout changed: a caller (`actingctl`, MCP, the Lab, the console) whose
+wait ends first reports its own timeout, while the pause stands and goes on. A second pause
+request for the instance then answers `scheduling_already_paused`, and `Status` shows the pause
+and its stage (`paused` while the hand-back waits, `released` once it is done).
 
 ## Resume
 
@@ -350,7 +373,10 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   failed append poisons the Runtime as every runtime-fact append does. A process that dies
   between the record and the gate change restarts on the side the operator asked for. A failed
   instance pause stage lifts its gate and records the rows without it; if that record fails
-  the request poisons the Runtime.
+  the request poisons the Runtime. Since 0.12.72 (#480 PG-1 fix round 1) a hand-back a shutdown
+  interrupted while it waited for the Runtime's own automatic emulator start alone
+  (`scheduling_pause_kept_at_shutdown`) lifts nothing and records nothing: the rows that set the
+  pause stay, and the next start restores it.
 - **Restore at start.** A start that is not installer-held reads the fact before any physical
   instance is prepared and before the policy driver: the global pause comes back at revision 1
   in the new owner epoch, an instance pause at revision 1 with stage `released`, so the startup

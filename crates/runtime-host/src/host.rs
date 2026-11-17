@@ -2260,6 +2260,12 @@ impl RuntimeHost {
             #[cfg(test)]
             pause_release_lease_hook_for_test: Mutex::new(None),
             #[cfg(test)]
+            pause_release_lease_meetings_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            autostart_claim_request_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            autostart_last_read_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
             #[cfg(test)]
@@ -4418,6 +4424,48 @@ impl RuntimeHost {
         *lock(
             &shared.pause_release_lease_hook_for_test,
             HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-1 fix round 1, test builds: how many checks of instance pauses' hand-backs
+    /// (`release_paused_instance`) have found their instance's key held so far.
+    #[cfg(test)]
+    pub(crate) fn pause_release_lease_meetings_for_test(&self) -> RuntimeHostResult<u64> {
+        Ok(self
+            .shared_ref(HostLocation::ReleasePausedInstance)?
+            .pause_release_lease_meetings_for_test
+            .load(Ordering::Acquire))
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs `hook` once, on the requesting thread, just before
+    /// the next autostart claim (the daemon start's, the watch's, an idle wake's) is requested,
+    /// after its requester decided to ask for it.
+    #[cfg(test)]
+    pub(crate) fn run_before_autostart_claim_request_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::EnqueueEmulatorAutostart)?;
+        *lock(
+            &shared.autostart_claim_request_hook_for_test,
+            HostLocation::EnqueueEmulatorAutostart,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs `hook` once, on the claim's worker, after an
+    /// automatic start's claim made its last status read and just before it asks
+    /// `automatic_start_hold` once more (before its Start or its recognition).
+    #[cfg(test)]
+    pub(crate) fn run_after_autostart_last_read_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::RunEmulatorAutostart)?;
+        *lock(
+            &shared.autostart_last_read_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
         )? = Some(hook);
         Ok(())
     }
@@ -6595,6 +6643,18 @@ struct HostShared {
     /// instance's key held.
     #[cfg(test)]
     pause_release_lease_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-1 fix round 1, test only: how many checks of instance pauses' hand-backs found
+    /// their instance's key held.
+    #[cfg(test)]
+    pause_release_lease_meetings_for_test: AtomicU64,
+    /// #480 PG-1 fix round 1, test only: the hook an autostart claim runs once just before it is
+    /// requested.
+    #[cfg(test)]
+    autostart_claim_request_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-1 fix round 1, test only: the hook an automatic start's claim runs once after its
+    /// last status read, just before it asks the hold once more.
+    #[cfg(test)]
+    autostart_last_read_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]

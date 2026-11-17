@@ -1102,8 +1102,12 @@ impl HostShared {
     /// `connection_value`: a resource-close-only lease (`prepare_resource_close`: a waiting entry
     /// the scheduling pause does not hold back is `TransferNotSafe`, Workflow #369 §5.1),
     /// granted with `CapacityUse::Drain`. `kind` names its holder (Workflow #369 Q-2; review
-    /// L2). The caller holds the instance admission guard. Returns the token, its connection
-    /// and the grant's request id.
+    /// L2). #480 PG-1 fix round 1 (item 3): while an automatic start of the instance is held
+    /// (`automatic_start_hold`: a scheduling pause, its own or the global one), its own queued
+    /// autostart claim, which ends at its grant without a Start, neither refuses the lease nor is
+    /// jumped by it (`AutostartEndsAtGrant`); it is granted after the lease, in its place. The
+    /// caller holds the instance admission guard. Returns the token, its connection and the
+    /// grant's request id.
     pub(super) fn grant_dedicated_instance_lease(
         &self,
         instance_id: InstanceId,
@@ -1115,19 +1119,39 @@ impl HostShared {
             connection_value,
             |request_id, holder_id, connection_id| {
                 let gate = self.routine_gate(instance_id)?;
-                lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
-                    .prepare_dedicated_lease(
+                let autostart_ends = self.autostart_ends_at_grant(
+                    instance_id,
+                    HostLocation::PrepareResourceCloseLease,
+                )?;
+                let mut scheduler = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?;
+                let now_monotonic_ms = self.monotonic_ms()?;
+                let prepared = if autostart_ends {
+                    scheduler.prepare_dedicated_lease(
+                        request_id,
+                        instance_id,
+                        holder_id,
+                        connection_id,
+                        kind,
+                        actingcommand_scheduler::AutostartEndsAtGrant {
+                            gates: gate,
+                            member: instance_id,
+                        },
+                        now_monotonic_ms,
+                    )
+                } else {
+                    scheduler.prepare_dedicated_lease(
                         request_id,
                         instance_id,
                         holder_id,
                         connection_id,
                         kind,
                         gate,
-                        self.monotonic_ms()?,
+                        now_monotonic_ms,
                     )
-                    .map_err(|error| {
-                        RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
-                    })
+                };
+                prepared.map_err(|error| {
+                    RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+                })
             },
         )
     }

@@ -85,11 +85,13 @@
 //! #480 PG-1 (0.12.72) the global pause does too (`skip_reason` `global_paused`; where both hold,
 //! the instance's own `instance_paused`). The configured start at daemon start asks it before it
 //! requests a claim: a held instance gets none, and its skip is `emulator_autostart_skipped`
-//! (`alias`, `skip_reason` `instance_paused`), a `device_state_observed` record under the instance
-//! and its report line. Its claim, the claim of IDLE-1's wake after `stop_emulator` and the
-//! emulator watch's restart and recognition claims (R3, EMU-BIND; the watch asks before it
-//! requests them, WATCH-P) ask it again on their key, at every tick of the hold and so in the last
-//! check just before the Start or the recognition: a claim queued before the pause began ends
+//! (`alias`, `skip_reason` the hold's word: `instance_paused`, or since 0.12.72 `global_paused`), a
+//! `device_state_observed` record under the instance and its report line. Its claim, the claim of
+//! IDLE-1's wake after `stop_emulator` and the emulator watch's restart and recognition claims (R3,
+//! EMU-BIND; the watch asks before it requests them, WATCH-P) ask it again on their key, at every
+//! tick of the hold and so in the last check just before the Start or the recognition, and (#480
+//! PG-1 fix round 1) once more after the claim's last status read, just before the Start or the
+//! recognition (`held_after_last_read`): a claim queued before the pause began ends
 //! there, releases its key and starts, binds and prepares nothing, its skip recorded the same way
 //! (an idle wake's with `idle_action` `stop_emulator`, and the wake stays owed,
 //! `withhold_idle_wake`; the watch's with its `watch_kind`, and the request it counted against the
@@ -654,6 +656,10 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
+        // #480 PG-1 fix round 1, tests: just before the claim is requested.
+        #[cfg(test)]
+        self.before_autostart_claim_request_for_test()
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.request_host_claim_work(
             HostClaim {
                 request: &request,
@@ -753,10 +759,20 @@ impl HostShared {
                 if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
                     return self.end_autostart_hold(pending, &key, end);
                 }
-                return match self.watch_start_unneeded(pending)? {
-                    WatchRead::Start => self.drive_autostart(pending, key),
-                    WatchRead::End(end) => self.end_autostart_hold(pending, &key, end),
-                    WatchRead::Recognize => self.drive_recognition(pending, key),
+                let recognize = match self.watch_start_unneeded(pending)? {
+                    WatchRead::Start => false,
+                    WatchRead::Recognize => true,
+                    WatchRead::End(end) => return self.end_autostart_hold(pending, &key, end),
+                };
+                // #480 PG-1 fix round 1 (review sequence 2): a pause pressed while that read ran
+                // stops this Start or recognition too.
+                if let Some(end) = self.held_after_last_read(pending)? {
+                    return self.end_autostart_hold(pending, &key, end);
+                }
+                return if recognize {
+                    self.drive_recognition(pending, key)
+                } else {
+                    self.drive_autostart(pending, key)
                 };
             }
             thread::sleep(AUTOSTART_TICK);
@@ -785,13 +801,62 @@ impl HostShared {
                 .blackout_covering(pending.instance_id, &pending.instance_alias)?
                 .is_none()
             {
-                return match self.recognition_unneeded(pending)? {
+                if let Some(end) = self.recognition_unneeded(pending)? {
+                    return self.end_autostart_hold(pending, &key, end);
+                }
+                // #480 PG-1 fix round 1 (review sequence 2): a pause pressed while that read ran
+                // stops this recognition too.
+                return match self.held_after_last_read(pending)? {
                     None => self.drive_recognition(pending, key),
                     Some(end) => self.end_autostart_hold(pending, &key, end),
                 };
             }
             thread::sleep(AUTOSTART_TICK);
         }
+    }
+
+    /// #480 PG-1 fix round 1 (review sequence 2): after the claim's last status read, just before
+    /// its Start or its recognition, `automatic_start_hold` asked once more, so that a pause pressed
+    /// while the read ran (it is bounded, not instant) stops this Start: `Held` with what holds it.
+    fn held_after_last_read(
+        &self,
+        pending: &PendingAutostart,
+    ) -> RuntimeHostResult<Option<HoldEnd>> {
+        #[cfg(test)]
+        self.after_autostart_last_read_for_test()?;
+        Ok(self
+            .automatic_start_hold(&pending.instance_alias, HostLocation::RunEmulatorAutostart)?
+            .map(HoldEnd::Held))
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs, once, the hook a test set for an automatic
+    /// start's claim after its last status read, just before it asks the hold once more.
+    #[cfg(test)]
+    fn after_autostart_last_read_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.autostart_last_read_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs, once, the hook a test set for an autostart claim
+    /// just before it is requested.
+    #[cfg(test)]
+    fn before_autostart_claim_request_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.autostart_claim_request_hook_for_test,
+            HostLocation::EnqueueEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// EMU-BIND fix 1 (0.12.28, review L2: something may have bound and prepared the instance
@@ -838,8 +903,9 @@ impl HostShared {
     /// never passes it; Workflow #429
     /// R-3 (register §1.272): for every claim that would start the emulator (not a recognition),
     /// the instance's `start_emulator` in effect, so a claim requested while it was on starts
-    /// nothing once it is off. The last of these checks runs just before the Start or the
-    /// recognition.
+    /// nothing once it is off. The last of these checks runs just before the claim's last status
+    /// read; #480 PG-1 fix round 1: after that read, `held_after_last_read` asks the hold once
+    /// more, just before the Start or the recognition.
     fn autostart_hold_ends(
         &self,
         pending: &PendingAutostart,
@@ -921,6 +987,25 @@ impl HostShared {
             reason: WatchSkipReason::GlobalPaused,
             revision: pause.revision,
         }))
+    }
+
+    /// #480 PG-1 fix round 1 (item 3): whether a queued autostart claim of `instance_id` ends at
+    /// its grant without a Start, starting, binding and preparing nothing: an automatic start of
+    /// the instance is held now (`automatic_start_hold`), so the claim's first check on its key
+    /// ends it (`autostart_hold_ends`). `at` names the caller's operation for a poisoned lock.
+    pub(super) fn autostart_ends_at_grant(
+        &self,
+        instance_id: InstanceId,
+        at: impl Into<Location>,
+    ) -> RuntimeHostResult<bool> {
+        let at = at.into();
+        let alias = lock(&self.registered_instances, at)?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone());
+        match alias {
+            Some(alias) => Ok(self.automatic_start_hold(&alias, at)?.is_some()),
+            None => Ok(false),
+        }
     }
 
     /// Ends a hold before its Start: the key is released, and one report line says why. A

@@ -13,9 +13,9 @@ use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
-    PolicyRandomDelay, SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary,
-    SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope, SchedulingPauseState,
-    SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
+    PolicyRandomDelay, SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
+    SchedulingPauseScope, SchedulingPauseState, SchedulingResumeCaptureCheck,
+    SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
 
 /// Workflow #369 W-1 (review L-6): how long a policy admission retries an admission guard that
@@ -269,9 +269,11 @@ impl HostShared {
     }
 
     /// #480 PG-1, test builds: runs, once, the hook a test set for an instance pause's hand-back
-    /// that finds its instance's key held.
+    /// that finds its instance's key held; fix round 1: and counts every such check.
     #[cfg(test)]
     fn pause_release_meets_lease_for_test(&self) -> RuntimeHostResult<()> {
+        self.pause_release_lease_meetings_for_test
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let hook = lock(
             &self.pause_release_lease_hook_for_test,
             HostLocation::ReleasePausedInstance,
@@ -873,6 +875,18 @@ fn check_scheduling_pause_expectation(
         ));
     }
     Ok(())
+}
+
+/// #480 PG-1 fix round 1: how an instance pause's hand-back (`release_paused_instance`) ended,
+/// short of a failure (which lifts the pause).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PauseRelease {
+    /// Nothing uses the instance's device any more: the stage goes on to `released`.
+    Released,
+    /// R4″: a shutdown came while the hand-back waited for the Runtime's own automatic emulator
+    /// start alone. The pause is kept (stage `paused`, its fact unchanged) and the request fails
+    /// with `scheduling_pause_kept_at_shutdown`; the next start restores it.
+    KeptAtShutdown,
 }
 
 /// Workflow #191 ps2: a failed device hand-back fails the pause request (`Failed`); a fatal
@@ -3237,27 +3251,29 @@ impl HostShared {
                 InstancePauseStage::Draining,
                 InstancePauseStage::Paused,
             )?;
-            self.release_paused_instance(
+            let released = self.release_paused_instance(
                 request,
                 instance_alias,
                 instance_id,
                 deadlines,
                 &mut drained,
             )?;
-            lock(
-                &self.scheduling_pause,
-                HostLocation::FinishInstancePauseRelease,
-            )?
-            .advance_instance(
-                instance_alias,
-                revision,
-                InstancePauseStage::Paused,
-                InstancePauseStage::Released,
-            )?;
-            Ok(drained)
+            if released == PauseRelease::Released {
+                lock(
+                    &self.scheduling_pause,
+                    HostLocation::FinishInstancePauseRelease,
+                )?
+                .advance_instance(
+                    instance_alias,
+                    revision,
+                    InstancePauseStage::Paused,
+                    InstancePauseStage::Released,
+                )?;
+            }
+            Ok((released, drained))
         });
         match staged {
-            Ok(drained) => Ok(OperationSuccess {
+            Ok((PauseRelease::Released, drained)) => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
                 result: RuntimeResult::SchedulingPaused {
@@ -3267,6 +3283,18 @@ impl HostShared {
                 },
                 failure_outcome: None,
             }),
+            // #480 PG-1 fix round 1 (R4″, the coordinator's ruling: a person's pause is never lifted
+            // because of the Runtime's own automatic claim): a shutdown came while the hand-back
+            // waited for the Runtime's own automatic emulator start alone. The pause is
+            // not lifted: it stays in stage `paused` until the Runtime stops, its persisted fact
+            // still names the instance, and the next start restores it as every pause is restored.
+            Ok((PauseRelease::KeptAtShutdown, _)) => {
+                Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                    HostCode::SchedulingPauseKeptAtShutdown,
+                    HostLocation::ReleasePausedInstance,
+                    RuntimeErrorCode::RuntimeUnavailable,
+                )))
+            }
             // No half-open pause: a failed stage lifts the gate it closed, and the persisted
             // pause with it (Workflow #361 B1); a failed record poisons the request.
             Err(failure) => match self.lift_failed_instance_pause(instance_alias) {
@@ -3303,12 +3331,17 @@ impl HostShared {
     /// policy dispatch admitted before the gate closed) is drained again under the pause's
     /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active
     /// lease are waited for until the grace deadline (`scheduling_pause_release_busy`). #480 PG-1
-    /// (ruling 4; production 11-17: a watch restart held the instance through its readiness wait
-    /// and the pause a person pressed was lifted when it ended): the lease of an automatic
-    /// emulator start (`ClaimKind::Autostart`, whatever asked for it) that alone holds the instance
-    /// is waited for beyond the grace, until the time its key lapses as it last renewed it plus
-    /// `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`; past that the pause fails with the same word and
-    /// `holder_kind` `autostart`. The gate stays closed throughout. The
+    /// (ruling 4 and the fix round's R4′; production 11-17: a watch restart held the instance
+    /// through its readiness wait and the pause a person pressed was lifted when it ended): a
+    /// person's pause is never lifted because of the Runtime's own automatic claim. The lease of
+    /// an automatic emulator start (`ClaimKind::Autostart`, whatever asked for it) that alone holds
+    /// the instance (no owed reset, no policy run on the worker) is waited for as long as it is
+    /// there, with no bound of the pause's own: until the claim ends, by its own deadlines or when
+    /// the lease sweep takes a lapsed key back. The instance's own queued autostart claim refuses
+    /// nothing (`AutostartEndsAtGrant`: granted under the pause, it ends at its first tick without
+    /// a Start), here and at the dedicated close lease. A shutdown during a wait whose only
+    /// obstacle was that automatic claim ends the hand-back as `PauseRelease::KeptAtShutdown`
+    /// (R4″): the caller does not lift the pause. The gate stays closed throughout. The
     /// device session then stays open (Workflow #191 H: a pause is not a disconnect). Only an
     /// instance outside the multi-Nemu gate (`keeps_device_session`) closes it, through
     /// `close_retained_instance_while_guarded` without reusing a lease: the dedicated close
@@ -3321,7 +3354,7 @@ impl HostShared {
         instance_id: InstanceId,
         deadlines: SchedulingPauseDeadlines,
         drained: &mut SchedulingDrainSummary,
-    ) -> Result<(), RequestFailure> {
+    ) -> Result<PauseRelease, RequestFailure> {
         // A policy admission that read the gate before (a) holds this gate until its lease is
         // granted or refused; passing it once makes that lease visible to the check below.
         drop(lock(
@@ -3331,6 +3364,9 @@ impl HostShared {
         let links = self
             .events
             .request_links(request, Some(instance_id), None, None);
+        // #480 PG-1 fix round 1 (R4″): the last check found the Runtime's own automatic emulator
+        // start the only thing the hand-back waits for.
+        let mut waits_for_automatic = false;
         loop {
             if let Some(error) = self
                 .fatal
@@ -3340,6 +3376,11 @@ impl HostShared {
                 return Err(RequestFailure::poison_without_terminal(error));
             }
             if self.fatal.is_shutdown_requested() {
+                // R4″: a shutdown that interrupts a wait for the Runtime's own automatic claim
+                // alone lifts nothing; the caller keeps the pause.
+                if waits_for_automatic {
+                    return Ok(PauseRelease::KeptAtShutdown);
+                }
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(
                     HostCode::SchedulingPauseReleaseInterrupted,
                     HostLocation::ReleasePausedInstance,
@@ -3356,20 +3397,26 @@ impl HostShared {
             // lease per device"): the pause of one member of a device group waits only for that
             // member's own work: a lease whose token names it and the queued claims that serve it.
             // For an instance alone on its device these are its lease and its queue, as before.
-            // #480 PG-1 (ruling 4): when that lease is an automatic emulator start's (the
-            // autostart claim, whatever asked for it), also its own deadline, the time its key
-            // lapses as the claim last renewed it.
-            let (lease_held, queue_waiting, automatic_until_ms) = {
+            // #480 PG-1 (fix round 1, item 3): the instance's own queued autostart claim is no
+            // such work: under this pause it ends at its first tick, touching nothing. And (R4′)
+            // whether that lease is an automatic emulator start's (the autostart claim, whatever
+            // asked for it).
+            let (lease_held, queue_waiting, automatic_holds) = {
                 let scheduler = lock(&self.scheduler, HostLocation::ReadReleasedInstanceLease)?;
                 let lease = scheduler
                     .active_lease(instance_id)
                     .filter(|lease| lease.token().instance_id() == instance_id);
                 (
                     lease.is_some(),
-                    scheduler.member_refusing_count(instance_id, gate, now_monotonic_ms) > 0,
-                    lease
-                        .filter(|lease| lease.kind() == ClaimKind::Autostart)
-                        .map(|lease| lease.token().expires_at_monotonic_ms()),
+                    scheduler.member_refusing_count(
+                        instance_id,
+                        actingcommand_scheduler::AutostartEndsAtGrant {
+                            gates: gate,
+                            member: instance_id,
+                        },
+                        now_monotonic_ms,
+                    ) > 0,
+                    lease.is_some_and(|lease| lease.kind() == ClaimKind::Autostart),
                 )
             };
             // The close path's own rule (`prepare_resource_close`: a non-empty queue is
@@ -3399,7 +3446,7 @@ impl HostShared {
                 // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
                 // instance outside the multi-Nemu gate closes its session here.
                 if self.keeps_device_session(instance_id)? {
-                    return Ok(());
+                    return Ok(PauseRelease::Released);
                 }
                 return match self.close_retained_instance_while_guarded(
                     instance_id,
@@ -3408,7 +3455,7 @@ impl HostShared {
                     LeaseReleaseReason::InstancePaused,
                     &admission,
                 ) {
-                    Ok(Ok(())) => Ok(()),
+                    Ok(Ok(())) => Ok(PauseRelease::Released),
                     // ISO-2 (#419, ISO-M rows D54, C32): a close whose resources were confirmed
                     // is gone and its failure recorded; the pause holds. Workflow #403: an
                     // unconfirmed close fenced the instance; the pause fails with the fence's
@@ -3418,13 +3465,17 @@ impl HostShared {
                         instance_id,
                         &close_error,
                     )? {
-                        None => Ok(()),
+                        None => Ok(PauseRelease::Released),
                         Some(error) => Err(scheduling_pause_release_failure(error)),
                     },
                     Err(error) => Err(scheduling_pause_release_failure(error)),
                 };
             }
             drop(admission);
+            // #480 PG-1 fix round 1 (R4′): the Runtime's own automatic emulator start alone holds
+            // the instance (no run to drain again, no owed reset, no policy run on the worker).
+            waits_for_automatic =
+                automatic_holds && !run_in_flight && !reset_awaited && !lane_working;
             // #480 PG-1, tests: the hand-back found its instance's key held.
             #[cfg(test)]
             if lease_held {
@@ -3454,36 +3505,14 @@ impl HostShared {
             if lane_working {
                 self.pause_waits_for_lane_for_test()?;
             }
-            if Instant::now() >= deadlines.grace {
-                // #480 PG-1 (ruling 4): an automatic emulator start's claim that alone holds the
-                // instance is waited for beyond the grace, up to its own deadline plus the same
-                // grace (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`); past that bound the pause fails
-                // with the same word, naming the holder. Anything else fails it here as before.
-                match automatic_until_ms.filter(|_| !reset_awaited && !lane_working) {
-                    Some(until_ms)
-                        if now_monotonic_ms
-                            < until_ms.saturating_add(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS) => {}
-                    Some(_) => {
-                        return Err(scheduling_pause_release_failure(
-                            RuntimeHostError::request(
-                                HostCode::SchedulingPauseReleaseBusy,
-                                HostLocation::ReleasePausedInstance,
-                                RuntimeErrorCode::LeaseBusy,
-                            )
-                            .with_outcome_values(|outcome| {
-                                outcome
-                                    .holder_kind(crate::error::ClaimKindToken(ClaimKind::Autostart))
-                            }),
-                        ));
-                    }
-                    None => {
-                        return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                            HostCode::SchedulingPauseReleaseBusy,
-                            HostLocation::ReleasePausedInstance,
-                            RuntimeErrorCode::LeaseBusy,
-                        )));
-                    }
-                }
+            // R4′: the Runtime's own automatic claim is waited for with no bound of the pause's
+            // own; the grace is for everything else, which fails the pause here as before.
+            if !waits_for_automatic && Instant::now() >= deadlines.grace {
+                return Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                    HostCode::SchedulingPauseReleaseBusy,
+                    HostLocation::ReleasePausedInstance,
+                    RuntimeErrorCode::LeaseBusy,
+                )));
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
         }
