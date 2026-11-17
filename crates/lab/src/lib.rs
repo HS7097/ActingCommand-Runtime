@@ -124,6 +124,9 @@ mod gate_463_s210;
 // #463 S2-8': the swipes recorded before a press folded into one scrolling search, and unfolded.
 #[cfg(test)]
 mod gate_463_s28;
+// #463 S2-9a: a scrolling choice that reads the list to its end, over the swipes folded into it.
+#[cfg(test)]
+mod gate_463_s29a;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

@@ -144,6 +144,19 @@ pub(crate) fn unfold_scan(recording: &mut LabRecording, press: u32) -> LabResult
     if step.scan_fold.is_none() {
         return Err(not_folded(press, step.folded_into));
     }
+    // #463 S2-9a: a scrolling select reads the fold; it is taken off first.
+    if super::scan::scrolls(step) {
+        return Err(scan_invalid(
+            press,
+            ScanProblem::ScanSelected,
+            format!(
+                "the fold of step {press} is read by its scrolling select (rows and scan): take the \
+                 select off first (clear_select on step {press}), then undo the fold; nothing was \
+                 written"
+            ),
+            json!({}),
+        ));
+    }
     for step in &mut recording.steps {
         if step.index == press {
             step.scan_fold = None;
@@ -172,7 +185,8 @@ fn not_folded(press: u32, into: Option<u32>) -> LabError {
 
 /// `scan_not_selected`, the refusal `record stop` and its dry run give a press step `press` that
 /// holds the fold `fold` and declares no scrolling select (`record ready`'s item
-/// `scan_without_select`): this build declares none, so a recording with a fold makes no package.
+/// `scan_without_select`). #463 S2-9a: the scrolling select is declared on the press step (a
+/// select with `rows` and `scan`), or the fold is undone.
 pub(crate) fn scan_not_selected(press: u32, fold: &StepScanFold) -> LabError {
     let last = press.saturating_sub(1);
     scan_invalid(
@@ -181,9 +195,9 @@ pub(crate) fn scan_not_selected(press: u32, fold: &StepScanFold) -> LabError {
         format!(
             "the swipes of steps {}..{last} are folded into the scrolling search of step {press}, \
              which declares no scrolling select yet: its package would press without scrolling. \
-             This build declares no scrolling select, so a recording with a fold makes no package \
-             yet; to make the package without the fold, undo it (step_action unfold_scan of step \
-             {press}); nothing was written",
+             Declare it on step {press} (a select with rows and scan), or, to make the package \
+             without the fold, undo it (step_action unfold_scan of step {press}); nothing was \
+             written",
             fold.first
         ),
         json!({"first": fold.first}),

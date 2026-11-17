@@ -5228,6 +5228,30 @@
         },
         "transition_of_choice": {
           "description": "to_transition names a step that holds a choice (marked as holding one, or refined by a select): a page transition holds none, so the conversion would lose it; the choice is withdrawn first (#463 stage two, train, fix round)."
+        },
+        "scan_without_fold": {
+          "description": "A scrolling select (rows and scan) on a step that holds no fold of the swipes recorded before it: it has no screens of the list to read (#463 S2-9a, since 0.12.70)."
+        },
+        "rows_with_slots": {
+          "description": "The request declares rows and slots, which exclude each other (#463 S2-9a, since 0.12.70)."
+        },
+        "confirm_with_rows": {
+          "description": "The request declares confirm beside rows: the kernel confirms a scrolled choice itself (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_stop_missing": {
+          "description": "The request's scan states no stop, the kind of the scrolling choice (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_frame": {
+          "description": "A region of a scrolling select (its list, row, anchor, name, click box, start or end mark) does not lie inside the frame (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_list": {
+          "description": "The row of a scrolling select does not lie inside its list (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_row": {
+          "description": "The anchor, the name region or the click box of a scrolling select does not lie inside its row (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_number_not_measured": {
+          "description": "A number the Lab measures from the demonstration cannot be measured there (a swipe recorded without its after loop's record) and the request does not give it in scan.numbers (#463 S2-9a, since 0.12.70)."
         }
       }
     },
@@ -5432,6 +5456,9 @@
         },
         "scan_without_select": {
           "description": "#463 S2-8' (since 0.12.70): a press step whose recorded swipes are folded into its scrolling search declares no scrolling select yet (record_scan_invalid, scan_not_selected)."
+        },
+        "scan_end_not_recorded": {
+          "description": "#463 S2-9a (since 0.12.70): a scrolling select that reads its list to its end declares no end mark: the demonstration never reached the list's end (record_scan_invalid, end_not_recorded)."
         }
       }
     },
@@ -11227,6 +11254,12 @@
         },
         "scan_not_selected": {
           "description": "record stop meets a press step whose swipes are folded into it and which declares no scrolling select yet, so its package would press without scrolling."
+        },
+        "scan_selected": {
+          "description": "unfold_scan names a press step whose fold a scrolling select reads; the select is taken off first, with clear_select (#463 S2-9a)."
+        },
+        "end_not_recorded": {
+          "description": "record stop meets a scrolling select that reads its list to its end and declares no end mark: the demonstration never reached the list's end (#463 S2-9a)."
         }
       }
     }

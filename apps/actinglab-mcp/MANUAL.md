@@ -504,6 +504,27 @@ naming this file.
   `scan_without_select` and `ac_record_stop` refuses it (`scan_not_selected`), so a recording with
   a fold makes no package until the slice that declares the scan; unfold it to make the package
   without it.
+  #463 S2-9a (0.12.70; `contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+  end"): that scan is the press step's select. Send `ac_record_mark` with `request_json`
+  `{"step": b, "select": {"rows": {"row", "anchor", "name", "click"?}, "scan": {"list", "start",
+  "end", "stop": "end"}, "read", "names", "match", "wanted", "pressed"?}}`: every rectangle is
+  yours, drawn on the list's first screen (the first swipe's screen before it in `ac_record_review`'s
+  `folded`), but the end mark, drawn on the last screen after a forward swipe. Scroll to the list's
+  end once while recording: a select without `end` stands, `ac_record_ready` lists
+  `scan_end_not_recorded` and `ac_record_stop` refuses it (`end_not_recorded`). The Lab measures the
+  scan's numbers from your regions and the demonstration and keeps each with what it was measured
+  from; give one in `scan.numbers` by its name to replace it (`origin: "given"`). The self-test reads
+  every screen, checks the start and end marks and the press, and runs the kernel's offline entry
+  over the forward screens for the pressed name and for a name no screen shows; its refusals are
+  `record_mark_rejected` reasons (`select_name_unread`, `scan_start_mark_repeated`,
+  `scan_step_outside_window`, `scan_decision_mismatch`, …), the request's own are
+  `record_select_invalid` (`scan_without_fold`, `rows_with_slots`, `confirm_with_rows`,
+  `scan_stop_missing`, `scan_region_outside_frame`, `scan_region_outside_list`,
+  `scan_region_outside_row`, `scan_number_not_measured`). `ac_record_review` shows the step's
+  `scan` (screens, names read, numbers, the offline entry's decision); `unfold_scan` is refused
+  `scan_selected` while the select stands: `clear_select` first, which keeps the fold. Inertia,
+  settling, a list opened in its middle, the drag's real displacement and a list that loads while
+  it scrolls are judged only by the trial on the device.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

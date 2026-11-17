@@ -4022,3 +4022,18 @@ tests = [
     "actingcommand-lab::lib::gate_463_s28::s28_each_step_action_on_a_step_of_a_fold_is_refused",
 ]
 incident = ["#463 S2-8'"]
+
+# #463 S2-9a (0.12.70; register §1.457; brief rd-1117/brief-463-s29a-scan-select-end.md; study rd-1116/report-463-scroll-refresh-study.md and the coordinator's rulings; contracts/lab-recording.md, "A scrolling choice: reading the list to its end"): a press step whose swipes are folded into it declares the first kind of scrolling choice, select with rows and scan {list, start, end, stop: end}. Recordings made as stage one makes them (taps and swipes through record_press with a fake Runtime), synthetic 128x128 screens: a list area at rows 20 to 99 holding eleven rows 12 px apart, each an anchor of noise and a name marker a stand-in name reader reads, a start and an end mark of noise; the demonstration a tap, three swipes forward of 24 px to the list's end, two back, the press on delta, the detail screen; no clock. Marked: the click the pressed row's box, every number measured (window 1 to 72, settle 100 and 1700, tolerance 2, signature 5 x 1, spacing 1, 14, 30, 4, 2, 8 anchors, 8 and 8 viewports, 42000 ms), the offline entry deciding delta (position 3) over complete coverage with steps of 24 px and lima empty, record ready ready, record stop generating the scan, the repeated_anchor layout and the templates, admitted, lab.selects with the decision, record review listing the screens, the names and the numbers (1); lima, not in the list, empty over complete coverage at mark time and in record stop, also as the wanted default (2); scan_without_fold, rows_with_slots, confirm_with_rows, scan_stop_missing, scan_region_outside_frame, scan_region_outside_list, scan_region_outside_row (record_select_invalid), select_press_mismatch, scan_start_mark_repeated, scan_step_outside_window, select_name_unread (record_mark_rejected), nothing written each time (3); settle_timeout_ms given 2500 is given with the measured 1700 beside it, max_ms 55600 follows, the package's settle (4); a select without end stands, record ready's one item scan_end_not_recorded, record stop and its dry run refused end_not_recorded, nothing written (5); the package built twice from the recording and the one record stop writes are byte for byte one (6); unfold_scan refused scan_selected, clear_select keeps the fold and gives the press its point back, scan_without_select listed again (7); the cases step_01, step_02 and final written and proven, step_02 on the first screen expecting neutral/step_02 (8). The existing gates of the fixed-slot select (gate_463_r1) pin its bytes, untouched
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s29a::s29a_three_forward_two_back_and_the_press_are_marked_generated_and_admitted",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_a_name_the_list_does_not_hold_decides_empty_over_complete_coverage",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_each_refusal_of_the_request_and_of_the_self_test_writes_nothing",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_a_given_number_replaces_the_measured_one_and_is_marked_given",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_a_select_without_the_list_end_is_listed_and_refuses_record_stop",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_the_package_is_generated_byte_for_byte_again",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_unfold_is_refused_while_the_select_stands_and_clearing_it_keeps_the_fold",
+    "actingcommand-lab::lib::gate_463_s29a::s29a_the_regression_case_of_the_step_is_on_its_first_screen_and_passes",
+]
+incident = ["#463 S2-9a"]

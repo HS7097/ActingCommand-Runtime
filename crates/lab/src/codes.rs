@@ -240,6 +240,26 @@ actingcommand_contract::outcome_vocabulary! {
         /// page transition holds none, so the conversion would lose it; the choice is withdrawn
         /// first.
         TransitionOfChoice => "transition_of_choice",
+        /// #463 S2-9a: a scrolling select (`rows` and `scan`) on a step that holds no fold of the
+        /// swipes recorded before it: it has no screens of the list to read.
+        ScanWithoutFold => "scan_without_fold",
+        /// #463 S2-9a: the request declares `rows` and `slots`, which exclude each other.
+        RowsWithSlots => "rows_with_slots",
+        /// #463 S2-9a: the request declares `confirm` beside `rows`: the kernel confirms a
+        /// scrolled choice itself.
+        ConfirmWithRows => "confirm_with_rows",
+        /// #463 S2-9a: the request's `scan` states no `stop`, the kind of the scrolling choice.
+        ScanStopMissing => "scan_stop_missing",
+        /// #463 S2-9a: a region of a scrolling select does not lie inside the frame.
+        ScanRegionOutsideFrame => "scan_region_outside_frame",
+        /// #463 S2-9a: the row of a scrolling select does not lie inside the list.
+        ScanRegionOutsideList => "scan_region_outside_list",
+        /// #463 S2-9a: the anchor, the name region or the click box of a scrolling select does not
+        /// lie inside the row.
+        ScanRegionOutsideRow => "scan_region_outside_row",
+        /// #463 S2-9a: a number the Lab measures from the demonstration cannot be measured there
+        /// (a swipe recorded without its after loop's record) and the request does not give it.
+        ScanNumberNotMeasured => "scan_number_not_measured",
     }
 }
 
@@ -416,6 +436,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// #463 S2-8': a press step whose recorded swipes are folded into it declares no scrolling
         /// select yet (`record_scan_invalid`, `scan_not_selected`).
         ScanWithoutSelect => "scan_without_select",
+        /// #463 S2-9a: a scrolling select that reads its list to its end declares no end mark:
+        /// the demonstration never reached the list's end (`record_scan_invalid`,
+        /// `end_not_recorded`).
+        ScanEndNotRecorded => "scan_end_not_recorded",
     }
 }
 
@@ -668,5 +692,11 @@ actingcommand_contract::outcome_vocabulary! {
         /// `record stop` meets a press step whose swipes are folded into it and which declares no
         /// scrolling select yet, so its package would press without scrolling.
         ScanNotSelected => "scan_not_selected",
+        /// #463 S2-9a: `unfold_scan` names a press step whose fold a scrolling select reads; the
+        /// select is taken off first (`clear_select`).
+        ScanSelected => "scan_selected",
+        /// #463 S2-9a: `record stop` meets a scrolling select that reads its list to its end and
+        /// declares no end mark: the demonstration never reached the list's end.
+        EndNotRecorded => "end_not_recorded",
     }
 }

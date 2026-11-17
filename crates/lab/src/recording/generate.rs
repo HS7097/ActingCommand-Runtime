@@ -11,8 +11,9 @@ use super::follow::{follow_invalid, located_page_problem};
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
-    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, SelectConfirmSpec, SelectSpec,
-    SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
+    RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, ScanNumber, SelectConfirmSpec,
+    SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect,
+    StepTransition,
 };
 use super::select::{on_empty_key, select_invalid};
 use super::steps::path_order;
@@ -731,11 +732,31 @@ fn unrefined_choices(steps: &[PlanStep], lacks: &mut Lacks) {
 /// recording with a fold yet. The folded swipes are no effective steps and have no page here.
 fn unselected_scans(steps: &[PlanStep], lacks: &mut Lacks) {
     for step in steps {
-        if let Some(fold) = &step.step.scan_fold {
+        // #463 S2-9a: a fold that a scrolling select reads is generated.
+        if let Some(fold) = &step.step.scan_fold
+            && !super::scan::scrolls(&step.step)
+        {
             lacks.push(
                 ReadyMissing::ScanWithoutSelect,
                 plan_step_number(step),
                 scan_not_selected(step.step.index, fold),
+            );
+        }
+    }
+}
+
+/// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its end"):
+/// every scrolling select of the package that reads its list to its end and declares no end mark
+/// is a failed pre-check (`scan_end_not_recorded`; `record_scan_invalid` with
+/// `end_not_recorded`), by step: the demonstration never reached the list's end, and the scan
+/// would have no end to stop at.
+fn unrecorded_scan_ends(steps: &[PlanStep], lacks: &mut Lacks) {
+    for step in steps {
+        if let Some(refusal) = super::scan::end_not_recorded(&step.step) {
+            lacks.push(
+                ReadyMissing::ScanEndNotRecorded,
+                plan_step_number(step),
+                refusal,
             );
         }
     }
@@ -1270,6 +1291,8 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
     // #463 S2-8': a press step whose swipes are folded into it and which declares no scrolling
     // select generates no package.
     unselected_scans(&steps, &mut lacks);
+    // #463 S2-9a: nor does a scrolling select whose demonstration never reached the list's end.
+    unrecorded_scan_ends(&steps, &mut lacks);
     // #463 R2: so are an ending's, a select declared after it among them; then each ending's page
     // `ending_kk` (or `ending_kk_<page>`), numbered to the width of the steps' pages.
     for (what, refusal) in ending_rule_refusals(recording) {
@@ -1488,6 +1511,15 @@ fn default_timeout(
         // #463 R1: a single-frame select confirms its choice on one fresh frame of its page.
         if step.step.select.is_some() {
             total = total.saturating_add(step_timeout);
+        }
+        // #463 S2-9a: a scrolling select observes within its scan's time.
+        if let Some(scan) = step
+            .step
+            .select
+            .as_ref()
+            .and_then(|select| select.scan.as_ref())
+        {
+            total = total.saturating_add(scan.number(ScanNumber::MaxMs));
         }
         total = total.saturating_add(
             attempts
@@ -2206,6 +2238,18 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
     for (step, select) in plan.select_steps() {
         ocr.extend(select_slot_targets(plan, step, &select.declaration));
     }
+    // #463 S2-9a: a scrolling select's name target, which no page rule names, and its templates:
+    // the row's anchor, the start mark and the end mark.
+    for (step, select) in plan.select_steps() {
+        if select.scan.is_some() {
+            ocr.push(super::scan::name_target(plan, step, &select.declaration)?);
+            templates.extend(super::scan::template_targets(
+                plan,
+                step,
+                &select.declaration,
+            )?);
+        }
+    }
     let mut families = Map::new();
     for (name, targets) in [
         ("anchors", anchors),
@@ -2699,10 +2743,12 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
         );
         operation.insert("from".into(), json!(page));
         operation.insert("to".into(), json!(next_page));
-        operation.insert(
-            "select".into(),
-            select_json(plan, step, &select.declaration),
-        );
+        let mut declared = select_json(plan, step, &select.declaration);
+        // #463 S2-9a: a scrolling select declares its scan.
+        if let Some(scan) = &select.scan {
+            super::scan::add_scan_member(&mut declared, plan, step, &select.declaration, scan)?;
+        }
+        operation.insert("select".into(), declared);
         let guard = guard_json(plan, step, &page)?.ok_or_else(|| {
             select_invalid(
                 Some(step.step.index),
@@ -3087,7 +3133,11 @@ pub(crate) fn render(
             "effect": "no_designated_effect",
             "terminal_pages": [step.page_id()?]
         }));
-        layouts.push(select_layout_json(plan, step, &select.declaration)?);
+        // #463 S2-9a: a scrolling select's layout is the repeated anchor of its rows.
+        layouts.push(match &select.scan {
+            Some(scan) => super::scan::layout_json(plan, step, &select.declaration, scan)?,
+            None => select_layout_json(plan, step, &select.declaration)?,
+        });
         // #463 S2-6 fix round 1: every select step reads its wanted value from the package's
         // variable, one policy form whether the step is marked as a choice or not.
         policies.push((
@@ -3140,6 +3190,16 @@ pub(crate) fn render(
             invalid(
                 "validation_failed",
                 format!("the crop of template '{id}' was not loaded"),
+            )
+        })?;
+        entries.insert(format!("{task_dir}/{asset}"), bytes.clone());
+    }
+    // #463 S2-9a: the templates of every scrolling select, cut from its screens by the caller.
+    for (id, asset) in super::scan::template_assets(plan) {
+        let bytes = crops.get(&id).ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("the crop of the scrolling select's template '{id}' was not cut"),
             )
         })?;
         entries.insert(format!("{task_dir}/{asset}"), bytes.clone());

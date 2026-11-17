@@ -802,7 +802,8 @@ choose in a list of fixed slots on one screen by the name read in each slot: the
 `select` (request form only, `record mark --request` or `--request-json`, MCP `ac_record_mark`, and
 the mark request of "One call per step"; no shortcut flag). `record stop` generates it as the
 select step of a `linear_steps` task ([linear-steps.md](linear-steps.md), "Select steps"). A list
-that scrolls is a later slice; an ending added after the stop is #463 R2's ("Endings"). #463 S2-6
+that scrolls is #463 S2-9a's ("A scrolling choice: reading the list to its end"); an ending added
+after the stop is #463 R2's ("Endings"). #463 S2-6
 (since 0.12.68, [v012-register.md](v012-register.md) §1.442): a step may be marked first as holding
 a choice and refined later by its select ("Marking a choice first"); fix round 1 (the coordinator's
 ruling R1): the wanted value of every select, marked first or given whole, is a variable of the
@@ -1057,7 +1058,8 @@ recording keeps the wanted value's name in `select.wanted.name`; the package's g
 
 **Which to use.** A control found by its fixed label whose position moves (a "Confirm" button):
 a click that follows a located text ("Following a located text"). An item chosen by a value that
-may change, where "not there" is a normal result: a select. A list that scrolls is a later slice.
+may change, where "not there" is a normal result: a select. A list that scrolls: its swipes folded
+and a select with `rows` and `scan` (#463 S2-9a, "A scrolling choice: reading the list to its end").
 The located text's `expected` names were the first form of the variable; since R1 the variable
 belongs to the select.
 
@@ -1224,15 +1226,15 @@ record mark --unfold-scan <b>
   for byte what it was before the fold but for `updated_at_unix_ms`, which every write sets, and
   the package `record stop` generates is the one it generated before the fold, but for its
   generation time. A step that holds no fold is `not_folded` (the details' `folded_into` names the
-  press step when the step named is a folded swipe). The next slice declares a scrolling select on
-  the press step that reads the fold; `unfold_scan` is then refused while that select stands (its
-  own word, added with it).
+  press step when the step named is a folded swipe). #463 S2-9a: a scrolling select on the press
+  step reads the fold ("A scrolling choice: reading the list to its end"); `unfold_scan` is refused
+  while that select stands (`scan_selected`, nothing written): `clear_select` first.
 - **A fold without a scrolling select is listed, not generated.** `record ready` lists the press
   step with the item `scan_without_select` (code `record_scan_invalid`), and `record stop` and its
   dry run refuse it among their pre-checks, in the one function both use, with `scan_problem:
   scan_not_selected`, `details.missing_total` and `details.hint: "record ready"`; nothing is
-  written. This build declares no scrolling select, so a recording with a fold makes no package
-  until the next slice: undo the fold to make the package without it.
+  written. Declare the scrolling select on the press step (#463 S2-9a, below), or undo the fold to
+  make the package without it. A fold that a scrolling select reads is generated, and is no item.
 - **The readers of the step table.** `record status`: a folded step's row carries `folded_into`
   and `artifact_step: null`, the press step's row `scan_fold`. `record review`: a folded step is no
   step of the answer, and `--step` naming one is `step_in_fold`; the press step's sheet lists its
@@ -1252,6 +1254,159 @@ record mark --unfold-scan <b>
   marks, a choice and a select as any press step, and the drop of a press before the fold compares
   the next step's screen as the run meets it, the screen before the first folded swipe ("Steps,
   frames and remediation").
+
+### A scrolling choice: reading the list to its end
+
+#463 S2-9a (since 0.12.70, [v012-register.md](v012-register.md) §1.457; the owner's rule on board
+#463 that a scrolling choice has two kinds, and that a list whose content is not known is scrolled
+to its end; the rules here are the coordinator's). Stage one recorded the demonstration as it was
+played: swipes forward to the list's end, swipes back to the wanted row, the press on it; S2-8'
+folded the swipes into the press step ("Folding swipes into a scrolling search"). The press step's
+select then declares the choice over the list read across those screens, and `record stop`
+generates it as a select over a scan ([selection-graph.md](selection-graph.md), "Select over a
+scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first kind; the second
+(straight to a known item) is a later slice.
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":7,
+ "select":{
+   "rows":{"row":{"x":2,"y":24,"width":40,"height":8},"anchor":{"x":4,"y":24,"width":8,"height":6},
+           "name":{"x":18,"y":24,"width":16,"height":6}},
+   "scan":{"list":{"x":0,"y":20,"width":128,"height":80},"start":{"x":60,"y":20,"width":16,"height":4},
+           "end":{"x":60,"y":84,"width":16,"height":6},"stop":"end"},
+   "read":{"languages":["en"],"timeout_ms":1000,"minimum_confidence_milli":800,
+           "model_ref":"model","model_sha256":"<64 hex>"},
+   "names":[{"id":"item_a","aliases":["Item A"]},{"id":"item_b","aliases":["Item B"]}],
+   "match":{"max_distance":1,"minimum_margin":1},
+   "wanted":{"name":"list_item","default":"item_b"}}}
+```
+
+- **The request** (request form only, as every select): on a press step that holds a fold, `rows`
+  and `scan` in place of `slots`, beside the members a select has ("Selecting in a list": `read`,
+  `names`, `match`, `wanted`, `pressed`, `on_empty_key`). `rows {row, anchor, name, click?}`: one
+  row of the list as its first screen shows it, the anchor that repeats in every row, the region a
+  row's name is read in and the box a tap is drawn in (absent: the row). `scan {list, start, end?,
+  stop, numbers?}`: the list's area, the start mark, the end mark, the kind of the choice (`stop`,
+  required: `"end"`, the list read to its end and then chosen, is this build's one value; another
+  value does not decode, `validation_failed`), and numbers given in place of the measured ones
+  (below). Every region is the agent's; no tool proposes one, a choice or a value. The select is
+  declared, declared again and taken off (`clear_select`) as any select, on the active or the
+  stopped recording ("Marking after stop"), and keeps a select step's rules.
+- **Refusals of the request**, `record_select_invalid` (exit 3), nothing written, each its
+  `select_problem`: `scan_without_fold` (the step holds no fold), `rows_with_slots`,
+  `confirm_with_rows` (the kernel confirms a scrolled choice itself, on a fresh frame after its
+  return to the chosen row), `scan_stop_missing`, `scan_region_outside_frame` (a region outside the
+  frame), `scan_region_outside_list` (the row outside the list), `scan_region_outside_row` (the
+  anchor, the name region or the click box outside the row), `scan_number_not_measured` (a number
+  the demonstration does not hold what it is measured from, a swipe recorded without its after
+  loop's record, and the request does not give it; `details.number`). `rows` without `scan` or the
+  other way round, a rectangle without width or height, a number `numbers` does not know or a given
+  0 are the Lab's own reading, `validation_failed` (exit 2).
+- **Where each image comes from.** The screens are the fold's, in order: the first screen (the
+  first folded swipe's screen before it), then the screen after each swipe, forward or back. The
+  row, its anchor, its name and the start mark are taken from the first screen; the end mark from
+  the last screen after a forward swipe. A fold with no swipe back, whose last forward screen is the
+  press step's screen, is the same case. The package's templates are those regions cut from those
+  screens (the anchor searched in the list, the start and end marks each at its own region, unmoved,
+  so that each passes only where the list stands at that end); the name is an OCR target at the
+  first screen's name region, which the layout moves to every row's anchor.
+- **The numbers the Lab measures** from those regions and from the demonstration (`b` and `e` the
+  list's and the row's extents along the fold's axis, `V` the first screen and the screens after a
+  forward swipe), each kept in the select with what it is measured from (`from`): the advance's
+  window, 1 to `b − e`, and the reposition's largest step, `b − e` (`list_and_row`); the advance's
+  duration, the first forward swipe's (`first_forward_swipe`; the package's advance and reposition
+  are a drag between one-pixel boxes at that swipe's two points, whatever the other forward swipes
+  measured); the settle's interval, that swipe's after loop's (`first_forward_swipe`), and its
+  timeout, twice the longest time a swipe's screen was captured after it plus the interval
+  (`fold_swipes`); the position tolerance, `max(2, e / 10)`, the edge margin, the tolerance, and the
+  signature's grid, the row in as many square cells as its shape gives (at most 8) along its long
+  side and one across (`row`); the signature distance, the Runtime's frame-change bound
+  (`frame_change_bound`); one overlapping row, since every pair of rows matches by the name read
+  (`names_read`); the spacing (rows across the axis at one place, the largest gap along it and the
+  first screen's first row from the list's leading edge, the last row of the last screen after a
+  forward swipe from the list's trailing edge, the lead and the gap across it, each plus the
+  tolerance) and the most anchors on a screen plus 2, at most 64 (`screens`, as the kernel's dry
+  run reads each screen); the viewports and the return viewports, `2V`, at most 128 (`fold_swipes`);
+  and the scan's time, the viewports and the return viewports and one more, each an advance and its
+  settle, plus one screen's reads of every anchor (`scan_moves`). **A number given** in
+  `scan.numbers` (by its name: `advance_min_content_step_px`, `advance_max_content_step_px`,
+  `advance_duration_ms`, `reposition_max_content_step_px`, `settle_interval_ms`, `settle_timeout_ms`,
+  `position_tolerance_px`, `edge_margin_px`, `signature_columns`, `signature_rows`,
+  `signature_max_distance_milli`, `min_overlap_instances`, `spacing_columns`,
+  `spacing_max_axis_gap_px`, `spacing_max_trailing_gap_px`, `spacing_max_cross_lead_px`,
+  `spacing_max_cross_gap_px`, `max_instances`, `max_viewports`, `max_reposition_viewports`,
+  `max_ms`) wins: it is kept with `origin: "given"` and the value the Lab measured beside it
+  (`measured`), and the numbers computed from it follow it. A bound only the kernel checks (a window
+  beyond `b − e`, a swipe longer than the window's largest step, a scan's time above the task's) is
+  the kernel's admission of the probe, `kernel_refused`.
+- **The self-test at mark time**, on probe packages the kernel admits (`kernel_refused` with
+  `details.loader_code` otherwise), refusals of `record_mark_rejected` (`{id: "select", reason,
+  frame_id, …}`): every screen of the demonstration is read by the kernel's dry run of the step,
+  each row the anchor finds there that lies in the list reads a known name (`select_name_unread`,
+  `self_test_error` with the kernel's failure, `scan_rows_not_found` when the first screen shows no
+  row); the start mark passes on the first screen and on no later forward screen
+  (`scan_start_mark_missing`, `scan_start_mark_repeated`); the end mark passes on the last screen
+  after a forward swipe and, from the first forward screen it passes on, on every later one
+  (`scan_end_mark_missing`, `scan_end_mark_lost`): the kernel's end check is its template passing,
+  so a mark that passes and then not again would end the scan early; on the step's own frames the
+  pressed name selects a row whose click box holds the recorded press (`select_pressed_absent`,
+  `select_press_mismatch`), which becomes the step's click box; the content step of each forward
+  swipe, measured by the kernel's offline entry in the widest window `[1, b − e]`, lies in the
+  window declared (`scan_step_outside_window`, `details.content_step_px` and `window`); the
+  kernel's offline entry (`dry_run_scan_decide`, called, never copied) over the first screen and
+  the screens after a forward swipe, each fed twice as a forward run captures it, with the
+  package's variables at their defaults and the pressed name's constant policy, covers the list
+  completely (`scan_coverage_incomplete`), reads every position (`scan_position_unread`) and decides
+  the pressed name (`scan_decision_mismatch`); once more with the first name of `names` no screen
+  shows, it decides empty over complete coverage (`scan_absent_not_empty`; not run when every name
+  is on a screen). Without an OCR model a scrolling select is refused `lab_ocr_unavailable`: its
+  numbers are measured on the names read. **`recording.json`** keeps the select's `scan {axis,
+  advance_from, advance_to, screens[{frame, step, role, regions, names, content_offset_px?}],
+  numbers[{name, value, origin, from, measured?}], outcome?{coverage, positions, pressed, steps,
+  absent?}}`, `record mark` answers it, and `record status` shows it with the select.
+- **The end of the list not recorded.** A select without `end` stands (the self-test reads its
+  screens and its press, and runs no offline entry); `record ready` lists the press step with
+  `scan_end_not_recorded` (code `record_scan_invalid`), and `record stop` and its dry run refuse it
+  among their pre-checks with `scan_problem: end_not_recorded`: the demonstration never reached
+  the list's end. Record the business again and scroll to the end once.
+- **What `record stop` generates** for a scrolling select on step i (page `step_ii`): the select
+  step's operation `step_ii_select`, its `select` R1's (the layout, the policy document, `on_empty`)
+  with `scan` whole as the declaration requires it (`identity_feature: "name"`, `axis`, `advance`
+  and `reposition` the drag above, `settle`, `track` with the list as its area and the row as its
+  signature, `start {check: "select/step_ii/start", rewind: true}`, `end {check:
+  "select/step_ii/end"}`, `bounds`; no `early_stop`, no `confirm`); the layout `layout/step_ii`,
+  `repeated_anchor`, its anchor `select/step_ii/anchor`, `max_instances`, `order` along the axis,
+  `instance_rect`, `click` and the name's `offset` relative to the anchor on the first screen, the
+  list as its `readable_band`, the one identity feature `name` over `names`; `ocr_targets[]`
+  `select/step_ii/name`; `verify_templates[]` `select/step_ii/anchor`, `…/start`, `…/end`, their
+  assets under `assets/select/`; the policy document, `variables` and the `on_empty` mapping as a
+  fixed-slot select generates them (unchanged: R1 generates `on_empty` for every select, its key
+  the request's `on_empty_key` or `<task_id>_not_found`, so that a name the list does not hold is
+  the run's normal end). The default task timeout adds the scan's `max_ms`. The same recording
+  generates the same bytes again.
+- **The self-checks** (the one function `record ready` and `record stop` share, "Self-checks"):
+  admission; in `first_decision`, a scrolling select at step 1 is the kernel's offline entry over
+  its forward screens with the package's variables at their defaults, which must cover the list
+  and read every position: `{status: "would_select", operation_label, name, position, frames}` or
+  `{status: "would_end_empty", …}`; in `selects`, the step's own frames as a fixed-slot select's,
+  every screen of the demonstration read by the kernel's dry run of the package (another page of
+  the package passing there is the kernel's `select_page_mismatch`, `self_test_error`, as on any
+  frame of a select step; a row's name unread is `select_name_unread` about the target
+  `select/step_ii/name`), and the offline entry for the pressed name and for a name no screen shows,
+  as at mark time; each failure `record_step_self_mismatch` with its `reason`; `lab.selects[]` adds
+  `scan {screens, coverage, positions, pressed, steps, absent?}`. The regression case of the step
+  is made on its first screen, where a run meets its page; the other screens are judged by the
+  offline entry, not by cases (one case per step, as for every step).
+- **The readers.** `record review`'s sheet of the step adds `scan {rows, scan, screens, numbers,
+  outcome?}`: the screens in order with the regions taken from each and the names read on each,
+  every number with its origin, the offline entry's decision; its `folded` lists the swipes with
+  their screens and previews (S2-8'). `unfold_scan` is refused while the select stands
+  (`scan_selected`); `clear_select` takes the select off and leaves the fold, which `record ready`
+  lists again (`scan_without_select`).
+- **What cannot be judged offline**, for the trial on the device: the list's inertia and how long
+  it takes to settle after a drag; a list opened in its middle (the rewind toward the start mark);
+  the drag's real displacement against the declared window; the return to the chosen row and its
+  confirmation on a fresh frame; a list that loads more rows while it scrolls.
 
 ### Endings
 
@@ -3821,6 +3976,7 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
 | `size_not_base` | (Workflow #392 DA-5cd fix round 1, as the train of DA-5 words it) the recording is not at the base size: its header's base size and frames of another size, or, without one, frames that show a larger display of the base size's ratio ("A recording's size"); listed first, and then no self-check runs | `record_size_not_base` |
 | `select_unrefined` | #463 S2-6: a step marked as holding a choice that no select refines yet ("Marking a choice first"); listed by its step, after the step's effect and recognition items | `record_select_invalid` (`choice_not_refined`) |
 | `scan_without_select` | #463 S2-8': a press step whose recorded swipes are folded into its scrolling search declares no scrolling select yet ("Folding swipes into a scrolling search"); listed by its step, after its select items | `record_scan_invalid` (`scan_not_selected`) |
+| `scan_end_not_recorded` | #463 S2-9a: a scrolling select that reads its list to its end declares no end mark: the demonstration never reached the list's end; record again and scroll to the end once ("A scrolling choice: reading the list to its end"); listed by its step, after `scan_without_select` | `record_scan_invalid` (`end_not_recorded`) |
 
   The select and ending rules are those `record mark` holds when it takes a select or an ending,
   checked again where the package is generated ("Selecting in a list", "Endings"); the refusal's
@@ -4008,7 +4164,8 @@ order of its serial numbers. The rows below count steps by these numbers; where 
 | `--timeout-ms`, `--arrival-timeout-ms` and `--application-arrival-timeout-ms` given explicitly lie in 1..=1800000 | `validation_failed` (2) |
 | every live frame and template crop still has its recorded sha256 and the recording's size | `record_frame_hash_mismatch`, `record_frame_size_mismatch` (3) |
 | #463 S2-6: every step marked as holding a choice is refined by its select (checked after the optional steps' positions and before the select steps' rules; "Marking a choice first") | `record_select_invalid`, `choice_not_refined` (3) |
-| #463 S2-8': no press step holds a fold that no scrolling select reads (checked after the select steps' rules; a folded swipe is no effective step and is numbered nowhere; "Folding swipes into a scrolling search"): this build declares no scrolling select, so a recording with a fold makes no package | `record_scan_invalid`, `scan_not_selected` (3) |
+| #463 S2-8': no press step holds a fold that no scrolling select reads (checked after the select steps' rules; a folded swipe is no effective step and is numbered nowhere; "Folding swipes into a scrolling search") | `record_scan_invalid`, `scan_not_selected` (3) |
+| #463 S2-9a: every scrolling select that reads its list to its end declares its end mark (checked after the folds; "A scrolling choice: reading the list to its end") | `record_scan_invalid`, `end_not_recorded` (3) |
 
 A `--requires` that does not start with `<game>.<server>.` adds the warning
 `requires_prefix_mismatch`. Steps whose click or application operation is marked

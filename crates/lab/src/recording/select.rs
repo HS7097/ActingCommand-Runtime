@@ -232,7 +232,10 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
         ))
     };
     let slots = super::model::LAB_RECORDING_MAX_SELECT_SLOTS;
-    if !(1..=slots).contains(&select.slots.len()) {
+    // #463 S2-9a: a scrolling select declares rows and a scan in place of slots.
+    if select.rows.is_some() || select.scan.is_some() {
+        super::scan::validate_scan_shape(step, select)?;
+    } else if !(1..=slots).contains(&select.slots.len()) {
         return Err(shape(format!("needs 1..={slots} slots")));
     }
     for (index, slot) in select.slots.iter().enumerate() {
@@ -453,6 +456,7 @@ pub(crate) fn declare_select(step: &mut RecordingStep, request: &MarkRequest) ->
             frames: Vec::new(),
         },
         click_before,
+        scan: None,
     });
     Ok(fresh)
 }
@@ -662,6 +666,8 @@ pub(crate) fn check_step_select(
             "the recording has no frame, so it has no coordinate space",
         )
     })?;
+    // A scrolling select has no slots; its regions are checked with its screens
+    // (`scan::check_scan_select`).
     for (slot, declared) in spec.slots.iter().enumerate() {
         if [declared.rect, declared.click_rect(), declared.name]
             .into_iter()
@@ -735,6 +741,12 @@ pub(crate) fn check_step_select(
                  the select an on_empty_key of its own"
             ),
         );
+    }
+
+    // #463 S2-9a: a scrolling select reads its list over the screens of the demonstration folded
+    // into the step, and is self-tested there (`scan::check_scan_select`).
+    if spec.rows.is_some() {
+        return super::scan::check_scan_select(recording, probe, frames, ocr, current).map(Some);
     }
 
     // The probe package: the step as `record stop` generates it, admitted by the kernel.
@@ -935,6 +947,19 @@ pub(crate) struct Decided {
     pub(crate) kind: SelectDecision,
     pub(crate) clicks: BTreeMap<u32, RecordRect>,
     pub(crate) unread: Vec<(u32, Value)>,
+    /// #463 S2-9a: every instance the projection holds, as a scrolling select reads its rows.
+    pub(crate) instances: Vec<DecidedInstance>,
+}
+
+/// #463 S2-9a: one instance of a dry run's projection: its index, whether it is actionable (its
+/// rectangle and click box inside the readable band; a row cut by the list's edge is not), its
+/// rectangle, the name its identity feature read and, when it read none, why.
+pub(crate) struct DecidedInstance {
+    pub(crate) index: u32,
+    pub(crate) actionable: bool,
+    pub(crate) rect: RecordRect,
+    pub(crate) name: Option<String>,
+    pub(crate) unread: Option<Value>,
 }
 
 /// The kernel's dry run of the select operation `operation` of `prepared` on `frame`
@@ -1047,13 +1072,31 @@ pub(crate) fn decide(
             .map(|candidate| (candidate.instance_index, click_of(candidate)))
             .collect(),
         unread,
+        instances: candidates
+            .iter()
+            .map(|candidate| DecidedInstance {
+                index: candidate.instance_index,
+                actionable: candidate.actionable,
+                rect: RecordRect {
+                    x: candidate.rect.x,
+                    y: candidate.rect.y,
+                    width: candidate.rect.width,
+                    height: candidate.rect.height,
+                },
+                name: match candidate.features.get(SELECT_FEATURE) {
+                    Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
+                    _ => None,
+                },
+                unread: unread_cause(candidate),
+            })
+            .collect(),
     }))
 }
 
 /// Fix 1: the kernel's decision outcome as the contract mirrors it (`TaskSelectionOutcome`,
 /// through their shared serde shape, as the run's record takes it): the evaluator's `detail`
 /// text of an unknown outcome stays out, as the record leaves it out.
-fn mirrored_outcome(outcome: &impl Serialize) -> LabResult<TaskSelectionOutcome> {
+pub(crate) fn mirrored_outcome(outcome: &impl Serialize) -> LabResult<TaskSelectionOutcome> {
     let mut value = serde_json::to_value(outcome).map_err(|error| {
         invalid(
             "validation_failed",

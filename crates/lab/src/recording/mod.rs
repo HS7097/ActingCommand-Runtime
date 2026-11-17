@@ -39,6 +39,8 @@ pub(crate) mod preview;
 pub(crate) mod ready;
 // #463 S2-2: each step of a recording as the screen before, the press and the screen after.
 pub(crate) mod review;
+// #463 S2-9a: a choice in a list read across its screens to its end, the swipes folded into it.
+pub(crate) mod scan;
 // #463 R1: a step that chooses in a list of fixed slots by the name read in each slot.
 pub(crate) mod select;
 pub(crate) mod steps;
@@ -69,3 +71,5 @@ pub use review::{
 };
 // #463 S2-8': a swipe folded into a press step's scrolling search, in that step's sheet.
 pub use review::RecordReviewFolded;
+// #463 S2-9a: a scrolling select's sheet in its step's `record review`.
+pub use scan::RecordReviewScan;

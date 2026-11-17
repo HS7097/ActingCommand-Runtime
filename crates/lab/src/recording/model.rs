@@ -6,7 +6,7 @@
 use actingcommand_contract::{
     InputFrameReference, InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat,
     OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ScanCoverageState, ValueTestOp,
 };
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
@@ -1278,8 +1278,18 @@ pub struct BoxSpec {
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
     /// 1 to [`LAB_RECORDING_MAX_SELECT_SLOTS`] slots, slot `k` the candidate with instance index
-    /// `k`.
+    /// `k`. #463 S2-9a: none beside `rows`, which excludes them (absent then, so that a select
+    /// over fixed slots is byte for byte what an earlier build wrote).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<SelectSlotSpec>,
+    /// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+    /// end"): the rows of a list read across its screens, in place of `slots`, with `scan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<SelectRowsSpec>,
+    /// #463 S2-9a: the list the rows scroll in, its two ends and the kind of the scrolling choice,
+    /// with `rows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<SelectScanSpec>,
     /// The OCR members every slot's name is read with.
     pub read: SelectReadSpec,
     /// The identity domain: every name the list may show.
@@ -1375,10 +1385,245 @@ pub enum SelectConfirmSpec {
     Decision,
 }
 
+/// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its end"):
+/// the rows of a list a scrolling select reads, each a rectangle of the list's first screen, the
+/// agent's: one row (`row`), the anchor that repeats in every row (`anchor`), the region its name
+/// is read in (`name`) and the box a tap is drawn in (`click`, absent: the row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectRowsSpec {
+    pub row: RecordRect,
+    pub anchor: RecordRect,
+    pub name: RecordRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<RecordRect>,
+}
+
+impl SelectRowsSpec {
+    /// The box a tap on a row is drawn in, on the first screen.
+    pub fn click_rect(&self) -> RecordRect {
+        self.click.unwrap_or(self.row)
+    }
+}
+
+/// #463 S2-9a: the list a scrolling select reads and its two ends, the agent's rectangles: the
+/// list's area (`list`), the start mark on the first screen (`start`) and the end mark on the
+/// last screen after a forward swipe (`end`; absent while the demonstration never reached the
+/// end, which `record ready` lists as `scan_end_not_recorded`); the kind of the choice (`stop`,
+/// required: `end`, the list read to its end, is this build's one value); and the numbers given in
+/// place of the ones the Lab measures (`numbers`, by name; absent: every one measured).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectScanSpec {
+    pub list: RecordRect,
+    pub start: RecordRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<RecordRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<ScanStop>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub numbers: BTreeMap<String, u64>,
+}
+
+/// #463 S2-9a: the kind of a scrolling choice the agent states. `end`: what the list holds is not
+/// known, so it is read to its end and then chosen. (The kind that scrolls straight to a known
+/// item is a later slice's second value.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanStop {
+    End,
+}
+
+/// #463 S2-9a: one number of a scrolling select's scan or layout that the Lab measures from the
+/// agent's regions and the demonstration, or that the request gives in its place (`numbers`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumber {
+    AdvanceMinContentStepPx,
+    AdvanceMaxContentStepPx,
+    AdvanceDurationMs,
+    RepositionMaxContentStepPx,
+    SettleIntervalMs,
+    SettleTimeoutMs,
+    PositionTolerancePx,
+    EdgeMarginPx,
+    SignatureColumns,
+    SignatureRows,
+    SignatureMaxDistanceMilli,
+    MinOverlapInstances,
+    SpacingColumns,
+    SpacingMaxAxisGapPx,
+    SpacingMaxTrailingGapPx,
+    SpacingMaxCrossLeadPx,
+    SpacingMaxCrossGapPx,
+    MaxInstances,
+    MaxViewports,
+    MaxRepositionViewports,
+    MaxMs,
+}
+
+/// #463 S2-9a: whether a number was measured by the Lab or given in the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumberOrigin {
+    Measured,
+    Given,
+}
+
+/// #463 S2-9a: what a number is measured from: the list's and the row's extents along the axis
+/// (`list_and_row`), the row's own extents (`row`), the first forward swipe as recorded
+/// (`first_forward_swipe`), the fold's swipes and their after loops (`fold_swipes`), the rows the
+/// demonstration's screens show (`screens`), the Runtime's frame-change bound
+/// (`frame_change_bound`), the names read, by which every pair of rows matches (`names_read`), and
+/// the moves, their settle and one screen's reads (`scan_moves`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumberSource {
+    ListAndRow,
+    Row,
+    FirstForwardSwipe,
+    FoldSwipes,
+    Screens,
+    FrameChangeBound,
+    NamesRead,
+    ScanMoves,
+}
+
+/// #463 S2-9a: one number as the select's scan holds it: its value, whether it was measured or
+/// given, what it is measured from, and, when given, the value the Lab measured (absent when it
+/// could not measure it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanNumberValue {
+    pub name: ScanNumber,
+    pub value: u64,
+    pub origin: ScanNumberOrigin,
+    pub from: ScanNumberSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<u64>,
+}
+
+/// #463 S2-9a: how a screen of the demonstration is met: the list's first screen (before the first
+/// swipe), the screen after a forward swipe, the screen after a swipe back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanScreenRole {
+    First,
+    Forward,
+    Back,
+}
+
+/// #463 S2-9a: a region of a scrolling select, by the screen its image is taken from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanRegion {
+    List,
+    Row,
+    Anchor,
+    Name,
+    Click,
+    Start,
+    End,
+}
+
+/// #463 S2-9a: one screen of the demonstration a scrolling select reads: the stored frame, the
+/// folded swipe whose screen before (the first screen) or after it is, how it is met, the regions
+/// whose images are taken from it, the names read on it in the order of its rows, and, on the
+/// first screen and those after a forward swipe, the content offset the kernel's offline entry
+/// aligned it at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanScreen {
+    pub frame: RecordedFrame,
+    pub step: u32,
+    pub role: ScanScreenRole,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<ScanRegion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_offset_px: Option<i64>,
+}
+
+/// #463 S2-9a: a decision of the kernel's offline entry over the demonstration, by its kind:
+/// `selected` with the name chosen and its position, `empty`, or the kind of a decision a run
+/// fails on (`blocked`: an empty or insufficient decision beside an unknown position).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum ScanDecision {
+    Selected { name: String, position: u32 },
+    Empty,
+    Ambiguous,
+    Insufficient,
+    Blocked,
+    Unknown,
+}
+
+/// #463 S2-9a: the content step one forward swipe of the demonstration gave, as the offline entry
+/// aligned the screens around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanMeasuredStep {
+    pub step: u32,
+    pub content_step_px: i64,
+}
+
+/// #463 S2-9a: the offline entry run once more for a name that no screen shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanAbsentRun {
+    pub name: String,
+    pub coverage: ScanCoverageState,
+    pub decision: ScanDecision,
+}
+
+/// #463 S2-9a: what the kernel's offline entry decided over the demonstration's forward screens at
+/// mark time: its coverage, the positions it read, its decision for the pressed name, the content
+/// step of each forward swipe, and the run for a name no screen shows (absent when every name of
+/// the select is on a screen).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanSelfTestOutcome {
+    pub coverage: ScanCoverageState,
+    pub positions: u32,
+    pub pressed: ScanDecision,
+    pub steps: Vec<ScanMeasuredStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent: Option<ScanAbsentRun>,
+}
+
+/// #463 S2-9a: a scrolling select's scan as `recording.json` keeps it once its self-test passed:
+/// the axis, the first forward swipe's two points (the package's advance), the screens of the
+/// demonstration in order, every number with its origin, and the offline entry's outcome (absent
+/// while the end of the list was not recorded).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectScanState {
+    pub axis: FoldAxis,
+    pub advance_from: RecordPoint,
+    pub advance_to: RecordPoint,
+    pub screens: Vec<ScanScreen>,
+    pub numbers: Vec<ScanNumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ScanSelfTestOutcome>,
+}
+
+impl SelectScanState {
+    /// The value of the number `name` (0 when the scan holds none, which no scan of this build
+    /// is).
+    pub fn number(&self, name: ScanNumber) -> u64 {
+        self.numbers
+            .iter()
+            .find(|number| number.name == name)
+            .map_or(0, |number| number.value)
+    }
+}
+
 /// #463 R1: a step's select as `recording.json` keeps it: the declaration as given, when it was
 /// marked, and its last self-test. Fix 1: when the select took over a click with an outcome on
 /// record (a tap recorded before the select, also after `record stop`), that click's own
 /// rectangle, source and mark (`click_before`), which `clear_select` gives back; absent otherwise.
+/// #463 S2-9a: a scrolling select's scan (`scan`), absent on every other select.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepSelect {
@@ -1387,6 +1632,8 @@ pub struct StepSelect {
     pub self_test: SelectSelfTest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub click_before: Option<SelectClickBefore>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<SelectScanState>,
 }
 
 /// #463 R1 fix 1: the rectangle, source and mark of an executed click before a select took it

@@ -46,6 +46,7 @@ use crate::recording::ready::{
     point_press_warnings, ready_outcome, with_size_item,
 };
 use crate::recording::review::{RecordReviewOutcome, RecordReviewRequest, review_outcome};
+use crate::recording::scan::{scan_crops, scan_screen_frames};
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     Arrival, ArrivalMode, FrameMeta, Session, application_action, application_with_click,
@@ -1313,6 +1314,20 @@ fn load_package_inputs(
             }
         }
     }
+    // #463 S2-9a: and every screen of a scrolling select's demonstration.
+    for step in &plan.steps {
+        for frame in scan_screen_frames(step) {
+            if cache.contains_key(&frame.sha256) {
+                continue;
+            }
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_step(step).with_frame(frame), error)?,
+            }
+        }
+    }
     let mut crops = BTreeMap::new();
     for (id, _asset) in plan.template_assets() {
         match read_crop(plan, &id) {
@@ -1320,6 +1335,16 @@ fn load_package_inputs(
                 crops.insert(id, bytes);
             }
             Err(error) => failures.fail(Locus::default().with_target(&id), error)?,
+        }
+    }
+    // #463 S2-9a: a scrolling select's templates are cut from its screens, as at mark time.
+    for (step, select) in plan.select_steps() {
+        let Some(scan) = &select.scan else {
+            continue;
+        };
+        match scan_crops(plan, step, &select.declaration, scan, &cache) {
+            Ok(cut) => crops.extend(cut),
+            Err(error) => failures.fail(Locus::on_step(step), error)?,
         }
     }
     Ok((cache, crops))

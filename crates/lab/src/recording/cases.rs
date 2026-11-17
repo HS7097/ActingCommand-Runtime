@@ -358,7 +358,12 @@ fn sources(plan: &Plan) -> LabResult<Vec<Source<'_>>> {
         let Some(page) = &step.page else {
             continue;
         };
-        let frame = pressed_on(step)?;
+        // #463 S2-9a: a scrolling select's case is on the list's first screen, where a run meets
+        // its page; its other screens are the offline entry's, in the self-check `selects`.
+        let frame = match super::scan::first_screen(step) {
+            Some(frame) => frame,
+            None => pressed_on(step)?,
+        };
         sources.push(Source {
             id: format!("step_{}", plan.numbered(step.number)),
             kind: CaseKind::Step,

@@ -35380,6 +35380,114 @@ whose press step declares no scrolling select.
 
 **At deploy.** Nothing to configure.
 
+### 1.457 Slice #463 S2-9a (0.12.70): a scrolling choice that reads the list to its end (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making, her rule that a scrolling choice has two kinds and that a list whose content is not known is scrolled to its end, and her ruling that no tool proposes a region, a choice or a value; the read-only study `rd-1116/report-463-scroll-refresh-study.md`, its slice 4 and part three, and the coordinator's rulings at its end and in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-s29a-scan-select-end.md`; stacked on #463 S2-8', §1.456, its branch at `8629a6b6`, which stands on #463 S2-10 at `225c1d3c` and holds main `26698590`)
+
+This section takes 1.457, the number the work order gives. It ships in 0.12.70.
+
+**Why.** S2-8' folds the recorded swipes into the press step; this slice lets the agent declare,
+on that step, the first kind of scrolling choice (the list read to its end, then chosen), and makes
+`record stop` generate it as the kernel's select over a scan, self-tested at mark time and
+self-checked at the stop by the kernel's own dry runs over the demonstration's screens.
+
+**The rule** ([lab-recording.md](lab-recording.md), "A scrolling choice: reading the list to its
+end").
+- *The request*: the select's `rows {row, anchor, name, click?}` and `scan {list, start, end?,
+  stop, numbers?}` in place of `slots`, every region the agent's; `stop` required, `"end"` the one
+  value of this build (`ScanStop`); `numbers` by name in place of measured ones.
+- *The images*: the row, the anchor, the name and the start mark from the first screen (the first
+  folded swipe's screen before it), the end mark from the last screen after a forward swipe; the
+  package's templates are those regions cut from those screens in memory, at each stop the same.
+- *The numbers*, measured from the regions and the demonstration and kept with their origin
+  (`scan_numbers`): the window 1 to `b − e`, the reposition `b − e`, the advance's duration and the
+  settle interval from the first forward swipe, the settle timeout twice the longest capture time
+  after a swipe plus the interval, the tolerance `max(2, e / 10)`, the edge margin, the signature
+  grid from the row, the signature distance the frame-change bound, one overlapping row, the
+  spacing and the anchors from the rows the screens show, `2V` viewports and return viewports, and
+  the scan's time from those. A given number wins and is marked `given`, the measured value beside
+  it.
+- *The self-test at mark time*: on probe packages the kernel admits, every screen read by
+  `dry_run_select` (through `select::decide`), the start and end marks by the package's evaluator,
+  the press on the step's own frames, the content steps measured in the widest window and held to
+  the declared one, the kernel's offline entry `dry_run_scan_decide` over the forward screens for
+  the pressed name (complete coverage, every position read, the pressed name chosen) and for a name
+  no screen shows (empty over complete coverage). Without an OCR model: `lab_ocr_unavailable`.
+- *Generation*: `select.scan` whole, the `repeated_anchor` layout, the name's OCR target and the
+  three templates; the policy, the `variables` and `on_empty` as R1 generates them; the default
+  task timeout adds `max_ms`.
+- *The self-checks*: `first_decision` of a scrolling select at step 1 and `selects` run the same
+  dry runs on the generated package; the step's regression case is on its first screen.
+- *The readers*: `record review`'s `scan`, `record status` and `record mark` through the select's
+  kept `scan`; `unfold_scan` refused `scan_selected`; `clear_select` keeps the fold.
+
+**What the code holds against the study and the work order, and what was decided here.**
+- *`on_empty`*: the work order asks for it only where the agent declared an ending for "not in the
+  list" the way endings are declared. R1 already generates `on_empty` for every select, its key the
+  request's `on_empty_key` or `<task_id>_not_found` (the owner's rule on board #463 that an item not
+  there ends the run normally with a named result); the scrolling select keeps that unchanged, so no
+  default ending is invented here.
+- *`scan_end_not_recorded`*: the self-test cuts the end mark from the very screen it is checked on,
+  so a declared end mark always passes there; the item stands for a select declared without `end`
+  (the demonstration never reached the list's end), which the self-test reads as far as it can and
+  `record stop` refuses.
+- *The second kind*: `ScanStop` has the one value `end`; `"wanted"` does not decode
+  (`validation_failed`), leaving the value to the next slice.
+- *Another page on a scan screen*: judged in the self-check `selects` (the kernel's
+  `select_page_mismatch` on that screen), as R1 judges another page on a select step's frame.
+- *The regression cases*: one per step, on its first screen; the other screens are the offline
+  entry's, so that one step keeps one case.
+- *Rows cut by the list's edge* have no features; a fixed-slot select's per-frame reading counts them
+  unread, so the scrolling select reads only the rows that lie in the list (`DecidedInstance`).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The scrolling select | `crates/lab/src/recording/scan.rs` (new): `validate_scan_shape`, `check_scan_select`, `scan_numbers`, `screens_of`, `admitted_probe`, `offline_entry`, `layout_json`, `add_scan_member`, `name_target`, `template_targets`, `template_assets`, `scan_crops`, `scan_select_checks`, `scan_first_decision`, `review_sheet`, `end_not_recorded`, `scrolls`, `RecordReviewScan` |
+| The members | `crates/lab/src/recording/model.rs`: `SelectSpec::rows`, `SelectSpec::scan` (`slots` absent beside them), `SelectRowsSpec`, `SelectScanSpec`, `ScanStop`, `ScanNumber`, `ScanNumberOrigin`, `ScanNumberSource`, `ScanNumberValue`, `ScanScreenRole`, `ScanRegion`, `ScanScreen`, `ScanDecision`, `ScanMeasuredStep`, `ScanAbsentRun`, `ScanSelfTestOutcome`, `SelectScanState`, `StepSelect::scan` |
+| The hooks | `select.rs` (`validate_select_shape`, `check_step_select` hand a scrolling select to `scan.rs`; `Decided::instances`; `mirrored_outcome` shared); `generate.rs` (`unselected_scans` skips a scrolling select, `unrecorded_scan_ends`, the scan member, layout, targets and templates, the timeout); `crosscheck.rs` (`first_decision`, `select_checks`); `recording_api.rs` `load_package_inputs` (the screens and the cut templates); `cases.rs` `sources`; `review.rs` `RecordReviewStep::scan`; `fold.rs` `unfold_scan` |
+| The words | `crates/lab/src/codes.rs`: `SelectProblem` (8 words), `ScanProblem::ScanSelected`, `ScanProblem::EndNotRecorded`, `ReadyMissing::ScanEndNotRecorded` |
+| Texts | [lab-recording.md](lab-recording.md): the new "A scrolling choice: reading the list to its end", the notes of "Selecting in a list" and "Folding swipes into a scrolling search", "Pre-checks", the words of "What a recording still lacks"; the row `record mark` of [lab-operations.json](lab-operations.json) (the `request` note and `notes`; no `help` change); `apps/actinglab-mcp/MANUAL.md`; the lab fragment, the catalog and the regenerated index |
+
+**Codes and words.**
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `select_problem` `scan_without_fold` | a scrolling select on a step that holds no fold | refuses | 3 |
+| `rows_with_slots` | `rows` beside `slots` | refuses | 3 |
+| `confirm_with_rows` | `confirm` beside `rows` | refuses | 3 |
+| `scan_stop_missing` | `scan` states no `stop` | refuses | 3 |
+| `scan_region_outside_frame` | a region outside the frame | refuses | 3 |
+| `scan_region_outside_list` | the row outside the list | refuses | 3 |
+| `scan_region_outside_row` | the anchor, the name region or the click box outside the row | refuses | 3 |
+| `scan_number_not_measured` | a number the demonstration does not let the Lab measure, not given | refuses | 3 |
+| `scan_problem` `scan_selected` | `unfold_scan` while a scrolling select reads the fold | refuses | 3 |
+| `scan_problem` `end_not_recorded` | `record stop` meets a scrolling select without an end mark | refuses `record stop` | 3 |
+| `ready_missing` `scan_end_not_recorded` | `record ready`'s item of the same | lists | 0 |
+
+The self-test's reasons of `record_mark_rejected` and the self-check's reasons of
+`record_step_self_mismatch` (`scan_rows_not_found`, `scan_start_mark_missing`,
+`scan_start_mark_repeated`, `scan_end_mark_missing`, `scan_end_mark_lost`,
+`scan_step_outside_window`, `scan_coverage_incomplete`, `scan_position_unread`,
+`scan_decision_mismatch`, `scan_absent_not_empty`, beside R1's) are details of existing codes, as
+R1's are. No decision added reads a code by name. The outcome-code index is regenerated.
+
+**Tests** (`crates/lab/src/gate_463_s29a.rs`, exec gate map "#463 S2-9a"): the eight of the work
+order, as the gate map's comment lists them. No existing test is adapted; no golden changes; no
+test leaves a gate map.
+
+**What is not changed.** The fixed-slot select and the bytes it generates; a recording without a
+fold; a fold without a select (still `scan_without_select`); the kernel. Nothing proposes a region,
+a choice or a value.
+
+**What the next slice changes** (the second kind, `stop: "wanted"`): `ScanStop` gains `Wanted`
+(`model.rs`); `scan::end_not_recorded` lists a missing end only for `End`; `scan::add_scan_member`
+adds `early_stop: "upper_bound"` for `Wanted` and, with the kernel's change, leaves `end` out;
+`scan::check_scan_select` holds `early_stopped` coverage as the second kind's and skips the end mark
+and the absent run where there is no end; `scan::scan_select_checks` and `scan_first_decision`
+likewise.
+
+**At deploy.** Nothing to configure.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

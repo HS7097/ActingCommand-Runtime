@@ -46,6 +46,7 @@ use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
 };
 use super::ready::{ReadyItem, RecordReadyOutcome, one_pixel, press_frame};
+use super::scan::RecordReviewScan;
 use super::steps::{effective_step, live_primary, step_ref};
 use super::store::{lab_dir, read_verified, write_atomic};
 use crate::recording_api::click_outcome;
@@ -125,6 +126,12 @@ pub struct RecordReviewStep {
     /// screen after each swipe, forward or back; absent on every other step.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub folded: Vec<RecordReviewFolded>,
+    /// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+    /// end"): on a step whose select scrolls, its sheet: the list's screens in order with the
+    /// regions taken from each and the names read on each, every number with its origin and the
+    /// offline entry's decision, as the select's self-test left them; absent on every other step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan: Option<RecordReviewScan>,
     /// The step's items of `record ready`, as `record ready` answers them: the pre-checks' items
     /// that name this step (#463 S2-6's `select_unrefined` among them) or, once none fails, every
     /// self-check's failure that names it (#463 S2-1c); an item that names no step is no step's.
@@ -334,6 +341,7 @@ pub(crate) fn review_outcome(
             marks: step.marks.clone(),
             choice: step.choice.clone(),
             folded,
+            scan: super::scan::review_sheet(step),
             missing: ready
                 .missing
                 .iter()

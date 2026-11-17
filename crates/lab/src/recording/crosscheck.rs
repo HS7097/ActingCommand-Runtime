@@ -470,6 +470,17 @@ pub(crate) fn first_decision(
     // #463 R1: a select at step 1 decides on its primary frame by the kernel's dry run; a slot it
     // selects is then simulated as the run taps it, and an empty decision is the run's normal end.
     if let Some(select) = &first.step.select {
+        // #463 S2-9a: a scrolling select at step 1 decides over its demonstration's screens by the
+        // kernel's offline entry; its tap follows a return that no saved frame shows.
+        if let Some(scan) = &select.scan {
+            return super::scan::scan_first_decision(
+                prepared,
+                plan,
+                (first, select, scan),
+                cache,
+                failures,
+            );
+        }
         return select_first_decision(prepared, plan, first, select, frame, cache, failures);
     }
     let start = failures.count();
@@ -919,6 +930,20 @@ pub(crate) fn select_checks(
                     .map(|frame| json!({"frame_id": frame.frame_id, "result": "undetermined"}))
                     .collect::<Vec<_>>()
             );
+            selects.push(item);
+            continue;
+        }
+        // #463 S2-9a: a scrolling select is checked on its own frames and on the screens of its
+        // demonstration, with the kernel's offline entry over them.
+        if let Some(scan) = &select.scan {
+            super::scan::scan_select_checks(
+                prepared,
+                plan,
+                (step, select, scan),
+                cache,
+                failures,
+                &mut item,
+            )?;
             selects.push(item);
             continue;
         }
