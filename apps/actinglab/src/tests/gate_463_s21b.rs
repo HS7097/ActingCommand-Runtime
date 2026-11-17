@@ -97,8 +97,9 @@ const TAP: RecordRect = RecordRect {
     width: 4,
     height: 4,
 };
-/// The self-checks of `record stop`, in the order they run.
-const EVERY_CHECK: [&str; 7] = [
+/// The self-checks of `record stop`, in the order they run (#463 S2-10, adapted: `cases` is the
+/// last).
+const EVERY_CHECK: [&str; 8] = [
     "frames",
     "admission",
     "first_decision",
@@ -106,6 +107,7 @@ const EVERY_CHECK: [&str; 7] = [
     "endings",
     "selects",
     "final_package",
+    "cases",
 ];
 
 /// What the made-up installation's configuration is.

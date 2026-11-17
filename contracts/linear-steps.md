@@ -411,6 +411,18 @@ package does not know or cannot read, which could change the decision, fails
 `selection_result_blocked` and is never skipped or guessed ([selection-graph.md](selection-graph.md),
 "Record per path"); each before any tap.
 
+**A list without its end** (Workflow #463 K-c, since 0.12.70, `package` revision 18; the owner's
+ruling on board #463, option A of question 221). A select that knows the item it wants scrolls
+straight to it, so its recording never reaches the list's end, and its scan may declare
+`early_stop` and no `end` ([selection-graph.md](selection-graph.md), "Declaration", and "Select
+over a scan", "A scan without an end"). Found, the item is pressed once the early stop holds, as
+above. When the list stops moving before the early stop holds, the run fails
+`selection_scan_early_stop_unreached` after the scan's moves and before any tap, with no decision
+recorded; a lower preference it read is not pressed. Such a step never ends empty, so it declares
+no `on_empty` (the declaration gate refuses it, `InvalidValue` at `…/select/on_empty`), and its
+page needs no `scheduling_outcome` mapping of its own. A scan that declares an `end` reads to it
+exactly as before.
+
 A task without a select step is admitted, run and recorded as before.
 
 ## Endings

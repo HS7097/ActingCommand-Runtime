@@ -10,6 +10,7 @@
 //! generates and checks it as every optional step. Every insertion that cannot hold is
 //! `record_optional_after_invalid` with its `optional_after_problem`.
 
+use super::key::validate_inserted_key;
 use super::model::{LAB_RECORDING_MAX_SETTLE_MS, MarkRequest, OptionalAfterSpec};
 use super::store::{blocked, invalid, page_name_valid, with_details};
 use crate::codes::{LabCode, OptionalAfterProblem};
@@ -77,6 +78,8 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
         // #463 S2-6: a choice marks a recorded step; an inserted step is optional, and a step
         // marked as a choice is not.
         ("choice", request.choice.is_some()),
+        // #463 KR-1: a key of a recorded step; an inserted step takes its key in `optional_after`.
+        ("key", request.key.is_some()),
         ("ending", request.ending.is_some()),
         ("remove_ending", request.remove_ending.is_some()),
         (
@@ -94,7 +97,7 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
 /// read: it stands alone (`with_other_change`), its page name keeps the grammar of a step's page
 /// (`validation_failed`, exit 2, as a step's `--page`), its settle lies in 0..=60000
 /// (`record_optional_settle_invalid`, exit 2, as `--settle-ms`), and it names a mark (`no_marks`)
-/// and a click (`no_click`).
+/// and (#463 KR-1) an effect, a click or a key (`no_effect`).
 pub(crate) fn validate_optional_after_request(request: &MarkRequest) -> LabResult<()> {
     let step = request
         .optional_after
@@ -153,17 +156,18 @@ fn validate_spec(spec: &OptionalAfterSpec) -> LabResult<()> {
             json!({}),
         ));
     }
-    if spec.click.is_none() {
+    // #463 KR-1: its effect is its click or its key, exactly one of the two.
+    if spec.click.is_none() && spec.key.is_none() {
         return Err(optional_after_invalid(
-            OptionalAfterProblem::NoClick,
+            OptionalAfterProblem::NoEffect,
             Some(spec.step),
-            "the inserted step declares no click, so nothing would close its pop-up; give the \
-             click that closes it; nothing was written"
+            "the inserted step declares no effect, no click and no key, so nothing would close \
+             its pop-up; give the click or the key that closes it; nothing was written"
                 .to_string(),
             json!({}),
         ));
     }
-    Ok(())
+    validate_inserted_key(spec)
 }
 
 /// An insertion on an active recording, or a step given up there: `recording_active`.

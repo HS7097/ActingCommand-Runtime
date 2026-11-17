@@ -117,6 +117,27 @@ mod gate_392_da5ab;
 // ready` lists one not refined (`select_unrefined`).
 #[cfg(test)]
 mod gate_463_s26;
+// #463 S2-10: `record stop` writes the package's regression cases, each run first by the one
+// runner of the case contract.
+#[cfg(test)]
+mod gate_463_s210;
+// #463 S2-8': the swipes recorded before a press folded into one scrolling search, and unfolded.
+#[cfg(test)]
+mod gate_463_s28;
+// #463 S2-9a: a scrolling choice that reads the list to its end, over the swipes folded into it.
+#[cfg(test)]
+mod gate_463_s29a;
+// #463 S2-9b: a scrolling choice straight to the wanted item, its end mark optional.
+#[cfg(test)]
+mod gate_463_s29b;
+// #463 KR-1: a recording's step may press the back key, declared after the fact and never sent
+// while recording.
+#[cfg(test)]
+mod gate_463_kr1;
+// The 0.12.70 train: where the key step of a recording meets the fold of swipes into a scrolling
+// search and the scrolling choice.
+#[cfg(test)]
+mod gate_463_t70;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

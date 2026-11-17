@@ -32,6 +32,14 @@
 //! overlap within the declared steps, as drags do, or, when they do not overlap, by page-order
 //! evidence: one declared check per page, of which exactly one passes on each viewport, and each
 //! move shows the same page or the next one.
+//!
+//! Workflow #463 K-c (the owner's ruling on board #463, option A of question 221): a select that
+//! knows the item it wants scrolls straight to it, so its recording never reaches the list's end.
+//! Its scan may declare no `end` when it declares `early_stop`: it never reaches complete coverage,
+//! its decision is acted on only once the early stop holds, and where the list stops moving before
+//! that (the repeats that fail a scan with `end` `selection_scan_end_unconfirmed`) it fails
+//! `selection_scan_early_stop_unreached`. A lower preference it read is not pressed, because
+//! without positive evidence of the list's end nothing says that no better item follows.
 
 mod admission;
 mod online;
@@ -71,9 +79,9 @@ const SELECT_INVALID: ExecutionKernelCode = ExecutionKernelCode::ContainedTaskSe
 
 /// A select step's `scan` (frozen model S0 v2.1 §2.1): how the list moves, how a viewport
 /// settles, which anchors are tracked and how they align, how the start and the end of the list
-/// are proven, and the bounds of the session. Every member is required; the Runtime has no
-/// default. Slice SEL-L4b reads it from the step's `select` and admits it (the static checks of
-/// §2.1); the session takes it as admitted.
+/// are proven, and the bounds of the session. Every member is required but `early_stop` and, beside
+/// it (Workflow #463 K-c), `end`; the Runtime has no default. Slice SEL-L4b reads it from the step's
+/// `select` and admits it (the static checks of §2.1); the session takes it as admitted.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanDeclaration {
@@ -85,10 +93,14 @@ pub struct ScanDeclaration {
     settle: DeclaredSettle,
     track: DeclaredTrack,
     start: DeclaredStart,
-    end: DeclaredEnd,
+    /// Workflow #463 K-c: absent only in a select's scan that declares `early_stop` (the
+    /// declaration gate refuses it otherwise, and a list reading's or one beside `on_empty`); such
+    /// a scan never passes an end check.
+    #[serde(default)]
+    end: Option<DeclaredEnd>,
     bounds: DeclaredBounds,
-    /// The one optional member: stop before the end once no position that was not read could
-    /// outrank the best member (S0 §3.3).
+    /// Stop before the end once no position that was not read could outrank the best member
+    /// (S0 §3.3).
     #[serde(default)]
     early_stop: Option<DeclaredEarlyStop>,
 }
@@ -1275,6 +1287,13 @@ impl<'a> ScanSession<'a> {
         {
             return Err(invalid("scan identity_feature=undeclared"));
         }
+        // Workflow #463 K-c: a scan that declares neither `end` nor `early_stop` could only fail.
+        // A package's is refused by its declaration gate (`MissingField` at `scan/end`), which
+        // admission runs; this refuses one that reaches a session another way (a `replay --scan`
+        // file).
+        if scan.end.is_none() && scan.early_stop.is_none() {
+            return Err(invalid("scan end=absent early_stop=absent"));
+        }
         let early_stop = match (scan.early_stop, policy) {
             (Some(DeclaredEarlyStop::UpperBound), Some(policy)) => Some(early_stop_inputs(
                 scan,
@@ -1416,15 +1435,7 @@ impl<'a> ScanSession<'a> {
                 return self.decide_coverage().map_err(ContainedTaskRunError::Task);
             }
             if self.forward_repeats >= 2 {
-                return Err(ContainedTaskError::valued(
-                    ExecutionKernelCode::SelectionScanEndUnconfirmed.code(),
-                    |outcome| {
-                        outcome
-                            .stage(ExecutionKernelLocation::SelectScanEnd)
-                            .viewport_index(latest)
-                    },
-                )
-                .into());
+                return Err(self.stopped_moving(latest).into());
             }
             let reading = self.advance(source, ScanDragMotion::Advance)?;
             let index = u32_of(self.viewports.len());
@@ -1486,6 +1497,25 @@ impl<'a> ScanSession<'a> {
                 }
             }
         }
+    }
+
+    /// `EndTest`'s repeats (S0 §2.2): two consecutive forward viewports repeated the one before
+    /// them, so the list stopped moving before the scan could end, at the coverage viewport
+    /// `viewport_index`. A scan that declares `end` never saw its end check pass
+    /// (`selection_scan_end_unconfirmed`); Workflow #463 K-c: one that declares none stopped before
+    /// its early stop held (`selection_scan_early_stop_unreached`). One detection, the code by
+    /// the declaration.
+    fn stopped_moving(&self, viewport_index: u32) -> ContainedTaskError {
+        let code = if self.scan.end.is_some() {
+            ExecutionKernelCode::SelectionScanEndUnconfirmed
+        } else {
+            ExecutionKernelCode::SelectionScanEarlyStopUnreached
+        };
+        ContainedTaskError::valued(code.code(), |outcome| {
+            outcome
+                .stage(ExecutionKernelLocation::SelectScanEnd)
+                .viewport_index(viewport_index)
+        })
     }
 
     /// Fails the session with `duration` once its time is spent.

@@ -27,7 +27,7 @@ column means. 46 codes.
 | `replay_frames_invalid` | error | none | 0.12.0 | active | pending | written | The --frames directory of actinglab replay holds an entry that is not a PNG file (a subdirectory, a link or a file without the .png extension). |
 | `replay_frames_unreadable` | error | none | 0.12.0 | active | pending | written | actinglab replay --frames could not list the --frames directory or one of its entries. |
 | `replay_run_refused` | error | none | 0.12.0 | active | pending | written | actinglab replay --frames replayed the whole package over the frame sequence and the replayed run did not complete. |
-| `replay_scan_invalid` | error | none | 0.12.0 | active | pending | written | The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member, no unknown member), within 1… |
+| `replay_scan_invalid` | error | none | 0.12.0 | active | pending | written | The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member but early_stop and, since… |
 | `replay_scan_refused` | error | none | 0.12.0 | active | pending | written | actinglab replay --frames --select --scan replayed the scan of the select step over the frame sequence through the kernel's scan path, and the scan did not… |
 | `replay_scan_unreadable` | error | none | 0.12.0 | active | pending | written | actinglab replay could not open or read the --scan file. |
 | `resource_build_failed` | error | none | 0.12.61 | active | pending | written | actinglab standard-pack build ran the steps of resource verify on the commit and they did not all pass. |

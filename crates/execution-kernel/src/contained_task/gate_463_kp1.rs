@@ -653,10 +653,10 @@ fn kp1_admission_refuses_an_unknown_key_a_retried_key_and_a_click_with_a_key() {
 }
 
 // The revision pair (contracts/component-interfaces.md, the `package` row 17): this build reads
-// `package` up to 17, so at the installer's `package` edge (`package_edge_holds`) its range holds a
-// bundle whose package has a key step, which declares [17, 17], and a range that ends below 17
-// refuses it; a bundle without a key step keeps its revision ([3, 15]) and both ranges hold it.
-// This build admits both packages.
+// `package` up to 17 (up to 18 since Workflow #463 K-c, register §1.454, 17 within it), so at the
+// installer's `package` edge (`package_edge_holds`) its range holds a bundle whose package has a key
+// step, which declares [17, 17], and a range that ends below 17 refuses it; a bundle without a key
+// step keeps its revision ([3, 15]) and both ranges hold it. This build admits both packages.
 #[test]
 fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision() {
     let declared: Value =
@@ -672,7 +672,8 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     let with_key = [KEY_REVISION, KEY_REVISION];
     let without_key = [3, 15];
 
-    assert_eq!(own, [3, KEY_REVISION]);
+    // Workflow #463 K-c (register §1.454) declares 18, the scan select without an end.
+    assert_eq!(own, [3, KEY_REVISION + 1]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));

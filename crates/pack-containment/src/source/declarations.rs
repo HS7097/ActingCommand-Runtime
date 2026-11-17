@@ -1175,6 +1175,8 @@ impl Declaration<'_> {
         }
         // Workflow #308 SEL-L4b (S0 §2.1): a scan holds its members, every one required but
         // `early_stop`; Runtime admission reads their values and runs the static checks.
+        // Workflow #463 K-c (package revision 18): `end` may be left out beside `early_stop`, and
+        // such a scan never covers its list, so it takes no `on_empty`.
         if let Some(scan) = select.get("scan").filter(|value| !value.is_null()) {
             let scan_pointer = child(&select_pointer, "scan");
             let scan = self.object(scan, &scan_pointer, SCAN_MEMBERS)?;
@@ -1182,7 +1184,11 @@ impl Declaration<'_> {
                 .iter()
                 .filter(|member| **member != "early_stop")
             {
-                self.required(scan, &scan_pointer, member)?;
+                if *member == "end" {
+                    self.scan_end(select, scan, &select_pointer)?;
+                } else {
+                    self.required(scan, &scan_pointer, member)?;
+                }
             }
         }
         // Workflow #308 SEL-L4b (S0 §1.4): `{outcome_key}`, a string; Runtime admission checks
@@ -1213,6 +1219,37 @@ impl Declaration<'_> {
         // select over a `repeated_anchor` layout.
         if let Some(track_px) = select.get("track_px").filter(|value| !value.is_null()) {
             self.unsigned(track_px, &child(&select_pointer, "track_px"))?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #463 K-c (`contracts/selection-graph.md`, "Declaration"; package revision 18): a
+    /// select step's `scan` declares `end` unless it declares `early_stop`, the scan of a select
+    /// that scrolls straight to the item it wants and never reaches the list's end. Without either
+    /// the scan could only fail: `MissingField` at `scan/end`, where a missing `end` was always
+    /// refused. A scan without `end` never covers its list, so `on_empty` beside it could never
+    /// take effect: `InvalidValue` at `select/on_empty`. A `null` member is an absent one, as the
+    /// Runtime reads it. A list reading's scan keeps requiring `end` ([`Self::read_list_step`]).
+    fn scan_end(
+        &self,
+        select: &Map<String, Value>,
+        scan: &Map<String, Value>,
+        select_pointer: &str,
+    ) -> CliOutcome<()> {
+        if declares(scan, "end") {
+            return Ok(());
+        }
+        if !declares(scan, "early_stop") {
+            return Err(self.error(
+                &child(&child(select_pointer, "scan"), "end"),
+                ResourceDeclarationReason::MissingField,
+            ));
+        }
+        if declares(select, "on_empty") {
+            return Err(self.error(
+                &child(select_pointer, "on_empty"),
+                ResourceDeclarationReason::InvalidValue,
+            ));
         }
         Ok(())
     }
@@ -1347,6 +1384,13 @@ impl Declaration<'_> {
             .iter()
             .filter(|member| **member != "early_stop")
         {
+            // Workflow #463 K-c fix round 1: a `null` `end` is a missing one, as a select's is.
+            if *member == "end" && !declares(scan, member) {
+                return Err(self.error(
+                    &child(&scan_pointer, member),
+                    ResourceDeclarationReason::MissingField,
+                ));
+            }
             self.required(scan, &scan_pointer, member)?;
         }
         Ok(())
@@ -3176,6 +3220,11 @@ impl Declaration<'_> {
 
 fn child(pointer: &str, field: &str) -> String {
     format!("{pointer}/{}", field.replace('~', "~0").replace('/', "~1"))
+}
+
+/// Workflow #463 K-c: whether `object` declares `member`, present and not `null`.
+fn declares(object: &Map<String, Value>, member: &str) -> bool {
+    object.get(member).is_some_and(|value| !value.is_null())
 }
 
 /// Workflow #411 B28: the shape the member a declaration refusal names must have, when the

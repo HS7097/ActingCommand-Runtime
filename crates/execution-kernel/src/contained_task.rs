@@ -134,6 +134,9 @@ mod gate_469_d4b;
 // Workflow #463 K-R3a: a scan select dry-run offline as far as its decision.
 #[cfg(test)]
 mod gate_463_r3a;
+// Workflow #463 K-b and K-c: a scan select run over screens with its moves; a scan without an end.
+#[cfg(test)]
+mod gate_463_kbc;
 // Workflow #390 EXEC-2.
 mod observation_window;
 // Workflow #384 D2-S2.

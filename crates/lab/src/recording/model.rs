@@ -6,7 +6,7 @@
 use actingcommand_contract::{
     InputFrameReference, InputSamplingEvidence, LabError, LabResult, OcrUnsignedIntegerFormat,
     OcrValueTrim, SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ValueTestOp,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, ScanCoverageState, ValueTestOp,
 };
 use actingcommand_execution_kernel::DriveDraw;
 use serde::{Deserialize, Serialize};
@@ -195,6 +195,74 @@ pub struct OptionalAfterSpec {
     pub click: Option<ClickSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settle_ms: Option<u64>,
+    /// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the key that closes the pop-up, in
+    /// place of `click` (exactly one of the two); absent on a request without it, which is then
+    /// byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeySpec>,
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): a key a step presses, `{"key": "back"}`,
+/// a word of the package's closed vocabulary of one word (the kernel's `StepKey`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySpec {
+    pub key: String,
+}
+
+/// #463 KR-1: a request's `key`: `{"key": "back"}` declares the step's effect that key (`--key
+/// back`), `false` takes the step's key back (`--no-key`; `true` is refused); absent or `null`
+/// changes nothing. Fix round 1 (the independent review, its answer 7): a `key` of any other shape
+/// is refused in the words of [`KEY_REQUEST_FORMS`], not in the decoder's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum KeyRequest {
+    Declare(KeySpec),
+    TakeBack(bool),
+}
+
+/// #463 KR-1 fix round 1: the forms a request's `key` takes, and the vocabulary, said where a
+/// `key` is none of them (`validation_failed`).
+pub(crate) const KEY_REQUEST_FORMS: &str = "key takes {\"key\": \"back\"}, which declares the back \
+                                            key (the vocabulary is back alone), false, which takes \
+                                            the key back, or null, which changes nothing";
+
+impl<'de> Deserialize<'de> for KeyRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Given {
+            Declare(KeySpec),
+            TakeBack(bool),
+        }
+
+        Given::deserialize(deserializer)
+            .map(|given| match given {
+                Given::Declare(spec) => Self::Declare(spec),
+                Given::TakeBack(take_back) => Self::TakeBack(take_back),
+            })
+            .map_err(|_| <D::Error as serde::de::Error>::custom(KEY_REQUEST_FORMS))
+    }
+}
+
+/// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): the key a step presses in place of a
+/// click, declared after the fact and never sent while recording: its word, when it was declared,
+/// and the click it replaced, kept whole (absent when the step had none), which taking the key back
+/// gives back as it was. Fix round 1 (the coordinator's ruling on the review's first point): with
+/// the step's click guard as it was when the key was declared (absent when it had none), which
+/// taking the key back gives back too, a guard named for the key going with it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedKey {
+    pub key: String,
+    pub declared_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<StepClick>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_guard: Option<String>,
 }
 
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
@@ -331,6 +399,11 @@ pub struct RecordingStep {
     /// The application operation of the step (R24); a step has a click or this, not both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<StepApplication>,
+    /// #463 KR-1: the key the step presses in place of a click, with the click it replaced. Absent
+    /// on every step without one, so that a recording without a key is byte-identical to one an
+    /// earlier build wrote; an earlier build refuses one that holds it (unknown member).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
     /// The step's page may not appear; the package then skips the step (Workflow #339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<StepOptional>,
@@ -359,6 +432,17 @@ pub struct RecordingStep {
     /// byte-identical to one an earlier build wrote; an earlier build refuses one that holds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,
+    /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): on a
+    /// recorded swipe folded into the scrolling search of a press step (`fold_scan`), that press
+    /// step's serial number; such a step is no effective step. Absent on every other step, so that
+    /// a recording without a fold is byte-identical to one an earlier build wrote; an earlier build
+    /// refuses one that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded_into: Option<u32>,
+    /// #463 S2-8': on a press step, the swipes recorded before it that are folded into its
+    /// scrolling search. Absent on every other step, as `folded_into` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -385,15 +469,75 @@ pub struct StepChoice {
     pub marked_at_unix_ms: u64,
 }
 
+/// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the swipes
+/// recorded before a press step, folded into its scrolling search: the first folded step (the
+/// steps from it to the press step's serial number - 1 are folded), the axis they run along, each
+/// folded step in order with its direction, and when they were folded. It records no kind of
+/// scrolling choice: the request of the next slice's scrolling select states it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepScanFold {
+    pub first: u32,
+    pub axis: FoldAxis,
+    pub moves: Vec<FoldedMove>,
+    pub folded_at_unix_ms: u64,
+}
+
+/// #463 S2-8': one folded swipe: its step and whether it runs in the first swipe's direction
+/// (`forward`) or against it (`back`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FoldedMove {
+    pub step: u32,
+    pub direction: FoldDirection,
+}
+
+/// #463 S2-8': the axis the folded swipes run along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// #463 S2-8': a folded swipe's direction against the first swipe's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldDirection {
+    Forward,
+    Back,
+}
+
 impl RecordingStep {
-    /// Neither dropped nor converted into the transition of the previous step.
+    /// Neither dropped nor converted into the transition of the previous step, nor (#463 S2-8')
+    /// folded into the scrolling search of a press step.
     pub fn is_effective(&self) -> bool {
+        self.kept_on_path() && self.folded_into.is_none()
+    }
+
+    /// #463 S2-8': neither dropped nor converted into the transition of the previous step: a step
+    /// of the path as it was recorded and kept, a folded swipe among them (the archive's material
+    /// reads its steps so).
+    pub fn kept_on_path(&self) -> bool {
         !self.dropped && !self.converted_to_transition
     }
 
     /// The application entry step: an application operation and no frame (`from:"any"`).
     pub fn is_application_entry(&self) -> bool {
         self.application.is_some() && self.frames.is_empty()
+    }
+
+    /// #463 KR-1: whether the step has an effect: a click, an application operation or a key.
+    pub fn has_effect(&self) -> bool {
+        self.click.is_some() || self.application.is_some() || self.key.is_some()
+    }
+
+    /// #463 KR-1: the click the step table holds of the step's press: its click, or the click its
+    /// key replaced, whose frames (the screen before, the screens after) stand.
+    pub fn recorded_click(&self) -> Option<&StepClick> {
+        self.click
+            .as_ref()
+            .or_else(|| self.key.as_ref().and_then(|key| key.replaced.as_ref()))
     }
 }
 
@@ -1189,6 +1333,11 @@ pub struct MarkRequest {
     /// `no_choice`); absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<bool>,
+    /// #463 KR-1 (`contracts/lab-recording.md`, "Key steps"): `{"key": "back"}` declares the step's
+    /// effect the back key (`--key back`), `false` takes it back (`--no-key`); absent or `null`
+    /// changes nothing, and a request without it is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<KeyRequest>,
 }
 
 /// #463 S2-5: what a box drawn on the step's primary frame is for: a region the step's page is
@@ -1220,8 +1369,18 @@ pub struct BoxSpec {
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
     /// 1 to [`LAB_RECORDING_MAX_SELECT_SLOTS`] slots, slot `k` the candidate with instance index
-    /// `k`.
+    /// `k`. #463 S2-9a: none beside `rows`, which excludes them (absent then, so that a select
+    /// over fixed slots is byte for byte what an earlier build wrote).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<SelectSlotSpec>,
+    /// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its
+    /// end"): the rows of a list read across its screens, in place of `slots`, with `scan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<SelectRowsSpec>,
+    /// #463 S2-9a: the list the rows scroll in, its two ends and the kind of the scrolling choice,
+    /// with `rows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<SelectScanSpec>,
     /// The OCR members every slot's name is read with.
     pub read: SelectReadSpec,
     /// The identity domain: every name the list may show.
@@ -1317,10 +1476,258 @@ pub enum SelectConfirmSpec {
     Decision,
 }
 
+/// #463 S2-9a (`contracts/lab-recording.md`, "A scrolling choice: reading the list to its end"):
+/// the rows of a list a scrolling select reads, each a rectangle of the list's first screen, the
+/// agent's: one row (`row`), the anchor that repeats in every row (`anchor`), the region its name
+/// is read in (`name`) and the box a tap is drawn in (`click`, absent: the row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectRowsSpec {
+    pub row: RecordRect,
+    pub anchor: RecordRect,
+    pub name: RecordRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<RecordRect>,
+}
+
+impl SelectRowsSpec {
+    /// The box a tap on a row is drawn in, on the first screen.
+    pub fn click_rect(&self) -> RecordRect {
+        self.click.unwrap_or(self.row)
+    }
+}
+
+/// #463 S2-9a: the list a scrolling select reads and its two ends, the agent's rectangles: the
+/// list's area (`list`), the start mark on the first screen (`start`) and the end mark on the
+/// last screen after a forward swipe (`end`; absent while the demonstration never reached the
+/// end, which `record ready` lists as `scan_end_not_recorded` for the kind `end`; #463 S2-9b: the
+/// kind `wanted` may leave it out); the kind of the choice (`stop`, required: `end`, the list read
+/// to its end, or `wanted`, straight to the wanted item); and the numbers given in place of the
+/// ones the Lab measures (`numbers`, by name; absent: every one measured).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectScanSpec {
+    pub list: RecordRect,
+    pub start: RecordRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<RecordRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<ScanStop>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub numbers: BTreeMap<String, u64>,
+}
+
+/// #463 S2-9a: the kind of a scrolling choice the agent states. `end`: what the list holds is not
+/// known, so it is read to its end and then chosen. #463 S2-9b (`contracts/lab-recording.md`, "A
+/// scrolling choice: straight to the wanted item"): `wanted`: the wanted item is known, so the
+/// list is scrolled straight to it, and the scan stops early where it shows (`early_stop`); its
+/// end mark may be left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanStop {
+    End,
+    Wanted,
+}
+
+/// #463 S2-9a: one number of a scrolling select's scan or layout that the Lab measures from the
+/// agent's regions and the demonstration, or that the request gives in its place (`numbers`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumber {
+    AdvanceMinContentStepPx,
+    AdvanceMaxContentStepPx,
+    AdvanceDurationMs,
+    RepositionMaxContentStepPx,
+    SettleIntervalMs,
+    SettleTimeoutMs,
+    PositionTolerancePx,
+    EdgeMarginPx,
+    SignatureColumns,
+    SignatureRows,
+    SignatureMaxDistanceMilli,
+    MinOverlapInstances,
+    SpacingColumns,
+    SpacingMaxAxisGapPx,
+    SpacingMaxTrailingGapPx,
+    SpacingMaxCrossLeadPx,
+    SpacingMaxCrossGapPx,
+    MaxInstances,
+    MaxViewports,
+    MaxRepositionViewports,
+    MaxMs,
+}
+
+/// #463 S2-9a: whether a number was measured by the Lab or given in the request. #463 S2-9b (the
+/// coordinator's ruling after S2-9a's review): a number is labelled by what it is: `measured`, read
+/// off the agent's regions or the demonstration; `default`, a constant of the generator the
+/// contract names; `derived`, a stated formula over measured numbers; `given`, the request's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumberOrigin {
+    Measured,
+    Given,
+    Default,
+    Derived,
+}
+
+/// #463 S2-9a: what a number is measured from: the list's and the row's extents along the axis
+/// (`list_and_row`), the row's own extents (`row`), the first forward swipe as recorded
+/// (`first_forward_swipe`), the fold's swipes and their after loops (`fold_swipes`), the rows the
+/// demonstration's screens show (`screens`), the Runtime's frame-change bound
+/// (`frame_change_bound`), the names read, by which every pair of rows matches (`names_read`), and
+/// the moves, their settle and one screen's reads (`scan_moves`). #463 S2-9a fix round 1: a
+/// constant of the generator, which the contract names (`generator`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanNumberSource {
+    ListAndRow,
+    Row,
+    FirstForwardSwipe,
+    FoldSwipes,
+    Screens,
+    FrameChangeBound,
+    NamesRead,
+    ScanMoves,
+    Generator,
+}
+
+/// #463 S2-9a: one number as the select's scan holds it: its value, whether it was measured or
+/// given, what it is measured from, and, when given, the value the Lab measured (absent when it
+/// could not measure it). Fix round 1: `origin` says what the number is (`measured`, `default`,
+/// `derived` or `given`), and `measured`, beside a given one, is the value the Lab would have
+/// written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanNumberValue {
+    pub name: ScanNumber,
+    pub value: u64,
+    pub origin: ScanNumberOrigin,
+    pub from: ScanNumberSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<u64>,
+}
+
+/// #463 S2-9a: how a screen of the demonstration is met: the list's first screen (before the first
+/// swipe), the screen after a forward swipe, the screen after a swipe back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanScreenRole {
+    First,
+    Forward,
+    Back,
+}
+
+/// #463 S2-9a: a region of a scrolling select, by the screen its image is taken from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanRegion {
+    List,
+    Row,
+    Anchor,
+    Name,
+    Click,
+    Start,
+    End,
+}
+
+/// #463 S2-9a: one screen of the demonstration a scrolling select reads: the stored frame, the
+/// folded swipe whose screen before (the first screen) or after it is, how it is met, the regions
+/// whose images are taken from it, the names read on it in the order of its rows, and, on the
+/// first screen and those after a forward swipe, the content offset the kernel's offline entry
+/// aligned it at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanScreen {
+    pub frame: RecordedFrame,
+    pub step: u32,
+    pub role: ScanScreenRole,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<ScanRegion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_offset_px: Option<i64>,
+}
+
+/// #463 S2-9a: a decision of the kernel's offline entry over the demonstration, by its kind:
+/// `selected` with the name chosen and its position, `empty`, or the kind of a decision a run
+/// fails on (`blocked`: an empty or insufficient decision beside an unknown position).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum ScanDecision {
+    Selected { name: String, position: u32 },
+    Empty,
+    Ambiguous,
+    Insufficient,
+    Blocked,
+    Unknown,
+}
+
+/// #463 S2-9a: the content step one forward swipe of the demonstration gave, as the offline entry
+/// aligned the screens around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanMeasuredStep {
+    pub step: u32,
+    pub content_step_px: i64,
+}
+
+/// #463 S2-9a: the offline entry run once more for a name that no screen shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanAbsentRun {
+    pub name: String,
+    pub coverage: ScanCoverageState,
+    pub decision: ScanDecision,
+}
+
+/// #463 S2-9a: what the kernel's offline entry decided over the demonstration's forward screens at
+/// mark time: its coverage, the positions it read, its decision for the pressed name, the content
+/// step of each forward swipe, and the run for a name no screen shows (absent when every name of
+/// the select is on a screen).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanSelfTestOutcome {
+    pub coverage: ScanCoverageState,
+    pub positions: u32,
+    pub pressed: ScanDecision,
+    pub steps: Vec<ScanMeasuredStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent: Option<ScanAbsentRun>,
+}
+
+/// #463 S2-9a: a scrolling select's scan as `recording.json` keeps it once its self-test passed:
+/// the axis, the first forward swipe's two points (the package's advance), the screens of the
+/// demonstration in order, every number with its origin, and the offline entry's outcome (absent
+/// while the end of the list was not recorded).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectScanState {
+    pub axis: FoldAxis,
+    pub advance_from: RecordPoint,
+    pub advance_to: RecordPoint,
+    pub screens: Vec<ScanScreen>,
+    pub numbers: Vec<ScanNumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ScanSelfTestOutcome>,
+}
+
+impl SelectScanState {
+    /// The value of the number `name` (0 when the scan holds none, which no scan of this build
+    /// is).
+    pub fn number(&self, name: ScanNumber) -> u64 {
+        self.numbers
+            .iter()
+            .find(|number| number.name == name)
+            .map_or(0, |number| number.value)
+    }
+}
+
 /// #463 R1: a step's select as `recording.json` keeps it: the declaration as given, when it was
 /// marked, and its last self-test. Fix 1: when the select took over a click with an outcome on
 /// record (a tap recorded before the select, also after `record stop`), that click's own
 /// rectangle, source and mark (`click_before`), which `clear_select` gives back; absent otherwise.
+/// #463 S2-9a: a scrolling select's scan (`scan`), absent on every other select.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepSelect {
@@ -1329,6 +1736,8 @@ pub struct StepSelect {
     pub self_test: SelectSelfTest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub click_before: Option<SelectClickBefore>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<SelectScanState>,
 }
 
 /// #463 R1 fix 1: the rectangle, source and mark of an executed click before a select took it
@@ -1577,6 +1986,12 @@ pub enum StepActionKind {
     /// #463 S2-7 (`contracts/lab-recording.md`, "Steps, frames and remediation"; request form
     /// only): a step `drop_step` dropped is effective again, as it was before the drop.
     RestoreStep,
+    /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the
+    /// swipes recorded from `first` to `step` - 1 are folded into the scrolling search of the
+    /// press `step`.
+    FoldScan,
+    /// #463 S2-8': the fold of the press `step` is undone, the recording as it was before it.
+    UnfoldScan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1585,6 +2000,10 @@ pub struct StepAction {
     pub kind: StepActionKind,
     #[serde(default)]
     pub step: Option<u32>,
+    /// #463 S2-8': the first swipe `fold_scan` folds; with no other kind. Absent on a request
+    /// without it, which is then byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<u32>,
 }
 
 /// `record start` options; game, server and locale are already canonical.
@@ -1615,7 +2034,7 @@ pub struct StepStateView {
     pub marks: usize,
     pub frames: usize,
     /// `none`, `click_declared`, `click_executed`, `click_indeterminate`,
-    /// `application_declared` or `application_executed`.
+    /// `application_declared`, `application_executed` or (#463 KR-1) `key_declared`.
     pub effect: String,
     pub transition: Option<String>,
     pub closed: bool,
@@ -1692,6 +2111,13 @@ pub struct MarkOutcome {
     /// #463 S2-6: the step's choice mark, on a step marked as holding a choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choice: Option<StepChoice>,
+    /// #463 S2-8': the swipes folded into the step's scrolling search, on a step that holds a
+    /// fold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
+    /// #463 KR-1: the step's key with the click it replaced, on a step that presses a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
 }
 
 /// #463 S2-5: a box of the request as the step took it: its rectangle and, for a recognize box,
@@ -1857,6 +2283,16 @@ pub struct StepView {
     /// #463 R4: the recorded step an inserted optional step runs after, on such a step only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inserted_after: Option<u32>,
+    /// #463 S2-8': on a folded swipe, the press step it is folded into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folded_into: Option<u32>,
+    /// #463 S2-8': on a press step, the swipes folded into its scrolling search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_fold: Option<StepScanFold>,
+    /// #463 KR-1: the step's key with the click it replaced, as the recording holds it, on a step
+    /// that presses a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<RecordedKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

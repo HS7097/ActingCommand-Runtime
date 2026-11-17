@@ -143,7 +143,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member, no unknown member), within 1 MiB.",
+      "description": "The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member but early_stop and, since 0.12.70 (Workflow #463 K-c), end, either of which may also be null, no unknown member), within 1 MiB. A file that declares neither end nor early_stop is read, and its replay is refused replay_scan_refused: the kernel refuses its scan session (contained_task_select_invalid).",
       "common_causes": "A member is missing, misspelt or of the wrong type, or the file holds more than the declaration.",
       "handling": "Save the step's scan declaration alone, with every member it requires."
     },

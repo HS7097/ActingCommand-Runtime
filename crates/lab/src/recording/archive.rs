@@ -217,7 +217,7 @@ pub(crate) struct ArchiveRow {
     pub(crate) step: u32,
     /// `tap`, `swipe`, `none` (no input), or the step table's own word for any other effect
     /// (`long_press`, `single_touch_drag_with_vertical_brake_v1`, `single_touch_path_drag_v1`,
-    /// `application`).
+    /// `application`, and #463 KR-1 `key`, whatever press the key replaced).
     pub(crate) kind: String,
     /// #463 S1-5: as the step table has them.
     pub(crate) dropped: bool,
@@ -1091,9 +1091,9 @@ struct Relation {
 /// has no frame, and a step without an effect on record name none.
 fn relation(recording: &LabRecording, step: &RecordingStep) -> Relation {
     let live = || live_primary(step).map(|frame| frame.frame_id.clone());
+    // #463 KR-1: a key step's frames are those of the press its key replaced.
     if let Some(execution) = step
-        .click
-        .as_ref()
+        .recorded_click()
         .and_then(|click| click.execution.as_ref())
     {
         return match &execution.before_frame {
@@ -1132,12 +1132,13 @@ fn relation(recording: &LabRecording, step: &RecordingStep) -> Relation {
 }
 
 /// The rule's frame after a click of step `index` executed at `executed_at_unix_ms`: the first
-/// frame of the next effective step by serial number, when it was recorded at or after it.
+/// frame of the next effective step by serial number, when it was recorded at or after it. #463
+/// S2-8': a swipe folded into a press step's scrolling search counts here, as recorded.
 fn derived_after(recording: &LabRecording, index: u32, executed_at_unix_ms: u64) -> Option<String> {
     recording
         .steps
         .iter()
-        .filter(|step| step.is_effective() && step.index > index)
+        .filter(|step| step.kept_on_path() && step.index > index)
         .min_by_key(|step| step.index)?
         .frames
         .first()
@@ -1151,9 +1152,9 @@ fn derived_after(recording: &LabRecording, index: u32, executed_at_unix_ms: u64)
 /// was run again), `indeterminate` with attempts and no completed receipt; `None` otherwise. #463
 /// S2-2 fix round 1: `record review` names an application operation's outcome by this judgement.
 pub(crate) fn outcome_of(step: &RecordingStep) -> Option<String> {
+    // #463 KR-1: a key step's, the press its key replaced (stage one's material).
     if let Some(execution) = step
-        .click
-        .as_ref()
+        .recorded_click()
         .and_then(|click| click.execution.as_ref())
     {
         return Some(execution.effect.clone());
@@ -1170,17 +1171,19 @@ pub(crate) fn outcome_of(step: &RecordingStep) -> Option<String> {
 
 /// #463 S1-5 ("The manifest", `material.clicks`): the press of the material the row of `step`
 /// gives, when the step is effective and its effect is on record: where it was pressed, as the
-/// step table holds it (a swipe's end only for a swipe), and the frame it happened on.
+/// step table holds it (a swipe's end only for a swipe), and the frame it happened on. #463 S2-8':
+/// a swipe folded into a press step's scrolling search is material as recorded.
 fn click_of(
     step: &RecordingStep,
     row: &ArchiveRow,
     index: &FrameIndex<'_>,
 ) -> Option<ArchiveClick> {
-    if !step.is_effective() {
+    if !step.kept_on_path() {
         return None;
     }
     let outcome = row.outcome.clone()?;
-    let click = step.click.as_ref();
+    // #463 KR-1: a key step's press is the one its key replaced.
+    let click = step.recorded_click();
     let execution = click.and_then(|click| click.execution.as_ref());
     let swiped = matches!(
         click.and_then(|click| click.gesture),
@@ -1227,7 +1230,8 @@ fn final_frame(recording: &LabRecording, index: &FrameIndex<'_>) -> Option<Archi
     let last = step_ref(recording, *last_index)?;
     let after_an_effect =
         step_ref(recording, *previous).is_some_and(|step| outcome_of(step).is_some());
-    if last.click.is_some() || last.application.is_some() || !after_an_effect {
+    // #463 KR-1: a key is an effect too.
+    if last.has_effect() || !after_an_effect {
         return None;
     }
     frame_ref(index, &live_primary(last)?.frame_id)
@@ -1239,6 +1243,10 @@ fn final_frame(recording: &LabRecording, index: &FrameIndex<'_>) -> Option<Archi
 pub(crate) fn step_kind(step: &RecordingStep) -> &'static str {
     if step.application.is_some() {
         return "application";
+    }
+    // #463 KR-1: the step table's word for a key, whatever press it replaced.
+    if step.key.is_some() {
+        return "key";
     }
     match step.click.as_ref().map(|click| click.gesture) {
         None => "none",
@@ -1267,7 +1275,8 @@ fn input_frame(summary: Option<&OpaqueJson>) -> Option<ArchiveInputFrame> {
 /// The row of one step of `recording`, from what the step table holds; `index` gives the row that
 /// lists its frame after.
 fn row_of(recording: &LabRecording, step: &RecordingStep, index: &FrameIndex<'_>) -> ArchiveRow {
-    let click = step.click.as_ref();
+    // #463 KR-1: a key step's press is the one its key replaced; its kind is `key`.
+    let click = step.recorded_click();
     let execution = click.and_then(|click| click.execution.as_ref());
     let before = execution.and_then(|execution| execution.before.as_ref());
     let after = execution.and_then(|execution| execution.after.as_ref());

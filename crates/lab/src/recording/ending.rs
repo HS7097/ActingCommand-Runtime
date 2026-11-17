@@ -12,7 +12,7 @@
 
 use super::generate::done_key;
 use super::model::{LabRecording, MarkRequest, RecordingEnding};
-use super::select::{on_empty_key, on_empty_key_valid};
+use super::select::{empty_end_key, on_empty_key_valid};
 use super::steps::Session;
 use super::store::{blocked, invalid, page_name_valid, with_details};
 use crate::codes::{EndingProblem, LabCode, ReadyMissing};
@@ -89,6 +89,8 @@ fn other_members(request: &MarkRequest) -> Vec<&'static str> {
         ("boxes", !request.boxes.is_empty()),
         // #463 S2-6: a choice marks a step.
         ("choice", request.choice.is_some()),
+        // #463 KR-1: a key is a step's effect.
+        ("key", request.key.is_some()),
         // #463 R4: an inserted optional step is no ending either.
         ("optional_after", request.optional_after.is_some()),
         ("remove_inserted", request.remove_inserted.is_some()),
@@ -186,9 +188,10 @@ pub(crate) fn ending_key_problem(
         .iter()
         .filter(|step| step.is_effective())
         .find(|step| {
-            step.select
-                .as_ref()
-                .is_some_and(|select| on_empty_key(&recording.task_id, &select.declaration) == key)
+            // #463 S2-9b: a select that declares no `on_empty` has no key.
+            step.select.as_ref().is_some_and(|select| {
+                empty_end_key(&recording.task_id, &select.declaration).as_deref() == Some(key)
+            })
         })
     {
         return Some((

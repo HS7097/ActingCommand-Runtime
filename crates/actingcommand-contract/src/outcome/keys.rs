@@ -891,4 +891,15 @@ outcome_keys! {
     // ---- #463 S2-7 fix round 1 (the same refusal): which of the two comparisons of two stored
     // frames, the whole frame or the neighbourhood of the press, showed the change. ----
     drop_comparison: vocab(drop_comparison),
+    // ---- #463 S2-10 (`record stop` writes the package's regression cases,
+    // contracts/lab-recording.md "Regression cases written with the package"): the word of the
+    // first failed check of a case that does not pass on its package (`record_case_failed`). ----
+    regression_problem: vocab(regression_problem),
+    // ---- #463 S2-8' (`record mark`'s `fold_scan` and `unfold_scan`, contracts/lab-recording.md
+    // "Folding swipes into a scrolling search"): why the swipes recorded before a press cannot be
+    // folded into its scrolling search, the fold undone or generated (`record_scan_invalid`). ----
+    scan_problem: vocab(scan_problem),
+    // ---- #463 KR-1 (a recording's step may press the back key, contracts/lab-recording.md "Key
+    // steps"): why a step's key cannot be declared or generated (`record_key_invalid`). ----
+    key_problem: vocab(key_problem),
 }

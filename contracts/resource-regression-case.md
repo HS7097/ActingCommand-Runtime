@@ -1,6 +1,7 @@
 # The regression case of a resource repository
 
-#463 RC-1 (register [v012-register.md](v012-register.md) §1.450, 0.12.69). A package of a resource
+#463 RC-1 (register [v012-register.md](v012-register.md) §1.450, 0.12.69; #463 RC-2, §1.459,
+0.12.71, the notes of a scene's construction read past). A package of a resource
 repository comes with regression cases: scenes on which its pages must be recognised, or must not
 be, and its targets found or not. This contract makes the case format the repositories write,
 `actingcommand.resource-regression-case.v1`, a contract of the Runtime, with one reader and one
@@ -18,11 +19,16 @@ regression`, and nothing else.
   rectangles `scene_construction.rects` names, never a whole frame. No player name, account or
   identifier is pasted (the recognition region and the press region are chosen so; nothing here
   checks images for privacy).
-- `case.json` is one JSON object of the members below. The parts this version evaluates are
-  closed: a member the table does not list there is refused (`member_unknown`). Its top level is
-  open (fix round 1): a member of it the table does not list is read past and named once in the
-  case's warning `case_member_unknown`, never a failure, as the repositories' own runners read
-  past it.
+- `case.json` is one JSON object of the members below. The expectations this version evaluates
+  are closed: a member the table does not list in `expect`, `expect.observe` or an entry of
+  `expect.recognize` is refused (`member_unknown`), so that a misspelt expectation is never read
+  past. Its top level is open (fix round 1), and so are `scene_construction`, its `canvas` and each
+  rectangle (#463 RC-2): a member of them the table does not list (a repository's note, or a note
+  on how the scene image was made, such as the patches it was pasted from) is read past and named,
+  with its place, in the case's warning `case_member_unknown`, never a failure, as the
+  repositories' own runners read past it. What a case is run on is the scene file `scene_sha256`
+  pins; the canvas's size and fill, the rectangles and the hash are read from the members the
+  table lists alone, so such a member changes nothing that is run.
 
 ## The members of `actingcommand.resource-regression-case.v1`
 
@@ -50,11 +56,22 @@ regression`, and nothing else.
 | `expect.error_page` | no | any | not run, `not_evaluated` |
 | `expect.after` | no | any | not run, `not_evaluated` |
 
-`scene_construction`, `canvas`, a rectangle, `expect`, `expect.observe` and an entry of
-`expect.recognize` are closed objects; the top level is open (above). An expectation that is not
+`expect`, `expect.observe` and an entry of `expect.recognize` are closed objects; the top level,
+`scene_construction`, `canvas` and a rectangle are open (above). An expectation that is not
 evaluated is read and answered `not_run` with `not_evaluated`, each at its place: never passed. A
-case `record stop` writes names in `source` only its recording and step, never a path of the
-machine (#463 S2-10).
+case `record stop` writes (#463 S2-10, 0.12.70; [lab-recording.md](lab-recording.md), "Regression
+cases written with the package") names in `source` the recording's id and where it comes from and
+nothing else: `{record_id, step}` (the step's serial number), `{record_id, final: true}` or
+`{record_id, ending}` (the ending's key); a recording id the Lab made by default
+(`<unix_ms>-<pid>-<task_id>`) holds the time the recording began and a process number, and `source`
+never holds a path of the machine, an instance, an account or a device. Its `id` is `step_<nn>`,
+`final` or `ending_<outcome_key>`; it expects its page (`expect.observe.page`) and every target that
+page requires to pass (`expect.recognize`), and nothing else; or, when its page is recognised on
+its scene beside another page of the package (`page_conflict` among whose pages its page is, which a
+linear run never asks), without `expect.observe`, every target its page requires to pass and every
+target its page forbids to fail (#463 S2-10 fix round 3), so that it states that this page holds on
+this scene, named where it is written with the warning `record_case_page_ambiguous`; such a page
+with no target to pin gives no case (the warning `record_case_ambiguous_not_written`).
 
 `scene_sha256` is, in this contract, the SHA-256 of the scene file's bytes, and a scene whose
 bytes have another is a failure of the case. The value of cases written before this contract was
@@ -76,10 +93,16 @@ verdict the case already has:
   object), `member_invalid` (a wrong type or a value out of its form), `expect_empty` (`expect`
   declares nothing, or only an empty `recognize`), `rect_outside_canvas`. A case with a problem is
   `failed` and nothing of it is evaluated.
-- **A member of the top level the table does not list** (fix round 1): read past, and named once
-  in the warning `case_member_unknown` (with `member`, its name, when it is a text of at most 256
-  bytes without a control character), first among the case's warnings. The case is read and run as
-  if it were not there.
+- **A member the table does not list of the top level** (fix round 1), **of `scene_construction`,
+  of its `canvas` or of a rectangle** (#463 RC-2): read past, and named in the warning
+  `case_member_unknown`, one per place and name, first among the case's warnings (those of the top
+  level, then `scene_construction`'s, its canvas's and each rectangle's in order). The warning
+  carries `json_pointer`, the member's place, the JSON pointer a failure there would name (`/note`
+  at the top level, `/scene_construction/note`, `/scene_construction/canvas/<name>`,
+  `/scene_construction/rects/<index>/<name>`), when it is at most 512 bytes, and `member`, its
+  name, when it is a text of at most 256 bytes without a control character. The case is read and
+  run as if it were not there. A member the table lists there that is wrong stays
+  `member_invalid`; one that is required and absent, `member_missing`.
 
 ## The runner
 
@@ -102,12 +125,26 @@ directory that is not there is `package_missing`, any other refusal `package_ref
    that does not hold evaluates nothing; each problem is a check.
 2. **The scene rule** (a warning, never a failure). Every pixel outside every rectangle is the
    canvas colour. Otherwise the warning `resource_regression_scene_outside_rects` with `count`, the
-   number of such pixels; the case still runs. A case the Runtime writes holds it: it pastes, on a
-   canvas of one colour, the regions every target of the whole package reads on that frame, not
-   only the targets of the case's page, so that a page told apart from this one by a target it
-   forbids cannot match on the bare canvas. A target that passes on the bare canvas (a dark
-   colour, for one) and a target that needs several frames are reported where the case is
-   written, not forced into one scene.
+   number of such pixels; the case still runs. Its rectangles are `scene_construction.rects` alone
+   (#463 RC-2): a patch a case names only in a member the table does not list is outside them. A
+   case the Runtime writes holds it (#463 S2-10): it
+   pastes, on a black canvas (`[0, 0, 0]`) of the recording's size, the regions every recognition
+   target of the whole package reads, as the admitted package declares them (a template's search
+   region and its colour check's, a colour or colour digest probe's region, an OCR or NN target's
+   region; a check, a value test and a click-only target none of their own; [lab-recording.md](lab-recording.md),
+   "Regression cases written with the package"), where they are in the frame, each rectangle once with the targets that read it as its
+   `content`; not only the targets of the case's page, so that a page told apart from this one by
+   a target it forbids sees that target's region as on the frame. It holds exactly those regions;
+   where a target reads the whole frame (its region or a template's search area is the whole
+   frame), that patch is the whole frame and so is the scene, unlike the patches of "A case" above:
+   such a case is named where it is written with the warning `record_case_whole_frame` and the
+   targets that read it (#463 S2-10 fix round 3), and nothing is refused for it. A page that
+   the bare canvas answers too (a dark colour, for one) is named where the case is written (the
+   warning `record_case_bare_canvas`), and a target that needs several frames leaves the case
+   `not_run` or `partial` with `frames_required`, named there too; neither is forced into one
+   scene. Without a text-recognition model for a text target the page detection reads, no case's
+   page is judged, which `record stop` says once (`record_cases_ocr_unavailable`). `record stop`
+   runs each case before it writes it and writes none that fails.
 3. **The scene in its package's coordinate space**, brought there as the offline commands bring
    a stored image (`scene_in_base`, `crates/lab`, Workflow #392 DA-5cd): a scene of the package's
    `coordinate_space` as it is, a pure scale of it reduced to it. A scene it refuses (another
@@ -137,7 +174,8 @@ the Lab has no OCR model (the Lab's own check, `LabOcr::require_pages` or `LabOc
 cannot give.
 
 `run_regression_case_on_bundle(bundle, case_json, scene_png, ocr)` (fix round 1) is the one call
-on a package already loaded, what `record stop` holds in memory: it reads the case, takes the
+on a package already loaded, what `record stop` holds in memory (#463 S2-10: its last self-check,
+`cases`, calls it on every case it makes, and once on the bare canvas): it reads the case, takes the
 package (`from_bundle`) and runs the case; it reads no file. `run_regression_case(package_dir,
 case_json, scene_png, ocr)` admits the package directory and calls it (a package missing or
 refused answers the case refused by it, or the case's own verdict when the reader refuses it or it
@@ -210,7 +248,7 @@ actinglab [--json] [--game <game>] resource regression --repo <checkout> [--case
 | `resource_regression_failed` (actinglab) | at least one case's verdict is `failed` | refuses | 1; 2 |
 | `resource_regression_partial` (actinglab), `count` | `count` cases of the run are `partial` (fix round 1) | warns | 0; 0 when no case failed |
 | `case_schema_unsupported` (lab) | a case of another `schema_version`, or none, is not run | warns | 0; 0 |
-| `case_member_unknown` (lab), `member?` | a member of a case's top level the contract does not name, read past (fix round 1) | warns | 0; 0 |
+| `case_member_unknown` (lab), `json_pointer?`, `member?` | a member of a case's top level (fix round 1), of its `scene_construction`, its `canvas` or a rectangle (#463 RC-2) the contract does not name, read past; `json_pointer` its place (RC-2) | warns | 0; 0 |
 | `resource_regression_scene_outside_rects` (lab), `count` | pixels outside the rectangles are not the canvas colour | warns | 0; 0 |
 | `regression_verdict`: `passed`, `failed`, `partial`, `not_run` | a case's verdict | informs (`failed` makes the run refuse) | |
 | `regression_result`: `passed`, `failed`, `not_run` | a check's result | informs | |

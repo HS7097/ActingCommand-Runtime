@@ -39,6 +39,9 @@
 //!   is none of its target pages and none of its `on_empty` pages, read from the pack's
 //!   `control.json` and its entry task file together, as the kernel's `declares_linear_endings`
 //!   reads the admitted package ([`declares_linear_ending`]).
+//! - **A select step's scan without an end**, 18 (Workflow #463 K-c, register §1.454; S2-9b,
+//!   §1.458): a member left out, which no row of [`ROWS`] can find, so read on its own
+//!   ([`scan_without_end`]).
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -103,6 +106,11 @@ const ON_EMPTY: &str = "on_empty";
 const SCHEDULING_OUTCOME: &str = "scheduling_outcome";
 const MAPPINGS: &str = "mappings";
 const TERMINAL_PAGES: &str = "terminal_pages";
+/// Revision 18: a select step's scan that declares no end (Workflow #463 K-c, S2-9b), and the
+/// members it reads: an operation's `select`, its `scan`, the scan's `end`.
+const SCAN_WITHOUT_END_REVISION: u64 = 18;
+const SCAN: &str = "scan";
+const END: &str = "end";
 
 /// The file a row's member stands in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -462,8 +470,9 @@ impl Row {
 }
 
 /// The `package` revision the zip's `entries` (its `interfaces.json` aside) need: the highest any
-/// entry needs, [`LINEAR_ENDINGS_REVISION`] when a pack declares an ending page
-/// ([`declares_linear_ending`]), [`PACKAGE_REVISION`] when nothing needs a later one.
+/// entry needs (a task file with a scan without an end, 18, [`scan_without_end`]),
+/// [`LINEAR_ENDINGS_REVISION`] when a pack declares an ending page ([`declares_linear_ending`]),
+/// [`PACKAGE_REVISION`] when nothing needs a later one.
 pub(crate) fn content_revision(entries: &BTreeMap<String, Vec<u8>>) -> u64 {
     let linear = linear_packs(entries);
     let masked = masked_templates(entries);
@@ -621,7 +630,28 @@ fn document_revision(
     {
         revision = revision.max(LAYOUT_ANCHOR_REVISION);
     }
+    if file == File::Task && scan_without_end(&document) {
+        revision = revision.max(SCAN_WITHOUT_END_REVISION);
+    }
     revision
+}
+
+/// Revision 18 (Workflow #463 K-c, register §1.454; S2-9b, §1.458;
+/// contracts/component-interfaces.md, the `package` row 18): the task file `task` has an operation
+/// whose `select` holds a `scan` object that declares no `end` (absent or `null`, as the
+/// declaration gate reads it: K-c's `declares`), the scan of a select that scrolls straight to the
+/// item it wants. A Runtime before 18 requires `end` in its declaration gate in every pack,
+/// `linear_steps` or not, so the row has no condition on the execution mode. Whether the scan also
+/// declares `early_stop`, without which this build refuses it, is the declaration gate's.
+fn scan_without_end(task: &Value) -> bool {
+    task.get(OPERATIONS)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|operation| operation.get(SELECT))
+        .filter_map(|select| select.get(SCAN))
+        .filter_map(Value::as_object)
+        .any(|scan| scan.get(END).is_none_or(Value::is_null))
 }
 
 /// Raises `revision` to what `value`, held by the member `holder`, and everything below it need.

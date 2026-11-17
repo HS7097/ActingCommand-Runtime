@@ -149,6 +149,7 @@ fn a10_step_and_stop_treat_an_undecodable_recording_as_unavailable_and_leave_it_
             step_action: Some(StepAction {
                 kind: StepActionKind::CloseStep,
                 step: None,
+                first: None,
             }),
             ..MarkRequest::default()
         },

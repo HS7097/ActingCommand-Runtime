@@ -516,6 +516,7 @@ impl Bench {
             step_action: Some(StepAction {
                 kind,
                 step: Some(step),
+                first: None,
             }),
             ..MarkRequest::default()
         };

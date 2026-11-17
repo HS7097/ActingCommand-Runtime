@@ -9,9 +9,10 @@ use crate::codes::{LabCode, ReadyCheck, ReadyCheckStop, ReadySource};
 use crate::display_base::{admit_pressed_first_frame, admit_recording_frame, recording_not_base};
 use crate::recording::archive::{ARCHIVED, latest_manifest, read_recording};
 use crate::recording::boxes::{expanded_add, validate_boxes, with_press_click};
+use crate::recording::cases::{CaseSet, cases_dir_name, regression_cases};
 use crate::recording::container::{
-    container_kind, encode, extension, file_name, preflight_lab_dir, replace_in_place,
-    write_lab_dir,
+    container_kind, encode, extension, file_name, preflight_lab_dir, replace_dir_in_place,
+    replace_in_place, write_lab_dir,
 };
 use crate::recording::crosscheck::{
     CheckFailure, CheckRun, CrossCheck, EndingChecks, Failures, FirstDecision, FrameCache, Locus,
@@ -21,10 +22,11 @@ use crate::recording::crosscheck::{
 use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, Plan, StopSettings, Survey,
-    application_steps_summary, optional_steps_summary, plan as generate_plan, render, survey,
-    transitions_summary, validate_timeout_option,
+    application_steps_summary, key_steps_summary, optional_steps_summary, plan as generate_plan,
+    render, survey, transitions_summary, validate_timeout_option,
 };
 use crate::recording::inserted::validate_optional_after_request;
+use crate::recording::key::validate_key_request;
 use crate::recording::marks::{declares_mark, match_metric};
 use crate::recording::model::{
     AfterCapture, AfterCaptureRecord, AfterFrame, ApplicationPlan, AttachFrameOutcome,
@@ -45,6 +47,7 @@ use crate::recording::ready::{
     point_press_warnings, ready_outcome, with_size_item,
 };
 use crate::recording::review::{RecordReviewOutcome, RecordReviewRequest, review_outcome};
+use crate::recording::scan::{scan_crops, scan_screen_frames};
 use crate::recording::select::{not_evaluated_id, validate_select_request};
 use crate::recording::steps::{
     Arrival, ArrivalMode, FrameMeta, Session, application_action, application_with_click,
@@ -466,7 +469,10 @@ fn ready_of(
         // on, and each check that ran saying whether its list is all it has.
         Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every()) {
             Ok(checked) => {
-                warnings.extend(generator_warnings(&checked.warnings)?);
+                warnings.extend(generator_warnings(&checked.package.warnings)?);
+                // #463 S2-10: a case's page recognised beside another page, as `record stop`
+                // names it.
+                warnings.extend(generator_warnings(checked.cases.ambiguity_warnings())?);
                 (Vec::new(), every_check_complete(), Vec::new())
             }
             Err(failed) => {
@@ -475,6 +481,7 @@ fn ready_of(
                     return Err(error);
                 }
                 warnings.extend(generator_warnings(&plan.warnings)?);
+                warnings.extend(generator_warnings(&failed.warnings)?);
                 (
                     check_items(recording, &failed.ran),
                     check_runs(&failed.ran),
@@ -595,14 +602,19 @@ fn generate_and_write(
     }
     let plan = generate_plan(recording, settings)?;
     let Checked {
-        entries,
-        kind,
-        bytes,
-        checks,
-        selects,
-        endings,
-        warnings,
-        final_decision,
+        package:
+            PackageChecked {
+                entries,
+                kind,
+                bytes,
+                checks,
+                selects,
+                endings,
+                warnings,
+                final_decision,
+                ..
+            },
+        cases,
     } = self_checks(&plan, ocr, Failures::first()).map_err(SelfCheckFailures::into_refusal)?;
 
     let ext = extension(kind);
@@ -620,6 +632,11 @@ fn generate_and_write(
     let mut written = Vec::new();
     // #464 P4: the outputs an earlier stop wrote, set aside and kept.
     let mut kept = Vec::new();
+    // #463 S2-10: the package's regression cases, beside it, `<package_id>.cases/<case id>/`.
+    let cases_path = lab_dir(state_dir, &recording.record_id)
+        .join("out")
+        .join(cases_dir_name(&plan.package_id));
+    let mut cases_kept = None;
     let lab_dir_status = if options.dry_run {
         None
     } else {
@@ -628,16 +645,29 @@ fn generate_and_write(
                 state_io(format!("failed to create {}: {error}", parent.display()))
             })?;
         }
-        replace_in_place(&copy_path, &bytes, &mut written, &mut kept)?;
-        match &lab_dir_plan {
+        // #463 S2-10 fix round 2: one clock read for the stop, so that the package and the cases
+        // it sets aside carry one `<unix_ms>` and are recognised as a pair.
+        let stamp = now_unix_ms();
+        replace_in_place(&copy_path, &bytes, stamp, &mut written, &mut kept)?;
+        let status = match &lab_dir_plan {
             Some(dir_plan) => Some(written_status(write_lab_dir(
                 dir_plan,
                 &bytes,
+                stamp,
                 &mut written,
                 &mut kept,
             )?)),
             None => None,
-        }
+        };
+        // The new set replaces the directory whole, an earlier set set aside and kept.
+        cases_kept = replace_dir_in_place(&cases_path, &cases.files(), stamp, &written)?;
+        status
+    };
+    let cases_status = match (options.dry_run, cases_path.exists(), &cases_kept) {
+        (true, true, _) => "to_replace",
+        (true, false, _) => "to_write",
+        (false, _, Some(_)) => "replaced",
+        (false, _, None) => "written",
     };
     let package_path = lab_dir_plan.as_ref().map_or_else(
         || absolute_display(&copy_path),
@@ -721,6 +751,15 @@ fn generate_and_write(
         if let Some(dir_plan) = lab_dir_plan.as_ref() {
             would_write.push(absolute_display(&dir_plan.target));
         }
+        // #463 S2-10 fix round 3: and the regression cases' directory with each case it would
+        // hold.
+        would_write.push(absolute_display(&cases_path));
+        would_write.extend(
+            cases
+                .ids()
+                .into_iter()
+                .map(|id| absolute_display(&cases_path.join(id))),
+        );
         lab.insert("would_write".to_string(), json!(would_write));
     } else {
         lab.insert("lab_dir_status".to_string(), json!(lab_dir_status));
@@ -756,6 +795,11 @@ fn generate_and_write(
         "application_steps".to_string(),
         json!(application_steps_summary(&plan)),
     );
+    // #463 KR-1: the key steps, present only when the package has one.
+    let key_steps = key_steps_summary(&plan)?;
+    if !key_steps.is_empty() {
+        lab.insert("key_steps".to_string(), json!(key_steps));
+    }
     // #463 R2: the endings' pages after the steps' and the transitions'.
     let pages = plan
         .steps
@@ -814,6 +858,12 @@ fn generate_and_write(
     lab.insert("cross_check".to_string(), checks.cross_check);
     lab.insert("first_decision".to_string(), final_decision.value);
     lab.insert("entry_overlay".to_string(), checks.entry_overlay);
+    // #463 S2-10: the regression cases written beside the package (under the dry run, those that
+    // would be), with their limit.
+    lab.insert(
+        "cases".to_string(),
+        cases.answer(absolute_display(&cases_path), cases_status, cases_kept),
+    );
     insert_binding(
         &mut lab,
         &plan.package_id,
@@ -835,9 +885,16 @@ fn generate_and_write(
     })
 }
 
-/// What `record stop`'s self-checks leave when every one passed: the final package, encoded, and
-/// the results its answer prints.
+/// What `record stop`'s self-checks leave when every one passed: the final package and what its
+/// answer prints, and (#463 S2-10) the regression cases made from the recording.
 struct Checked {
+    package: PackageChecked,
+    cases: CaseSet,
+}
+
+/// What the self-checks before `cases` leave when every one passed: the final package, encoded,
+/// the results its answer prints, and the recording's frames read back.
+struct PackageChecked {
     entries: BTreeMap<String, Vec<u8>>,
     kind: ContentContainer,
     bytes: Vec<u8>,
@@ -846,6 +903,7 @@ struct Checked {
     endings: EndingChecks,
     warnings: Vec<Value>,
     final_decision: FirstDecision,
+    cache: FrameCache,
 }
 
 /// #463 S2-1c: the self-checks that did not all pass: every check that ran, in the order they ran,
@@ -854,6 +912,10 @@ struct Checked {
 struct SelfCheckFailures {
     ran: Vec<CheckRun>,
     not_run: Vec<ReadyCheck>,
+    /// #463 S2-10: the warnings `record_case_page_ambiguous` (fix round 3: and
+    /// `record_case_ambiguous_not_written`) of the cases that did not fail, when the check `cases`
+    /// ran to its end and another case failed; `record ready` names them.
+    warnings: Vec<Value>,
 }
 
 impl SelfCheckFailures {
@@ -966,6 +1028,7 @@ impl Runner {
         SelfCheckFailures {
             ran: self.ran,
             not_run,
+            warnings: Vec::new(),
         }
     }
 }
@@ -983,40 +1046,65 @@ impl Runner {
 /// admission check, and the final package, built of what every check before it gave, only when
 /// none failed. Fix round 1: in `admission` and `final_package` rendering the package judges
 /// nothing, so an error there stops the check with `check_error`, as in every other check; only a
-/// refusal of their staged judgement stops it with `whole_package`.
+/// refusal of their staged judgement stops it with `whole_package`. #463 S2-10: the last check,
+/// `cases`, makes the regression cases of the final package and runs each on it; it reads the final
+/// package, so it runs only when every check before it passed.
 fn self_checks(
     plan: &Plan,
     ocr: &LabOcr,
     failures: Failures,
 ) -> Result<Checked, SelfCheckFailures> {
     let mut runner = Runner::new(failures);
-    let inputs = load_package_inputs(plan, &mut runner.failures);
-    let Some((cache, crops)) = runner.last(ReadyCheck::Frames, ReadyCheckStop::CheckError, inputs)
-    else {
+    let Some(package) = package_checks(plan, ocr, &mut runner) else {
         return Err(runner.into_failures());
     };
+    let built = regression_cases(
+        plan,
+        &package.entries,
+        &package.cache,
+        ocr,
+        &mut runner.failures,
+    );
+    let Some(cases) = runner.last(ReadyCheck::Cases, ReadyCheckStop::CheckError, built) else {
+        return Err(runner.into_failures());
+    };
+    if runner.failed() {
+        // `record ready` lists every failing case and names the ambiguity of the others.
+        let mut failed = runner.into_failures();
+        failed.warnings = cases.ambiguity_warnings().to_vec();
+        return Err(failed);
+    }
+    Ok(Checked { package, cases })
+}
+
+/// #463 S2-10: the package without its regression cases, as the self-checks before `cases` build
+/// it, for a test that compares it with the package `record stop` writes (S2-9a's test 6 reads it).
+#[cfg(test)]
+pub(crate) fn package_without_cases(plan: &Plan, ocr: &LabOcr) -> Option<Vec<u8>> {
+    package_checks(plan, ocr, &mut Runner::new(Failures::first())).map(|package| package.bytes)
+}
+
+/// The self-checks of [`self_checks`] before `cases`, in the order they run, with `runner`: the
+/// final package when every one passed; `None` when the checks end, `runner` holding why.
+fn package_checks(plan: &Plan, ocr: &LabOcr, runner: &mut Runner) -> Option<PackageChecked> {
+    let inputs = load_package_inputs(plan, &mut runner.failures);
+    let (cache, crops) = runner.last(ReadyCheck::Frames, ReadyCheckStop::CheckError, inputs)?;
     // Every later check reads every frame.
     if runner.failed() {
-        return Err(runner.into_failures());
+        return None;
     }
 
     // First pass: admit the package, decide its first step and cross-check its pages. Fix round
     // 1: rendering the package judges nothing, so an error there is `check_error`; the kernel's
     // admission and the evaluator are the staged judgement, `whole_package`.
     let rendered = render(plan, None, &crops);
-    let Some(first_entries) =
-        runner.part(ReadyCheck::Admission, ReadyCheckStop::CheckError, rendered)
-    else {
-        return Err(runner.into_failures());
-    };
+    let first_entries = runner.part(ReadyCheck::Admission, ReadyCheckStop::CheckError, rendered)?;
     let admitted = admission(&first_entries, ocr);
-    let Some((first_prepared, bundle)) = runner.part(
+    let (first_prepared, bundle) = runner.part(
         ReadyCheck::Admission,
         ReadyCheckStop::WholePackage,
         admitted,
-    ) else {
-        return Err(runner.into_failures());
-    };
+    )?;
     let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
         LabError::safety_blocked(
             "record_artifact_admission_failed",
@@ -1025,13 +1113,11 @@ fn self_checks(
         )
         .with_details(json!({"stage": "evaluator"}))
     });
-    let Some(evaluator) = runner.last(
+    let evaluator = runner.last(
         ReadyCheck::Admission,
         ReadyCheckStop::WholePackage,
         evaluator,
-    ) else {
-        return Err(runner.into_failures());
-    };
+    )?;
     // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
     let decision = first_decision(
         &first_prepared,
@@ -1047,12 +1133,12 @@ fn self_checks(
         decision,
     );
     if runner.ends() {
-        return Err(runner.into_failures());
+        return None;
     }
     let checks = cross_check(plan, evaluator, &cache, ocr, &mut runner.failures);
     let checks = runner.last(ReadyCheck::CrossCheck, ReadyCheckStop::CheckError, checks);
     if runner.ends() {
-        return Err(runner.into_failures());
+        return None;
     }
     // #463 R2, self-check item 9, before item 8: every ending's page passes on its own frames and
     // on no frame of a screen the run may show instead (an ending page that passes on a select
@@ -1061,7 +1147,7 @@ fn self_checks(
     let endings = ending_checks(plan, evaluator, &cache, ocr, &mut runner.failures);
     let endings = runner.last(ReadyCheck::Endings, ReadyCheckStop::CheckError, endings);
     if runner.ends() {
-        return Err(runner.into_failures());
+        return None;
     }
     // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
     // result is part of the cross-check, present only when the package has a select step.
@@ -1071,10 +1157,10 @@ fn self_checks(
     let (Some(decision), Some(mut checks), Some(endings), Some(selects)) =
         (decision, checks, endings, selects)
     else {
-        return Err(runner.into_failures());
+        return None;
     };
     if runner.failed() {
-        return Err(runner.into_failures());
+        return None;
     }
     if let Some(cross) = checks.cross_check.as_object_mut()
         && !endings.endings.is_empty()
@@ -1111,28 +1197,23 @@ fn self_checks(
     // Fix round 1: as in the first pass, rendering judges nothing (`check_error`); encoding,
     // expanding, admitting and deciding again are the staged judgement (`whole_package`).
     let rendered = render(plan, Some(&provenance), &crops);
-    let Some(final_entries) = runner.part(
+    let final_entries = runner.part(
         ReadyCheck::FinalPackage,
         ReadyCheckStop::CheckError,
         rendered,
-    ) else {
-        return Err(runner.into_failures());
-    };
+    )?;
     let built = final_package(final_entries, plan, ocr, &cache, evaluator, &decision);
-    let Some(FinalPackage {
+    let FinalPackage {
         entries,
         kind,
         bytes,
         decision: final_decision,
-    }) = runner.last(
+    } = runner.last(
         ReadyCheck::FinalPackage,
         ReadyCheckStop::WholePackage,
         built,
-    )
-    else {
-        return Err(runner.into_failures());
-    };
-    Ok(Checked {
+    )?;
+    Some(PackageChecked {
         entries,
         kind,
         bytes,
@@ -1141,6 +1222,7 @@ fn self_checks(
         endings,
         warnings,
         final_decision,
+        cache,
     })
 }
 
@@ -1248,6 +1330,20 @@ fn load_package_inputs(
             }
         }
     }
+    // #463 S2-9a: and every screen of a scrolling select's demonstration.
+    for step in &plan.steps {
+        for frame in scan_screen_frames(step) {
+            if cache.contains_key(&frame.sha256) {
+                continue;
+            }
+            match read_package_frame(plan, frame) {
+                Ok(loaded) => {
+                    cache.insert(frame.sha256.clone(), loaded);
+                }
+                Err(error) => failures.fail(Locus::on_step(step).with_frame(frame), error)?,
+            }
+        }
+    }
     let mut crops = BTreeMap::new();
     for (id, _asset) in plan.template_assets() {
         match read_crop(plan, &id) {
@@ -1255,6 +1351,16 @@ fn load_package_inputs(
                 crops.insert(id, bytes);
             }
             Err(error) => failures.fail(Locus::default().with_target(&id), error)?,
+        }
+    }
+    // #463 S2-9a: a scrolling select's templates are cut from its screens, as at mark time.
+    for (step, select) in plan.select_steps() {
+        let Some(scan) = &select.scan else {
+            continue;
+        };
+        match scan_crops(plan, step, &select.declaration, scan, &cache) {
+            Ok(cut) => crops.extend(cut),
+            Err(error) => failures.fail(Locus::on_step(step), error)?,
         }
     }
     Ok((cache, crops))
@@ -1646,6 +1752,7 @@ fn stop_already_generated(
         Some(dir_plan) => Some(written_status(write_lab_dir(
             dir_plan,
             &bytes,
+            now_unix_ms(),
             &mut written,
             &mut kept,
         )?)),
@@ -1745,6 +1852,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
     if request.optional_after.is_some() || request.remove_inserted.is_some() {
         return validate_optional_after_request(request);
     }
+    // #463 KR-1: a key's word and what stands beside it, before anything is read.
+    validate_key_request(request)?;
     // #463 S2-5: boxes are members of a step: never beside a step operation or a transition, one
     // press box beside no click, each recognize box once.
     validate_boxes(request)?;
@@ -1901,13 +2010,24 @@ pub fn record_mark(
     dry_run: bool,
     ocr: &LabOcr,
 ) -> LabResult<MarkOutcome> {
+    use crate::recording::model::StepActionKind;
     validate_mark_request(request)?;
     // Workflow #390 LAB-2: a stopped recording whose package was generated takes marks on its
     // steps again; the next `record stop` generates the package again.
     let mut session = open_session_for_marks(lock)?;
     if session.stopped {
-        if request.step_action.is_some() {
-            return Err(stopped_change("a step operation"));
+        // #463 S2-8' fix round 1 ("Marking after stop"): a fold of swipes into a press step's
+        // scrolling search, and its undoing, change no screen and send nothing, so a stopped
+        // recording takes them as it takes a mark; every other step operation needs an active one.
+        if request.step_action.as_ref().is_some_and(|action| {
+            !matches!(
+                action.kind,
+                StepActionKind::FoldScan | StepActionKind::UnfoldScan
+            )
+        }) {
+            return Err(stopped_change(
+                "a step operation other than fold_scan and unfold_scan",
+            ));
         }
         if request.application.is_some() {
             return Err(stopped_change("an application operation"));
@@ -1960,6 +2080,8 @@ fn mark_session(
         removed_ending: None,
         boxes: Vec::new(),
         choice: None,
+        scan_fold: None,
+        key: None,
     };
     // #463 R2: an ending of the stopped recording, taken from its frame or given up; it is no
     // step, so the answer names none.
@@ -2038,6 +2160,10 @@ fn mark_session(
         outcome.select = recorded.select.clone();
         // #463 S2-6: the step's choice mark.
         outcome.choice = recorded.choice.clone();
+        // #463 S2-8': the swipes folded into the step's scrolling search.
+        outcome.scan_fold = recorded.scan_fold.clone();
+        // #463 KR-1: the step's key with the click it replaced.
+        outcome.key = recorded.key.clone();
     }
     Ok(outcome)
 }
@@ -3596,7 +3722,8 @@ pub(crate) fn click_outcome(click: &StepClick) -> &'static str {
     }
 }
 
-/// `none`, `click_<declared|executed|indeterminate>` or `application_<declared|executed>`.
+/// `none`, `click_<declared|executed|indeterminate>`, `application_<declared|executed>` or (#463
+/// KR-1) `key_declared`, a key being never sent while recording.
 fn effect_state(step: &RecordingStep) -> String {
     match (&step.click, &step.application) {
         (Some(click), _) => format!("click_{}", click_outcome(click)),
@@ -3604,6 +3731,7 @@ fn effect_state(step: &RecordingStep) -> String {
             "application_executed".to_string()
         }
         (None, Some(_)) => "application_declared".to_string(),
+        (None, None) if step.key.is_some() => "key_declared".to_string(),
         (None, None) => "none".to_string(),
     }
 }
@@ -3690,5 +3818,10 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
         // #463 S2-6: the choice mark, refined when the step has a select too.
         choice: step.choice.clone(),
         inserted_after: step.inserted_after,
+        // #463 S2-8': what a folded swipe is folded into, and the fold of its press step.
+        folded_into: step.folded_into,
+        scan_fold: step.scan_fold.clone(),
+        // #463 KR-1: the key with the click it replaced.
+        key: step.key.clone(),
     }
 }

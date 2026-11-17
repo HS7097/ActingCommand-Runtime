@@ -2883,6 +2883,18 @@
     "drop_comparison": {
       "type": "vocab:drop_comparison",
       "description": "Which of the two comparisons of two stored frames showed the change for which record mark's drop_step refuses a step before the last (record_drop_unproven with drop_problem screen_changed or next_screen_differs): the whole frame or the neighbourhood of the press (#463 S2-7 fix round 1, since 0.12.68)."
+    },
+    "regression_problem": {
+      "type": "vocab:regression_problem",
+      "description": "The word of the first failed check of a regression case record stop made from a recording for the package it generated, which misses on that package (record_case_failed; #463 S2-10, since 0.12.70); every failed check of the case is in the refusal's details."
+    },
+    "scan_problem": {
+      "type": "vocab:scan_problem",
+      "description": "Why the swipes recorded before a press of a Lab recording cannot be folded into one scrolling search of that press, the fold undone, a step of the fold acted on, or the fold generated (record_scan_invalid; #463 S2-8', since 0.12.70)."
+    },
+    "key_problem": {
+      "type": "vocab:key_problem",
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70)."
     }
   },
   "vocabularies": {
@@ -5220,6 +5232,36 @@
         },
         "transition_of_choice": {
           "description": "to_transition names a step that holds a choice (marked as holding one, or refined by a select): a page transition holds none, so the conversion would lose it; the choice is withdrawn first (#463 stage two, train, fix round)."
+        },
+        "scan_without_fold": {
+          "description": "A scrolling select (rows and scan) on a step that holds no fold of the swipes recorded before it: it has no screens of the list to read (#463 S2-9a, since 0.12.70)."
+        },
+        "rows_with_slots": {
+          "description": "The request declares rows and slots, which exclude each other (#463 S2-9a, since 0.12.70)."
+        },
+        "confirm_with_rows": {
+          "description": "The request declares confirm beside rows: the kernel confirms a scrolled choice itself (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_stop_missing": {
+          "description": "The request's scan states no stop, the kind of the scrolling choice (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_frame": {
+          "description": "A region of a scrolling select (its list, row, anchor, name, click box, start or end mark) does not lie inside the frame (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_list": {
+          "description": "The row of a scrolling select does not lie inside its list (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_region_outside_row": {
+          "description": "The anchor, the name region or the click box of a scrolling select does not lie inside its row (#463 S2-9a, since 0.12.70)."
+        },
+        "scan_number_not_measured": {
+          "description": "A number the Lab measures from the demonstration cannot be measured there (a swipe recorded without its after loop's record) and the request does not give it in scan.numbers (#463 S2-9a, since 0.12.70)."
+        },
+        "on_empty_without_end": {
+          "description": "A scrolling select straight to the wanted item (scan.stop wanted) that declares no end mark gives an on_empty_key: such a scan never reads its list to an end, so a run cannot end normally there; where the item is not found it fails with the kernel's selection_scan_early_stop_unreached (#463 S2-9b, since 0.12.70)."
+        },
+        "scan_swipe_too_long": {
+          "description": "The first forward swipe of the fold, the package's advance, moves the finger further along the list than the kernel's admission allows (the list's length less a row's, less one), which no given number changes; details displacement_px and most_px; the scroll is recorded again with shorter swipes, so that neighbouring screens share at least one row (#463 S2-9a fix round 1, since 0.12.70)."
         }
       }
     },
@@ -5305,8 +5347,8 @@
         "no_marks": {
           "description": "The inserted step adds and reuses no mark, so its page would recognize nothing."
         },
-        "no_click": {
-          "description": "The inserted step declares no click, so nothing would close its pop-up."
+        "no_effect": {
+          "description": "#463 KR-1 (since 0.12.70, in place of no_click): the inserted step declares no effect, neither a click nor a key, so nothing would close its pop-up."
         },
         "clears_optional": {
           "description": "The request clears optional on an inserted step: a step never recorded on the path stays optional."
@@ -5421,6 +5463,15 @@
         },
         "select_unrefined": {
           "description": "#463 S2-6: a step marked as holding a choice that no select refines yet (record_select_invalid, choice_not_refined)."
+        },
+        "scan_without_select": {
+          "description": "#463 S2-8' (since 0.12.70): a press step whose recorded swipes are folded into its scrolling search declares no scrolling select yet (record_scan_invalid, scan_not_selected)."
+        },
+        "scan_end_not_recorded": {
+          "description": "#463 S2-9a (since 0.12.70): a scrolling select that reads its list to its end declares no end mark: the demonstration never reached the list's end (record_scan_invalid, end_not_recorded)."
+        },
+        "key_guard_missing": {
+          "description": "#463 KR-1 (since 0.12.70): a step that presses a key gets no guard (record_key_invalid, guard_missing; fix round 1: by a click step's rule, its page gives none)."
         }
       }
     },
@@ -5451,6 +5502,60 @@
         },
         "final_package": {
           "description": "The final package: encoded, expanded again, admitted again, and the same first decision."
+        },
+        "cases": {
+          "description": "#463 S2-10 (since 0.12.70): the regression cases made from the recording (one per step with a press and a page, the final screen, one per ending), each run on the final package by the one runner of the case contract before it is written; the last check, run only when every other passed."
+        }
+      }
+    },
+    "case_limit": {
+      "description": "A limit the regression cases record stop writes beside its package say of themselves, in lab.cases.limits (#463 S2-10, since 0.12.70); it informs and refuses nothing.",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "CaseLimit"
+      },
+      "tokens": {
+        "self_agreement": {
+          "description": "The cases were made from the frames the package was built from: that they pass shows the package recognises the screens it was recorded on and says nothing about screens it did not meet."
+        }
+      }
+    },
+    "key_problem": {
+      "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "KeyProblem"
+      },
+      "tokens": {
+        "word_unknown": {
+          "description": "The key's word is none of the vocabulary's, which is back alone."
+        },
+        "with_click": {
+          "description": "The request declares a click beside the key (a rectangle, a source mark, a followed mark, a gesture or a press box), or an inserted step declares both a click and a key."
+        },
+        "with_application": {
+          "description": "The request declares an application operation beside the key."
+        },
+        "with_retry": {
+          "description": "The request declares a click retry beside the key: a key step declares no retry."
+        },
+        "application_entry": {
+          "description": "The step is the application entry step, which has no frame and no page to guard a key on."
+        },
+        "application_step": {
+          "description": "The step's effect is an application operation, declared or executed."
+        },
+        "holds_choice": {
+          "description": "A key and a choice on one step: the step holds a choice (a select or a choice mark), or the request gives one to a step with a key or beside a key."
+        },
+        "step_not_effective": {
+          "description": "The step is dropped or converted into a page transition."
+        },
+        "guard_missing": {
+          "description": "record stop meets a step that presses a key and gets no guard (fix round 1: by a click step's rule, it names none its page requires and its page requires no template, colour, colour digest or check mark): a key has no coordinate to trust."
+        },
+        "holds_fold": {
+          "description": "The train of 0.12.70 (#463 S2-8' joined): the step holds a fold, the swipes recorded before it folded into its scrolling search, so its press is the press of a scrolling search; the fold is undone first."
         }
       }
     },
@@ -11127,7 +11232,7 @@
       }
     },
     "drop_problem": {
-      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
+      "description": "Why record mark's drop_step does not drop a step before the last of a Lab recording, the value drop_problem of record_drop_unproven (#463 S2-7, contracts/lab-recording.md \"Steps, frames and remediation\", since 0.12.68): the stored frames do not hold what the comparison needs, or they show a change, or (#463 KR-1 fix round 1, since 0.12.70) the step's effect is a declared key. Fix round 1: two frames are the same screen when two comparisons hold, the whole frame and the neighbourhood of the press (its rectangle grown by one cell of the whole-frame grid on every side), each by the measure stage one calls a screen still by, frame_change_milli at most FRAME_CHANGE_MAX_MILLI (1500); a change smaller than that measure sees is not seen, and whether the press mattered is the agent's judgement.",
       "review": "pending",
       "source": {
         "file": "crates/lab/src/codes.rs",
@@ -11142,6 +11247,9 @@
         },
         "next_screen_differs": {
           "description": "The stored frames show a change: the next step's frame before its press differs from the frame before this press by more than the frame-change bound, by one of the two comparisons (drop_comparison)."
+        },
+        "key_declared": {
+          "description": "#463 KR-1 fix round 1 (since 0.12.70): the step's effect is a declared key: the frames on record are those of the press the key replaced, and nothing shows what the key does; the key is taken back first (key false, --no-key)."
         }
       }
     },
@@ -11158,6 +11266,61 @@
         },
         "press_region": {
           "description": "The neighbourhood of the press: its rectangle (a point is a rectangle of one pixel, a swipe the rectangle spanned by its two ends) grown on every side by one cell of the whole-frame grid at the recording's size and clamped to the frame, by the same measure over that region."
+        }
+      }
+    },
+    "scan_problem": {
+      "description": "Why the swipes recorded before a press of a Lab recording cannot be folded into one scrolling search of that press, the fold undone, a step of a fold acted on, or the fold generated, the value scan_problem of record_scan_invalid (#463 S2-8', contracts/lab-recording.md \"Folding swipes into a scrolling search\", since 0.12.70). A swipe runs clearly along one axis when its move along it, between its own two points, is not zero and at least twice its move across it.",
+      "review": "pending",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ScanProblem"
+      },
+      "tokens": {
+        "fold_range_invalid": {
+          "description": "fold_scan names no fold: its first step is not below its press step; a step of the range is unknown, dropped, converted into a transition, or folded or holding a fold already; the press step's effect is no executed tap; or a step between them is no executed swipe."
+        },
+        "inserted_in_range": {
+          "description": "#463 S2-8' fix round 1: a step of the range, the press step included, is an optional step a stopped recording inserted after the stop, no step recorded on the path."
+        },
+        "would_lose_marks": {
+          "description": "A step the fold would fold has marks of its own, which no page of the package would read any more."
+        },
+        "would_lose_page": {
+          "description": "A step the fold would fold names its page."
+        },
+        "would_lose_optional": {
+          "description": "A step the fold would fold is optional."
+        },
+        "would_lose_choice": {
+          "description": "A step the fold would fold holds a choice (marked as holding one, or refined by a select)."
+        },
+        "would_lose_transition": {
+          "description": "A step the fold would fold has a transition after its effect."
+        },
+        "would_lose_inserted": {
+          "description": "#463 S2-8' fix round 1: a step the fold would fold has an optional step a stopped recording inserted after it after the stop, and not given up, which would run after no step of the package."
+        },
+        "move_axis_unclear": {
+          "description": "A swipe of the range runs clearly along neither axis (its move along one axis is not at least twice its move across it), or along another axis than the first swipe."
+        },
+        "move_after_back": {
+          "description": "A swipe in the first swipe's direction after one against it: the demonstration goes forward as often as needed, then back as often as needed, then presses."
+        },
+        "not_folded": {
+          "description": "unfold_scan names a step that holds no fold."
+        },
+        "step_in_fold": {
+          "description": "A step action or a mark names a step of a fold: a swipe folded into a press step, or (a step action) the press step that holds the fold; the fold is undone first."
+        },
+        "scan_not_selected": {
+          "description": "record stop meets a press step whose swipes are folded into it and which declares no scrolling select yet, so its package would press without scrolling."
+        },
+        "scan_selected": {
+          "description": "unfold_scan names a press step whose fold a scrolling select reads; the select is taken off first, with clear_select (#463 S2-9a)."
+        },
+        "end_not_recorded": {
+          "description": "record stop meets a scrolling select that reads its list to its end and declares no end mark: the demonstration never reached the list's end (#463 S2-9a)."
         }
       }
     }

@@ -9,6 +9,152 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.70
+
+本版是 v0.12.69 之后的 1 次合并、6 张 PR：0.12.70 列车 #1804（#463 S2-9b 自己），带 #463 S2-10 #1797、#463 K-b 和 K-c #1799、#463 S2-8′ #1801、#463 S2-9a #1803 和 #463 KR-1 #1802。
+列车除了各张的头和合并，有自己的提交：开头并进 S2-10 的第三轮小修、S2-8′ 的小修和 K-b、K-c 的小修（后者带着 main 的 0.12.69 发版提交），把 S2-10 第三轮删掉的一个只给测试用的函数（`package_without_cases`）为 S2-9a 的一条测试加回来；
+在车头上做的「滚动的小修」（S2-9a 审查要改的：底标在最后一张前滑屏之前就通过的拒、示范滑得太长的拒、每个数照实分四种标、两处重复的判定各合成一个函数）；最后并进 KR-1 的小修，接上按键、折叠和滚动选择相交的六处（各一条测试）。
+内容是：`record stop` 把包的回归用例写在包旁边，每个先跑过；把录下的几次滑动折成一次滚动查找；滚动选择的两种（读到底再选；直接滚到想要的那一个，可以不带底标）；
+内核的滚动选择可以不带底标（包格式修订 18），和它跨屏带拖动的测试；录制里的一步可以按返回键。
+**生产上跑的是 v0.12.69（2026-11-17 11:13 起，经 Lab 救急模块部署）**：一台实例在跑调度的例行任务，其余实例暂停着、模拟器关着。从 v0.12.69 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都能装，不用任何标志，没有 `ledger_verify`，`defaults_diff` 没有一行，没有新文件**。**一个接口动了：包格式 `package` 到 [3, 18]**（最低值不动），`runtime-client` 仍是 [3, 11]；
+配置键没加，结果码加了 9 个。**每次出包的 `record stop` 都写回归用例，以前停得下的录制可能被拒**（见下）。**退回 v0.12.69 开着**；回去以后，带折叠、滚动选择或按键的录制旧版读不了，扫描不带底标的包旧版放不了、跑不了。
+
+- **为什么有这一版**：主人 11-15 定了滚动列表里的挑选分两种：不知道列表里有什么，就滚到底再选；知道要哪个，就直接滚到它；11-16 又定了第二种的包可以不带底标，找到了就点，滚不动了还没找到算一次有名字的失败（看板 #463，待拍板 221 选 A）。
+  主人 11-15 还定了返回键录制时不按，由智能体在第二、三阶段加进去；v0.12.69 起包里可以有按键步，但只能手改包的源文件。包的回归用例一向是智能体录完以后手写的，录制其实都知道：每一步在哪一屏按的、最后停在哪一屏、每个结局取自哪一帧。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **没有折叠、滚动选择、按键的录制和它出的包不变，除了下面的回归用例。** 保证它的：录制的新成员（步上的 `key`、`folded_into`、`scan_fold`，挑选上的 `rows`、`scan`）都可缺、没有就不写
+    （`crates/lab/src/recording/model.rs` 400–445、1378–1383、1737–1740）；读一步的几个判断在没有它们时和原来一样（`is_effective`、`kept_on_path`、`has_effect`、`recorded_click`，514–541）；
+    生成器只在步有按键、挑选有扫描时走新分支（`crates/lab/src/recording/generate.rs` 2835、2850、3240、3299、3359），不带扫描的挑选照旧写 `on_empty` 和它那条映射（`empty_end_key`，`crates/lab/src/recording/scan.rs` 172–174）；
+    S2-10 的第 2 条测试拿生成器自己的渲染和编码比对写出的包。
+  - **回归用例**（S2-10）：每次出包的 `record stop`（连同停后又标过的重新出包）现在把这个包的回归用例写在包旁边，`lab/out/<package_id>.cases/<用例>/`（`case.json`、`scene.png`），每个先由 `resource regression` 那一个运行器在内存里的最终包上跑过
+    （`crates/lab/src/recording_api.rs` 618、663）：每个有按下和页的步一个，最后一屏一个，每个结局一个。**以前停得下的录制现在可能被拒 `record_case_failed`**（真认不出这一页，或这一页要的目标没过）：什么都不写，录制和会话照旧开着，按住也留着。
+    别的页也认得这一屏时不算没认出：用例改成不带判页、只钉这一页要的和禁止的目标，警告 `record_case_page_ambiguous`。整份替换，旧的一份改名留着（`.cases.old-<毫秒>`，和同一次留下的旧包同一个毫秒）；`--lab-dir` 那边照旧只有包；
+    试停什么都不写、列出将写的。回答多 `lab.cases`；包本身逐字节不变。停过、没再标过的录制再 `record stop` 答 `already_generated`，不写用例（242–252）。
+    **`record ready` 和 `record review` 每次调用都把用例跑一遍**（同一个 `ready_of`，470、529；已出包、没再标过的录制什么自检都不跑，437–447），`checks` 里多第八项 `cases`。
+  - **Runtime 这一侧**只改了内核的扫描和声明门，都只在扫描不带底标时走新路；带底标的每一条路审查逐处对过，没有变化。今天装着的包没有一个扫描不带底标（以前的版本拒这种包），所以装着的东西都不变。
+    **改了码的拒绝**：`read_list` 的扫描写 `"end": null` 的，以前过了声明门、在内核读列表时拒 `contained_task_resource_reading_invalid`，现在在声明门上拒 `resource_declaration_invalid`（`MissingField`，`…/read_list/scan/end`，
+    `crates/pack-containment/src/source/declarations.rs` 1387）；挑选的扫描写 `"end": null` 的现在当没写：带 `early_stop` 就是不带底标的扫描，不带就在声明门上拒 `MissingField`（以前过了声明门、在内核读任务时被拒）；
+    `replay --scan` 的文件既没有 `end` 也没有 `early_stop` 的，以前拒 `replay_scan_invalid`，现在读得进、回放拒 `replay_scan_refused`（内核的扫描会话拒 `contained_task_select_invalid`，`crates/execution-kernel/src/contained_task/scan.rs` 1295）。
+  - **新的内核失败 `selection_scan_early_stop_unreached`**（execution-kernel，error，类 `pack_logic_mismatch`，必带 `stage`（`select_scan_end`）和 `viewport_index`，`crates/execution-kernel/src/codes.rs` 202）：不带底标的扫描在提前停成立之前滚不动了（连着两屏不动，
+    `scan.rs` 1508 起的 `stopped_moving` 按声明给码）；什么都不点，不留选择记录，读到的较低偏好也不点。和 `selection_scan_end_unconfirmed` 同类同处理：只由调度策略重跑、不累计成暂停，按类触发默认恢复阶梯的 `pack_logic`。
+  - **包格式 18**：扫描不带底标的包要修订 18。v0.12.69 及更早的 Runtime 每次运行都拒它（声明门要 `end`，在 `PackageAdmitted` 之前拒 `resource_declaration_invalid`，`MissingField`，v0.12.69 的 `declarations.rs` 1181–1186），
+    v0.12.69 及更早的安装工具拒声明 18 的构建包（`package` 边上的 `interface_edge`）；所以**放了这样的包以后，这台安装要退回 0.12.70 以下，先撤掉那次放置**。
+  - **`record mark` 多了五个参数**（`fold_scan`、`fold_first`、`unfold_scan`、`key`、`no_key`，操作表那一行和 `ac_record_mark` 都有）：客户端要重新拉工具表才看得见（旧映像上的 MCP 服务进程答旧的工具表，见「部署和退路」）。
+  - **本版写的录制里只要有一步带折叠、滚动选择或按键，旧版的 Lab 就读不了**（见「盘上的东西」）。
+  - 别的：停后插入的可选步既没点按也没按键时，拒绝词从 `no_click` 改成 `no_effect`（`record_optional_after_invalid`，`crates/lab/src/recording/inserted.rs` 160）。
+  - **盘上的东西**：
+    - **在 v0.12.69 上开的录制本版照读**（新成员都可缺）；`record stop` 多跑用例、可能被拒 `record_case_failed`。v0.12.69 生成的包照收照跑；从同一份录制重新生成的包逐字节一样，旁边多一份用例。
+    - **带折叠、滚动选择或按键的录制，v0.12.69 读不了**：它读 `recording.json` 拒不认识的成员（v0.12.69 的 `crates/lab/src/recording/model.rs` 320–321、1325–1326），`record status`、`record ready`、`record review` 答 `lab_recording_unreadable`
+      （`recording/store.rs` 247–248）；**它的 `record stop` 对这样一份开着的录制照样结束会话、放开按住，但 `lab` 是 `null`、不出包**（v0.12.69 的 `recording_api.rs` 237），`recording.json` 原样留着。撤掉（`clear_select`、`unfold_scan`、`--no-key`）以后读得了。
+    - 用例目录：旧版不读、不拷、不删；旧版重新出包只换包文件，留着的用例就挨着旧版出的包。
+    - 本版生成的包：带按键步的（修订 17）、扫描带底标的，v0.12.69 照收照跑；扫描不带底标的跑不了（见上）。账本、配置不变。
+
+- **改了什么**（回归用例、内核、折叠、两种滚动选择、按键步、交界）：
+  - **回归用例**（S2-10，§1.441）：新文件 `crates/lab/src/recording/cases.rs`（场景是黑底上贴已准入的包里每个识别目标声明的区域，`read_regions`；空画布、歧义、整帧、没有文字模型的判断）；`recording_api.rs` 的自检多第八项 `cases`、在包之后写；
+    `recording/container.rs` 的 `swap_into_place`（文件和目录一处实现），同一次停下只读一次时钟；`crosscheck.rs`、`ready.rs` 带上用例和它没过的检查。跑用例只调 RC-1 的 `run_regression_case_on_bundle`，`crates/lab/src/regression_case.rs` 没改。
+  - **内核**（K-b、K-c，§1.453、§1.454）：K-b 只加测试（扫到底、回位、在确认帧上认名、点按绑在确认帧上、提前停、不在列表里、每次移动只有意图和输入、从中间打开时的回卷、读不出的卡）。
+    K-c：声明门的 `scan_end`（`declarations.rs` 1233 起）；内核的 `ScanDeclaration::end` 可缺（`scan.rs` 100），不带底标时线上不判底标（`scan/online.rs`），`stopped_moving` 按声明给码；列表读取照旧要 `end`（`list_reading.rs` 366）。离线试算和运行时是同一个判断。
+  - **折叠**（S2-8′，§1.456）：新文件 `recording/fold.rs`。`fold_scan {step: b, first: a}`（`--fold-scan b --fold-first a`）把按下步 b 之前录下的第 a 到 b−1 步的滑动折进 b 的滚动查找，被折的步原样留在文件里、不再算有效步；
+    `unfold_scan`（`--unfold-scan b`）撤销，步骤表除了更新时刻逐字节复原。活动的和停下的录制都收（停下的算一次停后修改，下一次停下重新出包）；拒绝都是 `record_scan_invalid` 带 `scan_problem` 的词；沿轴的位移至少是另一轴的两倍才算沿这条轴。
+    只折不选出不了包（`record ready` 列 `scan_without_select`，`record stop` 拒 `scan_not_selected`）。归档的素材照旧留着这些滑动。
+  - **滚动选择**（S2-9a、S2-9b，§1.457、§1.458）：新文件 `recording/scan.rs`。在带折叠的按下步上声明 `rows {row, anchor, name, click?}` 和 `scan {list, start, end?, stop, numbers?}` 代替固定槽位，每个区域都是智能体给的。
+    `stop: "end"` 读到底再选：底标必须给（没给的 `record ready` 列 `scan_end_not_recorded`、`record stop` 拒）；`stop: "wanted"` 直接滚到想要的那一个：生成 `early_stop`，底标可以不给，不给时不写 `end`、`on_empty` 和它那条映射（给了 `on_empty_key` 拒 `on_empty_without_end`）。
+    扫描要的数照实标四种（量出来的、默认值、按写明的公式算出的、请求里给的），都在 `record review` 里列出、都能在请求里改。打标时和出包时用内核自己的离线试算 `dry_run_scan_decide` 在示范的各屏上跑；读到底的那种还拿一个哪屏都没有的名字跑，要得到覆盖完整的空决策。
+    修订表的第 18 行在 `apps/actinglab/src/resource_verify/revision.rs`（`scan_without_end`，646）：任务文件里有挑选的扫描不带 `end`（没写或 `null`）就算 18，`standard-pack build` 给这样的构建包声明 [18, 18]；`record stop` 不写 `interfaces.json`。
+  - **按键步**（KR-1，§1.449）：新文件 `recording/key.rs`。请求里的 `key`（`{"key": "back"}`、`false`、`null`；`--key back`、`--no-key`），录制时绝不发。没有效果的步上它就是效果；录过点按的步上带 `replace_click` 才换，已经执行过的点按也能换，
+    那下点按整个存在按键的记录里，步的帧不动；收回时连同原来的守卫一起放回。守卫和点按步同一条取法（点名的，否则这一页第一个模板、颜色或检查标记，`generate.rs` 的 `page_guard`）；整页都是文字或数值标记时没有守卫，`record ready` 列 `key_guard_missing`、`record stop` 拒。
+    生成的操作照内核按键步的合同（没有点按、没有重试）。读一步效果的各处（状态、复看、还缺什么、帧、归档清单、回归用例、交叉检查）都照实答；被换掉的点按标过需要审看的照样算（收编那一侧 `crates/resource-tooling/src/adopt.rs` 也改了）。
+  - **交界**（列车）：被折的滑动上加按键答折叠自己的 `step_in_fold`；带折叠的按下步换成按键拒 `holds_fold`；折叠范围里有按键步、或折到按键步上，拒 `fold_range_invalid`；按键还在时删它记下的原守卫拒 `record_mark_in_use`。
+  - **这些工具不提议区域、不提议挑哪一项、不提议值**（主人的裁定）：区域和折叠的范围都由智能体给，守卫取智能体自己画的标记；生成器只给技术参数的默认值，并照实标成默认值。
+
+- **部署和退路**：照 v0.12.69 那次的做法，用在线 v0.12.69 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.69 只改了一条测试钉的范围（`install/gate_463_v1.rs`），部署、退回、撤销那几条路没动。
+  - 部署前照旧不留开着的录制（开着的录制按住那一台的调度）。
+  - 部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在改名放到一边的旧映像上的 MCP 服务进程：旧进程照样能用，但答的是旧的工具表（`ac_record_mark` 没有那五个参数）；要新的，重开那个客户端的会话。
+  - 部署以后第一次试跑要看的：滚动选择的停稳、从中间打开时的回卷、回位和确认，轴的规则会不会误拒真的滑动，生成的包里的按键步；再在一份带文字目标的录制上掐一下 `record ready` 要多久。
+  - **退路**：回 v0.12.69 用留着的 v0.12.69 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回：账本的修订和记录种类都没变，`runtime-client` 两边都是 [3, 11]，回退门放行。
+    退回之前把带折叠、滚动选择或按键的录制停下出包，或者撤掉这些；放了扫描不带底标的包的，先撤掉那次放置。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - 不带底标时，「想要的不在列表里」离线判不了（不跑缺席的名字，`scan.rs` 2238–2240），上设备时以内核的 `selection_scan_early_stop_unreached` 失败；想要的东西可能哪天不在列表里时，要声明底标和「不在列表里」的结局。
+  - 底标截自不是列表真底的那一屏，离线判不出来：包会提前收尾，把后面的名字当成不在列表里。底标要从列表真正的最后一屏上截。
+  - 示范时第一下滑得太长（手指沿列表的位移超过列表长度减一行再减一）拒 `scan_swipe_too_long`，给数也救不了，只能把滚动那一段重录，每一下滑短一点，让相邻两屏至少重一行。一屏装得下的列表没有滑动可折，照旧用固定槽位。
+  - Lab 没有文字识别模型时，用例一页都没判（`record_cases_ocr_unavailable`）；有目标读整帧时场景就是整帧（`record_case_whole_frame`）。
+  - 收编不带用例；`standard-pack build` 和 `resource verify` 还不跑用例（跑它的只有 `record stop` 和 `resource regression`）。读取器对手写用例 `scene_construction` 里它不认的成员答 `member_unknown`，那个用例算没过（`crates/lab/src/regression_case.rs` 1022）。
+  - `record ready`、`record review` 每次调用都跑一遍用例（一次最终包准入、一次空画布、每个用例一遍全包判页），包里有文字目标时可能要几秒，没量过。MCP 的回答超过 24 KiB 时 `lab.cases` 只在导出文件里；上一次中断留下的 `.part-`、`.old-` 目录下一次停下不点名。
+  - 契约里 `record_*` 拒绝的退出码 3 是带 `--via` 那一行的；Lab 自己的命令行和经 `serve --stdio --front mcp` 都答 1（本版的新词同样）。
+  - 写这份说明的时候本版一样都没在设备上跑过：滚动选择的停稳、回卷、回位和确认，生成的包里的按键步，都等第一次试跑。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**`package` 从 [3, 17] 升到 [3, 18]**（`component-interfaces.json` 9；契约表 `package` 第 18 行，`contracts/component-interfaces.md` 174）：扫描不带底标的构建包声明 [18, 18]（Lab 的 `standard-pack build` 按修订表的第 18 行算；资源仓的打包自己写）。
+  最低值留 3：扫描都带底标的包修订不变。v0.12.69 及更早的安装工具（范围到 17）在 `place` 的 `package` 边上拒声明 18 的包（`interface_edge`，在计划里、按住和写任何东西之前）；v0.12.69 及更早的 Runtime 在 `PackageAdmitted` 之前拒这种包（`MissingField`）。
+  没有东西核这个 18：`place` 只问 10 和 14，Runtime 准入不看包声明的范围，所以声明得更低的包旧安装工具照放、旧 Runtime 每次运行都拒。其余逐行和 v0.12.69 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、
+  `ledger` [3, 8]、`runtime-client` [3, 11]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–8、10）。没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 一个文件没改，新码走已有的失败终态，选择记录的覆盖词 `early_stopped` 原来就有）；
+  录制的新成员、`lab.cases` 和用例目录不属于表里任何一个接口（录制由 Lab 自己读，旧版读不了写在「盘上的东西」）。
+- **Runtime 改了的文件**：内核 `crates/execution-kernel/src/` 的 `codes.rs`、`contained_task.rs`（只多一个测试模块的声明）、`contained_task/` 下的 `scan.rs`、`scan/admission.rs`、`scan/online.rs`、`list_reading.rs`，测试 `gate_463_kbc.rs`（新）和 `gate_463_kp1.rs`；
+  声明门 `crates/pack-containment/src/source/declarations.rs`；契约库只有 `crates/actingcommand-contract/src/outcome/keys.rs`（三个 Lab 的结果键）。`crates/runtime-host`、`crates/ledger`、`crates/runtime-client`、`crates/runtime-config`、`crates/policy`、`crates/scheduler`、
+  `crates/display-adapter`、`crates/device`、`apps/actingd` 一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改。
+- 结果码：加了 9 个，没有标成 `retired` 的。按片：S2-10 加 `record_case_failed`（lab，error，拒，必带 `regression_problem`）和五个警告 `record_case_page_ambiguous`、`record_case_ambiguous_not_written`、`record_case_bare_canvas`、`record_case_whole_frame`、
+  `record_cases_ocr_unavailable`（lab，退出码 0），键 `regression_problem`（词表是 RC-1 的），`ready_check` 加 `cases`，词表 `case_limit`（`self_agreement`，只在回答里）；K-c 加 `selection_scan_early_stop_unreached`（见上），改了 `replay_scan_invalid` 的说明；
+  S2-8′ 加 `record_scan_invalid`（lab，error，拒，必带 `scan_problem`），键和词表 `scan_problem`（连同 S2-9a 的 `scan_selected`、`end_not_recorded` 共 15 个词），`ready_missing` 加 `scan_without_select`；
+  S2-9a 给 `select_problem` 加 9 个词（`scan_without_fold`、`rows_with_slots`、`confirm_with_rows`、`scan_stop_missing`、`scan_region_outside_frame`、`scan_region_outside_list`、`scan_region_outside_row`、`scan_number_not_measured`，小修的 `scan_swipe_too_long`），
+  `ready_missing` 加 `scan_end_not_recorded`（自测和自检的理由 `scan_end_mark_early` 等是已有码的细节，不进目录）；S2-9b 给 `select_problem` 加 `on_empty_without_end`（`scan_min_step_too_large`、`scan_default_not_shown` 是细节）；
+  KR-1 加 `record_key_invalid`（lab，error，拒，必带 `key_problem`），键和词表 `key_problem`（9 个词，列车再加 `holds_fold`），`ready_missing` 加 `key_guard_missing`，`drop_problem` 加 `key_declared`，`optional_after_problem` 的 `no_click` 换成 `no_effect`。
+  拒绝在 Lab 自己的命令行上退出码 1，`--via` 那一行 3。改了说明的：`record_drop_unproven`、`record_optional_after_invalid`、`record_select_invalid`、`replay_scan_invalid` 和词表 `drop_problem`。
+  合计 4017 个码（在用 3928，`retired` 89），1773 个位置、31 个分片；键 688，词表 278，词 2118；在用码按类别 error 3401、warning 171、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.70.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，改了 3 行：`record mark`（加参数 `fold_scan`、`fold_first`、`unfold_scan`、`key`、`no_key`，帮助改成 157 字节，说明）、`record stop`（输出加 `lab.cases`，说明）、`record ready`（说明）；帮助最长 159 字节。
+  命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。Lab 的 MCP 服务器的工具数不变（Windows 上 167 个，交给 `serve` 子进程的 74 行，别的平台 128 个），`ac_record_mark` 多五个参数；第一代 MCP 服务器仍是 46 个工具，一个没改。
+  README 两种语言把工具表标题改成 v0.12.70。两个压缩包的文件表不变（`.github/workflows/windows-remote-build.yml` 没改）：没有新文件、没有去掉的文件。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17、FLK-18（宿主的两条靠机器快慢的门测，在慢的运行上红过，都没有重跑到绿），没有镜像进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue/src/install/` 的 `plan.rs`、`update.rs` 自 v0.12.65 没改，v0.12.66 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.69 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 8]，`previous_max_in_next` 过，`one_way` 不触发，`ledger_verify` 为 false（`install/plan.rs` 924）；`runtime-outcomes`、`install-control` 的边过；
+  `runtime-client` 的 `installer_meets_previous`、`installer_meets_next` 是安装工具 I [3, 11] 对在线的 Rp [3, 11] 和本版 R* [3, 11]，都过（324–340）；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，B 没有、R* 写 [3, 18]，
+  照旧是 `pack_declaration_unknown` 警告，不挡（341–364）。`installer_knows_keys` 过；`defaults_diff`（583–607）没有一行；文件计划里没有 `new`。
+- **本版第一次启动多写的**：没有。`config.selection` 的默认值哈希不变；v0.12.69 的配置文件照收；`standard-pack check` 没改，对今天的根答法相同。
+- **退回 v0.12.69**：回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.69；第 1 部分的边都过（`runtime-client` 两边 [3, 11]，`package` 照旧是警告）；第 2 部分用 v0.12.69 自己的 `actingledger events`
+  读部署以来的每一页：本版不写新的记录种类或成员，新码在旧的读者那里照原样读成收到的拼写（`crates/actingcommand-contract/src/outcome.rs` 690），过。
+  - 读不了、放不了的：**带折叠、滚动选择或按键的录制**（见「盘上的东西」）；扫描不带底标的包和声明 18 的构建包。
+  - 用不了的功能：折叠、滚动选择、录制里的按键；`record stop` 不再写用例（已写的用例目录留着）。
+  - **这些都不让安装的状态或日志对 v0.12.69 读不了**；读不了的只是那几份录制，撤掉标注以后读得了。
+
+配对：
+
+- **控制台 UI**（UI main `99c6ff24`，即发行 v0.12.21，钉 Runtime v0.12.67 `3a17b927`，`Cargo.toml`；它声明 `runtime-client` [3, 10]）：`ui_meets_next` 是 [3, 10] 对 [3, 11]，过。
+  **本版没有东西碰得到它**：它钉的几个库里，本版只改了契约库的结果键表（三个 Lab 的键）和内核（扫描可以不带底标、一个新码）；它在用的 crate 不调内核（只有已不在 workspace 里的 `acui-setup` 用），账本库、客户端库本版一个文件没改；
+  新码在它那里照原样读成收到的拼写。它不用为本版改钉。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 是 `actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 8]、`runtime-client` [3, 11]、**`package` [3, 18]**、`runtime-outcomes` [1, 1]；
+  默认值文件的哈希不变；`git diff --stat v0.12.69 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；不过的边没有，`runtime-client` 的两条边写着 I [3, 11]、Rp [3, 11]、R* [3, 11]，都过；
+  警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`（R* 现在写 [3, 18]）；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，
+  别的跑着的程序文件挡住，和 v0.12.69 一样；`standard-pack check` 不出新的警告码；启动日志不多一行；部署前核没有开着的录制；部署以后 MCP 客户端重开会话才看得见 `record mark` 的新参数。
+- **热放置工具包**：`place` 和它的计划没变（救急模块的生产代码一个文件没改）。工具包要是按钉住的 `package` 范围核包的 `interfaces.json`，放第一个扫描不带底标的包之前先认 18。
+  重钉要换的照旧只是构建值；`actingd_config` 5,33 和默认值哈希不变。
+- **两个 MCP 服务器**：Lab 的工具数不变，`ac_record_mark` 多五个参数，操作表 `record stop`、`record ready` 两行的输出和说明改了；第一代的一个没变。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.69 部署，经 Lab 的 `release stage`、`deploy`、`op status`：不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`runtime-client` 的边都过。
+- 派单和装着的包都不变；扫描不带底标的包要修订 18，滚不动了还没找到以 `selection_scan_early_stop_unreached` 失败。
+- `record stop` 出包时写回归用例，用例没过就拒 `record_case_failed`；`record ready`、`record review` 每次都跑用例。
+- 做包时：录下的几次滑动可以折成一次滚动查找，滚动选择分读到底和直接滚到想要的两种；录制里的一步可以按返回键，录制时不发。
+- 退回 v0.12.69 开着；带折叠、滚动选择或按键的录制旧版读不了，扫描不带底标的包旧版放不了、跑不了。
+
+本版合并的 PR：
+
+- #1804 #463 S2-9b（登记 §1.458，同时是 0.12.70 列车的车头）：exec 门表 `#463 S2-9b` 5 条、apps 门表 1 条（修订表第 18 行）；列车的交界 `#463 train 0.12.70` 6 条。
+- #1797 #463 S2-10（§1.441）：exec 门表 `#463 S2-10` 16 条；改了 `gate_463_r4` 两条（输出目录的整份列表）和五个文件里的自检清单（第八项 `cases`）。
+- #1799 #463 K-b、K-c（§1.453、§1.454）：exec 门表 `#463 K-b` 7 条、`#463 K-c` 6 条；钉包格式范围的三条旧测试改成 [3, 18]，名字不变（exec 门表 KP-1 那一行和 apps 门表 V1 那一行的 incident 加 `#463 K-c`）。
+- #1801 #463 S2-8′（§1.456）：exec 门表 `#463 S2-8'` 14 条（含命令行的 1 条）；六个旧测试文件给 `StepAction` 补 `first: None`。
+- #1803 #463 S2-9a（§1.457）：exec 门表 `#463 S2-9a` 14 条（含车头上小修补的 6 条）。
+- #1802 #463 KR-1（§1.449）：exec 门表 `#463 KR-1` 13 条（含命令行的 1 条）；`gate_463_r4` 的一条改成 `no_effect`。
+- 合计 82 条新测试；没有测试名记进 `ci/retired-gates.toml`。
+
 ## v0.12.69
 
 本版是 v0.12.68 之后的 1 次合并、6 张 PR：0.12.69 列车 #1791（#463 KP-1 自己），带 #463 KB-1 #1790（两张先并成「按键」一趟）、#463 K-a #1740、#463 RC-1 #1793、#463 S3-18 #1795 和 #463 S3-15a #1796。
@@ -94,11 +240,13 @@ and artifact names bind the complete source SHA.
 
 - **已知的限度**（各片审查和验收记录列的，逐条核过）：
   - 模拟器接口的键码 158、按下和抬起之间不停顿，写这份说明的时候还没在真的模拟器上核过（键码取自厂商公开的头文件的注释，`nemu_input.rs` 32）。
+    部署以后在一台模拟器实例上经 Lab 发过一次返回键（看板 #421）：回答说发出去了，应用退回了一页；模拟器的键码是对的。
   - 发不了键的排程任务会一直重试：每次在退避的第一档，不暂停，不起恢复阶梯（见上）；库缺键调用时，按键之前的步每次都真按一遍。
   - 滚动选择的第二种（知道要哪个、直接滚到目标）里，「要的名字不在列表里」离线判不了：录制只录到目标那一屏，换一个名字试算要更多帧，只能在模拟器上实跑。
   - `standard-pack status` 在只出码的设置下仍有两处带全文：根上的 `warnings`（组合绑定的读取给的警告，原样转出）和流水或根读不了时的拒绝（`apps/actinglab/src/standard_pack_cli.rs` 1317 用 `Detail::Full`）；
     流水读不了时要先等子进程结束才拒。`--installation` 还没在生产的安装上跑过，「子进程到限被结束」没用真子进程测。
   - 还没有从录制写回归用例的东西（`record stop` 不写、不跑用例；`run_regression_case_on_bundle` 是给它留的入口）；`resource regression` 还没在真的检出上跑过。
+    部署以后在两份真的检出上只读跑过 `resource regression`（看板 #421）：没有一个场景的哈希对不上；没过的用例，没过在读取器不认的 `scene_construction` 里的成员上。
   - Lab 里滚动的挑选没做（`dry_run_scan_decide` 今天只有内核的测试调它）。
   - 录制里加按键步没做（`key` 带 `--record` 照旧是 `record_flag_unsupported`）：按键步现在只能写进包的源里进包。
   - 撤销放置不问授权；生产上还没撤销过一次放置。六片都没在真机上跑过。
