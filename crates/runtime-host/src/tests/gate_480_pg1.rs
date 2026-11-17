@@ -13,7 +13,9 @@
 // and fails for anything else as before. Fix round 1 (the coordinator's R4′ and R4″): that wait
 // has no bound of the pause's own, and a shutdown during it keeps the pause; the instance's own
 // queued autostart claim refuses neither the hand-back nor its dedicated close lease; a claim asks
-// the hold once more after its last status read. On the scripted emulator (HOST-I1), a scripted
+// the hold once more after its last status read. Fix round 2: a shutdown keeps the pause only when
+// the automatic claim alone is in the way at that moment, whoever held the key at the check
+// before. On the scripted emulator (HOST-I1), a scripted
 // connectivity status and, where time moves, the Runtime's manual clock, with the S6c and IDLE-1P
 // helpers. Every wait returns as soon as what it waits for is polled, reported, recorded or seen;
 // `GATE_WAIT` only bounds a broken run.
@@ -1414,4 +1416,226 @@ fn pg1_fix1_5_a_pause_pressed_during_the_last_status_read_stops_the_start() {
     assert_skip(skip, Some("restart"), None, GLOBAL_PAUSED);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
+}
+
+// Fix round 2, R4″ judged on the moment of the shutdown (the second review's first point), the
+// holder turning from the automatic claim to a client: an autostart claim holds the instance (its
+// Start driven, it keeps its key), and the hand-back of a person's pause meets it. Before the
+// hand-back checks again, the claim lets the key go, a client takes it and the Runtime is asked to
+// stop. What is in the way at the shutdown is the client's lease, so the pause is lifted as before:
+// `scheduling_pause_release_interrupted`, the record that set the pause and the record without it.
+// (On fix round 1's code the last check's mark, the automatic claim, kept the pause.)
+#[test]
+fn pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pause_at_shutdown() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| config);
+    stop(&host, FIRST, 931);
+    // Once its Start was driven, the claim keeps its key until released.
+    let (driven_tx, driven_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    host.run_after_configured_start_drive_for_test(Box::new(move || {
+        let _ = driven_tx.send(());
+        let _ = release_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim's hook");
+    // The hand-back's first check that finds the key held waits until the holder has changed.
+    let (met_tx, met_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_when_pause_release_meets_a_lease_for_test(Box::new(move || {
+        let _ = met_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the hand-back's hook");
+    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
+    driven_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the configured Start was driven");
+    let before = head(&host);
+    let pause_request = instance_pause(FIRST);
+
+    let interrupted = thread::scope(|scope| {
+        let pausing = scope.spawn(|| {
+            host.process_request_for_test(
+                &pause_request,
+                ConnectionId::new(932).expect("connection"),
+            )
+        });
+        met_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back meets the automatic claim");
+        assert_eq!(
+            host.instance_claims_for_test(FIRST).expect("claims").0,
+            Some(ClaimKind::Autostart)
+        );
+        release_tx.send(()).expect("the claim goes on");
+        await_reports(&host, start_ended);
+        wait_until("the claim lets the key go", || {
+            host.instance_claims_for_test(FIRST)
+                .expect("claims")
+                .0
+                .is_none()
+        });
+        let holder = IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_holder_id()
+            .expect("holder id");
+        let acquired = send(&host, RuntimeOperation::acquire_lease(FIRST, holder), 933);
+        assert!(
+            matches!(acquired.result(), Some(RuntimeResult::LeaseGranted { .. })),
+            "the client takes the key: {acquired:?}"
+        );
+        host.request_shutdown_for_test()
+            .expect("the Runtime is asked to stop");
+        go_tx.send(()).expect("the hand-back goes on");
+        pausing
+            .join()
+            .expect("the pause's thread")
+            .expect("the pause's receipt")
+    });
+
+    assert_eq!(
+        interrupted.state(),
+        RuntimeReceiptState::Failed,
+        "{interrupted:?}"
+    );
+    let outcome = host
+        .failure_outcome_for_test(pause_request.request_id())
+        .expect("the refused requests")
+        .expect("the pause's failure");
+    assert_eq!(
+        outcome.code().as_str(),
+        "scheduling_pause_release_interrupted",
+        "{outcome:?}"
+    );
+    assert_eq!(pause_stage(&host, FIRST), None, "the pause is lifted");
+    let records = pause_records_after(&host, before);
+    let [set, lifted] = &records[..] else {
+        panic!("the pause's record and its lift's: {records:?}");
+    };
+    assert!(names_instance(set, FIRST), "{set:?}");
+    assert!(!names_instance(lifted, FIRST), "{lifted:?}");
+    host.close().expect("close the stopping host");
+}
+
+// Fix round 2, R4″ judged on the moment of the shutdown, the holder turning from a client to the
+// automatic claim (the second review's first point; as in (4a), the client lets go): a restart
+// claim waits queued behind a client's lease that took the instance's key between the watch's
+// check and the claim's request, and a person pauses the instance; the hand-back meets the
+// client's lease. Before it checks again, the client lets go, the queue grants the restart claim,
+// which holds its key (`run_when_autostart_claim_granted_for_test`), and the Runtime is asked to
+// stop. What is in the way at the shutdown is the Runtime's own automatic claim alone, so the pause
+// is kept: `scheduling_pause_kept_at_shutdown`, still `paused`, its one record of the held pauses
+// naming the instance. (On fix round 1's code the last check's mark, the client, lifted it.)
+#[test]
+fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pause_at_shutdown() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
+    let (asked_tx, asked_rx) = mpsc::channel::<()>();
+    let (taken_tx, taken_rx) = mpsc::channel::<()>();
+    host.run_before_autostart_claim_request_for_test(Box::new(move || {
+        let _ = asked_tx.send(());
+        let _ = taken_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim request's hook");
+    host.start_emulator_watch().expect("the watch starts");
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    asked_rx
+        .recv_timeout(GATE_WAIT)
+        .expect("the watch asks for its restart claim");
+    let holder = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_holder_id()
+        .expect("holder id");
+    let acquired = send(&host, RuntimeOperation::acquire_lease(FIRST, holder), 941);
+    let Some(RuntimeResult::LeaseGranted { token }) = acquired.result() else {
+        panic!("the client's lease: {acquired:?}");
+    };
+    let token = token.clone();
+    taken_tx.send(()).expect("the watch goes on");
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the poll");
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (Some(ClaimKind::ClientLease), vec![ClaimKind::Autostart]),
+        "the restart claim waits behind the client's lease"
+    );
+    // Once granted, the restart claim keeps its key until the pause has answered.
+    let (granted_tx, granted_rx) = mpsc::channel::<()>();
+    let (answered_tx, answered_rx) = mpsc::channel::<()>();
+    host.run_when_autostart_claim_granted_for_test(Box::new(move || {
+        let _ = granted_tx.send(());
+        let _ = answered_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the claim's hook");
+    // The hand-back's first check that finds the key held waits until the holder has changed.
+    let (met_tx, met_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_when_pause_release_meets_a_lease_for_test(Box::new(move || {
+        let _ = met_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the hand-back's hook");
+    let before = head(&host);
+    let pause_request = instance_pause(FIRST);
+
+    let kept = thread::scope(|scope| {
+        let pausing = scope.spawn(|| {
+            host.process_request_for_test(
+                &pause_request,
+                ConnectionId::new(942).expect("connection"),
+            )
+        });
+        met_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back meets the client's lease");
+        completed(&send(&host, RuntimeOperation::ReleaseLease { token }, 941));
+        granted_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the queue grants the restart claim");
+        assert_eq!(
+            host.instance_claims_for_test(FIRST).expect("claims"),
+            (Some(ClaimKind::Autostart), vec![]),
+            "the restart claim holds the key"
+        );
+        host.request_shutdown_for_test()
+            .expect("the Runtime is asked to stop");
+        go_tx.send(()).expect("the hand-back goes on");
+        pausing
+            .join()
+            .expect("the pause's thread")
+            .expect("the pause's receipt")
+    });
+    answered_tx.send(()).expect("the claim goes on");
+
+    assert_eq!(kept.state(), RuntimeReceiptState::Failed, "{kept:?}");
+    let outcome = host
+        .failure_outcome_for_test(pause_request.request_id())
+        .expect("the refused requests")
+        .expect("the pause's failure");
+    assert_eq!(
+        outcome.code().as_str(),
+        "scheduling_pause_kept_at_shutdown",
+        "{outcome:?}"
+    );
+    assert_eq!(
+        pause_stage(&host, FIRST),
+        Some(InstancePauseStage::Paused),
+        "the pause is not lifted"
+    );
+    let records = pause_records_after(&host, before);
+    let [record] = &records[..] else {
+        panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
+    };
+    assert!(names_instance(record, FIRST), "{record:?}");
+    host.close().expect("close the stopping host");
 }

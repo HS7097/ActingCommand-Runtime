@@ -1355,7 +1355,16 @@ configuration does not carry it (a host started without actingd's manifest).
   `stop_emulator`, and on its key every claim of them requested before the global pause began, up
   to just before the Start (the watch's request given back to its bound, an idle wake owed again);
   since PG-1's fix round the claim asks once more after its last status read, so a pause pressed
-  while that read runs stops the Start too.
+  while that read runs stops the Start too, and since its fix round 2 once more with the
+  instance's admission guard in hand: as the last thing before the provider's Start (after the
+  start's `command.received`, its wait for that guard, the close of the old session and the
+  renewal), where a held start closes its `command.received` as a start not made is
+  (`command.rejected`, effect `not_performed`, and one `runtime.failed` of
+  `emulator_autostart_skipped` with the hold's `skip_reason`), and, for a recognition, once it has
+  that guard, before its preparation reads the status and binds, where it records nothing. Either
+  then ends as held on its key, as above, nothing started or bound. A pause pressed during the
+  recognition's own bounded status read, under the guard, does not stop its bind; the startup
+  package it queues then waits behind the pause's gate.
   Its skip is `emulator_autostart_skipped` with `skip_reason` `global_paused` (info; its own word,
   one cause), once per global pause revision, start and instance, counted against no bound and
   reporting no used-up bound; a lifted and set again global pause is a new revision and records

@@ -4312,3 +4312,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_5_a_pause_pressed_during_the_last_status_read_stops_the_start",
 ]
 incident = ["#480", "PG-1"]
+
+# #480 PG-1 fix round 2 (0.12.72; register §1.468, "Fix round 2"; brief rd-1118/brief-480-pg1-fix2.md, item 1; the second review rd-1118/review-1816-fix1.md, its first point: R4″ judged on the moment of the shutdown, not on the check before): an autostart claim holds the instance (its Start driven, its key kept) and an instance pause's hand-back meets it; before the next check the claim lets the key go, a client takes it and a stop is requested: the pause fails with scheduling_pause_release_interrupted and is lifted, the record that set it and the record without it (1); a restart claim waits queued behind a client's lease and the hand-back meets the client's lease; before the next check the client lets go, the queue grants the restart claim, which keeps its key, and a stop is requested: the pause answers scheduling_pause_kept_at_shutdown, stays paused, and its one record of host.scheduling_pause names the instance (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pause_at_shutdown",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pause_at_shutdown",
+]
+incident = ["#480", "PG-1"]

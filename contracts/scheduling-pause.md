@@ -147,12 +147,22 @@ own wait ends first finds the pause standing (the end of this section).
    re-checks that nothing still uses the device:
    - a non-empty lease queue fails the pause at once with the close path's own rule
      (`prepare_resource_close`: `TransferNotSafe`): a queued client waits for the device. Since
-     0.12.72 (#480 PG-1, fix round 1) the instance's own queued autostart claim is the exception:
-     granted under the pause, it ends at its first tick on its key without a Start, touching
-     nothing (its skip recorded, the watch's request given back, an idle wake owed again), so it
-     refuses neither the hand-back nor, outside the multi-Nemu gate, the dedicated close lease
-     below, which is granted ahead of it (the claim keeps its place and is granted after the
-     close). It is not cancelled in the queue;
+     0.12.72 (#480 PG-1, fix round 1) the instance's own queued autostart claim is the exception,
+     and the only one: while a scheduling pause, its own or the global one, holds the instance's
+     automatic starts, it refuses neither the hand-back nor any grant of a dedicated lease of the
+     instance (`grant_dedicated_instance_lease`, whoever asks for it: the resource-close lease a
+     fenced close of the retained session takes when no lease holds the instance, the dedicated
+     close lease below outside the multi-Nemu gate among them, and the daemon start's preparation
+     of a physical instance,
+     `DaemonStartPreparation`), which is granted ahead of it; the claim keeps its place and is
+     granted after that lease. Another member's autostart claim, a claim of another kind and an operator's entry
+     refuse as before. The claim is not cancelled in the queue, and the hand-back does not wait
+     for it. Granted under the pause it starts no emulator and ends at its first tick on its key,
+     one of two ways: held (the watch's restart or recognition claim and an idle wake's always, a
+     daemon start's while its instance is stopped): its skip recorded, the watch's request given
+     back, an idle wake owed again; or running (a daemon start's claim whose instance already
+     runs, which it asks before the pause): `emulator_autostart_skipped` without `skip_reason`,
+     and nothing more;
    - a contained run that started after (b) (a policy dispatch admitted just before the gate
      closed; the pause first waits for policy admissions that read the gate before it closed)
      is drained again under the same drain and grace deadlines; the device is never closed
@@ -196,9 +206,14 @@ their next checkpoint `30_000` ms after the drain timeout
 (`ContainedTaskBusy`); a Runtime shutdown during the drain fails it with
 `scheduling_pause_drain_interrupted`, during the hand-back with
 `scheduling_pause_release_interrupted` (`RuntimeUnavailable`). The one exception (#480 PG-1 fix
-round 1, since 0.12.72): a shutdown that interrupts the hand-back while it waits for the
-Runtime's own automatic emulator start alone (above) answers
-`scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and lifts nothing: the
+round 1, since 0.12.72): a shutdown that interrupts the hand-back while the Runtime's own
+automatic emulator start alone is in the way (above) answers
+`scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and lifts nothing. Since fix
+round 2 that is judged on the moment of the shutdown: the hand-back reads again then what is in
+the way (the lease's kind, a refusing queued entry, a run in flight, an owed reset, a policy run
+on the worker), whatever its last check found and before its first check too; anything else in
+the way, or nothing, answers `scheduling_pause_release_interrupted` and lifts the pause as
+before. The kept
 pause stays in stage `paused` until the Runtime stops, its row of `host.scheduling_pause` stays as
 it was recorded, and the next start restores it as every persisted pause is restored ("Persistence,
 no expiry" below; stage `released`). A failed pause writes no ledger event of its own: its code
@@ -374,8 +389,9 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   between the record and the gate change restarts on the side the operator asked for. A failed
   instance pause stage lifts its gate and records the rows without it; if that record fails
   the request poisons the Runtime. Since 0.12.72 (#480 PG-1 fix round 1) a hand-back a shutdown
-  interrupted while it waited for the Runtime's own automatic emulator start alone
-  (`scheduling_pause_kept_at_shutdown`) lifts nothing and records nothing: the rows that set the
+  interrupted while the Runtime's own automatic emulator start alone was in the way (fix round 2:
+  at the moment of the shutdown; `scheduling_pause_kept_at_shutdown`) lifts nothing and records
+  nothing: the rows that set the
   pause stay, and the next start restores it.
 - **Restore at start.** A start that is not installer-held reads the fact before any physical
   instance is prepared and before the policy driver: the global pause comes back at revision 1
