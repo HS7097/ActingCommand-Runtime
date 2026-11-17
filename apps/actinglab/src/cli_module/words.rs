@@ -23,7 +23,8 @@
 //!   - the flags of [`KEPT_FLAGS`] go on as written too: a positional given as its flag (`run show
 //!     --id <id>` and the like; `runs` and `monitor set --instance <x>` since Workflow #434 CLI-IN
 //!     by the instance's own rule, below), and a flag of the source command the row does not
-//!     declare (`op status --operation <op>`, `devices bind --root <r>`);
+//!     declare (`op status --operation <op>`; `devices bind --root <r>` is the row's `root` since
+//!     #398 DB-2 fix round 1);
 //!   - on a row of [`COMPLETED_ROWS`], an option LAB-5A declared takes no word that begins with
 //!     `--` as its value, as the further flag it was took none.
 //!
@@ -140,16 +141,17 @@ pub(crate) const GLOBAL_OPTIONS: [&str; 17] = [
 /// (operation, the flag's name with `_`), as it did when the row took its source command's
 /// further flags: `--flag value`, or `--flag` alone (`true`) when no value follows, as the member
 /// of the flag's name, given twice a list. A positional's own name fills that positional, as it
-/// did (its note says so); `operation` and `root` are the source command's own flags, which no
-/// row declares and the module writes as further flags, as before (the row's notes say so).
-/// Only the command line: `serve --stdio` takes the declared parameters only. Workflow #434 CLI-IN:
-/// `runs --instance <x>` and `monitor set --instance <x>`, two entries here before, are read by the
-/// rule every row with a positional instance follows ([`INSTANCE_FLAG`]), which gives them the
-/// same parameter.
-pub(crate) const KEPT_FLAGS: [(&str, &str); 7] = [
+/// did (its note says so); `operation` is the source command's own flag, which no row declares
+/// and the module writes as a further flag, as before (the row's notes say so). Only the command
+/// line: `serve --stdio` takes the declared parameters only. Workflow #434 CLI-IN:
+/// `runs --instance <x>` and `monitor set --instance <x>`, two entries here before, are read by
+/// the rule every row with a positional instance follows ([`INSTANCE_FLAG`]), which gives them
+/// the same parameter. #398 DB-2 fix round 1: `devices bind --root <r>`, an entry here before, is
+/// the row's parameter `root` now, handed on in the same place, so that `help devices bind` names
+/// it.
+pub(crate) const KEPT_FLAGS: [(&str, &str); 6] = [
     ("run show", "id"),
     ("run evidence", "id"),
-    ("devices bind", "root"),
     ("op status", "op"),
     ("op status", "operation"),
     ("release verify", "dir"),

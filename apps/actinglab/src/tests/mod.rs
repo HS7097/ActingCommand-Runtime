@@ -275,6 +275,11 @@ mod gate_463_s315;
 // function (S3-17).
 #[path = "gate_463_ac1.rs"]
 mod gate_463_ac1;
+// #398 DB-2: `help <row> --json` answers the parameters of `devices` and `devices bind` as the
+// operation table this build embeds holds them, the call a client makes to learn what this Lab
+// can do (register §1.467).
+#[path = "gate_398_db2.rs"]
+mod gate_398_db2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

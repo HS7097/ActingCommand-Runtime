@@ -40,10 +40,14 @@ naming this file.
   server records `cli`, as the row writes it without one), and takes `config`, a candidate
   configuration whose state root the binding goes into (fix round 1: then the install root's adb is
   that of the root this server's program runs from by its place, never read from an install
-  selection). These are the only parameters of a
-  row a tool leaves out; the command line also takes `actinglab`'s global options, a positional
-  given as its flag (`--id`, `--instance`) and `devices bind`'s own `--root` (the server hands on
-  the root it runs from), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
+  selection); `ac_devices` and `ac_devices_bind` take neither `key_salt` nor `key_salt_env`
+  (#398 DB-2, 0.12.72: a salt in a tool call stays in the client's transcript, and a variable of
+  this server's process is no caller's to name; through this server a row's `device_key` is made
+  with the installation's own secret, and `ac_devices_bind` takes `device_key` in place of
+  `handle`); `ac_devices_bind` takes no `root` (#398 DB-2 fix round 1: the row's parameter for
+  the command line's own `--root`; the server hands on the root it runs from). These are the only
+  parameters of a row a tool leaves out; the command line also takes `actinglab`'s global
+  options and a positional given as its flag (`--id`, `--instance`), which no tool needs. No tool takes `words` either (Workflow #434 LW-1):
   the further words a row handed on before Workflow #434 LAB-5B4, which no row declares and a row
   served in the server's own process refuses by name.
 - **Closed word lists** (Workflow #434 LW-1, 0.12.67). Where an operation takes only the words of

@@ -918,8 +918,13 @@
     {
       "name": "devices",
       "module": "core",
-      "params": [],
-      "help": "Lists the devices the installation's adb sees now, with their handles and bound aliases; no row names a serial.",
+      "params": [
+        {"name": "config", "form": "option", "type": "file", "required": false, "note": "a candidate configuration: the bindings are read in the state root it names and the device keys made with its secret; no selected configuration is needed"},
+        {"name": "root", "form": "option", "type": "dir", "required": false, "note": "the install root whose adb lists the devices, where none is located or its configuration is not selected yet; it stands for the located root"},
+        {"name": "key_salt", "form": "option", "type": "string", "required": false, "note": "16 to 1024 bytes of text the device keys are made with, never printed or written; a command line is visible to the user's other processes, so give it by key_salt_env instead where it must not be. Not offered through MCP"},
+        {"name": "key_salt_env", "form": "option", "type": "string", "required": false, "note": "the name of an environment variable of the Lab's own process that holds the salt (16 to 1024 bytes), the form for a salt no other process may see; not with key_salt. Not offered through MCP"}
+      ],
+      "help": "Lists the devices the installation's adb sees now, with their handles, device keys and bound aliases, also before anything is selected; no row names a serial.",
       "output": "the device list, from the installation's adb",
       "writes": false,
       "irreversible": false,
@@ -928,16 +933,21 @@
       "requests": [],
       "source": ["actingctl devices list", "MCP ac_devices", "actinglab devices (retired)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "#398 DB-2 (0.12.72; register section 1.467; contracts/device-binding.md, Choosing a device): where the program's place locates no state root the command line carries no module's state root and no module's root, the adb is that of root, else of the root the program runs from by its place (never an install selection), no binding is read and the answer says so (bindings_unread, why state_root_unknown, fix round 1: its cause the place's refusal); with config the bindings are those of the state root the candidate names, the line carrying neither the module's state root nor its root; root stands for the module's root. A row's device_key is the contract's fingerprint of the device's serial under key_salt or key_salt_env, else under the selected or candidate configuration's secret_fingerprint_salt, else absent; through MCP only the installation's secret makes it (tools::SUPPLIED leaves both salt forms out). Fix round 1: a selected configuration that cannot be read or decoded provides no secret: the rows carry no device_key and the answer says so (device_keys_unmade, why config_unreadable, its cause the reader's refusal); the listing is not refused for it"
     },
     {
       "name": "devices bind",
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "the instance's alias: devices takes no instance_id and no ADB port; on the command line also --instance <x>, in place of the positional"},
-        {"name": "handle", "form": "positional", "type": "string", "required": true, "note": "a device handle from devices, for example usb:7"},
+        {"name": "handle", "form": "positional", "type": "string", "required": false, "note": "a device handle from devices, for example usb:7; or device_key in its place, never both"},
         {"name": "config", "form": "option", "type": "file", "required": false, "note": "a candidate configuration: the alias is checked in it instead of the selected configuration, and the binding goes into the state root it names, which its check-config reads; no selected configuration is needed"},
-        {"name": "bound_via", "form": "option", "type": "enum:ui", "required": false, "note": "the channel the binding records: ui, the installer's; absent, cli. Not offered through MCP"}
+        {"name": "bound_via", "form": "option", "type": "enum:ui", "required": false, "note": "the channel the binding records: ui, the installer's; absent, cli. Not offered through MCP"},
+        {"name": "device_key", "form": "option", "type": "string", "required": false, "note": "a device key from devices, in place of handle: the device is found by it in a fresh listing, under the salt it was listed with, else under the installation's own secret"},
+        {"name": "key_salt", "form": "option", "type": "string", "required": false, "note": "the salt the device key was listed with, 16 to 1024 bytes of text, never printed or written; only with device_key. Not offered through MCP"},
+        {"name": "key_salt_env", "form": "option", "type": "string", "required": false, "note": "the name of an environment variable of the Lab's own process that holds that salt, the form for a salt no other process may see; only with device_key, not with key_salt. Not offered through MCP"},
+        {"name": "root", "form": "option", "type": "dir", "required": false, "note": "the install root whose adb lists the devices: with config, or where the program's place locates no install root; beside a located root it is refused as repeated. Not offered through MCP, whose server hands the root it runs from"}
       ],
       "help": "Binds an adb device to a handset of the selected or a candidate configuration in its state root's private binding file, for the Runtime's next start.",
       "output": "the binding written to the state root's private binding file",
@@ -949,7 +959,7 @@
       "source": ["actingctl devices bind", "MCP ac_device_bind"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "LAB-5A fix 1: on the command line a further --root <r> still goes on to the command, as before LAB-5A; the command takes it only when the program runs outside an installed root (inside one, the located --root makes it repeated). Not a parameter: serve --stdio refuses it. #398 DB-1 (0.12.71; register section 1.460; contracts/device-binding.md, Choosing a device): with config the command line carries no module's state root, so that a root whose configuration is not switched in yet binds, and (fix round 1) no module's root: no install selection is read, the install root's adb is that of a further --root (taken inside an installed root too), else of the root the program runs from by its place (a slot's root too), and the answer adds config, the file as given; a file that cannot be read is config_read_failed, one that does not decode config_decode_failed, one without an absolute state_root install_state_root_unresolved. bound_via is not named via, actinglab's global option; the MCP tool leaves it out (tools::SUPPLIED), and one sent there is refused as unknown"
+      "notes": "LAB-5A fix 1: on the command line a further --root <r> still goes on to the command, as before LAB-5A; the command takes it only when the program runs outside an installed root (inside one, the located --root makes it repeated). #398 DB-2 fix round 1 (register section 1.467): it is the parameter root now, written where it went before, so that help devices bind names it and serve --stdio takes it; the MCP tool leaves it out (tools::SUPPLIED). #398 DB-1 (0.12.71; register section 1.460; contracts/device-binding.md, Choosing a device): with config the command line carries no module's state root, so that a root whose configuration is not switched in yet binds, and (fix round 1) no module's root: no install selection is read, the install root's adb is that of a further --root (taken inside an installed root too), else of the root the program runs from by its place (a slot's root too), and the answer adds config, the file as given; a file that cannot be read is config_read_failed, one that does not decode config_decode_failed, one without an absolute state_root install_state_root_unresolved. bound_via is not named via, actinglab's global option; the MCP tool leaves it out (tools::SUPPLIED), and one sent there is refused as unknown. #398 DB-2 (0.12.72; register section 1.467): device_key in place of handle (neither: handle required; both: --device-key conflicting), found in a fresh listing under key_salt or key_salt_env, else under the selected or candidate configuration's secret (neither: --key-salt required), no row with it device_key_unknown; every bind, by handle or by key, refuses a row adb reports in another state than device, or whose transport is not the one the handset declares (device_row_unbindable, device_row_problem state_not_device or transport_mismatch; fix round 1: state_not_device with device_link_state, the row's state as its word), before anything is written. Through MCP neither salt form is offered (tools::SUPPLIED)"
     },
     {
       "name": "devices unbind",
