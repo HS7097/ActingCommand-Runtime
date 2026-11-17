@@ -16,8 +16,8 @@ use crate::recording::container::{
 };
 use crate::recording::crosscheck::{
     CheckFailure, CheckRun, CrossCheck, EndingChecks, Failures, FirstDecision, FrameCache, Locus,
-    SelectChecks, admit, cross_check, ending_checks, evaluator_bundle, first_decision, round_trip,
-    select_checks,
+    SelectChecks, SelectPagePassesAfterPress, admit, cross_check, ending_checks, evaluator_bundle,
+    first_decision, round_trip, select_checks,
 };
 use crate::recording::ending::{remove_ending, validate_ending_request};
 use crate::recording::generate::{
@@ -477,6 +477,17 @@ fn ready_of(
         Survey::Planned(plan) => match self_checks(&plan, ocr, Failures::every(), bound) {
             Ok(checked) => {
                 warnings.extend(generator_warnings(&checked.package.warnings)?);
+                // #463 SC-1 fix round 1: a select step's page beside another page after its press,
+                // as `record stop` answers it after its warnings.
+                warnings.extend(
+                    checked
+                        .package
+                        .selects
+                        .after_press
+                        .iter()
+                        .cloned()
+                        .map(ReadyWarningItem::SelectPageAfterPress),
+                );
                 // #463 RM-1: a template mark near its threshold, as `record stop` answers it after
                 // its warnings.
                 warnings.extend(
@@ -498,6 +509,14 @@ fn ready_of(
                     return Err(error);
                 }
                 warnings.extend(generator_warnings(&plan.warnings)?);
+                // #463 SC-1 fix round 1: as `near_threshold` below, and before it.
+                warnings.extend(
+                    failed
+                        .after_press
+                        .iter()
+                        .cloned()
+                        .map(ReadyWarningItem::SelectPageAfterPress),
+                );
                 // #463 RM-1 fix round 2: a template mark near its threshold, found by the checks
                 // before `cases` when they all passed and `cases` failed, before the cases' own
                 // warnings, as on a recording that is ready.
@@ -896,6 +915,18 @@ fn generate_and_write(
             "application_arrival_timeout_ms": plan.application_arrival_timeout_ms
         }),
     );
+    // #463 SC-1 fix round 1: after the warnings the package's provenance records, a select step's
+    // page beside another page on a frame after its press, which it does not record.
+    for warning in &selects.after_press {
+        warnings.push(serde_json::to_value(warning).map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!(
+                    "failed to encode a record_select_page_passes_after_press warning: {error}"
+                ),
+            )
+        })?);
+    }
     // #463 RM-1: the warnings the package's provenance records, then the template marks near their
     // threshold, which it does not record, so that the package is the same whatever the bound.
     for warning in &near_threshold {
@@ -997,6 +1028,9 @@ struct SelfCheckFailures {
     /// before `cases`, when every one of them passed and `cases` failed (a case that misses, or an
     /// error that ends the check); `record ready` names them, as it names `warnings`.
     near_threshold: Vec<TemplateNearThreshold>,
+    /// #463 SC-1 fix round 1: the warnings `record_select_page_passes_after_press` of self-check
+    /// item 8, under the same condition as `near_threshold`, and named before them.
+    after_press: Vec<SelectPagePassesAfterPress>,
 }
 
 impl SelfCheckFailures {
@@ -1111,6 +1145,7 @@ impl Runner {
             not_run,
             warnings: Vec::new(),
             near_threshold: Vec::new(),
+            after_press: Vec::new(),
         }
     }
 }
@@ -1155,6 +1190,7 @@ fn self_checks(
     let Some(cases) = runner.last(ReadyCheck::Cases, ReadyCheckStop::CheckError, built) else {
         let mut failed = runner.into_failures();
         failed.near_threshold = package.near_threshold;
+        failed.after_press = package.selects.after_press;
         return Err(failed);
     };
     if runner.failed() {
@@ -1162,6 +1198,7 @@ fn self_checks(
         let mut failed = runner.into_failures();
         failed.warnings = cases.ambiguity_warnings().to_vec();
         failed.near_threshold = package.near_threshold;
+        failed.after_press = package.selects.after_press;
         return Err(failed);
     }
     Ok(Checked { package, cases })
@@ -1267,7 +1304,8 @@ fn package_checks(
     }
     // #463 R1, self-check item 8: every select step decides on its own frames as recorded; the
     // result is part of the cross-check, present only when the package has a select step. #463
-    // SC-1: and its page is alone on every other frame of the recording it passes on.
+    // SC-1: and its page is alone on the frames of the step before it it passes on; fix round 1:
+    // on a frame after its press, beside another page, it is the warning `after_press`.
     let selects = select_checks(
         &first_prepared,
         plan,

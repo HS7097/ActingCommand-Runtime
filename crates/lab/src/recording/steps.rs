@@ -2156,8 +2156,8 @@ struct PageCheck {
 /// (`select_frames`), and #463 R1 fix 1, once that passed, the pages of the other steps this mark
 /// knows, which must not pass on the select's frames (`other_pages_on_select_frames`; the pages of
 /// steps recorded later are `record stop`'s, self-check item 8), and #463 SC-1 the other way round,
-/// the select's page on the frames of those steps (`select_page_on_other_frames`). The refusals are
-/// in that order; none when the whole page holds on every frame.
+/// the select's page on the frames of the step before it (`select_page_on_other_frames`; fix round
+/// 1: those alone). The refusals are in that order; none when the whole page holds on every frame.
 fn page_check(
     session: &Session,
     page: &PageInputs<'_>,
@@ -2215,7 +2215,8 @@ fn page_check(
             frames,
             ocr,
         )?);
-        // #463 SC-1: and the other way round, the select's page on the frames of those steps.
+        // #463 SC-1: and the other way round, the select's page on the frames of the step before
+        // it (fix round 1).
         refusals.extend(select_page_on_other_frames(session, page, &own, ocr)?);
     }
     Ok(PageCheck {
@@ -3108,16 +3109,21 @@ fn pages_of(step: &RecordingStep, marks: &BTreeMap<String, RecordedMark>) -> Vec
 }
 
 /// #463 SC-1 (`contracts/lab-recording.md`, "Selecting in a list"): the other way round of
-/// [`other_pages_on_select_frames`]. The page of the select step `page.target` as this command
-/// leaves it (its own marks `own`, the marks it reuses and those it forbids, `page`) on every live
-/// frame of every other effective step this mark knows and of every page transition, its own
-/// step's among them. On a frame it passes on, each other page the mark knows (another step's,
-/// a page transition's, the select step's own page transition's too) that passes there as well is
-/// `select_page_passes_on_other_frame`: `frame_id`; `select_step`; `step` and `transition`, the
-/// other page's step and whether it is its page transition's; `frame_step` and
-/// `frame_transition`, whose frame it is. The run's select confirms on a fresh frame that exactly
-/// one page of the package is recognised there, and on such a screen it would see two. A mark
-/// whose evaluation fails there is `self_test_error`; a page no mark decides there is not refused.
+/// [`other_pages_on_select_frames`]. Fix round 1, the coordinator's ruling after the review: the
+/// run's select confirms, before its press, on a fresh frame of its own screen or, taken on
+/// arrival, of the screen left after the press of the step before it; never of a screen after its
+/// own press. So the page of the select step `page.target` as this command leaves it (its own marks
+/// `own`, the marks it reuses and those it forbids, `page`) is judged on the live frames of the step
+/// before it alone: the nearest effective step before it in the path that is not optional (the
+/// optional steps between are `record stop`'s item 7b), its page transition's frames when it has
+/// one, else its own (as item 7a's `previous`). On a frame it passes on, each other page the mark
+/// knows (another step's, a page transition's, the select step's own page transition's too) that
+/// passes there as well is `select_page_passes_on_other_frame`: `frame_id`; `select_step`; `step`
+/// and `transition`, the other page's step and whether it is its page transition's; `frame_step`
+/// and `frame_transition`, whose frame it is. A mark whose evaluation fails there is
+/// `self_test_error`; a page no mark decides there is not refused. The frames after the select
+/// step's press (its own page transition's among them) are not judged here: `record stop` and
+/// `record ready` warn of a later frame (`record_select_page_passes_after_press`).
 fn select_page_on_other_frames(
     session: &Session,
     page: &PageInputs<'_>,
@@ -3137,10 +3143,9 @@ fn select_page_on_other_frames(
     if required.is_empty() {
         return Ok(Vec::new());
     }
-    // The other pages the mark knows, and the frames of the recording but the select step's own,
-    // each with the step it belongs to and whether it is that step's page transition's.
+    // The other pages the mark knows, each with the step it belongs to and whether it is that
+    // step's page transition's.
     let mut pages = Vec::new();
-    let mut frames = Vec::new();
     for step in recording.steps.iter().filter(|step| step.is_effective()) {
         pages.extend(
             pages_of(step, &marks)
@@ -3148,27 +3153,37 @@ fn select_page_on_other_frames(
                 .filter(|known| !known.required.is_empty())
                 .filter(|known| known.step != target || known.transition),
         );
-        if step.index != target {
-            frames.extend(
-                step.frames
-                    .iter()
-                    .filter(|frame| !frame.superseded)
-                    .map(|frame| (step.index, false, frame)),
-            );
-        }
-        if let Some(StepTransition::Page {
-            frames: transition_frames,
-            ..
-        }) = &step.transition
-        {
-            frames.extend(
-                transition_frames
-                    .iter()
-                    .filter(|frame| !frame.superseded)
-                    .map(|frame| (step.index, true, frame)),
-            );
-        }
     }
+    // Fix round 1: the frames of the step before the select step, with that step and whether they
+    // are its page transition's.
+    let path = path_order(recording)
+        .into_iter()
+        .filter(|step| step.is_effective())
+        .collect::<Vec<_>>();
+    let previous = path
+        .iter()
+        .position(|step| step.index == target)
+        .and_then(|at| path[..at].iter().rfind(|step| step.optional.is_none()))
+        .copied();
+    let frames: Vec<_> = match previous {
+        None => Vec::new(),
+        Some(previous) => match &previous.transition {
+            Some(StepTransition::Page {
+                frames: transition_frames,
+                ..
+            }) => transition_frames
+                .iter()
+                .filter(|frame| !frame.superseded)
+                .map(|frame| (previous.index, true, frame))
+                .collect(),
+            _ => previous
+                .frames
+                .iter()
+                .filter(|frame| !frame.superseded)
+                .map(|frame| (previous.index, false, frame))
+                .collect(),
+        },
+    };
     let mut rejections = Vec::new();
     for (frame_step, frame_transition, entry) in frames {
         let read;

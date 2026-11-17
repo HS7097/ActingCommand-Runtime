@@ -14,9 +14,10 @@
 //! name must select a slot on the primary frame (`select_pressed_absent`) and the executed press
 //! must lie in that slot (`select_press_mismatch`); the default's decision is reported per frame
 //! by its kind. Fix 1: the page of another step the mark knows must not pass on those frames
-//! (`select_other_page_passes`, checked in `steps.rs`); #463 SC-1: and on the frames of those
-//! steps, where the select step's page passes, no other page may pass beside it
-//! (`select_page_passes_on_other_frame`, also in `steps.rs`). Without an OCR model the select is
+//! (`select_other_page_passes`, checked in `steps.rs`); #463 SC-1: and on the frames of the step
+//! before it (fix round 1: the frames its confirmation can meet besides its own), where the select
+//! step's page passes, no other page may pass beside it (`select_page_passes_on_other_frame`, also
+//! in `steps.rs`). Without an OCR model the select is
 //! `not_evaluated` (`lab_ocr_unavailable`), never passed. Every declaration that cannot hold is
 //! `record_select_invalid` with its `select_problem`; `clear_select` takes a select off again.
 //!
@@ -72,11 +73,13 @@ pub(crate) const SELF_TEST_ERROR: &str = "self_test_error";
 /// Fix 1: the page of another effective step passes on a live frame of the select step too, so
 /// the run's select would not know its page there (the kernel's `select_page_mismatch` at stop).
 pub(crate) const OTHER_PAGE_PASSES: &str = "select_other_page_passes";
-/// #463 SC-1: the other way round: the select step's page passes on a live frame of another step
-/// (or of a page transition, or at `record stop` of an ending), and so does another page of the
-/// package there. The run's select confirms on a fresh frame that exactly one page of the whole
-/// package is recognised (`contained_task_recognition_conflict` otherwise), so on such a screen it
-/// would fail; the cause is the select step's own page, which holds on another step's screen.
+/// #463 SC-1: the other way round: the select step's page passes on a live frame its confirmation
+/// can meet that is not its own (fix round 1: a frame of the step before it, its page transition's
+/// when it has one), and so does another page of the package there. The run's select confirms on
+/// a fresh frame that exactly one page of the whole package is recognised
+/// (`contained_task_recognition_conflict` otherwise), so on such a screen it would fail; the cause
+/// is the select step's own page, which holds on another step's screen. A frame after the select
+/// step's press is no such frame: there it is the warning `record_select_page_passes_after_press`.
 pub(crate) const PAGE_PASSES_ON_OTHER_FRAME: &str = "select_page_passes_on_other_frame";
 /// The instance the probe package is admitted for.
 const PROBE_INSTANCE: &str = "lab.record.select";

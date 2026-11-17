@@ -37698,12 +37698,15 @@ actinglab-mcp's `gate_434_lab5g2b` (the pinned `SUPPLIED` gains `devices bind` `
 `gate_434_lw1` (the reason of its `LEFT_OUT` entry for `devices bind` `root`). No golden changes;
 no test leaves a gate map.
 
-### 1.469 Slice #463 SC-1 (0.12.72): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`, merged with main `98c1c0f1`, the 0.12.72 train of §1.464 and §1.466)
+### 1.469 Slice #463 SC-1 (0.12.72): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`, merged with main `98c1c0f1`, the 0.12.72 train of §1.464 and §1.466; fix round 1, after the independent review, `rd-1118/brief-463-sc1-fix1.md`)
 
 This section takes 1.469, the number its work order gives. It ships in 0.12.72. Where the train
 meets it: §1.466's warning `record_template_near_threshold` is drawn from items 4, 7 and 9, and
 this slice's judgement in item 8 adds none; both read a page with the one evaluation of item 4
-(`Evaluation::page`), this slice its verdict alone.
+(`Evaluation::page`), this slice its verdict alone. Fix round 1: this slice's warning
+`record_select_page_passes_after_press` is answered as §1.466's is, after the warnings the
+package's provenance records (before `record_template_near_threshold`), and like it is kept out of
+the provenance.
 
 **Why.** A package made from a recording was adopted and tried on its emulator; the trial ended
 `contained_task_recognition_conflict` at its second step, a select step. The business starts a job
@@ -37736,43 +37739,83 @@ step's own frames.
   recognised on the screen the select step confirms on. A scrolling select's session captures its
   first frame the same way (`scan/online.rs`). The contract's item 8 named `selection_page_changed`
   for two pages; it now says what the code does.
+- *When the run confirms* (fix round 1, read by the review and checked again: `linear.rs`, the
+  select step's input loop, `select_attempt` before `linear_send_input`). The run takes the select's
+  observation on a frame its own page passes on, confirms on a fresh frame, and only then sends the
+  press. So the confirmation frame shows the select step's own screen, in whatever state the game is
+  in, or, a stale frame on arrival, the screen left after the press of the step before; it never
+  shows a screen that comes after the select step's own press in the same run.
 
-**The rule.**
-- *Both ways.* For every select step S: on every live frame of the recording other than S's own
-  (every other step's, every page transition's, S's own transition's among them, and at
-  `record stop` every ending's) on which S's page passes, no other page of the package passes too.
-  S's own frames are today's direction and stay as they are.
+**Fix round 1** (the coordinator's ruling after the review; `rd-1118/brief-463-sc1-fix1.md`). The
+first round refused every frame of the recording on which the select step's page and another page
+both pass. A frame after the select step's press may be the select step's own screen as a later run
+will find it (the observed case: the list with a slot busy) or another screen on which the list's
+marks stay visible (a panel opened over the list), which runs without any conflict; the recording
+does not say which, and the first round refused the second kind too (thirteen tests of gate_463_r1
+and gate_463_s26 had their fixture changed for it). Now the refusal covers exactly the frames the
+confirmation can meet (R1), every other frame after the press is a warning of its own word (R2), the
+thirteen fixtures are as on main again (R3), and the slice's tests follow (R4).
+
+**The rule** (as fix round 1 leaves it).
+- *Both ways.* For every select step S, where S's page passes on a live frame of the recording that
+  is not S's own, does another page of the package pass there too? S's own frames are today's
+  direction and stay as they are. The frames of the step before S (R1): the nearest step before S in
+  the path that is not optional (the optional steps between are item 7b's), the frames of its page
+  transition when it has one, else its own, the group item 7a calls `previous`: such a frame is a
+  refusal. Every frame after S's press (R2: every later step's own frames, its page transition's
+  frames, every ending's): the warning `record_select_page_passes_after_press`, never a refusal.
+  S's own page transition's frames are in neither set, nor is any other frame before S's press.
 - *At `record mark`* (`steps.rs`, `select_page_on_other_frames`, called by `page_check` right after
   `other_pages_on_select_frames`, under the same condition): S's page as the command leaves it (its
   own marks with their new crops, the marks it reuses and forbids; `mark_on_frame` and
   `page_on_frame` take the command's `MarkBatch` for this, `None` everywhere else, as before) on the
-  frames of the steps the mark knows (every step before it; on a stopped recording every other step)
-  and of every page transition; against the pages the mark knows (other steps' and every page
-  transition's). A frame on which another page passes beside S's is the select's
-  `record_mark_rejected` reason `select_page_passes_on_other_frame` with `frame_id`, `select_step`,
-  `step` and `transition` (the other page's step and whether it is its transition's), `frame_step`
-  and `frame_transition` (whose frame it is); a mark that cannot be evaluated there is
+  frames of the step before S alone (fix round 1; `path_order`, the effective steps); against the
+  pages the mark knows (other steps' and every page transition's, S's own transition's among
+  them). A frame on which another page passes beside S's is the select's `record_mark_rejected`
+  reason `select_page_passes_on_other_frame` with `frame_id`, `select_step`, `step` and
+  `transition` (the other page's step and whether it is its transition's), `frame_step` and
+  `frame_transition` (whose frame it is); a mark that cannot be evaluated there is
   `self_test_error` (`frame_id`, `step` the frame's step, `mark_id`, `error`). Nothing is written.
+  The mark judges no frame after S's press and warns of none.
 - *At `record stop` and `record ready`* (`crosscheck.rs`, `select_page_elsewhere`, called by
   `select_checks` for each select step, fixed or scrolling, after its own frames, with the evaluator
-  of item 4, which `select_checks` now takes): against every page of the package (another step's, a
-  page transition's, an ending's), each frame and page is `record_step_self_mismatch` (3) with
-  `reason` `select_page_passes_on_other_frame` and `step`, `record_index`, `frame_id`, `page`,
-  `other_page`, `other_step`, `other_record_index` and `other_transition` (or `other_outcome_key`),
-  `frame_step`, `frame_record_index` and `frame_transition` (or `frame_outcome_key`); `record stop`
-  answers the first, after any failure on S's own frames, and `record ready` lists each (`what`
-  `selects`, the select step, `frames` the frame, `page` S's page). Without an OCR model item 8 calls
-  nothing, so neither direction is judged, as before.
+  of item 4, which `select_checks` takes): against every page of the package (another step's, a
+  page transition's, an ending's). On a frame of the step before S each such page is
+  `record_step_self_mismatch` (3) with `reason` `select_page_passes_on_other_frame` and `step`,
+  `record_index`, `frame_id`, `page`, `other_page`, `other_step`, `other_record_index` and
+  `other_transition` (or `other_outcome_key`), `frame_step`, `frame_record_index` and
+  `frame_transition`; `record stop` answers the first, after any failure on S's own frames, and
+  `record ready` lists each (`what` `selects`, the select step, `frames` the frame, `page` S's page).
+  On a frame after S's press each such page is the warning `record_select_page_passes_after_press`
+  (`SelectPagePassesAfterPress`, `{code, step, record_index, page, frame_id, frame_step?,
+  frame_record_index?, frame_transition?, frame_outcome_key?, other_page, other_step?,
+  other_record_index?, other_transition?, other_outcome_key?, after_press}`, `after_press` always
+  `true`), returned in `SelectChecks::after_press`: `record stop` and its dry run answer it in
+  `lab.warnings` after the warnings the provenance records and before
+  `record_template_near_threshold`, `record ready` among its warnings
+  (`ReadyWarningItem::SelectPageAfterPress`) when and where it lists §1.466's, its readiness
+  unchanged, and `record review` at the select step (`steps[].warnings`, now `ReadyWarningItem`s: §1.466's warnings as
+  before, whose JSON is unchanged, and these at the step whose `record_index` they name). The
+  provenance does not carry it. Without an OCR model item 8 calls nothing, so neither direction is
+  judged, as before.
 - *One cause per word* (the catalogue's rule: a word never lumps situations a reader cannot tell
   apart; where only the cause differs, another word of the closed vocabulary beside the code). The
-  program does the same next in both directions (it refuses, nothing written), but the causes
-  differ: in today's another page holds on the select step's screen and that page is what must be
-  told apart; in the new one the select step's own page holds on another step's screen and is what
-  must be told apart (that step's page passes on its own frame by item 4). So the new direction is a
-  word of its own, beside `select_other_page_passes` in the same `reason` vocabulary, and the answer
-  says on whose frame it was found (`frame_step`, `frame_transition`, `frame_outcome_key`).
-- *Facts only.* The refusal names the select step, the frame, whose it is and both pages; it
-  proposes no mark.
+  program does the same next in both directions of the refusal (it refuses, nothing written), but
+  the causes differ: in today's another page holds on the select step's screen and that page is
+  what must be told apart; in the new one the select step's own page holds on the screen of the
+  step before it and is what must be told apart (that step's page passes on its own frame by item
+  4). So the new direction is a word of its own, beside `select_other_page_passes` in the same
+  `reason` vocabulary, its one cause (fix round 1): on a frame the confirmation can meet that is not
+  the select step's own; the answer says on whose frame it was found (`frame_step`,
+  `frame_transition`). The program does another thing next after a frame after the press (it
+  generates), so that is another code, a warning: `record_select_page_passes_after_press`, its one
+  cause the same pair on a frame after the select step's press. It is not
+  `record_case_page_ambiguous`, which the cases give of a case's scene and which stays as it was.
+- *Facts only.* The refusal names the select step, the frame, whose it is and both pages; the
+  warning names the same and that the frame comes after the press. Its catalogue text states what
+  the recording shows (on that frame both pages pass) and what the Runtime does (a select step's
+  confirmation requires that exactly one page of the package is recognised on the screen it meets).
+  Neither proposes a mark.
 
 **The exemptions** (the work order's item 5; each read against the run).
 - *Optional steps that close on the same press* (item 7c, `same_as`): both sides are optional
@@ -37790,61 +37833,71 @@ step's own frames.
 - *An ending told from the usual end* (`ending_usual_insensitive`): its sides are the last step's
   page, on which a select never stands (`on_final_step`), and an ending's page, which is no step's;
   a select step is never one side, and the exemption stands, untouched. The select step's page
-  passing on an ending's frame beside the ending's page is no such pair; the run's select evaluates
-  the endings' pages too, so it is refused.
+  passing on an ending's frame beside the ending's page is no such pair; an ending's frame comes
+  after the select step's press, so (fix round 1) it is the warning
+  `record_select_page_passes_after_press`, no refusal.
 
 **Texts.** `record_case_page_ambiguous`'s description (the lab fragment), its message
 (`cases.rs`, `AMBIGUOUS_MESSAGE`) and the contract ([lab-recording.md](lab-recording.md), "A page
 recognised beside another page is no miss"; [resource-regression-case.md](resource-regression-case.md))
 say what is so: a press step waits for its own page and does not ask which page of the package a
-screen is; a select step's confirmation does ask, and `record stop` refuses that before the cases are
-made. The warning itself, its members and when it is given, is unchanged. The outcome index is
-regenerated (it does not change: it carries the description's beginning).
+screen is; a select step's confirmation does ask, before its press, and `record stop` refuses that
+on a frame the confirmation can meet and (fix round 1) warns of it on a frame after the press,
+before the cases are made. The warning itself, its members and when it is given, is unchanged. The
+new warning's description, `record_select_page_passes_after_press` (the lab fragment), states the
+two facts above; its `handling` says that nothing is required. The outcome index is regenerated.
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
 | The word | `crates/lab/src/recording/select.rs`: `PAGE_PASSES_ON_OTHER_FRAME` |
-| At the mark | `crates/lab/src/recording/steps.rs`: `select_page_on_other_frames` (new), `page_marks`, `KnownPage` and `pages_of` (new, shared with `other_pages_on_select_frames`, whose answers are as before), `mark_on_frame` and `page_on_frame` (a `batch` argument), `page_check` |
-| At `record stop` and `record ready` | `crates/lab/src/recording/crosscheck.rs`: `select_page_elsewhere`, `select_page_passes`, `SelectPageOwner` (new), `select_checks` (the evaluator); `crates/lab/src/recording_api.rs`: `package_checks` hands it the evaluator |
-| Texts | [lab-recording.md](lab-recording.md) ("Selecting in a list", the self-test's table; "Self-checks", item 8; "Regression cases written with the package"); [resource-regression-case.md](resource-regression-case.md); `contracts/outcome-codes/lab.json` (`record_case_page_ambiguous`); `crates/lab/src/codes.rs` and `crates/lab/src/recording/cases.rs` (its comment and message) |
+| At the mark | `crates/lab/src/recording/steps.rs`: `select_page_on_other_frames` (new; fix round 1: the frames of the step before the select step alone), `page_marks`, `KnownPage` and `pages_of` (new, shared with `other_pages_on_select_frames`, whose answers are as before), `mark_on_frame` and `page_on_frame` (a `batch` argument), `page_check` |
+| At `record stop` and `record ready` | `crates/lab/src/recording/crosscheck.rs`: `select_page_elsewhere` (fix round 1: the frames of the step before refused, the frames after the press warned of), `select_page_passes`, `select_page_after_press`, `beside_select_page`, `SelectPageOwner`, `OwnerAt`, `OtherPage` (new), `SelectPagePassesAfterPress` (new, public, re-exported by `crates/lab/src/recording/mod.rs`), `SelectChecks::after_press`, `select_checks` (the evaluator); `crates/lab/src/recording_api.rs`: `package_checks` hands it the evaluator, `generate_and_write` answers the warnings in `lab.warnings`, `ready_of` and `SelfCheckFailures::after_press` in `record ready` |
+| `record ready` and `record review` | `crates/lab/src/recording/ready.rs`: `ReadyWarningItem::SelectPageAfterPress`; `crates/lab/src/recording/review.rs`: `RecordReviewStep::warnings` holds `ReadyWarningItem`s |
+| The code | `crates/lab/src/codes.rs`: `LabCode::RecordSelectPagePassesAfterPress`; `contracts/outcome-codes/lab.json`: `record_select_page_passes_after_press`; the outcome index regenerated |
+| Texts | [lab-recording.md](lab-recording.md) ("Selecting in a list", the self-test's table; "Reviewing a recording step by step", `warnings`; "Self-checks", item 8 and the provenance's warnings; "Regression cases written with the package"); [resource-regression-case.md](resource-regression-case.md); `contracts/outcome-codes/lab.json` (`record_case_page_ambiguous`); `crates/lab/src/codes.rs` and `crates/lab/src/recording/cases.rs` (its comment and message) |
 
-**Codes and words.** One word, no code:
+**Codes and words.** One word and (fix round 1) one code:
 
-| Word | Its one situation | Refuses or warns | Exit status |
+| Word or code | Its one situation | Refuses or warns | Exit status |
 |---|---|---|---|
-| `select_page_passes_on_other_frame` (a `reason` of the select's `record_mark_rejected` and of `record_step_self_mismatch`) | the select step's page passes on a recorded frame that is not its own, and another page of the package passes there too | refuses | 3, as both codes |
+| `select_page_passes_on_other_frame` (a `reason` of the select's `record_mark_rejected` and of `record_step_self_mismatch`) | the select step's page passes on a recorded frame its confirmation can meet that is not its own (a frame of the step before it), and another page of the package passes there too | refuses | 3, as both codes |
+| `record_select_page_passes_after_press` (a Lab warning code, `warning / none`) | the select step's page passes on a recorded frame after its press (a later step's, a later page transition's, an ending's), and another page of the package passes there too | warns, never refuses | 0: none changed, on actinglab's own line, on the `--via` line and through MCP |
 
-No outcome code is added (the Lab's `record_mark_rejected` and `record_step_self_mismatch` and their
-reasons are the channel that stays a string until B4); no decision reads a code.
+The Lab's `record_mark_rejected` and `record_step_self_mismatch` and their reasons are the channel
+that stays a string until B4; no decision reads a code or a word.
 
 **Tests** (`crates/lab/src/gate_463_sc1.rs`, exec gate map "#463 SC-1"; recordings made with
 `record mark` and planned and committed clicks on synthetic frames, a scripted OCR provider, every
-page a colour mark; no clock): the work order's five, in nine tests, as the gate map's comment lists
-their assertions. Test 1's second half deviates from the work order's words: the later step's page
-given a mark the select step's screen lacks does not take the select step's page off the later
-step's frame, where both still pass, so by the rule above it still refuses; the test makes the
-select step's page forbid that mark, which tells the screens apart. Adapted, because the rule
-refuses what their fixtures recorded: the next screen of gate_463_r1 and of gate_463_s26 showed the
-list's page area in the list's gray, so the list's page passed on the next step's frame beside its
-page; their `next_screen` now shows that area in gray 170 (gate_463_r1:
-`r1_a_marked_select_is_accepted_generated_and_admitted`,
-`r1_the_on_empty_key_is_the_given_one_and_ends_an_empty_first_decision`,
-`r1_a_default_changed_after_stop_regenerates_another_package`,
-`r1_fix1_a_select_added_after_stop_and_taken_off_generates_the_package_again`,
-`r1_fix1_the_probe_holds_the_select_step_record_stop_generates`; gate_463_s26: the eight tests that
-refine the choice with a select, through `refined_package` or by hand). No assertion changes; no
-golden changes; no test leaves a gate map.
+page a colour mark; no clock): the work order's five and fix round 1's, in ten tests, as the gate
+map's comment lists their assertions. Fix round 1 (R4): the observed case is the warning, the
+package generated, the warning in `record ready`, `record review` (at the select step) and
+`lab.warnings` (test 1, renamed); the same recording with the later step's page given a further
+mark the select step's screen lacks still warns, a fact the test's comment states: the select
+step's page passes on that frame whatever the later page requires, and the later page passes on
+its own frame (test 2, rewritten: the first round's test, which made the select step's page forbid
+the busy slot's mark, taught the wrong thing, since the list with a busy slot is a state the select
+step must work in); a select declared after the stop on such a list stands at the mark and
+regenerates with the warning (test 3, rewritten); the select step's own page transition's frames are
+in neither set (a new test); the step before the select is refused at the mark (the test of the
+second exemption, kept). The fixtures of
+gate_463_r1 and gate_463_s26 (R3) are as on main again, byte for byte: their next screen shows the
+list's page area unchanged, the common shape, and passes without a refusal; each of their
+recordings with a select now carries the warning, which none of their assertions reads, and this
+slice's test 1 asserts it on that shape. No golden changes; no test leaves a gate map (the renamed
+tests were never on main).
 
 **What is not changed.** For a recording without a select step, what passes and what refuses, the
 package and the cases, byte for byte (the new code runs only for a select step); today's direction
 and its answers; every other self-check's answer; a recording with a select step whose page is alone
-on every frame passes as before.
+on every frame passes as before; the package, which the warning does not enter; the correction of
+the contract's self-check 8 (`contained_task_recognition_conflict` for two pages).
 
-**At deploy.** Nothing to configure. A recording whose select step's page passes on another recorded
-screen beside another page is now refused at `record stop` (and listed by `record ready`) until the
-pages are told apart, for one by a mark the select step's page forbids or requires.
+**At deploy.** Nothing to configure. A recording whose select step's page passes beside another
+page on a frame of the step before it is refused at `record stop` (and listed by `record ready`);
+on a frame after its press it is the warning `record_select_page_passes_after_press`, and the
+package is generated.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
