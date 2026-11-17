@@ -524,6 +524,22 @@ other hit passes with `truncated: true`. A target that declares `unique` fails w
 `failure` on the target row, `located` on its OCR row and the outcome of an evaluation
 error on its recognition error row.
 
+#463 RG-1 (since 0.12.71): the Lab's `recognize` (MCP `ac_recognize`) answers a locate target
+that passed with `matched_rect` the box a `target` or `offset` click starts from there: the found
+cell when `cells` is declared, else the found block, `{x, y, width, height}` in the coordinates a
+template's `matched_rect` has in that answer (the package's base when the scene was reduced to
+it). The box comes from the one function the run takes its click box from, never a second copy,
+and the answer's `evaluation.matched_rect` is the same box. A locate target that did not pass (no
+hit, a hit outside every cell, or a second match within its `unique` margin, the refusal the run
+gives as well) and an OCR target without `locate` answer `matched_rect` `null`, as before; every
+other target, and every other member of the answer, is answered as before. The answers built by
+the same function carry the box too: the `evaluation` of `is-visible`, and that of `tap-target` in
+the drive record of its recognition. What `tap-target`'s dry run plans to press is the target's
+declared static `click`, not the located box: where the OCR target declares one, the dry run plans
+that `click` and its answer's `evaluation` carries the box; where it declares none, the dry run is
+refused `validation_failed` (the target has no click field) after that drive record is written,
+and answers no box.
+
 Reads are counted per consumer: one page recognition (every page rule of the page set) or
 one guard evaluation. The reads are those of locate targets and (Workflow #396 REC-6) of value
 tests' sides, which read an ordinary OCR target as one request of its own region. Workflow #396

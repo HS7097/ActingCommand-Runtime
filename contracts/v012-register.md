@@ -36455,6 +36455,109 @@ ledger record, configuration key or interface revision.
 read and run: it answers what its scene gives, and the scene rule's warning where its scene holds
 more than its `rects` name.
 
+### 1.463 Slice #463 RG-1 (0.12.71): `recognize` answers the box of a text it located (Workflow #463; observed on production 0.12.70 by the channel that keeps the resource repositories; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rg1-recognize-located-box.md`, on main `ca539cc7`)
+
+This section takes 1.463 (1.460, 1.461 and 1.462 are held by other open slices of the same day).
+It ships in 0.12.71.
+
+**Why.** A package's click may follow a text an OCR target with `locate` found
+([ocr-fields.md](ocr-fields.md), "Located text"; [lab-recording.md](lab-recording.md),
+"Following a located text"). The resource repositories check such a click offline: their
+regression asks `recognize` for the target on a stored scene and takes the answer's `matched_rect`
+as the place the click must lie in. For a template target the answer carried that rectangle; for
+a locate target that passed it answered `"passed": true`, `"message": "ocr text located"` and
+`"matched_rect": null`. The text was read and found, and the answer did not say where, so a click
+that follows a found text could not be checked offline and the packages fell back to fixed boxes.
+
+**What it rests on** (read in the code). The run takes a `target` or `offset` click's box from
+`target_click_box` (`crates/execution-kernel/src/contained_task.rs`): a template's matched
+rectangle, or for a located text the declared cell holding the found block, else the block (the
+OCR evaluation's `located`, `cell_rect` or `rect`). `recognize` (the Lab's `Lab::recognize`, MCP
+`ac_recognize`) answers through `ReadonlyRecognitionEngine::recognize_frames`, whose
+`target_evaluation_response` (`readonly.rs`) built `matched_rect` from the template's evidence
+alone and never read the OCR evidence: that is why the answer named no box. `unique` is applied
+inside the evaluation before either reads it: a second match within the margin makes the target
+not pass and drops `located` (`target_match_not_unique`), so the run refuses the guard and the
+answer has no box; otherwise the found block is the one the run presses.
+
+**The rule.**
+- *One computation*: the box of a found text is one function, `located_text_box`
+  (`contained_task.rs`), which `target_click_box` now calls for a located text and which
+  `target_evaluation_response` calls for the answer; no second copy.
+- *The answer*: for an OCR target that passed, `matched_rect` (and `evaluation.matched_rect`, the
+  same member of the shared evaluation answer) is that box, `{x, y, width, height}` in the
+  coordinates of a template's `matched_rect` in the same answer (the package's base when the scene
+  was reduced to it). A template's `matched_rect` is built as before. Every other target, and a
+  target that did not pass (not found, outside every cell, not unique: answered as the refusal
+  is answered today, `passed: false` with its message), names none, as before.
+- *What else changes*: the answers built by the same function, `is-visible`'s `evaluation` and
+  `tap-target`'s (the drive record of its recognition, and its dry run's answer where the OCR
+  target declares a static `click`; fix round 1 below), carry the box too, where they carried
+  `null`. Nothing else.
+
+**The other answers that carry a target's rectangle** (the work order's item 4; read, not changed
+unless they share the function):
+
+| Answer | The box of a found text today |
+|---|---|
+| `is-visible`, `tap-target` (`evaluation`) | carried since this slice: built by the same function |
+| `navigate` dry run (a step's `recognition.evaluation`) | the same function, but a route step's box comes from `target_evaluation_rect` (`crates/lab/src/drive.rs`), which takes a template's match only and refuses any other target before an answer; following a found text in a route needs its own design |
+| offline `observe` (`targets[].evaluation`, `target_center`), `do`, `ensure` and `wait` dry runs (`guard_result.evaluation`) | not carried: actinglab builds these with its own `target_eval_json` (`apps/actinglab/src/commands/navigation_recovery.rs`) from the template's evidence; online `observe` answers the Runtime's page projection, which this function does not build (not read further) |
+| `detect-page`, `current-page` | no rectangle for any target: each page target is `{id, role, passed, message}` |
+| a recording's self-tests (`record mark`) | `self_test.matched_rect` is set for a template mark alone; a located-text mark's self-test names none. The step's `click.rect` of a click that follows a found text (`record status`, `record review`'s `press.rect`) is that box on the primary frame, which the Lab's `crates/lab/src/recording/follow.rs` takes from `located_text_box` since fix round 1 (before it, its own `located_rect`, the same rule written a second time) |
+| `run evidence` of a step that followed a text | no `matched_rect`: `targets[].box` of an OCR target is its read region (a ledger fact), and in a recorded package the followed text is no page target; the step's `action.rect`, the box its point was drawn in, comes from `target_click_box` and so from the same function; the overlay (task diagnostic stream) carries `located` with the block and the cell |
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The box | `crates/execution-kernel/src/contained_task.rs`: `located_text_box` (new, `pub` since fix round 1, exported by the kernel's `pub use contained_task::*`), called by `target_click_box` and by the Lab's `crates/lab/src/recording/follow.rs` |
+| The answer | `crates/execution-kernel/src/readonly.rs`: `target_evaluation_response` takes `matched_rect` from `matched_rect`, the template's match or, for an OCR target that passed, `located_text_box` |
+| Texts | [ocr-fields.md](ocr-fields.md), "Located text": what `recognize` answers for a locate target; no manual lists the answer's members (`apps/actinglab-mcp/MANUAL.md` does not) |
+
+**Codes and words.** None. No decision reads a code.
+
+**Tests** (`crates/execution-kernel/src/tests/gate_463_rg1.rs`, exec gate map "#463 RG-1"; a
+scripted text reader that answers two blocks at fixed places of the requested region when the
+scene shows a marker pixel, as the kernel's tests of a located text script theirs; no model, no
+clock): the four of the work order, as the gate map's comment lists them. The first asserts the
+equality by calling `located_text_box` on the same scene and target, not by a number. No existing
+test is adapted; no golden changes; no test leaves a gate map.
+
+**What is not changed.** Where the run presses and what it refuses (`target_click_box` gives the
+same box through the function); what `recognize` answers for template, colour, colour digest,
+check and value-test targets; every other member of the answer. No new record or member, no
+configuration key, outcome code or interface revision.
+
+**At deploy.** Nothing to configure. `recognize` on a scene where a locate target passes now
+answers its box in `matched_rect`, so a regression may check a click that follows a found text
+against it.
+
+**Fix round 1** (coordinator work order `rd-1117/brief-463-rg1-fix1.md`, after the independent
+review of pull request #1810 at `70c73f2c`: its first and third points that may change, nothing
+else; main still `ca539cc7`, nothing merged).
+- *One copy.* `located_text_box` is `pub`, exported by the kernel's `pub use contained_task::*`.
+  The Lab's `crates/lab/src/recording/follow.rs` takes a found text's box from it at both places
+  that computed it with their own `located_rect`, which is removed: `followed_evaluation_box` (the
+  first decision's click box, `crosscheck.rs`) and `check_located_follow_frames` (`record mark`'s
+  check of a following click, whose box on the primary frame is the step's `click.rect`). Each
+  keeps its own
+  check of `passed`: in `followed_evaluation_box` it also guards the template branch, whose match a
+  failed template keeps; for a located text it changes nothing today (an evaluation carries
+  `located` only when it passed), but `located_text_box` itself reads no `passed`, and `recognize`'s
+  answer checks it before calling it as well. The rule is the same, so the recording's answers are
+  byte for byte what they were; the lab gate tests of #463 L2 pin them
+  (`l2_a_followed_located_text_generates_…`, the cell;
+  `l2_a_rectangle_with_a_located_text_follow_…`, the block and the offset from it;
+  `l2_a_click_box_that_leaves_a_sample_frame_…` and `l2_an_executed_press_outside_the_found_box_…`,
+  the box on a sample and on the primary frame; `l2_fix1_names_changed_after_the_press_…` and
+  `l2_fix2_a_later_change_that_passes_the_press_check_…`, the cell after a change). No test is
+  added or adapted.
+- *Text.* [ocr-fields.md](ocr-fields.md), "Located text": `tap-target`'s dry run carries the box
+  in its answer only where the OCR target declares a static `click`, which is what it plans to
+  press, not the located box; without one it is refused `validation_failed` (no click field) after
+  the drive record of its recognition, which carries the box, is written.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

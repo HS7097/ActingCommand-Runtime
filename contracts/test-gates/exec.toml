@@ -4140,3 +4140,14 @@ tests = [
     "actingcommand-lab::lib::gate_463_t70::t70_the_archive_keeps_the_folded_swipes_and_the_key_steps_row",
 ]
 incident = ["#463 train 0.12.70"]
+
+# #463 RG-1 (0.12.71; register §1.463; brief rd-1117/brief-463-rg1-recognize-located-box.md; contracts/ocr-fields.md, "Located text"): recognize answers the box of a text it located. ReadonlyRecognitionEngine::recognize, the function the Lab's recognize calls, on a synthetic 160x90 scene of flat gray with a noise icon, one pack of a template target, two located-text targets on one region (one without cells, one whose region is a row of four cells) and an OCR target without locate on the same region, read by a scripted text reader that answers the blocks GAMMA and ALPHA at fixed places of the region when the scene shows a marker pixel and nothing otherwise; no model, no clock. On the scene with the names each located-text target passes and its matched_rect, and its evaluation's, equals the box located_text_box (the function the run's click box takes) gives for the same scene and target, the cell holding ALPHA for the one with cells and ALPHA's block for the other (1); on the scene without them each does not pass and names no box (2); the OCR target without locate passes and names no box, as before (3); the template target's answer, as JSON, is the answer built before this slice from the same evaluation, its matched_rect the template's match (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_463_rg1::rg1_a_found_text_answers_the_box_the_run_starts_its_click_from",
+    "actingcommand-execution-kernel::lib::tests::gate_463_rg1::rg1_on_a_scene_without_the_text_the_target_does_not_pass_and_names_no_box",
+    "actingcommand-execution-kernel::lib::tests::gate_463_rg1::rg1_an_ocr_target_without_locate_passes_and_names_no_box_as_before",
+    "actingcommand-execution-kernel::lib::tests::gate_463_rg1::rg1_a_template_target_is_answered_byte_for_byte_as_before",
+]
+incident = ["#463 RG-1"]
