@@ -1817,8 +1817,17 @@ pub(crate) fn apply_marks(
             // #463 L2 fix 1: a click guard that names the followed located-text mark names the
             // guard the package has anyway; declared again, the mark is released as both.
             let released = follows_it && declared_again;
+            // The train of 0.12.70 (#463 KR-1's fix round joined): the click guard a key keeps
+            // beside the click it replaced is given back with it when the key is taken back, so
+            // it is in use while the key stands.
+            let given_back = step
+                .key
+                .as_ref()
+                .and_then(|key| key.replaced_guard.as_deref())
+                == Some(id.as_str());
             let guard = (!released
                 && (step.click_guard.as_deref() == Some(id.as_str()) || follows_it))
+                || given_back
                 || anchor.as_ref() == Some(id);
             if elsewhere.contains(id) || named_by_check || guard {
                 return Err(with_details(
@@ -1826,9 +1835,10 @@ pub(crate) fn apply_marks(
                         "record_mark_in_use",
                         format!(
                             "mark '{id}' is reused or forbidden by another step, named by a check, \
-                             is the click guard, is the mark the click follows or anchors the page \
-                             (a located-text mark the click follows is declared again by removing \
-                             and adding it in one request)"
+                             is the click guard (or the one the step's key gives back when it is \
+                             taken back), is the mark the click follows or anchors the page (a \
+                             located-text mark the click follows is declared again by removing and \
+                             adding it in one request)"
                         ),
                     ),
                     json!({"id": id}),

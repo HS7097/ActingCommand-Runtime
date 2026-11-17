@@ -587,7 +587,12 @@ naming this file.
   `record_optional_after_invalid` `no_effect`, the word that replaces `no_click`). `ac_record_stop`
   generates `step_<nn>_key`; its first decision at step 1 is `would_press_key`; the step has its
   regression case on the frame of the press it replaced; `ac_record_review` answers its `press`
-  with `key` and `replaced` and draws no press; `ac_record_status` shows its `key`.
+  with `key` and `replaced` and draws no press; `ac_record_status` shows its `key`. Beside a fold
+  (the train of 0.12.70): a key on a folded swipe is the fold's `record_scan_invalid`
+  `step_in_fold`, on the press step of a fold `record_key_invalid` `holds_fold` (unfold first), on
+  one whose scrolling select reads the fold `holds_choice`; a fold over a key step, or onto a press
+  whose effect is a key, is `fold_range_invalid`; and while a key stands the guard it gives back is
+  in use (`record_mark_in_use` for its `remove`).
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

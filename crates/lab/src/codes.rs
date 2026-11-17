@@ -771,5 +771,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// click step's rule, it names none its page requires and its page requires no template,
         /// colour, colour digest or check mark): a key has no coordinate to trust.
         GuardMissing => "guard_missing",
+        /// The train of 0.12.70 (#463 S2-8' joined): the step holds a fold, the swipes recorded
+        /// before it folded into its scrolling search, so its press is the press of a scrolling
+        /// search; the fold is undone first.
+        HoldsFold => "holds_fold",
     }
 }

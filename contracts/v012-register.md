@@ -35108,6 +35108,48 @@ pages refused (11); key steps before and after a run of optional steps arriving 
 (12); `--key back`, `--no-key` and `--key back` beside `--optional-after` through the command's own
 parsing (`kr1_the_key_flags_declare_the_request_forms_key`).
 
+**The train of 0.12.70** (coordinator work order `rd-1117/brief-train-01270.md`). KR-1 joins the
+line of the fold (§1.456) and the scrolling choice (§1.457, §1.458) in one merge, both sides whole:
+the step's record carries `folded_into`, `scan_fold` and `key`, the mark request `key` beside the
+step action `fold_scan` with `first`; the items of `record ready` stay in the generator's order,
+the recording's own first, then by step, each step's as the survey meets them: the select items,
+`scan_without_select`, `scan_end_not_recorded`, then `key_guard_missing`; the operation table's
+`record mark` says both meanings in one help of 157 bytes; this section stands between §1.448 and
+§1.450, in the order of the numbers. Where the slices meet, one cause per word:
+- *A key on a folded swipe* is answered by the fold's own word, `record_scan_invalid` with
+  `step_in_fold`: `key::key_on_dropped` judges by `kept_on_path` (the path the recording kept, which
+  a folded swipe is on) where it judged by `is_effective`, which S2-8' made exclude a folded step, so
+  the mark's own lookup of the step (`steps::effective_step`) gives the fold's refusal. A dropped or
+  converted step is `step_not_effective` as before.
+- *A press step that holds a fold refuses a key*: `key::apply_key` refuses it with the new word
+  `holds_fold` (`details.fold_first`), before the refusal of a second effect, so with or without
+  `replace_click`; its press is the press of a scrolling search, and the fold is undone first. One
+  whose scrolling select reads the fold is refused `holds_choice` before it.
+- *A fold over a key step, or onto one*, is refused by the fold's own range rule, unchanged:
+  `fold_range_invalid` at the step that is no executed swipe, or at the press step whose effect is no
+  executed tap (`fold::swipe_ends`, `fold::one_tap` read the step's `click`, which a key replaced).
+- *The guard a key gives back is in use*: while a key stands, `remove` of the mark
+  `key.replaced_guard` names is `record_mark_in_use` (`steps::apply_marks`, the removal's check of a
+  click guard), so that taking the key back never gives back a guard that names a mark that is gone.
+- *The readers* of a recording that holds a key step, a folded scrolling select and an ordinary
+  press, and its archive's manifest and stage-one material, are unchanged code; a test reads them
+  together.
+- *Where*: `crates/lab/src/recording/key.rs` (`key_on_dropped`, `apply_key`), `steps.rs`
+  (`apply_marks`), `crates/lab/src/codes.rs` (`KeyProblem::HoldsFold`); the contract ("Key steps",
+  "Folding swipes into a scrolling search"), the operation table's `notes` of `record mark`, the MCP
+  manual, the lab fragment's `record_key_invalid`, the catalog and the regenerated index.
+
+| Word | What it says | Refuses, warns or informs | Exit |
+|---|---|---|---|
+| `key_problem` `holds_fold` (of `record_key_invalid`) | the step to press a key holds a fold of the swipes recorded before it: its press is the press of a scrolling search | refuses | 1 (3 on a `--via` line) |
+
+*Tests* (`gate_463_t70`; exec gate map "#463 train 0.12.70"): a key on a folded swipe, and the
+dropped step beside it (1); a key on the press of a fold, and on one whose select reads it (2); a fold
+over a key step and onto one (3); the guard a key gives back in use (4); `record status`, `record
+review`, `record ready`, the regression cases and two stops of one joined recording (5); its
+archive's manifest and material (6). No existing test is adapted; no golden changes; no test leaves
+a gate map.
+
 ### 1.450 Slice #463 RC-1 (0.12.69): the regression case of a resource repository as a contract of the Runtime, with a reader and an offline runner (Workflow #463; the owner's approval on board #463 on 11-15 of the three-stage blueprint of package making as a whole, whose stage two checks a package against its recorded material and whose stage three builds it; the read-only study `rd-1116/report-463-case-format-study.md` and the coordinator's rulings at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1116/brief-463-rc1-regression-case-runner.md`, read on main `40abd08b`, taken over at its breakpoint under `rd-1116/brief-463-continue.md`)
 
 This section takes 1.450, the number the work order gives. It ships in 0.12.69.

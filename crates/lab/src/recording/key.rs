@@ -172,10 +172,13 @@ pub(crate) fn validate_inserted_key(spec: &OptionalAfterSpec) -> LabResult<()> {
 
 /// #463 KR-1: a key declared on a step the recording holds dropped or converted into a page
 /// transition: `step_not_effective`. A step it does not hold stays `record_step_not_found`, as for
-/// every request that names one.
+/// every request that names one. The train of 0.12.70 (#463 S2-8' joined): judged by the path the
+/// recording kept (`kept_on_path`), so that a swipe folded into a press step's scrolling search,
+/// which is no effective step either, is answered by the fold's own word (`record_scan_invalid`,
+/// `step_in_fold`, where the mark looks the step up), not as dropped or converted.
 pub(crate) fn key_on_dropped(recording: &LabRecording, request: &MarkRequest) -> LabResult<()> {
     if let (Some(KeyRequest::Declare(_)), Some(index)) = (&request.key, request.step)
-        && step_ref(recording, index).is_some_and(|step| !step.is_effective())
+        && step_ref(recording, index).is_some_and(|step| !step.kept_on_path())
     {
         return Err(key_invalid(
             KeyProblem::StepNotEffective,
@@ -213,8 +216,9 @@ pub(crate) fn key_on_entry(request: &MarkRequest, target: u32) -> LabResult<()> 
 /// declared; on a step with a click of any form, executed or declared, only with `replace_click`
 /// (otherwise the refusal of a second effect, `record_step_effect_exists`), the click kept whole
 /// inside the key as what it replaced; a key declared again with `replace_click` keeps the click
-/// the first replaced. A step whose effect is an application operation (`application_step`) or
-/// that holds a choice (`holds_choice`) is refused. Nothing is sent. Fix round 1 (the
+/// the first replaced. A step whose effect is an application operation (`application_step`), that
+/// holds a choice (`holds_choice`) or (the train of 0.12.70) that holds a fold of swipes
+/// (`holds_fold`) is refused. Nothing is sent. Fix round 1 (the
 /// coordinator's ruling on the review's first point): the step's click guard as it was when the
 /// key was declared is kept beside the click, before the request names one (this runs before
 /// `apply_click` takes the request's guard), and taking the key back gives it back too: a guard
@@ -246,6 +250,23 @@ pub(crate) fn apply_key(step: &mut RecordingStep, request: &MarkRequest) -> LabR
     }
     if holds_choice(step) {
         return Err(key_with_choice(Some(index)));
+    }
+    // The train of 0.12.70 (#463 S2-8' joined): a press step that holds a fold is the press of a
+    // scrolling search (a scrolling select on it is a choice, refused just above); a key in its
+    // place would leave a fold on a step whose effect is no tap.
+    if let Some(fold) = &step.scan_fold {
+        return Err(key_invalid(
+            KeyProblem::HoldsFold,
+            Some(index),
+            format!(
+                "step {index} holds the fold of the swipes recorded from step {} before it: its \
+                 press is the press of a scrolling search, and a key presses nothing in a list; \
+                 undo the fold first (step_action unfold_scan of step {index}, record mark \
+                 --unfold-scan {index}); nothing was written",
+                fold.first
+            ),
+            json!({"fold_first": fold.first}),
+        ));
     }
     if !request.replace_click {
         if step.click.is_some() {

@@ -424,7 +424,9 @@ Rules:
   S2-5: beside a recognize box, a sample on which a box of the request is below its threshold is
   not added and not stored ("Drawing a box").
 - `--remove <id>` removes the entry only; a mark reused elsewhere, named by a check or used
-  as the click guard is refused (`record_mark_in_use`).
+  as the click guard is refused (`record_mark_in_use`), and (the train of 0.12.70) so is the
+  click guard a key keeps to give back with the click it replaced (`key.replaced_guard`, "Key
+  steps").
 - `--page <name>` (`^[a-z0-9][a-z0-9_]{0,47}$`) names the step's page.
 - Workflow #390 LAB-2: `--template <id>=x,y,w,h@x,y,w,h` gives the template its search area
   (`search`, the part after `@`) as the request form does; only `--template` takes one
@@ -1287,10 +1289,12 @@ record mark --unfold-scan <b>
   ("Archiving") keeps a folded swipe as recorded: its press is a press of the material.
 - **Acting on a step of a fold.** `drop_step`, `restore_step`, `reopen_step`, `close_step` and
   `to_transition` naming a folded swipe or the press step that holds the fold, marks, a page, a
-  click or a transition on a folded swipe (`record mark --step`), and an optional step inserted
-  after a folded swipe after the stop (`optional_after`) are refused `step_in_fold` (the details'
-  `fold_step` names the press step): undo the fold first. A press step that holds a fold takes
-  marks, a choice and a select as any press step, and the drop of a press before the fold compares
+  click, a transition or (the train of 0.12.70) a key on a folded swipe (`record mark --step`), and
+  an optional step inserted after a folded swipe after the stop (`optional_after`) are refused
+  `step_in_fold` (the details' `fold_step` names the press step): undo the fold first. A press step
+  that holds a fold takes marks, a choice and a select as any press step, but (the train of 0.12.70)
+  no key: `record_key_invalid` with `holds_fold`, or `holds_choice` once a select reads the fold
+  ("Key steps"); and the drop of a press before the fold compares
   the next step's screen as the run meets it, the screen before the first folded swipe ("Steps,
   frames and remediation").
 
@@ -3276,6 +3280,16 @@ the decoder's.
     (`capture --record`) is `record_step_click_not_executed` (`details.effect: "key"`), an offline
     frame closes the step (`closed_by: "offline_frame"`) and `--close-step` accepts it, as a click
     declared and never executed. A transition follows a key step as it follows a click.
+- **Beside a fold of swipes** (the train of 0.12.70, [v012-register.md](v012-register.md) §1.449,
+  "The train of 0.12.70"; "Folding swipes into a scrolling search"). A key on a swipe folded into
+  a press step's scrolling search is the fold's own refusal, `record_scan_invalid` with
+  `step_in_fold`, as every mark on a folded swipe: the key's check of a dropped or converted step
+  reads the path the recording kept, which a folded swipe is on. A key on the press step that holds
+  the fold is `record_key_invalid` with `holds_fold` (its press is the press of a scrolling search:
+  undo the fold first), and on one whose scrolling select reads the fold `holds_choice`, the choice
+  judged first. The other way round the fold's own rules refuse: a range that holds a key step (a
+  step between the two that is no executed swipe) and a press step whose effect is a key (no
+  executed tap) are `record_scan_invalid` with `fold_range_invalid`.
 - **Which recordings take it.** An active recording, and a stopped one: "Marking after stop"
   refuses a new step, a step operation and an application operation, and a key is none of them,
   so the stopped recording takes it (its `amended_at_unix_ms` is set, and `record stop`
@@ -3308,7 +3322,9 @@ the decoder's.
   the key keeps the step's click guard as it was when the key was declared (`key.replaced_guard`,
   before the request that declares it names one) and taking the key back gives it back: a guard
   named with the key or after it goes, the guard the click had comes back, none comes back as none.
-  On a step without a key it changes nothing.
+  On a step without a key it changes nothing. The train of 0.12.70: while the key stands, the mark
+  `key.replaced_guard` names is in use, so `remove` of it is `record_mark_in_use`, as a click
+  guard's is, and taking the key back never gives back a guard that names a mark that is gone.
 - **An inserted optional step** ("Inserting an optional step after stop") may be closed by the key:
   `optional_after.key` (`--key back` beside `--optional-after`) in place of `click`, exactly one of
   the two: both is `record_key_invalid` with `with_click`, neither `record_optional_after_invalid`

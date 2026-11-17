@@ -5553,6 +5553,9 @@
         },
         "guard_missing": {
           "description": "record stop meets a step that presses a key and gets no guard (fix round 1: by a click step's rule, it names none its page requires and its page requires no template, colour, colour digest or check mark): a key has no coordinate to trust."
+        },
+        "holds_fold": {
+          "description": "The train of 0.12.70 (#463 S2-8' joined): the step holds a fold, the swipes recorded before it folded into its scrolling search, so its press is the press of a scrolling search; the fold is undone first."
         }
       }
     },

@@ -134,6 +134,10 @@ mod gate_463_s29b;
 // while recording.
 #[cfg(test)]
 mod gate_463_kr1;
+// The 0.12.70 train: where the key step of a recording meets the fold of swipes into a scrolling
+// search and the scrolling choice.
+#[cfg(test)]
+mod gate_463_t70;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
