@@ -36303,6 +36303,111 @@ ledger record, configuration key or interface revision.
 read and run: it answers what its scene gives, and the scene rule's warning where its scene holds
 more than its `rects` name.
 
+### 1.462 Slice #477 PC-2 (0.12.71): `standard-pack catalog` brings a named entry up to date from the rules, and writes a named entry's display (Workflow #477; the owner's approval on board #477 on 11-16 of one package declaration per game root, written by tools and not by hand; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-477-pc2-catalog-refresh.md`, on main `ca539cc7`)
+
+This section takes 1.462, the number the work order gives: §1.459 is on main, §1.460 and §1.461 are
+held by other open pull requests and §1.463 by another slice of the same day. It ships in 0.12.71.
+
+**Why.** `standard-pack catalog` (§1.438) gives a package without an entry one from the rules of
+`schedule.json` as they stand, and never overwrites an entry already there. Agents now make a
+package in this order: adopt it held (no rule yet), try it, then write its rule. An entry written
+before the rule stayed empty for good, and a rule changed later could never reach its entry: no
+tool brought an entry up to date, and the contract forbids editing the file by hand. Nor did any
+tool write a new entry's display, so a new package showed by its id.
+
+**The rule** ([pack-catalog.md](pack-catalog.md), "Who writes it").
+- *`--refresh <package_id>`* (repeatable, once per package; the MCP tool's `refresh`, a list): the
+  entry of each named package has its `consumes` and `produces` computed again from the package's
+  rules, by the function a new entry is made by (`schedule_union` inside
+  `merge_standard_pack_catalog`, one rule for both), and they replace what the entry held; its
+  display and its place in the file are kept, and an entry that holds its rules' already is left as
+  written. It is the one way an entry's business part changes; an entry not named is never
+  overwritten, as before. A refreshed package's rules are held to `schedule.json` as a new entry's
+  are (`standard_pack_root_invalid`, `catalog_pool_undeclared` at the rule). Afterwards no
+  `standard_pack_catalog_schedule_differs` names the package. The answer's `refreshed` gives each
+  named package in the order named: `{package_id, state, before?, after}`, `state` `replaced`,
+  `agrees` (no failure) or `added`, `before` and `after` each `{consumes, produces}` as the file
+  writes them.
+- *A named package that has no entry yet* is **not refused** (the coordinator left the choice to the
+  slice, "by what is least surprising"): it gets its new entry in the same call, by the plain rule,
+  which is its rules' already, and `refreshed` answers it `added`, without `before`. Refusing it
+  would only send the agent to a second line that gives the entry the same business part, and the
+  line already makes that entry whatever `refresh` says.
+- *Refused before anything is written* (`standard_pack_catalog_refresh_refused`): a package the
+  registry does not hold (`package_unregistered`) and one named twice (`package_repeated`), the
+  first in the order named.
+- *`--displays <file>`* (an absolute path; the tool's `displays`): a display file
+  `{"packs": [{"package_id", "title", "summary", "group"?, "risk"?}]}`, each entry in the catalog's
+  own shape without its business part. Each entry it names has its display replaced whole (the entry
+  written as its `package_id`, the file's display members in the order a new entry writes them, then
+  its business part as it stands; an entry of the file without display members leaves the package
+  showing by its id); its business part and its place are untouched, and a new entry it names takes
+  no display from `ui.json`. The file is checked before anything is written by the catalog's own
+  checks: its size and `packs` limit, a member repeated or unknown, a `package_id` that is no
+  string, one the registry does not hold (`package_not_listed`) or named twice
+  (`catalog_duplicate`), and each entry's display by the reader's own display check
+  (`Check::entry_display`, the same words and limits) against the groups of the file being written;
+  every display defect, a warning in the catalog, is an error here. Any error is
+  `standard_pack_catalog_display_refused`, the first of the file's shape and packages before its
+  display defects. The answer's `display_written` names the packages whose display the file
+  replaced, in its order. Since every package of the registry has an entry after the call, "a
+  package without an entry after this call" is the same as one the registry does not hold.
+- *Not settled, left refused*: **the option adds no group.** A `group` the file being written does
+  not declare is `catalog_group_unknown`; whether this option, or another tool, may add a group to
+  the catalog's `groups` is a question for the coordinator. The display file carries no schema
+  version (it is an input of one line, never stored); that is the slice's choice.
+- *`--plan`* writes nothing and answers the document as before, with `refreshed` and
+  `display_written`. Both members are present only with their option, so the line without the two
+  answers and writes as before, byte for byte; a second identical line is `unchanged`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The rule | `crates/actingcommand-contract/src/standard_pack_catalog.rs`: `merge_standard_pack_catalog` takes `CatalogEdits` (`refresh`, `displays`: `CatalogDisplayFile`) and answers `CatalogMergeRefusal` (`Refresh`, `Root`, `Display`); `refresh_named`, `schedule_business`, `read_display_file`, `Check::display_file`, `with_display`; `CatalogRefreshed`, `CatalogRefreshState`, `CatalogRefreshRefusal`, `CatalogDisplayFileIssue`; the merge's `refreshed` and `display_written`; the vocabulary `catalog_refresh_problem` |
+| The codes and the key | `crates/actingcommand-contract/src/codes.rs` (two `SharedCode`s), `outcome/keys.rs` (`catalog_refresh_problem`); the contract fragment, the catalog's key and vocabulary |
+| The writer | `crates/resource-tooling/src/standard_pack_catalog.rs` (`read_display_file`, `display_refused`, the refusals' mapping), `api.rs` (`StandardPackCatalogRequest::{refresh, displays}`, `StandardPackCatalogResponse::{refreshed, display_written}`) |
+| The command line | `apps/actinglab/src/standard_pack_cli.rs`: `CATALOG_FLAGS` (`--refresh`, `--displays`), `catalog_options`, `run_catalog` (`--refresh` repeatable, `--displays` once, either without its value a usage error) |
+| The row | `standard-pack catalog` in [lab-operations.json](lab-operations.json): the parameters `refresh` (option, string, repeat) and `displays` (option, file), its `help`, `output` and `notes`; the MCP server offers both through its child, the schema from the row |
+| Texts | [pack-catalog.md](pack-catalog.md) "Who writes it"; `apps/actinglab-mcp/MANUAL.md` (the package declaration) |
+
+**Codes and words.**
+
+| Word | Kind | The one situation | Refuses or warns | Exit (actinglab's own line / a `--via` line / through MCP's `serve` child) |
+|---|---|---|---|---|
+| `standard_pack_catalog_refresh_refused` (contract, error / none; `game`, `package_id`, `catalog_refresh_problem`) | new code | `standard-pack catalog` refuses a package its `refresh` names | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+| `package_unregistered` (vocabulary `catalog_refresh_problem`, new) | new word | the root's registry does not hold the package | as its code | as its code |
+| `package_repeated` (the same vocabulary) | new word | `refresh` names the package more than once | as its code | as its code |
+| `standard_pack_catalog_display_refused` (contract, error / none; `game`, `path` the display file, `standard_pack_problem`, `json_pointer` in it) | new code | `standard-pack catalog` refuses the display file its line gives, by the catalog's own word (`malformed`, `catalog_out_of_limits`, `package_not_listed`, `catalog_duplicate`, `catalog_text_missing`, `catalog_group_unknown`) | refuses, nothing written | 1 / 2 (usage_validation) / 1 |
+
+The key `catalog_refresh_problem` (`vocab:catalog_refresh_problem`) is new; `standard_pack_problem`
+gains no word. A relative `--displays` path, or one naming no file, is the existing
+`validation_failed` (usage), as a root file that cannot be read is. No decision reads a code or a
+word: the writer maps the merge's refusal by its variant. The outcome-code index is regenerated.
+
+**Tests** (`crates/resource-tooling/src/gate_477_pc2.rs`, apps gate map "#477 PC-2", six; a built
+game root of made-up files, no clock): the order agents use (an entry written without a rule is
+empty, a plain line after the rule is unchanged and warns, `refresh` writes the rule's pools, keeps
+the display and the place, and the warning is gone); an entry not named untouched though it
+differs; `--plan` writing nothing and answering before and after; each refusal of `refresh` with its
+word and nothing written, and a named package without an entry answered `added`; a display file
+replacing two entries' displays whole with their business parts untouched, and a title over its
+limit and an undeclared group refused with the catalog's words at their pointers, nothing written;
+a second identical line `unchanged`, `agrees`. Adapted, for the new members only (nothing they pin
+changes): `pc1_the_index_holds_each_relation_once_both_ways` passes `CatalogEdits::default()` to the
+merge, and the PC-1 writer gate's two `StandardPackCatalogRequest` initializers name `refresh` and
+`displays` empty. No golden changes; no test leaves a gate map.
+
+**What is not changed.** The line without the two options, byte for byte; the file's canonical form;
+the refusal of a root inside an installation, first; what `standard-pack check`, the build and
+`place` read of the file; the dry run (`--plan` no effect, without it `dry_run_unsupported`).
+Nothing here lifts a hold or changes scheduling: the Runtime still reads no member of the file. No
+ledger record, configuration key or interface revision.
+
+**At deploy.** Nothing to configure. After a package's rule is written, run `actinglab standard-pack
+catalog --root <the checkout> --refresh <package_id>` (`--plan` first to read `refreshed`), and give
+a new package its display with `--displays <a display file>`; commit `pack-catalog.json` as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

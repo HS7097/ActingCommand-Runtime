@@ -17687,6 +17687,53 @@
       "common_causes": "The root's directory is read-only, the disk is full, or another program holds the file open.",
       "handling": "Free the file or the disk and run the line again; it writes the same bytes."
     },
+    "standard_pack_catalog_refresh_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "package_id": "required",
+        "catalog_refresh_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.71",
+      "description": "actinglab standard-pack catalog refuses a package its refresh names (Workflow #477 PC-2, register section 1.462; contracts/pack-catalog.md \"Who writes it\"), by its word (catalog_refresh_problem): the game root's registry does not hold the package (package_unregistered), or refresh names it more than once (package_repeated). The first such package in the order named is the answer. The line is refused (an error, class usage_validation: exit status 1 on actinglab's own line and through serve --stdio, 2 on a --via line) before anything is written, and nothing is written; a named package that has no entry yet is not refused: it gets its new entry in the same call.",
+      "common_causes": "A package id misspelt or of another game, or the same id given twice.",
+      "handling": "Name each package of the root once, as its bundle.json (or the checkout's packs/) names it, and run the line again; --plan shows what it would write."
+    },
+    "standard_pack_catalog_display_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.71",
+      "description": "actinglab standard-pack catalog refuses the display file its line gives (displays, path) (Workflow #477 PC-2, register section 1.462; contracts/pack-catalog.md \"Who writes it\"), at its json_pointer in that file, by the catalog's own word (standard_pack_problem): the file larger than 1 MiB or packs over 1024 entries (catalog_out_of_limits), no JSON object, a member repeated, a member it does not know (a business member included) or a package_id that is no string (malformed), a package the root's registry does not hold (package_not_listed), a package named twice (catalog_duplicate, at the later one), or a display defect of an entry by the catalog's display checks: a title or summary missing beside a display member (catalog_text_missing), a group that is no group of the file the line writes (catalog_group_unknown), a risk word twice (catalog_duplicate), a text, locale or word outside its limit (catalog_out_of_limits), a member of the wrong shape (malformed). The first in the file's order is the answer, those of its shape and packages before its display defects. The line is refused (an error, class usage_validation: exit status 1 on actinglab's own line and through serve --stdio, 2 on a --via line) before anything is written, and nothing is written. The option adds no group: a group the display names must be in the file already.",
+      "common_causes": "A display text over its limit, a group not yet declared in the file's groups, or a package id misspelt.",
+      "handling": "Correct the display file at the pointer and run the line again; to name a new group, add it to the catalog's groups first (no tool writes groups yet)."
+    },
     "standard_pack_ui_retired": {
       "category": "warning",
       "ladder_class": "declaration_error",

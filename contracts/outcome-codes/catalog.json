@@ -1817,6 +1817,10 @@
       "type": "vocab:catalog_difference",
       "description": "Which of a game root's pack-catalog.json and schedule.json lacks a pool a package consumes or produces (Workflow #477 PC-1)."
     },
+    "catalog_refresh_problem": {
+      "type": "vocab:catalog_refresh_problem",
+      "description": "Why actinglab standard-pack catalog refuses a package its refresh names (Workflow #477 PC-2)."
+    },
     "schedule_sha256": {
       "type": "hash",
       "description": "The sha256 of the schedule.json of a standard-pack game root the scheduler workbench composed (ROUT-L RL-1b)."
@@ -7529,6 +7533,17 @@
         },
         "schedule_lacks": {
           "description": "The package's entry in pack-catalog.json lists the pool on that side and no rule of the package in schedule.json names it there."
+        }
+      }
+    },
+    "catalog_refresh_problem": {
+      "description": "Why actinglab standard-pack catalog refuses a package its refresh names, before anything is written (Workflow #477 PC-2).",
+      "tokens": {
+        "package_unregistered": {
+          "description": "The game root's registry (its bundle.json, or the one a resource repository's checkout's packages make) does not hold the package."
+        },
+        "package_repeated": {
+          "description": "refresh names the package more than once."
         }
       }
     },

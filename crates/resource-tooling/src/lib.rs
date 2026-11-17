@@ -164,6 +164,11 @@ mod gate_463_s314;
 #[cfg(test)]
 mod gate_477_pc1;
 
+// Workflow #477 PC-2 (register §1.462): `standard-pack catalog --refresh` brings a named entry's
+// business part up to date from its rules, and `--displays` writes a named entry's display.
+#[cfg(test)]
+mod gate_477_pc2;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;

@@ -2594,3 +2594,16 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_a_case_as_record_stop_writes_it_warns_no_unknown_member",
 ]
 incident = ["#463 RC-2"]
+
+# #477 PC-2 (0.12.71; register §1.462; brief rd-1117/brief-477-pc2-catalog-refresh.md; contracts/pack-catalog.md, "Who writes it"): standard-pack catalog brings a named entry's business part up to date from its rules (refresh) and writes a named entry's display (displays), on a built game root of made-up files. The order agents use: an entry written while its package has no rule is empty; with the rule written a plain line is unchanged and warns standard_pack_catalog_schedule_differs catalog_lacks; a line with refresh writes the rule's pools into the entry, keeps its display, its place and the other entry, answers refreshed replaced with before and after, and the warning names the package no more (1); an entry not named is untouched in the same line, its difference still warned (2); with plan nothing is written and refreshed answers before and after, the document holding after (3); refresh naming a package the registry does not hold or one twice is refused standard_pack_catalog_refresh_refused with package_unregistered or package_repeated, nothing written; a named package without an entry gets its new entry, refreshed added without before (4); a display file replaces two entries' displays whole (a group gone, a group kept), display_written in its order, their business parts and places untouched; a title over its limit and a group the file does not declare are refused standard_pack_catalog_display_refused with catalog_out_of_limits and catalog_group_unknown at their pointers in the display file, nothing written (5); a second identical line with refresh and displays is unchanged, byte for byte, refreshed agrees (6). Adapted for the new members only: the PC-1 contract test's merge call and the PC-1 writer gate's two request initializers
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_refresh_writes_the_rule_into_an_entry_written_before_it_and_keeps_its_display",
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_an_entry_not_named_is_untouched_though_it_differs_from_its_rules",
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_plan_writes_nothing_and_answers_refreshed_before_and_after",
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_refresh_refuses_an_unregistered_or_repeated_package_and_writes_nothing",
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_displays_replace_a_named_entry_s_display_and_a_defect_is_refused_with_its_word",
+    "actingcommand-resource-tooling::lib::gate_477_pc2::pc2_a_second_identical_line_changes_nothing",
+]
+incident = ["#477 PC-2"]

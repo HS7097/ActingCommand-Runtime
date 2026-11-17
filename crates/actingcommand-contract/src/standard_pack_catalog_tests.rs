@@ -602,8 +602,15 @@ fn pc1_the_index_holds_each_relation_once_both_ways() {
         "pools": [{"id": POOL_A}, {"id": POOL_B}]
     })))
     .expect("the schedule reads");
-    let merged = merge_standard_pack_catalog(GAME, &registry(), Some(&schedule), None, None)
-        .unwrap_or_else(|errors| panic!("the writer's merge: {errors:?}"));
+    let merged = merge_standard_pack_catalog(
+        GAME,
+        &registry(),
+        Some(&schedule),
+        None,
+        None,
+        &CatalogEdits::default(),
+    )
+    .unwrap_or_else(|errors| panic!("the writer's merge: {errors:?}"));
     assert_eq!(
         merged.added,
         vec![OTHER.to_owned(), ALPHA.to_owned(), BETA.to_owned()]

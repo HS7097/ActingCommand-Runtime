@@ -469,6 +469,8 @@ fn write(root: &Path, plan: bool) -> crate::StandardPackCatalogResponse {
     write_standard_pack_catalog(StandardPackCatalogRequest {
         root: root.to_owned(),
         plan,
+        refresh: Vec::new(),
+        displays: None,
     })
     .unwrap_or_else(|error| panic!("the writer: {}: {}", error.code, error.message))
 }
@@ -600,6 +602,8 @@ fn pc1_the_writer_keeps_an_entry_reports_its_differences_and_refuses_an_installa
     let error = write_standard_pack_catalog(StandardPackCatalogRequest {
         root: inside.clone(),
         plan: false,
+        refresh: Vec::new(),
+        displays: None,
     })
     .expect_err("a root inside an installation is refused");
     assert_eq!(error.code, "standard_pack_catalog_root_refused");

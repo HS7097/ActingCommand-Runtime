@@ -521,6 +521,14 @@ crate::outcome_codes! {
         // PC-1: `standard-pack catalog` could not write `pack-catalog.json` (key `path`); the OS
         // error is the cause, and the file in place is as it was.
         StandardPackCatalogWriteFailed => "standard_pack_catalog_write_failed": error / none,
+        // Workflow #477 PC-2 (register §1.462): `standard-pack catalog` refuses a package its
+        // `refresh` names, before anything is written (keys `game`, `package_id`,
+        // `catalog_refresh_problem`: the registry does not hold it, or it is named twice).
+        StandardPackCatalogRefreshRefused => "standard_pack_catalog_refresh_refused": error / none,
+        // PC-2: `standard-pack catalog` refuses the display file its line gives, before anything is
+        // written (keys `game`, `path` the file, `standard_pack_problem` the catalog's own word,
+        // `json_pointer` in that file).
+        StandardPackCatalogDisplayRefused => "standard_pack_catalog_display_refused": error / none,
         // PC-1: a game root still holds `ui.json`, which no program reads any more; its content
         // belongs in the display part of `pack-catalog.json` (keys `game`, `path`).
         StandardPackUiRetired => "standard_pack_ui_retired": warning / declaration_error,
