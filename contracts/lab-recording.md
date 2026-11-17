@@ -4944,7 +4944,8 @@ guard execution still requires the corresponding frames, provider and Runtime ev
     each at the step its `record_index` names (`steps[].warnings`, absent when none; a warning of an
     ending names no step). The package's provenance does not carry them, so the package is byte for
     byte the same whatever the bound. On a recording whose package is made and that has not changed
-    since (`packaged`) no self-check runs: the bound is taken and has no effect (fix round 2).
+    since (`packaged`) no self-check runs: the bound is taken, its range is checked (outside 0 to 1
+    `validation_failed`) and it has no effect (fix round 2).
 
 Warnings never refuse. The provenance and the output carry the same warnings, but (#463 RM-1)
 `record_template_near_threshold`, which only the output carries.
