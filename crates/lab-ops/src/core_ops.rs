@@ -183,10 +183,11 @@ pub fn answer(operation: &Operation, params: &Map<String, Value>, caller: &Calle
     let located = (caller.place)();
     let state_root = match &located.state_root {
         Ok(state_root) => state_root.clone(),
-        // #398 DB-2: `devices` lists where no state root is located, and says it read no binding.
+        // #398 DB-2: `devices` lists where no state root is located, and says it read no binding;
+        // fix round 1: with the place's refusal as the cause.
         Err(outcome) => {
             return match unlocated_words(operation, params) {
-                Some(Ok(argv)) => dispatched(devices::dispatch(&argv)),
+                Some(Ok(argv)) => dispatched(devices::dispatch_unlocated(&argv, outcome)),
                 Some(Err(exit)) => exit,
                 None => cli_line::failure(outcome, Some(caller.unlocated)),
             };
@@ -459,7 +460,9 @@ pub fn handed_words(
 /// module's state root and without its root, so that `devices` lists with the adb of the root the
 /// call names (`root`), else of the root its program runs from by its place, reads no binding and
 /// says so (`bindings_unread`). The place's own refusal is then not the answer: a listing needs no
-/// state root. `None` for every other row, which answers the place's refusal as before.
+/// state root; fix round 1: it is the cause `bindings_unread` carries ([`answer`] hands it to
+/// `devices::dispatch_unlocated`). `None` for every other row, which answers the place's refusal
+/// as before.
 pub fn unlocated_words(
     operation: &Operation,
     params: &Map<String, Value>,
@@ -485,8 +488,9 @@ pub fn unlocated_words(
 /// (`devices::bind_candidate`), so that a root whose configuration is not switched in yet, and
 /// whose state root cannot be located, binds too. Fix round 1: without the module's root either,
 /// which the place reads from the process's install selection when there is one; a `--root` the
-/// command line gives is handed on (`Part::Further`), and without it `devices` takes the root its
-/// program runs from by its place. `None` for every other call. #398 DB-2: `devices` with `config`
+/// command line gives is handed on (`Part::Further`; since #398 DB-2 fix round 1 the row's
+/// parameter `root`, in the same place), and without it `devices` takes the root its program runs
+/// from by its place. `None` for every other call. #398 DB-2: `devices` with `config`
 /// the same way, listing the bindings of the state root the candidate names (its `root` written
 /// as its row writes it).
 fn candidate_words(
@@ -568,9 +572,9 @@ fn handed_line(
                     argv.flag(core_reads::ROOT_FLAG, root);
                 }
             }
-            // Workflow #434 LAB-5A fix 1: `devices bind`'s `--root` from the command line
-            // (`words::KEPT_FLAGS`), after the module's own, as its further flags went before:
-            // `devices` takes it only when the module located none.
+            // Workflow #434 LAB-5A fix 1: the members a command line hands on undeclared
+            // (`words::KEPT_FLAGS`), as the row's further flags went before. #398 DB-2 fix round 1:
+            // `devices bind`'s `--root`, one of them before, is the row's parameter `root` now.
             Part::Further => argv.further(operation, params.map()),
         }
     }
@@ -1879,8 +1883,9 @@ impl Argv {
     }
 
     /// Workflow #434 LAB-5A fix 1: the members the row does not declare, which only the command
-    /// line hands on (`words::KEPT_FLAGS`: `devices bind --root`), each under the flag of its
-    /// name, as the row's further flags went before LAB-5A.
+    /// line hands on (`words::KEPT_FLAGS`; `devices bind --root` until #398 DB-2 fix round 1
+    /// declared it), each under the flag of its name, as the row's further flags went before
+    /// LAB-5A.
     fn further(&mut self, operation: &Operation, params: &Map<String, Value>) {
         for (name, value) in further_flags(operation, params) {
             self.written(&flag_name(name), value);

@@ -37,6 +37,12 @@
 //!   (`device_key_unknown` when no row carries it). Every bind refuses a row that cannot be a
 //!   handset's device (`device_row_unbindable`): adb reports it in another state than `device`,
 //!   or its transport is not the one the handset declares.
+//! - #398 DB-2 fix round 1: a listing never refuses for want of a key. Where the selected
+//!   configuration cannot be read for the installation's secret, its rows carry no `device_key`
+//!   and the answer says so (`device_keys_unmade` `config_unreadable`, the reader's refusal its
+//!   `cause`); `bindings_unread` carries the place's refusal as its `cause` where the Lab's row
+//!   located no state root ([`dispatch_unlocated`]); a row refused for its state carries the
+//!   state's word (`device_link_state`).
 //!
 //! None of them runs the Runtime or records anything in the ledger: the next start reads the
 //! file and records the binding by fingerprint, so a change answers `restart_required`. No
@@ -47,11 +53,11 @@
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, DeviceRowProblem};
 use actingcommand_contract::codes::{ContractCode, SanitizationCode, SharedCode};
-use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     DEVICE_BINDINGS_SCHEMA, DeviceBinding, DeviceBindings, DeviceBindingsFile, DeviceBoundVia,
-    InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, SecretField, SecretFingerprinter,
-    device_bindings_path, parse_device_bindings, read_device_bindings,
+    DeviceLinkState, InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, SecretField,
+    SecretFingerprinter, device_bindings_path, parse_device_bindings, read_device_bindings,
 };
 use actingcommand_ledger::Sha256SecretFingerprinter;
 use serde::Deserialize;
@@ -96,8 +102,19 @@ const CONFIG_MEMBER: &str = "config";
 const DEVICE_KEY_MEMBER: &str = "device_key";
 /// #398 DB-2: the member of a listing that read no binding, and the one word it says why with: no
 /// state root is known (none was given or located, and no candidate configuration named one).
+/// Fix round 1: `{why, cause?}` ([`not_done`]), the place's refusal its cause where a place was
+/// asked ([`dispatch_unlocated`]).
 const BINDINGS_UNREAD_MEMBER: &str = "bindings_unread";
 const STATE_ROOT_UNKNOWN: &str = "state_root_unknown";
+/// #398 DB-2 fix round 1: the member of a listing whose rows carry no `device_key` because the
+/// selected configuration, which provides the installation's secret, cannot be read or decoded,
+/// and the one word it says why with; `{why, cause}`, the reader's refusal its cause.
+const DEVICE_KEYS_UNMADE_MEMBER: &str = "device_keys_unmade";
+const CONFIG_UNREADABLE: &str = "config_unreadable";
+/// #398 DB-2 fix round 1: the members of [`BINDINGS_UNREAD_MEMBER`] and
+/// [`DEVICE_KEYS_UNMADE_MEMBER`]: the word, and the refusal that caused it as an outcome envelope.
+const WHY_MEMBER: &str = "why";
+const CAUSE_MEMBER: &str = "cause";
 /// #398 DB-2: the configuration member that holds the installation's own secret.
 const SECRET_MEMBER: &str = "secret_fingerprint_salt";
 /// #398 DB-2: the state adb reports for an authorized device that is online, the one state a
@@ -413,7 +430,8 @@ fn listing(
 /// device adb lists now, in its order, with the alias the private file of `state_root` binds it
 /// to. No row names a serial; a loopback `tcp` row (an emulator) names its `endpoint`. #398 DB-2:
 /// each row carries its `device_key` when the selected configuration provides the installation's
-/// own secret ([`list_from`], the state root given).
+/// own secret ([`list_from`], the state root given); fix round 1: one that cannot be read provides
+/// none, and the answer says so (`device_keys_unmade`).
 pub fn list(
     state_root: &Path,
     root: Option<&Path>,
@@ -424,16 +442,20 @@ pub fn list(
         against: &against,
         root,
         key_salt: None,
+        unlocated: None,
     };
     list_from(&request, None, run)
 }
 
 /// #398 DB-2: one listing: whose private binding file it reads (`against`), the install root a
-/// call names (`--root`) and the caller's salt (`--key-salt`).
+/// call names (`--root`) and the caller's salt (`--key-salt`). Fix round 1: and, where a place was
+/// asked for the state root and located none, its refusal (`unlocated`), the cause of
+/// `bindings_unread`.
 pub struct ListRequest<'a> {
     pub against: &'a Against,
     pub root: Option<&'a Path>,
     pub key_salt: Option<&'a KeySalt>,
+    pub unlocated: Option<&'a Outcome>,
 }
 
 /// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): [`list`] for the program at
@@ -441,28 +463,35 @@ pub struct ListRequest<'a> {
 /// - Against a state root: its bindings, and the adb of the install root found as before
 ///   ([`install`]: the install selection, else `root`, else the root the executable runs from);
 ///   the device keys under the salt, else under the selected configuration's secret (read as
-///   `bind` reads it: `config_read_failed`, `config_decode_failed`).
+///   `bind` reads it). Fix round 1: a configuration that cannot be read or decoded provides no
+///   secret, so the rows carry no key and the answer says so, the reader's refusal
+///   (`config_read_failed`, `config_decode_failed`) its cause (`device_keys_unmade`
+///   `config_unreadable`); the listing is not refused for it.
 /// - Against a candidate configuration: the bindings of the state root it names, the adb of
 ///   `root`, else of the root the program runs from by its place ([`candidate_adb`]; no install
 ///   selection is read), the keys under the salt, else under the candidate's secret.
 /// - Against neither: no binding is read, the adb as against a candidate, the keys under the salt
 ///   alone; the answer says that the bindings were not read, and why (`bindings_unread`
-///   `state_root_unknown`), so that no row's missing `bound_alias` reads as "nothing is bound".
+///   `state_root_unknown`), so that no row's missing `bound_alias` reads as "nothing is bound";
+///   fix round 1: the request's `unlocated` its cause.
 pub fn list_from(
     request: &ListRequest<'_>,
     program: Option<&Path>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
     let salt = request.key_salt.map(|salt| salt.0.as_slice());
-    let (bindings, adb, secret) = match request.against {
+    let (bindings, adb, secret, unmade) = match request.against {
         Against::StateRoot(state_root) => {
             let bindings = bindings(state_root)?;
             let (installation, config, adb) = install(request.root)?;
-            let secret = match salt {
-                Some(_) => None,
-                None => installation_secret(installation.as_ref(), &config)?,
+            let (secret, unmade) = match salt {
+                Some(_) => (None, None),
+                None => match installation_secret(installation.as_ref(), &config) {
+                    Ok(secret) => (secret, None),
+                    Err(refused) => (None, Some(refused)),
+                },
             };
-            (Some(bindings), adb, secret)
+            (Some(bindings), adb, secret, unmade)
         }
         Against::Candidate(file) => {
             let adb = candidate_adb(request.root, program)?;
@@ -471,22 +500,48 @@ pub fn list_from(
                 Some(bindings(&candidate.state_root)?),
                 adb,
                 candidate.secret,
+                None,
             )
         }
-        Against::Unnamed => (None, candidate_adb(request.root, program)?, None),
+        Against::Unnamed => (None, candidate_adb(request.root, program)?, None, None),
     };
     let keyer = salt.or(secret.as_deref()).map(Keyer::new).transpose()?;
     let unread = DeviceBindings::default();
     let listed = listing(&adb, bindings.as_ref().unwrap_or(&unread), run)?;
+    let detail = cli_line::detail().unwrap_or(Detail::Full);
     let mut answer = Map::new();
     answer.insert(
         "devices".to_owned(),
         Value::Array(rows(&listed, bindings.as_ref(), keyer.as_ref())?),
     );
     if bindings.is_none() {
-        answer.insert(BINDINGS_UNREAD_MEMBER.to_owned(), json!(STATE_ROOT_UNKNOWN));
+        answer.insert(
+            BINDINGS_UNREAD_MEMBER.to_owned(),
+            not_done(STATE_ROOT_UNKNOWN, request.unlocated, detail),
+        );
+    }
+    if let Some(refused) = &unmade {
+        answer.insert(
+            DEVICE_KEYS_UNMADE_MEMBER.to_owned(),
+            not_done(CONFIG_UNREADABLE, Some(refused), detail),
+        );
     }
     Ok(Value::Object(answer))
+}
+
+/// #398 DB-2 fix round 1: what a listing did not do, as its member says it: `{why, cause?}`, the
+/// word `why` and, when a refusal kept it from it, that refusal as an outcome envelope in `detail`
+/// (`cause`). No serial: the refusals a listing keeps name paths and codes.
+fn not_done(why: &str, cause: Option<&Outcome>, detail: Detail) -> Value {
+    let mut member = Map::new();
+    member.insert(WHY_MEMBER.to_owned(), json!(why));
+    if let Some(cause) = cause {
+        member.insert(
+            CAUSE_MEMBER.to_owned(),
+            cli_line::outcome_value(cause, detail),
+        );
+    }
+    Value::Object(member)
 }
 
 /// The rows of `listed`, in adb's order: each with its handle, its device key when `keyer` makes
@@ -552,16 +607,6 @@ impl<'a> Bind<'a> {
     }
 }
 
-/// #398 DB-2: a binding request by device key: the handset's alias, the `device_key` of the
-/// device a listing showed, and the salt that listing made it with (absent: the installation's
-/// own secret).
-pub struct BindByKey<'a> {
-    pub alias: &'a str,
-    pub device_key: &'a str,
-    pub key_salt: Option<&'a KeySalt>,
-    pub via: DeviceBoundVia,
-}
-
 /// #398 DB-2: how a bind names its device.
 #[derive(Clone, Copy)]
 enum Chosen<'a> {
@@ -604,37 +649,17 @@ pub fn bind(
     bind_against(&against, root, None, &request.by_handle(), run)
 }
 
-/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): [`bind`], or
-/// [`bind_candidate_from`] against a candidate, with the device named by its key in place of its
-/// handle: the alias checked as before, the device found in a fresh listing by the key under the
-/// request's salt, else under the installation's own secret (the selected configuration's, read as
-/// `bind` reads it, or the candidate's); neither is `actingctl_usage_invalid` [`KEY_SALT_FLAG`]
-/// `required`. No row with the key is `device_key_unknown`. The binding written is the one a bind
-/// by the row's handle writes; the answer is `{alias, device_key, handle?, model?,
-/// restart_required: true}` and, against a candidate, `config`. Against neither a state root nor a
-/// candidate it is `actingctl_usage_invalid` `--state-root` `required`, as `bind` is.
-pub fn bind_by_key(
-    against: &Against,
-    root: Option<&Path>,
-    program: Option<&Path>,
-    request: &BindByKey<'_>,
-    run: &dyn Fn(&Path) -> AdbRun,
-) -> Result<Value, Outcome> {
-    let binding = Request {
-        alias: request.alias,
-        chosen: Chosen::Key {
-            device_key: request.device_key,
-            salt: request.key_salt,
-        },
-        via: request.via,
-    };
-    bind_against(against, root, program, &binding, run)
-}
-
-/// #398 DB-2: the binding `request` against the state root (its configuration the selected one,
-/// its adb found by [`install`]), against the candidate configuration (its adb by
-/// [`candidate_adb`] for the program at `program`, the answer naming the file as `config`), or
-/// against neither (`--state-root` `required`).
+/// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): the binding `request` against
+/// the state root (its configuration the selected one, its adb found by [`install`]), against the
+/// candidate configuration (its adb by [`candidate_adb`] for the program at `program`, the answer
+/// naming the file as `config`), or against neither (`--state-root` `required`). [`bind`],
+/// [`bind_candidate_from`] and [`dispatch_in`] call it. A device named by its key is found in a
+/// fresh listing by the key under the request's salt, else under the installation's own secret
+/// (the selected configuration's, read as `bind` reads it, or the candidate's); neither is
+/// `actingctl_usage_invalid` [`KEY_SALT_FLAG`] `required`, no row with the key
+/// `device_key_unknown`. The binding written is the one a bind by the row's handle writes; the
+/// answer by key is `{alias, device_key, handle?, model?, restart_required: true}` and, against a
+/// candidate, `config`.
 fn bind_against(
     against: &Against,
     root: Option<&Path>,
@@ -818,21 +843,39 @@ fn keyed(rows: Vec<Listed>, keyer: &Keyer, device_key: &str) -> Result<Option<Li
 /// one (a handset on USB is not bound to a `tcp` row, an emulator's loopback row among them).
 /// Otherwise `device_row_unbindable` with the alias, the row's handle when it has one, and
 /// `device_row_problem` (`state_not_device`, `transport_mismatch`), before anything is written.
+/// Fix round 1: `state_not_device` with the row's state as a word of `device_link_state`
+/// ([`link_state`]), never the row's own text.
 fn bindable(listed: &Listed, declared: &str, alias: &str) -> Result<(), Outcome> {
-    let problem = if listed.state != STATE_DEVICE {
-        DeviceRowProblem::StateNotDevice
+    let unbindable = || Outcome::new(ActingctlCode::DeviceRowUnbindable).alias(alias);
+    let refused = if listed.state != STATE_DEVICE {
+        unbindable()
+            .device_row_problem(DeviceRowProblem::StateNotDevice)
+            .device_link_state(link_state(&listed.state))
     } else if listed.transport() != declared {
-        DeviceRowProblem::TransportMismatch
+        unbindable().device_row_problem(DeviceRowProblem::TransportMismatch)
     } else {
         return Ok(());
     };
-    let refused = Outcome::new(ActingctlCode::DeviceRowUnbindable)
-        .alias(alias)
-        .device_row_problem(problem);
     Err(match listed.handle() {
         Some(handle) => refused.handle(handle),
         None => refused,
     })
+}
+
+/// #398 DB-2 fix round 1: the word of `device_link_state` for a row's adb state, the row's second
+/// word in `adb devices -l`: `device`, `offline` and `unauthorized` as adb writes them; `no`, the
+/// first word of adb's `no permissions` (the listing's words are separated by white space), is
+/// `no_permissions`; any other state `other`. The Runtime's link watch reads the whole state `adb
+/// track-devices` writes (`actingcommand_device::link_state_of_adb_state`, of a crate this one
+/// does not build on), so this reads the listing's form of the same states.
+fn link_state(state: &str) -> DeviceLinkState {
+    match state {
+        STATE_DEVICE => DeviceLinkState::Device,
+        "offline" => DeviceLinkState::Offline,
+        "unauthorized" => DeviceLinkState::Unauthorized,
+        "no" => DeviceLinkState::NoPermissions,
+        _ => DeviceLinkState::Other,
+    }
 }
 
 /// Removes the binding of `alias`: `{alias, unbound, restart_required}`, both true when the file
@@ -1145,7 +1188,7 @@ fn parse(
             _ => {}
         }
         if let (Some((_, flag)), None) = (&key_salt, &device_key) {
-            return Err(usage(*flag, ArgumentProblem::Conflicting));
+            return Err(usage(flag, ArgumentProblem::Conflicting));
         }
     }
     // #398 DB-1: the state root `--state-root` names, or the candidate configuration, which names
@@ -1192,6 +1235,38 @@ pub fn dispatch_in(
     arguments: &[OsString],
     run: &dyn Fn(&Path) -> AdbRun,
     environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<cli_line::Exit> {
+    dispatch_answer(arguments, run, environment, None)
+}
+
+/// #398 DB-2 fix round 1: [`dispatch`] of the words the Lab's row `devices` gives where its place
+/// located no state root (`core_ops::unlocated_words`): `located` is the place's refusal, which the
+/// answer's `bindings_unread` carries as its cause, so that the real cause (a selection that
+/// cannot be read, a configuration without a state root) is not lost.
+pub fn dispatch_unlocated(arguments: &[OsString], located: &Outcome) -> Option<cli_line::Exit> {
+    dispatch_unlocated_with(arguments, located, &run_adb, &|name: &str| {
+        std::env::var_os(name)
+    })
+}
+
+/// #398 DB-2 fix round 1: [`dispatch_unlocated`] with `run` and in `environment`, as
+/// [`dispatch_in`] takes them, so that a test lists with its own `adb devices -l`.
+pub fn dispatch_unlocated_with(
+    arguments: &[OsString],
+    located: &Outcome,
+    run: &dyn Fn(&Path) -> AdbRun,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<cli_line::Exit> {
+    dispatch_answer(arguments, run, environment, Some(located))
+}
+
+/// The answer of [`dispatch_in`] and [`dispatch_unlocated_with`]: `unlocated`, the refusal of a
+/// place that located no state root, is the cause of a listing's `bindings_unread`.
+fn dispatch_answer(
+    arguments: &[OsString],
+    run: &dyn Fn(&Path) -> AdbRun,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    unlocated: Option<&Outcome>,
 ) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
@@ -1245,6 +1320,7 @@ pub fn dispatch_in(
                 against: &parsed.against,
                 root,
                 key_salt: parsed.key_salt.as_ref(),
+                unlocated,
             };
             list_from(&request, program.as_deref(), run)
                 .map(|answer| (answer, ActingctlCode::DeviceListReported))
@@ -1263,7 +1339,7 @@ pub fn dispatch_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::outcome::{Category, Detail};
+    use actingcommand_contract::outcome::Category;
     use tempfile::TempDir;
 
     const PHONE: &str = "node.phone";

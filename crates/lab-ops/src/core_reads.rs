@@ -73,7 +73,8 @@ pub enum Part {
     /// [`ROOT_FLAG`] and the install root, when the program runs from one.
     Root,
     /// The members the row does not declare that the command line hands on, each under the flag
-    /// of its name ([`EXCEPTIONS`]: `devices bind`'s `root`).
+    /// of its name (actinglab's `words::KEPT_FLAGS` and global options; #398 DB-2 fix round 1:
+    /// `devices bind`'s `root`, its one before, is declared now).
     Further,
 }
 
@@ -112,21 +113,15 @@ pub struct Exception {
     pub why: &'static str,
 }
 
-/// The exceptions, each with its reason.
-pub const EXCEPTIONS: [Exception; 3] = [
+/// The exceptions, each with its reason. #398 DB-2 fix round 1: `devices bind`'s `root`, one
+/// before, is a parameter of its row now, so that `help devices bind` names it.
+pub const EXCEPTIONS: [Exception; 2] = [
     Exception {
         rows: &[],
         name: MORE_WORDS,
         why: "no row declares it: the further words of a row that handed them on before Workflow \
               #434 LAB-5B4; `core_ops::answer` reads it on every row it serves in this process, to \
               refuse it by name",
-    },
-    Exception {
-        rows: &["devices bind"],
-        name: "root",
-        why: "`devices`' own flag, which the row does not declare and its command line hands on \
-              (actinglab's `words::KEPT_FLAGS`); written by `Part::Further` after the module's own \
-              `--root`, which `devices` takes only when the module located none",
     },
     Exception {
         rows: &["codes", "events"],
@@ -416,6 +411,10 @@ pub static HANDED: [Handed; 16] = [
             flag("key_salt_env", devices::KEY_SALT_ENV_FLAG),
             Part::StateRoot,
             Part::Root,
+            // #398 DB-2 fix round 1: the command line's `--root`, declared now, written where
+            // `Part::Further` wrote it before (after the module's own root, which `devices` takes
+            // only when the module located none: beside a located root it is `repeated`).
+            flag("root", ROOT_FLAG),
             Part::Further,
         ],
     ),

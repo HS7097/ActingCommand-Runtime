@@ -27,20 +27,36 @@
 //   and the key both `--device-key` `conflicting`, and none writes anything.
 // - db2_t4: an `unauthorized` row, an `offline` row and a loopback `tcp` row are each refused
 //   `device_row_unbindable` with their word, by handle and by key, naming no serial and writing
-//   nothing.
+//   nothing; fix round 1: the two refused for their state carry it as a word of
+//   `device_link_state` (`unauthorized`, `offline`), the `tcp` row none.
 // - db2_t6: an installed root without the new options: the listing answers today's members, each
 //   row with the key the installation's own secret makes, and no `bindings_unread`; the bind by
 //   handle answers today's members exactly. RD-1c's tests (`devices::tests`) stay as they are: none
 //   binds a row ruling 4 refuses.
+// Fix round 1 (the coordinator's work order rd-1118/brief-398-db2-fix1.md, items 2, 3 and 6):
+// - db2_fix1_an_installed_root_whose_configuration_cannot_be_read_lists_its_rows_without_keys: an
+//   installed root whose configuration cannot be read is listed by `devices::list` (the older MCP
+//   tool's call) and by the command line `devices list --state-root --root` alike: its rows
+//   without `device_key` and `device_keys_unmade` `{why: config_unreadable, cause}`, the cause
+//   `config_read_failed` with the configuration's path; `devices bind --device-key` there, with a
+//   salt and without, refuses `config_read_failed` (the alias is checked in that configuration
+//   before any key is made), naming no serial and writing nothing.
+// - db2_fix1_bindings_unread_carries_the_refusal_of_the_place_that_located_no_state_root: the
+//   Lab's row on a place that locates no state root answers `bindings_unread` with `why`
+//   `state_root_unknown` and the place's refusal as `cause`; the command line's own listing,
+//   which asks no place, `why` alone.
+// - db2_fix1_a_salt_longer_than_the_maximum_is_refused_by_both_forms: a salt of 1025 bytes is
+//   refused `out_of_range` (16 to 1024) as `--key-salt` and as the variable `--key-salt-env`
+//   names, the salt in no line; one of 1024 bytes makes every row's key.
 
-use crate::cli_line::Exit;
+use crate::cli_line::{self, Exit};
 use crate::codes::ActingctlCode;
 use crate::core_ops::{self, Caller, Place};
 use crate::devices::{self, AdbRun, Bind};
 use crate::events::CursorBinding;
 use crate::front::Connection;
 use crate::table;
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{DeviceBoundVia, SecretField, SecretFingerprinter};
 use actingcommand_ledger::Sha256SecretFingerprinter;
 use serde_json::{Map, Value, json};
@@ -321,9 +337,10 @@ fn db2_t1_a_root_with_only_its_tools_lists_its_rows_and_says_no_binding_was_read
         .expect("devices answers");
     let (members, code) = answered(&exit);
     assert_eq!(code, "device_list_reported", "{exit:?}");
+    // Fix round 1 (adapted: the member is `{why, cause?}` now; no place was asked here).
     assert_eq!(
         members,
-        json!({"devices": bare_rows(FIRST), "bindings_unread": "state_root_unknown"})
+        json!({"devices": bare_rows(FIRST), "bindings_unread": {"why": "state_root_unknown"}})
     );
     no_serial(&printed(&exit));
     assert!(!at.state_root.exists(), "nothing is written");
@@ -492,11 +509,12 @@ fn db2_t2_a_device_key_holds_across_handles_and_differs_by_salt() {
     );
     assert!(!printed(&short).contains("neutral-short"));
 
-    // Without a salt and without an installation: no key.
+    // Without a salt and without an installation: no key (fix round 1, adapted: the member is
+    // `{why, cause?}` now).
     let (members, _) = answered(&list(&at, FIRST, &[], &nothing));
     assert_eq!(
         members,
-        json!({"devices": bare_rows(FIRST), "bindings_unread": "state_root_unknown"})
+        json!({"devices": bare_rows(FIRST), "bindings_unread": {"why": "state_root_unknown"}})
     );
 
     // A key's length and alphabet are fixed, and it is no serial.
@@ -618,13 +636,15 @@ fn db2_t3_a_bind_by_key_after_the_handles_changed_binds_the_device_it_was_listed
 
 #[test]
 fn db2_t4_an_unauthorized_an_offline_and_a_loopback_tcp_row_are_refused_by_handle_and_by_key() {
-    // Each row, its place in the listing, its handle and the word of its refusal.
+    // Each row, its place in the listing, its handle, the word of its refusal and (fix round 1)
+    // its state as a word of device_link_state, for a row refused for its state.
     let cases = [
-        (2, "usb:8", "state_not_device"),
-        (3, "usb:9", "state_not_device"),
-        (1, "tcp:3", "transport_mismatch"),
+        (2, "usb:8", "state_not_device", Some("unauthorized")),
+        (3, "usb:9", "state_not_device", Some("offline")),
+        (1, "tcp:3", "transport_mismatch", None),
     ];
-    for (place, handle, problem) in cases {
+    for (place, handle, problem, word) in cases {
+        let state = word.map(|word| json!(word));
         // By the handle, and by the key the candidate's own secret makes (no salt given).
         let key = fingerprint(SECRET, SERIALS[place]);
         let by_key = ["--device-key", key.as_str()];
@@ -645,6 +665,11 @@ fn db2_t4_an_unauthorized_an_offline_and_a_loopback_tcp_row_are_refused_by_handl
                     &json!(problem),
                     &json!(handle)
                 ),
+                "{device:?}: {outcome}"
+            );
+            assert_eq!(
+                outcome["values"].get("device_link_state"),
+                state.as_ref(),
                 "{device:?}: {outcome}"
             );
             assert_eq!(outcome["category"], "error", "{outcome}");
@@ -704,4 +729,161 @@ fn db2_t6_an_installed_root_without_the_new_options_answers_todays_members() {
         devices::list(state.path(), root, &run).expect("the list"),
         json!({"devices": expected})
     );
+}
+
+#[test]
+fn db2_fix1_an_installed_root_whose_configuration_cannot_be_read_lists_its_rows_without_keys() {
+    // An installed root without the new options whose configuration cannot be read: none is laid.
+    let install = TempDir::new().expect("install root");
+    let state = TempDir::new().expect("state root");
+    let config = text(&install.path().join("actingd.config.json"));
+    let (install_text, state_text) = (text(install.path()), text(state.path()));
+    let run = |_: &Path| AdbRun::Printed(listing_text(FIRST));
+
+    // The older MCP tool's call: the rows without a key, and the member that says why.
+    let listed = devices::list(state.path(), Some(install.path()), &run)
+        .unwrap_or_else(|refused| panic!("a listing is not refused for want of a key: {refused}"));
+    let cause = listed["device_keys_unmade"]["cause"].clone();
+    assert_eq!(
+        (&cause["code"], &cause["values"]["path"]),
+        (&json!("config_read_failed"), &json!(config)),
+        "the reader's refusal is the cause: {listed}"
+    );
+    assert_eq!(
+        listed,
+        json!({
+            "devices": bare_rows(FIRST),
+            "device_keys_unmade": {"why": "config_unreadable", "cause": cause}
+        })
+    );
+
+    // The older command line, `devices list --state-root <dir> --root <install root>`: the same.
+    let argv = words(&[
+        "devices",
+        "list",
+        "--state-root",
+        state_text.as_str(),
+        "--root",
+        install_text.as_str(),
+    ]);
+    let exit = devices::dispatch_in(&argv, &run, &nothing).expect("devices answers");
+    let (members, code) = answered(&exit);
+    assert_eq!(code, "device_list_reported", "{exit:?}");
+    assert_eq!(members, listed);
+    no_serial(&printed(&exit));
+
+    // A bind by key there refuses as it must: its alias is checked in the configuration that
+    // cannot be read, before any key is made, with a salt or without.
+    let key = fingerprint(SALT_A, SERIALS[0]);
+    let salts: [&[&str]; 2] = [&[], &["--key-salt", SALT_A]];
+    for salt in salts {
+        let mut argv = words(&[
+            "devices",
+            "bind",
+            ALIAS,
+            "--device-key",
+            key.as_str(),
+            "--state-root",
+            state_text.as_str(),
+            "--root",
+            install_text.as_str(),
+        ]);
+        argv.extend(words(salt));
+        let exit = devices::dispatch_in(&argv, &run, &nothing).expect("devices answers");
+        let outcome = refused(&exit);
+        assert_eq!(
+            (&outcome["code"], &outcome["values"]["path"]),
+            (&json!("config_read_failed"), &json!(config)),
+            "{salt:?}: {outcome}"
+        );
+        no_serial(&printed(&exit));
+        assert!(!printed(&exit).contains(SALT_A), "the salt is not printed");
+    }
+    assert!(names(state.path()).is_empty(), "nothing is written");
+}
+
+#[test]
+fn db2_fix1_bindings_unread_carries_the_refusal_of_the_place_that_located_no_state_root() {
+    let at = roots();
+    let table = table::operation_table().expect("the operation table");
+    let row = table.operation("devices").expect("the row devices");
+    let root = text(&at.root);
+    let argv = core_ops::unlocated_words(row, &params(json!({"root": root})))
+        .expect("devices lists where nothing is located")
+        .expect("its words are built");
+
+    // The place's refusal, as the Lab's row hands it to `devices` (`core_ops::answer`): the
+    // listing answers the rows and carries it as the cause.
+    let located =
+        Outcome::new(ActingctlCode::InstallStateRootUnresolved).config_path(at.candidate.as_path());
+    let exit = devices::dispatch_unlocated_with(
+        &argv,
+        &located,
+        &listing_of(adb_of(&at.root), FIRST),
+        &nothing,
+    )
+    .expect("devices answers");
+    let (members, code) = answered(&exit);
+    assert_eq!(code, "device_list_reported", "{exit:?}");
+    assert_eq!(
+        members,
+        json!({
+            "devices": bare_rows(FIRST),
+            "bindings_unread": {
+                "why": "state_root_unknown",
+                "cause": cli_line::outcome_value(&located, Detail::Full)
+            }
+        })
+    );
+    no_serial(&printed(&exit));
+    assert!(!at.state_root.exists(), "nothing is written");
+
+    // The command line's own listing asks no place: the word alone.
+    let (members, _) = answered(&list(&at, FIRST, &[], &nothing));
+    assert_eq!(
+        members["bindings_unread"],
+        json!({"why": "state_root_unknown"})
+    );
+}
+
+#[test]
+fn db2_fix1_a_salt_longer_than_the_maximum_is_refused_by_both_forms() {
+    let at = roots();
+    let long = "s".repeat(devices::MAX_KEY_SALT_BYTES + 1);
+    let held = |name: &str| (name == SALT_VARIABLE).then(|| OsString::from(long.as_str()));
+    let given = list(&at, FIRST, &["--key-salt", long.as_str()], &nothing);
+    let variable = list(&at, FIRST, &["--key-salt-env", SALT_VARIABLE], &held);
+    for (exit, flag) in [(&given, "--key-salt"), (&variable, "--key-salt-env")] {
+        let outcome = refused(exit);
+        assert_eq!(
+            (
+                &outcome["values"]["argument"],
+                &outcome["values"]["argument_problem"],
+                &outcome["values"]["range_min"],
+                &outcome["values"]["range_max"]
+            ),
+            (
+                &json!(flag),
+                &json!("out_of_range"),
+                &json!(16),
+                &json!(1024)
+            ),
+            "{outcome}"
+        );
+        assert!(
+            !printed(exit).contains(long.as_str()),
+            "the salt is not printed"
+        );
+    }
+
+    // The longest salt the bounds allow makes every row's key.
+    let longest = "s".repeat(devices::MAX_KEY_SALT_BYTES);
+    let (members, _) = answered(&list(
+        &at,
+        FIRST,
+        &["--key-salt", longest.as_str()],
+        &nothing,
+    ));
+    assert_eq!(keys(&members).len(), SERIALS.len(), "{members}");
+    assert!(!at.state_root.exists(), "nothing is written");
 }

@@ -286,6 +286,9 @@ fn mcp_front_members_in_one_place() {
             ("devices", "key_salt_env", Supplied::Nothing),
             ("devices bind", "key_salt", Supplied::Nothing),
             ("devices bind", "key_salt_env", Supplied::Nothing),
+            // #398 DB-2 fix round 1 (adapted: the work order has `help devices bind` name the
+            // row's `--root`, declared now; its tool still takes none).
+            ("devices bind", "root", Supplied::Nothing),
         ],
         "the front's own members, in one place"
     );

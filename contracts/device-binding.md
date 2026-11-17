@@ -236,7 +236,7 @@ configuration tools of #387 D1b):
 
 | CLI | MCP | Answer |
 |---|---|---|
-| `actingctl devices list [--state-root <dir> \| --config <file>] [--root <install root>] [--key-salt <text> \| --key-salt-env <NAME>]` | `ac_devices` | `{devices: [{handle?, device_key?, transport, state, model?, bound_alias?, endpoint?}], bindings_unread?}` |
+| `actingctl devices list [--state-root <dir> \| --config <file>] [--root <install root>] [--key-salt <text> \| --key-salt-env <NAME>]` | `ac_devices` | `{devices: [{handle?, device_key?, transport, state, model?, bound_alias?, endpoint?}], bindings_unread?: {why, cause?}, device_keys_unmade?: {why, cause}}` |
 | `actingctl devices bind <alias> (<handle> \| --device-key <key> [--key-salt <text> \| --key-salt-env <NAME>]) (--state-root <dir> \| --config <file>) [--root <install root>]` | `ac_device_bind {alias, handle}` | `{alias, handle, model?, restart_required: true}`; by key `{alias, device_key, handle?, model?, restart_required: true}` |
 | `actingctl devices unbind <alias> --state-root <dir>` | `ac_device_unbind {alias}` | `{alias, unbound, restart_required}` |
 
@@ -289,7 +289,8 @@ configuration tools of #387 D1b):
     included) or of a root, and no located state root: the Lab's line carries neither the
     located `--state-root` nor the located `--root` then (`--state-root` beside `--config` is
     `conflicting`). The install root gives its adb alone: the root `--root` names when it is
-    given (on the Lab's command line a further `--root`), else the root the program runs from by
+    given (on the Lab's command line a further `--root`, the row's parameter `root` since #398
+    DB-2 fix round 1), else the root the program runs from by
     its place (`locate::root_of_place`: a program in an A/B slot, `<root>\<A|B>\runtime\` or
     `tools\`, beside the slot's `runtime\BUILD-MANIFEST.json` and the root's
     `install\slot-<A|B>.lock`, belongs to `<root>`; a program in a kept build or in a
@@ -332,9 +333,12 @@ configuration tools of #387 D1b):
     root: its line then carries neither the module's state root nor its root) it reads no binding,
     takes its adb as a bind against a candidate does (the root `--root` names, else the root the
     program runs from by its place, never an install selection; else `install_root_unresolved`),
-    and its answer says so: `bindings_unread` `state_root_unknown`, so that rows without
-    `bound_alias` never read as "nothing is bound". The place's own refusal is then not the
-    answer: a listing needs no state root;
+    and its answer says so: `bindings_unread` `{why, cause?}`, `why` `state_root_unknown`, so that
+    rows without `bound_alias` never read as "nothing is bound". The place's own refusal is then
+    not the answer: a listing needs no state root; it is the member's `cause` (fix round 1: the
+    Lab's row hands it on, so that a selection that cannot be read, or a configuration that names
+    no state root, is not lost), as an outcome envelope; a listing that asked no place (the
+    command line's own `devices list` without a state root) has `why` alone;
   - with `--config <file>` it reads the bindings of the state root the candidate names, its adb
     found the same way, the line carrying neither the module's state root nor its root;
   - with a state root (the located installation, as before) it reads that state root's bindings
@@ -346,8 +350,15 @@ configuration tools of #387 D1b):
   caller's salt, 16 to 1024 bytes of text, given as `--key-salt <text>` or read from the
   environment variable `--key-salt-env <NAME>` names in the Lab's own process; else the
   installation's own `secret_fingerprint_salt`, of the selected configuration (read as `bind`
-  reads it: `config_read_failed`, `config_decode_failed`) or of the candidate `--config` names,
-  when it is text of 16 to 1024 bytes; else the row has no `device_key`. Under the installation's
+  reads it) or of the candidate `--config` names, when it is text of 16 to 1024 bytes; else the
+  row has no `device_key`. **A listing never refuses for want of a key** (fix round 1): a selected
+  configuration that cannot be read or decoded provides no secret, so its rows carry no
+  `device_key` and the answer says so, `device_keys_unmade` `{why, cause}`, `why`
+  `config_unreadable`, `cause` the reader's refusal (`config_read_failed` or
+  `config_decode_failed`, with its `path`) as an outcome envelope; the older `actingctl devices
+  list --state-root` and `ac_devices` of `actingctl mcp-serve` reach the same code and answer
+  the same. A configuration without the secret, or with one outside its bounds, is no such
+  failure: no key and no member, as before. Under the installation's
   secret the key is the fingerprint the ledger records for the device. A command line is visible
   to the other processes of the same user (process listings, and the system's log where it records
   command lines), so `--key-salt-env` is the form for a salt that must not be. The salt and the
@@ -362,7 +373,10 @@ configuration tools of #387 D1b):
   under the installation's own secret, is the key; neither salt nor secret is `--key-salt`
   `required`, a salt without `--device-key` its flag `conflicting`. No such row is
   `device_key_unknown` (nothing written). The binding written is the one a bind by the row's
-  handle writes; the answer names the `device_key` and the row's current `handle`.
+  handle writes; the answer names the `device_key` and the row's current `handle`. On an installed
+  root whose selected configuration cannot be read a bind, by key with a salt or without, is
+  refused `config_read_failed` (with its `path`) before any key is made: its alias is checked in
+  that configuration first, as a bind by handle's is.
 - **What a bind refuses** (#398 DB-2). By handle or by key, before anything is written: a row
   adb reports in another state than `device`, the state of an authorized device online
   (`unauthorized`, `offline`, no permissions, which `adb devices -l` prints as `no`,
@@ -370,19 +384,28 @@ configuration tools of #387 D1b):
   declares (`device.transport`, `usb` when it names none: a handset on USB is not bound to a `tcp`
   row, an emulator's loopback row among them). Each is `device_row_unbindable` with `alias`, the
   row's `handle` when it has one and `device_row_problem` (`state_not_device`,
-  `transport_mismatch`). This changes what `bind` accepted before 0.12.72, which bound any row
-  adb listed by its handle.
+  `transport_mismatch`); fix round 1: `state_not_device` with `device_link_state`, the row's state
+  as a word of that vocabulary (`unauthorized`, `offline`, `no_permissions` for adb's `no`,
+  `other`), never the row's text. This changes what `bind` accepted before 0.12.72, which bound
+  any row adb listed by its handle.
 - **What a client asks the Lab** (#398 DB-2). No interface name says what a Lab can do: a client
   asks the Lab it carries for the rows of the operation table its build embeds,
   `actinglab --json help devices` and `actinglab --json help devices bind` (`command.params`, each
-  parameter's `name`, `form`, `type`, `required`, `note`), which reads nothing else and sends
-  nothing. A Lab whose `devices` declares `root`, `key_salt` and `key_salt_env` and whose
-  `devices bind` declares `config` and `device_key` lists before an installation and binds by key.
-- **Through MCP** (#398 DB-2). The Lab's MCP tools take `config`, `root` and `device_key` as the
-  table gives them, and neither `key_salt` nor `key_salt_env` (a tool call's arguments stay in the
-  client's transcript, and a variable of the server's process is no caller's to name): there a
-  device key is made with the installation's own secret alone. `actingctl mcp-serve`'s
-  `ac_devices` carries the keys of the installation's secret too; its tools take no new argument.
+  parameter's `name`, `form`, `type`, `required`, `note` and `written`, how the command line
+  writes it, as `--root <dir>`), which reads nothing else and sends nothing. A Lab whose `devices`
+  declares `root`, `key_salt` and `key_salt_env` and whose `devices bind` declares `config`,
+  `device_key` and `root` lists before an installation and binds by key. Every option either row
+  takes is among its `params` (fix round 1: `devices bind`'s `--root`, a flag only the command
+  line handed on before, is the row's `root` now, written where it went before: beside a located
+  root it is `--root` `repeated`; `serve --stdio` takes it; its MCP tool leaves it out, the
+  server handing on the root it runs from).
+- **Through MCP** (#398 DB-2). The Lab's MCP tools take `config`, `root` (`ac_devices`) and
+  `device_key` as the table gives them, and neither `key_salt` nor `key_salt_env` (a tool call's
+  arguments stay in the client's transcript, and a variable of the server's process is no
+  caller's to name): there a device key is made with the installation's own secret alone.
+  `ac_devices_bind` takes no `root` (fix round 1). `actingctl mcp-serve`'s `ac_devices` carries
+  the keys of the installation's secret too, and `device_keys_unmade` where its configuration
+  cannot be read; its tools take no new argument.
 - **`unbind`** removes the alias's binding; an alias without one answers `unbound: false` and
   writes nothing. A start then registers the handset unbound (above).
 - A private file that breaks its rules is refused before anything is listed or written

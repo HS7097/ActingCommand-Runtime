@@ -37303,7 +37303,7 @@ the Lab", "Through MCP").
 
 | Part | Where |
 |---|---|
-| Listing, key, bind by key, refusals | `crates/lab-ops/src/devices.rs`: `KeySalt`, `Keyer`, `secret_of`, `installation_secret`, `ListRequest`, `list_from` (`list` calls it), `rows`, `Against` (`Unnamed`, now public), `BindByKey`, `bind_by_key`, `bind_against` (`bind`, `bind_candidate_from` call it), `Request`, `Chosen`, `Finder`, `key_maker`, `keyed`, `bindable`, `ConfigDevice.transport`, `Candidate.secret`; `parse` (its environment given), `dispatch_in` (`dispatch_with` calls it with `std::env::var_os`), the usage text |
+| Listing, key, bind by key, refusals | `crates/lab-ops/src/devices.rs`: `KeySalt`, `Keyer`, `secret_of`, `installation_secret`, `ListRequest`, `list_from` (`list` calls it), `rows`, `Against` (`Unnamed`, now public), `bind_against` (`bind`, `bind_candidate_from` and the command line call it), `Request`, `Chosen`, `Finder`, `key_maker`, `keyed`, `bindable`, `ConfigDevice.transport`, `Candidate.secret`; `parse` (its environment given), `dispatch_in` (`dispatch_with` calls it with `std::env::var_os`), the usage text (fix round 1 removed `BindByKey` and `bind_by_key`, which nothing called, and added `not_done`, `link_state`, `dispatch_unlocated`, `dispatch_unlocated_with`, `dispatch_answer`, `ListRequest.unlocated`) |
 | Codes and the word | `crates/lab-ops/src/codes.rs` (`DeviceKeyUnknown`, `DeviceRowUnbindable`, the vocabulary `DeviceRowProblem`); `crates/actingcommand-contract/src/outcome/keys.rs` (`device_row_problem`); `contracts/outcome-codes/catalog.json` (the key and the vocabulary); the actingctl fragment and the regenerated index |
 | The flags and the rows' lines | `crates/lab-ops/src/lib.rs` `flags_of`; `crates/lab-ops/src/core_reads.rs` (`devices`, `devices bind`); `crates/lab-ops/src/core_ops.rs` `unlocated_words`, `candidate_words`, `handed_words`, `answer` |
 | The MCP front | `apps/actinglab-mcp/src/tools.rs` `SUPPLIED`; `apps/actinglab-mcp/MANUAL.md` section 1 |
@@ -37314,7 +37314,7 @@ the Lab", "Through MCP").
 | Word | Its one situation | Refuses or warns | Exit status |
 |---|---|---|---|
 | `device_key_unknown` (code) | `devices bind --device-key`: no row adb lists now carries the key under the salt given or the installation's secret | refuses | 1 on the Lab's line and on `actingctl`'s, the same line through `serve --stdio`; a `--via` line never reaches `devices` (no command of actinglab's own); `isError` true through the Lab's MCP server (`actingctl mcp-serve` has no key bind) |
-| `device_row_unbindable` (code) with `device_row_problem` `state_not_device` | the row named is in another adb state than `device` | refuses | as above; through `actingctl mcp-serve`'s `ac_device_bind` `isError` true with class `runtime` (its existing classification by name, which this slice does not move) |
+| `device_row_unbindable` (code) with `device_row_problem` `state_not_device` | the row named is in another adb state than `device` (fix round 1: with `device_link_state`, the row's state as its word) | refuses | as above; through `actingctl mcp-serve`'s `ac_device_bind` `isError` true with class `runtime` (its existing classification by name, which this slice does not move) |
 | `device_row_unbindable` with `device_row_problem` `transport_mismatch` | the row's transport is not the handset's declared one | refuses | as above |
 
 The usage words, all of the settled `actingctl_usage_invalid` (refuses, exit 1 everywhere, `isError`
@@ -37339,13 +37339,70 @@ reasons). No golden changes; no test leaves a gate map.
 
 **What changes for an installed root without the new options.** Rulings 2 and 6 give each row of
 an installed root whose selected configuration holds its secret a `device_key`; every other member
-of the listing is as before, and the listing now reads that configuration (one that cannot be read
-or decoded is refused as `bind` refuses it). `bind` refuses the rows of ruling 4. Nothing else:
+of the listing is as before, and the listing now reads that configuration (fix round 1: one that
+cannot be read or decoded is no refusal; the rows carry no key and the answer says so,
+`device_keys_unmade`). `bind` refuses the rows of ruling 4. Nothing else:
 `devices unbind`, the private file's format, check-config and the start are untouched, and no
 answer, outcome value, developer line or log names a serial.
 
 **At deploy.** Nothing to configure. The installer offers a phone once `help` shows the parameters
 above.
+
+**Fix round 1** (coordinator work order `rd-1118/brief-398-db2-fix1.md`, after the independent
+review `rd-1118/review-1817.md`, its two points that must change and five that may, as the
+coordinator ruled them; main `87b6003d`, which brought §1.465, merged in).
+- *Lint* (1). `devices::parse` hands a salt's flag to the usage refusal without an explicit
+  dereference (clippy `explicit_auto_deref`, where the lint job stopped).
+- *A listing never refuses for want of a key* (2; ruling 2: a configuration that cannot be read
+  provides no secret). An installed root whose selected configuration cannot be read or decoded
+  is listed: its rows without `device_key`, beside them `device_keys_unmade` `{why, cause}`, `why`
+  `config_unreadable` (the one word: the configuration that would provide the installation's
+  secret was not read), `cause` the reader's refusal (`config_read_failed` or
+  `config_decode_failed`, its `path`) as an outcome envelope in the line's detail. The older
+  `actingctl devices list --state-root` and `actingctl mcp-serve`'s `ac_devices` reach the same
+  code (`devices::list_from`) and answer the same; a configuration without the secret is no such
+  failure and answers as before, no key and no member. A bind there, by key with a salt or
+  without, is refused `config_read_failed` with its `path`: its alias is checked in that
+  configuration before any key is made, as a bind by handle's is; nothing is written.
+- *The real cause is kept* (3). `bindings_unread` is `{why, cause?}` now: `why`
+  `state_root_unknown` as before; `cause` the refusal of the place that located no state root,
+  which the Lab's row hands to `devices::dispatch_unlocated` (`core_ops::answer`), as an outcome
+  envelope; the command line's own listing without a state root asks no place and has `why`
+  alone.
+- *Every option in `help`* (4). `devices bind`'s `--root`, which only the command line handed on
+  (`words::KEPT_FLAGS`, `core_reads::EXCEPTIONS`, `Part::Further`), is the row's parameter `root`
+  (`dir`) now, so that `actinglab --json help devices bind` names it among `command.params`: its
+  command line writes it where `Part::Further` wrote it (after the module's root; beside a located
+  root `devices` refuses `--root` `repeated`, as before), `serve --stdio` takes it, and the Lab's
+  MCP tool leaves it out (`tools::SUPPLIED` `Supplied::Nothing`; the server hands on the root it
+  runs from, as before). Both entries it had as an undeclared flag are gone.
+- *The state of a refused row* (5). `device_row_unbindable` `state_not_device` carries
+  `device_link_state` (the existing key and vocabulary of a handset's link state): `unauthorized`,
+  `offline`, `no_permissions` for the listing's `no`, `other` for any other state
+  (`devices::link_state`; the link watch's `actingcommand_device::link_state_of_adb_state` reads
+  `adb track-devices`' whole state, and this crate does not build on that one); never the row's
+  text. The actingctl fragment lists the key, optional; the index is regenerated.
+- *Tests and dead code* (6, 7). A salt over the maximum is tested by both forms; `BindByKey` and
+  `bind_by_key`, which nothing called, are removed.
+
+| Word | Its one situation | Refuses, warns or tells | Exit status |
+|---|---|---|---|
+| `device_keys_unmade` (answer member) `why` `config_unreadable` | a listing's rows carry no key because the selected configuration, which provides the installation's secret, could not be read or decoded; `cause` the reader's refusal | tells (a member of a success) | 0 |
+| `bindings_unread` `cause` (answer member) | the refusal of the place that located no state root, beside `why` `state_root_unknown` | tells | 0 |
+| `device_link_state` on `device_row_unbindable` (existing key) | the state of the row refused `state_not_device` | refuses, as the code | 1, as the code |
+
+*Tests of fix round 1* (gate map `contracts/test-gates/apps.toml`, the row "#398 DB-2 fix round
+1"; `crates/lab-ops/src/gate_398_db2.rs`, the gate map's comment lists their assertions):
+`db2_fix1_an_installed_root_whose_configuration_cannot_be_read_lists_its_rows_without_keys`,
+`db2_fix1_bindings_unread_carries_the_refusal_of_the_place_that_located_no_state_root`,
+`db2_fix1_a_salt_longer_than_the_maximum_is_refused_by_both_forms`. Adapted, because the work
+order changes what they pin: `db2_t1` and `db2_t2` (`bindings_unread` `{why}`), `db2_t4` (the two
+rows refused for their state carry `device_link_state`, the `tcp` row none), `db2_t5` (`devices
+bind` declares `root`; each parameter's `written` pinned), actinglab's `gate_434_lab5a` (`serve
+--stdio` takes `devices bind`'s `root`, where fix 1 of LAB-5A refused it as undeclared),
+actinglab-mcp's `gate_434_lab5g2b` (the pinned `SUPPLIED` gains `devices bind` `root`) and
+`gate_434_lw1` (the reason of its `LEFT_OUT` entry for `devices bind` `root`). No golden changes;
+no test leaves a gate map.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

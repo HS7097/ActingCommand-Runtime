@@ -9,7 +9,10 @@
 //   `--json help devices` and `--json help devices bind` answer `command.params`, each parameter's
 //   name, form, type and required as the table file holds them, in its order; among them what an
 //   installer looks for: `devices` takes `root`, `config`, `key_salt` and `key_salt_env`, and
-//   `devices bind` takes `config` and `device_key`, its `handle` no longer required.
+//   `devices bind` takes `config` and `device_key`, its `handle` no longer required. Fix round 1
+//   (work order rd-1118/brief-398-db2-fix1.md, item 4): every option either row takes is among
+//   them, `devices bind`'s `root` too, and each parameter's written form (`params[].written`) is
+//   pinned.
 // The operation table this build embeds and the table file; no Runtime, no device, no clock.
 
 use super::gate_434_lab5b4::{Isolated, printed};
@@ -18,6 +21,23 @@ use serde_json::{Value, json};
 
 /// The operation table as this repository holds it.
 const TABLE: &str = include_str!("../../../../contracts/lab-operations.json");
+
+/// Fix round 1: each row's parameters as the command line writes them (row, parameter, written
+/// form), in the table's order.
+const WRITTEN: [(&str, &str, &str); 12] = [
+    ("devices", "config", "--config <file>"),
+    ("devices", "root", "--root <dir>"),
+    ("devices", "key_salt", "--key-salt <string>"),
+    ("devices", "key_salt_env", "--key-salt-env <string>"),
+    ("devices bind", "instance", "<instance>"),
+    ("devices bind", "handle", "<handle>"),
+    ("devices bind", "config", "--config <file>"),
+    ("devices bind", "bound_via", "--bound-via <ui>"),
+    ("devices bind", "device_key", "--device-key <string>"),
+    ("devices bind", "key_salt", "--key-salt <string>"),
+    ("devices bind", "key_salt_env", "--key-salt-env <string>"),
+    ("devices bind", "root", "--root <dir>"),
+];
 
 /// A parameter's name, form, type and required, as data.
 fn shape(param: &Value) -> Value {
@@ -69,13 +89,22 @@ fn db2_t5_help_answers_the_parameters_of_devices_and_devices_bind_as_the_table_h
         let line = exit.line.expect("help's line");
         let command = &line["command"];
         assert_eq!(command["name"], name, "{line}");
-        let params = command["params"]
+        let given = command["params"]
             .as_array()
-            .unwrap_or_else(|| panic!("{name}'s parameters: {line}"))
-            .iter()
-            .map(shape)
-            .collect::<Vec<_>>();
+            .unwrap_or_else(|| panic!("{name}'s parameters: {line}"));
+        let params = given.iter().map(shape).collect::<Vec<_>>();
         assert_eq!(params, declared(name), "{name}: as the table holds them");
+        // Fix round 1: how the command line writes each, as a client passes it.
+        let written = given
+            .iter()
+            .map(|param| (param["name"].clone(), param["written"].clone()))
+            .collect::<Vec<_>>();
+        let pinned = WRITTEN
+            .iter()
+            .filter(|(row, _, _)| *row == name)
+            .map(|(_, param, form)| (json!(param), json!(form)))
+            .collect::<Vec<_>>();
+        assert_eq!(written, pinned, "{name}: each parameter's written form");
         answered.push(params);
     }
 
@@ -85,7 +114,8 @@ fn db2_t5_help_answers_the_parameters_of_devices_and_devices_bind_as_the_table_h
         assert!(devices.iter().any(|given| given == name), "devices: {name}");
     }
     let bind = names(&answered[1]);
-    for name in ["config", "device_key"] {
+    // Fix round 1: and `devices bind`'s `--root`, the command line's own, declared now.
+    for name in ["config", "device_key", "root"] {
         assert!(
             bind.iter().any(|given| given == name),
             "devices bind: {name}"

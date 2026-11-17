@@ -122,10 +122,12 @@ const LEFT_OUT: [(&str, &str, &str); 12] = [
         "detach",
         "through MCP it always runs detached: it replaces the server",
     ),
+    // #398 DB-2 fix round 1 (adapted: the row declares the command line's --root now, the tool
+    // still leaves it out; the reason changes, not the entry).
     (
         "devices bind",
         "root",
-        "the command line's own --root, which the row does not declare: the server hands the root it runs from",
+        "the command line's own --root, a parameter of the row since #398 DB-2 fix round 1: the server hands the root it runs from",
     ),
     // #398 DB-1 (adapted: the work order leaves the row's channel out of its tool).
     (
