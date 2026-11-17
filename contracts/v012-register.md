@@ -37359,6 +37359,132 @@ and "Where it is built", the gate file's description and the comment of the gate
 PP-1" say the rule of fix round 1. No test and no golden changes; no gate map row changes but in
 its comment.
 
+### 1.466 Slice #463 RM-1 (0.12.72): a recording's self-check warns of a template mark that barely passes (Workflow #463; observed on production 0.12.70: a package made from a recording failed its first trials, one cause a template mark cut from a tab drawn with a moving highlight, which passed its threshold of 0.95 by 0.013 on the recording's own frames and read 0.947 on the device a moment later; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-rm1-margin-warning.md`, on main `8caf51bb`)
+
+This section takes 1.466 (1.464 and 1.465 are held by other open slices of the same day).
+It ships in 0.12.72.
+
+**Why.** The stop's answer showed the margin (`cross_check.margins`) and said nothing of it; a margin
+that small is a fact the tool has at the stop and did not point out. The owner's rulings on stage
+two hold: the tool hands back material and proposes nothing.
+
+**What the self-checks computed per mark** (read in the code; the work order's item 1).
+
+| Where | What, on which frames, against what |
+|---|---|
+| `record mark`'s self-test (`crates/lab/src/recording/marks.rs`, `evaluate_mark`) | every live frame of the mark's step (primary and samples): a template's `min_score` and `margin` = min score − its threshold (its own or the recording's default), with `matched_rect` and `location_ambiguous`; a colour mark's `max_observed_distance` and `margin` = its limit − the largest distance; a colour digest's `mean_milli`, `max_cell` and `margin` = `{mean_milli, max_cell}`, the limits minus the worst values; an OCR mark, a value test and a check carry none. Answered in the mark's `self_test` (the `record mark` answer, `record status`, `record review`'s `marks`) |
+| `record stop`'s cross-check (`crates/lab/src/recording/crosscheck.rs`, `cross_check`, item 4 "Self") | every page on the live frames of its own step and every page transition on its frames, with the admitted evaluator: per required target the smallest `score − threshold` (template), `max_distance − distance` (colour) or `max_mean_milli − mean_milli` (colour digest), over the frames the page matched or was undetermined on; answered in `cross_check.margins[{step, page, target, min_margin}]`, also in the package's provenance. No check compares anything to a bound; forbidden targets, the arrival gates, the optional steps, the endings and the entry overlay answer verdicts only |
+| `record ready` | no margin: the self-checks' failures and warnings; the cross-check's result is not in its answer |
+| `record review` | the marks' `self_test` as stored; no margin of the self-checks |
+
+**The rule** (`contracts/lab-recording.md`, "Self-checks", item 11, "Near a threshold").
+- *The measure.* The self-checks keep, per template mark and per judgement, the frame on which its
+  score came nearest its threshold, on the side the judgement needs it (`crates/lab/src/recording/
+  near.rs`, `Nearest`, one implementation for every caller). `passes`: a template a page requires
+  that passes on the page's own frames (a step's page, its page transition, an ending's page),
+  the marks `cross_check.margins` lists. `misses`: a template a page forbids that misses on the
+  page's own frames (item 4, the forbidden marks, the one check that compares a mark against its
+  threshold from below); and, where a page must not pass on a screen and does not, the one template
+  mark its not passing rests on (every other mark it requires passes, none is undetermined, no mark
+  it forbids passes, that one fails with its score below its threshold): the arrival gate on the
+  frames of the step whose effect it awaits, an optional step's page against the step before its
+  run, the skip target and another optional step, the skip target on an optional step's frames,
+  an ending's page against `previous`, `usual` and `other_ending`, the usual ending's page on an
+  ending's frames. A page not passing because two marks fail is told apart by either and is not
+  judged so. The entry overlay, a darkened copy of step 1's frames, is not judged so.
+- *The warning.* `record_template_near_threshold` (warning, `ladder_class` none, `pending`, since
+  0.12.72): `{code, side, check, against?, step?, record_index?, page?, gate?, optional_step?,
+  outcome_key?, other_outcome_key?, usual_page?, mark_id, frame_id, score, threshold, margin, bound}`,
+  `side` a word of the new vocabulary `template_threshold_side` (`passes`, `misses`), `check` the code
+  the judgement answers when it fails (`record_step_self_mismatch`, `arrival_unconfirmed`,
+  `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`,
+  `record_ending_ambiguous`, `ending_usual_insensitive`, as `optional_ambiguity_not_evaluated`
+  names its check) with the members that check names its place by, `margin` the distance of the
+  score from the threshold, less than `bound`. No message, no proposal: the fact only.
+- *Where it is answered.* `record stop` and its dry run: `lab.warnings`, after the other warnings;
+  `record ready`: among its warnings, after `record stop`'s other warnings, once every self-check
+  passed (`ReadyWarningItem::NearThreshold`), its status, `missing` and `checks` unchanged; `record
+  review`: `steps[].warnings`, the warnings whose `record_index` is the step's (an ending's names no
+  step), absent when there is none. It is not written into the package's provenance (`warnings`
+  there are what they were), so the package is byte for byte the same whatever the bound.
+- *The bound* (the work order's item 4). The Lab gives its other self-check numbers as parameters
+  of the command with a default (`record stop --arrival-timeout-ms`, `record frames --before` and
+  `--after`, a mark's `--threshold`, `record start --template-threshold`); the Lab's configuration
+  (`user-config`) holds none. So the bound is `--template-margin-bound <d>` of `record stop`,
+  `record ready` and `record review` (`RecordStopOptions::template_margin_bound`, the operation
+  table's `template_margin_bound`, `decimal`), default `DEFAULT_TEMPLATE_MARGIN_BOUND` 0.03; a value
+  outside 0 to 1 is `validation_failed` before anything is read (the Lab's check, as for the
+  timeouts; a text that is no number is refused by actinglab's parse); 0 warns of nothing.
+- *What the other mark families have* (the work order's item 5; not warned in this slice). In the
+  same self-checks a colour mark's and a colour digest's distance to their limits is already
+  measured and answered: `cross_check.margins` (`max_distance − distance`, `max_mean_milli −
+  mean_milli`) and the mark's `self_test.margin` at mark time. OCR, value-test and check marks have
+  no such number.
+
+**Codes and words.**
+
+| Word | One cause | Refuses or warns | Exit |
+|---|---|---|---|
+| `record_template_near_threshold` | a template mark's score lies nearer its threshold than the bound on the side a self-check needs it on (`side`) | warns, never refuses | unchanged: 0 on actinglab's own line, on the `--via` line and through MCP |
+| `template_threshold_side` (`passes`, `misses`) | the side: it passes where it must pass, or misses where it must not pass | (a vocabulary) | none |
+
+No decision reads the code or the word: `record review` places a warning at a step by its typed
+variant and `record_index`, not by its code.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The measure and the warning | `crates/lab/src/recording/near.rs` (new): `TemplateNearThreshold`, `NearThresholdAt`, `Nearest`, `template_margin_bound` |
+| The judgements | `crates/lab/src/recording/crosscheck.rs`: `Evaluation::target` keeps a template's score and threshold; `PageResult::held_apart_by`; `OwnNearest`; `page_on_frames` answers `OnFrames` with the held marks (the arrival gate now reads it too, as the optional steps and the endings did); `cross_check`, `optional_checks` and `ending_checks` take the bound |
+| The answers | `crates/lab/src/recording_api.rs`: the bound read by `record_stop` and `ready_of`, `self_checks` and `package_checks` carry it, `PackageChecked::near_threshold` kept out of the provenance and added to `lab.warnings`; `ready.rs` `ReadyWarningItem::NearThreshold`; `review.rs` `RecordReviewStep::warnings` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--template-margin-bound` in `RECORD_STOP_FLAGS`, `RECORD_READY_READS` and `RECORD_REVIEW_READS`; the usage texts of `record stop` (`lab2_cli.rs`, `session_contracts.rs`) |
+| Codes | `crates/lab/src/codes.rs`, `contracts/outcome-codes/lab.json`, the vocabulary in `contracts/outcome-codes/catalog.json`, the index regenerated |
+| Texts | `contracts/lab-recording.md` ("Package generation", "Self-checks" item 11, "Reviewing a recording step by step"); `contracts/lab-operations.json`, the rows `record stop`, `record ready`, `record review` |
+
+**Tests** (`crates/lab/src/gate_463_rm1.rs`, exec gate map "#463 RM-1"; synthetic gray screens with
+noise patches recorded offline, a perturbed patch's score read by the function the admitted
+evaluator reads it with; no OCR model, no clock): the five of the work order, as the gate map's
+comment lists them. Test 1 compares the package the stop writes with the bytes the self-checks
+build for the same plan with the bound 0 (`recording_api::package_with_bound`, test-only). No
+existing test is adapted; no golden changes; no test leaves a gate map.
+
+**What is not changed.** What passes and what refuses at `record mark`, `record ready` and `record
+stop`; every verdict of every self-check; the generated package, byte for byte; every answer but
+for the new warning (`steps[].warnings` of `record review` is absent where there is none). No
+record, no configuration key, no interface revision.
+
+**At deploy.** Nothing to configure. `record stop`, its dry run, `record ready` and `record review`
+answer the warning where a template mark lies within 0.03 of its threshold; `--template-margin-bound`
+changes the bound for one call.
+
+**Fix round 2** (coordinator work order `rd-1118/brief-463-rm1-fix2.md`, after the independent
+review of the pull request; the coordinator's rulings on the review's points, not the owner's
+words).
+- *Texts.* The usage of `record ready` and of `record review` names `[--template-margin-bound <d>]`
+  as `record stop`'s does, and their MCP parameter lists `template_margin_bound`. On a recording
+  whose package is made and that has not changed since (`packaged`; `record stop` answers it
+  `already_generated`) no self-check runs: the bound is taken, checked, and has no effect
+  (`contracts/lab-recording.md`, "Package generation" and "Self-checks" item 11; the manual; the
+  rows `record ready` and `record review`).
+- *A failing case no longer drops the warning.* When every self-check before `cases` passed, the
+  warnings `record_template_near_threshold` they found are carried with the failures of `cases` (a
+  case that misses, or an error that ends the check; `SelfCheckFailures::near_threshold`), and
+  `record ready` lists them after the generator's warnings and before the cases' own, as on a
+  recording that is ready; `record review` shows them at their steps. `record stop` still answers
+  the refusal alone.
+- *No warning where item 7c allows the pass.* An optional step's page on the frames of another
+  optional step of its run closed by the same press (`same_closing`: the same click rectangle, or
+  the same key on the same marks), where section 4.7c lets it pass as one pop-up recorded twice, is
+  not judged `misses` there.
+- *Tests.* Four more in `gate_463_rm1.rs` (the gate map's comment, items 6 to 9), each judgement
+  once with a gap of about 0.01 (warned) and once with about 0.05 (not warned): an optional page
+  against `previous` and the skip target; an optional page against `other_optional`, warned with
+  different presses and not with the same press; an ending's page against `previous`, `usual` and
+  `other_ending` and the usual page on an ending's frame; a page transition's and an ending's
+  template on their own frames (`passes`). No existing test is adapted. The older MCP server's
+  `record stop` is not changed (it is being removed).
+
 ### 1.467 #398 DB-2 (0.12.72): devices listed and bound before an installation is selected, by a key that outlives the adb session (Workflow #398; the rules below are the coordinator's rulings in the work order, not the owner's words, and the coordinator's addition of `--key-salt-env` sent during the work; coordinator work order `rd-1117/brief-398-db2-devices-before-install.md`, read on main `8caf51bb`, built on main `f0c64ae8`, the release of 0.12.71)
 
 This section takes 1.467 (1.464 to 1.466 are held by other open slices). It ships in 0.12.72.
