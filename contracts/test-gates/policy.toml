@@ -1464,3 +1464,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_463_v3::v3_policy_the_bounds_refuse_an_edit",
 ]
 incident = ["#463 V3"]
+
+# #480 PG-1 fix round 2 (0.12.72; register §1.468, "Fix round 2"; brief rd-1118/brief-480-pg1-fix2.md, item 4; contracts/scheduling-pause.md, "Instance pause: three stages", (c)), the scheduler's half: on a device of two members keyed by the map the assembly derives, under a closed routine gate, the first member's own queued autostart claim refuses its pause's hand-back (member_refusing_count), the device's dedicated-lease count (refusing_count) and its dedicated close lease (lease_transfer_not_safe) without the word AutostartEndsAtGrant and under the word naming the other member, and under the word naming the first member refuses none of them: the close lease is granted ahead of it (no lease_queue_ahead) and the claim keeps its place in the queue (1); under the word naming the first member, the other member's queued autostart claim (counted by the device, not by the first member's pause), a queued claim of the first member of another kind (the start's preparation) and a queued operator's entry of the first member (an emulator control) each still refuse the dedicated close lease, the latter two the hand-back too (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_480_pg1::pg1_fix2_only_the_instances_own_queued_autostart_claim_is_passed_over_under_its_pause",
+    "actingcommand-scheduler::lib::tests::gate_480_pg1::pg1_fix2_every_other_queued_entry_refuses_as_before_under_the_instances_pause",
+]
+incident = ["#480", "PG-1"]

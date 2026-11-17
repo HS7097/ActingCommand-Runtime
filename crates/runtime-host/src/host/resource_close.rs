@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::emulator_autostart::AutomaticStartHold;
 use super::host_claims::HostClaimWork;
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
@@ -29,6 +30,17 @@ pub(super) enum LeaseDeviceEnd {
 enum ResourceCloseTarget {
     Session,
     ApplicationBackends,
+}
+
+/// #480 PG-1 fix round 2 (the review's sequence 2, to its end): how the preparation of the
+/// watch's recognition on its autostart claim's key (`prepare_recognized_instance`) ended.
+pub(super) enum RecognitionPreparation {
+    /// It ran: the ladder a failed preparation admitted, which the caller's release hands the
+    /// key to (H-1, P1).
+    Ran(Option<Box<PendingRecoveryLadder>>),
+    /// `automatic_start_hold`, asked once the claim had the instance's admission guard, held it:
+    /// nothing was read, bound, prepared or recorded.
+    Held(AutomaticStartHold),
 }
 
 impl HostShared {
@@ -1102,8 +1114,16 @@ impl HostShared {
     /// `connection_value`: a resource-close-only lease (`prepare_resource_close`: a waiting entry
     /// the scheduling pause does not hold back is `TransferNotSafe`, Workflow #369 §5.1),
     /// granted with `CapacityUse::Drain`. `kind` names its holder (Workflow #369 Q-2; review
-    /// L2). The caller holds the instance admission guard. Returns the token, its connection
-    /// and the grant's request id.
+    /// L2). #480 PG-1 fix round 1 (item 3): while an automatic start of the instance is held
+    /// (`automatic_start_hold`: a scheduling pause, its own or the global one), its own queued
+    /// autostart claim, which ends at its grant without a Start, neither refuses the lease nor is
+    /// jumped by it (`AutostartEndsAtGrant`); it is granted after the lease, in its place. Fix
+    /// round 2: so for every caller, the resource-close lease of
+    /// `close_retained_instance_while_guarded` (a pause's hand-back outside the multi-Nemu gate
+    /// among them) and the daemon start's preparation of a physical instance
+    /// (`ClaimKind::DaemonStartPreparation`, `prepare_physical_instance_on_start`). The
+    /// caller holds the instance admission guard. Returns the token, its connection and the
+    /// grant's request id.
     pub(super) fn grant_dedicated_instance_lease(
         &self,
         instance_id: InstanceId,
@@ -1115,19 +1135,39 @@ impl HostShared {
             connection_value,
             |request_id, holder_id, connection_id| {
                 let gate = self.routine_gate(instance_id)?;
-                lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
-                    .prepare_dedicated_lease(
+                let autostart_ends = self.autostart_ends_at_grant(
+                    instance_id,
+                    HostLocation::PrepareResourceCloseLease,
+                )?;
+                let mut scheduler = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?;
+                let now_monotonic_ms = self.monotonic_ms()?;
+                let prepared = if autostart_ends {
+                    scheduler.prepare_dedicated_lease(
+                        request_id,
+                        instance_id,
+                        holder_id,
+                        connection_id,
+                        kind,
+                        actingcommand_scheduler::AutostartEndsAtGrant {
+                            gates: gate,
+                            member: instance_id,
+                        },
+                        now_monotonic_ms,
+                    )
+                } else {
+                    scheduler.prepare_dedicated_lease(
                         request_id,
                         instance_id,
                         holder_id,
                         connection_id,
                         kind,
                         gate,
-                        self.monotonic_ms()?,
+                        now_monotonic_ms,
                     )
-                    .map_err(|error| {
-                        RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
-                    })
+                };
+                prepared.map_err(|error| {
+                    RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+                })
             },
         )
     }
@@ -2090,17 +2130,28 @@ impl HostShared {
     /// `runtime.instance_bound`, the ADB baseline, `device.connected`; a failure there opens
     /// nothing and is recorded on this instance only), under the instance's admission guard for
     /// the preparation's device steps only. It takes no dedicated lease and releases nothing;
-    /// returns the self-check and the ladder a failed preparation admitted, which the caller's
-    /// release hands the key to (H-1, P1).
+    /// returns the ladder a failed preparation admitted, which the caller's release hands the key
+    /// to (H-1, P1). #480 PG-1 fix round 2 (the review's sequence 2, to its end): once it has the
+    /// guard, before the preparation reads the status and binds, it asks `automatic_start_hold`
+    /// once more; held (a pause set while the claim renewed or waited for the guard), it reads,
+    /// binds and prepares nothing and records nothing (`RecognitionPreparation::Held`).
     pub(super) fn prepare_recognized_instance(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
         key: &super::host_claims::HostKey,
-    ) -> Result<(SchedulingResumeSelfCheck, Option<PendingRecoveryLadder>), RequestFailure> {
+    ) -> Result<RecognitionPreparation, RequestFailure> {
+        // #480 PG-1 fix round 3, tests: just before the wait for the instance's admission guard.
+        #[cfg(test)]
+        self.before_recognition_admission_for_test()?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.lock_admission(&instance_guard, instance_id)?;
+        if let Some(hold) =
+            self.automatic_start_hold(instance_alias, HostLocation::RunEmulatorAutostart)?
+        {
+            return Ok(RecognitionPreparation::Held(hold));
+        }
         let prepared = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
@@ -2115,7 +2166,22 @@ impl HostShared {
         );
         drop(admission);
         let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
-        Ok((prepared.selfcheck, prepared.ladder))
+        Ok(RecognitionPreparation::Ran(prepared.ladder.map(Box::new)))
+    }
+
+    /// #480 PG-1 fix round 3, test builds: runs, once, the hook a test set for the watch's
+    /// recognition just before its preparation takes the instance's admission guard.
+    #[cfg(test)]
+    fn before_recognition_admission_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.recognition_admission_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover

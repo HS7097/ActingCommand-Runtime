@@ -1307,7 +1307,10 @@ its wake, one `emulator_autostart_skipped` (`skip_reason` `instance_paused`, `id
 `stop_emulator`) per pause revision says so, and a wake's configured start that meets the pause on
 its key starts nothing and leaves the wake owed again; the first idle check after the resume
 queues it ([emulator-control.md](emulator-control.md), "Pauses (PAUSE-AUTO)"). A wake after
-`close_app` queues its startup package behind the pause as before.
+`close_app` queues its startup package behind the pause as before. #480 PG-1 (since 0.12.72): the
+global pause holds such a wake the same way (`skip_reason` `global_paused`), and the first idle
+check after the global resume queues it ([emulator-control.md](emulator-control.md), "Pauses
+(PG-1)").
 
 What wakes an idle instance (IDLE-WG, since 0.12.27; production v0.12.26 on 10-29 02:43: an
 instance resume's reconnect claim held an idle instance, its candidates waited
@@ -1369,9 +1372,9 @@ its owner epoch is one), the start does not know what the action left: every ins
 could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
 closed, never as open, and owes its wake at the start's time (review N-1): the start's first idle
 check wakes it once, its startup package waits behind a scheduling pause or an install hold as
-after every wake (for `stop_emulator` after its configured emulator start, which no global pause
-holds; since 0.12.34 the instance's own pause holds the wake itself, PAUSE-AUTO above,
-[emulator-control.md](emulator-control.md)), and the next plan
+after every wake (for `stop_emulator` after its configured emulator start; since 0.12.34 the
+instance's own pause holds the wake itself, PAUSE-AUTO above, and since 0.12.72 the global pause
+does too, PG-1, [emulator-control.md](emulator-control.md)), and the next plan
 closes it again with its proper wake. So an instance whose only work waits for a status reading
 that expired meanwhile is not left closed with no wake. The configured emulator start at daemon
 start leaves an emulator the action holds stopped to its wake.
@@ -1736,7 +1739,8 @@ before. An instance turned on by an instruction takes its turn after those the f
 (the configured ones in configuration order, then the others by alias).
 
 **Pauses (Alice's ruling 117 A).** While the instance's own scheduling pause holds it, in any
-stage, no automatic start launches its emulator, whatever the key says, and the pause is asked
+stage, or (#480 PG-1, since 0.12.72) the global pause does, no automatic start launches its
+emulator, whatever the key says, and the pause is asked
 again on every claim's key just before the Start (PAUSE-AUTO, `automatic_start_hold`, the one
 place R-7b extends with the player hold; [emulator-control.md](emulator-control.md), "Pauses
 (PAUSE-AUTO)"). An explicit emulator control (a person, an agent, Lab) asks neither.

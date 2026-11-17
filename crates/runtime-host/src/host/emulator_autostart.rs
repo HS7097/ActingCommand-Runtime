@@ -15,7 +15,8 @@
 //! included), never holds or queues the claim and never makes it yield; the pause holds only the
 //! instance's dispatches and its startup package (below). PAUSE-AUTO (0.12.34, below): the
 //! instance's own pause keeps the daemon start and an idle wake from requesting the claim, and
-//! ends one it meets on the claim's key, without a Start. The claim takes neither the
+//! ends one it meets on the claim's key, without a Start; #480 PG-1 (0.12.72): so does the global
+//! pause. The claim takes neither the
 //! bound-endpoint check nor the performance-control gate and is granted with drain capacity
 //! (Q-2a).
 //!
@@ -60,7 +61,10 @@
 //! emulator control waiting on the instance (superseded: a release and a report line, no failure
 //! pair), and ends without action on an instance that already runs. The Start is H-4's start path
 //! on the claim's own key; its `command.received` is written only then, so a claim that yields
-//! leaves no open command. A passing preparation hands the key to the startup package through the
+//! leaves no open command (#480 PG-1 fix round 3: only once the last ask of the hold, with the
+//! instance's admission guard in hand, has passed, just before the provider's Start, so a claim a
+//! pause held anywhere before leaves no `command.*` record at all). A passing preparation hands
+//! the key to the startup package through the
 //! gate, a failing one to the ladder it admitted; emu-watch: under a scheduling pause the startup
 //! package's claim waits queued as a gated entry and runs after the resume (#411 A71: so does an
 //! operator's start's; W2-B, 0.12.26: `host.idle_state` keeps it, so a restart before the resume
@@ -80,18 +84,27 @@
 //! PAUSE-AUTO (0.12.34, Alice's ruling 117 A; production 10-31: every instance paused under
 //! `alice-116-scheduler-stop`, and the emulators are started by hand for maintenance): every
 //! automatic emulator start asks one question, `automatic_start_hold`, whether it may start the
-//! instance's emulator now; today the instance's own scheduling pause, in any stage, holds it (the
-//! global pause does not). The configured start at daemon start asks it before it requests a
-//! claim: a held instance gets none, and its skip is `emulator_autostart_skipped` (`alias`,
-//! `skip_reason` `instance_paused`), a `device_state_observed` record under the instance and its
-//! report line. Its claim, the claim of IDLE-1's wake after `stop_emulator` and the emulator
-//! watch's restart and recognition claims (R3, EMU-BIND; the watch asks before it requests them,
-//! WATCH-P) ask it again on their key, at every tick of the hold and so in the last check just
-//! before the Start or the recognition: a claim queued before the pause began ends there,
-//! releases its key and starts, binds and prepares nothing, its skip recorded the same way (an
-//! idle wake's with `idle_action` `stop_emulator`, and the wake stays owed, `withhold_idle_wake`;
-//! the watch's with its `watch_kind`, and the request it counted against the watch's bound given
-//! back, `refund_watch_request`). Each start records its skip once per pause revision. The pause
+//! instance's emulator now; the instance's own scheduling pause, in any stage, holds it, and since
+//! #480 PG-1 (0.12.72) the global pause does too (`skip_reason` `global_paused`; where both hold,
+//! the instance's own `instance_paused`). The configured start at daemon start asks it before it
+//! requests a claim: a held instance gets none, and its skip is `emulator_autostart_skipped`
+//! (`alias`, `skip_reason` the hold's word: `instance_paused`, or since 0.12.72 `global_paused`), a
+//! `device_state_observed` record under the instance and its report line. Its claim, the claim of
+//! IDLE-1's wake after `stop_emulator` and the emulator watch's restart and recognition claims (R3,
+//! EMU-BIND; the watch asks before it requests them, WATCH-P) ask it again on their key, at every
+//! tick of the hold and so in the last check just before the Start or the recognition, (#480
+//! PG-1 fix round 1) once more after the claim's last status read (`held_after_last_read`), and
+//! (fix round 2) once more with the instance's admission guard in hand: as the last thing before
+//! the provider's Start (`drive_configured_control`, fix round 3: before the start's
+//! `command.received`, which is written only after that ask, so a start held there records no
+//! `command.*` and no `runtime.failed`), and before the recognition's preparation reads the status
+//! and binds (`prepare_recognized_instance`, which records nothing): a claim queued before the
+//! pause began ends
+//! there, releases its key and starts, binds and prepares nothing, its skip recorded the same way
+//! (an idle wake's with `idle_action` `stop_emulator`, and the wake stays owed,
+//! `withhold_idle_wake`; the watch's with its `watch_kind`, and the request it counted against the
+//! watch's bound given back, `refund_watch_request`). Each start records its skip once per pause
+//! revision. The pause
 //! is still no routine gate of the claim: it neither queues it nor makes it yield. An explicit
 //! emulator control (a person, an agent, Lab) never asks.
 //!
@@ -109,6 +122,7 @@
 use super::emulator_watch::{SkippedStart, WatchKind, WatchSkipReason, start_skip_outcome};
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
+use super::resource_close::RecognitionPreparation;
 use super::*;
 use crate::InstanceState;
 use crate::codes::{HostCode, HostLocation};
@@ -297,8 +311,8 @@ enum HoldEnd {
     /// The instance already runs.
     Running,
     /// PAUSE-AUTO (0.12.34): the daemon start's, an idle wake's or one of the watch's claims met a
-    /// hold on its key (`automatic_start_hold`, the instance's own scheduling pause): it starts,
-    /// binds and prepares nothing.
+    /// hold on its key (`automatic_start_hold`: the instance's own scheduling pause or, #480 PG-1,
+    /// the global pause): it starts, binds and prepares nothing.
     Held(AutomaticStartHold),
     /// Workflow #429 R-3 (register §1.272): the daemon start's, an idle wake's or the watch's
     /// restart claim met the instance's `start_emulator` off in effect on its key: it starts
@@ -313,6 +327,22 @@ enum HoldEnd {
     Unread(Box<Outcome>),
     /// A renewal was refused (`lease_expired`, `lease_missing`).
     RenewalRefused(Box<RequestFailure>),
+}
+
+/// #480 PG-1 fix round 2 (the review's sequence 2, to its end): how an automatic start's drive on
+/// its claim's key ended, short of a failure (`drive_configured_start`, `recognize_on_key`).
+pub(super) enum KeyedStart {
+    /// The Start was driven, or the recognition prepared: its report line follows.
+    Driven,
+    /// `automatic_start_hold`, asked once more with the instance's admission guard in hand (just
+    /// before the provider's Start, or before the recognition's preparation reads the status and
+    /// binds), held it: nothing was started, bound or recorded (fix round 3: a start's
+    /// `command.received` comes only after that ask), and the claim ends as held
+    /// (`HoldEnd::Held`) on its key, given back here.
+    Held {
+        key: Box<HostKey>,
+        hold: AutomaticStartHold,
+    },
 }
 
 /// emu-watch: what the watch claim's status read just before its Start found.
@@ -344,7 +374,8 @@ impl HostShared {
     /// queued contends once it is granted. A claim the queue refuses is recorded by the queue and
     /// reported; only a failure the Runtime does not survive is returned. PAUSE-AUTO (0.12.34):
     /// an instance an automatic start may not start now (`automatic_start_hold`: its own
-    /// scheduling pause) gets no claim and is not counted; its skip is recorded after the count.
+    /// scheduling pause or, #480 PG-1, the global pause, a restored one included) gets no claim
+    /// and is not counted; its skip is recorded after the count.
     /// Workflow #429 R-3 (register §1.272): a configured instance is one whose `start_emulator` is
     /// on in effect now (`emulator_starts_in_effect`), not the start-time list.
     pub(super) fn enqueue_emulator_autostart(&self) -> RuntimeHostResult<usize> {
@@ -650,6 +681,10 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
+        // #480 PG-1 fix round 1, tests: just before the claim is requested.
+        #[cfg(test)]
+        self.before_autostart_claim_request_for_test()
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.request_host_claim_work(
             HostClaim {
                 request: &request,
@@ -677,6 +712,10 @@ impl HostShared {
         pending: &PendingAutostart,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
+        // #480 PG-1 fix round 2, tests: the claim was granted and holds its key, before its first
+        // check.
+        #[cfg(test)]
+        self.autostart_claim_granted_for_test()?;
         // EMU-BIND: a recognition launches nothing, so it takes no start turn.
         if pending.recognize {
             return self.hold_recognition_claim(pending, key);
@@ -749,10 +788,20 @@ impl HostShared {
                 if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
                     return self.end_autostart_hold(pending, &key, end);
                 }
-                return match self.watch_start_unneeded(pending)? {
-                    WatchRead::Start => self.drive_autostart(pending, key),
-                    WatchRead::End(end) => self.end_autostart_hold(pending, &key, end),
-                    WatchRead::Recognize => self.drive_recognition(pending, key),
+                let recognize = match self.watch_start_unneeded(pending)? {
+                    WatchRead::Start => false,
+                    WatchRead::Recognize => true,
+                    WatchRead::End(end) => return self.end_autostart_hold(pending, &key, end),
+                };
+                // #480 PG-1 fix round 1 (review sequence 2): a pause pressed while that read ran
+                // stops this Start or recognition too.
+                if let Some(end) = self.held_after_last_read(pending)? {
+                    return self.end_autostart_hold(pending, &key, end);
+                }
+                return if recognize {
+                    self.drive_recognition(pending, key)
+                } else {
+                    self.drive_autostart(pending, key)
                 };
             }
             thread::sleep(AUTOSTART_TICK);
@@ -765,8 +814,8 @@ impl HostShared {
     /// on, renewing its key, until the blackout's end (Workflow #386 SR-4a3). No network wait and
     /// no start turn: it launches nothing. PAUSE-AUTO (0.12.34, the coordinator's ruling of 10-31
     /// on ruling 112): the instance's own scheduling pause ends it at any tick, without a
-    /// recognition (`autostart_hold_ends`); no other pause holds it. EMU-BIND fix 1
-    /// (0.12.28, review L2): just before the recognition, the check that one is still needed
+    /// recognition (`autostart_hold_ends`); since #480 PG-1 the global pause does too. EMU-BIND
+    /// fix 1 (0.12.28, review L2): just before the recognition, the check that one is still needed
     /// (`recognition_unneeded`).
     fn hold_recognition_claim(
         &self,
@@ -781,13 +830,77 @@ impl HostShared {
                 .blackout_covering(pending.instance_id, &pending.instance_alias)?
                 .is_none()
             {
-                return match self.recognition_unneeded(pending)? {
+                if let Some(end) = self.recognition_unneeded(pending)? {
+                    return self.end_autostart_hold(pending, &key, end);
+                }
+                // #480 PG-1 fix round 1 (review sequence 2): a pause pressed while that read ran
+                // stops this recognition too.
+                return match self.held_after_last_read(pending)? {
                     None => self.drive_recognition(pending, key),
                     Some(end) => self.end_autostart_hold(pending, &key, end),
                 };
             }
             thread::sleep(AUTOSTART_TICK);
         }
+    }
+
+    /// #480 PG-1 fix round 1 (review sequence 2): after the claim's last status read, just before
+    /// its Start or its recognition, `automatic_start_hold` asked once more, so that a pause pressed
+    /// while the read ran (it is bounded, not instant) stops this Start: `Held` with what holds it.
+    fn held_after_last_read(
+        &self,
+        pending: &PendingAutostart,
+    ) -> RuntimeHostResult<Option<HoldEnd>> {
+        #[cfg(test)]
+        self.after_autostart_last_read_for_test()?;
+        Ok(self
+            .automatic_start_hold(&pending.instance_alias, HostLocation::RunEmulatorAutostart)?
+            .map(HoldEnd::Held))
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs, once, the hook a test set for an automatic
+    /// start's claim after its last status read, just before it asks the hold once more.
+    #[cfg(test)]
+    fn after_autostart_last_read_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.autostart_last_read_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-1 fix round 2, test builds: runs, once, the hook a test set for an autostart claim
+    /// that was granted and holds its key, before its first check.
+    #[cfg(test)]
+    fn autostart_claim_granted_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.autostart_claim_granted_hook_for_test,
+            HostLocation::RunEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-1 fix round 1, test builds: runs, once, the hook a test set for an autostart claim
+    /// just before it is requested.
+    #[cfg(test)]
+    fn before_autostart_claim_request_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.autostart_claim_request_hook_for_test,
+            HostLocation::EnqueueEmulatorAutostart,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// EMU-BIND fix 1 (0.12.28, review L2: something may have bound and prepared the instance
@@ -829,12 +942,14 @@ impl HostShared {
     /// emulator control waiting on the instance; an instance that already runs (a daemon start's
     /// claim: its binding is no longer pending); PAUSE-AUTO (0.12.34, Alice's ruling 117 A and
     /// ruling 112): for every claim (a daemon start's, an idle wake's, the watch's restart and
-    /// recognition), what holds an automatic start now (`automatic_start_hold`, the instance's own
-    /// scheduling pause), so a claim queued before the pause began never passes it; Workflow #429
+    /// recognition), what holds an automatic start now (`automatic_start_hold`: the instance's own
+    /// scheduling pause or, #480 PG-1, the global pause), so a claim queued before the pause began
+    /// never passes it; Workflow #429
     /// R-3 (register §1.272): for every claim that would start the emulator (not a recognition),
     /// the instance's `start_emulator` in effect, so a claim requested while it was on starts
-    /// nothing once it is off. The last of these checks runs just before the Start or the
-    /// recognition.
+    /// nothing once it is off. The last of these checks runs just before the claim's last status
+    /// read; #480 PG-1 fix round 1: after that read, `held_after_last_read` asks the hold once
+    /// more, just before the Start or the recognition.
     fn autostart_hold_ends(
         &self,
         pending: &PendingAutostart,
@@ -892,23 +1007,49 @@ impl HostShared {
     /// just before the Start (`autostart_hold_ends`); IDLE-1's wake after `stop_emulator` before it
     /// queues its claim (`IdleView::start_held`) and on that claim's key; the emulator watch before
     /// it requests a restart or a recognition (`watch_emulator`) and on either claim's key.
-    /// Today one thing holds it: the
-    /// instance's own scheduling pause, in any stage (`draining`, `paused`, `released`, a restored
-    /// one included), as `skip_reason` `instance_paused` at the pause's revision; the global pause
-    /// is no pause of the instance. #429 R-7b extends this place with the player hold. An explicit
-    /// emulator control (a person, an agent, Lab) never asks it. `at` names the caller's operation
-    /// for a poisoned lock.
+    /// Two things hold it: the instance's own scheduling pause, in any stage (`draining`,
+    /// `paused`, `released`, a restored one included), as `skip_reason` `instance_paused` at the
+    /// pause's revision; and (#480 PG-1, 0.12.72, the owner's requirement on board #480: after
+    /// "pause all" the Runtime starts no emulator by itself) the global pause, a restored one
+    /// included, as `skip_reason` `global_paused` at the global pause's revision. Where both hold,
+    /// the instance's own pause answers (one stable word). #429 R-7b extends this place with the
+    /// player hold. An explicit emulator control (a person, an agent, Lab) never asks it. `at`
+    /// names the caller's operation for a poisoned lock.
     pub(super) fn automatic_start_hold(
         &self,
         alias: &str,
         at: impl Into<Location>,
     ) -> RuntimeHostResult<Option<AutomaticStartHold>> {
-        Ok(lock(&self.scheduling_pause, at)?
-            .instance_state(alias)
-            .map(|pause| AutomaticStartHold {
+        let pauses = lock(&self.scheduling_pause, at)?;
+        if let Some(pause) = pauses.instance_state(alias) {
+            return Ok(Some(AutomaticStartHold {
                 reason: WatchSkipReason::InstancePaused,
                 revision: pause.revision,
-            }))
+            }));
+        }
+        Ok(pauses.global_state().map(|pause| AutomaticStartHold {
+            reason: WatchSkipReason::GlobalPaused,
+            revision: pause.revision,
+        }))
+    }
+
+    /// #480 PG-1 fix round 1 (item 3): whether a queued autostart claim of `instance_id` ends at
+    /// its grant without a Start, starting, binding and preparing nothing: an automatic start of
+    /// the instance is held now (`automatic_start_hold`), so the claim's first check on its key
+    /// ends it (`autostart_hold_ends`). `at` names the caller's operation for a poisoned lock.
+    pub(super) fn autostart_ends_at_grant(
+        &self,
+        instance_id: InstanceId,
+        at: impl Into<Location>,
+    ) -> RuntimeHostResult<bool> {
+        let at = at.into();
+        let alias = lock(&self.registered_instances, at)?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone());
+        match alias {
+            Some(alias) => Ok(self.automatic_start_hold(&alias, at)?.is_some()),
+            None => Ok(false),
+        }
     }
 
     /// Ends a hold before its Start: the key is released, and one report line says why. A
@@ -1121,7 +1262,8 @@ impl HostShared {
     /// H-5 Start path: H-4's start on the claim's own key (`drive_configured_start`), then one
     /// report line: started when the backend self-check after the start passes, the preparation
     /// failure when it does not (the ladder it admitted holds the key), or the failure that ended
-    /// the start.
+    /// the start. #480 PG-1 fix round 2: a start the hold held just before its provider Start ends
+    /// as a hold on its key does (`end_autostart_hold`, `HoldEnd::Held`).
     fn drive_autostart(&self, pending: &PendingAutostart, key: HostKey) -> RuntimeHostResult<()> {
         let alias = pending.instance_alias.as_str();
         let claim = key.request.clone();
@@ -1150,10 +1292,15 @@ impl HostShared {
             }
         };
         let line = match self.drive_configured_start(&validated, &resolved, links, key) {
-            Ok(()) if self.backend_selfcheck_passed(pending.instance_id)? => {
+            Ok(KeyedStart::Held { key, hold }) => {
+                return self.end_autostart_hold(pending, &key, HoldEnd::Held(hold));
+            }
+            Ok(KeyedStart::Driven) if self.backend_selfcheck_passed(pending.instance_id)? => {
                 Outcome::new(HostCode::EmulatorAutostartStarted).alias(alias)
             }
-            Ok(()) => Outcome::new(HostCode::EmulatorAutostartPreparationFailed).alias(alias),
+            Ok(KeyedStart::Driven) => {
+                Outcome::new(HostCode::EmulatorAutostartPreparationFailed).alias(alias)
+            }
             Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
                 return Err(*failure.error);
             }
@@ -1201,12 +1348,16 @@ impl HostShared {
     /// `emulator_autostart_preparation_failed` (`watch_kind` `recognize`) when it did not (the
     /// preparation recorded the failing step on this instance; a ladder it admitted holds the
     /// key), or `emulator_autostart_failed` (`watch_kind` `recognize`, since 0.12.28) with the
-    /// failure that ended it. Only a failure the Runtime does not survive is returned.
+    /// failure that ended it. Only a failure the Runtime does not survive is returned. #480 PG-1
+    /// fix round 2: a recognition the hold held once it had the instance's admission guard ends
+    /// as a hold on the key of the claim it was requested as does (`end_autostart_hold`,
+    /// `HoldEnd::Held`: a routed watch restart's request given back to the restart bound).
     fn drive_recognition(
         &self,
         pending: &PendingAutostart,
         mut key: HostKey,
     ) -> RuntimeHostResult<()> {
+        let requested = pending;
         // EMU-BIND fix 1 (0.12.28, review L1): a recognition routed from a watch claim or an idle
         // wake's ends as one too (its lines carry `watch_kind` `recognize`, and a refused renewal
         // records no start intent: it drives no Start).
@@ -1232,12 +1383,15 @@ impl HostShared {
             );
         }
         let line = match self.recognize_on_key(pending, key) {
-            Ok(()) if self.backend_selfcheck_passed(pending.instance_id)? => {
+            Ok(KeyedStart::Held { key, hold }) => {
+                return self.end_autostart_hold(requested, &key, HoldEnd::Held(hold));
+            }
+            Ok(KeyedStart::Driven) if self.backend_selfcheck_passed(pending.instance_id)? => {
                 Outcome::new(HostCode::EmulatorAutostartSkipped)
                     .alias(alias)
                     .watch_kind(WatchKind::Recognize)
             }
-            Ok(()) => Outcome::new(HostCode::EmulatorAutostartPreparationFailed)
+            Ok(KeyedStart::Driven) => Outcome::new(HostCode::EmulatorAutostartPreparationFailed)
                 .alias(alias)
                 .watch_kind(WatchKind::Recognize),
             Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
@@ -1257,13 +1411,16 @@ impl HostShared {
     /// end as after a start (`end_emulator_control_hold`): once the endpoint is bound, the
     /// instance's startup package is queued and takes the key through the gate, or waits behind
     /// the ladder a failed preparation admitted; an endpoint still pending queues none and the key
-    /// goes to that ladder or is released. The error is a failure that ended the key.
+    /// goes to that ladder or is released. The error is a failure that ended the key. #480 PG-1
+    /// fix round 2: a preparation the hold held once it had the instance's admission guard
+    /// (`RecognitionPreparation::Held`) did nothing; the key comes back (`KeyedStart::Held`).
     fn recognize_on_key(
         &self,
         pending: &PendingAutostart,
         key: HostKey,
-    ) -> Result<(), RequestFailure> {
-        let validated = key.request.validate().map_err(|_| {
+    ) -> Result<KeyedStart, RequestFailure> {
+        let claim = key.request.clone();
+        let validated = claim.validate().map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::HostKeyRequestInvalid,
                 HostLocation::RunEmulatorAutostart,
@@ -1273,27 +1430,35 @@ impl HostShared {
         let links = self
             .events
             .request_links(&validated, Some(pending.instance_id), None, None);
-        let prepared = self
-            .prepare_recognized_instance(
-                &pending.instance_alias,
-                pending.instance_id,
-                links.clone(),
-                &key,
-            )
-            .and_then(|(_, ladder)| {
-                let resolved = self.resolve_instance(&pending.instance_alias)?;
-                let startup_package = if resolved.endpoint_pending() {
-                    None
-                } else {
-                    self.prepare_startup_package(&resolved, links, key.request.request_id())?
-                };
-                Ok((startup_package, ladder))
-            });
+        let ladder = match self.prepare_recognized_instance(
+            &pending.instance_alias,
+            pending.instance_id,
+            links.clone(),
+            &key,
+        ) {
+            Ok(RecognitionPreparation::Held(hold)) => {
+                return Ok(KeyedStart::Held {
+                    key: Box::new(key),
+                    hold,
+                });
+            }
+            Ok(RecognitionPreparation::Ran(ladder)) => Ok(ladder.map(|ladder| *ladder)),
+            Err(failure) => Err(failure),
+        };
+        let prepared = ladder.and_then(|ladder| {
+            let resolved = self.resolve_instance(&pending.instance_alias)?;
+            let startup_package = if resolved.endpoint_pending() {
+                None
+            } else {
+                self.prepare_startup_package(&resolved, links, key.request.request_id())?
+            };
+            Ok((startup_package, ladder))
+        });
         let ended = prepared.and_then(|(startup_package, ladder)| {
             self.end_emulator_control_hold(&validated, &key, startup_package, ladder)
         });
         match ended {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(KeyedStart::Driven),
             Err(failure) => {
                 Err(self.cleanup_composite_failure(key.token, key.connection_id, failure))
             }

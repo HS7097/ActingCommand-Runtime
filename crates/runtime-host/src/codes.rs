@@ -1666,6 +1666,14 @@ actingcommand_contract::outcome_codes! {
         /// the run alone is refused instead of a panic that would stop the Runtime.
         RunVariableUnjudged => "run_variable_unjudged": error / none,
         // ---- Workflow #463 S3-8: end
+        // ---- #480 PG-1 fix round 1 (`contracts/scheduling-pause.md`, "Instance pause: three
+        // stages", (c)): begin
+        /// Error. A shutdown came while an instance pause's hand-back waited for the Runtime's own
+        /// automatic emulator start alone (the autostart claim holding the instance): the request
+        /// fails before stage `released`, but the pause is not lifted; its fact still names the
+        /// instance and the next start restores it.
+        SchedulingPauseKeptAtShutdown => "scheduling_pause_kept_at_shutdown": error / none,
+        // ---- #480 PG-1 fix round 1: end
     }
 }
 
