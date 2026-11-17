@@ -266,6 +266,11 @@ mod gate_463_rc2;
 #[cfg(windows)]
 #[path = "gate_463_s315.rs"]
 mod gate_463_s315;
+// #463 AC-1: `standard-pack adopt --record-id` takes the recording's regression cases into the
+// checkout, each run first by the one runner, and judges the recording by `record ready`'s one
+// function (S3-17).
+#[path = "gate_463_ac1.rs"]
+mod gate_463_ac1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

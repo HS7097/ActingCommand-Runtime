@@ -10385,7 +10385,7 @@
           "description": "--repo holds no applications.json, maintenance.json or packs directory, one of them or its schedule.json does not read, or a .part of a root file an interrupted adoption left is there (the message names every leftover and what to do), or, without a decision and with --replace, schedule.json gives the package a held entry beside its maintenance.json entry (two roles, which only an adoption interrupted between its two renames leaves; a rule beside that entry is the package's one maintenance role, never a second one)."
         },
         "recording_not_current": {
-          "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package."
+          "description": "The recording --record-id names is not as its last record stop left it: no recording.json, not stopped, marked again since, or without its package. Workflow #463 S3-17 (since 0.12.71): judged by record ready's one function, a status other than packaged (the details' record_ready, that function's answer with its missing); where that function cannot read the recording, its status and amended_at_unix_ms checked as before (its refusal the cause); its artifact and its package's file checked as before; and a cases directory beside the package that cannot be listed (Workflow #463 AC-1)."
         },
         "package_invalid": {
           "description": "The package is not admitted as package preflight admits it, or its package_id names no directory packs/<package_id>."
@@ -10394,7 +10394,7 @@
           "description": "The package's game is not applications.json's, or its server is none of that file's servers."
         },
         "pack_exists": {
-          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there; the message names which, and with its directory alone either the root file adopt does not write that gives it a role and what the call accepts for it, or that an adoption was interrupted before it wrote the root files) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken."
+          "description": "The package was adopted before (its directory, its rule, its held entry or its maintenance entry is there; the message names which, and with its directory alone either the root file adopt does not write that gives it a role and what the call accepts for it, or that an adoption was interrupted before it wrote the root files) and --replace is not given, its .part an interrupted adoption left is there (the message names every leftover and what to do), or the kept copy's place is taken. Workflow #463 AC-1 (since 0.12.71), when the adoption takes cases: a case of the package an earlier adoption took from a recording is in regression/<game>/ and --replace is not given; the .part of a case of the package an interrupted adoption left is there; or the kept place of the earlier cases is taken."
         },
         "pack_dirty": {
           "description": "With --replace, the version control shows a change not committed below packs/<package_id>, or cannot tell."
@@ -10418,7 +10418,7 @@
           "description": "schedule.json or maintenance.json must change and is not in the canonical form package fmt writes."
         },
         "replace_across_volumes": {
-          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's package by --package)."
+          "description": "With --replace, the replaced pack directory's kept place under the state directory lies on another volume than the checkout, where it cannot be moved, or the volume cannot be told; a --state-dir on the checkout's volume is given instead (and a recording's package by --package). Workflow #463 AC-1 (since 0.12.71): so does the kept place of the earlier cases of the package (entry the first of them)."
         },
         "check_tree_unmarked": {
           "description": "The place of the checkout's check tree under the state directory holds no marker the tool wrote, so it is not the tool's own scratch and nothing in it is touched."
@@ -10431,6 +10431,37 @@
         },
         "business_rule_in_the_way": {
           "description": "A decision of the class maintenance by its uses alone, without a trigger, meets the package's business rule in schedule.json (a rule the composer judges by its value), which adopt does not turn into a maintenance rule unasked; the refusal names the rule."
+        },
+        "case_name_invalid": {
+          "description": "Workflow #463 AC-1 (since 0.12.71): the name of a case of the recording's set (out/<package_id>.cases/<case>/) gives no directory <package_id>.<case> of regression/<game>/: the name holds a dot, the whole is not one path segment, or with its .part it is longer than a file name takes (255 bytes). path names the case in the recording."
+        },
+        "case_place_taken": {
+          "description": "Workflow #463 AC-1 (since 0.12.71): the directory regression/<game>/<package_id>.<case> a case of the recording would be written to is there (names compared in ASCII lower case) and is no case an adoption took from a recording of this package (a case.json naming the package with a recording's source); adopt neither moves nor overwrites it. entry names it."
+        },
+        "case_failed": {
+          "description": "Workflow #463 AC-1 (since 0.12.71): a regression case of the recording, run by the one runner on the package as this adoption writes it, has the verdict failed; count their number, path the recording's cases directory. Fix round 1: the details list the cases that did not pass as resource regression lists them, by its one rule: failed_total how many did not pass, cases the rows of the first of them, the failed ones first, at most resource regression's bound, without a check's detail, listed how many rows are given."
+        },
+        "recording_not_judged": {
+          "description": "Workflow #463 AC-1 fix round 1 (since 0.12.71): record ready's one function refused the recording otherwise than as one the Lab cannot read whole (the state not read, the recording's identity not its own, its answer not serialized), so the recording is not judged and adoption takes none it did not judge; the Lab's refusal is the cause, path the recording's recording.json."
+        }
+      }
+    },
+    "adopt_cases": {
+      "description": "Which regression cases actinglab standard-pack adopt took, the member cases.state of its answer (Workflow #463 AC-1, contracts/standard-pack-authoring.md \"The cases\", since 0.12.71).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "AdoptCasesState"
+      },
+      "tokens": {
+        "taken": {
+          "description": "With --record-id: the cases the recording's last stop wrote beside its package, read from its out/<package_id>.cases/, each run before the first write and written into regression/<game>/<package_id>.<case>/ (none when that directory holds none)."
+        },
+        "none_found": {
+          "description": "With --record-id: the recording's last stop wrote no cases directory beside its package (a stop of a build before #463 S2-10), so none is taken; the adoption is as before, and next names the regression case."
+        },
+        "package_path": {
+          "description": "With --package: a package given by its path carries no case, so none is read; the adoption is as before, and next names the regression case."
         }
       }
     },

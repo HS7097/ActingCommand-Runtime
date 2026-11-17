@@ -2594,3 +2594,28 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_463_rc2::rc2_a_case_as_record_stop_writes_it_warns_no_unknown_member",
 ]
 incident = ["#463 RC-2"]
+
+# #463 AC-1 (0.12.71; register §1.461; brief rd-1117/brief-463-ac1-adopt-cases.md; contracts/standard-pack-authoring.md, "The cases" and "One judgement of the recording"): standard-pack adopt --record-id of real recordings (screens of one colour each, recorded and stopped through the Lab): five cases taken byte for byte into regression/<game>/<package_id>.<case>/, in written after the package and the root file, passing resource regression afterwards (1); --replace after the package was recorded again with other steps moves the earlier set to <state>/adopt/<package_id>.cases.old-<ms>/ and leaves a case of the package written by hand (2); a package changed after its stop refuses case_failed listing all five cases as the runner answers them, nothing written (3); a destination there by hand refuses case_place_taken before the first write (4); --dry-run writes nothing and lists the cases, a recording without its cases directory answers none_found and a package by --package package_path, each writing the package and the root file byte for byte as the adoption that took the cases did, next naming the regression case (5); an adoption stopped by the test's machine after its first case's rename leaves that case alone, the next call is refused pack_exists without --replace and with it moves that case to the kept place and writes the set (6); S3-17: a draft is refused recording_not_current with record ready's missing (7), four recordings compared with the old check of recording_not_current (8) and a packaged recording the review refuses compared with recording_unreviewed (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_five_cases_are_taken_byte_for_byte_and_pass_resource_regression",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_replace_moves_the_earlier_set_and_leaves_a_hand_written_case",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_a_failing_case_refuses_and_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_a_destination_that_is_no_recordings_case_refuses_before_the_first_write",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_the_dry_run_lists_the_cases_and_the_two_words_write_as_before",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_an_adoption_stopped_after_its_first_case_leaves_it_and_the_next_call_answers_the_contract",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_s317_a_draft_recording_is_refused_with_record_readys_missing",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_s317_recording_not_current_against_record_ready",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_s317_recording_unreviewed_against_record_ready",
+]
+incident = ["#463 AC-1"]
+
+# #463 AC-1 fix round 1 (0.12.71; register §1.461, "Fix round 1"; brief rd-1117/brief-463-ac1-fix1.md, the coordinator's rulings 2 and 3; contracts/standard-pack-authoring.md, "The cases" and "One judgement of the recording"): a packaged recording record ready's own function refuses otherwise than as one the Lab cannot read whole (asked in a state directory where it is not, lab_recording_missing) is refused recording_not_judged, the Lab's refusal its cause, nothing written; the same recording with a member added to its recording.json by hand (lab_recording_unreadable) is judged by the check of its own members and adopted, said in review.ready_not_read (1); fifteen failing cases (two copies of each of a recording's five beside it, every scene changed after the stop) refuse case_failed with count 15, failed_total 15, listed and the rows the first ROWS_LISTED_MAX in the order of their names, each by the directory it would be written to, failed, without a check's detail; nothing written (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_fix1_a_lab_failure_refuses_and_an_unreadable_recording_falls_back",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_463_ac1::ac1_fix1_failing_cases_beyond_the_bound_are_listed_as_resource_regression_lists_them",
+]
+incident = ["#463 AC-1"]

@@ -220,6 +220,13 @@ actingcommand_contract::outcome_codes! {
         /// Warning (Workflow #463 S3-12): no passed trial of the content the adoption writes is on
         /// record in its state directory (key `package_id`; the review's `trial` says what is).
         NotTried => "not_tried": warning / none,
+        /// Warning (Workflow #463 AC-1 fix round 1): the adoption took no case (`cases.state`
+        /// `none_found` or `package_path`), and `regression/<game>/` holds cases of the package it
+        /// left as they are, neither moved nor run on the content it writes: cases an earlier
+        /// adoption took from a recording and the `.part` of a case an interrupted adoption left
+        /// (keys `package_id`, `paths` those directories relative to `--repo`). It moves and
+        /// removes nothing.
+        AdoptCasesLeft => "adopt_cases_left": warning / none,
         // Workflow #463 S3-15a: the refusals of `actinglab standard-pack status --installation`
         // (contracts/standard-pack-schedule.md, "Where a pack stands"), each before the game
         // root, a journal or the suspension report is read.
@@ -352,6 +359,37 @@ actingcommand_contract::outcome_vocabulary! {
         /// composer judges by its value, fix round 3), which adopt does not turn into a
         /// maintenance rule (fix round 2).
         BusinessRuleInTheWay => "business_rule_in_the_way",
+        /// Workflow #463 AC-1: the name of a case of the recording's set gives no directory
+        /// `<package_id>.<case>` of the checkout: it holds a dot, is not one path segment, or the
+        /// name with its `.part` is longer than a file name takes (255 bytes).
+        CaseNameInvalid => "case_name_invalid",
+        /// Workflow #463 AC-1: the directory a case of the recording would be written to,
+        /// `regression/<game>/<package_id>.<case>`, is there and is no case an adoption took from
+        /// a recording of this package.
+        CasePlaceTaken => "case_place_taken",
+        /// Workflow #463 AC-1: a case of the recording fails on the package as this adoption
+        /// writes it (the one runner's verdict `failed`); fix round 1: the details list the cases
+        /// that did not pass as `resource regression` lists them, by its one rule.
+        CaseFailed => "case_failed",
+        /// Workflow #463 AC-1 fix round 1: `record ready`'s one function refused the recording
+        /// otherwise than as one the Lab cannot read whole (the state not read, the recording's
+        /// identity not its own, its answer not serialized): the recording is not judged, and
+        /// adoption takes none it did not judge (that refusal the cause).
+        RecordingNotJudged => "recording_not_judged",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #463 AC-1: which regression cases `standard-pack adopt` took (the vocabulary
+    /// `adopt_cases`, the member `cases.state` of its answer).
+    pub enum AdoptCasesState: "adopt_cases" {
+        /// The cases of the recording's last stop, read from its `out/<package_id>.cases/`.
+        Taken => "taken",
+        /// The recording's last stop wrote no cases beside its package (a stop of a build before
+        /// #463 S2-10): none is taken.
+        NoneFound => "none_found",
+        /// The package was given by its path (`--package`), which carries no case: none is read.
+        PackagePath => "package_path",
     }
 }
 

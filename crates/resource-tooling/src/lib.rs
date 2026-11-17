@@ -197,9 +197,18 @@ pub use adopt::{
     RecordingReview, RootEntryChange, StandardPackAdoptRequest, StandardPackAdoptResponse,
     ValueNotJudged, ValueWait, standard_pack_adopt,
 };
+// Workflow #463 AC-1: what adoption asks of the Lab (the one judgement of a recording, #463 S3-17,
+// and the one runner of a regression case), and the cases it answers; fix round 1: the cases run
+// as a set, listed by `resource regression`'s rule, and the judgement's refusal told apart.
+pub use adopt::{
+    AdoptCaseAt, AdoptCaseRun, AdoptCaseVerdict, AdoptCases, AdoptCasesRun, AdoptLab,
+    CaseNotProven, ReadyNotRead, ReadyRefused, RecordingReady,
+};
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
+// Workflow #463 AC-1: the word of the cases an adoption took.
+pub use codes::AdoptCasesState;
 pub use codes::ResourceToolingCode;
 // Workflow #464 P3: the readiness items, problems and unjudged words; fix round 1: a pack's four
 // answers and its supporting parts.

@@ -8,7 +8,13 @@ be, and its targets found or not. This contract makes the case format the reposi
 runner in the Lab. Writing cases (`record stop`, #463 S2-10) and running them where a repository
 is verified and built (`resource verify`'s and `standard-pack build`'s step, RV-2a) call the same
 runner; this version builds the reader, the runner and the offline operation `resource
-regression`, and nothing else.
+regression`, and nothing else. #463 AC-1 (0.12.71): `standard-pack adopt --record-id` runs each
+case of the recording by the same runner on the package it adopts before it writes the case into
+`regression/<game>/<package_id>.<case>/` ([standard-pack-authoring.md](standard-pack-authoring.md),
+"The cases"); its fix round 1: it reads each case directory by the one reading `resource
+regression` reads one with (what a `case.json` that cannot be read, a missing scene and a refused
+package become), and its refusal `case_failed` lists the cases that did not pass by this
+operation's rule and bound ("The operation").
 
 ## A case
 

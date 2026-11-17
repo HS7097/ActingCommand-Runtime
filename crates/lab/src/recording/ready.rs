@@ -287,6 +287,14 @@ impl ReadyState {
     }
 }
 
+impl RecordReadyOutcome {
+    /// #463 AC-1 (S3-17): whether the status is `packaged`, the one that says the recording's
+    /// package is current: `standard-pack adopt --record-id` takes no other.
+    pub fn is_packaged(&self) -> bool {
+        self.status == ReadyState::Packaged.word()
+    }
+}
+
 /// Whether `recording` is stopped with its package written and nothing changed since (no mark
 /// after the stop, `amended_at_unix_ms`).
 pub(crate) fn packaged(recording: &LabRecording) -> bool {
