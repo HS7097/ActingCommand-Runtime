@@ -31,14 +31,20 @@ fn not_read(stored: Value) -> bool {
 }
 
 // S2-T1: `PackageAdmitted` has only `package_label` and `task_label` (with its response
-// deadline); every entry-recovery fact names its layer's package by `package_label`. Each
-// reads back unchanged, and none is read with a `package_sha256` member.
+// deadline) and, since Workflow #463 CH-1 (ledger revision 9; the owner's ruling of 11-16 on
+// board #463, which relaxes option 丙 for computing and recording only), the content hash its
+// admission measured (`content_hash`) and the values handed to the run (`variables`); every
+// entry-recovery fact names its layer's package by `package_label`. Each reads back unchanged,
+// and none is read with a `package_sha256` member. (Adapted by CH-1: the member set gains
+// `content_hash` and `variables`.)
 #[test]
 fn s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest() {
     let mut admitted = semantic(TaskSemanticFact::PackageAdmitted {
         package_label: "neutral.main".to_owned(),
         task_label: "task".to_owned(),
         response_deadline_monotonic_ms: Some(60_000),
+        content_hash: Some("c".repeat(64)),
+        variables: AdmittedVariable::list([("pick", &json!("item_a"))]),
     });
     read_back(&admitted);
     assert_eq!(
@@ -48,6 +54,8 @@ fn s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest() {
             "package_label",
             "task_label",
             "response_deadline_monotonic_ms",
+            "content_hash",
+            "variables",
         ])
     );
 

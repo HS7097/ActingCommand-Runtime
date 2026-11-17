@@ -1183,8 +1183,8 @@ impl ContainedRunControl {
     }
 
     /// Workflow #385 MEM-1: the run's main package load, when its preparation measured it.
-    pub(super) fn package_load(&self) -> Option<PackageLoad> {
-        self.package_load.get().copied()
+    pub(super) fn package_load(&self) -> Option<&PackageLoad> {
+        self.package_load.get()
     }
 
     /// #385 P-k (Tk-10): the wall time the run's budget clock did not count, noted once when
@@ -1760,6 +1760,12 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// The admitted package's `control.json` `game` / `server`, published as `task.game` /
     /// `task.server` once `task.package_admitted` is appended.
     declared_game_server: (String, String),
+    /// Workflow #463 CH-1 (register §1.455): what the run's admission record carries beside its
+    /// package's label: the content hash its admission measured on the bytes it read
+    /// (`PackageLoad::content_hash`) and the values handed to the run from outside, sorted by
+    /// name. Only recorded; nothing of the run reads them.
+    admitted_content_hash: Option<String>,
+    admitted_variables: Option<Vec<actingcommand_contract::AdmittedVariable>>,
     pub(super) last_frame_id: Option<IssuedFrameId>,
     /// The device capture time of the frame `last_frame_id` names.
     last_frame_captured_at: Option<SystemTime>,
@@ -5730,6 +5736,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             package_label,
                             task_label,
                             response_deadline_monotonic_ms: Some(self.control.deadline()),
+                            // Workflow #463 CH-1: only recorded, compared with nothing.
+                            content_hash: self.admitted_content_hash.clone(),
+                            variables: self.admitted_variables.clone(),
                         },
                         self.token.expires_at_monotonic_ms(),
                         AuditInput::new(),
@@ -6786,11 +6795,15 @@ fn contained_task_package_path(request: &ContainedTaskRequest) -> Result<&Path, 
 }
 
 /// Workflow #385 MEM-1 (ADD §1.6, register P8): how long a run's package took to load and the
-/// bytes it holds in memory; the run's task timing evidence carries both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// bytes it holds in memory; the run's task timing evidence carries both. Workflow #463 CH-1
+/// (register §1.455): and the content hash the admission measured on the bytes it read, which
+/// the run's admission record carries (`PackageAdmitted.content_hash`); `None` when the
+/// admission measured none.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PackageLoad {
     pub(super) elapsed_ms: u64,
     pub(super) bytes: u64,
+    pub(super) content_hash: Option<String>,
 }
 
 /// [`prepare_contained_task`] with the package load it measured (Workflow #385 MEM-1): the same
@@ -6831,9 +6844,11 @@ pub(super) fn prepare_measured_naming_refusal(
 ) -> Result<MeasuredLoad, MeasuredRefusal> {
     let path = contained_task_package_path(request).map_err(|failure| (failure, None))?;
     // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
-    // structural only; the package is named by its path alone.
+    // structural only; the package is named by its path alone. Workflow #463 CH-1: the
+    // admission also measures the content hash of what it read, once, on the bytes in memory;
+    // it is recorded with the run's admission and compared with nothing.
     let started = Instant::now();
-    let (prepared, bytes) = PreparedContainedTask::load_path_with_resident_bytes(
+    let (prepared, bytes, content_hash) = PreparedContainedTask::load_path_with_resident_bytes(
         instance_alias,
         path,
         vision_provider,
@@ -6846,7 +6861,14 @@ pub(super) fn prepare_measured_naming_refusal(
         (contained_task_declaration_failure(error), refused)
     })?;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    Ok((prepared, PackageLoad { elapsed_ms, bytes }))
+    Ok((
+        prepared,
+        PackageLoad {
+            elapsed_ms,
+            bytes,
+            content_hash,
+        },
+    ))
 }
 
 fn contained_task_declaration_failure(
@@ -8889,6 +8911,26 @@ impl HostShared {
         dispatched_parameters: Option<crate::fact_refresh::DispatchedParameters>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
+        // Workflow #463 CH-1 (contracts/package-variables.md, "The run's admission record"): the
+        // values handed to the run from outside, as its admission record carries them: a policy
+        // run's, those of its dispatch it reads under its prepared package's declaration
+        // (`dispatched_variables_read`, the rule `dispatched_variable_values` applies below); a
+        // direct run's, those its request gives (judged before its admission, so each is read
+        // whole); none for any other run.
+        let admitted_variables = match &dispatched_parameters {
+            Some(dispatched) => actingcommand_contract::AdmittedVariable::list(
+                prepared
+                    .dispatched_variables_read(&dispatched.variables)
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value)),
+            ),
+            None => actingcommand_contract::AdmittedVariable::list(
+                task_request
+                    .variables()
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value)),
+            ),
+        };
         // Workflow #411 B15 R5 (contracts/remedies.md section 4): a policy run reads the values
         // its dispatch carries, observed at its admission; any other run reads its package's
         // declared defaults. Workflow #411 B8: a policy run also reads the schedule values its
@@ -8961,6 +9003,10 @@ impl HostShared {
             execution_provenance,
             control: Arc::clone(&control),
             declared_game_server: (prepared.game().to_owned(), prepared.server().to_owned()),
+            admitted_content_hash: control
+                .package_load()
+                .and_then(|load| load.content_hash.clone()),
+            admitted_variables,
             last_frame_id: None,
             last_frame_captured_at: None,
             reading_frames: Vec::new(),
@@ -12473,6 +12519,7 @@ impl HostShared {
         control.note_package_load(PackageLoad {
             elapsed_ms: 1,
             bytes,
+            content_hash: None,
         });
         lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?
             .insert(request_id, control);

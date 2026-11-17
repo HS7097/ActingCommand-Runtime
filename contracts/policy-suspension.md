@@ -118,7 +118,7 @@ The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 
 `content-directory.v1` hash of the content table its path holds (a directory, a `.json` or a
 `.zip` content container), or the SHA-256 of the whole file for an assembled package ZIP (one
 holding `resources/manifest.json`). It has two uses: a pause and (Workflow #463 U1b, since
-0.12.63) a pair's break-in. It is measured in three places only, read-only: when a scheduled
+0.12.63) a pair's break-in. For them it is measured in three places only, read-only: when a scheduled
 failure is settled (the main package at the path the run used and each layer at the path the
 run's standard-pack registry gave it, Workflow #373 NAV-3a; SR-3 adds its suspension point), at a
 lift check ("Lifting"), and (U1b) when a scheduled run of a `linear_steps` main package is
@@ -127,8 +127,15 @@ through the lift checks' memory: a location measured within
 `scheduling.suspension.lift_check_min_interval_ms`, by a preparation or a lift check, is not
 measured again. For a package replaced inside that interval (fix round 3), until the interval ends
 its runs are judged and counted against the content measured before; the new content's break-in
-starts with the first measurement after it. Admission never computes or compares it; it is stored
-inside the failure identity and, as its first 12 hex digits, in the pair's break-in.
+starts with the first measurement after it. Admission never compares it; it is stored inside the
+failure identity and, as its first 12 hex digits, in the pair's break-in. Since Workflow #463 CH-1
+(Runtime 0.12.71, ledger revision 9; the owner's ruling of 11-16, which relaxes option 丙 for
+computing and recording only; [v012-register.md](v012-register.md) §1.455) the admission of a
+run's package by its path also computes it once, by the same function, on the bytes it read, and
+records it in the run's admission record `task.requested` (`content_hash`), so the ledger says
+which content each run was admitted with. Nothing of the suspension reads that record: the
+failure identity, the break-in and the lift checks measure the content themselves, in the three
+places above, as before, and a pause, a break-in or a lift is decided exactly as without it.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
 unknown) and the startup reconciliation of an interrupted settlement.

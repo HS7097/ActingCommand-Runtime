@@ -136,6 +136,8 @@ fn run_facts() -> Vec<TaskSemanticFact> {
             package_label: MAIN_PACKAGE.to_owned(),
             task_label: TASK_LABEL.to_owned(),
             response_deadline_monotonic_ms: None,
+            content_hash: None,
+            variables: None,
         },
         TaskSemanticFact::StepStarted {
             step_index: 0,

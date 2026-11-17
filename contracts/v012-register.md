@@ -22,7 +22,10 @@ owner slice is in v0.12.0 and brings its own shape says so. A writer that arrive
 a shape that v0.12.0 already reads.
 
 **Rules every shape below follows.** No member carries a task-package content digest (option 丙;
-the package identity is `package_id`, recorded as `package_label`). No reader accepts a ledger or
+the package identity is `package_id`, recorded as `package_label`), but one: since ledger revision
+9 the run's admission record `task.requested` carries the content hash its admission measured
+(`content_hash`, only computed and recorded, compared with nothing; the owner's ruling of 11-16,
+which relaxes option 丙 in this respect alone, §1.455). No reader accepts a ledger or
 configuration written before v0.12.0 (no old-version compatibility); every 0.12 build reads what
 earlier 0.12 builds wrote on the same root, which is why this register exists
 ([ledger-observer.md](ledger-observer.md), "Later rulings applied", item 2). Field and type
@@ -595,7 +598,7 @@ optional, and what replaces each removed one.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| P2-1 | `TaskSemanticFact::PackageAdmitted {package_label, task_label, response_deadline_monotonic_ms?}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `package_label` is the package's `package_id` (a task semantic label, `invalid_task_semantic_label`); the code `invalid_task_package_fingerprint` is deleted (pending) |
+| P2-1 | `TaskSemanticFact::PackageAdmitted {package_label, task_label, response_deadline_monotonic_ms?}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `package_label` is the package's `package_id` (a task semantic label, `invalid_task_semantic_label`); the code `invalid_task_package_fingerprint` is deleted (pending). Since ledger revision 9 (Workflow #463 CH-1, §1.455) the fact also carries the optional `content_hash` (the content hash its admission measured, recorded only and compared with nothing) and `variables` (the run's values); `package_sha256` stays refused |
 | P2-2 | `EntryRecoveryPackageAdmitted.package_label`, `EntryRecoveryCompleted.package_label` (required), `EntryRecoveryFailed.package_label` (optional, omitted when absent) | changed persisted members (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | each the layer's own `package_id`; a failure has none only when the layer's package was refused before its `package_id` was read (a request's own recovery binding names a path only); the run recovery view pairs a failure with a later completion of the same label; the failure identity's `pre:` scope is `pre:<I>`, `I` the id hash of that label (§2 format v2 scope; the rest of the format stays with PKG-S3) |
 | P2-3 | `EffectiveConfigurationFacts::EntryRecovery.package_label` | changed artifact member (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | ledger-forensics refuses an empty, overlong or control-character label (`effective_configuration_fields_invalid`) |
 | P2-4 | `TaskSelectionPolicy {path, policy_sha256, policy_id}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `policy_sha256` is the evaluator's identity of the document, not a package digest; it stays |
@@ -35125,6 +35128,115 @@ release 0.12.68 (`ff74c80c`) merged first, in one merge commit; this section kee
   and `s318_fix1_an_undo_that_lets_one_pack_enter_and_others_leave_names_each_hot_and_cold` (one
   pack enters, two leave, one of them a pack the placement added with no rule, which the
   placement's own lists never named).
+
+### 1.455 Slice #463 CH-1 (0.12.71): the run's admission record carries the content hash its admission measured and the values handed to the run (Workflow #463; the owner's ruling of 11-16 on board #463, option A of question 220, which relaxes her ruling of 10-11, option 丙 of Workflow #336, for computing and recording only; the read-only study `rd-1116/report-463-run-content-identity-study.md`, its slices S1 and S2, with the coordinator's notes at its end; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1117/brief-463-ch1-admitted-content.md`, on main `26698590`)
+
+The coordinator gave this slice 1.455. It ships in 0.12.71, released alone after 0.12.70; two
+followers (the Lab's `run show` and the trial's comparison) are other slices.
+
+**Why.** A run's record said which package label ran, not which content, nor which values it was
+given. A trial reads the package directory when it plans and the Runtime reads it again when it
+admits; if the directory changed in between, nothing told. A scheduled run whose package was
+replaced after its dispatch could read a default while the dispatch's record said `set`
+([package-variables.md](package-variables.md), "A limit, now recorded").
+
+**The rule.**
+- *`content_hash`* (`PackageAdmitted`, `task.requested`): optional; 64 lowercase hexadecimal
+  digits; the measure of [policy-suspension.md](policy-suspension.md) ("Content hash"), computed
+  by one private function of the containment (`content_hash_of`), which
+  `Containment::measure_content_hash` and the admission of a run's package
+  (`Containment::load_path_measured`) both call: in the one bounded read the admission does, on
+  the bytes in memory, before the source compile adds its derived files; the package is not read
+  a second time and `measure_content_hash`'s output is byte for byte what it was. A run's package
+  is admitted so (`PreparedContainedTask::load_path_with_resident_bytes`, through
+  `ExternallyVerifiedBundle::load_path_measured`), so every run admitted by its path records it:
+  a direct run, the trial's run (a direct run), a scheduled run, and a run the host starts itself
+  (a startup package, a return-home or idle return-home package, a ladder rung's package). A
+  layer of a run (a prerequisite, a return home, an interrupt handler, a navigation hop) writes no
+  admission record of its own and records none. Every other admission (by bytes, by a content
+  table already in memory, the metadata reads, `package bundle`, `standard-pack check`, the Lab's
+  validation) computes nothing; every path form has the measure (a directory, a `.json` or `.zip`
+  content container, an assembled ZIP), so no run's package has a form where it has no meaning.
+- *`variables`*: optional; the values handed to the run from outside, sorted by name, 1 to 16
+  `AdmittedVariable`s: `{variable_name, value_json}` with a value's compact JSON text of at most
+  1024 bytes, else `{variable_name, value_sha256, value_bytes}`. A direct run: the values its
+  request gave; a policy run: the values of its dispatch it read under its prepared package's
+  declaration (`PreparedContainedTask::dispatched_variables_read`, the rule of
+  `dispatched_variable_values`, one helper `dispatched_value` for both); none otherwise. A run
+  handed no value writes no member, so its record is byte for byte the record with `content_hash`
+  alone.
+- *Only computed and recorded.* Admission compares nothing and refuses nothing for them; the
+  failure identity, the break-in, the lift of a suspension and their own measuring do not change
+  and read neither member.
+- *The record's validation* (`TaskSemanticFact::validate`): a `content_hash` that is not 64
+  lowercase hexadecimal digits, and `variables` that are empty, more than 16, not in strictly
+  ascending order of names, under a name outside a variable's form or of neither form, are
+  refused `invalid_task_semantic_payload` (the writer at `content_hash` or `variables`; the
+  stored reader at `task_semantic_fact`, as for every fact refusal but the geometry phase's). An
+  old record without them reads as before; `package_sha256` stays refused.
+- *The public projection* (the coordinator's ruling): `TaskSemanticFact::public_summary` strips
+  both, so the projection of a record with them is byte for byte the projection without them and
+  a console of the older client library reads every page of public projections as before. The
+  full record (the Lab's own reading, the ledger tools) carries them.
+- *`ledger` 9*, one way ([component-interfaces.md](component-interfaces.md), the `ledger` row 9):
+  a build that declares [3, 8] refuses a ledger that holds such a record. `runtime-client` stays
+  [3, 11]: no request, receipt or answer type changes; the fact is a ledger record type, which a
+  client meets in a full-detail page or the ledger itself, as for revisions 4 to 8.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The record | `crates/actingcommand-contract/src/event/payload.rs`: `AdmittedVariable` (`of`, `list`), `TaskSemanticFact::PackageAdmitted` (`content_hash`, `variables`), `validate` (`is_lower_hex_64`, `validate_admitted_variables`), `public_summary` |
+| The measure | `crates/pack-containment/src/lib.rs`: `content_hash_of`, `Containment::load_path_measured`, `read_and_admit`, `LoadedBundle::content_hash`; `measure_content_hash` calls `content_hash_of` |
+| The kernel | `crates/execution-kernel/src/bundle.rs`: `ExternallyVerifiedBundle::load_path_measured`; `contained_task.rs`: `load_path_with_resident_bytes` answers the hash; `contained_task/remedies.rs`: `dispatched_value`, `dispatched_variables_read` |
+| The host | `crates/runtime-host/src/host/contained_task.rs`: `PackageLoad::content_hash`, `prepare_measured_naming_refusal`, `execute_contained_task_with_lease` (the values), `RuntimeContainedTask` (`admitted_content_hash`, `admitted_variables`) and its record of `PackageAdmitted` |
+| The declaration | `distribution/windows/component-interfaces.json`: `ledger` [3, 9]; the pin `tools/actinglab-architecture/tests/component_interfaces.rs` (`V0120`) |
+| Texts | [ledger-observer.md](ledger-observer.md), "Later rulings applied", item 1; this register's "Rules every shape below follows" and §1.31 P2-1; [policy-suspension.md](policy-suspension.md), "Content hash"; [linear-steps.md](linear-steps.md), "Ledger"; [package-variables.md](package-variables.md), "Not built", "A limit, now recorded", "A direct run given values", "The run's admission record", "Interface"; [component-interfaces.md](component-interfaces.md), the `ledger` row 9 and "Planned: Workflow #434"; [lab-operations.json](lab-operations.json), the notes of `run start`; the comments at the record, `content_directory_digest` and `suspension_lift.rs` |
+
+**Codes and words.** None added: a malformed member is the existing
+`invalid_task_semantic_payload`. No vocabulary, key or location is added; no fragment of
+`contracts/outcome-codes/` changes.
+
+**What the console re-pins for** (the coordinator's order: this commit is pinned and the console
+ships before this Runtime is released). The types are in one file,
+`crates/actingcommand-contract/src/event/payload.rs` (crate `actingcommand-contract`):
+`TaskSemanticFact` (its variant `PackageAdmitted` gains `content_hash` and `variables`) and
+`AdmittedVariable`, with the projection `TaskSemanticFact::public_summary`. A client of the older
+library decodes a page of public projections that holds the new record as before; a full-detail
+page that holds it, and the ledger read offline (the console's ledger window), it cannot decode.
+
+**Tests.** `crates/runtime-host/src/tests/gate_463_ch1.rs`, gate map `host.toml` "#463 CH-1", no
+clock read: the kernel's admission of a directory answers a content hash equal to
+`measure_content_hash` of it (`admitted_hash_equals_measure_content_hash_of_directory`); of an
+assembled ZIP the SHA-256 of the whole file, what the measure is for that form
+(`assembled_zip_hash_is_file_sha256`); a direct run's record with both members reads back
+unchanged, and without them too (`package_admitted_reads_back_with_and_without_hash`); a hash out
+of its form is refused (`hash_not_64_lower_hex_refused`); a direct run records its directory's
+content hash, and a changed content's after a change (`direct_run_records_admitted_content`);
+given values are listed sorted, whole (`direct_run_records_given_values`); a value of 2145 bytes
+by its SHA-256 and length, one of 1024 bytes whole
+(`value_over_1024_recorded_by_sha256_and_length`); a run given no value writes the bytes of the
+fact with the hash alone (`run_without_values_writes_the_bytes_of_the_hash_alone`); a scheduled
+run lists what its dispatch handed down and it read, and nothing when its package was replaced
+after the dispatch so that it read its default (`scheduled_run_records_values_it_read`); the
+public projection of a record with both members is the projection without them
+(`public_projection_carries_neither_member`). **Adapted**: the pinned member set of
+`event::tests::pkg_s2::s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest`
+(contract gate K22) gains the two members and still refuses `package_sha256`; the golden of
+actinglab's `lab run` (`apps/actinglab/tests/golden/expected.json`) gains the record's
+`content_hash`, which its normalizer writes `<CONTENT_HASH>` as it writes the other hashes of the
+files a case writes (edited by hand, not recorded); every construction of the fact in a test
+names the two members `None`. No test leaves the gate map.
+
+**What is not changed.** What admission accepts and refuses; `measure_content_hash`'s output; the
+failure identity, the break-in and the suspension; `QueryRuns` rows; every record other than
+`PackageAdmitted`; `run show`; a run's timing, beyond one SHA-256 pass over the bytes already in
+memory, inside the package load the run's timing evidence measures (`package_load_ms`; no gate
+test reads a clock, so none shows it).
+
+**At deploy.** Nothing to do on the root. The console that reads `ledger` 9 ships first; once this
+Runtime has run on a root, no build that declares [3, 8] runs on it again.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

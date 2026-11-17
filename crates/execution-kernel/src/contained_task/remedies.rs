@@ -203,6 +203,22 @@ impl RemedyDeclarations {
     }
 }
 
+/// Workflow #463 V2 (contracts/package-variables.md, "The run"): the value of `variable` a policy
+/// run reads from its dispatch's `dispatched` values: the dispatched value when the package's own
+/// declaration lets it through ([`PackageVariable::judge`], as the run reads it), `None` when the
+/// dispatch names none for it or the declaration no longer takes it. Workflow #463 CH-1: the one
+/// rule of both [`PreparedContainedTask::dispatched_variable_values`] and
+/// [`PreparedContainedTask::dispatched_variables_read`].
+fn dispatched_value(
+    variable: &PackageVariable,
+    dispatched: &[(String, serde_json::Value)],
+) -> Option<serde_json::Value> {
+    dispatched
+        .iter()
+        .find(|(name, _)| *name == variable.name)
+        .and_then(|(_, value)| variable.judge(value).ok())
+}
+
 impl PreparedContainedTask {
     /// The [`RemedyDeclarations`] of the package `locator` names, admitted by its path through
     /// the metadata-only containment as [`Self::read_reading_marks`] admits it, but without
@@ -338,14 +354,33 @@ impl PreparedContainedTask {
             .variables
             .iter()
             .filter_map(|variable| {
-                let value = dispatched
-                    .iter()
-                    .find(|(name, _)| *name == variable.name)
-                    .and_then(|(_, value)| variable.judge(value).ok())
+                let value = dispatched_value(variable, dispatched)
                     .unwrap_or_else(|| variable.default_value());
                 variable
                     .fact_value(&value)
                     .map(|value| (variable.name.clone(), value))
+            })
+            .collect()
+    }
+
+    /// Workflow #463 CH-1 (contracts/package-variables.md, "The run's admission record"): the
+    /// values of `dispatched` a policy run of this package reads, `(name, value)` each as the run
+    /// reads it, in declaration order: those [`Self::dispatched_variable_values`] takes from the
+    /// dispatch by the same rule, without the defaults it reads in their place (a variable the
+    /// dispatch does not name, or whose value this package's declaration no longer takes). The
+    /// run's admission record carries them.
+    pub fn dispatched_variables_read(
+        &self,
+        dispatched: &[(String, serde_json::Value)],
+    ) -> Vec<(String, serde_json::Value)> {
+        self.control
+            .variables
+            .iter()
+            .filter_map(|variable| {
+                let value = dispatched_value(variable, dispatched)?;
+                // The run reads no overlay of a value its kind cannot type, as above.
+                variable.fact_value(&value)?;
+                Some((variable.name.clone(), value))
             })
             .collect()
     }

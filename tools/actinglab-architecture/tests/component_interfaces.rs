@@ -115,7 +115,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `tracked` and `track_lost`; revision-3 to revision-6 ledgers are still read, so [3, 7], one
 ///   way. Workflow #428 S168-LB1a (0.12.55, register §1.309, §1.311) raises `max` to 8: a
 ///   `fact.published` `record_list` record of 257 to 1024 rows; revision-3 to revision-7 ledgers
-///   are still read, so [3, 8], one way.
+///   are still read, so [3, 8], one way. Workflow #463 CH-1 (0.12.71, register §1.455) raises
+///   `max` to 9: the optional members `content_hash` and `variables` of the run's admission record
+///   (`task.requested`, `PackageAdmitted`); revision-3 to revision-8 ledgers are still read, so
+///   [3, 9], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -187,7 +190,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 33]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 8]),
+    ("ledger", [3, 9]),
     ("package", [3, 17]),
     ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),

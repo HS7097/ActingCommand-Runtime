@@ -3414,23 +3414,26 @@ impl PreparedContainedTask {
     }
 
     /// Workflow #385 MEM-1 (ADD §1.6, register P8): `load_path`, with the bytes the admitted
-    /// package holds in memory (its entries as they were read).
+    /// package holds in memory (its entries as they were read). Workflow #463 CH-1 (register
+    /// §1.455): and the content hash its admission measured once on the bytes it read, by
+    /// containment's one measure (`Containment::load_path_measured`), which the run's admission
+    /// record carries; it is compared with nothing. The Runtime's runs admit their package so.
     pub fn load_path_with_resident_bytes(
         instance_label: &str,
         locator: &std::path::Path,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
-    ) -> Result<(Self, u64), ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load_path(
+    ) -> Result<(Self, u64, Option<String>), ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_path_measured(
             instance_label,
             locator,
-            false,
             vision_provider,
             deadline,
         )
         .map_err(contained_task_admission_error)?;
         let resident_bytes = bundle.loaded_bundle().resident_bytes();
-        Ok((Self::from_bundle(bundle)?, resident_bytes))
+        let content_hash = bundle.loaded_bundle().content_hash().map(str::to_owned);
+        Ok((Self::from_bundle(bundle)?, resident_bytes, content_hash))
     }
 
     /// Workflow #336: `load_path` for a content table already in memory.

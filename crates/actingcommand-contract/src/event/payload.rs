@@ -4251,16 +4251,86 @@ pub struct RecognizedTarget {
     pub region: Option<crate::page_projection::Rect>,
 }
 
+/// Ledger revision 9 (Workflow #463 CH-1, register §1.455; `contracts/package-variables.md`, "The
+/// run's admission record"): one value handed to a run from outside, as the run's admission record
+/// (`PackageAdmitted`, `task.requested`) carries it under `variables`: the variable's name, and the
+/// value's compact JSON text whole when it is at most [`crate::MAX_VARIABLE_VALUE_JSON_BYTES`]
+/// (1024) bytes, else that text's SHA-256 and length only. Only recorded: nothing reads it to
+/// decide, and the public projection does not carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdmittedVariable {
+    pub variable_name: String,
+    /// The value's compact JSON text, of at most 1024 bytes; absent for a longer value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_json: Option<String>,
+    /// A longer value's text's SHA-256, 64 lowercase hexadecimal digits; absent beside
+    /// `value_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_sha256: Option<String>,
+    /// A longer value's text's length in bytes, above 1024; absent beside `value_json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_bytes: Option<u64>,
+}
+
+impl AdmittedVariable {
+    /// The record of `value`, handed to the run for the variable `name`.
+    pub fn of(name: &str, value: &serde_json::Value) -> Self {
+        let text = value.to_string();
+        if text.len() <= crate::MAX_VARIABLE_VALUE_JSON_BYTES {
+            Self {
+                variable_name: name.to_owned(),
+                value_json: Some(text),
+                value_sha256: None,
+                value_bytes: None,
+            }
+        } else {
+            Self {
+                variable_name: name.to_owned(),
+                value_json: None,
+                value_sha256: Some(format!("{:x}", Sha256::digest(text.as_bytes()))),
+                value_bytes: Some(text.len() as u64),
+            }
+        }
+    }
+
+    /// The records of `values`, `(name, value)` each, sorted by name; `None` when there is none,
+    /// so a run handed no value writes no `variables` member.
+    pub fn list<'a>(
+        values: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+    ) -> Option<Vec<Self>> {
+        let mut values = values.into_iter().collect::<Vec<_>>();
+        values.sort_unstable_by_key(|(name, _)| *name);
+        let list = values
+            .into_iter()
+            .map(|(name, value)| Self::of(name, value))
+            .collect::<Vec<_>>();
+        (!list.is_empty()).then_some(list)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSemanticFact {
     /// Workflow #336 PKG-S2 (option 丙): the package is named by its `package_id`
-    /// (`package_label`); no content digest is recorded.
+    /// (`package_label`). Ledger revision 9 (Workflow #463 CH-1, register §1.455; the owner's
+    /// ruling of 11-16 on board #463, option A of question 220, which relaxes option 丙 in this
+    /// one respect, computing and recording): `content_hash`, the content hash the admission of
+    /// the run's package by its path measured once on the bytes it read, by containment's one
+    /// measure (`contracts/policy-suspension.md`, "Content hash"), 64 lowercase hexadecimal
+    /// digits; and `variables`, the values handed to the run from outside, sorted by name
+    /// ([`AdmittedVariable`]). Both are only computed and recorded: nothing compares them,
+    /// nothing is refused for them, and the public projection carries neither. A record without
+    /// them keeps its revision-8 bytes.
     PackageAdmitted {
         package_label: String,
         task_label: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_deadline_monotonic_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variables: Option<Vec<AdmittedVariable>>,
     },
     RunStarted,
     EvidenceIndexed {
@@ -5305,6 +5375,18 @@ impl TaskSemanticFact {
     fn public_summary(&self) -> Self {
         let mut fact = self.clone();
         match &mut fact {
+            // Workflow #463 CH-1 (the coordinator's ruling): the projection a client reads carries
+            // neither the admitted content hash nor the run's values (no data value leaves
+            // through it), so it is byte for byte the projection of a revision-8 record; the full
+            // record keeps both.
+            Self::PackageAdmitted {
+                content_hash,
+                variables,
+                ..
+            } => {
+                *content_hash = None;
+                *variables = None;
+            }
             Self::EntryRecoveryFailed { outcome, .. }
             | Self::TerminalRejected { outcome, .. }
             | Self::InterruptHandled { outcome, .. }
@@ -5421,6 +5503,8 @@ impl TaskSemanticFact {
                 package_label,
                 task_label,
                 response_deadline_monotonic_ms,
+                content_hash,
+                variables,
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
                 validate_task_semantic_label(task_label, "task_label")?;
@@ -5429,6 +5513,20 @@ impl TaskSemanticFact {
                         SanitizationCode::InvalidTaskResponseDeadline,
                         "response_deadline_monotonic_ms",
                     ));
+                }
+                // Ledger revision 9 (Workflow #463 CH-1): the content hash is 64 lowercase
+                // hexadecimal digits; the values are 1 to 16, sorted by name, each in its form.
+                if content_hash
+                    .as_deref()
+                    .is_some_and(|hash| !is_lower_hex_64(hash))
+                {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskSemanticPayload,
+                        "content_hash",
+                    ));
+                }
+                if let Some(variables) = variables {
+                    validate_admitted_variables(variables)?;
                 }
             }
             Self::RunStarted => {}
@@ -5897,6 +5995,55 @@ fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), 
     } else {
         Ok(())
     }
+}
+
+/// Ledger revision 9 (Workflow #463 CH-1): 64 lowercase hexadecimal digits, the form of a
+/// content hash and of a value's SHA-256 on the admission record.
+fn is_lower_hex_64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+/// Ledger revision 9 (Workflow #463 CH-1): the admission record's `variables`, 1 to
+/// [`crate::MAX_PACKAGE_VARIABLES`] entries in strictly ascending order of their names, each a
+/// variable's name ([`remedy_token_valid`]) with either its value's JSON text of 1 to 1024 bytes
+/// alone, or that text's SHA-256 and a length above 1024 alone; otherwise
+/// `invalid_task_semantic_payload` at `variables`.
+fn validate_admitted_variables(variables: &[AdmittedVariable]) -> Result<(), SanitizationError> {
+    let whole = crate::MAX_VARIABLE_VALUE_JSON_BYTES;
+    let in_form = |variable: &AdmittedVariable| {
+        remedy_token_valid(&variable.variable_name)
+            && match (
+                &variable.value_json,
+                &variable.value_sha256,
+                variable.value_bytes,
+            ) {
+                (Some(text), None, None) => {
+                    !text.is_empty()
+                        && text.len() <= whole
+                        && serde_json::from_str::<serde_json::Value>(text).is_ok()
+                }
+                (None, Some(sha256), Some(bytes)) => {
+                    is_lower_hex_64(sha256) && bytes > whole as u64
+                }
+                _ => false,
+            }
+    };
+    if variables.is_empty()
+        || variables.len() > crate::MAX_PACKAGE_VARIABLES
+        || !variables
+            .windows(2)
+            .all(|pair| pair[0].variable_name < pair[1].variable_name)
+        || !variables.iter().all(in_form)
+    {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidTaskSemanticPayload,
+            "variables",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {

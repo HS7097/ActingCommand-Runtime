@@ -1251,7 +1251,7 @@
       "source": ["actingctl task-run", "MCP ac_run_pack", "actinglab lab run"],
       "slice": "LAB-2",
       "status": "planned",
-      "notes": "frames pinned Lab and kept (lab-two-entries.md section 2.4); LAB-2: requests add Status, the read that resolves <inst>; #463 S3-9 (0.12.68): variable, the values a direct run reads (runtime-interface.md, \"The variable values of a contained run\"): a value the package does not take is the Runtime's refusal run_variable_undeclared, run_variable_value_refused or run_variable_not_applying, before anything runs; a direct run records nothing of its values (package-variables.md, \"Runs without a dispatch\")"
+      "notes": "frames pinned Lab and kept (lab-two-entries.md section 2.4); LAB-2: requests add Status, the read that resolves <inst>; #463 S3-9 (0.12.68): variable, the values a direct run reads (runtime-interface.md, \"The variable values of a contained run\"): a value the package does not take is the Runtime's refusal run_variable_undeclared, run_variable_value_refused or run_variable_not_applying, before anything runs; #463 CH-1 (0.12.71): the run's admission record carries the values it was given and the content hash its admission measured (package-variables.md, \"The run's admission record\")"
     },
     {
       "name": "run stop",

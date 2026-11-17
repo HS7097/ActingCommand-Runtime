@@ -4267,3 +4267,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_463_train_key::train_key_a_key_step_reaches_the_device_on_its_frame_or_is_refused_at_the_start",
 ]
 incident = ["#463 KP-1", "#463 KB-1"]
+
+# Workflow #463 CH-1 (0.12.71; register §1.455; brief rd-1117/brief-463-ch1-admitted-content.md, after the owner's ruling of 11-16 on board #463, option A of question 220; contracts/package-variables.md, "The run's admission record"; contracts/policy-suspension.md, "Content hash"; ledger revision 9): the kernel's admission of a package directory by its path answers the content hash, 64 lowercase hex, equal to containment's measure_content_hash of the directory (1); of an assembled package ZIP the SHA-256 of the whole file, as the measure is (D3) (2). On the S3-8 fixture (direct runs) a direct run given pick item_a writes task.requested with content_hash and variables, which reads back unchanged, and the same record without both members (revision 8) reads back unchanged with neither (3); that record with a content_hash of uppercase digits, 63 or 65 digits, a non-hex digit, none or a sha256: prefix is refused invalid_task_semantic_payload at task_semantic_fact, as written it validates (4); a run given no value records the content hash of its package directory as containment measures it, and after the control declaration is rewritten the next run records the new content's hash (5); given pick and order the record lists order then pick, each compact JSON text whole (6); an ordered value of 2145 bytes is recorded as value_sha256 and value_bytes only, one of 1024 bytes whole (7); a run given no value writes no variables member, its fact byte for byte the fact with content_hash alone (8). On the V2 fixture (scheduled runs) the record lists the value the dispatch handed down and the run read, the default item_b and then the set item_a, and when the package's declaration is replaced between the dispatch and its run so that it no longer offers item_a, no variables member while the dispatch's reason says item_a set; its content hash the replaced content's (9). The public projection of a record with both members is byte for byte the projection of the record without them (10)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::admitted_hash_equals_measure_content_hash_of_directory",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::assembled_zip_hash_is_file_sha256",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::package_admitted_reads_back_with_and_without_hash",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::hash_not_64_lower_hex_refused",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::direct_run_records_admitted_content",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::direct_run_records_given_values",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::value_over_1024_recorded_by_sha256_and_length",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::run_without_values_writes_the_bytes_of_the_hash_alone",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::scheduled_run_records_values_it_read",
+    "actingcommand-runtime-host::lib::tests::gate_463_ch1::public_projection_carries_neither_member",
+]
+incident = ["#463 CH-1"]

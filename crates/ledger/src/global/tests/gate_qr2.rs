@@ -380,6 +380,8 @@ fn lab_run(ledger: &GlobalLedger, ids: &IdentifierIssuer) -> LabRun {
                 package_label: "fixture-pack-qr2".to_owned(),
                 task_label: "fixture-task-qr2".to_owned(),
                 response_deadline_monotonic_ms: None,
+                content_hash: None,
+                variables: None,
             },
         ),
         start: fact(LAB_RUN_RECORDS, TaskSemanticFact::RunStarted),

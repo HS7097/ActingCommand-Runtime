@@ -553,6 +553,8 @@ impl<'a> Generator<'a> {
                     package_label: format!("synthetic-pack-{task:02}"),
                     task_label: run.task_label.clone(),
                     response_deadline_monotonic_ms: None,
+                    content_hash: None,
+                    variables: None,
                 },
                 AuditInput::new(),
             )
