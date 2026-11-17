@@ -1967,13 +1967,24 @@ pub fn record_mark(
     dry_run: bool,
     ocr: &LabOcr,
 ) -> LabResult<MarkOutcome> {
+    use crate::recording::model::StepActionKind;
     validate_mark_request(request)?;
     // Workflow #390 LAB-2: a stopped recording whose package was generated takes marks on its
     // steps again; the next `record stop` generates the package again.
     let mut session = open_session_for_marks(lock)?;
     if session.stopped {
-        if request.step_action.is_some() {
-            return Err(stopped_change("a step operation"));
+        // #463 S2-8' fix round 1 ("Marking after stop"): a fold of swipes into a press step's
+        // scrolling search, and its undoing, change no screen and send nothing, so a stopped
+        // recording takes them as it takes a mark; every other step operation needs an active one.
+        if request.step_action.as_ref().is_some_and(|action| {
+            !matches!(
+                action.kind,
+                StepActionKind::FoldScan | StepActionKind::UnfoldScan
+            )
+        }) {
+            return Err(stopped_change(
+                "a step operation other than fold_scan and unfold_scan",
+            ));
         }
         if request.application.is_some() {
             return Err(stopped_change("an application operation"));

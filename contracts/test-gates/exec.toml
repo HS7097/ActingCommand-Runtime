@@ -4022,3 +4022,16 @@ tests = [
     "actingcommand-lab::lib::gate_463_s28::s28_each_step_action_on_a_step_of_a_fold_is_refused",
 ]
 incident = ["#463 S2-8'"]
+
+# #463 S2-8' fix round 1 (0.12.70; register §1.456 "Fix round 1"; brief rd-1117/brief-463-s28-fix1.md, after the independent review rd-1117/review-1801.md and the coordinator's ruling on its answer 1; contracts/lab-recording.md, "Folding swipes into a scrolling search", "Marking after stop"): a stopped recording takes fold_scan and unfold_scan as an amendment. On the recording of three swipes and the press, paged and stopped with its package, the session header stopped as the record command writes it: folded, it stays stopped with amended_at_unix_ms and after_stop, record ready (session stopped, draft) lists scan_without_select alone, record stop refuses scan_not_selected with missing_total and writes nothing; unfolded (after_stop) record stop regenerates the package id and the package generated before the fold but for its generation time, and clears amended_at_unix_ms (1); an optional step inserted after the stop after the second swipe (serial 7): fold_scan is would_lose_inserted on step 3 naming step 7, a fold whose press is step 7 is inserted_in_range on it, nothing written; given up (remove_inserted) the swipes fold (2); drop_step on a step of no fold and on a swipe, restore_step, reopen_step, close_step and to_transition stay record_session_not_active with recording_stopped before and after a fold, nothing written (3); a swipe 40 up and 20 across folds vertical, 40 up and 21 across and a swipe without a move are move_axis_unclear with their two points, two swipes left and one right fold horizontal, the last back (4); record archive of a folded recording: the material names the presses of steps 1 to 5 with the swipes' frames and two points, the final screen step 6's, six rows, the step table unchanged (5); record mark --fold-scan b --fold-first a and --unfold-scan b are the request form's step actions, and --fold-scan alone, --fold-first alone, a fold beside --unfold-scan and --unfold-scan beside --drop-step are validation_failed (6). The helpers that press in gate_463_s28 are named tapped and swiped (the workspace guard lab_input_face_is_semantic_input_executor counts a call of a method named tap or swipe by its name); no logic changed, no test renamed.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_463_s28::s28_fix1_a_stopped_recording_folds_as_an_amendment_and_unfolded_generates_again",
+    "actingcommand-lab::lib::gate_463_s28::s28_fix1_a_fold_after_the_stop_is_refused_what_only_a_stopped_recording_holds",
+    "actingcommand-lab::lib::gate_463_s28::s28_fix1_every_other_step_operation_stays_refused_on_a_stopped_recording",
+    "actingcommand-lab::lib::gate_463_s28::s28_fix1_the_axis_rule_at_its_edges_and_a_fold_along_the_horizontal_axis",
+    "actingcommand-lab::lib::gate_463_s28::s28_fix1_the_archive_keeps_the_folded_swipes_in_its_material",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::s28_fix1_the_fold_flags_declare_the_request_forms_step_actions",
+]
+incident = ["#463 S2-8'"]

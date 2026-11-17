@@ -35380,6 +35380,67 @@ whose press step declares no scrolling select.
 
 **At deploy.** Nothing to configure.
 
+**Fix round 1** (coordinator work order `rd-1117/brief-463-s28-fix1.md`, after the independent
+review of pull request #1801 at `8629a6b6`, `rd-1117/review-1801.md`, and the coordinator's ruling
+on its answer 1; nothing merged, the branch still on `8629a6b6`).
+- *The `light` job* (the review's must-fix). The workspace guard
+  `lab_input_face_is_semantic_input_executor` finds a call of a write method of `LabInputPort` by
+  the method's name, and the gate's helpers were named `Bench::tap` and `Bench::swipe`: their
+  twelve calls counted. They are `Bench::tapped` and `Bench::swiped`; no logic changed. No other
+  call of a method named `tap`, `long_tap`, `swipe`, `key` or `text` is in this slice's files.
+- *A fold on a stopped recording* (the ruling). A fold changes no screen and sends nothing: it is
+  an amendment of the kind a mark after stop is ("Marking after stop"), and a recording stopped once
+  must not have to be recorded again to be folded. `record_mark` (`recording_api.rs`) refused every
+  step operation on a stopped recording (`recording_stopped`); it now lets `fold_scan` and
+  `unfold_scan` through and refuses every other step operation there as before (its `change` reads
+  "a step operation other than fold_scan and unfold_scan"). The write sets `amended_at_unix_ms`, the
+  member a mark after stop sets, so the answer says `after_stop`, adoption finds the recording not
+  current, and the next `record stop` generates again: while a fold stands it refuses
+  `scan_not_selected` (the old package and `amended_at_unix_ms` kept), after `unfold_scan` it
+  regenerates the package it generated before the fold but for its generation time. An archived
+  recording takes neither, as it takes no mark (`record_session_not_active`).
+- *What only a stopped recording holds* (the ruling), in `fold.rs` `planned_fold`. A step of
+  `a..=b` that is an optional step inserted after the stop was one of the conditions of
+  `fold_range_invalid`; it has its own word, `inserted_in_range`, checked where it was (only `b` can
+  be one: an inserted step takes the next serial number, above every recorded step). An optional
+  step inserted after a swipe of the range, and not given up, is `would_lose_inserted` (details
+  `at`, `inserted`), checked after that swipe's other losses; the agent gives it up first
+  (`remove_inserted`) or folds another range. An ending names no step: its frame is a file the
+  caller gave, its marks carry step 0, and a mark of a step it reuses is that step's own mark,
+  which `would_lose_marks` refuses already; nothing is refused for an ending.
+- *The review's (h)*: the tests below. *Its item on the review sheet*: `after.step` of the step
+  before a fold names the first folded swipe, under which the list's first screen is stored, as the
+  member says ("the step it is stored under"); the contract says so and the code is unchanged. *Its
+  dead branch* at the end of `planned_fold` (the range holds one swipe at least once `first` is
+  below the press) stays: removing it needs a list of swipes that cannot be empty by its type, which
+  reorders the function's checks and is more than a few lines.
+- *Texts*: [lab-recording.md](lab-recording.md) (the opening; the fold's request, refusals and
+  states; "Reviewing a recording step by step", `after.step`; "Marking after stop"), the operation
+  table's `record mark` notes (no `help` change), the MCP manual, `codes.rs`, the catalog's words of
+  `scan_problem` and the lab fragment's text of `record_scan_invalid`; the index regenerated, and
+  unchanged.
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `scan_problem` `inserted_in_range` | a step of the range, the press step included, is an optional step inserted after the stop | refuses | 3 (1 on actinglab's own line) |
+| `scan_problem` `would_lose_inserted` | a swipe of the range has an optional step inserted after it after the stop, not given up | refuses | 3 (1 on actinglab's own line) |
+
+Tests (`crates/lab/src/gate_463_s28.rs` and `apps/actinglab/src/commands/session_record.rs`, a new
+gate of the exec gate map, incident "#463 S2-8'"): a stopped recording folded is marked again,
+`record ready` lists `scan_without_select`, `record stop` refuses `scan_not_selected`, and after
+`unfold_scan` regenerates the package generated before the fold
+(`s28_fix1_a_stopped_recording_folds_as_an_amendment_and_unfolded_generates_again`); the two new
+refusals, and the fold taken once the inserted step is given up
+(`s28_fix1_a_fold_after_the_stop_is_refused_what_only_a_stopped_recording_holds`); every other step
+operation still `recording_stopped`, before and after a fold
+(`s28_fix1_every_other_step_operation_stays_refused_on_a_stopped_recording`); a ratio of exactly
+two accepted, just under two and a swipe without a move `move_axis_unclear`, a horizontal fold
+(`s28_fix1_the_axis_rule_at_its_edges_and_a_fold_along_the_horizontal_axis`); the archive's material
+of a folded recording keeps the swipes (`s28_fix1_the_archive_keeps_the_folded_swipes_in_its_material`);
+the command line's `--fold-scan <b> --fold-first <a>` and `--unfold-scan <b>`
+(`s28_fix1_the_fold_flags_declare_the_request_forms_step_actions`). No test leaves a gate map; no
+golden changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
