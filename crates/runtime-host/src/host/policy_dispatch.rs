@@ -13,9 +13,9 @@ use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
-    PolicyRandomDelay, SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
-    SchedulingPauseScope, SchedulingPauseState, SchedulingResumeCaptureCheck,
-    SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
+    PolicyRandomDelay, SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary,
+    SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope, SchedulingPauseState,
+    SchedulingResumeCaptureCheck, SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
 
 /// Workflow #369 W-1 (review L-6): how long a policy admission retries an admission guard that
@@ -3302,7 +3302,13 @@ impl HostShared {
     /// for below); a contained run that started after (b) (a
     /// policy dispatch admitted before the gate closed) is drained again under the pause's
     /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active
-    /// lease are waited for until the grace deadline (`scheduling_pause_release_busy`). The
+    /// lease are waited for until the grace deadline (`scheduling_pause_release_busy`). #480 PG-1
+    /// (ruling 4; production 11-17: a watch restart held the instance through its readiness wait
+    /// and the pause a person pressed was lifted when it ended): the lease of an automatic
+    /// emulator start (`ClaimKind::Autostart`, whatever asked for it) that alone holds the instance
+    /// is waited for beyond the grace, until the time its key lapses as it last renewed it plus
+    /// `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`; past that the pause fails with the same word and
+    /// `holder_kind` `autostart`. The gate stays closed throughout. The
     /// device session then stays open (Workflow #191 H: a pause is not a disconnect). Only an
     /// instance outside the multi-Nemu gate (`keeps_device_session`) closes it, through
     /// `close_retained_instance_while_guarded` without reusing a lease: the dedicated close
@@ -3350,13 +3356,20 @@ impl HostShared {
             // lease per device"): the pause of one member of a device group waits only for that
             // member's own work: a lease whose token names it and the queued claims that serve it.
             // For an instance alone on its device these are its lease and its queue, as before.
-            let (lease_held, queue_waiting) = {
+            // #480 PG-1 (ruling 4): when that lease is an automatic emulator start's (the
+            // autostart claim, whatever asked for it), also its own deadline, the time its key
+            // lapses as the claim last renewed it.
+            let (lease_held, queue_waiting, automatic_until_ms) = {
                 let scheduler = lock(&self.scheduler, HostLocation::ReadReleasedInstanceLease)?;
+                let lease = scheduler
+                    .active_lease(instance_id)
+                    .filter(|lease| lease.token().instance_id() == instance_id);
                 (
-                    scheduler
-                        .active_lease(instance_id)
-                        .is_some_and(|lease| lease.token().instance_id() == instance_id),
+                    lease.is_some(),
                     scheduler.member_refusing_count(instance_id, gate, now_monotonic_ms) > 0,
+                    lease
+                        .filter(|lease| lease.kind() == ClaimKind::Autostart)
+                        .map(|lease| lease.token().expires_at_monotonic_ms()),
                 )
             };
             // The close path's own rule (`prepare_resource_close`: a non-empty queue is
@@ -3442,11 +3455,35 @@ impl HostShared {
                 self.pause_waits_for_lane_for_test()?;
             }
             if Instant::now() >= deadlines.grace {
-                return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                    HostCode::SchedulingPauseReleaseBusy,
-                    HostLocation::ReleasePausedInstance,
-                    RuntimeErrorCode::LeaseBusy,
-                )));
+                // #480 PG-1 (ruling 4): an automatic emulator start's claim that alone holds the
+                // instance is waited for beyond the grace, up to its own deadline plus the same
+                // grace (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`); past that bound the pause fails
+                // with the same word, naming the holder. Anything else fails it here as before.
+                match automatic_until_ms.filter(|_| !reset_awaited && !lane_working) {
+                    Some(until_ms)
+                        if now_monotonic_ms
+                            < until_ms.saturating_add(SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS) => {}
+                    Some(_) => {
+                        return Err(scheduling_pause_release_failure(
+                            RuntimeHostError::request(
+                                HostCode::SchedulingPauseReleaseBusy,
+                                HostLocation::ReleasePausedInstance,
+                                RuntimeErrorCode::LeaseBusy,
+                            )
+                            .with_outcome_values(|outcome| {
+                                outcome
+                                    .holder_kind(crate::error::ClaimKindToken(ClaimKind::Autostart))
+                            }),
+                        ));
+                    }
+                    None => {
+                        return Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                            HostCode::SchedulingPauseReleaseBusy,
+                            HostLocation::ReleasePausedInstance,
+                            RuntimeErrorCode::LeaseBusy,
+                        )));
+                    }
+                }
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
         }

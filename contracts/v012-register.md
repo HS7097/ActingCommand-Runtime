@@ -37066,6 +37066,136 @@ else; main still `ca539cc7`, nothing merged).
   press, not the located box; without one it is refused `validation_failed` (no click field) after
   the drive record of its recognition, which carries the box, is written.
 
+### 1.468 Slice #480 PG-1 (0.12.72): the global pause holds every automatic emulator start, and an instance pause stands while an automatic start holds its instance (Workflow #480; the owner's requirement on board #480 of 11-17: after "pause all" the Runtime starts no emulator and launches no game by itself, and a pause she presses stands; her rulings 35, 112 and 117 A were built for the instance's own pause and are extended here to the global pause; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-480-pg1-pause-holds-automatic-starts.md`, on main `f0c64ae8`, the release of 0.12.71)
+
+This section takes 1.468. It ships in 0.12.72.
+[emulator-control.md](emulator-control.md) ("Configured start at daemon start", "Pauses (PG-1)",
+"Emulator watch"), [scheduling-pause.md](scheduling-pause.md) ("The dispatch gate", "Instance
+pause: three stages") and [runtime-config.md](runtime-config.md) ("The `idle` section",
+"Starting an instance's emulator") are the contract.
+
+**Why** (production v0.12.70 on 11-17, the ledger and the code read by the coordinator). A person
+pressed the console's "pause all" (the global pause, `console_pause_all`); no dispatch followed,
+but the emulator watch restarted, twice, the emulator of the one instance that carried no pause of
+its own (`emulator_autostart_queued`, `watch_kind` `restart`), because by the code the global pause
+was no pause of the instance (WATCH-P, PAUSE-AUTO: `automatic_start_hold` answered the instance's
+own pause alone), and every daemon start's configured start started it too. The person then paused
+that instance (`console_pause_account`, the console's smallest drain timeout, so its grace ended
+31 s later). The watch's third restart held the instance through its readiness wait (120 s, ended
+as `emulator_control_wait_timeout`); the pause's hand-back waited for the instance's admission
+guard, which the Start held, met the claim's key past the grace once it got the guard back, failed
+(`scheduling_pause_release_busy`) and lifted the pause ("No half-open pause"), 107 s after it was
+recorded. The console had long given up on the receipt.
+
+**The rule.**
+- *Ruling 1.* `automatic_start_hold` (`host/emulator_autostart.rs`), the one question every
+  automatic emulator start asks, now answers for either pause: the instance's own pause, in any
+  stage, as before; else the global pause, a restored one included. So under the global pause
+  the configured start at daemon start requests no claim, the watch requests no restart and no
+  recognition (both paths: an endpoint pending or bound to another port, and one bound to the
+  reported port but unprepared), IDLE-1's wake after `stop_emulator` is not queued (it stays
+  owed), and a claim of any of them requested before the global pause began ends at its next tick
+  on its key (`autostart_hold_ends`), starting, binding and preparing nothing, the watch's request
+  given back to its bound (`refund_watch_request`), an idle wake owed again (`withhold_idle_wake`).
+  The daemon start has the restored pauses before it asks.
+- *Ruling 2.* The skip is `emulator_autostart_skipped` with `skip_reason` `global_paused`, its own
+  word. It is recorded once per global pause revision, start and instance: the skip memory
+  (`EmulatorWatch::paused_skips`) is keyed by instance and reason, each with its own revision, so a
+  lifted and set again global pause (a new revision) records again, and an instance's own pause
+  keeps its memory apart. It counts against no bound and reports no used-up bound (the skip comes
+  before `watch_may_request`, as WATCH-P's). Where both pauses hold an instance,
+  `instance_paused` is recorded: the instance's own pause answers first, one stable word.
+- *Ruling 3.* The global resume adds nothing: the watch's first poll after it restarts or
+  recognizes as for any instance, and the next idle check takes a withheld wake up, as after an
+  instance resume. A person sees emulators that are off stay off under the global pause, and the
+  watch bring them back after the resume.
+- *Ruling 4.* The hand-back of an instance pause (`release_paused_instance`,
+  `host/policy_dispatch.rs`) reads, with the instance's lease, whether that lease is the autostart
+  claim's (`ClaimKind::Autostart`, whatever asked for it: the configured start, the watch's restart
+  or recognition, an idle wake) and the time its key lapses (`expires_at_monotonic_ms`, as the
+  claim last renewed it). Past the grace, while that claim alone holds the instance (no owed
+  reset, no policy run on the worker), the hand-back waits on until that time plus
+  `SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS` (30 s, the margin) on the Runtime's monotonic clock, re-read
+  at every check (20 ms), the gate closed throughout and the stages `draining`, `paused`,
+  `released` as before, only later. A Start renews its key to its bound plus 5 s before its
+  provider step (225 s) and to `CONNECTION_PREPARATION_WAIT_MS` plus 5 s (35 s) before its
+  preparation, so the wait for a Start that has begun ends at most 255 s after its provider step's
+  renewal; a claim that only waits (for the network, its turn, a blackout's end) meets the pause at
+  its next tick and ends. Past that bound the pause fails with the existing
+  `scheduling_pause_release_busy` and `holder_kind` `autostart` names the holder; the lift is as
+  before. For every other holder the grace keeps its meaning byte for byte (no `holder_kind`).
+  The lease sweep still ends a lapsed key it can reach; then the hand-back finds the instance free.
+- *Ruling 5 and 7.* Unchanged: a claim that meets a pause before its Start ends there, a Start
+  that has begun is not interrupted, and an explicit emulator control (a person, an agent, Lab)
+  never asks.
+
+**Every place the Runtime starts an emulator or launches an application by itself** (ruling 6;
+not a person's, an agent's or a client's explicit operation, not a step of a dispatched run):
+
+| Place | File and function | Held by the global pause after this slice |
+|---|---|---|
+| configured start at daemon start (also a watchdog's or a deploy's daemon start, actingd `main.rs`) | `emulator_autostart.rs` `enqueue_emulator_autostart`, its claim `hold_autostart_claim` / `autostart_hold_ends`, then `drive_autostart` and `emulator_instance.rs` `drive_configured_start` | yes (PG-1) |
+| the watch's restart (R3) | `emulator_watch.rs` `watch_emulator`, `restart_watched_emulator`, `emulator_autostart.rs` `request_watch_autostart`; on the key `autostart_hold_ends` | yes (PG-1) |
+| the watch's recognition, both paths (binds, prepares, queues the startup package) | `emulator_watch.rs` `watch_emulator`, `recognize_watched_emulator`, `emulator_autostart.rs` `request_watch_recognition`, `hold_recognition_claim`, `drive_recognition` | yes (PG-1) |
+| a watch or idle-wake claim that reads the emulator running and recognizes instead | `emulator_autostart.rs` `watch_start_unneeded`, `drive_recognition` (after the hold's last check) | yes (PG-1) |
+| IDLE-1's wake after `stop_emulator` | `idle.rs` `check_idle_instances` / `check_idle` (`IdleView::start_held`, `IdleStep::WakeHeld`), `queue_idle_wake`, then `request_watch_autostart` | yes (PG-1) |
+| the startup package (launches the game): after a configured or an operator's start, an idle wake (also `close_app`'s), a recognition, at start `requeue_startup_packages_on_start` | `startup_package.rs` `schedule_startup_package`, `hand_off_startup_package`, `emulator_autostart.rs` `queue_idle_wake_startup_package`, `idle.rs` `requeue_startup_packages_on_start` | yes, already: a routine claim (`ClaimKind::StartupPackage`) that either pause holds queued (`lease.rs` `routine_gate`) |
+| the idle actions (`close_app`, `stop_emulator`, IDLE-2's rest at home, which runs the return-home package) | `idle.rs` `check_idle`, `idle_view` (`paused` from `routine_gate`) | yes, already: not decided under either pause |
+| the stuck-recovery ladder (its application and emulator restart rungs) | `recovery_ladder.rs` `recovery_admitted`, `recovery_gate_open` (A6 reads `SchedulingPauseTable::pauses`, either pause), `emulator_instance.rs` `drive_emulator_control_while_guarded` | yes, already: not admitted, and ended at its next step, under either pause |
+
+Nothing else was found: the daemon-start preparation of a running instance
+(`resource_close.rs` `prepare_physical_instances_on_start`), a device group member's held start
+preparation (`queue_members_after_device_hold`) and a fence's recheck open backends and start or
+launch nothing. No place outside ruling 1's is left unheld.
+
+**Codes and words** (one cause per word; no new code, key, configuration key or vocabulary):
+
+| Word | What it stands for | Refuses, warns or informs | Severity | Where it shows |
+|---|---|---|---|---|
+| `global_paused` (new token of `emulator_autostart_skip_reason`, the `skip_reason` value on `emulator_autostart_skipped`; enum `WatchSkipReason::GlobalPaused`) | the global pause held an automatic start of an instance that carries no pause of its own | informs | info (the code's) | the daemon's report line (`OUTCOME actingd:`), a `device_state_observed` record under the instance; not in `status` |
+| `holder_kind` `autostart` (existing key and token of `vocab:claim_kind`, a new optional value of the existing `scheduling_pause_release_busy`) | the instance pause's hand-back failed because an automatic start's claim still held the instance past its own deadline and the margin | refuses (the pause fails, `Failed`, `LeaseBusy`, its gate lifted) | error (the code's) | the pause's failure (its receipt's code, the `runtime.failed` record's outcome), `actingctl` and MCP as every failed pause |
+
+**Status.** `status` (the overview) already lets a reader tell why an emulator is not started under
+the global pause: its `global_pause` block shows the pause (revision, reason, since) and the
+instance's row shows `emulator_state` off, and this contract says that no automatic start runs
+under that pause. No member is added.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The question | `host/emulator_autostart.rs` `automatic_start_hold` (the instance's pause first, then the global one) |
+| The word and the memory | `host/emulator_watch.rs` `WatchSkipReason::GlobalPaused`, `EmulatorWatch::paused_skips` keyed by instance and reason, `first_paused_skip` taking the hold |
+| The hand-back's wait | `host/policy_dispatch.rs` `release_paused_instance` |
+| Test hooks (test builds only) | `RuntimeHostConfig::with_scheduling_pause_deadlines_for_test`, `RuntimeHost::run_after_configured_start_drive_for_test`, `RuntimeHost::run_when_pause_release_meets_a_lease_for_test` (`host.rs`, `policy_dispatch.rs`, `emulator_instance.rs`) |
+| Texts | the outcome catalog (`catalog.json`: the token, the key's text; `runtime-host.json`: `holder_kind` optional on `scheduling_pause_release_busy`), the three contracts above |
+
+**Tests** (`crates/runtime-host/src/tests/gate_480_pg1.rs`, host gate map row "#480 PG-1"; the
+scripted emulator, a scripted connectivity status, the manual clock where time moves, and the
+three test hooks above; no clock read in the gate file): the nine of the work order, test 1 as
+three (the restart, the pending recognition, the unprepared recognition). Test 7 came first on the
+branch, red on the base: there the hand-back met the claim's key past the grace and failed
+`scheduling_pause_release_busy`, lifting the pause. Retired (`ci/retired-gates.toml`): S6c's
+`s6c_5_under_a_restored_pause_the_claim_is_granted_at_once_and_starts` and
+`s6c_6_a_pause_during_the_wait_does_not_hold_the_start`, which pinned emu-watch's "the global pause
+never holds the start" that ruling 1 replaces; covered by PG-1's tests 2 and 3. No golden changes.
+
+**What is not changed.** Dispatch gating under either pause; an instance pause where no automatic
+claim holds the instance (answers, stages, records); the blackout's gate; the watch's bounds but
+for the refund; the resume; the format of `host.scheduling_pause`; the interface declarations. An
+autostart claim queued behind another holder (not holding the key) still refuses the hand-back at
+once as a queued entry (`TransferNotSafe`), as before; the queue grants it the key as soon as the
+holder ends, and the pause then ends it at its next tick.
+
+**Ledger and interface.** The ledger's revision does not move: `global_paused` is an outcome value
+(a token in an existing vocabulary, as `instance_paused` in §1.226 and `start_emulator_off` in
+§1.272 were), and `holder_kind` is an optional value of an existing code (as `idle_action` in
+§1.230). No interface revision moves (`runtime-outcomes`, `runtime-client`, `ledger` unchanged).
+
+**At deploy.** Nothing to configure. Under a held global pause the next daemon start, the watch
+and IDLE-1 start no emulator; each instance records one `global_paused` skip per start kind. An
+instance pause pressed while a watch restart or configured start drives its instance stands.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

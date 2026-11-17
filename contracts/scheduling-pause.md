@@ -82,7 +82,8 @@ configured emulator start, at daemon start or by the emulator watch (`contracts/
 included, never holds or queues it and never makes it yield, so the emulator is started under the
 pause; the pause holds that start's startup package, whose claim waits queued as a gated entry and
 runs after the resume. An instance pause whose hand-back (step (c)) meets such a start holding the
-instance's key waits for it as it waits for an operator's emulator control. WATCH-P (since 0.12.32,
+instance's key waits for it, since 0.12.72 (#480 PG-1) beyond the grace up to the claim's own
+deadline ("Instance pause: three stages", (c)). WATCH-P (since 0.12.32,
 Alice's ruling 112, which replaces ruling 35 here for the watch): the emulator watch requests no
 such claim, neither a restart nor a recognition, for an instance its own pause holds in any stage;
 it only reads and records the emulator's status, records the skip once per pause revision
@@ -96,8 +97,15 @@ again on its key up to just before its Start, then releases the key and starts n
 restart and a recognition claim the watch requested before the pause (the coordinator's rulings
 of 10-31 on rulings 112 and 117 A), which bind and prepare nothing either and give the place they
 took in the watch's bound back. Each skip is `emulator_autostart_skipped` (`skip_reason` `instance_paused`) once per pause revision and
-start (`contracts/emulator-control.md`, "Pauses (PAUSE-AUTO)"). The global pause holds neither, and an
-explicit emulator control runs under any pause as before. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
+start (`contracts/emulator-control.md`, "Pauses (PAUSE-AUTO)"). #480 PG-1 (since 0.12.72; the owner's
+requirement on board #480: after "pause all" the Runtime starts no emulator and launches no game by
+itself): the global pause, a restored one included, holds every one of these automatic starts the
+same way (the daemon start's, the watch's restart and recognition, IDLE-1's wake, and on its key
+each of their claims requested before it), its skip `skip_reason` `global_paused` once per global
+pause revision, start and instance; where both pauses hold an instance, its own `instance_paused`
+is recorded (`contracts/emulator-control.md`, "Pauses (PG-1)"). After the global resume the watch's
+first poll restarts or recognizes, and the next idle check takes a withheld wake up, as after an
+instance resume. An explicit emulator control runs under any pause as before. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
 that arrives while a ladder holds the instance ends the ladder at its next step
 (`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
@@ -143,7 +151,22 @@ is done while (c) runs, `released` once (c) is done. The request answers after (
    - an active lease is waited for until it is released.
 
    These waits end at the grace deadline (the drain timeout plus `30_000` ms); past it the
-   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). With nothing left the stage
+   pause fails with `scheduling_pause_release_busy` (`LeaseBusy`). #480 PG-1 (since 0.12.72,
+   ruling 4; production 11-17: a watch restart held the instance through its readiness wait, and
+   the pause a person pressed was lifted when it ended): an instance pause never fails because a
+   Runtime-internal automatic emulator start holds its instance. When the active lease is the
+   autostart claim's (`ClaimKind::Autostart`, whoever asked for it: the configured start at
+   daemon start, the watch's restart or recognition, IDLE-1's wake) and nothing else is waited
+   for, the hand-back waits for it beyond the grace, up to the claim's own deadline (the time its
+   key lapses as the claim last renewed it: before its Start's provider step to the Start's bound
+   plus 5 s, 225 s, and before its connection preparation to `CONNECTION_PREPARATION_WAIT_MS` plus
+   5 s, 35 s) plus the same `30_000` ms;
+   the gate stays closed throughout, and the stages go `draining`, `paused`, `released` as before,
+   only later. A claim that has not ended within that bound fails the pause with the same
+   `scheduling_pause_release_busy`, its `holder_kind` `autostart` naming the holder. The grace keeps
+   its meaning for everything else (a person's or a client's run and lease, an operator's entry, an
+   owed reset), which fails the pause as before, with no `holder_kind`. A client whose own receipt
+   wait (below) ends first reads the pause's stage in `Status`. With nothing left the stage
    becomes `released`; the device session stays as it is and nothing is recorded. Only an
    instance outside the multi-Nemu gate (`read-session-resource-close.md`, "Device session
    lifetime") closes its session here, through the existing fenced resource-close path

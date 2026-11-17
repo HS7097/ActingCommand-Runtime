@@ -19174,6 +19174,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "holder_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",

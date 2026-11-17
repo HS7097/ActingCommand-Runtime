@@ -55,9 +55,10 @@
 //!   emulator watch does not start it again. PAUSE-AUTO (0.12.34, Alice's ruling 117 A): the
 //!   exception is a wake after `stop_emulator`, whose first work starts the emulator: while an
 //!   automatic start may not start it (`automatic_start_hold`: the instance's own scheduling
-//!   pause, in any stage) the wake is not queued, the instance stays closed owing it, and one
-//!   `emulator_autostart_skipped` (`skip_reason` `instance_paused`, `idle_action`
-//!   `stop_emulator`) per pause revision says so; a wake whose configured start meets the hold on
+//!   pause, in any stage, or, #480 PG-1, the global pause) the wake is not queued, the instance
+//!   stays closed owing it, and one `emulator_autostart_skipped` (`skip_reason` `instance_paused`
+//!   or `global_paused`, `idle_action` `stop_emulator`) per pause revision says so; a wake whose
+//!   configured start meets the hold on
 //!   its key starts nothing and is owed again (`withhold_idle_wake`). The first check after the
 //!   resume queues it. A `close_app` wake (its startup package alone) is unchanged. Workflow #429
 //!   R-3 (register §1.272): the configured emulator start is the instance's `start_emulator` in

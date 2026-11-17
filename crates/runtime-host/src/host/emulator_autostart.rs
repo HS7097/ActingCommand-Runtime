@@ -15,7 +15,8 @@
 //! included), never holds or queues the claim and never makes it yield; the pause holds only the
 //! instance's dispatches and its startup package (below). PAUSE-AUTO (0.12.34, below): the
 //! instance's own pause keeps the daemon start and an idle wake from requesting the claim, and
-//! ends one it meets on the claim's key, without a Start. The claim takes neither the
+//! ends one it meets on the claim's key, without a Start; #480 PG-1 (0.12.72): so does the global
+//! pause. The claim takes neither the
 //! bound-endpoint check nor the performance-control gate and is granted with drain capacity
 //! (Q-2a).
 //!
@@ -80,18 +81,20 @@
 //! PAUSE-AUTO (0.12.34, Alice's ruling 117 A; production 10-31: every instance paused under
 //! `alice-116-scheduler-stop`, and the emulators are started by hand for maintenance): every
 //! automatic emulator start asks one question, `automatic_start_hold`, whether it may start the
-//! instance's emulator now; today the instance's own scheduling pause, in any stage, holds it (the
-//! global pause does not). The configured start at daemon start asks it before it requests a
-//! claim: a held instance gets none, and its skip is `emulator_autostart_skipped` (`alias`,
-//! `skip_reason` `instance_paused`), a `device_state_observed` record under the instance and its
-//! report line. Its claim, the claim of IDLE-1's wake after `stop_emulator` and the emulator
-//! watch's restart and recognition claims (R3, EMU-BIND; the watch asks before it requests them,
-//! WATCH-P) ask it again on their key, at every tick of the hold and so in the last check just
-//! before the Start or the recognition: a claim queued before the pause began ends there,
-//! releases its key and starts, binds and prepares nothing, its skip recorded the same way (an
-//! idle wake's with `idle_action` `stop_emulator`, and the wake stays owed, `withhold_idle_wake`;
-//! the watch's with its `watch_kind`, and the request it counted against the watch's bound given
-//! back, `refund_watch_request`). Each start records its skip once per pause revision. The pause
+//! instance's emulator now; the instance's own scheduling pause, in any stage, holds it, and since
+//! #480 PG-1 (0.12.72) the global pause does too (`skip_reason` `global_paused`; where both hold,
+//! the instance's own `instance_paused`). The configured start at daemon start asks it before it
+//! requests a claim: a held instance gets none, and its skip is `emulator_autostart_skipped`
+//! (`alias`, `skip_reason` `instance_paused`), a `device_state_observed` record under the instance
+//! and its report line. Its claim, the claim of IDLE-1's wake after `stop_emulator` and the
+//! emulator watch's restart and recognition claims (R3, EMU-BIND; the watch asks before it
+//! requests them, WATCH-P) ask it again on their key, at every tick of the hold and so in the last
+//! check just before the Start or the recognition: a claim queued before the pause began ends
+//! there, releases its key and starts, binds and prepares nothing, its skip recorded the same way
+//! (an idle wake's with `idle_action` `stop_emulator`, and the wake stays owed,
+//! `withhold_idle_wake`; the watch's with its `watch_kind`, and the request it counted against the
+//! watch's bound given back, `refund_watch_request`). Each start records its skip once per pause
+//! revision. The pause
 //! is still no routine gate of the claim: it neither queues it nor makes it yield. An explicit
 //! emulator control (a person, an agent, Lab) never asks.
 //!
@@ -297,8 +300,8 @@ enum HoldEnd {
     /// The instance already runs.
     Running,
     /// PAUSE-AUTO (0.12.34): the daemon start's, an idle wake's or one of the watch's claims met a
-    /// hold on its key (`automatic_start_hold`, the instance's own scheduling pause): it starts,
-    /// binds and prepares nothing.
+    /// hold on its key (`automatic_start_hold`: the instance's own scheduling pause or, #480 PG-1,
+    /// the global pause): it starts, binds and prepares nothing.
     Held(AutomaticStartHold),
     /// Workflow #429 R-3 (register §1.272): the daemon start's, an idle wake's or the watch's
     /// restart claim met the instance's `start_emulator` off in effect on its key: it starts
@@ -344,7 +347,8 @@ impl HostShared {
     /// queued contends once it is granted. A claim the queue refuses is recorded by the queue and
     /// reported; only a failure the Runtime does not survive is returned. PAUSE-AUTO (0.12.34):
     /// an instance an automatic start may not start now (`automatic_start_hold`: its own
-    /// scheduling pause) gets no claim and is not counted; its skip is recorded after the count.
+    /// scheduling pause or, #480 PG-1, the global pause, a restored one included) gets no claim
+    /// and is not counted; its skip is recorded after the count.
     /// Workflow #429 R-3 (register §1.272): a configured instance is one whose `start_emulator` is
     /// on in effect now (`emulator_starts_in_effect`), not the start-time list.
     pub(super) fn enqueue_emulator_autostart(&self) -> RuntimeHostResult<usize> {
@@ -765,8 +769,8 @@ impl HostShared {
     /// on, renewing its key, until the blackout's end (Workflow #386 SR-4a3). No network wait and
     /// no start turn: it launches nothing. PAUSE-AUTO (0.12.34, the coordinator's ruling of 10-31
     /// on ruling 112): the instance's own scheduling pause ends it at any tick, without a
-    /// recognition (`autostart_hold_ends`); no other pause holds it. EMU-BIND fix 1
-    /// (0.12.28, review L2): just before the recognition, the check that one is still needed
+    /// recognition (`autostart_hold_ends`); since #480 PG-1 the global pause does too. EMU-BIND
+    /// fix 1 (0.12.28, review L2): just before the recognition, the check that one is still needed
     /// (`recognition_unneeded`).
     fn hold_recognition_claim(
         &self,
@@ -829,8 +833,9 @@ impl HostShared {
     /// emulator control waiting on the instance; an instance that already runs (a daemon start's
     /// claim: its binding is no longer pending); PAUSE-AUTO (0.12.34, Alice's ruling 117 A and
     /// ruling 112): for every claim (a daemon start's, an idle wake's, the watch's restart and
-    /// recognition), what holds an automatic start now (`automatic_start_hold`, the instance's own
-    /// scheduling pause), so a claim queued before the pause began never passes it; Workflow #429
+    /// recognition), what holds an automatic start now (`automatic_start_hold`: the instance's own
+    /// scheduling pause or, #480 PG-1, the global pause), so a claim queued before the pause began
+    /// never passes it; Workflow #429
     /// R-3 (register §1.272): for every claim that would start the emulator (not a recognition),
     /// the instance's `start_emulator` in effect, so a claim requested while it was on starts
     /// nothing once it is off. The last of these checks runs just before the Start or the
@@ -892,23 +897,30 @@ impl HostShared {
     /// just before the Start (`autostart_hold_ends`); IDLE-1's wake after `stop_emulator` before it
     /// queues its claim (`IdleView::start_held`) and on that claim's key; the emulator watch before
     /// it requests a restart or a recognition (`watch_emulator`) and on either claim's key.
-    /// Today one thing holds it: the
-    /// instance's own scheduling pause, in any stage (`draining`, `paused`, `released`, a restored
-    /// one included), as `skip_reason` `instance_paused` at the pause's revision; the global pause
-    /// is no pause of the instance. #429 R-7b extends this place with the player hold. An explicit
-    /// emulator control (a person, an agent, Lab) never asks it. `at` names the caller's operation
-    /// for a poisoned lock.
+    /// Two things hold it: the instance's own scheduling pause, in any stage (`draining`,
+    /// `paused`, `released`, a restored one included), as `skip_reason` `instance_paused` at the
+    /// pause's revision; and (#480 PG-1, 0.12.72, the owner's requirement on board #480: after
+    /// "pause all" the Runtime starts no emulator by itself) the global pause, a restored one
+    /// included, as `skip_reason` `global_paused` at the global pause's revision. Where both hold,
+    /// the instance's own pause answers (one stable word). #429 R-7b extends this place with the
+    /// player hold. An explicit emulator control (a person, an agent, Lab) never asks it. `at`
+    /// names the caller's operation for a poisoned lock.
     pub(super) fn automatic_start_hold(
         &self,
         alias: &str,
         at: impl Into<Location>,
     ) -> RuntimeHostResult<Option<AutomaticStartHold>> {
-        Ok(lock(&self.scheduling_pause, at)?
-            .instance_state(alias)
-            .map(|pause| AutomaticStartHold {
+        let pauses = lock(&self.scheduling_pause, at)?;
+        if let Some(pause) = pauses.instance_state(alias) {
+            return Ok(Some(AutomaticStartHold {
                 reason: WatchSkipReason::InstancePaused,
                 revision: pause.revision,
-            }))
+            }));
+        }
+        Ok(pauses.global_state().map(|pause| AutomaticStartHold {
+            reason: WatchSkipReason::GlobalPaused,
+            revision: pause.revision,
+        }))
     }
 
     /// Ends a hold before its Start: the key is released, and one report line says why. A

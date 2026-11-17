@@ -136,8 +136,9 @@ pub(crate) struct IdleView {
     /// emulator is configured to be started by the Runtime).
     pub(crate) emulator_wakeable: bool,
     /// PAUSE-AUTO (0.12.34, Alice's ruling 117 A): an automatic emulator start may not start the
-    /// instance's emulator now (the host's `automatic_start_hold`: its own scheduling pause), so
-    /// a wake that starts the emulator is not queued and stays owed ([`IdleStep::WakeHeld`]).
+    /// instance's emulator now (the host's `automatic_start_hold`: its own scheduling pause or,
+    /// #480 PG-1, the global pause), so a wake that starts the emulator is not queued and stays
+    /// owed ([`IdleStep::WakeHeld`]).
     pub(crate) start_held: bool,
     /// IDLE-3 (#447, register §1.332): the scheduler's latest plan does not count the end of
     /// every run the policy dispatched on the instance: as its evaluation read its inputs a
