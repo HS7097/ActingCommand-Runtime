@@ -9,42 +9,61 @@
 // f0006), then marked with colour marks. Frames are synthetic 160x90 screens of gray with squares of
 // one colour; no Runtime, no device; no OCR model but in tests 6 and 11, whose scripted model reads
 // its text only on a frame that shows the marker colour anywhere, a model that looks outside the
-// region the package declares; the tests read no clock and never sleep. The coordinator's ruling
+// region the package declares, and in test 16 (fix round 3); the tests read no clock and never sleep. The coordinator's ruling
 // after the first round (R2's ruling 4 as precedent): a page recognised beside another page of the
 // package is no miss, the case is written without `expect.observe` and named
 // `record_case_page_ambiguous`; only a real miss refuses.
 // - `s210_three_steps_and_an_ending_write_five_cases_that_pass_read_from_disk` (1): the stop writes
 //   four cases, the ending taken after it a fifth on the regeneration; each in the contract's form,
 //   each passing when read from disk and run by `run_regression_case` on the written package.
-// - `s210_the_package_is_byte_for_byte_what_it_is_without_the_cases` (2): the package the
-//   self-checks before `cases` build, from the recording as it was, is the file `record stop` wrote.
+// - `s210_the_package_is_byte_for_byte_what_it_is_without_the_cases` (2; fix round 3: compared with
+//   bytes this slice's path does not make): the file `record stop` wrote is the generator's own
+//   rendering and encoding of the recording's plan, the three check results its task's provenance
+//   records read back, and that provenance holds exactly the members it held before this slice.
 // - `s210_a_scene_holds_no_pixel_of_the_frame_outside_the_regions_the_targets_read` (3): every pixel
 //   no target reads is painted a marker colour; no scene holds it, every pixel outside the
 //   rectangles is the canvas colour, and the runner's scene rule warns nothing.
 // - `s210_a_page_told_apart_by_another_pages_forbidden_target_passes` (4): step 2's page also passes
 //   on step 1's screen but forbids step 3's blue mark, which only steps 1 and 3 show; step 1's case
 //   holds that mark's region and passes.
-// - `s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_the_cases` (5).
+// - `s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_the_cases` (5; fix
+//   round 3: `would_write` names the cases' directory and each of the five cases).
 // - `s210_cases_whose_page_is_not_recognised_are_listed_and_refuse_record_stop` (6, adjusted to the
 //   ruling): steps 2 and 3 are recognised by text the scripted model reads only on a frame showing
 //   the marker, which their screens show where no target reads: on the scenes their pages are not
 //   recognised: two misses, both listed by `record ready`; `record stop` refuses the first and writes
 //   no case.
-// - `s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven` (7).
+// - `s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven` (7; fix round 3: every
+//   case is not proven, and `record_cases_ocr_unavailable` says once that no page was judged).
 // - `s210_a_page_the_bare_canvas_answers_is_written_with_the_warning` (8): step 2's square is black.
 // - `s210_a_dropped_middle_step_has_no_case_and_a_source_names_no_path` (9).
 // - `s210_a_later_page_matching_an_earlier_screen_writes_the_case_without_observe` (10): step 2's
 //   mark holds on step 1's screen too: step 1's case is written without `observe`, passes, and
 //   `record stop` and `record ready` name it with the other page.
 // - `s210_an_expected_page_not_recognised_refuses_record_stop` (11): one such miss, its checks.
+// Fix round 3 (register §1.441, "Fix round 3"; the independent review of #1797):
+// - `s210_a_target_that_reads_the_whole_frame_makes_each_scene_the_whole_frame_and_names_it` (12):
+//   the final step's colour mark reads the whole frame: every scene is its whole frame, and each case
+//   is named `record_case_whole_frame` with that target.
+// - `s210_an_ambiguous_case_pins_the_targets_its_page_forbids_failing` (13): step 1's page forbids
+//   step 3's mark; its case, written without `observe`, expects that mark not to pass.
+// - `s210_a_press_frame_no_longer_live_gives_the_case_of_the_steps_primary_frame` (14): step 2's
+//   press names its frame set aside; its case is made of its primary frame.
+// - `s210_an_ambiguous_page_with_no_target_to_pin_is_not_written_with_its_own_word` (15): the slice's
+//   decision on its own (no recording reaches it: a page set requires a target on every page): no
+//   case, the warning `record_case_ambiguous_not_written`; with targets, the expectation.
+// - `s210_an_ambiguous_case_that_fails_its_run_again_refuses_record_stop` (16): a scripted OCR model
+//   reads a case's scene only once; step 1's case, ambiguous on its first run, fails its run again
+//   without the page judgement: `record_case_failed` with that run's one failed check.
 
+use crate::recording::cases::CaseSet;
+use crate::recording::container::{container_kind, encode};
 use crate::recording::generate::{
     DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, StopSettings,
-    plan as generate_plan,
+    plan as generate_plan, render,
 };
 use crate::recording::model::LabRecording;
 use crate::recording::store::{hex_sha256, lab_dir, old_record_path, recording_path};
-use crate::recording_api::package_without_cases;
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabCode, LabOcr, MarkOutcome, MarkRequest, PlanClickRequest,
@@ -60,13 +79,13 @@ use actingcommand_pack_containment::{
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
-    OcrProviderTextBlock, VisionProvider, VisionProviderError, VisionProviderErrorCode,
+    OcrProviderTextBlock, PackRect, VisionProvider, VisionProviderError, VisionProviderErrorCode,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -119,6 +138,8 @@ const SECOND: RecordRect = rect(32, 0, 16, 16);
 const THIRD: RecordRect = rect(64, 0, 16, 16);
 /// A square no target reads, where tests 6 and 11 show the marker colour.
 const UNREAD: RecordRect = rect(100, 40, 16, 16);
+/// Test 12's mark: the whole frame.
+const WHOLE: RecordRect = rect(0, 0, 160, 90);
 /// The OCR marks' region (tests 6, 7 and 11).
 const TEXT_AREA: RecordRect = rect(40, 40, 32, 16);
 /// The point each tap presses, on no square.
@@ -298,6 +319,88 @@ impl VisionProvider for MarkerOcr {
             blocks,
             detection: None,
         })
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+}
+
+/// What a scripted model reads in `region`: `TEXT` at confidence 0.9 when `reads`, nothing else.
+fn text_read(reads: bool, region: PackRect) -> OcrProviderResult {
+    let blocks = if reads {
+        vec![OcrProviderTextBlock {
+            text: "TEXT".to_owned(),
+            rect: region,
+            confidence: Some(0.9),
+        }]
+    } else {
+        Vec::new()
+    };
+    let text = blocks
+        .iter()
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    OcrProviderResult {
+        ppocr_diagnostics: Vec::new(),
+        text,
+        confidence: reads.then_some(0.9),
+        blocks,
+        detection: None,
+    }
+}
+
+/// Test 16's scripted OCR model (fix round 3): it reads `TEXT` in the requested region on every
+/// recorded screen, and on a case's scene (a frame showing the canvas colour anywhere, which no
+/// recorded screen shows) only the first time it reads that scene: a model whose second reading of
+/// one scene is not its first.
+#[derive(Debug, Default)]
+struct OnceOcr {
+    scenes: Mutex<Vec<Vec<u8>>>,
+}
+
+impl VisionProvider for OnceOcr {
+    fn require_ocr_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "no NN model in this fixture",
+        ))
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        let pixels = request.frame.rgb8_pixels;
+        let scene = pixels.chunks(3).any(|pixel| *pixel == BLACK);
+        let reads = !scene || {
+            let mut read = self.scenes.lock().expect("the scenes read");
+            let first = !read.iter().any(|seen| seen.as_slice() == pixels);
+            if first {
+                read.push(pixels.to_vec());
+            }
+            first
+        };
+        Ok(text_read(reads, request.region))
     }
 
     fn classify(
@@ -707,9 +810,32 @@ fn s210_three_steps_and_an_ending_write_five_cases_that_pass_read_from_disk() {
     }
 }
 
-// The work order's test 2: the package is byte for byte what it is without this slice. The package
-// the self-checks before `cases` build (the code before this slice) from the recording as it stands
-// before the stop is the very file `record stop` writes, beside which it writes four cases.
+// Each warning of `warnings`, a list of `lab.cases.warnings` or of `record ready`'s `warnings`, without
+// its text.
+fn without_message(warnings: &Value) -> Vec<Value> {
+    warnings
+        .as_array()
+        .unwrap_or_else(|| panic!("no warnings in {warnings}"))
+        .iter()
+        .map(|warning| {
+            let mut warning = warning.clone();
+            warning
+                .as_object_mut()
+                .expect("a warning")
+                .remove("message")
+                .expect("its message");
+            warning
+        })
+        .collect()
+}
+
+// The work order's test 2: the package is byte for byte what it is without this slice. Fix round 3
+// (the review of #1797: the earlier test compared the stop with a second call of the slice's own
+// path): the file `record stop` wrote is compared with bytes that path does not make, the
+// generator's own rendering (`render`) and encoding (`encode`) of the recording's plan as it stands
+// before the stop, given the three check results the package's provenance records (`warnings`,
+// `arrival_by_time_window`, `cross_check`, read back from the file); and that provenance holds
+// exactly the members the generator wrote before this slice, nothing of the cases.
 #[test]
 fn s210_the_package_is_byte_for_byte_what_it_is_without_the_cases() {
     let bench = Bench::recorded(&four_screens());
@@ -730,19 +856,66 @@ fn s210_the_package_is_byte_for_byte_what_it_is_without_the_cases() {
     };
     let plan = generate_plan(&recording, &settings)
         .unwrap_or_else(|error| panic!("the plan: {}: {}", error.code, error.message));
-    let without = package_without_cases(&plan, &bench.ocr).expect("the package without its cases");
 
     let lab = bench.stopped(false);
     assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(lab["container"], "json", "{lab}");
     assert_eq!(
         lab["cases"]["ids"],
         json!(["step_01", "step_02", "step_03", "final"]),
         "{lab}"
     );
     let written = fs::read(lab["path"].as_str().expect("package path")).expect("package");
+    let entries = expand_content_container(
+        &written,
+        ContentContainer::Json,
+        ContainmentLimits::default(),
+    )
+    .expect("package container");
+    let task: Value = entries
+        .iter()
+        .find(|(name, _)| name.ends_with("/task.json"))
+        .map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).expect("task JSON"))
+        .expect("the package's task.json");
+    let provenance = task["provenance"]
+        .as_object()
+        .unwrap_or_else(|| panic!("no provenance in {task}"));
+    assert_eq!(
+        provenance
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "arrival_by_time_window",
+            "cross_check",
+            "generated_at_unix_ms",
+            "generator",
+            "record_id",
+            "recording_schema",
+            "source",
+            "steps",
+            "warnings"
+        ]),
+        "{task}"
+    );
+    // In the order the self-checks hand them to the generator.
+    let checks = ["warnings", "arrival_by_time_window", "cross_check"]
+        .into_iter()
+        .map(|key| {
+            let value = provenance
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {key} in {task}"));
+            (key.to_owned(), value)
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    let rendered = render(&plan, Some(&checks), &BTreeMap::new())
+        .unwrap_or_else(|error| panic!("render: {}: {}", error.code, error.message));
+    let rebuilt = encode(&rendered, container_kind(&rendered))
+        .unwrap_or_else(|error| panic!("encode: {}: {}", error.code, error.message));
     assert!(
-        written == without,
-        "the package record stop wrote is not the package without its cases"
+        written == rebuilt,
+        "the package record stop wrote is not the generator's package of the recording"
     );
 }
 
@@ -858,6 +1031,19 @@ fn s210_the_dry_run_writes_nothing_and_lists_five_and_a_regeneration_replaces_th
         "{answer}"
     );
     assert!(answer.get("kept").is_none(), "{answer}");
+    // Fix round 3: what it would write, whole: the package, the cases' directory and each case.
+    let would_write = validated["would_write"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no would_write in {validated}"))
+        .iter()
+        .map(|path| PathBuf::from(path.as_str().expect("a path")))
+        .collect::<Vec<_>>();
+    let mut listed = vec![
+        PathBuf::from(validated["path"].as_str().expect("package path")),
+        dir.clone(),
+    ];
+    listed.extend(FIVE.map(|id| dir.join(id)));
+    assert_eq!(would_write, listed, "{validated}");
     assert_eq!(written_cases(&dir), before, "the dry run wrote a case");
     let out_after = fs::read_dir(bench.out())
         .expect("the output directory")
@@ -947,7 +1133,8 @@ fn s210_cases_whose_page_is_not_recognised_are_listed_and_refuse_record_stop() {
         assert_eq!(item["frame_id"], frame, "{item}");
         let details = &item["details"];
         assert_eq!(details["case"], case, "{item}");
-        assert_eq!(details["page"], case, "{item}");
+        // Fix round 3: the page as the page detection names it, as the warnings do.
+        assert_eq!(details["page"], format!("neutral/{case}"), "{item}");
         assert_eq!(details["frames"], json!([frame]), "{item}");
         let checks = details["checks"].as_array().expect("checks");
         assert_eq!(checks.len(), 2, "{item}");
@@ -1014,7 +1201,10 @@ fn s210_cases_whose_page_is_not_recognised_are_listed_and_refuse_record_stop() {
 
 // The work order's test 7: step 2's page requires an OCR mark beside its square, and the Lab has no
 // OCR model. The cases are written; step 2's is named not proven, its page and its OCR target not
-// run with `ocr_unavailable`, the runner's own reason.
+// run with `ocr_unavailable`, the runner's own reason. Fix round 3 (the review of #1797, its (h)):
+// the page detection reads that text target on every page, so no case's page is judged: every case
+// is not proven, its page check not run, and the answer says so once, `record_cases_ocr_unavailable`,
+// its only warning.
 #[test]
 fn s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven() {
     let bench = Bench::recorded(&four_screens());
@@ -1028,13 +1218,25 @@ fn s210_a_page_that_needs_text_recognition_is_written_and_named_not_proven() {
     let lab = bench.stopped(false);
     assert_eq!(lab["lab_status"], "generated", "{lab}");
     let answer = &lab["cases"];
-    let not_proven = answer["not_proven"].as_array().expect("not_proven");
-    let step_02 = not_proven
-        .iter()
-        .find(|item| item["case"] == "step_02")
-        .unwrap_or_else(|| panic!("step_02 is not named not proven: {answer}"));
-    assert_eq!(step_02["verdict"], "partial", "{answer}");
-    assert_eq!(step_02["reasons"], json!(["ocr_unavailable"]), "{answer}");
+    let not_proven = ["step_01", "step_02", "step_03", "final"].map(|case| {
+        json!({
+            "case": case,
+            "verdict": "partial",
+            "reasons": ["ocr_unavailable"]
+        })
+    });
+    assert_eq!(answer["not_proven"], json!(not_proven), "{answer}");
+    assert_eq!(
+        without_message(&answer["warnings"]),
+        [json!({"code": LabCode::RecordCasesOcrUnavailable.as_str()})],
+        "{answer}"
+    );
+    assert!(
+        answer["warnings"][0]["message"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("No case's page was judged")),
+        "{answer}"
+    );
     let cases = written_cases(&cases_dir(&lab));
     assert!(cases.contains_key("step_02"), "step_02 is not written");
     let case = case_of(&cases["step_02"].0);
@@ -1221,7 +1423,8 @@ fn s210_an_expected_page_not_recognised_refuses_record_stop() {
     );
     let details = error.details.expect("details");
     assert_eq!(details["case"], "step_02", "{details}");
-    assert_eq!(details["page"], "step_02", "{details}");
+    // Fix round 3: the page as the page detection names it, as the warnings do.
+    assert_eq!(details["page"], "neutral/step_02", "{details}");
     assert_eq!(
         details["outcome"]["values"]["regression_problem"], "page_mismatch",
         "{details}"
@@ -1244,4 +1447,265 @@ fn s210_an_expected_page_not_recognised_refuses_record_stop() {
     )
     .expect("step table JSON");
     assert_eq!(recording["status"], "active", "{recording}");
+}
+
+// Fix round 3, the review's first point: step 4's colour mark reads the whole frame (a cyan screen
+// with a yellow square), so every case's scene is its whole frame: each holds every pixel of its
+// screen (no recorded screen shows the canvas colour), its rectangles are the squares' region and the
+// whole frame, and the runner passes it with no warning of its scene rule. The answer names each case
+// with `record_case_whole_frame` and the target that reads the whole frame, its only warnings, and
+// nothing is refused.
+#[test]
+fn s210_a_target_that_reads_the_whole_frame_makes_each_scene_the_whole_frame_and_names_it() {
+    let bench = Bench::recorded(&[
+        screen(&[(SQUARE, RED)]),
+        screen(&[(SQUARE, GREEN)]),
+        screen(&[(SQUARE, BLUE)]),
+        screen_on(CYAN, &[(SQUARE, YELLOW)]),
+    ]);
+    bench.squares(3);
+    bench.marked(json!({"step": 4, "add": [color("whole_4", WHOLE)]}));
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let answer = &lab["cases"];
+    let ids = ["step_01", "step_02", "step_03", "final"];
+    assert_eq!(answer["ids"], json!(ids), "{answer}");
+    let named = ids
+        .into_iter()
+        .zip(1_u32..)
+        .map(|(case, step)| {
+            json!({
+                "code": LabCode::RecordCaseWholeFrame.as_str(),
+                "case": case,
+                "page": format!("neutral/step_{step:02}"),
+                "targets": ["whole_4"]
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(without_message(&answer["warnings"]), named, "{answer}");
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    for id in ids {
+        let (case_json, scene_png) = &cases[id];
+        let case = case_of(case_json);
+        assert_eq!(rects_of(&case), [SQUARE, WHOLE], "{id}: {case}");
+        assert_eq!(
+            content_of(&case, 1),
+            BTreeSet::from(["whole_4".to_owned()]),
+            "{id}: {case}"
+        );
+        let scene = Scene::from_png(scene_png).expect("the scene");
+        let (pixels, _) = scene.rgb8_pixels().as_chunks::<3>();
+        assert!(
+            pixels.iter().all(|pixel| *pixel != BLACK),
+            "{id}: the scene is not its whole frame"
+        );
+        let verdict = run_regression_case(&package, case_json, scene_png, &bench.ocr);
+        assert_eq!(
+            verdict.verdict,
+            RegressionVerdict::Passed,
+            "{id}: {verdict:?}"
+        );
+        assert!(verdict.warnings.is_empty(), "{id}: {verdict:?}");
+    }
+}
+
+// Fix round 3, the review's (b), its first weak point (the coordinator's ruling): step 1's page
+// forbids step 3's square (green, which step 1's red square is not), and step 2's green mark holds on
+// step 1's screen too. Step 1's case, written without `observe`, expects its own square to pass and
+// the forbidden square not to: it states that step 1's page holds on its screen, and passes when read
+// from disk; `record_case_page_ambiguous` names it, the answer's only warning.
+#[test]
+fn s210_an_ambiguous_case_pins_the_targets_its_page_forbids_failing() {
+    let bench = Bench::recorded(&[
+        screen(&[(SQUARE, RED), (SECOND, GREEN)]),
+        screen(&[(SQUARE, BLUE), (SECOND, GREEN)]),
+        screen(&[(SQUARE, GREEN)]),
+        screen(&[(SQUARE, YELLOW)]),
+    ]);
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE)]}));
+    bench.marked(json!({"step": 1, "add": [color("square_1", SQUARE)], "forbid": ["square_3"]}));
+    bench.marked(json!({"step": 2, "add": [color("green_2", SECOND)]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let answer = &lab["cases"];
+    assert_eq!(
+        without_message(&answer["warnings"]),
+        [json!({
+            "code": LabCode::RecordCasePageAmbiguous.as_str(),
+            "case": "step_01",
+            "page": "neutral/step_01",
+            "other_pages": ["neutral/step_02"],
+            "written": true
+        })],
+        "{answer}"
+    );
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    let (case_json, scene) = &cases["step_01"];
+    let case = case_of(case_json);
+    assert_eq!(
+        case["expect"],
+        json!({"recognize": [
+            {"target": "square_1", "passed": true},
+            {"target": "square_3", "passed": false}
+        ]}),
+        "{case}"
+    );
+    let verdict = run_regression_case(&package, case_json, scene, &bench.ocr);
+    assert_eq!(verdict.verdict, RegressionVerdict::Passed, "{verdict:?}");
+}
+
+// Fix round 3, the review's (h): a step whose press frame is no longer one of its live frames gives
+// the case of its primary frame. Step 2's screen changed between the capture after press 1 (a cyan
+// square) and the capture press 2 was sent on (a green square, which set the cyan one aside); the
+// step table is made to name the frame set aside as press 2's. Step 2's case is made of its primary
+// frame, the green square, and passes.
+#[test]
+fn s210_a_press_frame_no_longer_live_gives_the_case_of_the_steps_primary_frame() {
+    let bench = Bench::new();
+    bench.press(vec![screen(&[(SQUARE, RED)]), screen(&[(SQUARE, CYAN)])]);
+    bench.press(vec![screen(&[(SQUARE, GREEN)]), screen(&[(SQUARE, BLUE)])]);
+    bench.press(vec![screen(&[(SQUARE, BLUE)]), screen(&[(SQUARE, YELLOW)])]);
+    bench.squares(4);
+    let path = recording_path(&bench.state(), RECORD_ID);
+    let mut table: Value =
+        serde_json::from_slice(&fs::read(&path).expect("step table")).expect("step table JSON");
+    let second = &mut table["steps"][1];
+    let set_aside = second["frames"]
+        .as_array()
+        .and_then(|frames| frames.iter().find(|frame| frame["superseded"] == true))
+        .map(|frame| frame["frame_id"].clone())
+        .expect("the frame step 2 set aside");
+    assert_ne!(
+        second["click"]["execution"]["before_frame"], set_aside,
+        "{second}"
+    );
+    second["click"]["execution"]["before_frame"] = set_aside;
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&table).expect("step table JSON"),
+    )
+    .expect("step table");
+
+    let lab = bench.stopped(false);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        lab["cases"]["ids"],
+        json!(["step_01", "step_02", "step_03", "final"]),
+        "{lab}"
+    );
+    let package = bench.package(&lab);
+    let cases = written_cases(&cases_dir(&lab));
+    let (case_json, scene_png) = &cases["step_02"];
+    let scene = Scene::from_png(scene_png).expect("the scene");
+    assert_eq!(
+        scene.rgb8_pixels()[..3],
+        GREEN,
+        "step 2's case is not made of its primary frame"
+    );
+    let verdict = run_regression_case(&package, case_json, scene_png, &bench.ocr);
+    assert_eq!(verdict.verdict, RegressionVerdict::Passed, "{verdict:?}");
+}
+
+// Fix round 3, the review's (b), its second weak point: a case not written and a case written
+// without the page judgement are two consequences, two words. No recording reaches the first (a page
+// set requires a target on every page), so the slice's decision is called on its own: a page
+// recognised beside another page with no target to pin gives no expectation, no case and the
+// warning `record_case_ambiguous_not_written`, which `record ready` names too; with a target it
+// requires and one it forbids, the expectation pins both and warns nothing.
+#[test]
+fn s210_an_ambiguous_page_with_no_target_to_pin_is_not_written_with_its_own_word() {
+    let mut set = CaseSet::default();
+    let others = ["neutral/step_02".to_owned()];
+    assert!(
+        set.without_page_judgement("step_01", "neutral/step_01", &others, &[], &[])
+            .is_none(),
+        "an expectation of nothing"
+    );
+    let pinned = set.without_page_judgement(
+        "step_03",
+        "neutral/step_03",
+        &others,
+        &["square_3".to_owned()],
+        &["square_1".to_owned()],
+    );
+    assert_eq!(
+        pinned,
+        Some(json!({"recognize": [
+            {"target": "square_3", "passed": true},
+            {"target": "square_1", "passed": false}
+        ]}))
+    );
+    let expected = json!({
+        "code": LabCode::RecordCaseAmbiguousNotWritten.as_str(),
+        "case": "step_01",
+        "page": "neutral/step_01",
+        "other_pages": ["neutral/step_02"],
+        "written": false
+    });
+    assert_eq!(
+        without_message(&Value::Array(set.ambiguity_warnings().to_vec())),
+        std::slice::from_ref(&expected)
+    );
+    let answer = set.answer("cases".to_owned(), "written", None);
+    assert_eq!(without_message(&answer["warnings"]), [expected], "{answer}");
+    assert_eq!(answer["ids"], json!([]), "{answer}");
+    assert!(set.files().is_empty(), "a case was made");
+}
+
+// Fix round 3, the work order's item 8 (d): a case whose run again without the page judgement fails
+// is a real miss. Test 10's screens and marks, step 1's page also requiring a text mark that the
+// scripted model `OnceOcr` reads on every recorded screen and on a case's scene only once. On step
+// 1's scene the page detection reads it, so step 1's page and step 2's both match (ambiguity, no
+// miss); made again without `observe`, the case reads it again and finds nothing: `record stop`
+// refuses `record_case_failed` with that run's one failed check, the text target at
+// `/expect/recognize/1` (no page check: it is the run without the page judgement), and writes no
+// case.
+#[test]
+fn s210_an_ambiguous_case_that_fails_its_run_again_refuses_record_stop() {
+    let bench = Bench::with_ocr(Some(LabOcr::with_provider(Arc::new(OnceOcr::default()))))
+        .pressing(&[
+            screen(&[(SQUARE, RED), (SECOND, GREEN)]),
+            screen(&[(SQUARE, BLUE), (SECOND, GREEN)]),
+            screen(&[(SQUARE, GREEN)]),
+            screen(&[(SQUARE, YELLOW)]),
+        ]);
+    bench.marked(json!({
+        "step": 1,
+        "add": [color("square_1", SQUARE), ocr("text_1", TEXT_AREA)]
+    }));
+    bench.marked(json!({"step": 2, "add": [color("green_2", SECOND)]}));
+    bench.marked(json!({"step": 3, "add": [color("square_3", SQUARE)]}));
+    bench.marked(json!({"step": 4, "add": [color("square_4", SQUARE)]}));
+    let error = bench
+        .stop(false)
+        .expect_err("a case that fails its run again");
+    assert_eq!(
+        error.code,
+        LabCode::RecordCaseFailed.as_str(),
+        "{}",
+        error.message
+    );
+    let details = error.details.expect("details");
+    assert_eq!(details["case"], "step_01", "{details}");
+    assert_eq!(details["page"], "neutral/step_01", "{details}");
+    assert_eq!(
+        details["outcome"]["values"]["regression_problem"], "target_mismatch",
+        "{details}"
+    );
+    let checks = details["checks"].as_array().expect("checks");
+    assert_eq!(checks.len(), 1, "{details}");
+    assert_eq!(checks[0]["at"], "/expect/recognize/1", "{details}");
+    assert_eq!(checks[0]["problem"], "target_mismatch", "{details}");
+    assert_eq!(
+        checks[0]["target"],
+        json!({"target": "text_1", "expected": true, "recognized": false}),
+        "{details}"
+    );
+    assert!(
+        !bench.out().join(format!("{PACKAGE_ID}.cases")).exists(),
+        "a case was written"
+    );
 }

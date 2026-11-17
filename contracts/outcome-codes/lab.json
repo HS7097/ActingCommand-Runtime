@@ -351,7 +351,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.70",
-      "description": "#463 S2-10 (contracts/lab-recording.md, Regression cases written with the package): a regression case record stop made from the recording for the package it generated (one per step with a press and a page, on the frame its press was sent on; one for the final screen; one per ending, on the frame it was taken from: a black canvas with, pasted where they are in the frame, the regions every recognition target of the package declares) misses on that package when the one runner of contracts/resource-regression-case.md runs it, its verdict failed: its page is not recognised on its scene (page_mismatch, or page_conflict among pages that are not its own), a target it expects fails (target_mismatch), or another check fails. A page recognised beside another page of the package is no miss (the coordinator's ruling after the first round, R2's ruling 4 as precedent): that case is written without expect.observe and named record_case_page_ambiguous, and only failing in that form is a miss. It is a failure of record stop's last self-check, cases: the case is not written and record stop refuses as at any self-check's failure, nothing written, the recording and the session staying as they were (exit 3; actinglab details case, the case's id, page, frame_id, step and artifact_step or outcome_key, verdict, and checks, every failed check as the runner answered it). regression_problem is the word of the first failed check. record ready lists every failing case, each an item of what cases with the case's id and checks in its details; it writes nothing.",
+      "description": "#463 S2-10 (contracts/lab-recording.md, Regression cases written with the package): a regression case record stop made from the recording for the package it generated (one per step with a press and a page, on the frame its press was sent on; one for the final screen; one per ending, on the frame it was taken from: a black canvas with, pasted where they are in the frame, the regions every recognition target of the package declares) misses on that package when the one runner of contracts/resource-regression-case.md runs it, its verdict failed: its page is not recognised on its scene (page_mismatch, or page_conflict among pages that are not its own), a target it expects fails (target_mismatch), or another check fails. A page recognised beside another page of the package is no miss (the coordinator's ruling after the first round, R2's ruling 4 as precedent): that case is written without expect.observe and named record_case_page_ambiguous, and only failing in that form is a miss. It is a failure of record stop's last self-check, cases: the case is not written and record stop refuses as at any self-check's failure, nothing written, the recording and the session staying as they were (exit 3; actinglab details case, the case's id, page, as the page detection names it, <game>/<page>, as the case and its warnings do (fix round 3), frame_id, step and artifact_step or outcome_key, verdict, and checks, every failed check as the runner answered it). regression_problem is the word of the first failed check. record ready lists every failing case, each an item of what cases with the case's id and checks in its details; it writes nothing.",
       "common_causes": "A target whose verdict depends on more of the screen than the region the package declares for it (a text-recognition model that reads the whole frame, for one): the scene holds only the declared regions, so the page that passed on the frame is not recognised on the case's scene.",
       "handling": "Run record ready and read each item's checks; give the page a mark that holds within its own region on its screen (a template of a fixed element, a colour of a fixed area), then run record stop again."
     },
@@ -365,7 +365,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.70",
-      "description": "#463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as precedent: the usual ending's page passing on an ending's frames is no refusal; contracts/lab-recording.md, Regression cases written with the package): the page a regression case record stop made expects is recognised on its scene, but so is another page of the package (the runner's page_conflict, the case's own page among the pages matched). A linear run waits for each step's own page and never asks which page of the whole package a screen is, so this is no miss: the case is made again without expect.observe, with every recognition target its page requires (passed true), run again in that form and written when it passes (failing then is record_case_failed); a page that requires no target gives no case, since it would declare nothing. lab.cases.warnings and record ready's warnings name it: {code, case, page, other_pages, written, message}, written false for a case not written. It refuses nothing (exit 0).",
+      "description": "#463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as precedent: the usual ending's page passing on an ending's frames is no refusal; contracts/lab-recording.md, Regression cases written with the package): the page a regression case record stop made expects is recognised on its scene, but so is another page of the package (the runner's page_conflict, the case's own page among the pages matched). A linear run waits for each step's own page and never asks which page of the whole package a screen is, so this is no miss: the case is made again without expect.observe, with every recognition target its page requires (passed true) and (fix round 3, the coordinator's ruling) every target its page forbids (passed false), so that it states that this page holds on this scene, run again in that form and written when it passes (failing then is record_case_failed); a forbidden target a scene cannot evaluate (a click-only target, which no page set admits in forbidden today) is left out and named in forbidden_left_out. lab.cases.warnings and record ready's warnings name it: {code, case, page, other_pages, written: true, forbidden_left_out?, message}. Fix round 3, one cause per word: a case not written because it has no target to pin is record_case_ambiguous_not_written, not this. It refuses nothing (exit 0).",
       "common_causes": "An earlier step's marks also hold on a later screen (a background the screens share, a button that stays), or an ending's marks beside the usual ending's on one screen; the screens differ only where no mark of the package reads.",
       "handling": "Nothing is required. To make the case prove its page too, give the page a mark of its own screen that the other page's screen does not show, or give the other page a forbidden mark (record mark --step <k> --forbid <mark>) that holds on this screen only, and run record stop again."
     },
@@ -382,6 +382,48 @@
       "description": "#463 S2-10 (contracts/lab-recording.md, Regression cases written with the package): the page a regression case record stop wrote expects is also a page the package's page detection answers on the bare canvas, the black canvas with no patch at all, run once per package; the case proves nothing of its page (its marks pass where nothing was pasted, a dark colour for one). It is written, and lab.cases.warnings names it ({code, case, page, message}); it refuses nothing (exit 0).",
       "common_causes": "The page's marks are colours of a dark area, or a template of a dark patch, which the black canvas shows too.",
       "handling": "Nothing is required. To make the case prove its page, give the page a mark of a bright or textured area of its own screen and run record stop again."
+    },
+    "record_case_ambiguous_not_written": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.70",
+      "description": "#463 S2-10 fix round 3 (contracts/lab-recording.md, Regression cases written with the package; one cause per word, split from record_case_page_ambiguous): the page a regression case record stop made expects is recognised on its scene beside another page of the package (the runner's page_conflict, the case's own page among the pages matched), and the page has no recognition target to pin (none it requires, none it forbids that a scene can evaluate): without expect.observe the case would declare nothing, so it is not written. lab.cases.warnings and record ready's warnings name it: {code, case, page, other_pages, written: false, message}. It refuses nothing (exit 0). A page set refuses a page that requires no target, so no recording made today reaches it.",
+      "common_causes": "None in a recording made today: a page set refuses a page that requires no target; the word keeps this consequence apart from a case written without the page judgement.",
+      "handling": "Mark a target on that page's screen (record mark on its step) and run record stop again: the case is then written."
+    },
+    "record_case_whole_frame": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.70",
+      "description": "#463 S2-10 fix round 3 (contracts/lab-recording.md, Regression cases written with the package): a recognition target of the package reads the whole frame (its region, or a template's search area, is the whole frame, which record mark accepts), so the scene of a regression case record stop wrote, which holds exactly the regions the package's targets read, is the whole frame. Each such case is written and lab.cases.warnings names it ({code, case, page, targets, message}, targets the targets that read the whole frame), so that the agent who chose that region sees it. Nothing is proposed and nothing is refused for it (exit 0).",
+      "common_causes": "A mark drawn over the whole screen, or a template searched for anywhere on it.",
+      "handling": "Nothing is required. A smaller region or search area of the same target gives scenes of patches."
+    },
+    "record_cases_ocr_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.70",
+      "description": "#463 S2-10 fix round 3 (contracts/lab-recording.md, Regression cases written with the package): the Lab has no text-recognition model and the package's page detection reads a text target (LabOcr::require_pages refuses), so the runner judged no regression case's page: every case's page check is not_run with ocr_unavailable, and the bare canvas and the ambiguity rule judge nothing. The cases are written without any page judgement and are judged where a model is; record stop says so once, first in lab.cases.warnings ({code, message}), beside the cases not proven. It refuses nothing (exit 0).",
+      "common_causes": "A package with an OCR mark, a located-text mark or a value test, stopped where the Lab finds no text-recognition model.",
+      "handling": "Nothing is required. To have the pages judged, run record stop where the Lab has a text-recognition model, or run the written cases there (resource regression)."
     }
   },
   "locations": {

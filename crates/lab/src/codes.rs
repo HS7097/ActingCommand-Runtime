@@ -118,13 +118,26 @@ actingcommand_contract::outcome_codes! {
         /// Warning. #463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as
         /// precedent): a regression case's page is recognised on its scene, but so is another page
         /// of the package, which a linear run never asks; the case is written without
-        /// `expect.observe`, its page's targets alone, or, when its page requires no target, not
-        /// written. `record stop` and `record ready` name it, with the other pages.
+        /// `expect.observe`, every target its page requires passing and (fix round 3) every target
+        /// it forbids failing. `record stop` and `record ready` name it, with the other pages.
         RecordCasePageAmbiguous => "record_case_page_ambiguous": warning / none,
         /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
         /// page the bare canvas answers, the canvas with no patch at all, so the case proves
         /// nothing of its page; it is written and named.
         RecordCaseBareCanvas => "record_case_bare_canvas": warning / none,
+        /// Warning. #463 S2-10 fix round 3 (one cause per word): a regression case's page is
+        /// recognised on its scene beside another page of the package, and the page has no
+        /// recognition target to pin, so without `expect.observe` the case would declare nothing;
+        /// it is not written. `record stop` and `record ready` name it, with the other pages.
+        RecordCaseAmbiguousNotWritten => "record_case_ambiguous_not_written": warning / none,
+        /// Warning. #463 S2-10 fix round 3: a recognition target of the package reads the whole
+        /// frame (its region or its search area is the whole frame), so the scene of the case
+        /// `record stop` wrote is the whole frame; it is written and named, with those targets.
+        RecordCaseWholeFrame => "record_case_whole_frame": warning / none,
+        /// Warning. #463 S2-10 fix round 3: the Lab has no text-recognition model and the package's
+        /// page detection reads a text target, so the runner judged no regression case's page; the
+        /// cases are written without their page judgement, and `record stop` says so once.
+        RecordCasesOcrUnavailable => "record_cases_ocr_unavailable": warning / none,
     }
 }
 

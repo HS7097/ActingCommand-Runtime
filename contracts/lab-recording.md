@@ -3744,8 +3744,9 @@ and, once no pre-check fails, with the self-checks' failures (#463 S2-1c):
   ("Marking after stop"; `recorded` `null` when the package recorded none). It is a warning here
   because `record ready` answers about the recording and refuses nothing the recording holds.
   #463 S2-10: once the self-check `cases` ran, each `record_case_page_ambiguous` (`{code, case,
-  page, other_pages, written, message}`), as `record stop` answers it ("Regression cases written
-  with the package").
+  page, other_pages, written, forbidden_left_out?, message}`) and (fix round 3) each
+  `record_case_ambiguous_not_written` (`{code, case, page, other_pages, written, message}`), as
+  `record stop` answers them ("Regression cases written with the package").
 - **`status`**, by the recording alone, and `session`, the session's state as `record status` says
   it (`active`, `archived` or `stopped`):
 
@@ -4230,8 +4231,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
     check above and the final package passed, since it reads the final package): the regression
     cases made from the recording, each run on the final package by the one runner of the case
     contract before it is written; a case that misses is `record_case_failed` (3), a page
-    recognised beside another page of the package is no miss (`record_case_page_ambiguous`, a
-    warning). See "Regression cases written with the package" below.
+    recognised beside another page of the package is no miss (`record_case_page_ambiguous`, or
+    `record_case_ambiguous_not_written` for a case with no target to pin; warnings). See
+    "Regression cases written with the package" below.
 
 Warnings never refuse. The provenance and the output carry the same warnings.
 
@@ -4273,10 +4275,12 @@ the package it came with.
   `<game>/<page>`; not when its page is ambiguous, below) and every recognition target that page
   requires to pass (`expect.recognize`, `{target, passed: true}`, the page's required marks by
   their targets, an anchor as `page/<page>`), and nothing else. Its `id` says where it comes from: `step_<nn>` (the step's
-  number in the package, as its page), `final`, or `ending_<outcome_key>`. Its `source` names only
-  the recording and the step: `{record_id, step}` (the step's serial number, as `record mark
-  --step` takes it), `{record_id, final: true}` or `{record_id, ending}` (the ending's key); never a
-  path of the machine, an instance, an account or a time.
+  number in the package, as its page), `final`, or `ending_<outcome_key>`. Its `source` names the
+  recording's id and the step and nothing else: `{record_id, step}` (the step's serial number, as
+  `record mark --step` takes it), `{record_id, final: true}` or `{record_id, ending}` (the ending's
+  key). Fix round 3: a recording id the Lab made by default (`<unix_ms>-<pid>-<task_id>`, for a
+  recording started without `--record-id`) holds the time the recording began and a process
+  number; `source` never holds a path of the machine, an instance, an account or a device.
 - **The scene** is a canvas of the recording's size filled black (`[0, 0, 0]`, as the
   repositories' cases are), on which are pasted, where they are in the frame, the regions every
   recognition target of the whole package reads, each as the admitted package declares it (read
@@ -4293,10 +4297,16 @@ the package it came with.
   Not only the case's page's targets: a page told apart from the case's page by a target it forbids
   sees that target's region as on the frame. `scene_construction.rects` lists each pasted rectangle
   once, its `content` the targets that read it; `scene_sha256` is the SHA-256 of the PNG's bytes.
-  Never a whole frame, and nothing outside those regions, so the runner's scene rule holds without
-  its warning. A target whose region is no fixed rectangle inside the frame (relative to a
-  template, or the whole frame; no recording generates one) cannot be pasted where it is read, and
-  the check stops there with an error.
+  The scene holds exactly the regions the package's recognition targets read and nothing outside
+  them, so the runner's scene rule holds without its warning. Fix round 3: where a target reads the
+  whole frame (its region, or a template's search area, is the whole frame, which `record mark`
+  accepts), that rectangle is the whole frame and so is the scene, of every case; the answer names
+  each such case with the warning `record_case_whole_frame` (`{code, case, page, targets,
+  message}`, `targets` the targets that read the whole frame; exit 0), so that the agent who chose
+  that region sees it. The tool proposes nothing and refuses nothing for it. A target whose region
+  is no fixed rectangle inside the frame (relative to a template, or the keyword `full_frame`; no
+  recording generates one) cannot be pasted where it is read, and the check stops there with an
+  error.
 - **The run before the write.** Each case is run by `run_regression_case_on_bundle` on the final
   package, admitted in memory from the very files `record stop` writes: no file is read for it and
   nothing is evaluated a second way. Its verdict decides: `failed`, the case is not written and is
@@ -4307,7 +4317,13 @@ the package it came with.
   bare canvas, the canvas with no patch at all, is run once per package as a case that expects no
   page; a case whose page is also a page the bare canvas answers (its marks pass where nothing was
   pasted, a dark colour for one) proves nothing of its page: it is written and named with the
-  warning `record_case_bare_canvas`.
+  warning `record_case_bare_canvas`. Fix round 3: when the Lab has no text-recognition model and
+  the package's page detection reads a text target (the runner's own check, `LabOcr::require_pages`,
+  refuses), the runner judges no case's page: every case's page check is `not_run` with
+  `ocr_unavailable`, so the bare canvas and the ambiguity rule below judge nothing either. The
+  answer says so once, first among `lab.cases.warnings`, with the warning
+  `record_cases_ocr_unavailable` (`{code, message}`; exit 0): the cases were written without any
+  page judgement, because the Lab has no text-recognition model, and are judged where one is.
 - **A page recognised beside another page is no miss** (the coordinator's ruling after the slice's
   first round; R2's ruling 4 is its precedent: the usual ending's page passing on an ending's frames
   is no refusal, "Endings"). A linear run never asks which page of the whole package a screen is:
@@ -4318,14 +4334,21 @@ the package it came with.
      (`page_mismatch`, or a `page_conflict` among which its page is not), a target the case expects
      fails (`target_mismatch`), or another check fails: `record_case_failed`, below.
   2. **Ambiguity does not refuse**: when the runner answers `page_conflict` and the case's page is
-     among `matched_pages`, the case is made again without `expect.observe`, with only its
-     `expect.recognize` entries, run again in that form before it is written (it must pass; failing
-     then is a real miss) and written; `record stop` and `record ready` name it with the warning
-     `record_case_page_ambiguous` (`{code, case, page, other_pages, written: true, message}`,
-     `other_pages` the other pages matched; exit 0). Such a case proves what a linear run needs:
-     the step's own targets are found on its screen.
-  3. A case whose page requires no recognition target and is ambiguous would declare nothing: it is
-     not written, and the same warning says so (`written: false`).
+     among `matched_pages`, the case is made again without `expect.observe`: its `expect.recognize`
+     holds every target its page requires, `passed: true`, and (fix round 3, the coordinator's
+     ruling) every target its page forbids, `passed: false`; a forbidden target a scene cannot
+     evaluate (a click-only target, which no page set admits in `forbidden` today) is left out and
+     named in the warning's `forbidden_left_out`. It is run again in that form before it is written
+     (it must pass; failing then is a real miss, `record_case_failed`) and written; `record stop`
+     and `record ready` name it with the warning `record_case_page_ambiguous` (`{code, case, page,
+     other_pages, written: true, forbidden_left_out?, message}`, `other_pages` the other pages
+     matched; exit 0). Such a case states exactly that this page holds on this scene.
+  3. A case whose page is ambiguous and has no recognition target to pin (none it requires, none
+     it forbids that a scene can evaluate) would declare nothing: it is not written. Fix round 3,
+     one consequence per word: the warning `record_case_ambiguous_not_written` says so (`{code,
+     case, page, other_pages, written: false, message}`; exit 0), in `record stop`'s answer and in
+     `record ready`'s; a target marked on that page's screen has the case written. A page set
+     refuses a page that requires no target, so no recording made today reaches it.
 - **The self-check `cases`** is the last self-check ("Self-checks", item 10): it reads the final
   package, so it runs only when every check before it passed. Under `record stop` its first
   failing case (a real miss) is the refusal `record_case_failed` (3, `details{case, page, frame_id,
@@ -4335,7 +4358,9 @@ the package it came with.
   still lacks"): `what` `cases`, `code` `record_case_failed`, the step (or none, for an ending) and
   its press frame, and in `details` `case` (the case's id), `page`, `frames` (the case's frame),
   `outcome_key` (an ending's) and `checks`; and among its `warnings` each
-  `record_case_page_ambiguous`, as `record stop` answers it. A real miss means a target's verdict
+  `record_case_page_ambiguous` and `record_case_ambiguous_not_written`, as `record stop` answers
+  them. Fix round 3: the failure's `page`, in the refusal and in the item, is the page as the page
+  detection names it, `<game>/<page>`, as the case and its warnings name it. A real miss means a target's verdict
   depends on more of the screen than the region the package declares for it (a text-recognition
   model that reads the whole frame, for one): give the page a mark that holds within its own
   region.
@@ -4351,13 +4376,22 @@ the package it came with.
   two are recognised as a pair (each name is the first millisecond from that one that no entry
   holds, so a kept entry is never overwritten). A failure is `record_state_io_failed` (5) with
   `details.written_files` (the part directory among them) and `stage`; when the new set cannot be
-  renamed into place the old one is renamed back (`restored`). Under `--dry-run` nothing is written and the answer lists what
-  would be. The cases stay in the recording's own directory; they enter a resource repository only
-  through adoption.
+  renamed into place the old one is renamed back (`restored`). Fix round 3: the set-aside, rename
+  and roll-back of a file and of the cases' directory are one implementation (`swap_into_place`).
+  Under `--dry-run` nothing is written and the answer lists what would be: `lab.would_write`, after
+  the package's files, the cases' directory and each case's directory in it, in the order of
+  `lab.cases.ids` (fix round 3), and `lab.cases` with `status` `to_write` or `to_replace`. The
+  cases are written beside the package, in the recording's own directory, and nowhere else: taking
+  them into a resource repository is another slice's (#463 AC-1), not built by this one; adoption
+  does not write them today.
 - **The answer**: `lab.cases{directory, status, kept?, counts{steps, final, endings}, ids,
-  not_proven[{case, verdict, reasons}], warnings, limits, limit_texts}`: `warnings` each case's in
-  the order of the cases, `record_case_page_ambiguous` (`{code, case, page, other_pages, written,
-  message}`) before `record_case_bare_canvas` (`{code, case, page, message}`); `status` is `written` or `replaced` (`to_write` or `to_replace` under `--dry-run`);
+  not_proven[{case, verdict, reasons}], warnings, limits, limit_texts}`: `warnings` (fix round 3)
+  first, once, `record_cases_ocr_unavailable` (`{code, message}`) when no page was judged, then
+  each case's in the order of the cases, `record_case_page_ambiguous` (`{code, case, page,
+  other_pages, written, forbidden_left_out?, message}`) or `record_case_ambiguous_not_written`
+  (`{code, case, page, other_pages, written, message}`), then `record_case_bare_canvas` (`{code,
+  case, page, message}`), then `record_case_whole_frame` (`{code, case, page, targets, message}`);
+  every one warns and refuses nothing (exit 0); `status` is `written` or `replaced` (`to_write` or `to_replace` under `--dry-run`);
   `kept` the directory an earlier set was set aside as; `ids` the cases in the order the recording
   gives them (the steps in path order, the final screen, the endings in the order taken);
   `limits` is `["self_agreement"]` (the closed vocabulary `case_limit`) and
@@ -4438,8 +4472,11 @@ equal value is accepted.
 
 - #463 S2-10 (0.12.70): `cases` is the package's regression cases, written beside it or (under
   `--dry-run`) to be written: `{directory, status, kept?, counts, ids, not_proven, warnings,
-  limits, limit_texts}`, its `warnings` `record_case_page_ambiguous` and `record_case_bare_canvas`
-  ("Regression cases written with the package").
+  limits, limit_texts}`, its `warnings` `record_cases_ocr_unavailable`,
+  `record_case_page_ambiguous`, `record_case_ambiguous_not_written`, `record_case_bare_canvas` and
+  `record_case_whole_frame`; fix round 3: under `--dry-run` `would_write` names the cases'
+  directory and each case after the package's files ("Regression cases written with the
+  package").
 
 - #464 P4 (since 0.12.63): `kept` lists the files a replacement set aside and kept ("Writing"),
   present only when one was. `adoption_example` is how the package becomes a member of its game's
