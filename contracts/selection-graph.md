@@ -469,8 +469,10 @@ listed is present (section Ending empty), and lets the `expect_after` of any ope
   or from SEL-L4b-T `expect_identity: {"choice_of", "templates": [{"id", "target_id"}]}`
   (section Expected identity).
 
-A scan is declared with every member but `early_stop`; the Runtime supplies no default. The
-numbers below are neutral examples, not values:
+A scan is declared with every member but `early_stop`, and, beside `early_stop`, `end` may be
+left out too (Workflow #463 K-c, since 0.12.70, `package` revision 18: the scan of a select that
+scrolls straight to the item it knows; section Select over a scan, "A scan without an end"); the
+Runtime supplies no default. The numbers below are neutral examples, not values:
 
 ```json
 "scan": {"identity_feature": "member", "axis": "vertical",
@@ -508,7 +510,10 @@ numbers below are neutral examples, not values:
   (`position_tolerance_px`), how many must overlap between viewports (`min_overlap_instances`)
   and how they are spaced (`spacing`).
 - `start` is `{check, rewind}` and `end` is `{check}`: checks that give positive evidence of the
-  list's two ends; `rewind: true` lets the scan move toward the start until its check passes.
+  list's two ends; `rewind: true` lets the scan move toward the start until its check passes. A
+  scan without `end` has no evidence of its list's end, so it never covers its list: a step that
+  declares `on_empty` beside it is refused, and so is a scan that declares neither `end` nor
+  `early_stop`, which could only fail.
 - `bounds` caps the coverage viewports (`max_viewports`), the rewind and return viewports
   together (`max_reposition_viewports`) and the scan's time (`max_ms`, section Select over a
   scan). `early_stop: "upper_bound"` lets the scan stop before the list's end once no position
@@ -521,7 +526,8 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | Rule | Pointer | File |
 | --- | --- | --- |
 | `select` holds `layout_id` and `policy`, and optionally `scan` and `on_empty`, of the right JSON types. | the field | `task.json` |
-| `scan` holds `identity_feature`, `axis`, `advance`, `reposition`, `settle`, `track`, `start`, `end` and `bounds` (`MissingField`), and optionally `early_stop`; any other member is `UnknownField`. Admission reads their values. | `…/select/scan/<member>` | `task.json` |
+| `scan` holds `identity_feature`, `axis`, `advance`, `reposition`, `settle`, `track`, `start`, `end` and `bounds` (`MissingField`), and optionally `early_stop`; any other member is `UnknownField`. Admission reads their values. Workflow #463 K-c (since 0.12.70, `package` revision 18): `end` may be left out when the scan declares `early_stop`; a scan with neither is refused as a missing `end` always was (`MissingField`), because it could only fail; a `null` member is an absent one. | `…/select/scan/<member>` | `task.json` |
+| Workflow #463 K-c: a step whose `scan` declares no `end` declares no `on_empty` (`InvalidValue`): such a scan never covers its list, so rule 1 of section Select over a scan, which needs complete coverage, could never end the step empty. | `…/select/on_empty` | `task.json` |
 | `on_empty` is `{outcome_key}`, a string. | `…/select/on_empty/outcome_key` | `task.json` |
 | `expect_after.expect_identity` holds `choice_of` and optionally `target_id`, both strings, and optionally `templates`, an array of `{id, target_id}`, both strings (SEL-L4b-T); any other member is `UnknownField`. Admission requires exactly one of `target_id` and `templates`. | `/operations/<i>/expect_after/expect_identity/<member>`, `…/expect_identity/templates/<j>/<member>` | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
@@ -581,7 +587,8 @@ extent on the axis:
 - the largest finger displacement a drag's two rectangles allow is at most its
   `max_content_step_px`; 1 ≤ `advance.min_content_step_px` ≤ `advance.max_content_step_px` ≤
   *b* − *e*; and 1 ≤ `reposition.max_content_step_px` ≤ *b*;
-- `start.check`, `end.check` and every page check of a page flip are targets of the pack.
+- `start.check`, `end.check` (when the scan declares `end`) and every page check of a page flip are
+  targets of the pack.
 
 For a step that declares `scan` or `on_empty`, every field the policy reads has a domain the
 layout gives it: a `passed` feature boolean, a `measure_milli` or (Workflow #404 FS-2)
@@ -859,7 +866,10 @@ decides, returns to the chosen member and confirms it. One attempt runs:
    `advance`, the settle, the page and the guard, the alignment against the previous viewport,
    the gap and spacing checks, the reading of every position and the evaluation of the
    positions the viewport fixed, until the end check passes (coverage `complete`) or the early
-   stop holds (`early_stopped`).
+   stop holds (`early_stopped`). Two consecutive forward viewports that repeat the one before them
+   (the list stopped moving) fail the scan at the stage `select_scan_end`: with `end` declared
+   `selection_scan_end_unconfirmed`, without it `selection_scan_early_stop_unreached` (below, "A
+   scan without an end").
 3. **Decide.** A position that was tracked but never readable fails
    `selection_scan_position_unread`, and the spacing of the whole list is checked. The members,
    the positions whose fixed reading the evaluator ranked, are numbered `<layout>#NN` in
@@ -936,6 +946,28 @@ The scan's moves are inputs that come before the selecting tap, so a failure aft
 failure after input: the step is not retried, the task does not recover within itself, and the
 run fails with the failure's code. The selecting tap still comes after every failure path.
 
+**A scan without an end** (Workflow #463 K-c, since 0.12.70; the owner's ruling on board #463,
+option A of question 221: a scrolling choice that knows the item it wants scrolls straight to it,
+so its recording never reaches the list's end, and its package may carry no end mark). A scan
+that declares `early_stop` may declare no `end` (section Declaration). It never passes an end
+check, so its coverage is never `complete`, and its decision is acted on only when the early
+stop holds (`early_stopped`): then `Decide`, `Return`, `Confirm` and the tap run exactly as
+above. When the list stops moving before the early stop holds, the detection that fails a scan
+with `end` (two consecutive forward viewports repeating the one before them), the step fails
+`selection_scan_early_stop_unreached` (execution-kernel, error, class `pack_logic_mismatch`;
+`stage` `select_scan_end`, `viewport_index` the last of those viewports): a failure after input
+like every scan failure, with no retry, no tap and no record of a decision (section Record per
+path, "a failure before the decision"). A lower preference the scan read is not pressed: without
+positive evidence of the list's end, that nothing better follows is not known. Nothing ends such
+a step empty, so it declares no `on_empty`. `selection_scan_end_unconfirmed` keeps its one cause,
+a declared end that never passed; the bounds (`max_viewports`, `max_reposition_viewports`,
+`max_ms`) fail with `selection_scan_bounds_exceeded` as for every scan. The forward window is the
+one a scan with `end` has before its end passes, no move or a step within the advance's steps; a
+last move to the list's foot shorter than `advance.min_content_step_px` (less the tolerance)
+therefore fails `selection_scan_alignment_rejected` before the repeats are seen, as it does for a
+scan whose end check does not pass there. The offline entry `dry_run_scan_decide` (section
+Offline) runs the same session and the same `Decide`, so it answers the same on the same frames.
+
 The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
 [resource-readings.md](resource-readings.md), "List readings"): steps 1 and 2 only, with no
 policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures end the run as
@@ -954,7 +986,7 @@ the step's return, with these members:
 
 | Path | `selection_result` | `confirmation` | `unknown_check.blocking` | `coverage.state` | Task result |
 | --- | --- | --- | --- | --- | --- |
-| A failure before the decision: start, settle, alignment, gap, spacing, an identity mismatch while scanning (`selection_scan_identity_mismatch`), end, unread position, bounds, page, guard, geometry, budget, projection | no record | | | | the failure's code |
+| A failure before the decision: start, settle, alignment, gap, spacing, an identity mismatch while scanning (`selection_scan_identity_mismatch`), end (and, Workflow #463 K-c, a scan without an end that stopped moving before its early stop held, `selection_scan_early_stop_unreached`), unread position, bounds, page, guard, geometry, budget, projection | no record | | | | the failure's code |
 | A declared record list is unusable at `Pin` | `unknown` | `not_attempted` | `none` | `not_started` | `selection_not_selected` |
 | The evaluator aborts in a viewport | `unknown`, no verdicts | `not_attempted` | `none` | `incomplete` | `selection_not_selected` |
 | Rule 1 with `on_empty` | `empty` | `not_attempted` | `none` | `complete` | the run ends Completed with the `on_empty` key |
@@ -1110,8 +1142,10 @@ records them; the scan's inputs perform nothing. `--scan` is the step's scan dec
 §2.1), read from the file. Since SEL-L4b a package declares a step's `scan` itself (section
 Declaration), and the replay still takes the declaration `--scan` gives; the session's own
 checks apply to it, while the static checks of a package's admission (section Declaration) are
-not run on it. The replay never runs `Return` or `Confirm` (section Select over a scan). The scan's
-policy evaluates the facts a whole replay gives a select step, checked as the step checks them
+not run on it. Workflow #463 K-c: one of them refuses a declaration with neither `end` nor
+`early_stop`, which could only fail and which no package can carry
+(`contained_task_select_invalid`, `scan end=absent early_stop=absent`). The replay never runs
+`Return` or `Confirm` (section Select over a scan). The scan's policy evaluates the facts a whole replay gives a select step, checked as the step checks them
 (`selection_state_unavailable`, `selection_fact_context_mismatch`), with the rows of the record
 lists the step's policy declares. The result is `mode` `offline_scan_replay`, the package,
 task and operation, `end` and `scan`: its coverage, start evidence, coverage viewports, members,
@@ -1152,7 +1186,10 @@ is pressed, and a failure before the decision is the error. A draft policy in pl
 one is checked as `dry_run_select` checks one and then by every admission rule of a scan step that
 reads its policy, in admission's order: its last tie-break key `candidate_id lowest_first`, the
 mode `none_allowed` where the step declares `on_empty`, and the upper bound's inputs; else
-`contained_task_select_invalid` with the admission's detail.
+`contained_task_select_invalid` with the admission's detail. Workflow #463 K-c: the session and
+`Decide` are the run's own, so a scan without an end answers here what it answers in a run (section
+Select over a scan, "A scan without an end"): a decision once its early stop held, else the error
+`selection_scan_early_stop_unreached` with the run's stage and viewport.
 
 ## Judge step
 
