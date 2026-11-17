@@ -274,8 +274,9 @@ fn joined(mut line: Map<String, Value>, added: Vec<Value>) -> Map<String, Value>
 }
 
 /// The warnings a line's `warnings` member holds: its items, a member that is no list as one
-/// warning, none without it.
-fn listed(warnings: Option<&Value>) -> Vec<Value> {
+/// warning, none without it. Workflow #434 PP-1: also the header of a rescue row's line written
+/// whole (`crate::rescue_export`).
+pub(crate) fn listed(warnings: Option<&Value>) -> Vec<Value> {
     match warnings {
         None => Vec::new(),
         Some(Value::Array(warnings)) => warnings.clone(),
@@ -369,8 +370,9 @@ fn parts(row: &str, line: &Value) -> Vec<(String, Value)> {
 }
 
 /// The warning on a line written whole to the export `reference` (`{path, sha256, size}`),
-/// today's: `answer_exported` with `path`, `actual_sha256` and `actual_bytes`.
-fn answer_exported(reference: &Value) -> Outcome {
+/// today's: `answer_exported` with `path`, `actual_sha256` and `actual_bytes`. Workflow #434 PP-1:
+/// also on a rescue row's line written whole (`crate::rescue_export`).
+pub(crate) fn answer_exported(reference: &Value) -> Outcome {
     let mut warning = Outcome::new(ActingctlCode::AnswerExported);
     if let Some(path) = reference.get(PATH).and_then(Value::as_str) {
         warning = warning.path(path);
