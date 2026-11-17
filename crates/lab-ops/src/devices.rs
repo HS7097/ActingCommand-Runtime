@@ -16,6 +16,15 @@
 //!   reads the list again, and writes the device of `handle` for the alias into the private
 //!   file, with the time and the channel (`cli` here, `mcp` for the tool).
 //! - `unbind <alias>` removes the alias's binding.
+//! - #398 DB-1 (`contracts/device-binding.md`, "Choosing a device"): `bind <alias> <handle>
+//!   --config <file>` checks the alias in the candidate configuration `file` instead, by the same
+//!   rules and codes, and writes into the private file of the state root `file` names, the one a
+//!   check-config of `file` reads, so that a new installation binds its handset before its
+//!   configuration passes check-config and is switched in: no `--state-root` is taken, and no
+//!   install selection is read, of the process or of a root (fix round 1): the install root's adb
+//!   is that of `--root`, else of the root the program runs from by its place
+//!   (`locate::root_of_place`); the answer names `config`. `--bound-via ui` writes the channel
+//!   `ui` (the installer's); without it the channel is the caller's, as before.
 //!
 //! None of them runs the Runtime or records anything in the ledger: the next start reads the
 //! file and records the binding by fingerprint, so a change answers `restart_required`. No
@@ -45,7 +54,16 @@ pub const COMMAND: &str = "devices";
 pub const LIST: &str = "list";
 pub const BIND: &str = "bind";
 pub const UNBIND: &str = "unbind";
-const USAGE: &str = "usage: actingctl devices list --state-root <dir> [--root <install root>]\n       actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]\n       actingctl devices unbind <alias> --state-root <dir>";
+/// #398 DB-1: `bind`'s candidate configuration, a file, in place of `--state-root`.
+pub const CONFIG_FLAG: &str = "--config";
+/// #398 DB-1: the channel `bind` writes; absent, the caller's own.
+pub const BOUND_VIA_FLAG: &str = "--bound-via";
+/// #398 DB-1: the one word [`BOUND_VIA_FLAG`] takes.
+const UI: &str = "ui";
+/// #398 DB-1: the member of `bind`'s answer that names the candidate configuration the alias was
+/// checked in.
+const CONFIG_MEMBER: &str = "config";
+const USAGE: &str = "usage: actingctl devices list --state-root <dir> [--root <install root>]\n       actingctl devices bind <alias> <handle> (--state-root <dir> | --config <file>) [--root <install root>] [--bound-via ui]\n       actingctl devices unbind <alias> --state-root <dir>";
 
 /// One run of `adb devices -l`: what it printed, or why it printed nothing.
 pub enum AdbRun {
@@ -158,11 +176,28 @@ fn install(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf, Pa
         .or_else(|| root.map(Path::to_path_buf))
         .or_else(crate::packs::executable_install_root)
         .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))?;
-    let adb = install_root
+    Ok((installation, config, adb_of(&install_root)))
+}
+
+/// The adb of the install root `install_root`, `<install root>\tools\platform-tools\adb.exe`.
+fn adb_of(install_root: &Path) -> PathBuf {
+    install_root
         .join("tools")
         .join("platform-tools")
-        .join("adb.exe");
-    Ok((installation, config, adb))
+        .join("adb.exe")
+}
+
+/// #398 DB-1 fix round 1: the adb a bind against a candidate configuration lists the devices
+/// with: that of `root` (`--root`) when it is given, else that of the install root the program
+/// at `program` runs from by its place alone (`locate::root_of_place`). No install selection is
+/// read, of this process (one it inherited from another installation included) or of a root, so
+/// a root whose files are laid and whose configuration is not selected yet binds, from a slot too.
+/// Neither root: `install_root_unresolved`.
+fn candidate_adb(root: Option<&Path>, program: Option<&Path>) -> Result<PathBuf, Outcome> {
+    root.map(Path::to_path_buf)
+        .or_else(|| program.and_then(crate::locate::root_of_place))
+        .map(|install_root| adb_of(&install_root))
+        .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))
 }
 
 /// The private binding file of `state_root`; one that breaks its rules is
@@ -284,6 +319,63 @@ pub fn bind(
 ) -> Result<Value, Outcome> {
     let (installation, config, adb) = install(root)?;
     let instances = configured_instances(installation.as_ref(), &config)?;
+    bound(state_root, &adb, &instances, request, run).map(Value::Object)
+}
+
+/// #398 DB-1 (`contracts/device-binding.md`, "Choosing a device"): [`bind`] against the candidate
+/// configuration `file` in place of the selected one. The alias is checked in `file` by the same
+/// rules and codes, and the binding goes into the private file of the state root `file` names,
+/// which a check-config of `file` reads; no install selection is read, and the install root is
+/// asked for its adb alone ([`candidate_adb`]: `root`, else the root this program runs from by its
+/// place). A file that cannot be read is `config_read_failed`, one that does not decode
+/// `config_decode_failed`, each with its `path`; one without an absolute `state_root` is
+/// `install_state_root_unresolved` with `config_path`. The answer is [`bind`]'s and `config`, the
+/// file as given.
+pub fn bind_candidate(
+    file: &Path,
+    root: Option<&Path>,
+    request: &Bind<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    let program = std::env::current_exe().and_then(fs::canonicalize).ok();
+    bind_candidate_from(file, root, program.as_deref(), request, run)
+}
+
+/// #398 DB-1 fix round 1: [`bind_candidate`] for the program at `program` (this process's own,
+/// canonical, in [`bind_candidate`]), whose place names the install root when `root` is not
+/// given, so that a test binds as a program in a given place does.
+pub fn bind_candidate_from(
+    file: &Path,
+    root: Option<&Path>,
+    program: Option<&Path>,
+    request: &Bind<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Value, Outcome> {
+    let adb = candidate_adb(root, program)?;
+    let candidate = read_candidate(file)?;
+    let mut answer = bound(
+        &candidate.state_root,
+        &adb,
+        &candidate.instances,
+        request,
+        run,
+    )?;
+    answer.insert(
+        CONFIG_MEMBER.to_owned(),
+        Value::String(file.to_string_lossy().into_owned()),
+    );
+    Ok(Value::Object(answer))
+}
+
+/// The binding of `request` into the private file of `state_root`: its alias checked among
+/// `instances` (the configuration's), the device read from adb at `adb`. The answer's members.
+fn bound(
+    state_root: &Path,
+    adb: &Path,
+    instances: &[ConfigInstance],
+    request: &Bind<'_>,
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Result<Map<String, Value>, Outcome> {
     let instance = instances
         .iter()
         .find(|instance| instance.alias == request.alias)
@@ -294,7 +386,7 @@ pub fn bind(
         return Err(Outcome::new(ActingctlCode::DeviceKindUnsupported).alias(request.alias));
     }
     let bindings = bindings(state_root)?;
-    let listed = listing(&adb, &bindings, run)?
+    let listed = listing(adb, &bindings, run)?
         .into_iter()
         .find(|listed| listed.handle().as_deref() == Some(request.handle))
         .ok_or_else(|| Outcome::new(ActingctlCode::DeviceHandleUnknown).handle(request.handle))?;
@@ -317,7 +409,7 @@ pub fn bind(
         answer.insert("model".to_owned(), json!(model));
     }
     answer.insert("restart_required".to_owned(), json!(true));
-    Ok(Value::Object(answer))
+    Ok(answer)
 }
 
 /// Removes the binding of `alias`: `{alias, unbound, restart_required}`, both true when the file
@@ -345,29 +437,65 @@ fn configured_instances(
     installation: Option<&InstalledProcess>,
     config: &Path,
 ) -> Result<Vec<ConfigInstance>, Outcome> {
-    let bytes = match installation {
+    let bytes = configuration_bytes(installation, config)?;
+    serde_json::from_slice::<ConfigFile>(&bytes)
+        .map(|file| file.instances)
+        .map_err(|error| decode_failed(config, &error))
+}
+
+/// The bytes of the configuration `config`: through its install selection when it is the
+/// selection's, else read from disk; `config_read_failed` with its `path` when they cannot be read.
+fn configuration_bytes(
+    installation: Option<&InstalledProcess>,
+    config: &Path,
+) -> Result<Vec<u8>, Outcome> {
+    match installation {
         Some(selected) => selected.config_bytes().map_err(|error| {
             Outcome::new(SharedCode::ConfigReadFailed)
                 .path(config)
                 .caused_by(Outcome::new(error.code()))
-        })?,
+        }),
         None => fs::read(config).map_err(|error| {
             Outcome::new(SharedCode::ConfigReadFailed)
                 .path(config)
                 .caused_by(Outcome::from_io_error(&error, IoOp::Read))
-        })?,
-    };
-    serde_json::from_slice::<ConfigFile>(&bytes)
-        .map(|file| file.instances)
-        .map_err(|error| {
-            Outcome::new(SharedCode::ConfigDecodeFailed)
-                .path(config)
-                .caused_by(
-                    Outcome::new(ContractCode::ForeignDataError)
-                        .raw_source(RawSource::Json)
-                        .raw_text(error.to_string()),
-                )
-        })
+        }),
+    }
+}
+
+/// `config_decode_failed` for the configuration `config`, caused by the decoder's refusal.
+fn decode_failed(config: &Path, error: &serde_json::Error) -> Outcome {
+    Outcome::new(SharedCode::ConfigDecodeFailed)
+        .path(config)
+        .caused_by(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Json)
+                .raw_text(error.to_string()),
+        )
+}
+
+/// #398 DB-1: a candidate configuration's instances and the state root it names.
+struct Candidate {
+    instances: Vec<ConfigInstance>,
+    state_root: PathBuf,
+}
+
+/// #398 DB-1: the candidate configuration `file`, read as the configuration of a root without a
+/// selection is read ([`configured_instances`]: `config_read_failed`, `config_decode_failed`), and
+/// the absolute state root it names, by the rule the Lab locates a state root by
+/// (`locate::state_root_of`: `install_state_root_unresolved` with `config_path`).
+fn read_candidate(file: &Path) -> Result<Candidate, Outcome> {
+    let bytes = configuration_bytes(None, file)?;
+    let document =
+        serde_json::from_slice::<Value>(&bytes).map_err(|error| decode_failed(file, &error))?;
+    let instances = ConfigFile::deserialize(&document)
+        .map_err(|error| decode_failed(file, &error))?
+        .instances;
+    let state_root = crate::locate::state_root_of(&document, file)?;
+    Ok(Candidate {
+        instances,
+        state_root,
+    })
 }
 
 /// Writes `bindings` as the private file of `state_root`, checked by the file's own rules first
@@ -418,8 +546,19 @@ struct Parsed {
     action: &'static str,
     alias: Option<String>,
     handle: Option<String>,
-    state_root: PathBuf,
+    against: Against,
     root: Option<PathBuf>,
+    /// #398 DB-1: `bind --bound-via ui`; absent, the command's own channel, `cli`.
+    bound_via: Option<DeviceBoundVia>,
+}
+
+/// Where a `devices` call reads and writes the private binding file.
+enum Against {
+    /// The state root `--state-root` names; `bind` checks its alias in the selected configuration.
+    StateRoot(PathBuf),
+    /// #398 DB-1: `bind --config <file>`: the candidate configuration, which names its own state
+    /// root.
+    Candidate(PathBuf),
 }
 
 /// Workflow #434 LAB-5B1 (test builds and, since Workflow #434 LW-1, the feature `test-hooks`, for
@@ -433,7 +572,9 @@ pub(crate) fn parse_refusal(arguments: &[OsString]) -> Option<Outcome> {
 /// `devices <list|bind <alias> <handle>|unbind <alias>>` and the flags `flags_of` names for the
 /// action, each at most once and with a value; any other word, a repeated flag or a missing value
 /// is `actingctl_usage_invalid` naming it (`argument`, `argument_problem`; Workflow #382
-/// A1-FLAG).
+/// A1-FLAG). #398 DB-1: `bind` takes `--config <file>` in place of `--state-root` (both:
+/// `--state-root` `conflicting`; neither: `--state-root` `required`) and `--bound-via ui` (another
+/// word: `not_recognised`).
 fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
     let usage = |argument: &str, problem: ArgumentProblem| {
         Outcome::new(ActingctlCode::ActingctlUsageInvalid)
@@ -465,6 +606,8 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
     let takes = crate::flags_of(COMMAND, Some(action)).unwrap_or_default();
     let mut state_root = None;
     let mut root = None;
+    let mut config = None;
+    let mut bound_via = None;
     while index < arguments.len() {
         let text = arguments[index]
             .to_str()
@@ -475,22 +618,43 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
         let value = arguments
             .get(index + 1)
             .ok_or_else(|| usage(flag, ArgumentProblem::ValueMissing))?;
+        index += 2;
+        // #398 DB-1: the channel, whose one word is `ui`.
+        if flag == BOUND_VIA_FLAG {
+            if value.to_str() != Some(UI) {
+                return Err(usage(flag, ArgumentProblem::NotRecognised));
+            }
+            if bound_via.replace(DeviceBoundVia::Ui).is_some() {
+                return Err(usage(flag, ArgumentProblem::Repeated));
+            }
+            continue;
+        }
         let slot = if flag == "--root" {
             &mut root
+        } else if flag == CONFIG_FLAG {
+            &mut config
         } else {
             &mut state_root
         };
         if slot.replace(PathBuf::from(value)).is_some() {
             return Err(usage(flag, ArgumentProblem::Repeated));
         }
-        index += 2;
     }
+    // #398 DB-1: the state root `--state-root` names, or the candidate configuration, which names
+    // its own; never both.
+    let against = match (state_root, config) {
+        (Some(_), Some(_)) => return Err(usage("--state-root", ArgumentProblem::Conflicting)),
+        (Some(state_root), None) => Against::StateRoot(state_root),
+        (None, Some(config)) => Against::Candidate(config),
+        (None, None) => return Err(usage("--state-root", ArgumentProblem::Required)),
+    };
     Ok(Parsed {
         action,
         alias,
         handle,
-        state_root: state_root.ok_or_else(|| usage("--state-root", ArgumentProblem::Required))?,
+        against,
         root,
+        bound_via,
     })
 }
 
@@ -498,6 +662,15 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
 /// CLI. One result line (Workflow #378 A5): the answer with `device_list_reported` or
 /// `device_binding_changed`, or `{outcome}` with the refusal and exit 1.
 pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
+    dispatch_with(arguments, &run_adb)
+}
+
+/// #398 DB-1: [`dispatch`] with `run` for its run of `adb devices -l` ([`run_adb`] in
+/// [`dispatch`]; a test's own listing), so that a test reads what a command line binds.
+pub fn dispatch_with(
+    arguments: &[OsString],
+    run: &dyn Fn(&Path) -> AdbRun,
+) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -510,22 +683,30 @@ pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
         parsed.action,
         parsed.alias.as_deref(),
         parsed.handle.as_deref(),
+        &parsed.against,
     ) {
-        (BIND, Some(alias), Some(handle)) => bind(
-            &parsed.state_root,
-            root,
-            &Bind {
+        (BIND, Some(alias), Some(handle), against) => {
+            let request = Bind {
                 alias,
                 handle,
-                via: DeviceBoundVia::Cli,
-            },
-            &run_adb,
-        )
-        .map(|answer| (answer, ActingctlCode::DeviceBindingChanged)),
-        (UNBIND, Some(alias), _) => unbind(&parsed.state_root, alias)
-            .map(|answer| (answer, ActingctlCode::DeviceBindingChanged)),
-        _ => list(&parsed.state_root, root, &run_adb)
-            .map(|answer| (answer, ActingctlCode::DeviceListReported)),
+                via: parsed.bound_via.unwrap_or(DeviceBoundVia::Cli),
+            };
+            match against {
+                Against::StateRoot(state_root) => bind(state_root, root, &request, run),
+                Against::Candidate(file) => bind_candidate(file, root, &request, run),
+            }
+            .map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
+        }
+        (UNBIND, Some(alias), _, Against::StateRoot(state_root)) => {
+            unbind(state_root, alias).map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
+        }
+        (_, _, _, Against::StateRoot(state_root)) => {
+            list(state_root, root, run).map(|answer| (answer, ActingctlCode::DeviceListReported))
+        }
+        // `--config` is `bind`'s alone (`flags_of`): `list` and `unbind` refuse it as unknown.
+        (_, _, _, Against::Candidate(_)) => Err(Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+            .argument(CONFIG_FLAG)
+            .argument_problem(ArgumentProblem::Unknown)),
     };
     Some(match answer {
         Ok((answer, code)) => {

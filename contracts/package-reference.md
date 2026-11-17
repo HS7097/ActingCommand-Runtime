@@ -19,7 +19,9 @@ names each pack by its `package_id` (bundle v4, below), a Lab recording writes
 Workflow #336 PKG-S1 (option 丙): a package is admitted by its path, structurally. Neither a
 digest of the package nor a pin inside it (a legacy manifest's per-file hashes, a select
 step's `policy.sha256`, an OCR dictionary's or truth set's `sha256`) is computed or compared,
-and no name is read as an identity. The path alone chooses the reading:
+and no name is read as an identity; the one exception (Workflow #463 CH-1) is the content hash
+the admission of a run's package computes once, only to record it (item 1 below). The path
+alone chooses the reading:
 
 | Path | Reading |
 |---|---|
@@ -35,8 +37,13 @@ a file is opened without following a link. Admission runs in this order under on
 
 1. The locator must be absolute. Nothing names the package but its path (PKG-S4). Since
    PKG-S2 the ledger and the evidence name a package by its `package_id` (`package_label`:
-   `PackageAdmitted`, the entry-recovery facts, the Lab and observation evidence) and carry
-   no package digest; since PKG-S4 neither does a package debug summary.
+   `PackageAdmitted`, the entry-recovery facts, the Lab and observation evidence), never by a
+   digest; since PKG-S4 neither does a package debug summary. Since Workflow #463 CH-1
+   (Runtime 0.12.71, ledger revision 9; the owner's ruling of 11-16, which relaxes option 丙
+   for computing and recording only) a run's admission record `PackageAdmitted` also carries
+   the content hash its admission measured on the bytes it read (`content_hash`,
+   [policy-suspension.md](policy-suspension.md), "Content hash"): only recorded, never a name
+   of the package, never compared, never a reason to refuse.
 2. The content is read into memory exactly once, as a table of `/`-separated relative paths
    and their bytes. A directory contributes every regular file at any depth; empty
    directories do not contribute. A regular file is read whole and treated by its extension

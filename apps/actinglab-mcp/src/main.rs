@@ -86,6 +86,10 @@ mod gate_463_s11;
 // finished run's answer fits, every schema property reaches its operation).
 #[cfg(test)]
 mod gate_434_lw1;
+// Test-only: #398 DB-1, `ac_devices_bind` takes the candidate configuration and leaves the channel
+// out (`db1_t5_the_mcp_tool_takes_config_and_leaves_bound_via_out`).
+#[cfg(test)]
+mod gate_398_db1;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

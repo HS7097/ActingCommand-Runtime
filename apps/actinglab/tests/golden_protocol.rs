@@ -827,6 +827,13 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<INPUT_SHA256>".to_string();
             return;
         }
+        // Workflow #463 CH-1 (ledger revision 9): the content hash a run's admission records,
+        // the SHA-256 of the package file the case writes; the gate tests of the Runtime pin its
+        // value against containment's measure.
+        Some("content_hash") => {
+            *text = "<CONTENT_HASH>".to_string();
+            return;
+        }
         Some("instance_id") if text.starts_with("envinst_") => {
             *text = "<IID>".to_string();
             return;

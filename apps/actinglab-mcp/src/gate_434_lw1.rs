@@ -96,7 +96,7 @@ const IDENTIFIERS: [(&str, &str); 6] = [
 /// every name outside the table that the command line of a row this server serves in its own
 /// process takes and its schema does not offer (`*`: every such row). A rescue row's only where the
 /// rescue module runs.
-const LEFT_OUT: [(&str, &str, &str); 7] = [
+const LEFT_OUT: [(&str, &str, &str); 8] = [
     (
         "material",
         "out",
@@ -126,6 +126,12 @@ const LEFT_OUT: [(&str, &str, &str); 7] = [
         "devices bind",
         "root",
         "the command line's own --root, which the row does not declare: the server hands the root it runs from",
+    ),
+    // #398 DB-1 (adapted: the work order leaves the row's channel out of its tool).
+    (
+        "devices bind",
+        "bound_via",
+        "its one channel ui is the installer's: a binding made through MCP keeps the channel the row writes without it",
     ),
     (
         "*",

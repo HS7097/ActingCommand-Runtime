@@ -562,7 +562,7 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #336 PKG-S2 (option 丙): the package facts, the declaration refusal and the selection record name a package by its package_id and carry no package digest; each reads back unchanged and a stored record that still carries a removed digest member is not read (M-PKG v1.1 §4.3 S2-T1, S2-T7; register §2)
+# Workflow #336 PKG-S2 (option 丙): the package facts, the declaration refusal and the selection record name a package by its package_id and carry no package digest; each reads back unchanged and a stored record that still carries a removed digest member is not read (M-PKG v1.1 §4.3 S2-T1, S2-T7; register §2). Adapted by Workflow #463 CH-1 (0.12.71, register §1.455, ledger revision 9; the owner's ruling of 11-16, which relaxes option 丙 for computing and recording only): the admission fact's member set gains content_hash (the content hash its admission measured) and variables (the run's values); a package_sha256 member is still not read
 [[gate]]
 key = "K22"
 coverage = "Y"

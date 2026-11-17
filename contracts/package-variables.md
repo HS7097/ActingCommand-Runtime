@@ -80,7 +80,8 @@ root's accepted `goals.json` takes, which the Runtime's scheduler workbench read
   run read the defaults, and so does a direct run whose request gives none; since S3-8, S3-9 only a
   direct run's request (`run start --variable`, `standard-pack trial --variable`, their MCP tools)
   and the offline scan replay take values. actingctl's first-generation MCP server
-  (`ac_run_pack`) gives none. No run's answer or record lists the values it was given.
+  (`ac_run_pack`) gives none. No run's answer lists the values it was given; since Workflow #463
+  CH-1 (0.12.71) its admission record does ("The run's admission record").
 - **A recording writes a variable for every select.** Since #463 S2-6 (0.12.68, register §1.442;
   fix round 1, the coordinator's ruling R1; [lab-recording.md](lab-recording.md), "Selecting in a
   list" and "The wanted value is a variable of the package") `record stop` declares one `ordered`
@@ -400,10 +401,13 @@ a package that declares it. The kernel reads the dispatched value (`value_json`)
 prepared package's own declaration, so a package changed since its dispatch reads the default for
 a value it no longer takes; the dispatch's record still says what was dispatched.
 
-**A known limit** (fix round 1): a package replaced between a dispatch and its run's start may
-read the default while the dispatch's record says `set`: the dispatch judged the value under the
-declaration the workbench last read, the run under the one it prepares. The record names the
-declaration's `declaration_sha256` only in the warning; no record says the run read otherwise.
+**A limit, now recorded** (fix round 1; Workflow #463 CH-1, 0.12.71): a package replaced between
+a dispatch and its run's start may read the default while the dispatch's record says `set`: the
+dispatch judged the value under the declaration the workbench last read, the run under the one it
+prepares. The record names the declaration's `declaration_sha256` only in the warning. Since CH-1
+the run's admission record says what the run read ("The run's admission record"): it lists only
+the values of its dispatch the run read, so such a run's record names no value for that variable
+(it read its default), and its `content_hash` is the content it was prepared with.
 
 **The record.** The dispatch's `policy_dispatch_parameters` reason (an existing info outcome)
 gains `variable_values`, one record per variable of the package in declaration order:
@@ -476,9 +480,10 @@ judgement that gives neither the value nor a word, which cannot happen, is
 values pass into the run's parameters by the line a dispatch's values pass through
 (`dispatched_variable_values`, `with_variables`), so the package reads each as
 `session.dispatch.parameter.<name>` with its kind's type, and a variable not given reads its
-default; a request without values reads every default, as before. A direct run records nothing of
-its values, as it records nothing of its parameters: its command record carries no parameters,
-and recording them would need a new ledger member, which S3-8 does not add. actinglab's `run
+default; a request without values reads every default, as before. S3-8 recorded nothing of a
+direct run's values, as nothing of its parameters: its command record carries no parameters, and
+recording them needed a new ledger member, which Workflow #463 CH-1 adds (0.12.71, ledger
+revision 9, "The run's admission record"); the parameters are still not recorded. actinglab's `run
 start --variable <name>=<json>` (repeatable) reads the values with the scan replay's own parser
 (`lab_ops::core_ops::parse_variables`, one function for the three commands) before anything is
 sent (fix round 1: more than 16 of them are `--variable` `out_of_range`, the word of a count out
@@ -487,6 +492,53 @@ of its range), and without `--variable` sends the request of revision 10 byte fo
 ([standard-pack-trial.md](standard-pack-trial.md), "The run"). A Runtime below revision 11 cannot
 decode a request that carries values: it ends the connection, nothing runs, and the client reports
 the connection ended.
+
+**The run's admission record** (Workflow #463 CH-1, Runtime 0.12.71, ledger revision 9; register
+[v012-register.md](v012-register.md) §1.455; the owner's ruling of 11-16 on board #463, option A
+of question 220). The run's `task.requested` (`PackageAdmitted`) carries the optional member
+`variables`: the values handed to the run from outside, sorted by name, each
+`{variable_name, value_json}` with the value's compact JSON text when that text is at most 1024
+bytes (`MAX_VARIABLE_VALUE_JSON_BYTES`), else `{variable_name, value_sha256, value_bytes}`, the
+text's SHA-256 (64 lowercase hexadecimal digits) and length only (`AdmittedVariable`):
+
+- a direct run, the trial's run included: the values its request gave (judged before its
+  admission, "A direct run given values", so each is the value the run reads); a variable left
+  to its default is not in it, since its request handed it none;
+- a policy run: the values of its dispatch's `variable_values` that the run read, each as it read
+  it, judged under the declaration of the package it prepared by the rule of its overlay
+  (`dispatched_variables_read`, beside `dispatched_variable_values`): a variable the dispatch
+  names no value for, or whose value that declaration no longer takes, reads its default and is
+  not listed; an `ordered` value taken in part is listed as the run read it. So it holds every
+  value its dispatch carried and the run read, defaults included (a dispatch hands down a default
+  of at most 1024 bytes as it hands down a set value, "The record" above), and does not say which
+  were set and which were defaults (CH-1 fix round 1, the coordinator's ruling: the code stays as
+  it is): the member is what was handed to the run from outside, and the dispatch's own reason
+  says where each value came from (`variable_source`);
+- a run handed no value (none given, a package without variables, a run the host starts itself)
+  writes no `variables` member: its record is byte for byte the record without it.
+
+Beside it, `content_hash` is the content hash the admission measured on the bytes it read
+([policy-suspension.md](policy-suspension.md), "Content hash"). Both are only recorded: nothing
+reads them to decide, the record's validation refuses a malformed member
+(`invalid_task_semantic_payload`), and the public projection a client reads carries neither (the
+coordinator's ruling: no data value leaves through it). The Lab's own reading of the record and
+the ledger tools read them; `run show` answering them is a later slice. Which tiers of the
+projection and which exports carry them (an exported evidence package does, so a person who hands
+one on hands the values too): [ledger-observer.md](ledger-observer.md), "Later rulings applied",
+item 1.
+
+**The admission record's size** (CH-1 fix round 1). With a value's text recorded whole only up to
+1024 bytes and at most sixteen values (a package declares at most 16 variables, a direct run's
+request carries at most 16 values), the record is about 20 KB at most: an entry of a 1024-byte
+text, escaped once inside the record (about 1.09 KB for a list of 32 keys), with its name takes
+about 1.2 KB, sixteen of them about 19 KB, and the content hash and the rest of the fact well
+under 1 KB. A longer text is recorded by its SHA-256 and length and can come only from a direct
+run (a dispatch hands down no text above 1024 bytes). Nothing refuses, cuts or fails on it:
+neither the ledger nor this fact's validation sets a byte bound on the record, and the bounds a
+record meets on its way out,
+a query page's 768 KiB (`MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES`) and a frame's 1 MiB, are far
+above it; the 32 640 bytes of an outcome's record form ("The record's size" above) bound outcomes,
+not this fact.
 
 **What the next slice reads** (fix round 2, for V3's view; no request, Lab row or view is added
 here). From memory, never from a file:
@@ -613,6 +665,10 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   `ContainedTaskRequest.variables`. `min` stays 3: a request without it is the request of revision
   10, and no answer changes. `package`, `ledger`, `actingd-config` and `runtime-outcomes` do not
   move.
+- **`ledger` 9** (Workflow #463 CH-1, Runtime 0.12.71, [component-interfaces.md](component-interfaces.md),
+  the `ledger` row 9): the admission record's optional `content_hash` and `variables` ("The run's
+  admission record"). One way; a build that declares [3, 8] cannot read a ledger that holds one.
+  `runtime-client`, `package`, `actingd-config` and `runtime-outcomes` do not move.
 
 ## What arrives later
 

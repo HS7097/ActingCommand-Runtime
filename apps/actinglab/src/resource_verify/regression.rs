@@ -31,9 +31,9 @@ use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_lab::{
-    LabOcr, REGRESSION_CASE_FILE, RegressionCase, RegressionCaseVerdict, RegressionCheck,
-    RegressionCounts, RegressionPackage, RegressionProblem, RegressionResult, RegressionVerdict,
-    RegressionWarning, read_regression_case,
+    LabOcr, REGRESSION_CASE_FILE, RegressionCaseVerdict, RegressionCheck, RegressionCounts,
+    RegressionPackage, RegressionProblem, RegressionResult, RegressionVerdict, RegressionWarning,
+    read_regression_case,
 };
 use actingcommand_lab_ops::cli_line;
 use serde::Serialize;
@@ -79,10 +79,11 @@ struct CaseDirectory {
 }
 
 /// One case run: where it is (`regression/<game>/<case>`, relative to the checkout) and its
-/// verdict.
-struct CaseRun {
-    path: String,
-    verdict: RegressionCaseVerdict,
+/// verdict. #463 AC-1 fix round 1: adoption lists its cases' runs so too
+/// (`standard_pack_cli::LabAdoption`), each by the directory it would write.
+pub(crate) struct CaseRun {
+    pub(crate) path: String,
+    pub(crate) verdict: RegressionCaseVerdict,
 }
 
 /// Fix round 1: one case of the answer, short: where it is, its `id` and `package_id` (`null`
@@ -90,7 +91,7 @@ struct CaseRun {
 /// not run, each with its word and what it names: its place `at`, the page, the target, the two
 /// values compared; without the `detail` text) and its warnings. Never the case's document.
 #[derive(Serialize)]
-struct CaseRow {
+pub(crate) struct CaseRow {
     path: String,
     id: Option<String>,
     package_id: Option<String>,
@@ -171,19 +172,7 @@ pub(crate) fn run_resource_regression(
     }
     // Fix round 1: the cases that did not pass, the failed ones first, each group in the order of
     // their paths; the first `ROWS_LISTED_MAX` of them are listed.
-    let did_not_pass = [RegressionVerdict::Failed, RegressionVerdict::Partial]
-        .into_iter()
-        .flat_map(|verdict| {
-            runs.iter()
-                .filter(move |run| run.verdict.verdict == verdict)
-        })
-        .collect::<Vec<_>>();
-    let rows = did_not_pass
-        .iter()
-        .copied()
-        .take(ROWS_LISTED_MAX)
-        .map(CaseRow::of)
-        .collect::<Vec<_>>();
+    let NotPassed { total, rows } = not_passed(&runs);
     let message = format!(
         "{} of {} regression cases failed, the first {}; the details list the first {} of the {} \
          cases that did not pass, the failed ones first",
@@ -191,12 +180,12 @@ pub(crate) fn run_resource_regression(
         counts.cases,
         rows.first().map_or("", |row| row.path.as_str()),
         rows.len(),
-        did_not_pass.len()
+        total
     );
     let answer = RegressionAnswer {
         repo,
         counts,
-        failed_total: Some(did_not_pass.len()),
+        failed_total: Some(total),
         listed: Some(rows.len()),
         cases: Some(rows),
         warnings,
@@ -217,6 +206,37 @@ fn answer_value(answer: &RegressionAnswer) -> CliOutcome<Value> {
             "the answer of resource regression does not serialize: {error}"
         ))
     })
+}
+
+/// Fix round 1: the cases of a run that did not pass, as a failing run lists them.
+pub(crate) struct NotPassed {
+    /// How many did not pass (`failed` and `partial`), the answer's `failed_total`.
+    pub(crate) total: usize,
+    /// The rows of the first [`ROWS_LISTED_MAX`] of them, the failed ones first.
+    pub(crate) rows: Vec<CaseRow>,
+}
+
+/// Fix round 1: the cases of `runs` that did not pass, the failed ones first, each group in the
+/// order of `runs` (the order of their paths), the rows of the first [`ROWS_LISTED_MAX`] of them
+/// short ([`CaseRow`]), so that the refusal fits the Lab's own line and the MCP server's answer
+/// budget whatever the number of cases. #463 AC-1 fix round 1: the one rule, which `standard-pack
+/// adopt`'s `case_failed` lists its cases by too (`standard_pack_cli::LabAdoption`).
+pub(crate) fn not_passed(runs: &[CaseRun]) -> NotPassed {
+    let did_not_pass = [RegressionVerdict::Failed, RegressionVerdict::Partial]
+        .into_iter()
+        .flat_map(|verdict| {
+            runs.iter()
+                .filter(move |run| run.verdict.verdict == verdict)
+        })
+        .collect::<Vec<_>>();
+    NotPassed {
+        total: did_not_pass.len(),
+        rows: did_not_pass
+            .into_iter()
+            .take(ROWS_LISTED_MAX)
+            .map(CaseRow::of)
+            .collect(),
+    }
 }
 
 impl CaseRow {
@@ -347,9 +367,9 @@ fn directories(parent: &Path) -> CliOutcome<Vec<(String, PathBuf)>> {
     Ok(found)
 }
 
-/// The answer of one case directory, or none when `--package-id` does not select it: its
-/// `case.json` read, its scene read, its package admitted (once per run, kept in `packages`) and
-/// the case run on it.
+/// The answer of one case directory, or none when `--package-id` does not select it
+/// ([`case_of_directory`], its package `packs/<package_id>/` of the checkout admitted once per
+/// run, kept in `packages`).
 fn run_case(
     request: &RegressionRequest,
     directory: CaseDirectory,
@@ -360,18 +380,83 @@ fn run_case(
         "{REGRESSION_DIRECTORY}/{}/{}",
         directory.game, directory.case
     );
-    let selects = |package_id: Option<&str>| {
-        request
+    let mut checkout = CheckoutPackages {
+        request,
+        admitted: packages,
+        ocr,
+    };
+    let read = case_of_directory(&directory.path, &mut checkout)?;
+    Some(CaseRun {
+        path,
+        verdict: read.verdict,
+    })
+}
+
+/// #463 AC-1 fix round 1: which cases a reading of case directories takes and the package each is
+/// run on ([`case_of_directory`]).
+pub(crate) trait CasePackages {
+    /// Whether the case whose `case.json` names the package `package_id` (`None` when it names
+    /// none as text, or cannot be read) is taken; every case is, unless a filter says otherwise.
+    fn selects(&self, _package_id: Option<&str>) -> bool {
+        true
+    }
+
+    /// The package the case of `package_id` is run on, as the runner admitted it
+    /// (`RegressionPackage::load`), or the check that refused it.
+    fn package(&mut self, package_id: &str) -> &Result<RegressionPackage, RegressionCheck>;
+}
+
+/// The packages of a checkout `resource regression` runs its cases on: `packs/<package_id>/` of
+/// `--repo`, each admitted once per run (kept in `admitted`); `--package-id` selects.
+struct CheckoutPackages<'a> {
+    request: &'a RegressionRequest,
+    admitted: &'a mut Packages,
+    ocr: &'a LabOcr,
+}
+
+impl CasePackages for CheckoutPackages<'_> {
+    fn selects(&self, package_id: Option<&str>) -> bool {
+        self.request
             .package_id
             .as_deref()
             .is_none_or(|wanted| package_id == Some(wanted))
-    };
-    let verdict = match fs::read(directory.path.join(REGRESSION_CASE_FILE)) {
+    }
+
+    fn package(&mut self, package_id: &str) -> &Result<RegressionPackage, RegressionCheck> {
+        let package_dir = self.request.repo.join(PACKS_DIRECTORY).join(package_id);
+        let ocr = self.ocr;
+        self.admitted
+            .entry(package_id.to_owned())
+            .or_insert_with(|| RegressionPackage::load(&package_dir, ocr))
+    }
+}
+
+/// #463 AC-1 fix round 1: a case directory as it was read and run ([`case_of_directory`]).
+pub(crate) struct CaseRead {
+    pub(crate) verdict: RegressionCaseVerdict,
+    /// The case's files as they were read, each by its name in the directory: its `case.json`
+    /// when it could be read, and the scene it names when that could be read too.
+    pub(crate) files: Vec<(String, Vec<u8>)>,
+}
+
+/// #463 RC-1 (`contracts/resource-regression-case.md`, "The operation"); #463 AC-1 fix round 1:
+/// the one reading of a case directory, which `resource regression` and `standard-pack adopt`
+/// (`standard_pack_cli::LabAdoption`) both call. Its `case.json` read by the one reader (a file
+/// that cannot be read is `failed` with `case_missing`; the reader's refusal is its verdict); none
+/// when `packages` does not select the package the case names; the scene it names read
+/// (`scene_missing` when it cannot be); and the case run on the package `packages` gives for it
+/// (refused by the package's own check when the runner refused the package). With the files read.
+pub(crate) fn case_of_directory(
+    directory: &Path,
+    packages: &mut dyn CasePackages,
+) -> Option<CaseRead> {
+    let case_json = match fs::read(directory.join(REGRESSION_CASE_FILE)) {
+        Ok(bytes) => bytes,
         Err(error) => {
-            if !selects(None) {
+            if !packages.selects(None) {
                 return None;
             }
-            RegressionCaseVerdict::refused(
+            let verdict = RegressionCaseVerdict::refused(
                 None,
                 None,
                 RegressionCheck::failed(
@@ -379,52 +464,51 @@ fn run_case(
                     RegressionProblem::CaseMissing,
                     Some(format!("{REGRESSION_CASE_FILE} cannot be read: {error}")),
                 ),
-            )
+            );
+            return Some(CaseRead {
+                verdict,
+                files: Vec::new(),
+            });
         }
-        Ok(bytes) => match read_regression_case(&bytes) {
-            Err(verdict) => {
-                if !selects(verdict.package_id.as_deref()) {
-                    return None;
-                }
-                verdict
-            }
-            Ok(case) => {
-                if !selects(Some(case.package_id())) {
-                    return None;
-                }
-                run_read_case(&request.repo, &directory.path, &case, packages, ocr)
-            }
-        },
     };
-    Some(CaseRun { path, verdict })
-}
-
-/// The verdict of the read case `case` of the directory `directory`: its scene read, its package
-/// `packs/<package_id>/` of the checkout `repo` admitted (once per run, kept in `packages`) and
-/// the case run on it.
-fn run_read_case(
-    repo: &Path,
-    directory: &Path,
-    case: &RegressionCase,
-    packages: &mut Packages,
-    ocr: &LabOcr,
-) -> RegressionCaseVerdict {
+    let case = match read_regression_case(&case_json) {
+        Ok(case) => case,
+        Err(verdict) => {
+            if !packages.selects(verdict.package_id.as_deref()) {
+                return None;
+            }
+            return Some(CaseRead {
+                verdict,
+                files: vec![(REGRESSION_CASE_FILE.to_owned(), case_json)],
+            });
+        }
+    };
+    if !packages.selects(Some(case.package_id())) {
+        return None;
+    }
     let scene = match fs::read(directory.join(case.scene())) {
         Ok(scene) => scene,
         Err(error) => {
-            return case.refused(RegressionCheck::failed(
+            let verdict = case.refused(RegressionCheck::failed(
                 "/scene",
                 RegressionProblem::SceneMissing,
                 Some(format!("{} cannot be read: {error}", case.scene())),
             ));
+            return Some(CaseRead {
+                verdict,
+                files: vec![(REGRESSION_CASE_FILE.to_owned(), case_json)],
+            });
         }
     };
-    let package_dir = repo.join(PACKS_DIRECTORY).join(case.package_id());
-    let package = packages
-        .entry(case.package_id().to_owned())
-        .or_insert_with(|| RegressionPackage::load(&package_dir, ocr));
-    match package {
-        Ok(package) => package.run(case, &scene),
+    let verdict = match packages.package(case.package_id()) {
+        Ok(package) => package.run(&case, &scene),
         Err(check) => case.refused(check.clone()),
-    }
+    };
+    Some(CaseRead {
+        verdict,
+        files: vec![
+            (REGRESSION_CASE_FILE.to_owned(), case_json),
+            (case.scene().to_owned(), scene),
+        ],
+    })
 }

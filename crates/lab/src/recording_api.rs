@@ -568,19 +568,51 @@ fn ready_recording(
             json!({"instance": instance}),
         ));
     };
+    let recording = recording_of_id(state_dir, record_id)?;
+    record_instance_check(&recording.instance, instance)?;
+    let session = session_of_id(state_dir, &recording)?;
+    Ok((recording, session))
+}
+
+/// #463 AC-1 (S3-17; `contracts/standard-pack-authoring.md`, "One judgement of the recording"):
+/// the answer of `record ready` for the recording `record_id` of the state directory `state_dir`,
+/// whatever instance it is of, by the one function [`ready_of`] with `options`: `standard-pack
+/// adopt --record-id` judges the recording it adopts by it, with no option given (no instance, so
+/// no instance configuration and no installation's row). The recording is read as `record ready
+/// --record-id` reads one its instance's header no longer names ([`recording_of_id`],
+/// [`session_of_id`]); it only reads.
+pub fn record_ready_by_id(
+    state_dir: &Path,
+    record_id: &str,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+) -> LabResult<RecordReadyOutcome> {
+    let recording = recording_of_id(state_dir, record_id)?;
+    let session = session_of_id(state_dir, &recording)?;
+    ready_of(&recording, session, options, ocr)
+}
+
+/// #463 S2-1: the step table of the recording `record_id`; none is `record_lab_unavailable`
+/// (`lab_recording_missing`). #463 AC-1: also for [`record_ready_by_id`].
+fn recording_of_id(state_dir: &Path, record_id: &str) -> LabResult<LabRecording> {
     let Some(recording) = read_recording(state_dir, record_id)? else {
         return Err(lab_unavailable("lab_recording_missing")
             .with_details(json!({"reason": "lab_recording_missing", "record_id": record_id})));
     };
-    record_instance_check(&recording.instance, instance)?;
-    let archived =
-        recording.status == "active" && latest_manifest(&lab_dir(state_dir, record_id))?.is_some();
-    let session = if archived {
+    Ok(recording)
+}
+
+/// #463 S2-1: the session's state of `recording`, read by its id as `record status` says it:
+/// `archived` when it is active and its directory holds a manifest (a later `record start`
+/// replaced its header), otherwise its status. #463 AC-1: also for [`record_ready_by_id`].
+fn session_of_id(state_dir: &Path, recording: &LabRecording) -> LabResult<String> {
+    let archived = recording.status == "active"
+        && latest_manifest(&lab_dir(state_dir, &recording.record_id))?.is_some();
+    Ok(if archived {
         ARCHIVED.to_string()
     } else {
         recording.status.clone()
-    };
-    Ok((recording, session))
+    })
 }
 
 /// Generates, checks and writes the package of `recording` with `settings` (section 4); with

@@ -89,6 +89,10 @@ mod gate_453_s4;
 // temporary vision roots.
 #[cfg(test)]
 mod gate_453_s7;
+// Test-only: #398 DB-1, `devices bind --config` against a candidate configuration, read back by
+// the start's assembly and by check-config.
+#[cfg(test)]
+mod gate_398_db1;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{

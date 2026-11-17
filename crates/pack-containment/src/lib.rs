@@ -185,7 +185,8 @@ impl Containment {
     /// `.zip` container is a source package, compiled in memory; a `.zip` holding
     /// `resources/manifest.json` is an assembled package. Admission is structural only: neither
     /// a digest of the package nor a pin inside it is computed or compared, no name is read as
-    /// an identity, and no reference is taken or kept (Workflow #336 PKG-S5).
+    /// an identity, and no reference is taken or kept (Workflow #336 PKG-S5). The admission of a
+    /// run's package that also measures its content hash is [`Self::load_path_measured`].
     pub fn load_path(
         &mut self,
         instance: &InstanceId,
@@ -193,12 +194,43 @@ impl Containment {
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
-        match content_dir::read(locator, self.limits, deadline)? {
+        self.read_and_admit(instance, locator, observation, deadline, false)
+    }
+
+    /// Workflow #463 CH-1 (register §1.455; the owner's ruling of 11-16 on board #463, option A
+    /// of question 220, which relaxes option 丙 for computing and recording only): `load_path`
+    /// of a run's package (never an observation), whose bundle also carries the content hash of
+    /// what the admission read ([`LoadedBundle::content_hash`]): measured once by the measure of
+    /// [`Self::measure_content_hash`], on the bytes the read holds in memory, before a source
+    /// package is compiled; the package is not read a second time. It is only computed: nothing
+    /// here compares it, and nothing is refused for it.
+    pub fn load_path_measured(
+        &mut self,
+        instance: &InstanceId,
+        locator: &Path,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<&LoadedBundle> {
+        self.read_and_admit(instance, locator, false, deadline, true)
+    }
+
+    /// One bounded read of `locator`, the content hash of what it read when `measured`, then the
+    /// admission of those bytes as the path chooses.
+    fn read_and_admit(
+        &mut self,
+        instance: &InstanceId,
+        locator: &Path,
+        observation: bool,
+        deadline: std::time::Instant,
+        measured: bool,
+    ) -> ContainmentResult<&LoadedBundle> {
+        let content = content_dir::read(locator, self.limits, deadline)?;
+        let content_hash = measured.then(|| content_hash_of(&content));
+        match content {
             content_dir::LocatorContent::Entries(entries) => {
-                self.admit_source(instance, entries, observation, deadline)
+                self.admit_source(instance, entries, observation, deadline, content_hash)
             }
             content_dir::LocatorContent::AssembledZip(bytes) => {
-                self.load_for(instance, &bytes, observation)
+                self.load_for(instance, &bytes, observation, content_hash)
             }
         }
     }
@@ -216,29 +248,23 @@ impl Containment {
     }
 
     /// Workflow #336 PKG-S3 (M-PKG §3.3): the content hash of the package at `locator`, in
-    /// lowercase hex. It has one use: a scheduled failure that can suspend its pair records the
-    /// hash of each package its run went through, and a suspension's lift check measures them
-    /// again; admission never computes it. The path chooses the reading as `load_path` does (one
-    /// bounded snapshot under this loader's limits and `deadline`): a source package hashes its
-    /// content table as `content-directory.v1`, an assembled package ZIP is the SHA-256 of the
-    /// whole file (D3). Nothing is parsed or compared.
+    /// lowercase hex. A scheduled failure that can suspend its pair records the hash of each
+    /// package its run went through, and a suspension's lift check measures them again. The path
+    /// chooses the reading as `load_path` does (one bounded snapshot under this loader's limits
+    /// and `deadline`): a source package hashes its content table as `content-directory.v1`, an
+    /// assembled package ZIP is the SHA-256 of the whole file (D3). Nothing is parsed or compared.
+    /// Workflow #463 CH-1: the admission of a run's package computes the same measure, by the
+    /// same function, on the bytes it read ([`Self::load_path_measured`]).
     pub fn measure_content_hash(
         &self,
         locator: &Path,
         deadline: std::time::Instant,
     ) -> ContainmentResult<String> {
-        Ok(match content_dir::read(locator, self.limits, deadline)? {
-            content_dir::LocatorContent::Entries(entries) => {
-                actingcommand_contract::content_directory_digest(
-                    entries.iter().map(|(path, bytes)| {
-                        (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())
-                    }),
-                )
-            }
-            content_dir::LocatorContent::AssembledZip(bytes) => {
-                Sha256Hash::digest(&bytes).to_string()
-            }
-        })
+        Ok(content_hash_of(&content_dir::read(
+            locator,
+            self.limits,
+            deadline,
+        )?))
     }
 
     /// Workflow #336: admits a content table already in memory (for example a content
@@ -252,17 +278,18 @@ impl Containment {
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
         let entries = content_dir::admit_entries(entries, self.limits, deadline)?;
-        self.admit_source(instance, entries, observation, deadline)
+        self.admit_source(instance, entries, observation, deadline, None)
     }
 
-    /// Assembles one in-memory source snapshot and issues its capability; the material is not
-    /// read again.
+    /// Assembles one in-memory source snapshot and issues its capability, with the content hash
+    /// its read measured (`None` when it measured none); the material is not read again.
     fn admit_source(
         &mut self,
         instance: &InstanceId,
         entries: BTreeMap<String, Vec<u8>>,
         observation: bool,
         deadline: std::time::Instant,
+        content_hash: Option<String>,
     ) -> ContainmentResult<&LoadedBundle> {
         let (package, operation) = source_pack::compile(entries, self.limits, deadline)?;
         if std::time::Instant::now() >= deadline {
@@ -273,6 +300,7 @@ impl Containment {
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             Some(operation),
+            content_hash,
         )?;
         if std::time::Instant::now() >= deadline {
             return Err(source_error(PackContainmentCode::SourceTreeDeadline));
@@ -327,7 +355,7 @@ impl Containment {
         instance: &InstanceId,
         task_zip_bytes: &[u8],
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, task_zip_bytes, false)
+        self.load_for(instance, task_zip_bytes, false, None)
     }
 
     /// Admits the existing Lab resource layout without requiring an executable operation.
@@ -336,14 +364,17 @@ impl Containment {
         instance: &InstanceId,
         zip_bytes: &[u8],
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, zip_bytes, true)
+        self.load_for(instance, zip_bytes, true, None)
     }
 
+    /// Admits the bytes of an assembled package ZIP with the content hash the read of its path
+    /// measured (`None` when it measured none, and for bytes no path was read for).
     fn load_for(
         &mut self,
         instance: &InstanceId,
         task_zip_bytes: &[u8],
         observation: bool,
+        content_hash: Option<String>,
     ) -> ContainmentResult<&LoadedBundle> {
         if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
             return Err(ContainmentError::CompressedTooLarge {
@@ -358,6 +389,7 @@ impl Containment {
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             None,
+            content_hash,
         )?;
         let bench = self
             .benches
@@ -386,6 +418,24 @@ impl Containment {
         self.benches
             .get_mut(instance)
             .and_then(|bench| bench.loaded.take())
+    }
+}
+
+/// Workflow #336 PKG-S3 (M-PKG §3.3, D3) and #463 CH-1: the content hash of what one read of a
+/// locator holds, in lowercase hex: a source package's content table as `content-directory.v1`
+/// (the contract crate's `content_directory_digest` of each file's SHA-256), an assembled package
+/// ZIP the SHA-256 of the whole file. The one measure of [`Containment::measure_content_hash`]
+/// and of the admission of a run's package ([`Containment::load_path_measured`]).
+fn content_hash_of(content: &content_dir::LocatorContent) -> String {
+    match content {
+        content_dir::LocatorContent::Entries(entries) => {
+            actingcommand_contract::content_directory_digest(
+                entries
+                    .iter()
+                    .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
+            )
+        }
+        content_dir::LocatorContent::AssembledZip(bytes) => Sha256Hash::digest(bytes).to_string(),
     }
 }
 
@@ -537,6 +587,8 @@ pub struct LoadedBundle {
     evaluator: Option<RecognitionEvaluator>,
     detector: Option<PageDetector>,
     recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
+    /// Workflow #463 CH-1: the content hash its admission measured on the bytes it read.
+    content_hash: Option<String>,
 }
 
 impl LoadedBundle {
@@ -545,6 +597,7 @@ impl LoadedBundle {
         vision_provider: Option<Arc<dyn VisionProvider>>,
         observation: bool,
         execution_operation: Option<Value>,
+        content_hash: Option<String>,
     ) -> ContainmentResult<Self> {
         let entries = Arc::new(package.entries);
         let mut metadata = if observation {
@@ -608,11 +661,19 @@ impl LoadedBundle {
             evaluator,
             detector,
             recognition_pack_diagnostics,
+            content_hash,
         })
     }
 
     pub fn task_id(&self) -> &TaskId {
         &self.task_id
+    }
+
+    /// Workflow #463 CH-1 (register §1.455): the content hash, in lowercase hex, that its
+    /// admission measured on the bytes it read ([`Containment::load_path_measured`], the measure
+    /// of [`Containment::measure_content_hash`]); `None` for every other admission.
+    pub fn content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
     }
 
     pub fn layout(&self) -> PackageLayout {

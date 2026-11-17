@@ -29,6 +29,9 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
+# #398 DB-1: the gate binds through the Lab's `devices bind` against a candidate configuration and
+# reads the binding back as the start and check-config read it.
+actingcommand-lab-ops = { workspace = true }
 actingcommand-ledger = { workspace = true }
 # Workflow #381 A: the held-start preparation checkpoints (test plan A-2 G3b).
 actingcommand-runtime-host = { workspace = true, features = ["test-hooks"] }

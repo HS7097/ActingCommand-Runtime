@@ -240,9 +240,15 @@ pub fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'stati
             "--detail",
         ],
         // Workflow #398 RD-1c: `devices`; the alias and the handle are positional words.
-        "devices" if matches!(action, Some(devices::LIST | devices::BIND)) => {
-            &["--state-root", "--root"]
-        }
+        "devices" if action == Some(devices::LIST) => &["--state-root", "--root"],
+        // #398 DB-1: `bind` also takes a candidate configuration in place of `--state-root`, and
+        // the channel `ui`.
+        "devices" if action == Some(devices::BIND) => &[
+            "--state-root",
+            "--root",
+            devices::CONFIG_FLAG,
+            devices::BOUND_VIA_FLAG,
+        ],
         "devices" if action == Some(devices::UNBIND) => &["--state-root"],
         // Workflow #410 item 6: both texts are required; no root is read.
         capability_gap::COMMAND => &["--capability", "--why"],

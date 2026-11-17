@@ -29,9 +29,10 @@ use super::store::{blocked, with_details};
 use crate::codes::{ClickFollowProblem, LabCode, LabLocation};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{LabError, LabResult};
+use actingcommand_execution_kernel::located_text_box;
 use actingcommand_recognition::resample::scale_signed;
 use actingcommand_recognition_pack::{
-    OcrLocatedEvidence, TargetEvaluation, TemplateEvaluation, VisionProvider,
+    PackRect, TargetEvaluation, TemplateEvaluation, VisionProvider,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -241,10 +242,10 @@ pub(crate) fn followed_box(
     })
 }
 
-/// #463 L2: the box a located text gives: the declared cell holding the found block, else the
-/// block.
-fn located_rect(located: &OcrLocatedEvidence) -> RecordRect {
-    let rect = located.cell_rect.unwrap_or(located.rect);
+/// #463 RG-1: the box of a located text, as the kernel's [`located_text_box`] gives it (the one
+/// computation of it: the declared cell holding the found block, else the block), as the
+/// recording's rectangle.
+fn record_rect(rect: PackRect) -> RecordRect {
     RecordRect {
         x: rect.x,
         y: rect.y,
@@ -273,7 +274,7 @@ fn located_box(found: RecordRect, follow: &ClickFollow) -> Option<RecordRect> {
 
 /// Workflow #396 REC-4, #463 L2: the box a following click clicks on a frame on which the followed
 /// mark evaluated as `evaluation`: a passing template's [`followed_box`], or a passing located
-/// text's box; `None` when the mark did not pass.
+/// text's box (#463 RG-1: the kernel's [`located_text_box`]); `None` when the mark did not pass.
 pub(crate) fn followed_evaluation_box(
     evaluation: &TargetEvaluation,
     follow: &ClickFollow,
@@ -284,8 +285,7 @@ pub(crate) fn followed_evaluation_box(
     if let Some(template) = &evaluation.template {
         return followed_box(template, follow);
     }
-    let located = evaluation.ocr.as_ref()?.located.as_ref()?;
-    located_box(located_rect(located), follow)
+    located_box(record_rect(located_text_box(evaluation)?), follow)
 }
 
 fn inside(rect: RecordRect, size: RecordSize) -> bool {
@@ -352,17 +352,17 @@ pub(crate) fn check_located_follow_frames(
     let evaluations = ocr_frame_evaluations(mark, frames, provider)?;
     let mut found = Vec::with_capacity(evaluations.len());
     for frame in &evaluations {
+        // #463 RG-1: the found box is the kernel's, the one the run's click box takes.
         let located = frame
             .evaluation
             .as_ref()
             .ok()
             .filter(|evaluation| evaluation.passed)
-            .and_then(|evaluation| evaluation.ocr.as_ref())
-            .and_then(|ocr| ocr.located);
+            .and_then(located_text_box);
         let Some(located) = located else {
             return Ok(FollowFrames::default());
         };
-        found.push(located_rect(&located));
+        found.push(record_rect(located));
     }
     let primary = live
         .iter()

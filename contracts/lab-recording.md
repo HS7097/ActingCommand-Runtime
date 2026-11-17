@@ -4111,7 +4111,10 @@ once. Through the Lab's MCP server (`actinglab-mcp`) it is `ac_record_ready` (`r
 ready`); today's server (`actingctl mcp-serve`) has no such tool. #463 stage two, train: its answer
 is one function's (`recording_api::ready_of`), which `record review` calls too and of which it
 gives each step the items that name it ("Reviewing a recording step by step: `record review`");
-neither command has a judgement of its own.
+neither command has a judgement of its own. #463 S3-17 (0.12.71): `standard-pack adopt --record-id`
+judges the recording it adopts by the same function, called on the recording by its id with no
+option given, and refuses a status other than `packaged` with this answer in its details
+([standard-pack-authoring.md](standard-pack-authoring.md), "One judgement of the recording").
 
 - **Which recording.** The one `record status` reads: the recording the instance's session header
   names, archived or not; or, with `--record-id`, that recording: the header's, or one the header no
@@ -5032,7 +5035,9 @@ the package it came with.
   `lab.cases.ids` (fix round 3), and `lab.cases` with `status` `to_write` or `to_replace`. The
   cases are written beside the package, in the recording's own directory, and nowhere else: taking
   them into a resource repository is another slice's (#463 AC-1), not built by this one; adoption
-  does not write them today.
+  does not write them today. #463 AC-1 (0.12.71): `standard-pack adopt --record-id` takes them, each
+  run first on the package as it adopts it ([standard-pack-authoring.md](standard-pack-authoring.md),
+  "The cases"); it reads them and never writes the recording's files.
 - **The answer**: `lab.cases{directory, status, kept?, counts{steps, final, endings}, ids,
   not_proven[{case, verdict, reasons}], warnings, limits, limit_texts}`: `warnings` (fix round 3)
   first, once, `record_cases_ocr_unavailable` (`{code, message}`) when no page was judged, then

@@ -432,12 +432,7 @@ pub fn target_evaluation_response(evaluation: &TargetEvaluation) -> TargetEvalua
         kind: format!("{:?}", evaluation.kind),
         passed: evaluation.passed,
         message: evaluation.message.clone(),
-        matched_rect: evaluation.template.map(|template| RectResponse {
-            x: template.x,
-            y: template.y,
-            width: template.width,
-            height: template.height,
-        }),
+        matched_rect: matched_rect(evaluation),
         template: evaluation
             .template
             .map(|template| TemplateEvaluationResponse {
@@ -457,6 +452,27 @@ pub fn target_evaluation_response(evaluation: &TargetEvaluation) -> TargetEvalua
             region: color.region.map(rect_response),
             expected_index: color.expected_index,
         }),
+    }
+}
+
+/// The rectangle an answer names for a target: a template's matched rectangle, passed or not, as
+/// before; #463 RG-1: for an OCR target with `locate` that passed, the box of the text it found,
+/// where a click that follows the text starts, taken from the function the run takes it from
+/// ([`crate::contained_task::located_text_box`]): the declared cell holding the found block, else
+/// the block, in the frame's coordinates as a template's. An OCR target that did not pass, and
+/// every other target, names none.
+fn matched_rect(evaluation: &TargetEvaluation) -> Option<RectResponse> {
+    match evaluation.template {
+        Some(template) => Some(RectResponse {
+            x: template.x,
+            y: template.y,
+            width: template.width,
+            height: template.height,
+        }),
+        None if evaluation.kind == TargetKind::Ocr && evaluation.passed => {
+            crate::contained_task::located_text_box(evaluation).map(rect_response)
+        }
+        None => None,
     }
 }
 

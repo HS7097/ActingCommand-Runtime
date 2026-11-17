@@ -44,7 +44,7 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-6S3 | Runtime | the UI list on `ui` (section 3, `ui_allows`; section 2.3 step 5): a `ui` connection is refused, `channel_request_refused`, every kind off the list and a setting outside the console's tiers; every other connection as before. Way back: yes |
 | LAB-6S4a | Runtime | the five kinds deleted; `install-control` [0, 0]. Built, 0.12.63 (register §1.287, "Slice LAB-6S4a"): `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` with their results, the host's handlers, the client's methods and the codes only they emitted (retired in 0.12.63); `actingctl install-transition` and actingd's `--install-held` start; the identity card and the client action the two MCP servers sent before a write, and the card of `evidence read` (the coordinator's ruling N8 on board #434: the initiator the binding carries replaces them; the client action after a capture stays). A request of a deleted kind does not decode: the connection is dropped without a receipt and `runtime_protocol_invalid` recorded once. Way back: yes |
 | LAB-6S4b | Runtime | `cli`, `mcp` and a `lab` without a word refused; `via` off the wire; `runtime-client` [8, 8]; `actingd-config` 30. Way back: yes |
-| LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; `ledger` 9. Way back: **no** |
+| LAB-6S5 | Runtime | the initiator in the ledger and in the settings rows; the next free `ledger` revision when it ships (9 went to Workflow #463 CH-1, Runtime 0.12.71). Way back: **no** |
 | LAB-6S2-E | Runtime | the envelope becomes the channel's (section 2.4: `lab` → `(Lab, Lab)`), and the map M and the receipt rule R end; with it the host's evidence-read confirmation and its index take `(Lab, Lab)`, the senders' identity card step having gone with LAB-6S4a, and the kept frames of CLI and MCP reads are decided. What a person then sees change comes with it, each the owner's to accept: the console's ledger page and Lab tab show the requests of `actingctl` and of both MCP servers as the Lab's, its settings page says "via Lab" for the rows they set, the runs they start have the origin `lab`, and the frames they read are kept as Lab frames. LAB-6S4b, which takes `via` off the wire, ends M's `via` cell with it. Way back: settled with the slice |
 | UI-L1 | UI | the console on `runtime-client` 8: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
@@ -305,7 +305,8 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   (open point 1).
 - From LAB-6S1a the six words are a closed vocabulary of `runtime-client` 8, written once, in the
   contract crate (`Initiator`, which `crates/lab-ops` converts its own type to, so the recordings
-  and the installation journal write the same strings); from LAB-6S5 also of `ledger` 9. Adding or
+  and the installation journal write the same strings); from LAB-6S5 also of the `ledger`
+  revision it takes (the next free one; 9 went to Workflow #463 CH-1). Adding or
   renaming one later raises both (open point 2); until LAB-6S1a is released a rename changes one
   line of that type, this text and the table.
 
@@ -1363,7 +1364,8 @@ initiator of section 2.2 on `BindChannel`, `ChannelBound` and the receipt
 the same file, "Planned: Workflow #434". The numbers this contract first planned for LAB-6
 (`runtime-client` 7, `ledger` 8, `actingd-config` 28) were taken by other slices: LAB-6S4a
 declares `install-control` [0, 0] (Runtime 0.12.63, in force), LAB-6S4b raises `runtime-client`'s `min` to 8 and
-`actingd-config` to 30, LAB-6S5 `ledger` to 9; LAB-7 `install-cli` to 2. `install-control`
+`actingd-config` to 30, LAB-6S5 `ledger` to the next free revision (9 went to Workflow #463
+CH-1, Runtime 0.12.71); LAB-7 `install-cli` to 2. `install-control`
 retires, `tools-layout` becomes 5 as that section plans it,
 `install-selection` does not move, and the MCP entry's second generation, a program of its own
 (section 8.1), speaks `entry_protocol` 2 while the first keeps 1 (LAB-5). `actinglab-mcp.exe` and

@@ -35,9 +35,20 @@
 //! `standard-pack catalog`, `standard-pack build` and the installer's `place`) do. Every text,
 //! word, locale, group id and risk word is opaque: compared only for equality and measured only in
 //! bytes; an aspect ratio is only checked to be of the form `<w>:<h>`.
+//!
+//! Workflow #477 PC-2 (register §1.462): a line of the writer may also name packages whose entry's
+//! business part is computed again from their rules, by the rule a new entry is made by, its
+//! display and its place kept (`refresh`, [`CatalogEdits::refresh`]), and give a display file whose
+//! entries replace the named entries' displays whole, checked by the reader's own display checks
+//! before anything is written ([`CatalogEdits::displays`]). Both go through
+//! [`merge_standard_pack_catalog`], the one rule; an entry no line names is never overwritten.
+//! Fix round 1 (the coordinator's ruling on groups): the display file
+//! ([`STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`]) may carry groups, which the line adds to the
+//! catalog's `groups`, never removing or renaming one; and an issue's pointer the key table would
+//! not take (a very long member or locale name) is cut to its entry's ([`issue_pointer`]).
 
 use crate::codes::SharedCode;
-use crate::outcome::{Outcome, VocabularyToken};
+use crate::outcome::{KeyKind, Outcome, VocabularyToken, key_text_fits};
 use crate::standard_pack::{
     STANDARD_PACK_BUNDLE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
     StandardPackRootBytes, StandardPackRootIssue, read_standard_pack_root,
@@ -50,12 +61,17 @@ use serde::{Serialize, Serializer};
 use serde_json::{Map, Number, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The game root's package declaration (Workflow #477 PC-1).
 pub const STANDARD_PACK_CATALOG_FILE: &str = "pack-catalog.json";
 /// The one version of `pack-catalog.json` this build reads and writes.
 pub const STANDARD_PACK_CATALOG_SCHEMA_VERSION: &str = "actingcommand.pack-catalog.v1";
+/// Workflow #477 PC-2 fix round 1: the one version of the display file `standard-pack catalog
+/// --displays` reads (an input of one line, never stored); a file without it or with another is
+/// refused before anything else of it is read.
+pub const STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION: &str =
+    "actingcommand.pack-catalog-displays.v1";
 /// The file the catalog replaced (Workflow #429 R-11's display metadata), which no program reads
 /// any more: a root that still holds it is told so, and the installer's `place` sets it aside.
 pub const STANDARD_PACK_RETIRED_UI_FILE: &str = "ui.json";
@@ -123,6 +139,11 @@ const QUANTITY_MEMBERS: [&str; 2] = ["kind", "amount"];
 /// A quantity's two kinds.
 const KIND_CONSTANT: &str = "constant";
 const KIND_PENDING: &str = "pending";
+/// Workflow #477 PC-2: the members of the display file's document (fix round 1: its
+/// `schema_version` and the `groups` it adds), and of one of its entries (a catalog entry's
+/// `package_id` and display members; no business member).
+const DISPLAY_FILE_MEMBERS: [&str; 3] = ["schema_version", "groups", "packs"];
+const DISPLAY_FILE_ENTRY_MEMBERS: [&str; 5] = ["package_id", "title", "summary", "group", "risk"];
 
 crate::outcome_vocabulary! {
     /// Which side of a package's business part a pool stands on (vocabulary `catalog_side`,
@@ -146,6 +167,19 @@ crate::outcome_vocabulary! {
         CatalogLacks => "catalog_lacks",
         /// The package's entry lists the pool on that side; no rule of the package names it there.
         ScheduleLacks => "schedule_lacks",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Why `standard-pack catalog` refuses a package its `refresh` names, before anything is
+    /// written (vocabulary `catalog_refresh_problem`, Workflow #477 PC-2).
+    pub enum CatalogRefreshProblem: "catalog_refresh_problem" {
+        /// The root's registry (its `bundle.json`, or the one a checkout's packages make) does not
+        /// hold the package. Fix round 1 (one cause, one word): the word `standard_pack_problem`
+        /// has for the same cause.
+        PackageNotListed => "package_not_listed",
+        /// `refresh` names the package more than once.
+        PackageRepeated => "package_repeated",
     }
 }
 
@@ -505,23 +539,26 @@ struct Check<'a> {
 }
 
 impl Check<'_> {
+    /// An error at `pointer` ([`issue_pointer`]: fix round 1, cut to its entry's when the key
+    /// table would not take it).
     fn error(&mut self, problem: StandardPackProblem, pointer: impl Into<String>) {
         if self.errors.len() < MAX_STANDARD_PACK_CATALOG_ISSUES {
             self.errors.push(StandardPackRootIssue::new(
                 STANDARD_PACK_CATALOG_FILE,
                 problem,
-                pointer,
+                issue_pointer(pointer.into()),
             ));
         }
     }
 
+    /// A display defect at `pointer`, as [`Self::error`] places it.
     fn warn(&mut self, problem: StandardPackProblem, pointer: impl Into<String>) {
         self.defects += 1;
         if self.warnings.len() < MAX_STANDARD_PACK_CATALOG_ISSUES {
             self.warnings.push(StandardPackRootIssue::new(
                 STANDARD_PACK_CATALOG_FILE,
                 problem,
-                pointer,
+                issue_pointer(pointer.into()),
             ));
         }
     }
@@ -935,6 +972,147 @@ impl Check<'_> {
             }
         }
     }
+
+    /// Workflow #477 PC-2: the display file `{schema_version, groups?, packs: [{package_id, title?,
+    /// summary?, group?, risk?}]}`, each entry in the catalog's own shape without its business
+    /// part, checked against `written`, the groups of the file the writer writes. Its size and its
+    /// JSON are read as the catalog's are; fix round 1: then a `schema_version` other than
+    /// [`STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`] (or none) is `malformed` at it, and nothing
+    /// else of the file is read. The rest is read as the catalog and its entries are: errors here
+    /// are a repeated member, a member the reader does not know, `packs` and its limit, a
+    /// `package_id` that is no string (`malformed` or `catalog_out_of_limits`), a `package_id` the
+    /// registry does not hold (`package_not_listed`) and one named twice (`catalog_duplicate` at
+    /// the later one). Fix round 1 (the coordinator's ruling on groups): the file's `groups` are
+    /// read by [`Self::groups`], the reader's own group check; a group whose id `written` holds
+    /// with another title is an error, `catalog_group_title_differs` at its `title` (the same
+    /// title, compared as JSON values without the order of its locales, is simply there:
+    /// [`same_title`]), and so are more groups than [`MAX_PACK_CATALOG_GROUPS`] once the file's new
+    /// ones join `written`'s (`catalog_out_of_limits` at `/groups`). Each entry's display members
+    /// are checked by [`Self::entry_display`], the reader's own display check, against the ids of
+    /// `written` and of the file's groups together. Every display defect is left in the warnings.
+    /// Every entry whose `package_id` is a string is answered, in the file's order, and so is each
+    /// group without a defect whose id `written` does not hold (the groups it adds), in the file's
+    /// order.
+    fn display_file(&mut self, bytes: &[u8], written: &WrittenGroups<'_>) -> DisplayFile {
+        let mut file = DisplayFile::default();
+        if bytes.len() > MAX_STANDARD_PACK_CATALOG_BYTES {
+            self.error(StandardPackProblem::CatalogOutOfLimits, "");
+            return file;
+        }
+        let mut repeated = Vec::new();
+        let Some(Value::Object(document)) = read_document(bytes, &mut repeated) else {
+            self.error(StandardPackProblem::Malformed, "");
+            return file;
+        };
+        if document.get("schema_version").and_then(Value::as_str)
+            != Some(STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION)
+        {
+            self.error(StandardPackProblem::Malformed, "/schema_version");
+            return file;
+        }
+        for pointer in repeated {
+            self.error(StandardPackProblem::Malformed, pointer);
+        }
+        self.unknown(&document, "", &DISPLAY_FILE_MEMBERS);
+        let mut groups = written.ids.clone();
+        if let Some(value) = document.get("groups") {
+            let (kept, ids) = self.groups(value);
+            for (index, group) in value.as_array().into_iter().flatten().enumerate() {
+                let Some(id) = group.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if written.ids.contains(id) && !same_title(written.title(id), group.get("title")) {
+                    self.error(
+                        StandardPackProblem::CatalogGroupTitleDiffers,
+                        at(&format!("/groups/{index}"), "title"),
+                    );
+                }
+            }
+            file.groups_added = kept
+                .into_iter()
+                .filter(|group| {
+                    group
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| !written.ids.contains(id))
+                })
+                .collect();
+            if written.items.len() + file.groups_added.len() > MAX_PACK_CATALOG_GROUPS {
+                self.error(StandardPackProblem::CatalogOutOfLimits, "/groups");
+            }
+            groups.extend(ids);
+        }
+        let Some(items) = document.get("packs").and_then(Value::as_array) else {
+            self.error(StandardPackProblem::Malformed, "/packs");
+            return file;
+        };
+        if items.len() > MAX_PACK_CATALOG_PACKS {
+            self.error(StandardPackProblem::CatalogOutOfLimits, "/packs");
+        }
+        let mut named = BTreeSet::new();
+        for (index, item) in items.iter().enumerate() {
+            let pointer = format!("/packs/{index}");
+            let Some(object) = item.as_object() else {
+                self.error(StandardPackProblem::Malformed, pointer);
+                continue;
+            };
+            self.unknown(object, &pointer, &DISPLAY_FILE_ENTRY_MEMBERS);
+            let at_id = at(&pointer, "package_id");
+            let Some(package_id) = object.get("package_id").and_then(Value::as_str) else {
+                self.error(StandardPackProblem::Malformed, at_id);
+                continue;
+            };
+            if self.registry.get(package_id).is_none() {
+                self.error(StandardPackProblem::PackageNotListed, at_id.clone());
+            }
+            if !named.insert(package_id) {
+                self.error(StandardPackProblem::CatalogDuplicate, at_id);
+            }
+            let display = self.entry_display(object, &pointer, &groups);
+            file.entries.push(DisplayFileEntry {
+                package_id: package_id.to_owned(),
+                display,
+            });
+        }
+        file
+    }
+}
+
+/// Workflow #477 PC-2 fix round 1 (the independent review): `pointer`, an issue's place in the file
+/// it reads, as an outcome's `json_pointer` can carry it. A pointer the key table takes
+/// ([`key_text_fits`]) is kept; a longer one (a very long member or locale name in it) is cut to
+/// the entry it lies in, its first two reference tokens (`/packs/<i>`, `/groups/<i>`), else to the
+/// member of the document it lies in (`/display`), else to the whole document (empty).
+fn issue_pointer(pointer: String) -> String {
+    if key_text_fits(KeyKind::Pointer, &pointer) {
+        return pointer;
+    }
+    let cut = |tokens: usize| {
+        pointer
+            .match_indices('/')
+            .nth(tokens)
+            .map(|(end, _)| &pointer[..end])
+    };
+    [cut(2), cut(1)]
+        .into_iter()
+        .flatten()
+        .find(|prefix| key_text_fits(KeyKind::Pointer, prefix))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Workflow #477 PC-2 fix round 1: whether two groups' `title`s are the same, compared as JSON
+/// values without the order of their locales (a title absent on both sides is the same).
+fn same_title(left: Option<&Value>, right: Option<&Value>) -> bool {
+    match (left, right) {
+        (Some(Value::Object(left)), Some(Value::Object(right))) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|(locale, text)| right.get(locale) == Some(text))
+        }
+        (left, right) => left == right,
+    }
 }
 
 /// Whether `text` is of the form `<w>:<h>`: two positive decimal integers of 1 to
@@ -1217,6 +1395,18 @@ pub struct CatalogLeftOut {
 }
 
 impl CatalogLeftOut {
+    /// The 0.12.71 train (register §1.462, "The train of 0.12.71"): whether its warning can name
+    /// its package and its pool, each a name of the key table ([`key_text_fits`]: at most 256
+    /// bytes, no control character). [`merge_standard_pack_catalog`] refuses what it cannot name
+    /// before a warning is built.
+    fn nameable(&self) -> bool {
+        key_text_fits(KeyKind::Name, &self.package_id)
+            && self
+                .pool_id
+                .as_deref()
+                .is_none_or(|pool_id| key_text_fits(KeyKind::Name, pool_id))
+    }
+
     /// The warning `standard_pack_catalog_left_out` of the game root of `game` whose
     /// `pack-catalog.json` is at `path`: the problem, the pointer in the existing file, the
     /// package and, for a pool, the pool.
@@ -1234,6 +1424,141 @@ impl CatalogLeftOut {
     }
 }
 
+/// Workflow #477 PC-2 (`contracts/pack-catalog.md`, "Who writes it"): what a line of
+/// `standard-pack catalog` asks of [`merge_standard_pack_catalog`] beyond the plain rule. The
+/// default asks nothing, and the merge is then the plain rule, byte for byte.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CatalogEdits<'a> {
+    /// The packages whose entry's business part is computed again from their rules, by the rule a
+    /// new entry is made by (`refresh`), in the order named; each one the registry holds, once.
+    pub refresh: &'a [String],
+    /// The display file whose entries replace the named entries' displays whole (`displays`).
+    pub displays: Option<CatalogDisplayFile<'a>>,
+}
+
+/// Workflow #477 PC-2: the display file a line of `standard-pack catalog` gives: where it is,
+/// which its refusals name, and its bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogDisplayFile<'a> {
+    pub path: &'a Path,
+    pub bytes: &'a [u8],
+}
+
+/// Workflow #477 PC-2: a package `refresh` names that the line refuses, by its word, before
+/// anything is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogRefreshRefusal {
+    pub package_id: String,
+    pub problem: CatalogRefreshProblem,
+}
+
+impl CatalogRefreshRefusal {
+    /// The refusal `standard_pack_catalog_refresh_refused` of the game root of `game`: the
+    /// package and why.
+    pub fn outcome(&self, game: &str) -> Outcome {
+        Outcome::new(SharedCode::StandardPackCatalogRefreshRefused)
+            .game(game)
+            .package_id(self.package_id.as_str())
+            .catalog_refresh_problem(self.problem)
+    }
+}
+
+/// Workflow #477 PC-2: one error of the display file, by the catalog's own word, at its JSON
+/// pointer in that file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogDisplayFileIssue {
+    pub problem: StandardPackProblem,
+    pub pointer: String,
+}
+
+impl CatalogDisplayFileIssue {
+    /// The refusal `standard_pack_catalog_display_refused` of the game root of `game` whose line
+    /// gave the display file at `path`.
+    pub fn outcome(&self, game: &str, path: &Path) -> Outcome {
+        Outcome::new(SharedCode::StandardPackCatalogDisplayRefused)
+            .game(game)
+            .path(path)
+            .standard_pack_problem(self.problem)
+            .json_pointer(self.pointer.clone())
+    }
+}
+
+/// Workflow #477 PC-2: why [`merge_standard_pack_catalog`] makes no file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogMergeRefusal {
+    /// A package `refresh` names ([`CatalogEdits::refresh`]).
+    Refresh(CatalogRefreshRefusal),
+    /// The root's files (PC-1): the errors of its existing catalog, or each pool a rule names that
+    /// `schedule.json` does not declare, each naming its file.
+    Root(Vec<StandardPackRootIssue>),
+    /// The display file ([`CatalogEdits::displays`]) at `path`: its errors, at their pointers in
+    /// it, first those of its shape and its packages, then its display defects.
+    Display {
+        path: PathBuf,
+        issues: Vec<CatalogDisplayFileIssue>,
+    },
+}
+
+/// Workflow #477 PC-2: how a package `refresh` names stands after the merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogRefreshState {
+    /// Its entry's business part differed from what its rules give and is replaced.
+    Replaced,
+    /// Its entry's business part is what its rules give already: the entry is left as written.
+    Agrees,
+    /// It had no entry: it gets the new entry the plain rule makes, which is its rules'.
+    Added,
+}
+
+/// Workflow #477 PC-2: one package `refresh` names, with its entry's business part before and
+/// after the merge, so that a reader sees the change without comparing files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CatalogRefreshed {
+    pub package_id: String,
+    pub state: CatalogRefreshState,
+    /// The business part the existing entry wrote; absent for a package that had no entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<CatalogBusiness>,
+    /// The business part its rules give, which the written entry holds.
+    pub after: CatalogBusiness,
+}
+
+/// Workflow #477 PC-2: one entry of the display file: its package and its display members as
+/// written, `None` when it writes none (the entry then shows by its id).
+#[derive(Debug, Clone)]
+struct DisplayFileEntry {
+    package_id: String,
+    display: Option<Map<String, Value>>,
+}
+
+/// Workflow #477 PC-2: what the display file gives: its entries, and (fix round 1) the groups it
+/// adds, each as written, in its order.
+#[derive(Debug, Clone, Default)]
+struct DisplayFile {
+    entries: Vec<DisplayFileEntry>,
+    groups_added: Vec<Value>,
+}
+
+/// Workflow #477 PC-2 fix round 1: the groups of the file the writer writes, as the display file is
+/// checked against them: the ids the reader takes of them ([`Check::groups`]) and the list as
+/// written (empty when `groups` is absent or no list, which holds no group for the reader).
+struct WrittenGroups<'v> {
+    ids: BTreeSet<String>,
+    items: &'v [Value],
+}
+
+impl WrittenGroups<'_> {
+    /// The `title` the first group of `id` writes; `None` when it writes none, or when no group has
+    /// the id.
+    fn title(&self, id: &str) -> Option<&Value> {
+        self.items
+            .iter()
+            .find(|group| group.get("id").and_then(Value::as_str) == Some(id))
+            .and_then(|group| group.get("title"))
+    }
+}
+
 /// What [`merge_standard_pack_catalog`] makes of a game root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandardPackCatalogMerge {
@@ -1243,7 +1568,9 @@ pub struct StandardPackCatalogMerge {
     pub catalog: StandardPackCatalog,
     /// The packages given a new entry, in the registry's order.
     pub added: Vec<String>,
-    /// The packages whose entry was there and is kept, in the file's order.
+    /// The packages whose entry was there and is kept in its place, in the file's order (PC-2: its
+    /// business part as written unless [`Self::refreshed`] names it, its display as written unless
+    /// [`Self::display_written`] does).
     pub kept: Vec<String>,
     /// The entries of packages `bundle.json` no longer registers, left out.
     pub removed: Vec<String>,
@@ -1258,6 +1585,15 @@ pub struct StandardPackCatalogMerge {
     pub differences: Vec<CatalogScheduleDifference>,
     /// The new entries whose display came from the leftover `ui.json`.
     pub display_from_ui: Vec<String>,
+    /// PC-2: each package [`CatalogEdits::refresh`] names, in the order named, its business part
+    /// before and after; empty when none is named.
+    pub refreshed: Vec<CatalogRefreshed>,
+    /// PC-2: the packages whose display the display file replaced, in that file's order; empty
+    /// without one.
+    pub display_written: Vec<String>,
+    /// PC-2 fix round 1: the ids of the groups the display file added to `groups`, in that file's
+    /// order; empty without one, or when each of its groups was there already.
+    pub groups_added: Vec<String>,
 }
 
 /// Workflow #477 PC-1: the writer's one rule (`standard-pack catalog`; `contracts/pack-catalog.md`,
@@ -1267,15 +1603,17 @@ pub struct StandardPackCatalogMerge {
 /// when it is).
 ///
 /// - An entry for every package of the registry: the existing entries first, in the file's order,
-///   each kept as written (its display and its business part), then one new entry per package
-///   without one, in the registry's order.
+///   each kept as written (its display and its business part) unless `edits` names it (PC-2,
+///   below), then one new entry per package without one, in the registry's order.
 /// - A new entry's display comes from the leftover `ui.json`'s entry for the package (its `title`,
 ///   `summary`, `group` and `risk` as written), else it has none; its `consumes` and `produces` are
 ///   the union over the package's rules ([`schedule_union`]): a constant quantity when every rule
 ///   states the same constant, else pending.
 /// - `groups` and `display` are the existing catalog's when it writes them, else the leftover
-///   `ui.json`'s, else absent.
-/// - An existing entry's business part is never overwritten: its differences from the rules are
+///   `ui.json`'s, else absent (PC-2: the display file's new groups after them).
+/// - An existing entry's business part is never overwritten unless `refresh` names it (PC-2, the
+///   one way it is brought back to the rules; the plain rule already drops a pool `schedule.json`
+///   no longer declares, below): its differences from the rules are
 ///   reported ([`StandardPackCatalogMerge::differences`]). What no longer holds is left out and
 ///   reported: the entry of a package the registry no longer holds
 ///   ([`StandardPackCatalogMerge::removed`]) and a pool `schedule.json` no longer declares
@@ -1286,15 +1624,44 @@ pub struct StandardPackCatalogMerge {
 /// to date: its errors are the answer. Fix round 1: so is each pool a rule of a package that gets a
 /// new entry names and `schedule.json` does not declare, `catalog_pool_undeclared` in
 /// `schedule.json` at the rule's pool (`/rules/<i>/<side>/<j>/pool_id`), the file the pool is
-/// missing from ([`undeclared_rule_pools`]). The written bytes are read back by the reader, and
+/// missing from ([`undeclared_rule_pools`]). The 0.12.71 train: so is an entry or a pool left out
+/// whose `package_id` or `pool_id` no warning can name, `catalog_out_of_limits` at its pointer in
+/// the existing file ([`CatalogLeftOut`]). The written bytes are read back by the reader, and
 /// its errors (none, for a merge that holds) are the answer too.
+///
+/// Workflow #477 PC-2: `edits` ([`CatalogEdits`]; the default asks nothing, and the rule above is
+/// the whole merge, byte for byte).
+///
+/// - **`refresh`**: each package it names is one the registry holds, named once
+///   ([`CatalogMergeRefusal::Refresh`] otherwise, before anything else is read). The entry of
+///   each has its `consumes` and `produces` computed again from the package's rules, by the rule
+///   a new entry is made by ([`schedule_union`]), and they replace what the entry held; its display
+///   and its place in the file are kept, and an entry that holds them already is left as written.
+///   A named package without an entry is not refused: it gets its new entry by the plain rule,
+///   which is its rules' already. Its rules' pools are held to `schedule.json` as a new entry's
+///   are. Each is answered in [`StandardPackCatalogMerge::refreshed`], before and after. An entry
+///   not named is never overwritten.
+/// - **`displays`**: the display file ([`Check::display_file`]), read after the root's own
+///   refusals and checked against the groups of the file being written, by the reader's own
+///   checks; any error refuses the merge ([`CatalogMergeRefusal::Display`]). Each entry it names
+///   has its display replaced whole by the file's (its `package_id`, the display members in the
+///   order a new entry writes them, then its business part as it stands), its business part and
+///   its place untouched; a new entry it names takes no display from `ui.json`. Each is answered
+///   in [`StandardPackCatalogMerge::display_written`]. Fix round 1 (the coordinator's ruling): each
+///   group of the file whose id the written `groups` do not hold is appended to them, in the file's
+///   order, and answered in [`StandardPackCatalogMerge::groups_added`]; a group there with the same
+///   title is simply there, one there with another title refuses the merge, and no group is
+///   removed or renamed. Without a new group `groups` are as they were, byte for byte (a `groups`
+///   that is no list holds no group for the reader, and the new ones are then the list).
 pub fn merge_standard_pack_catalog(
     game: &str,
     registry: &StandardPackRegistry,
     schedule: Option<&StandardPackSchedule>,
     existing: Option<&[u8]>,
     retired_ui: Option<&Value>,
-) -> Result<StandardPackCatalogMerge, Vec<StandardPackRootIssue>> {
+    edits: &CatalogEdits<'_>,
+) -> Result<StandardPackCatalogMerge, CatalogMergeRefusal> {
+    let refresh = refresh_named(registry, edits.refresh).map_err(CatalogMergeRefusal::Refresh)?;
     let pools = schedule
         .map(standard_pack_schedule_pools)
         .unwrap_or_default();
@@ -1315,19 +1682,20 @@ pub fn merge_standard_pack_catalog(
                 .cloned()
                 .collect::<Vec<_>>();
             if !refused.is_empty() {
-                return Err(refused);
+                return Err(CatalogMergeRefusal::Root(refused));
             }
-            read.document
+            Some(read)
         }
     };
+    let existing_document = existing.as_ref().and_then(|read| read.document.as_ref());
     let mut kept = Vec::new();
     let mut removed = Vec::new();
     let mut dropped = Vec::new();
     let mut left_out = Vec::new();
+    let mut refreshed_by_package = BTreeMap::new();
     let mut packs = Vec::new();
     let mut listed = BTreeSet::new();
-    for (index, entry) in existing
-        .as_ref()
+    for (index, entry) in existing_document
         .and_then(|document| document.get("packs"))
         .and_then(Value::as_array)
         .into_iter()
@@ -1352,49 +1720,110 @@ pub fn merge_standard_pack_catalog(
             continue;
         }
         let mut written = object.clone();
-        for side in CatalogSide::ALL.iter().copied() {
-            let at_side = at(&pointer, side.as_str());
-            if let Some(Value::Array(items)) = written.get_mut(side.as_str()) {
-                let mut position = 0_usize;
-                items.retain(|item| {
-                    let at_pool = format!("{at_side}/{position}/pool_id");
-                    position += 1;
-                    let pool_id = item
-                        .get("pool_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let declared = pools.contains(pool_id);
-                    if !declared {
-                        dropped.push(CatalogDropped {
-                            package_id: package_id.to_owned(),
-                            side,
-                            pool_id: pool_id.to_owned(),
-                        });
-                        left_out.push(CatalogLeftOut {
-                            problem: StandardPackProblem::CatalogPoolUndeclared,
-                            package_id: package_id.to_owned(),
-                            pool_id: Some(pool_id.to_owned()),
-                            pointer: at_pool,
-                        });
-                    }
-                    declared
-                });
+        if refresh.contains(package_id) {
+            // PC-2: the business part computed again by the rule a new entry is made by; the
+            // display and the place stay, and an entry that holds it already stays as written.
+            let before = existing
+                .as_ref()
+                .and_then(|read| read.catalog.entry(package_id))
+                .map(|read_entry| read_entry.business.clone());
+            let after = schedule_business(schedule, package_id);
+            let state = if before.as_ref() == Some(&after) {
+                CatalogRefreshState::Agrees
+            } else {
+                for side in CatalogSide::ALL.iter().copied() {
+                    written.insert(
+                        side.as_str().to_owned(),
+                        Value::Array(after.side(side).iter().map(pool_value).collect()),
+                    );
+                }
+                CatalogRefreshState::Replaced
+            };
+            refreshed_by_package.insert(
+                package_id.to_owned(),
+                CatalogRefreshed {
+                    package_id: package_id.to_owned(),
+                    state,
+                    before,
+                    after,
+                },
+            );
+        } else {
+            for side in CatalogSide::ALL.iter().copied() {
+                let at_side = at(&pointer, side.as_str());
+                if let Some(Value::Array(items)) = written.get_mut(side.as_str()) {
+                    let mut position = 0_usize;
+                    items.retain(|item| {
+                        let at_pool = format!("{at_side}/{position}/pool_id");
+                        position += 1;
+                        let pool_id = item
+                            .get("pool_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let declared = pools.contains(pool_id);
+                        if !declared {
+                            dropped.push(CatalogDropped {
+                                package_id: package_id.to_owned(),
+                                side,
+                                pool_id: pool_id.to_owned(),
+                            });
+                            left_out.push(CatalogLeftOut {
+                                problem: StandardPackProblem::CatalogPoolUndeclared,
+                                package_id: package_id.to_owned(),
+                                pool_id: Some(pool_id.to_owned()),
+                                pointer: at_pool,
+                            });
+                        }
+                        declared
+                    });
+                }
             }
         }
         listed.insert(package_id.to_owned());
         kept.push(package_id.to_owned());
         packs.push(Value::Object(written));
     }
+    // The 0.12.71 train (register §1.462): what is left out is warned of by its package and its
+    // pool, names of the key table. An entry whose `package_id`, or a pool whose `pool_id`, no
+    // warning can name (over 256 bytes, or with a control character: no registry holds such a
+    // package, and the reader takes no pool over 128 bytes) is refused at its pointer in the
+    // existing file, before any warning is built and without its value.
+    if let Some(unnamed) = left_out.iter().find(|left| !left.nameable()) {
+        return Err(CatalogMergeRefusal::Root(vec![StandardPackRootIssue::new(
+            STANDARD_PACK_CATALOG_FILE,
+            StandardPackProblem::CatalogOutOfLimits,
+            unnamed.pointer.clone(),
+        )]));
+    }
     // Fix round 1: a new entry's pools are its rules'; one that `schedule.json` does not declare is
-    // refused there, where it is missing, before anything is made.
+    // refused there, where it is missing, before anything is made. PC-2: a refreshed entry's are
+    // its rules' too.
     let fresh = registry
         .package_ids()
-        .filter(|package_id| !listed.contains(*package_id))
+        .filter(|package_id| !listed.contains(*package_id) || refresh.contains(*package_id))
         .collect::<BTreeSet<_>>();
     let undeclared = undeclared_rule_pools(schedule, &pools, &fresh);
     if !undeclared.is_empty() {
-        return Err(undeclared);
+        return Err(CatalogMergeRefusal::Root(undeclared));
     }
+    let carried = |member: &str| {
+        existing_document
+            .and_then(|document| document.get(member))
+            .or_else(|| retired_ui.and_then(|ui| ui.get(member)))
+            .cloned()
+    };
+    // PC-2: the display file, checked against the groups the written file carries.
+    let displays = edits
+        .displays
+        .map(|file| {
+            read_display_file(file.bytes, registry, carried("groups").as_ref()).map_err(|issues| {
+                CatalogMergeRefusal::Display {
+                    path: file.path.to_owned(),
+                    issues,
+                }
+            })
+        })
+        .transpose()?;
     let ui_packs = retired_ui
         .and_then(|ui| ui.get("packs"))
         .and_then(Value::as_array);
@@ -1409,12 +1838,19 @@ pub fn merge_standard_pack_catalog(
             "package_id".to_owned(),
             Value::String(package_id.to_owned()),
         );
+        // PC-2: a display the display file gives replaces the entry's whole, below.
+        let named = displays
+            .iter()
+            .flat_map(|file| &file.entries)
+            .any(|given| given.package_id == package_id);
         let display = ui_packs
             .into_iter()
             .flatten()
             .find(|pack| pack.get("package_id").and_then(Value::as_str) == Some(package_id))
             .and_then(Value::as_object);
-        if let Some(display) = display {
+        if let Some(display) = display
+            && !named
+        {
             let mut taken = false;
             for member in DISPLAY_MEMBERS {
                 if let Some(value) = display.get(member) {
@@ -1426,44 +1862,84 @@ pub fn merge_standard_pack_catalog(
                 display_from_ui.push(package_id.to_owned());
             }
         }
+        let business = schedule_business(schedule, package_id);
         for side in CatalogSide::ALL.iter().copied() {
-            let union = schedule_union(schedule, package_id, side);
             entry.insert(
                 side.as_str().to_owned(),
-                Value::Array(union.iter().map(pool_value).collect()),
+                Value::Array(business.side(side).iter().map(pool_value).collect()),
+            );
+        }
+        if refresh.contains(package_id) {
+            refreshed_by_package.insert(
+                package_id.to_owned(),
+                CatalogRefreshed {
+                    package_id: package_id.to_owned(),
+                    state: CatalogRefreshState::Added,
+                    before: None,
+                    after: business,
+                },
             );
         }
         added.push(package_id.to_owned());
         packs.push(Value::Object(entry));
     }
-    let taken = |member: &str| {
-        existing
-            .as_ref()
-            .and_then(|document| document.get(member))
-            .or_else(|| retired_ui.and_then(|ui| ui.get(member)))
-            .cloned()
-    };
+    // PC-2: each display the display file gives replaces its entry's whole. Every package of the
+    // registry has its entry by now, and the file names only such packages.
+    let mut display_written = Vec::new();
+    for named in displays.iter().flat_map(|file| &file.entries) {
+        let found = packs.iter_mut().find(|pack| {
+            pack.get("package_id").and_then(Value::as_str) == Some(named.package_id.as_str())
+        });
+        if let Some(Value::Object(entry)) = found {
+            let replaced = with_display(entry, named.display.as_ref());
+            *entry = replaced;
+            display_written.push(named.package_id.clone());
+        }
+    }
+    let refreshed = edits
+        .refresh
+        .iter()
+        .filter_map(|package_id| refreshed_by_package.remove(package_id.as_str()))
+        .collect::<Vec<_>>();
     let mut document = Map::new();
     document.insert(
         "schema_version".to_owned(),
         Value::String(STANDARD_PACK_CATALOG_SCHEMA_VERSION.to_owned()),
     );
     document.insert("game".to_owned(), Value::String(game.to_owned()));
-    for member in ["groups", "display"] {
-        if let Some(value) = taken(member) {
-            document.insert(member.to_owned(), value);
+    // PC-2 fix round 1: the groups the display file adds follow the written file's, in the display
+    // file's order; without one, `groups` is as it was, byte for byte.
+    let new_groups = displays.map(|file| file.groups_added).unwrap_or_default();
+    let groups_added = new_groups
+        .iter()
+        .filter_map(|group| group.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let groups = match (carried("groups"), new_groups.is_empty()) {
+        (groups, true) => groups,
+        (Some(Value::Array(mut groups)), false) => {
+            groups.extend(new_groups);
+            Some(Value::Array(groups))
         }
+        (_, false) => Some(Value::Array(new_groups)),
+    };
+    if let Some(groups) = groups {
+        document.insert("groups".to_owned(), groups);
+    }
+    if let Some(display) = carried("display") {
+        document.insert("display".to_owned(), display);
     }
     document.insert("packs".to_owned(), Value::Array(packs));
     let mut bytes = serde_json::to_vec_pretty(&Value::Object(document)).map_err(|_| {
-        vec![StandardPackRootIssue::new(
+        CatalogMergeRefusal::Root(vec![StandardPackRootIssue::new(
             STANDARD_PACK_CATALOG_FILE,
             StandardPackProblem::Malformed,
             "",
-        )]
+        )])
     })?;
     bytes.push(b'\n');
-    let catalog = parse_standard_pack_catalog(&bytes, game, registry, Some(&pools))?;
+    let catalog = parse_standard_pack_catalog(&bytes, game, registry, Some(&pools))
+        .map_err(CatalogMergeRefusal::Root)?;
     let differences = standard_pack_catalog_differences(&catalog, schedule);
     Ok(StandardPackCatalogMerge {
         bytes,
@@ -1475,7 +1951,114 @@ pub fn merge_standard_pack_catalog(
         left_out,
         differences,
         display_from_ui,
+        refreshed,
+        display_written,
+        groups_added,
     })
+}
+
+/// Workflow #477 PC-2: the packages `refresh` names, each one the registry holds and named once;
+/// the first that is not, refused by its word.
+fn refresh_named<'r>(
+    registry: &StandardPackRegistry,
+    refresh: &'r [String],
+) -> Result<BTreeSet<&'r str>, CatalogRefreshRefusal> {
+    let mut named = BTreeSet::new();
+    for package_id in refresh {
+        if registry.get(package_id).is_none() {
+            return Err(CatalogRefreshRefusal {
+                package_id: package_id.clone(),
+                problem: CatalogRefreshProblem::PackageNotListed,
+            });
+        }
+        if !named.insert(package_id.as_str()) {
+            return Err(CatalogRefreshRefusal {
+                package_id: package_id.clone(),
+                problem: CatalogRefreshProblem::PackageRepeated,
+            });
+        }
+    }
+    Ok(named)
+}
+
+/// Workflow #477 PC-2: the business part the rules of `package_id` in `schedule` give, both sides
+/// by [`schedule_union`]: what a new entry is written with, and what a refreshed entry holds.
+fn schedule_business(schedule: Option<&StandardPackSchedule>, package_id: &str) -> CatalogBusiness {
+    CatalogBusiness {
+        consumes: schedule_union(schedule, package_id, CatalogSide::Consumes),
+        produces: schedule_union(schedule, package_id, CatalogSide::Produces),
+    }
+}
+
+/// Workflow #477 PC-2: the display file's entries and (fix round 1) the groups it adds
+/// ([`Check::display_file`]), checked against `groups` (the `groups` of the file the writer
+/// writes, whose ids the reader's own group check takes); every error of the file, by the
+/// catalog's own words, otherwise: first those of its shape, its groups and its packages, then its
+/// display defects, each at its pointer in the file.
+fn read_display_file(
+    bytes: &[u8],
+    registry: &StandardPackRegistry,
+    groups: Option<&Value>,
+) -> Result<DisplayFile, Vec<CatalogDisplayFileIssue>> {
+    let mut check = Check {
+        registry,
+        declared_pools: None,
+        errors: Vec::new(),
+        warnings: Vec::new(),
+        defects: 0,
+    };
+    // The groups of the written file as the reader takes them; their own defects are that file's
+    // warnings, not this file's.
+    let written = WrittenGroups {
+        ids: groups
+            .map(|groups| check.groups(groups).1)
+            .unwrap_or_default(),
+        items: groups
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    };
+    check.warnings.clear();
+    let file = check.display_file(bytes, &written);
+    let issues = check
+        .errors
+        .into_iter()
+        .chain(check.warnings)
+        .map(|issue| CatalogDisplayFileIssue {
+            problem: issue.problem,
+            pointer: issue.pointer,
+        })
+        .collect::<Vec<_>>();
+    if issues.is_empty() {
+        Ok(file)
+    } else {
+        Err(issues)
+    }
+}
+
+/// Workflow #477 PC-2: `entry` with its display replaced whole by `display` (`None`: no display
+/// member, the entry shows by its id): its `package_id`, then the display members `display` writes
+/// in the order a new entry writes them, then every other member of `entry` (its business part) as
+/// it stands, in its order.
+fn with_display(
+    entry: &Map<String, Value>,
+    display: Option<&Map<String, Value>>,
+) -> Map<String, Value> {
+    let mut written = Map::new();
+    if let Some(package_id) = entry.get("package_id") {
+        written.insert("package_id".to_owned(), package_id.clone());
+    }
+    for member in DISPLAY_MEMBERS {
+        if let Some(value) = display.and_then(|display| display.get(member)) {
+            written.insert(member.to_owned(), value.clone());
+        }
+    }
+    for (name, value) in entry {
+        if name != "package_id" && !DISPLAY_MEMBERS.contains(&name.as_str()) {
+            written.insert(name.clone(), value.clone());
+        }
+    }
+    written
 }
 
 #[cfg(test)]

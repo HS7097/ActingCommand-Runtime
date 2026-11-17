@@ -48,6 +48,9 @@ mod gate_lab_l3;
 // Test plan v2.2 E-1 G8 (exec key 13): the failure-frame comparison.
 mod gate_e1_failure_frames;
 
+// #463 RG-1: `recognize` answers the box of a text it located.
+mod gate_463_rg1;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {

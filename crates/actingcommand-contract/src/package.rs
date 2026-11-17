@@ -66,8 +66,10 @@ fn lower_hex(value: &str) -> bool {
 /// The single `content-directory.v1` digest: SHA-256 over the domain line followed by one
 /// `<hex sha256 of the bytes>  <path>\n` line per regular file, ordered by the UTF-8 bytes
 /// of the `/`-separated relative path. Callers supply distinct, already admitted paths.
-/// Workflow #336 PKG-S5 (M-PKG v1.1 §3.3): the content hash of the suspension rule. Its one
-/// caller is containment's `measure_content_hash`; no admission, tool or recording computes it.
+/// Workflow #336 PKG-S5 (M-PKG v1.1 §3.3): the content hash of the suspension rule. Containment
+/// computes it by one function, which `measure_content_hash` and (Workflow #463 CH-1) the
+/// admission of a run's package by its path call, the latter for the run's admission record
+/// only; the trial's content prefix computes it over the snapshot it reads.
 pub fn content_directory_digest<'a>(
     files: impl IntoIterator<Item = (&'a str, [u8; 32])>,
 ) -> String {

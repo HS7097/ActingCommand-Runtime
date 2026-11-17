@@ -226,7 +226,8 @@ impl StandardPackCatalogReport {
 }
 
 /// Workflow #477 PC-1 (contracts/pack-catalog.md, "Who writes it"): `actinglab standard-pack
-/// catalog --root <root> [--plan]`.
+/// catalog --root <root> [--plan]`; Workflow #477 PC-2: `[--refresh <package_id>]...
+/// [--displays <file>]`.
 #[derive(Debug, Clone)]
 pub struct StandardPackCatalogRequest {
     /// Fix round 1: a resource repository's checkout (`applications.json` and `packs/`, no
@@ -236,6 +237,16 @@ pub struct StandardPackCatalogRequest {
     pub root: PathBuf,
     /// `--plan`: write nothing, answer the document the line would write.
     pub plan: bool,
+    /// Workflow #477 PC-2 (register §1.462): `--refresh <package_id>`, repeatable: the packages
+    /// whose entry's business part is computed again from their rules, its display and its place
+    /// kept; empty: none, and the line is PC-1's.
+    pub refresh: Vec<String>,
+    /// Workflow #477 PC-2: `--displays <file>`, an absolute path: a display file
+    /// (`{schema_version, groups?, packs: [{package_id, title, summary, group?, risk?}]}`, fix
+    /// round 1: `actingcommand.pack-catalog-displays.v1`) whose entries replace the named entries'
+    /// displays whole, their business part untouched, and whose groups the catalog's `groups` gain
+    /// when they do not hold them.
+    pub displays: Option<PathBuf>,
 }
 
 /// Workflow #477 PC-1: the answer of `standard-pack catalog`.
@@ -251,17 +262,32 @@ pub struct StandardPackCatalogResponse {
     pub changed: bool,
     /// The packages given a new entry, in the registry's order.
     pub added: Vec<String>,
-    /// The packages whose entry was there and is kept as written, in the file's order.
+    /// The packages whose entry was there and is kept in its place, in the file's order: as
+    /// written, but (PC-2) the business part of one `refreshed` names and the display of one
+    /// `display_written` names.
     pub kept: Vec<String>,
     /// The entries of packages `bundle.json` no longer registers, left out.
     pub removed: Vec<String>,
     /// The pools of kept entries `schedule.json` no longer declares, left out.
     pub dropped: Vec<actingcommand_contract::CatalogDropped>,
-    /// Every difference between the written entries and the rules of `schedule.json` (a kept
-    /// entry's business part is never overwritten); each is also a warning.
+    /// Every difference between the written entries and the rules of `schedule.json` (the business
+    /// part of an entry no `refresh` names is never overwritten); each is also a warning.
     pub differences: Vec<actingcommand_contract::CatalogScheduleDifference>,
     /// The new entries whose display came from the leftover `ui.json`.
     pub display_from_ui: Vec<String>,
+    /// Workflow #477 PC-2: with `--refresh`, each package it names, in the order named:
+    /// `{package_id, state (replaced, agrees or added), before?, after}`, its entry's business part
+    /// before (absent for a package that had no entry) and after. Absent without `--refresh`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refreshed: Option<Vec<actingcommand_contract::CatalogRefreshed>>,
+    /// Workflow #477 PC-2: with `--displays`, the packages whose display the file replaced, in its
+    /// order. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_written: Option<Vec<String>>,
+    /// Workflow #477 PC-2 fix round 1: with `--displays`, the ids of the groups the file added to
+    /// the catalog's `groups`, in its order (empty when it adds none). Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups_added: Option<Vec<String>>,
     /// With `--plan`: the document the line would write.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<Value>,

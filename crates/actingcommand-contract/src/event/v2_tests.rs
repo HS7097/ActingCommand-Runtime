@@ -2419,6 +2419,8 @@ fn task_semantic_payload_rejects_invalid_facts() {
             package_label: String::new(),
             task_label: "task".to_string(),
             response_deadline_monotonic_ms: Some(60_000),
+            content_hash: None,
+            variables: None,
         },
         TaskSemanticFact::RecognitionStarted {
             candidate_pages: Vec::new(),
