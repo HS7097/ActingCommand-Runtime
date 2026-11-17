@@ -4886,14 +4886,22 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    - on every frame after the select step's press (every later step's own frames, its page
      transition's frames, and every ending's frames), each other page that passes beside the
      select step's page is the warning `record_select_page_passes_after_press`: `{code, step,
-     record_index, page, frame_id, frame_step?, frame_record_index?, frame_transition?,
+     record_index, page, frames, frame_step?, frame_record_index?, frame_transition?,
      frame_outcome_key?, other_page, other_step?, other_record_index?, other_transition?,
      other_outcome_key?, after_press}` (`step`, `record_index` and `page` the select step's,
-     `frame_id` the frame and the `frame_` members whose it is, a step's, `frame_transition` true
-     for the frames of its page transition, or an ending's; the `other_` members the other page
-     and whose it is; `after_press` `true`, the frame comes after the select step's press). It is
-     the fact only: on that frame both pages pass, and a select step's confirmation requires that
-     exactly one page of the package is recognised on the screen it meets. It refuses nothing
+     `frames` the frames and the `frame_` members whose they are, a step's, `frame_transition`
+     true for the frames of its page transition, or an ending's; the `other_` members the other
+     page and whose it is; `after_press` `true`, the frames come after the select step's press).
+     Fix round 2 (the coordinator's ruling): one warning for each select step, owner of the
+     frames (a later step's own frames, a later step's page transition's, an ending's) and other
+     page, as `arrival_unconfirmed` and `record_optional_step_ambiguous` carry theirs: `frames`
+     lists every frame of that owner on which the two pages pass, in the order the owner holds
+     them, none left out; the warnings come in the order of the owners (the later steps in path
+     order, each step's own frames before its page transition's, then the endings), then of the
+     other pages (the steps' pages in path order, each followed by its page transition's, then
+     the endings'). It is the fact only: on those frames both pages pass, and a select step's
+     confirmation requires that exactly one page of the package is recognised on the screen it
+     meets. It refuses nothing
      (exit 0 on actinglab's own line, on the `--via` line and through MCP: a warning changes no
      exit status) and is not the cases' `record_case_page_ambiguous`. `lab.warnings` lists these
      warnings after the warnings the provenance records (and before `record_template_near_threshold`,

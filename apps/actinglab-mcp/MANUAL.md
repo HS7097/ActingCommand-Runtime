@@ -644,6 +644,21 @@ naming this file.
   `already_generated`) no self-check runs: `template_margin_bound` is taken there, its range is
   checked (outside 0 to 1 `validation_failed`) and it has no effect. What to do with a mark that
   barely passes is yours to decide.
+  #463 SC-1 (0.12.72; `contracts/lab-recording.md`, "Self-checks", item 8): a select step's
+  confirmation requires that exactly one page of the package is recognised on the screen it meets,
+  and captures that screen before the select step's press. A select step's page that passes beside
+  another page on a frame of the step before it is refused (`ac_record_mark` where it knows the
+  frame, `ac_record_stop` with `record_step_self_mismatch`, `reason`
+  `select_page_passes_on_other_frame`, the frame and whose it is, the other page) and listed by
+  `ac_record_ready` (`what` `selects`). On a frame after the select step's press (a later step's, a
+  later page transition's, an ending's) it is the warning `record_select_page_passes_after_press`,
+  one for each select step, owner of the frames and other page: `step`, `record_index` and `page`
+  the select step's, `frames` every frame of that owner on which the two pages pass, the `frame_`
+  members whose they are, the `other_` members the other page and whose it is, `after_press`
+  `true`; in `lab.warnings` after the warnings the provenance records and before
+  `record_template_near_threshold`, among `ac_record_ready`'s warnings where it lists those, at the
+  select step in `ac_record_review` (`steps[].warnings`). It is the fact only, refuses nothing and
+  changes no exit status; the package does not carry it.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

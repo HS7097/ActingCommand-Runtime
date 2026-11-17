@@ -15,7 +15,10 @@
 // and `record review` (at the select step) answer and which refuses nothing; the frames of the
 // select step's own page transition are judged neither way. The other way round, another page on
 // the select step's own frames, is refused as before. A pair of pages neither of which is a select
-// step's stays the warning it was.
+// step's stays the warning it was. Fix round 2 (rd-1118/brief-463-sc1-fix2.md): the refusal at
+// `record stop` of a frame of the step before, which the mark did not judge (a sample added to that
+// step after the select was marked), and one warning for each select step, owner of the frames and
+// other page, naming every such frame (`frames`).
 //
 // Frames are synthetic: 96x64 pixels of flat gray 60. The scripted OCR provider reads one block
 // per marker pixel inside the requested region, its text chosen by the marker's gray value, at
@@ -308,11 +311,20 @@ fn without_message(warnings: Vec<Value>) -> Vec<Value> {
 
 // Fix round 1: the warning of the observed screens: the select step 1's page `step_01` passes on
 // step 2's frame f0002, which comes after the select's press, and so does step 2's page `step_02`.
+// Fix round 2: the frames of the warning are a list, here the one frame step 2 has.
 fn observed_warning() -> Value {
+    later_warning(2, &["f0002"])
+}
+
+// Fix round 2: the warning that the select step 1's page `step_01` passes, after its press, on the
+// frames `frames` of the later step `step` (its own frames, no page transition's), beside that
+// step's page `step_0<step>`.
+fn later_warning(step: u32, frames: &[&str]) -> Value {
     json!({"code": AFTER_PRESS, "step": 1, "record_index": 1, "page": "step_01",
-           "frame_id": "f0002", "frame_step": 2, "frame_record_index": 2,
-           "frame_transition": false, "other_page": "step_02", "other_step": 2,
-           "other_record_index": 2, "other_transition": false, "after_press": true})
+           "frames": frames, "frame_step": step, "frame_record_index": step,
+           "frame_transition": false, "other_page": format!("step_{step:02}"),
+           "other_step": step, "other_record_index": step, "other_transition": false,
+           "after_press": true})
 }
 
 // A state directory with an active session of `INSTANCE` and its Lab recording, before any step,
@@ -909,6 +921,120 @@ fn sc1_a_recording_without_a_select_generates_with_the_cases_warning_as_before()
                 "page": "neutral/step_02", "other_pages": ["neutral/step_01"],
                 "written": true})
         ],
+        "{lab}"
+    );
+}
+
+// Fix round 2 (the review's first point, R1 at `record stop`): a frame of the step before the
+// select step that the mark did not judge. Step 1 a press on a screen of its own (`ui/other`, gray
+// 170 at x 2), step 2 the select on the list, step 3 a screen that is not the list; then a sample
+// of step 1 (f0004) on which the list's page area is gray 60, added after the select was marked: the
+// mark judges step 1's own page on it, which passes, and it stands. On f0004 the list's page passes
+// beside step 1's. `record ready` lists that one item, `selects` at step 2 with code
+// `record_step_self_mismatch`, the frame f0004 and the select step's page; `record stop` refuses
+// `record_step_self_mismatch` with `select_page_passes_on_other_frame`, naming the select step and
+// its page, the frame and whose it is (step 1, record index 1, not a page transition), and step 1's
+// page beside it.
+#[test]
+fn sc1_a_sample_of_the_step_before_added_after_the_select_is_refused_at_stop() {
+    let recording = Recording::new();
+    recording.marked(recording.on(
+        "start",
+        &other_screen(&[OTHER_AREA]),
+        json!({"add": [color(OTHER, OTHER_AREA)], "click": {"region": SLOTS[0]}}),
+    ));
+    recording.press_open_step();
+    recording.marked(recording.on(
+        "list",
+        &list(),
+        json!({"add": [color(PAGE, PAGE_AREA)], "select": select("item_a", "item_b")}),
+    ));
+    recording.press_open_step();
+    recording.marked(recording.on(
+        "final",
+        &other_screen(&[FINAL_AREA]),
+        json!({"add": [color(FINAL, FINAL_AREA)]}),
+    ));
+    let sample = recording.frame(
+        "start_sample",
+        &screen([None, None], &[(OTHER_AREA, SHOWN)]),
+    );
+    recording.marked(json!({"step": 1, "samples": [sample]}));
+
+    let ready = recording.ready();
+    let missing = ready["missing"].as_array().expect("missing");
+    assert_eq!(missing.len(), 1, "{ready}");
+    assert_eq!(missing[0]["what"], "selects", "{ready}");
+    assert_eq!(missing[0]["step"], 2, "{ready}");
+    assert_eq!(missing[0]["code"], SELF_MISMATCH, "{ready}");
+    assert_eq!(missing[0]["details"]["frames"], json!(["f0004"]), "{ready}");
+    assert_eq!(missing[0]["details"]["page"], "step_02", "{ready}");
+
+    let error = recording
+        .stop()
+        .expect_err("the list's page passes beside step 1's on step 1's sample");
+    assert_eq!(error.code, SELF_MISMATCH, "{}", error.message);
+    let details = error.details.expect("details");
+    assert_eq!(details["reason"], PASSES_ELSEWHERE, "{details}");
+    assert_eq!(details["step"], 2, "{details}");
+    assert_eq!(details["record_index"], 2, "{details}");
+    assert_eq!(details["page"], "step_02", "{details}");
+    assert_eq!(details["frame_id"], "f0004", "{details}");
+    assert_eq!(details["frame_step"], 1, "{details}");
+    assert_eq!(details["frame_record_index"], 1, "{details}");
+    assert_eq!(details["frame_transition"], false, "{details}");
+    assert_eq!(details["other_page"], "step_01", "{details}");
+    assert_eq!(details["other_step"], 1, "{details}");
+    assert_eq!(details["other_record_index"], 1, "{details}");
+    assert_eq!(details["other_transition"], false, "{details}");
+}
+
+// Fix round 2 (the coordinator's ruling on the grouping): one warning for each select step, owner
+// of the frames and other page, naming every frame of that owner. Step 1 the select on the list;
+// step 2 the list with a slot busy, its page `ui/busy`, on its frame f0002 and a sample f0003 (the
+// same list before `ui/started` showed); step 3 the list's page area beside `ui/final` and no busy
+// slot (gray 60 at x 60, so step 2's page does not pass there), f0004. The list's page passes beside
+// step 2's page on both of step 2's frames and beside step 3's page on step 3's frame: `record
+// ready` (ready, nothing missing) and `record stop` (generated) answer two warnings, the first
+// naming both of step 2's frames, the second step 3's one.
+#[test]
+fn sc1_two_frames_of_one_later_step_are_one_warning_and_two_later_steps_two() {
+    let recording = Recording::new();
+    recording.select_on_the_list();
+    let mut busy = recording.on(
+        "busy",
+        &busy_list(),
+        json!({"add": [color(BUSY, BUSY_AREA)], "click": {"region": SLOTS[0]}}),
+    );
+    busy["samples"] = json!([recording.frame(
+        "busy_before",
+        &screen([Some(ALPHA), Some(BRAVO)], &[(BUSY_AREA, SHOWN)]),
+    )]);
+    recording.marked(busy);
+    recording.press_open_step();
+    recording.marked(recording.on(
+        "final",
+        &screen([None, None], &[(FINAL_AREA, SHOWN)]),
+        json!({"add": [color(FINAL, FINAL_AREA)]}),
+    ));
+    let expected = [
+        later_warning(2, &["f0002", "f0003"]),
+        later_warning(3, &["f0004"]),
+    ];
+
+    let ready = recording.ready();
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["missing"], json!([]), "{ready}");
+    assert_eq!(
+        warnings_of(&ready["warnings"], AFTER_PRESS),
+        expected,
+        "{ready}"
+    );
+    let lab = recording.stopped();
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(
+        warnings_of(&lab["warnings"], AFTER_PRESS),
+        expected,
         "{lab}"
     );
 }

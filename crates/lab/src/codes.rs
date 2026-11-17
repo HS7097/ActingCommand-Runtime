@@ -164,9 +164,10 @@ actingcommand_contract::outcome_codes! {
         /// step's, a page transition's of a later step, an ending's), the select step's page passes
         /// and so does another page of the package; a select step's confirmation requires that
         /// exactly one page of the package is recognised on the screen it meets. `lab.warnings`,
-        /// `record ready` and `record review` (at the select step) name the select step, the frame
-        /// and whose it is, both pages; it refuses nothing, proposes nothing and is not written into
-        /// the package.
+        /// `record ready` and `record review` (at the select step) name the select step, the frames
+        /// and whose they are, both pages (fix round 2: one warning for each select step, owner of
+        /// the frames and other page, with every such frame); it refuses nothing, proposes nothing
+        /// and is not written into the package.
         RecordSelectPagePassesAfterPress => "record_select_page_passes_after_press": warning / none,
     }
 }
