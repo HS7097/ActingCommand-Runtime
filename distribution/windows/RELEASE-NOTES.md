@@ -9,6 +9,169 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.72
+
+本版是 v0.12.71 之后的 5 次合并、6 张 PR：#434 PP-1 #1814、#479 ACIB-0 #1809、#398 DB-2 #1817 先后单独合入，再是 0.12.72 列车 #1813（#463 AD-1 自己）带 #463 RM-1 #1815，最后 #480 PG-1 #1816 单独合入。
+列车除了各张的头和合并，只有文字：两张各补上审查留下的最后几句（收编新警告的处理说先提交再 `--replace`，手册里别的包的警告在分不开时照原样答，`--state-dir` 放在检出之外；已出包的录制上界限参数照收、照查范围、不起作用），登记 §1.464 末尾写下两片交界的地方；没有改代码。
+内容是：全局暂停按住 Runtime 自己起模拟器的每一处，人按下的单台暂停不再因为 Runtime 自己的自动启动被撤回；按录制号收编可以从录制自己的目录读录制，回答只带本包的警告、别的包按码计数；录制的自检对勉强过线或勉强没过线的模板标记给警告；
+`devices` 在选中安装之前就能列手机，每行带跨 adb 会话不变的设备键，`devices bind` 能按键绑、拒绝当不了手机的行；救急模块的回答超过 MCP 预算时整份导出、答它的头；项目自己的 iOS 调试桥 `acib`，单独的只读程序，不进发版的压缩包。
+**生产上跑的是 v0.12.71（2026-11-18 04:18 起，经 Lab 救急模块部署）**。从 v0.12.71 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都不用标志，`ledger_verify` 为 false，计划通知的 `rollback_window_bounded` 为 false，`defaults_diff` 没有一行，没有新文件**。
+**接口一个都没动**（`ledger` 仍是 [3, 9]，`package` [3, 18]，`runtime-client` [3, 11]，`actingd-config` [5, 33]）；配置键没加，结果码加了 5 个。**退回 v0.12.71 开着**。
+**全局暂停下 Runtime 不再自己起模拟器；人按的单台暂停碰上 Runtime 自己的自动启动时不再被撤回，但回答可能晚很多**（见下）。
+
+- **为什么有这一版**：主人 11-17 按了控制台的「全部暂停」，Runtime 照样自己拉起模拟器；主人接着单独暂停那一台，这份暂停又被 Runtime 撤回了（看板 #480，主人的原话在那里）。
+  在 v0.12.70、v0.12.71 上做包看到的：录制在一个卷、检出在另一个卷，按录制号收编用不上；收编的回答每次都超过 MCP 的预算；一个模板标记录制时只比阈值高出 0.013，上了设备就没过；
+  `place --plan` 的回答超过预算时什么都读不到；界面的安装程序在安装之前列不出手机。还有 #479：主人定了 iOS 调试桥只用 MIT 许可的 `idevice` 库作不改动的依赖、其余净室自写，本版是它的第一版只读探针。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码）：
+  - **首先，暂停改变了 Runtime 自己做的事。**
+    - **全局暂停下不再自动起模拟器。** 每一处自动启动都问同一个问题 `automatic_start_hold`（`crates/runtime-host/src/host/emulator_autostart.rs` 1018–1034）：以前只答单台自己的暂停，现在先看单台的、再看全局的，恢复出来的全局暂停也算。
+      所以全局暂停下四处都不起：守护进程启动时的配置启动不请求认领；看护不请求重启；看护也不请求识别（两条路都是：端点待定或绑在别的端口；绑在报告的端口上但没准备好）；IDLE-1 在 `stop_emulator` 之后的唤醒不排，照旧欠着。
+      暂停之前已经请求的认领在自己钥匙上的下一拍结束（`autostart_hold_ends`，同一文件 953–1001），什么都不启动、不绑定、不准备；看护算进上限的那一次退回（`refund_watch_request`），唤醒照旧欠着（`withhold_idle_wake`）；看护或唤醒的认领读到模拟器在跑、要改成识别的，也一样挡住。
+      原本就挡着的三处不变：启动包是例行认领，任一种暂停都把它挡在队里（`host/lease.rs` 3716–3746 `routine_gate`）；空闲动作在任一种暂停下都不判（`host/idle.rs` 914–959）；卡死恢复阶梯在任一种暂停下都不准入，已在跑的下一步结束（`host/recovery_ladder.rs` 1453–1496）。
+    - **关着的模拟器在暂停期间一直关着，恢复以后由看护拉回来。** 全局恢复不欠什么：看护恢复后的第一次轮询照常重启或识别，下一次空闲检查接上欠着的唤醒；守护进程启动那一次在恢复时不会再跑，所以靠看护（`emulator_control.watch_enabled` 开着时）或由人起（`contracts/emulator-control.md` 1344–1346、1378–1382）。
+      以前「暂停只挡派单、模拟器照样起」这句，对全局暂停从本版起不再成立（`contracts/scheduling-pause.md` 82–86）。
+    - **跳过记一条，只是告知。** `emulator_autostart_skipped`，`skip_reason` 新词 `global_paused`（info），每个全局暂停修订、每种启动、每台各一次，不算进看护的上限；写成实例下的一条 `device_state_observed` 记录和守护进程的一行报告（`host/emulator_watch.rs` 155–176、216–228、841–861）。
+      两种暂停都在时记单台的 `instance_paused`。`global_paused` 是已有词表里的一个词、结果里的一个值，不动任何接口。`status` 不加成员：总览的 `global_pause` 块加上实例的 `emulator_state` 已经看得出来。
+    - **人按的单台暂停不再因 Runtime 自己的自动启动被撤回，回答可能晚很多。** 交还那一步（`host/policy_dispatch.rs` 3364–3533 `release_paused_instance`）碰到占着这一台的只是自动启动的认领（配置启动、看护的重启或识别、空闲唤醒都是它；没有要再排空的运行、没有欠着的复位、工作线程上没有策略运行）时，
+      过了宽限也一直等，每 20 毫秒看一次，没有暂停自己的上限（3521–3530），等到认领自己结束（已开始的启动在发命令前把钥匙续到 225 秒、准备连接前续到 35 秒，登记 §1.468）或钥匙过期被租约清扫收回。闸门一直关着，阶段照旧 `draining`、`paused`、`released`，只是更晚。
+      客户端等回执的时间没改，仍是排空时限加 30 秒宽限加 IO 时限（`crates/runtime-client/src/client.rs` 6918–6930），所以客户端可能先放弃：它报自己的超时，暂停照样立着、接着做完；再发一次暂停答 `scheduling_already_paused`，`status` 显示阶段（等的时候 `paused`，做完 `released`；`contracts/scheduling-pause.md` 230–235）。
+      本实例排在队里的自动认领不算拒绝项（专用租约的每一次授予也一样，`crates/scheduler/src/lib.rs` 379 `AutostartEndsAtGrant`），授予后第一拍就结束；别人的活（人或客户端的运行和租约、操作员的项、欠着的复位）照旧按宽限算，过了就失败、撤回。
+    - **`scheduling_pause_kept_at_shutdown`**（runtime-host 的新码，error，拒，退出码和别的暂停失败一样是 1）：等的时候 Runtime 关机，关机那一刻重读挡路的东西（`policy_dispatch.rs` 3420–3447）。只剩 Runtime 自己的自动认领，或者 multi-Nemu 闸门外的实例（交还还要关会话）已经什么都不挡，
+      就答这个码、不撤暂停，`host.scheduling_pause` 的事实照旧记着这一台，下次启动照常恢复（3325–3336）；闸门里的实例什么都不挡了，就照常到 `released`、答成功。挡着的是别人的活，才照旧答 `scheduling_pause_release_interrupted` 并撤回。这个码只在这一次请求的回执里，不写账本。
+    - **被暂停挡下的自动启动只留一条跳过记录，没有命令记录。** 自动认领的启动改成先等这一台的准入锁、核钥匙上的围栏、关旧会话、续约，再拿着锁问一次 `automatic_start_hold`，过了才写 `command.received`、真启动（`host/emulator_instance.rs` 929–1008 `drive_configured_control`）。
+      挡在这里的，认领名下只有租约的授予、续约、释放，没有 `command.*`、没有 `runtime.failed`；实例下一条跳过记录、一行报告。最后一问之前就失败的（围栏拒、关会话失败、续约被拒）照旧先补写 `command.received` 再记拒绝和失败；读者看得出的唯一差别：旧会话还开着时，关会话的记录排到了 `command.received` 前面。
+      识别那条路拿到锁之后、读状态和绑定之前也问一次，挡下时什么都不记（`host/resource_close.rs` 2137–2153）。
+    - **人、代理、Lab 的模拟器控制一点没变**：`drive_emulator_control`（`emulator_instance.rs` 891–927）照旧先写 `command.received`，记录和顺序都不变，也从来不问暂停；操作员的重启和阶梯的梯级也一样。
+  - **`devices bind` 拒以前收的行**（DB-2）：按 handle 还是按键、经哪一面，adb 状态不是 `device` 的行（未授权、离线、无权限等）、传输方式不是这台手机实例声明的行（`device.transport`，没写是 `usb`；模拟器的回环 `tcp` 行就是），
+    都在写任何东西之前拒 `device_row_unbindable`：`device_row_problem` `state_not_device`（带 `device_link_state`）或 `transport_mismatch`（`crates/lab-ops/src/devices.rs` 839–879）。以前这样的行绑得上，配置检查也过。
+    列表每行多 `device_key`：`sha256:` 加 64 位小写十六进制，是账本用的那一个指纹函数对序列号算的带钥摘要；钥匙取调用方的盐（`--key-salt-env <变量名>` 或 `--key-salt`，16 到 1024 字节），没有就取选中或候选配置的 `secret_fingerprint_salt`，都没有就不给键；
+    在安装自己的秘密下，它就是账本 `runtime.instance_bound` 记的那个指纹。**已装的根上选中的配置读不了或解不开时照样列出各行，不带键，另答 `device_keys_unmade`**（`{why: config_unreadable, cause}`）；没定位到状态根、也没给 `--config` 时照样列，答 `bindings_unread`（`{why: state_root_unknown, cause?}`）。
+    `devices bind --device-key` 绑定时现列一遍去对，对不上拒 `device_key_unknown`；写下的和按 handle 绑的是同一条记录。经 MCP 两种盐都不给，只用安装自己的秘密；盐、变量的值和序列号不出现在任何回答、拒绝和日志里。
+    第一代 MCP 服务器（`actingctl mcp-serve`）没加参数，但它的 `ac_devices` 同样带键、`ac_device_bind` 同样拒（它按码名归类，把 `device_row_unbindable` 归成 `runtime` 类）。
+  - **收编的回答换了形**（AD-1）：`warnings` 只留本包的和不属于任何包的（根上的、只写 `task_id` 的规则警告），点名别的包的按码计数，放进 `other_packages_warnings {total, counts}`，一条不丢；`--dry-run` 同形（`crates/resource-tooling/src/adopt.rs` 1434–1453）。
+    重读检查树的根失败时不拒，全部警告照原样答，最后加一条 `adopt_warnings_not_split`（带 `path` 和读取器的拒绝），没有 `other_packages_warnings`。
+    新选项 `--session-state-dir`（MCP 的 `session_state_dir`）点明录制所在的目录：按录制号收编从那里只读地读录制、它的包和用例、`record ready` 的判断；检查树、两份留着的旧副本、试跑记录照旧在 `--state-dir` 下。和 `--package` 一起给，拒 `validation_failed`（`conflicting`，退出码 2）；不给时逐字节照旧。
+    **试跑记录是从给的 `--state-dir` 读的**：登记 §1.464 的「At deploy」写明，录制和检出不在一个卷上时这样收编：`--record-id <号> --session-state-dir <录制的目录> --state-dir <检出那个卷上的目录>`；这个 `--state-dir` 放在检出之外（试跑拒放在仓库里的目录，`trial_state_dir_refused`）；
+    `standard-pack trial` 和 `standard-pack status` 也给同一个 `--state-dir`，不然收编读不到试跑记录，把试过的包答成 `review.trial` `none`、警告 `not_tried`。
+  - **录制的新警告**（RM-1）：`record_template_near_threshold`（lab，warning，退出码 0）。必须通过的模板标记在它该过的帧上只比阈值高出不到界限，或者必须不通过的模板只比阈值低出不到界限（禁止标记、到达门、可选步的页、跳过的目标、结局的三种比较），给一条警告：
+    带 `side`（新词表 `template_threshold_side`：`passes`、`misses`）、`check`（那项检查失败时答的码）、所在的步、标记、帧、分数、阈值、余量和界限，没有说明文字，不提议（`crates/lab/src/recording/near.rs`）。只交回事实，什么都不拒：该过的过、该拒的拒和原来一样，生成的包逐字节不变（警告不写进包的来历）。
+    `record stop` 和它的试停答在 `lab.warnings`；`record ready` 在每个自检都过了时列在它的警告里，`cases` 之前的都过、`cases` 没过时也带上；`record review` 在那一步的 `steps[].warnings`。
+    界限是 `--template-margin-bound`（MCP 的 `template_margin_bound`），默认 0.03，0 到 1 以外拒 `validation_failed`（`near.rs` 28、36）；已出包、之后没改过的录制不跑自检，参数照收、照查范围、不起作用。收编判录制时用默认界限，收编不收这个参数。
+  - **救急模块的回答**（PP-1）：经 Lab 的 MCP 服务器，救急模块的成功回答两种方式都发不出去时（超过 24 KiB 的预算），整份写进导出目录，答它的头（`apps/actinglab-mcp/src/calls.rs` 147 `Service::rescue`，`rescue_export.rs`）：
+    头里留各操作最要紧的部分（`place` 留计划的 `schedule_changes` 和 `next`，`undo`、`op resume` 留 `reverses` 和 `schedule_changes`，`op status` 留 `unfinished`、`last_operations`、`journal`，别的行只留结果；`rescue_export.rs` 82–103），
+    一部分放不下就先去掉逐包的行、再把各列表换成计数，还放不下就整个留在文件里；`truncated` 用 JSON 指针列出头里没照原样带着的每个成员（行自己的 `warnings`、`outcome` 每个头都带着，不列），`export` 是 `{path, sha256, size}`，警告 `answer_exported` 排第一。
+    放得下的回答和所有拒绝逐字节照旧，拒绝从不导出；文件写不了时照样答头，`material_export_failed` 排第一、没有 `export`；头自己都放不下才答 `output_budget_exceeded`。`ac_run_show` 答的也是这个头。v0.12.71 说明里「`place --plan` 超过预算时不导出」这一条到此关上。
+  - **`acib`**（ACIB-0）：项目自己的 iOS 调试桥，单独的程序（`apps/acib`，包 `actingcommand-ios-bridge`），Runtime 和工作区里别的成员都不依赖它。五条只读命令：`devices`、`info`、`services`、`images`、`apps`（`apps/acib/README.md`）；
+    对手机只读：不配对、不挂镜像、不写盘，不打印序列号、UDID、设备名和配对材料；`apps` 只在匹配数不超过界限（默认 5，最多 20）而且不超过用户应用的一半时才给包名。
+    **它不在发版的两个压缩包里**：CI 在 PR、`stable` 推送和手动派发的构建里单独编它、单独上传 `acib-<提交>`，发版那一次什么都不编、不发（`.github/workflows/windows-remote-build.yml` 1007–1030，`if: ${{ !inputs.release_tag }}`）；两个压缩包的文件表（同一文件 664–684）里没有它。
+    Runtime 和 Tools 的发版构建那一步加了 `--workspace --exclude actingcommand-ios-bridge`（387–395），它的依赖不进这些程序的特性解析，那一步编的包和加它之前一样（复审对着构建日志逐包比过）。
+    依赖和许可写在 `NOTICE.md`「The iOS device library of `acib`」：`idevice` 0.1.68 是 MIT 许可（许可原文在它仓库根目录的 `LICENSE.txt`），带进的 63 个包逐个核过，都在宽松许可之内（`ring` 是 `Apache-2.0 AND ISC`）；TLS 是 `rustls` 加 `ring`，没有 OpenSSL；构建时不联网。
+  - **盘上的东西**：本版照读 v0.12.71 留下的一切（账本修订 3 到 9、配置、录制、包、绑定），第一次启动不迁移、不要新状态根；账本不加记录种类和成员，新写的只有全局暂停下的跳过记录（已有的码、已有词表里的新词）。录制、包、绑定、配置的格式都没变。
+
+- **改了什么**（宿主和调度器、绑定、收编、录制、MCP 服务器、iOS 调试桥）：
+  - **暂停**（PG-1，§1.468）：宿主 `crates/runtime-host/src/host/` 的 `emulator_autostart.rs`（`automatic_start_hold` 答两种暂停，读状态以后再问一次的 `held_after_last_read`，`autostart_ends_at_grant`）、`emulator_watch.rs`（`WatchSkipReason::GlobalPaused`，跳过的记忆按实例加原因各记修订）、
+    `policy_dispatch.rs`（`release_paused_instance` 的等待和关机那一支，`release_obstacles`）、`emulator_instance.rs`（`drive_configured_control`）、`resource_close.rs`（`grant_dedicated_instance_lease`、`prepare_recognized_instance`），`codes.rs` 多一个码；
+    调度器 `crates/scheduler/src/lib.rs`（`AutostartEndsAtGrant`：交还和专用租约都不算本实例排着的自动认领）。`host/idle.rs`、`idle_action.rs` 只改注释，`host.rs` 只加测试用的钩子。
+  - **绑定**（DB-2，§1.467）：`crates/lab-ops/src/devices.rs`（`KeySalt`、`Keyer`、`list_from`、`bind_against`、`bindable`、`link_state`），`core_ops.rs`、`core_reads.rs`、`lib.rs`、`codes.rs`；契约库 `outcome/keys.rs` 多一个键；Lab 的 MCP 服务器 `tools.rs` 的 `SUPPLIED`（两种盐不给）。
+  - **收编**（AD-1，§1.464）：`crates/resource-tooling/src/adopt.rs`，`standard_pack_ready.rs` 的 `with_packs_named`（准备情况那一行的读法，调用、不复制）；`apps/actinglab/src/standard_pack_cli.rs` 的新选项。
+  - **录制**（RM-1，§1.466）：新文件 `crates/lab/src/recording/near.rs`（量法只有这一份）；`crosscheck.rs`（判定记下模板的分数和阈值）、`recording_api.rs`、`ready.rs`、`review.rs`；`apps/actinglab/src/commands/session_record.rs` 的参数。
+  - **MCP 导出**（PP-1，§1.465）：新文件 `apps/actinglab-mcp/src/rescue_export.rs`，`calls.rs` 的 `Service::rescue`，`after_child.rs` 共用两个函数；`server.rs`、`jobs.rs`、`budget.rs` 和救急模块没改。
+  - **iOS 调试桥**（ACIB-0，不占登记节）：新程序 `apps/acib`，工作区成员从 41 个变成 42 个；`Cargo.lock` 多它带进的 63 个包，已锁的版本一个没变；CI 的 apps 任务按测试步的两次调用各编一次测试，发版构建那一步排除它，另加单独编它、上传它的两步。
+  - **这些工具不提议区域、不提议挑哪一项、不提议值**：新警告只交回事实，收编只照规则分警告。
+
+- **部署和退路**：照 v0.12.71 那次的做法，用在线 v0.12.71 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）自 v0.12.70 一个文件没改，在线那份和本版的是同一份代码。
+  - 这次没有账本那一步：两边账本都是 [3, 9]，计划的 `ledger_verify` 为 false，实做不校验账本，日志的 `one_way` 为 false，`actingctl install` 不用 `--accept-ledger-one-way`。
+  - **部署时全局暂停还在的话，新版一启动，关着的模拟器就不再被起**（配置启动和看护都不起），每台每种启动各记一条 `global_paused` 的跳过；全局恢复以后由看护拉回来。v0.12.71 那次部署就是在别人按的全局暂停下做的。
+  - 部署前照旧不留开着的录制，也不跑试跑。部署以后 `op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在旧映像上的 MCP 服务进程，重开那个客户端的会话才拿到新的工具表
+    （`ac_devices` 的 `config`、`root`，`ac_devices_bind` 的 `device_key`，`ac_record_stop`、`ac_record_ready`、`ac_record_review` 的 `template_margin_bound`，`ac_standard_pack_adopt` 的 `session_state_dir`）和救急工具的导出。
+  - 部署以后要看的：全局暂停下，实例的 `device_state_observed` 里有 `emulator_autostart_skipped`、`skip_reason` `global_paused`，模拟器没被自动起；`devices` 每行带 `device_key`；经 MCP 超过预算的 `ac_place` 带 `plan` 答头和 `export`。
+  - **退路**：回 v0.12.71 开着，用留着的 v0.12.71 那份 `actingctl install`（`install undo`、`install resume`、`install release-hold`）或救急模块的退回（见「升级与退回」）。
+
+- **已知的限度**（各片审查和验收记录列的，逐条核过）：
+  - **暂停这一片还没关上的**（第四次审查的单子和验收记录，归下一片 PG-2）：暂停之前已经开始的启动或识别会做完（之后启动包挡在门后）；已经在爬的恢复阶梯把当前这一级（重启应用、重启模拟器）做完才停；
+    阶梯的一级、或启动包这类宿主包的下一个检查点超过调用方的宽限时，单台暂停照旧失败并撤回（Runtime 关机落在排空阶段时也照旧答 `scheduling_pause_drain_interrupted` 并撤回）；
+    关闭租约看「前面有没有排着的」时把挡在暂停门后的启动包也算进去，multi-Nemu 闸门外的实例凑齐条件时会答 `lease_queue_ahead` 并撤回暂停（只按代码读出，没实测）；
+    等的时候有客户端或操作员的项排进来，暂停马上失败（`lease_transfer_not_safe`）并撤回，之后自动启动照走；等待没了上限，这个口子开着的时间也跟着长了；
+    识别拿着锁自己读状态的那一小段里按下的暂停挡不住这次绑定和连接准备（不起模拟器，启动包排在门后），启动那条路最后一问之后到真启动之间也还剩一瞬；
+    录制自己的按住把带失败的回执一律当成「没暂停」（`crates/lab-ops/src/scheduling.rs` 127–136），碰上 `scheduling_pause_kept_at_shutdown` 会当成没按住，重启以后可能留下一份带录制原因、没人解的暂停；
+    暂停失败不写自己的账本记录，原因只在回执里，客户端放弃等待以后就读不到；控制台给的排空时限是 1 秒，它的客户端只等 1 秒加 30 秒宽限（再加 IO 时限）。
+  - 收编（AD-1）：真正跨卷的收编还没在这台机器上用过；试跑记录只从给的 `--state-dir` 读（见上），读法没改。
+  - 录制的新警告（RM-1）：`cases` 没过时 `record ready` 只带生成器的警告，交叉检查自己的那些（例如 `arrival_unconfirmed`）不在，所以可能看到 `check` 是它的临界警告、却看不到它本身；`cases` 没过时带上这条警告没有单独的测试；
+    入场遮罩不判；禁止标记在不是那一步自己帧的画面上刚好通过的不报；第一代 MCP 服务器的 `record stop` 没有这个参数，只用默认值。
+  - 绑定（DB-2）：adb 列成 `no permissions` 的那一行没有测试；契约只写了配置读不了时绑定答的 `config_read_failed`，没写解不开时的 `config_decode_failed`；没在真机上验过，等界面的手机页接上。
+  - 导出（PP-1）：`deploy --plan` 的头只留结果（`plan_id`、`commit_sha`），其余都在文件里；头本身放不下（几百条警告）时照旧答 `output_budget_exceeded`。
+  - `acib`（ACIB-0）：小修以后的版本还没在真机上跑过（第一版 11-17 在一台手机上只读跑过一次）；列表为空就答 `mounted` false 这一点没在挂着个性化镜像的真机上核过；许可矩阵那一行等伞仓合入。
+  - 选择步的唯一性在录制停下时仍只查一个方向（另开了一片，不在本版）。
+  - 写这份说明的时候本版一样都没在设备上跑过。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：**一个都没动**，逐行和 v0.12.71 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [3, 11]、`package` [3, 18]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10；这个文件和 `contracts/component-interfaces.md` 自 v0.12.71 没改）。
+  没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 和契约库的记录类型一个文件没改）；`global_paused` 是已有词表 `emulator_autostart_skip_reason` 里的新词，跳过记录照旧是 `runtime.lifecycle_observed` 的 `device_state_observed` 带一个结果，和 `instance_paused`（§1.226）、`start_emulator_off`（§1.272）加进来时一样；
+  `scheduling_pause_kept_at_shutdown` 只在回执里，回执的错误码是已有的 `RuntimeUnavailable`，`runtime-outcomes` 留 1（新码只进目录）；设备键、收编的新成员、新警告、救急的头都是 Lab 的回答，不属于表里任何一个接口；`acib` 在 Runtime 之外。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的 `codes.rs`、`host.rs`（只加测试钩子）、`host/` 下的 `emulator_autostart.rs`、`emulator_instance.rs`、`emulator_watch.rs`、`idle.rs`（只改注释）、`policy_dispatch.rs`、`resource_close.rs`，`idle_action.rs`（只改注释），测试 `tests/gate_480_pg1.rs`（新）和 `tests/gate_369_s6c.rs`（去掉两条）；
+  调度器 `crates/scheduler/src/lib.rs` 和测试 `tests/gate_480_pg1.rs`（新）；契约库只有 `crates/actingcommand-contract/src/outcome/keys.rs`（DB-2 的一个键）。
+  `crates/ledger`、`crates/runtime-client`、`crates/lab-rescue`、`crates/runtime-config`、`crates/policy`、`crates/execution-kernel`、`crates/pack-containment`、`crates/display-adapter`、`crates/device`、`apps/actingd`、`apps/actingctl` 一个文件没改。
+- 配置键：没有加的、没有去掉的；`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改（`distribution/` 下只改了本文件）。
+- 结果码：加了 5 个，没有标成 `retired` 的。按片：PG-1 加 `scheduling_pause_kept_at_shutdown`（runtime-host，error，拒，`Failed`、`RuntimeUnavailable`，退出码 1，只在回执里），词表 `emulator_autostart_skip_reason` 加 `global_paused`（info 码 `emulator_autostart_skipped` 的值）；
+  DB-2 加 `device_key_unknown` 和 `device_row_unbindable`（actingctl 片段，error，拒，Lab 自己的命令行、`actingctl` 和经 `serve --stdio` 退出码 1，经 Lab 的 MCP 服务器 `isError`），键和词表 `device_row_problem`（`state_not_device`、`transport_mismatch`），`state_not_device` 带已有的可选键 `device_link_state`；新的用法拒绝都是已有的 `actingctl_usage_invalid` 的词；
+  AD-1 加 `adopt_warnings_not_split`（resource-tooling，warning，退出码 0），改了 `replace_across_volumes` 的说明；RM-1 加 `record_template_near_threshold`（lab，warning，三条线上都是退出码 0），词表 `template_threshold_side`（`passes`、`misses`）；PP-1 没加码；ACIB-0 不用 Runtime 的码（它的问题词是它自己的），目录里只多一个没有片段文件的属主 `acib`。
+  合计 4025 个码（在用 3936，`retired` 89），1773 个位置，31 个片段文件（42 个属主，11 个没有片段文件）；键 690，词表 282，词 2133；在用码按类别 error 3406、warning 174、info 214、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.72.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，改了 6 行：`devices`（加参数 `config`、`root`、`key_salt`、`key_salt_env`，帮助改成 158 字节，说明）、`devices bind`（加参数 `device_key`、`key_salt`、`key_salt_env`、`root`，`handle` 不再必给，说明）、
+  `record stop`、`record ready`（加参数 `template_margin_bound`，说明）、`record review`（加参数 `template_margin_bound`，输出加 `warnings?`，说明）、`standard-pack adopt`（加参数 `session_state_dir`，输出，说明）；帮助最长 159 字节。
+  命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。Lab 的 MCP 服务器的工具数不变（Windows 上 167 个：自己的进程答 54 个、救急行 39 个、交给子进程 74 个；别的平台 128 个）；`ac_devices` 多 `config`、`root`，`ac_devices_bind` 多 `device_key`（`handle` 不再必给），两种盐和 `devices bind` 的 `root` 经 MCP 不给；
+  `ac_record_stop`、`ac_record_ready`、`ac_record_review` 多 `template_margin_bound`，`ac_standard_pack_adopt` 多 `session_state_dir`。第一代 MCP 服务器仍是 46 个工具，`apps/actingctl` 一个文件没改（列表和绑定的变化来自 `crates/lab-ops`）。
+  README 两种语言把工具表标题改成 v0.12.72，工作区成员改成 42 个、apps 11 个，加上 `apps/acib` 一行。两个压缩包的文件表不变：没有新文件、没有去掉的文件，`acib.exe` 不在里面。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）。看板 #71 另登记了 FLK-17、FLK-18（宿主的两条靠机器快慢的门测），没有镜像进这张表。
+  另一张 PR 的一个任务在 `actingcommand-actingd` 的 `gate_427a::lanes_t1…` 上红过一次（看板 #71，评论 6963355193）：第一次见到，原因没查明，已登记，不进这张表。
+
+升级与退回（救急模块部署、退回、撤销那几条路，`crates/lab-rescue` 自 v0.12.70 一个文件没改，v0.12.70、v0.12.71 说明里引的行号对本版也对；`actinglab deploy` 和 `actingctl install` 走的都是它）：
+
+- **v0.12.71 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 9]，`previous_max_in_next` 过，`one_way` 不触发（`install/plan.rs` 298–310）；`runtime-outcomes` 的 `next_max_in_installer` 过；
+  `install-control`、`runtime-client` 的 `installer_meets_previous`、`installer_meets_next` 是安装工具 I 对在线 Rp 和本版 R*，`runtime-client` 三方都是 [3, 11]，都过（324–340）；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，照旧是 `pack_declaration_unknown` 警告，不挡（341–364）。
+  `installer_knows_keys` 过；`defaults_diff` 没有一行；文件计划里没有 `new`；`ledger_verify` 为 false（两边账本范围相同，924）；计划通知的 `rollback_window_bounded` 为 false（只有接受了单向的那一步才是 true，212）。
+- **本版第一次启动多写的**：格式上没有；不迁移、不要新状态根。全局暂停还在时，配置启动不请求认领，配了 `start_emulator`、模拟器关着的每台记一条守护进程启动那一种的 `global_paused` 跳过，看护的轮询再按它的种类各记一次。
+  `config.selection` 的默认值哈希不变；v0.12.71 的配置文件照收；`standard-pack check` 没改，对今天的根答法相同。
+- **退回 v0.12.71：开着。** 回退门（`install/update.rs` 390–447）只放行这次部署替换掉的 v0.12.71；第 1 部分的边都过（`ledger` 两边 [3, 9]，9 在 [3, 9] 里；`runtime-client` 两边 [3, 11]；`package` 照旧是警告）；
+  第 2 部分用 v0.12.71 自己的 `actingledger events` 读部署以来的每一页：本版不写新的记录种类或成员；`global_paused` 是一个结果里的值，读者把结果的值当 JSON 读进来、不按词表核（`crates/actingcommand-contract/src/outcome.rs` 1719–1735），码照收到的拼写读（692–744），这个文件本版没改；`scheduling_pause_kept_at_shutdown` 从不进账本。过。
+  部署以后 `op status` 的 `rollback_window` 里，留存的 v0.12.71 `ledger_edge_passes` 为 true，更早的为 false（`install/status.rs` 286–299）。
+  - 回去以后用不了的：全局暂停又不挡 Runtime 自己起模拟器（「全部暂停」下模拟器照样被起）；自动启动占着一台超过宽限时，人按的单台暂停又会被撤回；`--session-state-dir` 和分开答的警告；临界警告；安装之前列手机、设备键和对不能绑的行的拒绝；救急回答的导出。
+  - **这些都不让安装的状态或日志对 v0.12.71 读不了**：录制、包、绑定、配置的格式没变；关机时留下的暂停，事实的格式没变，v0.12.71 启动时照样恢复。
+
+配对：
+
+- **控制台 UI**：界面的 v0.12.23（钉 Runtime v0.12.71）2026-11-18 07:21 起在用。**本版没有它读不了的东西**：账本库、客户端库本版一个文件没改；`global_paused` 是已有记录里一个结果的值，新码 `scheduling_pause_kept_at_shutdown` 在暂停的回执里，它照收到的拼写读，回执的错误码 `RuntimeUnavailable` 是原有的。它不用为本版改钉。
+  它在运行上碰到的：按「全部暂停」以后关着的模拟器一直关着；单台暂停碰上 Runtime 自己的自动启动时，回答可能晚过它 1 秒排空加 30 秒宽限（再加 IO 时限）的等待，它照旧显示没确认，暂停其实立着（`status` 看得到阶段）。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.71 一样：`actingd-config` [5, 33]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [3, 11]、`package` [3, 18]、`runtime-outcomes` [1, 1]；
+  默认值文件的哈希不变；`git diff --stat v0.12.71 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；`ledger` 两条边写 Rp [3, 9]、R* [3, 9]，都过，`runtime-client` 的边写 I、Rp、R* [3, 11]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`。
+  **和 v0.12.71 那次不同的**：`notice.rollback_window_bounded` 为 false，`ledger_verify` 为 false，实做没有 `ledger_verify` 那一步，日志的 `one_way` 为 false，`actingctl install` 不要 `--accept-ledger-one-way`；部署以后 `op status` 的 `rollback_window` 里 v0.12.71 那份 `ledger_edge_passes` 为 true；
+  全局暂停还在时，配了 `start_emulator`、模拟器关着的实例，启动日志里不再是 `emulator_autostart_queued` 和 `emulator_autostart_started`，而是每台一行 `emulator_autostart_skipped`（`skip_reason` `global_paused`），模拟器不被起。
+  照旧的：没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住；`standard-pack check` 不出新的警告码；部署前核没有开着的录制和试跑；部署以后 MCP 客户端重开会话才看得见新参数。
+- **热放置工具包**：`place` 和它的计划没变（救急模块一个文件没改）。重钉只换构建值；`actingd_config` 5,33、`ledger` 3,9、`package` 3,18 和默认值哈希不变。经 MCP 的 `ac_place` 带 `plan` 超过预算时现在答头和导出文件，以前答 `output_budget_exceeded`。
+- **两个 MCP 服务器**：Lab 的工具数不变，五个工具多参数（见上），救急工具超过预算的成功回答改答头和导出；第一代的工具表一个没变，`ac_devices` 带键、`ac_device_bind` 拒不能绑的行。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.71 部署，经 Lab 的 `release stage`、`deploy`、`op status`：两面都不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；退回 v0.12.71 开着。
+- 全局暂停下 Runtime 不再自己起模拟器，也就不再自己拉起游戏；关着的模拟器在恢复以后由看护拉回来。
+- 人按的单台暂停碰上 Runtime 自己的自动启动时一直等它结束，不再被撤回；回答可能晚很多，客户端先超时也不要紧，用 `status` 看阶段；这时 Runtime 关机，暂停留到下次启动。
+- 做包时：按录制号收编能给 `--session-state-dir`，回答只带本包的警告；停下、就绪、复看对离阈值不到 0.03 的模板给警告；`devices` 在选中安装之前就能列、每行带设备键，`devices bind` 能按键绑、拒不能当手机的行；救急工具的大回答经 MCP 导出。
+- iOS 调试桥 `acib` 是单独的程序，CI 单独出产物，不随发版。
+
+本版合并的 PR：
+
+- #1816 #480 PG-1（登记 §1.468）：host 门表 `#480 PG-1` 10 条，小修三轮各一行 5、2、4 条，policy 门表 `#480 PG-1` 2 条（调度器）；3 个测试名记进 `ci/retired-gates.toml`（S6c 守「全局暂停不挡启动」的 `s6c_5`、`s6c_6`，第一轮钉等待上限的 `pg1_9`，后者从没随版本发过）；别的测试没改。
+- #1813 #463 AD-1（§1.464，同时是 0.12.72 列车的车头）：apps 门表 `#463 AD-1` 4 条、小修 1 条；`gate_464_p1`、`gate_463_ac1` 只为新成员补字段；小修让第 1 条的 `--replace` 经过一个记下每次移动、碰录制目录就拒的工作树。
+- #1815 #463 RM-1（§1.466，随列车）：exec 门表 `#463 RM-1` 9 条（含小修加的 4 条）。
+- #1817 #398 DB-2（§1.467）：apps 门表 `#398 DB-2` 6 条、小修 3 条；改了 actinglab-mcp 的 `gate_398_db1`、`gate_434_lab5g2b`、`gate_434_lw1` 和 actinglab 的 `gate_434_lab5a`，小修改了本片自己的 `db2_t1`、`db2_t2`、`db2_t4`、`db2_t5`。
+- #1814 #434 PP-1（§1.465）：apps 门表 `#434 PP-1` 5 条、小修 2 条；小修改了本片自己第 1、2、5 条的断言。
+- #1809 #479 ACIB-0（不占登记节）：apps 门表 `#479 ACIB-0` 16 条（`apps/acib` 自己的测试，不碰设备和网络）。
+- 合计 69 条新测试。
+
 ## v0.12.71
 
 本版是 v0.12.70 之后的 2 次合并、6 张 PR：先是 #463 RC-2 #1806 单独合入，再是 0.12.71 列车 #1800（#463 CH-1 自己），带 #463 RG-1 #1810、#463 AC-1 #1808、#398 DB-1 #1807 和 #477 PC-2 #1811。
@@ -104,6 +267,8 @@ and artifact names bind the complete source SHA.
   - `run show` 还不显示记下的哈希和值，试跑还不比对计划时的内容和实际跑的内容（CH-2、CH-3，另排）。
   - 目录工具碰到名字没有警告带得了的条目只拒、不修。
   - 校验账本在生产这本账本上要多久没量过；本版的变化一样都没在设备上跑过。
+    本版 2026-11-18 04:18 起在生产上跑（经 Lab 救急模块部署，看板 #421，评论 6958405327）：部署时有别人按下的全局暂停，救急模块留着它，把 `foreign_pauses` 列成没过的守卫（只有全局那一行），照设计接着做完；
+    有界的账本校验没有拉长部署（从关 Runtime 到启动 6.1 秒）；同一天早上从账本读到修订 9 的头两条准入记录（`task.requested`，`kind` `package_admitted`；两台模拟器实例上两个录制出的包的试跑），各带内容哈希，都没有 `variables`（两次都没交值）。
 
 配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
 
