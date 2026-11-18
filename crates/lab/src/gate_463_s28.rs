@@ -509,6 +509,7 @@ impl Bench {
             record_id: None,
             step,
             no_preview: true,
+            ruler: None,
         };
         record_review(
             &self.state(),

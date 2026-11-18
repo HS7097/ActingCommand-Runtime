@@ -669,6 +669,18 @@ naming this file.
   `record_template_near_threshold`, among `ac_record_ready`'s warnings where it lists those, at the
   select step in `ac_record_review` (`steps[].warnings`). It is the fact only, refuses nothing and
   changes no exit status; the package does not carry it.
+  #463 S1-R (0.12.74; `contracts/lab-recording.md`, "A ruler on the pictures a recording hands
+  back"): `ac_record_review` takes `ruler` (`edges` or `grid`; absent, no ruler), a ruler drawn on
+  its previews only, under the boxes and the press, in the stored frame's own pixels, the space
+  `ac_record_mark` takes a box's corners in: `edges` a tick every 50 pixels along the top and the
+  left edge, a longer one with its number every 100 (the top edge's numbers are `x`, the left
+  edge's `y`); `grid` the same and a thin line across the frame every 100 pixels, both ways. Each
+  ruled preview is written beside the plain ones under a name that says it is ruled,
+  `lab/preview/s<nn>-<before|after>-ruled-<word>.png`, never over `s<nn>-<before|after>.png` (not
+  with `no_preview`: `validation_failed`), and the answer adds `ruler` (`kind`, `space`
+  `frame_pixels`, `tick_px`, `long_tick_px`, `number_px`, `top_numbers`, `left_numbers`, `line_px`
+  on `grid`). Read the numbers; give a stored frame's `path`, never a preview, where a frame is
+  taken. Without `ruler` every preview and the answer are as before.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

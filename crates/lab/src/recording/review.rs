@@ -32,6 +32,14 @@
 //! that names it (S2-1c); an item that names no step is no step's. A step marked as holding a choice
 //! (S2-6) shows its mark (`choice`); a step S2-7 dropped is no effective step and is not listed, and
 //! one `restore_step` gave back is listed again.
+//!
+//! #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): with
+//! `ruler`, every preview carries the ruler under its boxes and its press (`preview::render`), is
+//! written beside the plain previews under a name of its own that says it is ruled
+//! (`s<nn>-<role>-ruled-<edges|grid>.png`, so that it is never taken for the plain preview of the
+//! same step, and a preview without the ruler keeps its name and its bytes), and the answer says
+//! what the ruler is (`ruler`); a ruler without previews (`no_preview`) is refused. The ruler is
+//! `record review`'s only: `record frames` writes nothing.
 
 use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_path};
 use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};
@@ -43,7 +51,8 @@ use super::model::{
     RecordedMark, RecordingStep, StepChoice, StepClick,
 };
 use super::preview::{
-    Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
+    Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, PreviewRuler, RECOGNIZE_BOX_COLOUR,
+    RulerView, render,
 };
 use super::ready::{ReadyItem, ReadyWarningItem, RecordReadyOutcome, one_pixel, press_frame};
 use super::scan::RecordReviewScan;
@@ -67,12 +76,14 @@ const DECLARED: &str = "declared";
 
 /// `record review`: the recording (`record_id`, or the one the instance's session header names),
 /// the one step to answer (`step`, its serial number; `None`: every effective step) and whether no
-/// preview is written (`no_preview`).
+/// preview is written (`no_preview`). #463 S1-R: and the ruler every preview carries (`ruler`;
+/// `None`: none).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordReviewRequest {
     pub record_id: Option<String>,
     pub step: Option<u32>,
     pub no_preview: bool,
+    pub ruler: Option<PreviewRuler>,
 }
 
 /// The answer of `record review`.
@@ -90,6 +101,10 @@ pub struct RecordReviewOutcome {
     /// `path` `null`), once, in the order the answer names them, as `record frames` warns; empty
     /// when every file is there.
     pub warnings: Vec<RecordFramesWarning>,
+    /// #463 S1-R: with `ruler`, what the ruler on every preview is; absent without it, so that the
+    /// answer is as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ruler: Option<RulerView>,
 }
 
 /// One step: its screen before, its press and its screen after, as the step table holds them.
@@ -278,7 +293,7 @@ pub(crate) fn review_outcome(
         let before = before_at.map(|at| {
             let frame = sequence[at].frame;
             let preview = (!request.no_preview).then(|| {
-                let path = preview_path(&dir, step.index, BEFORE);
+                let path = preview_path(&dir, step.index, BEFORE, request.ruler);
                 planned.push(Planned {
                     frame,
                     overlay: Overlay {
@@ -314,7 +329,7 @@ pub(crate) fn review_outcome(
         let after = after.map(|(at, record)| {
             let (frame, next) = (sequence[at].frame, sequence[at].step);
             let preview = (!request.no_preview).then(|| {
-                let path = preview_path(&dir, step.index, AFTER);
+                let path = preview_path(&dir, step.index, AFTER, request.ruler);
                 planned.push(Planned {
                     frame,
                     overlay: Overlay {
@@ -342,7 +357,7 @@ pub(crate) fn review_outcome(
             step,
             &sequence,
             &dir,
-            request.no_preview,
+            request,
             &mut planned,
             &mut missing,
         );
@@ -380,7 +395,7 @@ pub(crate) fn review_outcome(
                 .collect(),
         });
     }
-    write_previews(&dir, &planned)?;
+    write_previews(&dir, &planned, request.ruler)?;
     // A frame answered twice (a step's screen after is the next step's screen before) is named
     // once.
     let mut named = BTreeSet::new();
@@ -399,19 +414,21 @@ pub(crate) fn review_outcome(
         steps,
         steps_total: effective.len(),
         warnings,
+        ruler: request.ruler.map(PreviewRuler::view),
     })
 }
 
 /// #463 S2-8' (`contracts/lab-recording.md`, "Folding swipes into a scrolling search"): the swipes
 /// folded into the scrolling search of `step`, in the fold's order (none on a step that holds no
 /// fold), each answered as a step's screen before, press and screen after are, from the same
-/// sequence, its previews planned as a step's are and named by the swipe's own serial number.
+/// sequence, its previews planned as a step's are and named by the swipe's own serial number. #463
+/// S1-R: `request` says whether previews are written and with which ruler, as for every step.
 fn folded_sheet<'r>(
     recording: &'r LabRecording,
     step: &RecordingStep,
     sequence: &[Stored<'r>],
     dir: &Path,
-    no_preview: bool,
+    request: &RecordReviewRequest,
     planned: &mut Vec<Planned<'r>>,
     missing: &mut Vec<String>,
 ) -> Vec<RecordReviewFolded> {
@@ -425,8 +442,8 @@ fn folded_sheet<'r>(
         };
         let before = before_position(swipe, sequence).map(|at| {
             let frame = sequence[at].frame;
-            let preview = (!no_preview).then(|| {
-                let path = preview_path(dir, swipe.index, BEFORE);
+            let preview = (!request.no_preview).then(|| {
+                let path = preview_path(dir, swipe.index, BEFORE, request.ruler);
                 planned.push(Planned {
                     frame,
                     overlay: Overlay {
@@ -452,8 +469,8 @@ fn folded_sheet<'r>(
             })
             .map(|(at, record)| {
                 let (frame, next) = (sequence[at].frame, sequence[at].step);
-                let preview = (!no_preview).then(|| {
-                    let path = preview_path(dir, swipe.index, AFTER);
+                let preview = (!request.no_preview).then(|| {
+                    let path = preview_path(dir, swipe.index, AFTER, request.ruler);
                     planned.push(Planned {
                         frame,
                         overlay: Overlay {
@@ -636,16 +653,32 @@ fn declared_boxes(step: &RecordingStep) -> Vec<(RecordRect, Colour)> {
 }
 
 /// Where the preview of `role` of the step `serial` is written: `lab/preview/s<nn>-<role>.png`.
-fn preview_path(dir: &Path, serial: u32, role: &str) -> PathBuf {
-    dir.join(PREVIEW_DIR)
-        .join(format!("s{serial:02}-{role}.png"))
+/// #463 S1-R: with `ruler`, beside it under a name of its own that says it is ruled,
+/// `lab/preview/s<nn>-<role>-ruled-<edges|grid>.png`, so that a ruled preview is never taken for the
+/// plain preview of the same step and never written over it.
+pub(crate) fn preview_path(
+    dir: &Path,
+    serial: u32,
+    role: &str,
+    ruler: Option<PreviewRuler>,
+) -> PathBuf {
+    let name = match ruler {
+        None => format!("s{serial:02}-{role}.png"),
+        Some(ruler) => format!("s{serial:02}-{role}-ruled-{}.png", ruler.word()),
+    };
+    dir.join(PREVIEW_DIR).join(name)
 }
 
 /// Writes `planned`: first every stored frame they are drawn on is read and its bytes checked
 /// against its sha256, each once, so that a frame that does not match
 /// (`record_frame_hash_mismatch`) leaves no preview written; then each preview is drawn on a copy
-/// of its frame, read and checked again, and written atomically.
-fn write_previews(dir: &Path, planned: &[Planned<'_>]) -> LabResult<()> {
+/// of its frame, read and checked again, and written atomically. #463 S1-R: each with `ruler`
+/// under what it draws, when one is given.
+fn write_previews(
+    dir: &Path,
+    planned: &[Planned<'_>],
+    ruler: Option<PreviewRuler>,
+) -> LabResult<()> {
     let mut checked = BTreeSet::new();
     for preview in planned {
         if checked.insert(preview.frame.sha256.as_str()) {
@@ -658,7 +691,7 @@ fn write_previews(dir: &Path, planned: &[Planned<'_>]) -> LabResult<()> {
     for preview in planned {
         let source = stored_frame_path(dir, preview.frame);
         let bytes = read_verified(Path::new(&source), &preview.frame.sha256)?;
-        let png = render(bytes, &preview.overlay, &source)?;
+        let png = render(bytes, &preview.overlay, ruler, &source)?;
         write_atomic(&preview.path, &png)?;
     }
     Ok(())
