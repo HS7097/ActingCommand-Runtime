@@ -148,6 +148,16 @@ impl Sha256Fingerprint {
         &self.0
     }
 
+    /// Workflow #479 F-2: a fingerprint made before and kept, an iOS handset's device key from
+    /// the private binding file (made by `acib` under the installation's own secret, by the
+    /// function of [`SecretField::DeviceSerial`]): `sha256:` and 64 lowercase hexadecimal digits,
+    /// as a stored fingerprint is read back.
+    pub fn stored(candidate: impl Into<String>) -> Result<Self, SanitizationError> {
+        let fingerprint = Self(candidate.into());
+        fingerprint.validate_stored()?;
+        Ok(fingerprint)
+    }
+
     fn validate_for(&self, original: &str) -> Result<(), SanitizationError> {
         validate_fingerprint(&self.0, original)
     }
@@ -2126,10 +2136,19 @@ impl RuntimeInstanceDeviceBinding {
 }
 
 /// Workflow #398 RD-1b: the device of a handset instance as the Runtime holds it; sanitization
-/// keeps only the serial's fingerprint.
+/// keeps only the serial's fingerprint. Workflow #479 F-2: or an iOS handset's device key, which
+/// is that fingerprint already and is kept as it is.
 pub struct InstanceDeviceBindingDraft {
     kind: crate::InstanceDeviceKind,
-    bound: Option<(String, u64, crate::DeviceBoundVia)>,
+    bound: Option<(BoundDeviceDraft, u64, crate::DeviceBoundVia)>,
+}
+
+/// Workflow #479 F-2: what a bound handset's draft holds of its device.
+enum BoundDeviceDraft {
+    /// An Android handset's adb serial, fingerprinted by the sanitization.
+    Serial(String),
+    /// An iOS handset's device key: already the fingerprint under the installation's own secret.
+    Key(Sha256Fingerprint),
 }
 
 impl InstanceDeviceBindingDraft {
@@ -2141,7 +2160,29 @@ impl InstanceDeviceBindingDraft {
     ) -> Self {
         Self {
             kind: crate::InstanceDeviceKind::Handset,
-            bound: Some((serial.into(), bound_at_unix_ms, bound_via)),
+            bound: Some((
+                BoundDeviceDraft::Serial(serial.into()),
+                bound_at_unix_ms,
+                bound_via,
+            )),
+        }
+    }
+
+    /// Workflow #479 F-2: an iOS handset bound to the phone of `device_key` at
+    /// `bound_at_unix_ms`, by `bound_via`: the key is recorded as the device's fingerprint as it
+    /// is (it is one, under the installation's own secret).
+    pub fn keyed_handset(
+        device_key: Sha256Fingerprint,
+        bound_at_unix_ms: u64,
+        bound_via: crate::DeviceBoundVia,
+    ) -> Self {
+        Self {
+            kind: crate::InstanceDeviceKind::Handset,
+            bound: Some((
+                BoundDeviceDraft::Key(device_key),
+                bound_at_unix_ms,
+                bound_via,
+            )),
         }
     }
 
@@ -2157,7 +2198,7 @@ impl InstanceDeviceBindingDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<RuntimeInstanceDeviceBinding, SanitizationError> {
-        let Some((serial, bound_at_unix_ms, bound_via)) = self.bound else {
+        let Some((device, bound_at_unix_ms, bound_via)) = self.bound else {
             return Ok(RuntimeInstanceDeviceBinding {
                 kind: self.kind,
                 fingerprint: None,
@@ -2165,12 +2206,24 @@ impl InstanceDeviceBindingDraft {
                 bound_via: None,
             });
         };
-        let fingerprint = fingerprinter
-            .fingerprint(SecretField::DeviceSerial, &serial)
-            .map_err(|_| {
-                SanitizationError::new(SanitizationCode::FingerprinterFailed, "device_serial")
-            })?;
-        fingerprint.validate_for(&serial)?;
+        let fingerprint = match device {
+            BoundDeviceDraft::Serial(serial) => {
+                let fingerprint = fingerprinter
+                    .fingerprint(SecretField::DeviceSerial, &serial)
+                    .map_err(|_| {
+                        SanitizationError::new(
+                            SanitizationCode::FingerprinterFailed,
+                            "device_serial",
+                        )
+                    })?;
+                fingerprint.validate_for(&serial)?;
+                fingerprint
+            }
+            BoundDeviceDraft::Key(device_key) => {
+                device_key.validate_stored()?;
+                device_key
+            }
+        };
         Ok(RuntimeInstanceDeviceBinding {
             kind: self.kind,
             fingerprint: Some(fingerprint),

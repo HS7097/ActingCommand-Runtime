@@ -6165,10 +6165,12 @@ impl RuntimeReceipt {
     }
 
     /// #480 PG-2c fix round 3 (register §1.472): a completed `ResumeScheduling` receipt. Its
-    /// outcome is the kind's success code; an instance resume that ran no reconnect (a person's
-    /// pause lifted in `draining` or `paused`) carries `scheduling_resume_without_reconnect`
-    /// (informing) as that code's cause, as [`Self::scheduling_paused`] carries its causes, while
-    /// its self-check has both sides `ok: false` with no values and no `failure_code`.
+    /// outcome is the kind's success code; an instance resume that ran no reconnect carries one
+    /// informing cause of two as that code's cause, as [`Self::scheduling_paused`] carries its
+    /// causes, while its self-check has both sides `ok: false` with no values and no
+    /// `failure_code`: `scheduling_resume_without_reconnect`, a person's pause lifted in `draining`
+    /// or `paused`; or (Workflow #479 F-2) `scheduling_resume_without_backend`, an instance whose
+    /// device system has no backend in this build (an iOS handset).
     pub fn scheduling_resumed(
         request: &RuntimeRequest,
         result: RuntimeResult,

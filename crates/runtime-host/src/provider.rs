@@ -34,10 +34,10 @@ pub use actingcommand_execution_kernel::{
     DeviceLinkWatch, DeviceLinkWatchEvent, DeviceLinkWatchStop, DeviceProcessPresence,
     DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
     EmulatorControlResult, ExecutionBackendProvider, ForegroundApplicationObservation,
-    HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure, InstanceState, PendingAdbEndpoint,
-    ProviderDiscoveredInstance, ProviderInstanceDiscovery, RecognitionVisionProvider,
-    ResolvedAdbEndpoint, ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider,
-    VisionModelIdentity,
+    HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure, InstanceState, KeyedHandsetBinding,
+    PendingAdbEndpoint, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
+    RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedExecutionInstance,
+    ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
 };
 #[cfg(feature = "fixture-backends")]
 pub use fixtures::FixtureInstanceSpec;
@@ -472,9 +472,30 @@ impl EntryEndpoint {
 
     /// The typed refusal of every session-opening path while the port is unknown, and of a
     /// handset the private binding file has no serial for (Workflow #398 RD-1b, model-398 §3.6):
-    /// no adb command runs against it.
+    /// no adb command runs against it. Workflow #479 F-2: first, of an iOS handset, bound or not:
+    /// this build has no backend for any capture, input or application operation on its device
+    /// system, so nothing is opened or run for it (`device_system_backend_missing`, the stage
+    /// `device_system_unsupported`).
     fn require_bound(&self, operation: impl Into<Location>) -> DeviceResult<()> {
         let operation: Location = operation.into();
+        if self
+            .handset()
+            .is_some_and(|handset| handset.system() == actingcommand_contract::DeviceSystem::Ios)
+        {
+            return Err(DeviceError::fatal(
+                "device system without backend: this build has no backend for that operation on an iOS handset; nothing is opened",
+            )
+            .with_device_system_unsupported()
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                HostLocation::DeviceSystemUnsupported,
+            )
+            .with_diagnostic_context(
+                "execution_backend_registry",
+                operation,
+                DeviceErrorSensitivity::Sensitive,
+            ));
+        }
         if self.handset() == Some(&HandsetEndpoint::Unbound) {
             return Err(DeviceError::fatal(
                 "device binding missing: the private binding file binds no device to this handset instance; bind one and restart",
@@ -625,6 +646,7 @@ impl ExecutionBackendEntry {
             registration.input.requested,
             registration.capture.requested,
             registration.provider_profile.as_ref(),
+            state.bound().and_then(ResolvedAdbEndpoint::handset),
         )?;
         let mut endpoint = EntryEndpoint {
             state,
@@ -674,8 +696,12 @@ impl ExecutionBackendEntry {
         let input = endpoint.input.clone().with_requested(touch);
         let candidate = endpoint.capture.clone().with_requested(capture);
         check_backend_selection(&input, &candidate, HostLocation::SwitchInstanceBackends)?;
-        let capabilities =
-            entry_capability_profile(touch, capture, self.provider_profile.as_ref())?;
+        let capabilities = entry_capability_profile(
+            touch,
+            capture,
+            self.provider_profile.as_ref(),
+            endpoint.handset(),
+        )?;
         endpoint.configuration.input_backend = touch.as_str().to_owned();
         endpoint.configuration.capture_backend = capture.as_str().to_owned();
         endpoint.input = input;
@@ -1000,7 +1026,8 @@ impl ExecutionBackendEntry {
                 binding.serial().clone(),
                 self.application_adb.adb_path.clone(),
             )),
-            Some(HandsetEndpoint::Unbound) | None => None,
+            // Workflow #479 F-2: an iOS handset has no serial, and no adb reaches it.
+            Some(HandsetEndpoint::Unbound | HandsetEndpoint::Ios(_)) | None => None,
         }
     }
 
@@ -1027,7 +1054,10 @@ impl ExecutionBackendEntry {
             let endpoint = self.endpoint();
             match endpoint.handset() {
                 Some(HandsetEndpoint::Bound(_)) => endpoint.application_target.clone(),
-                Some(HandsetEndpoint::Unbound) | None => return Ok(false),
+                // Workflow #479 F-2: an iOS handset gets no adb device-state command.
+                Some(HandsetEndpoint::Unbound | HandsetEndpoint::Ios(_)) | None => {
+                    return Ok(false);
+                }
             }
         };
         let adb = Adb::new(self.application_adb.clone());
@@ -1278,12 +1308,59 @@ fn entry_capability_profile(
     input: TouchBackendChoice,
     capture: CaptureBackendChoice,
     provider: Option<&EmulatorCapabilityProfile>,
+    handset: Option<&HandsetEndpoint>,
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
-    let capabilities = capability_profile(input, capture)?;
+    // Workflow #479 F-2 fix round 1: a handset whose device system has no backend in this build
+    // has the table of no backend, whatever stand-ins its registration holds.
+    let capabilities = match handset
+        .map(HandsetEndpoint::system)
+        .filter(|system| *system == actingcommand_contract::DeviceSystem::Ios)
+    {
+        Some(system) => device_system_capability_profile(system)?,
+        None => capability_profile(input, capture)?,
+    };
     match provider {
         Some(provider) => merge_capability_profile(&capabilities, provider),
         None => Ok(capabilities),
     }
+}
+
+/// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the capability
+/// table of a handset of the device system `system`, for which this build has no backend: every
+/// row unsupported and unavailable, its source the device system (`device_system:<system>`) and
+/// its failure semantics why; no row names a backend, since none is there.
+fn device_system_capability_profile(
+    system: actingcommand_contract::DeviceSystem,
+) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+    let invalid = |_| {
+        RuntimeHostError::fatal(
+            HostCode::ExecutionCapabilityProfileInvalid,
+            HostLocation::BuildExecutionBackendRegistry,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    };
+    let source = format!("device_system:{}", system.as_str());
+    let evidence = EmulatorCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            EmulatorCapabilityEvidence::new(
+                capability,
+                EmulatorCapabilityAvailability::Unavailable,
+                "This build has no backend for the instance's device system: every capture, input and application operation on it is refused before anything is opened (device_system_backend_missing).",
+                source.as_str(),
+            )?
+            .with_implementation(EmulatorCapabilityImplementation::Unsupported)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
+    EmulatorCapabilityProfile::new(
+        "runtime.execution_backend_registry",
+        EmulatorVersionEvidence::Unavailable {
+            reason: EmulatorVersionUnavailableReason::NotProbed,
+        },
+        evidence,
+    )
+    .map_err(invalid)
 }
 
 /// Records implementation/configuration only; this path never opens or probes a backend.

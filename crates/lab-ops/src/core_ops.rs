@@ -1528,10 +1528,12 @@ fn reported_pause(paused: &actingcommand_runtime_client::SchedulingPauseAnswer) 
 }
 
 /// #480 PG-2c, and since #480 PG-2d the `resume` row's answer too: `code` beside the Runtime's
-/// `result`; when the completed receipt's `outcome` carries a cause (`resume`:
+/// `result`; when the completed receipt's `outcome` carries a cause (`resume`, one of two:
 /// `scheduling_resume_without_reconnect`, a person's pause lifted before it was quiet, with no
-/// reconnect), that outcome as the line's cause, unchanged: facts only. Decided by the presence of
-/// a cause, never by its code. Exit 0 either way.
+/// reconnect; or, Workflow #479 F-2, `scheduling_resume_without_backend`, an instance whose device
+/// system has no backend in this build, an iOS handset, resumed with no reconnect attempted), that
+/// outcome as the line's cause, unchanged: facts only. Decided by the presence of a cause, never by
+/// its code. Exit 0 either way.
 fn reported_with_cause(result: &RuntimeResult, outcome: &Outcome, code: ActingctlCode) -> Exit {
     match serde_json::to_value(result) {
         Ok(value) => {

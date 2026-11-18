@@ -160,9 +160,20 @@ pub struct ExecutionFailureContext {
     /// Workflow #463 KB-1 fix round 1 (R2): the backend refused the input before it sent
     /// anything, because it does not perform it (the primary device failure's).
     input_unsupported: bool,
+    /// Workflow #479 F-2: the provider refused the operation before anything was opened, because
+    /// this build has no backend for it on the instance's device system (the primary device
+    /// failure's).
+    device_system_unsupported: bool,
 }
 
 impl ExecutionFailureContext {
+    /// Workflow #479 F-2: whether the provider refused the operation this failure ended before
+    /// anything was opened, because this build has no backend for it on the instance's device
+    /// system (`DeviceError::device_system_unsupported`, an iOS handset).
+    pub const fn device_system_unsupported(&self) -> bool {
+        self.device_system_unsupported
+    }
+
     /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R2 of 11-16): whether the input
     /// backend refused the input this failure ended before it sent anything, because it does not
     /// perform it (`DeviceError::input_unsupported`): nothing was performed.
@@ -528,6 +539,7 @@ impl ExecutionKernelError {
                 input_check_stop: error.input_check_stop(),
                 nemu_app_index_problem: error.nemu_app_index_problem(),
                 input_unsupported: error.input_unsupported(),
+                device_system_unsupported: error.device_system_unsupported(),
                 causes,
                 resources: error
                     .resource_contributions()

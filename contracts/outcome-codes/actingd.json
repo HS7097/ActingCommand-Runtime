@@ -2163,7 +2163,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the private binding file <state root>\\private\\device-bindings.json (#398 R1 RD-1b): it cannot be read, breaks its shape or schema, or binds an alias or a device twice. path names the file and device_binding_problem the rule. check-config and a start refuse before the ledger opens.",
+      "description": "actingd refused the private binding file <state root>\\private\\device-bindings.json (#398 R1 RD-1b): it cannot be read, breaks its shape or schema, or binds an alias or a device twice. path names the file and device_binding_problem the rule. check-config and a start refuse before the ledger opens. Since 0.12.74 (Workflow #479 F-2 fix round 1) a row of another device system than its handset's configuration names (system_mismatch) is refused by check-config alone: a start binds the rest of the file and registers that handset unbound (device_binding_ignored).",
       "common_causes": "A hand edit of the private file, a file written by another release, or a file another program holds open.",
       "handling": "Repair or remove the binding file and bind the devices again through the console or the CLI."
     },
@@ -2182,6 +2182,23 @@
       "description": "The private binding file binds an alias (alias names it) that no handset instance of the configuration has (#398 R1 RD-1b). check-config reports it as a note link of check_config_passed; nothing is refused.",
       "common_causes": "A handset instance renamed or removed while its binding stayed.",
       "handling": "Remove the stale binding, or add the handset instance it was meant for."
+    },
+    "device_binding_ignored": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "device_binding_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "At a start, the private binding file's row of the handset alias names is of another device system than its configuration names (device_binding_problem system_mismatch: an Android row for an iOS handset, or the reverse), so it binds nothing: that handset alone is registered unbound and every other instance starts. One warning daemon line per such row, naming the alias and the word and no identifier of a device; check-config refuses the file (device_binding_file_invalid). Workflow #479 F-2 fix round 1, contracts/device-binding.md \"An iOS handset\".",
+      "common_causes": "A handset's device.system changed in the configuration while its old binding stayed, or a binding written for another instance of the same alias.",
+      "handling": "Unbind the handset and bind it again with the Lab (devices unbind, devices bind), then restart."
     },
     "start_emulator_requires_discovery_binding": {
       "category": "error",

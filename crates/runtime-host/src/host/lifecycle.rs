@@ -575,16 +575,30 @@ pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePa
         .and_then(ResolvedInstanceEndpoint::discovered_binding);
     let serial_configured = endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured);
     let target = endpoint.filter(|_| !serial_configured);
+    // Workflow #479 F-2: a bound iOS handset records its device key as the fingerprint as it is
+    // (one under the installation's own secret already); its record has the shape of an Android
+    // handset's.
     let device = endpoint
         .and_then(ResolvedAdbEndpoint::handset)
-        .map(|handset| match handset.binding() {
-            Some(binding) => actingcommand_contract::InstanceDeviceBindingDraft::handset(
-                binding.serial().adb_arg(),
-                binding.bound_at_unix_ms(),
-                binding.bound_via(),
-            ),
-            None => actingcommand_contract::InstanceDeviceBindingDraft::unbound_handset(),
-        });
+        .map(
+            |handset| match (handset.binding(), handset.keyed_binding()) {
+                (Some(binding), _) => actingcommand_contract::InstanceDeviceBindingDraft::handset(
+                    binding.serial().adb_arg(),
+                    binding.bound_at_unix_ms(),
+                    binding.bound_via(),
+                ),
+                (None, Some(keyed)) => {
+                    actingcommand_contract::InstanceDeviceBindingDraft::keyed_handset(
+                        keyed.device_key().clone(),
+                        keyed.bound_at_unix_ms(),
+                        keyed.bound_via(),
+                    )
+                }
+                (None, None) => {
+                    actingcommand_contract::InstanceDeviceBindingDraft::unbound_handset()
+                }
+            },
+        );
     RuntimePayloadDraft::instance_bound(
         instance.instance_alias.clone(),
         instance.provenance,
