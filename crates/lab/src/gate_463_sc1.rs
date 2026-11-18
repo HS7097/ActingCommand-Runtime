@@ -471,6 +471,7 @@ impl Recording {
                 record_id: None,
                 step: None,
                 no_preview: true,
+                ruler: None,
             },
             &RecordStopOptions::default(),
             &self.ocr,
