@@ -17,8 +17,8 @@ use super::model::{
 };
 use super::near::{NearThresholdAt, Nearest, TemplateNearThreshold, TemplateScore};
 use super::select::{
-    NAME_UNREAD, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR, decide, empty_end_key,
-    on_empty_key,
+    NAME_UNREAD, PAGE_PASSES_ON_OTHER_FRAME, PRESS_MISMATCH, PRESSED_ABSENT, SELF_TEST_ERROR,
+    decide, empty_end_key, on_empty_key,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
@@ -42,6 +42,7 @@ use actingcommand_pack_containment::{
 };
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -915,10 +916,13 @@ fn select_first_decision(
 }
 
 /// #463 R1: what the cross-check of the select steps leaves: one entry per select step (its
-/// decisions on every live frame) and the steps not evaluated without an OCR model.
+/// decisions on every live frame) and the steps not evaluated without an OCR model. #463 SC-1 fix
+/// round 1: and the warnings `record_select_page_passes_after_press`, which the answers carry and
+/// the package's provenance does not.
 pub(crate) struct SelectChecks {
     pub(crate) selects: Vec<Value>,
     pub(crate) not_evaluated: Vec<u32>,
+    pub(crate) after_press: Vec<SelectPagePassesAfterPress>,
 }
 
 /// #463 R1: a select step's frame on which the package would not choose as recorded:
@@ -961,16 +965,27 @@ fn select_mismatch(
 /// judgement, its parts read from the one before; a frame that fails it is a failure `failures`
 /// meets (the step, the frame, its page), and under `record ready` the next frame is judged. Fix
 /// round 1: a frame on which slots read no known name is one failure per such slot (the target that
-/// reads its name), so that one read lists them all.
+/// reads its name), so that one read lists them all. #463 SC-1: then the other way round, the
+/// step's page on the other frames its confirmation can meet and on the frames after its press,
+/// with `evaluator`, the evaluator of item 4 ([`select_page_elsewhere`]), after the step's own
+/// frames, so that a failure on those is answered first; fix round 1: the first are failures, the
+/// second the warnings it leaves (`after_press`).
 pub(crate) fn select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
     ocr: &LabOcr,
+    evaluator: &RecognitionEvaluator,
     failures: &mut Failures,
 ) -> LabResult<SelectChecks> {
+    let evaluation = Evaluation {
+        plan,
+        evaluator,
+        ocr_available: ocr.ocr_provider().is_some(),
+    };
     let mut selects = Vec::new();
     let mut not_evaluated = Vec::new();
+    let mut after_press = Vec::new();
     for (step, select) in plan.select_steps() {
         let spec = &select.declaration;
         let operation = plan.operation_id(step);
@@ -1006,6 +1021,13 @@ pub(crate) fn select_checks(
                 failures,
                 &mut item,
             )?;
+            after_press.extend(select_page_elsewhere(
+                plan,
+                step,
+                &evaluation,
+                cache,
+                failures,
+            )?);
             selects.push(item);
             continue;
         }
@@ -1115,12 +1137,391 @@ pub(crate) fn select_checks(
             }));
         }
         item["frames"] = json!(frames);
+        after_press.extend(select_page_elsewhere(
+            plan,
+            step,
+            &evaluation,
+            cache,
+            failures,
+        )?);
         selects.push(item);
     }
     Ok(SelectChecks {
         selects,
         not_evaluated,
+        after_press,
     })
+}
+
+/// #463 SC-1: where a page of the package comes from, or whose frame a frame is: a step's own (its
+/// package number and serial number), its page transition's (`transition`), or an ending's (its
+/// outcome key).
+#[derive(Clone, Copy)]
+enum SelectPageOwner<'p> {
+    Step {
+        step: &'p PlanStep,
+        transition: bool,
+    },
+    Ending(&'p PlanEnding),
+}
+
+impl SelectPageOwner<'_> {
+    /// The owner's members under `prefix` in a refusal's details: `<prefix>_step`,
+    /// `<prefix>_record_index` and `<prefix>_transition`, or `<prefix>_outcome_key`.
+    fn put(self, prefix: &str, details: &mut Map<String, Value>) {
+        match self {
+            Self::Step { step, transition } => {
+                details.insert(format!("{prefix}_step"), json!(step.number));
+                details.insert(format!("{prefix}_record_index"), json!(step.step.index));
+                details.insert(format!("{prefix}_transition"), json!(transition));
+            }
+            Self::Ending(ending) => {
+                details.insert(
+                    format!("{prefix}_outcome_key"),
+                    json!(ending.ending.outcome_key),
+                );
+            }
+        }
+    }
+
+    /// How the refusal's text names the owner.
+    fn named(self) -> String {
+        match self {
+            Self::Step {
+                step,
+                transition: false,
+            } => format!("step {}", step.step.index),
+            Self::Step {
+                step,
+                transition: true,
+            } => format!("the page transition of step {}", step.step.index),
+            Self::Ending(ending) => format!("the ending '{}'", ending.ending.outcome_key),
+        }
+    }
+
+    /// Fix round 1: the owner's members in a warning ([`SelectPagePassesAfterPress`]).
+    fn at(self) -> OwnerAt {
+        match self {
+            Self::Step { step, transition } => OwnerAt {
+                step: Some(step.number),
+                record_index: Some(step.step.index),
+                transition: Some(transition),
+                outcome_key: None,
+            },
+            Self::Ending(ending) => OwnerAt {
+                outcome_key: Some(ending.ending.outcome_key.clone()),
+                ..OwnerAt::default()
+            },
+        }
+    }
+}
+
+/// #463 SC-1 fix round 1: a step's number in the package, its serial number and whether it is its
+/// page transition's, or an ending's outcome key ([`SelectPageOwner::at`]).
+#[derive(Default)]
+struct OwnerAt {
+    step: Option<u32>,
+    record_index: Option<u32>,
+    transition: Option<bool>,
+    outcome_key: Option<String>,
+}
+
+/// #463 SC-1: a page of the package other than the select step's, with the marks it requires and
+/// forbids and whose it is.
+#[derive(Clone, Copy)]
+struct OtherPage<'p> {
+    page: &'p str,
+    required: &'p [String],
+    forbidden: &'p [String],
+    owner: SelectPageOwner<'p>,
+}
+
+/// #463 SC-1 fix round 1 (`contracts/lab-recording.md`, "Self-checks", item 8): the warning
+/// `record_select_page_passes_after_press`. On the frames `frames` of a screen after the press of
+/// the select step (`step`, its number in the package; `record_index`, its serial number, which
+/// `record mark --step` and `record review` take), the select step's page `page` passes, and so does
+/// the page `other_page` of the package. Whose the frames are: a step's (`frame_step`,
+/// `frame_record_index`, and `frame_transition`, whether they are the frames of that step's page
+/// transition) or an ending's (`frame_outcome_key`); whose the other page is, the same way
+/// (`other_step`, `other_record_index`, `other_transition`, or `other_outcome_key`); `after_press`,
+/// that the frames come after the select step's press. Fix round 2 (the coordinator's ruling): one
+/// warning for each select step, owner of the frames and other page, as `arrival_unconfirmed` and
+/// `record_optional_step_ambiguous` carry theirs: `frames` is every frame of that owner the two
+/// pages pass on, in the order the owner holds them, none left out. The fact only: it refuses
+/// nothing, changes no exit status and is never written into the package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SelectPagePassesAfterPress {
+    /// `record_select_page_passes_after_press`.
+    pub code: String,
+    pub step: u32,
+    pub record_index: u32,
+    pub page: String,
+    pub frames: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_step: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_record_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_transition: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_outcome_key: Option<String>,
+    pub other_page: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_step: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_record_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_transition: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_outcome_key: Option<String>,
+    pub after_press: bool,
+}
+
+/// #463 SC-1 fix round 1: the warning of the select step `step`'s page `page` passing on the frames
+/// `frames` of `frame_owner`, after its press, beside the page `other` (fix round 2: every such
+/// frame of that owner, by its id).
+fn select_page_after_press(
+    step: &PlanStep,
+    page: &str,
+    (frames, frame_owner): (Vec<String>, SelectPageOwner<'_>),
+    other: OtherPage<'_>,
+) -> SelectPagePassesAfterPress {
+    let at = frame_owner.at();
+    let of = other.owner.at();
+    SelectPagePassesAfterPress {
+        code: LabCode::RecordSelectPagePassesAfterPress
+            .as_str()
+            .to_owned(),
+        step: step.number,
+        record_index: step.step.index,
+        page: page.to_owned(),
+        frames,
+        frame_step: at.step,
+        frame_record_index: at.record_index,
+        frame_transition: at.transition,
+        frame_outcome_key: at.outcome_key,
+        other_page: other.page.to_owned(),
+        other_step: of.step,
+        other_record_index: of.record_index,
+        other_transition: of.transition,
+        other_outcome_key: of.outcome_key,
+        after_press: true,
+    }
+}
+
+/// #463 SC-1: the select step `step`'s page `page` passes on the frame `frame` of `frame_owner`,
+/// and so does the page `other_page` of `page_owner`: `record_step_self_mismatch` with `reason`
+/// `select_page_passes_on_other_frame`, naming the select step, the frame and whose it is, and both
+/// pages and whose the other is.
+fn select_page_passes(
+    step: &PlanStep,
+    page: &str,
+    (frame, frame_owner): (&RecordedFrame, SelectPageOwner<'_>),
+    (other_page, page_owner): (&str, SelectPageOwner<'_>),
+) -> LabError {
+    let mut details = Map::new();
+    details.insert("step".to_string(), json!(step.number));
+    details.insert("record_index".to_string(), json!(step.step.index));
+    details.insert("frame_id".to_string(), json!(frame.frame_id));
+    details.insert("reason".to_string(), json!(PAGE_PASSES_ON_OTHER_FRAME));
+    details.insert("page".to_string(), json!(page));
+    details.insert("other_page".to_string(), json!(other_page));
+    page_owner.put("other", &mut details);
+    frame_owner.put("frame", &mut details);
+    with_details(
+        blocked(
+            "record_step_self_mismatch",
+            format!(
+                "the page {page} of the select of step {} passes on frame {} of {}, and so does \
+                 the page {other_page} of {}: the run's select confirms that one page of the \
+                 package alone is on its screen, and on such a screen it would see two",
+                step.step.index,
+                frame.frame_id,
+                frame_owner.named(),
+                page_owner.named()
+            ),
+        ),
+        Value::Object(details),
+    )
+}
+
+/// #463 SC-1, self-check item 8 the other way round (`contracts/lab-recording.md`, "Self-checks"):
+/// the page of the select step `step`, with `evaluation` (the evaluator of item 4), against every
+/// other page of the package (every other step's, every page transition's, the step's own among
+/// them, and every ending's). Fix round 1, the coordinator's ruling after the review: the run's
+/// select confirms, before its press, on a fresh frame that exactly one page of the whole package
+/// is recognised there; that frame shows the step's own screen, or, taken on arrival before the
+/// screen changed, the screen left after the press of the step before it, never a screen after the
+/// select step's own press. So:
+/// - on the frames of the step before it (the nearest step before it that is not optional, as item
+///   7a's `previous`: its page transition's frames when it has one, else its own; the optional steps
+///   between are item 7b's), each other page that matches where the step's page matches is a
+///   failure `failures` meets ([`select_page_passes`]; the select step, that frame, its page), and
+///   under `record ready` the next is judged;
+/// - on the frames after its press (every later step's own and its page transition's, and every
+///   ending's), each such page is the warning `record_select_page_passes_after_press`
+///   ([`select_page_after_press`]), returned, never a failure; fix round 2: one warning for each
+///   owner of the frames (a later step, a later step's page transition, an ending) and other page,
+///   naming every frame of that owner the two pass on;
+/// - the frames of the step's own page transition, and every earlier frame, are judged neither way.
+///
+/// A page the evaluation cannot decide there (OCR without a model; item 8 calls this with a model
+/// only) is neither.
+fn select_page_elsewhere(
+    plan: &Plan,
+    step: &PlanStep,
+    evaluation: &Evaluation<'_>,
+    cache: &FrameCache,
+    failures: &mut Failures,
+) -> LabResult<Vec<SelectPagePassesAfterPress>> {
+    let page = step.page_id()?;
+    let index = step.step.index;
+    let position = plan
+        .steps
+        .iter()
+        .position(|other| other.step.index == index)
+        .ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("the select step {index} is no step of the package"),
+            )
+        })?;
+    // A page transition's page and an ending's forbid nothing.
+    let none: &[String] = &[];
+    let mut pages = Vec::new();
+    for other in &plan.steps {
+        if let Some(other_page) = other.page.as_deref().filter(|_| other.step.index != index) {
+            pages.push(OtherPage {
+                page: other_page,
+                required: &other.required,
+                forbidden: &other.forbidden,
+                owner: SelectPageOwner::Step {
+                    step: other,
+                    transition: false,
+                },
+            });
+        }
+        if let Some(transition_page) = &other.transition_page {
+            pages.push(OtherPage {
+                page: transition_page,
+                required: &other.transition_required,
+                forbidden: none,
+                owner: SelectPageOwner::Step {
+                    step: other,
+                    transition: true,
+                },
+            });
+        }
+    }
+    for ending in &plan.endings {
+        pages.push(OtherPage {
+            page: &ending.page,
+            required: &ending.required,
+            forbidden: none,
+            owner: SelectPageOwner::Ending(ending),
+        });
+    }
+    // The frames the confirmation can meet besides the step's own: the step before it's.
+    let mut before = Vec::new();
+    if let Some(previous) = plan.steps[..position]
+        .iter()
+        .rfind(|other| other.settle_ms().is_none())
+    {
+        let transition = previous.transition_page.is_some();
+        let owner = SelectPageOwner::Step {
+            step: previous,
+            transition,
+        };
+        let frames = if transition {
+            previous.transition_live_frames()
+        } else {
+            previous.live_frames()
+        };
+        before.extend(frames.into_iter().map(|frame| (frame, owner)));
+    }
+    // The frames after its press, which it never meets in the same run, by whose they are (fix
+    // round 2): every later step's own, its page transition's, every ending's.
+    let mut after = Vec::new();
+    for later in &plan.steps[position + 1..] {
+        after.push((
+            SelectPageOwner::Step {
+                step: later,
+                transition: false,
+            },
+            later.live_frames(),
+        ));
+        after.push((
+            SelectPageOwner::Step {
+                step: later,
+                transition: true,
+            },
+            later.transition_live_frames(),
+        ));
+    }
+    for ending in &plan.endings {
+        after.push((SelectPageOwner::Ending(ending), ending.live_frames()));
+    }
+    for (frame, frame_owner) in before {
+        for at in beside_select_page(step, &pages, frame, evaluation, cache)? {
+            let other = pages[at];
+            failures.fail(
+                Locus::on_step(step).with_frame(frame).with_page(page),
+                select_page_passes(step, page, (frame, frame_owner), (other.page, other.owner)),
+            )?;
+        }
+    }
+    // Fix round 2 (the coordinator's ruling): one warning for each owner of the frames and other
+    // page, with every frame of that owner on which the two pass, in the owner's order; the
+    // warnings in the order of the owners, then of the other pages in `pages`.
+    let mut warnings = Vec::new();
+    for (frame_owner, frames) in after {
+        let mut found: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        for frame in frames {
+            for at in beside_select_page(step, &pages, frame, evaluation, cache)? {
+                found.entry(at).or_default().push(frame.frame_id.clone());
+            }
+        }
+        for (at, frame_ids) in found {
+            warnings.push(select_page_after_press(
+                step,
+                page,
+                (frame_ids, frame_owner),
+                pages[at],
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
+/// #463 SC-1: the positions in `pages` of the pages that match on `frame` beside the page of the
+/// select step `step`, with `evaluation`, in their order; none when the step's page does not match
+/// there.
+fn beside_select_page(
+    step: &PlanStep,
+    pages: &[OtherPage<'_>],
+    frame: &RecordedFrame,
+    evaluation: &Evaluation<'_>,
+    cache: &FrameCache,
+) -> LabResult<Vec<usize>> {
+    let scene = &cached(cache, frame)?.scene;
+    if evaluation
+        .page(scene, &step.required, &step.forbidden)?
+        .verdict
+        != PageVerdict::Match
+    {
+        return Ok(Vec::new());
+    }
+    let mut matched = Vec::new();
+    for (at, other) in pages.iter().enumerate() {
+        if evaluation
+            .page(scene, other.required, other.forbidden)?
+            .verdict
+            == PageVerdict::Match
+        {
+            matched.push(at);
+        }
+    }
+    Ok(matched)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
