@@ -39677,6 +39677,105 @@ revision changes, and no code is added.
 **At deploy.** Nothing to do. A running MCP server or entry of the build before keeps its handles
 until it is started again.
 
+### 1.478 Slice #463 PRIV-1 (0.12.74): the sensitive-zone declaration, the one list of a package's read regions, and the comparison (Workflow #463, work order #482; the owner's rulings of 11-18 on a package's destination and, amendment 1, on the quantities an account holds; the other rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-priv1-zones-and-compare.md` and its amendment 1 `rd-1118/brief-463-priv1-amend1.md`, after the design `rd-1118/design-463-priv.md`, on main `a8d0aa43`)
+
+This section takes 1.478 (1.476 and 1.477 are other slices'). It ships in 0.12.74.
+[privacy-zones.md](privacy-zones.md) is the contract. It is the design's P1 and P2; nothing refuses
+for privacy yet.
+
+**Why.** The owner's ruling of 11-18: a person chooses a package's destination, used only locally
+or submitted to a public place (our own repositories count); for a public one privacy is checked
+and restricted (around private information the recognition region and the press box are
+different places, and a recognition region holds no account information), for a local one nothing
+of privacy is handled, and the check is one additional step of the public case. Amendment 1, the
+owner's ruling of the same evening: quantities of what the account holds, shown on a screen, are
+private; a package may still read them at run time (a resource reading), but their pixels are
+never stored in a repository. The case of 11-17: a case's scene pastes every region the package's
+targets read, from every case's frame, so the region of one page, cut from another page's frame,
+held that page's private information.
+
+**The rule.**
+- *The declaration* `privacy-zones.json` at a repository root (`actingcommand.privacy-zones.v1`):
+  `repository` `public` or `local`; a public one's `bases` (width, height, zones of distinct ids,
+  each a rectangle inside its base and of kind `identity`, the default, or `value`) and optional
+  `exempt` (a package id with a content prefix). Unknown members are refused; every refusal is
+  `resource_declaration_invalid` with the declaration's issue and its JSON pointer, as
+  `declaration-exclusions.json`'s are. The reader answers three states, public with its zones,
+  local, or absent (no file); nothing of this slice treats absent as public (the coordinator's
+  ruling 1).
+- *Zones hold on every page* (ruling 2): nothing knows which page of the root a frame shows; no
+  `pages` member, which a later version adds under a new schema version.
+- *The transition list* (ruling 3) is read and checked here and consulted by the comparison's
+  caller later; the comparison says nothing of it.
+- *The one list of a package's read regions* moved from the Lab's scene builder
+  (`crates/lab/src/recording/cases.rs`, `read_regions`) into the recognition pack
+  (`RecognitionPack::reads`), which the scene builder now calls. Each region carries its target
+  (a shared read: its layout), its kind (`template_search`, `color_check`, `color`,
+  `color_digest`, `ocr`, `nn`, `shared_ocr`, `select_name`), where it lies (a fixed rectangle,
+  `full_frame`, or no fixed rectangle) and, amendment 1, whether it is a reading: a region whose
+  target the `target_id` of one of the entry task's `resource_readings` (a top-level member of its
+  `task.json`) names. Press boxes are not in it. The scene pastes every region but a layout's
+  shared read, which no recording generates and the scene never pasted, and finds all of a
+  target's regions fixed before it places the first, as before: every scene the Lab builds is byte
+  for byte what it was.
+- *The comparison* `compare_privacy_zones` takes the list, the rectangles of the package's cases
+  when the caller has them (a case of another schema counted, not read), the package's base size
+  and a public declaration, and answers facts: a base size not declared (no zone compared then);
+  each region or scene rectangle that meets a zone (intersection area above zero; once per zone),
+  with the case when it is a scene's, the target, the kind, both rectangles, the zone's id and,
+  amendment 1, its kind and whether the region is a reading; a whole-frame one, named once; a
+  region that is no fixed rectangle. Beside them, what a rectangle cannot see, counted by kind: the
+  texts OCR targets expect, the aliases of layouts' identity entries, the cases of another schema.
+  It names no pixel and no expected text, blacks nothing out, proposes no other place and decides
+  nothing; which finding refuses is the later callers' rule.
+- *Validated where the root's files are*: `resource validate` (and `resource verify` in process)
+  reads a selected `privacy-zones.json` at the root by its one reader, family `privacy_zones`, so it
+  is not unmapped; its removal needs no other document.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The one list | `crates/recognition-pack/src/read_regions.rs` (`RecognitionPack::reads`, `PackReads`, `PackReadRegion`, `PackReadKind`, `PackReadArea`), exported from the crate |
+| The scene builder | `crates/lab/src/recording/cases.rs`: `read_regions` calls the list (with the package's readings, `readings_of`); `fixed` reads a region of the list; `Patch`, `read_regions` and `scene_of` are visible to the crate's gate |
+| The reader and the comparison | `crates/resource-tooling/src/privacy_zones.rs` (`PrivacyDeclaration`, `PublicPrivacyZones`, `PrivacyBase`, `PrivacyZone`, `PrivacyExemption`, `compare_privacy_zones`, `PrivacyCase`, `PrivacySceneRect`, `PrivacyPlace`, `PrivacyFinding`, `PrivacyUnseen`, `PrivacyComparison`), exported; the transition list's content prefix is checked by the trial's one check (`standard_pack_trial::content_prefix`, now visible to the crate) |
+| The registration | `apps/actinglab/src/resource_declarations.rs`: the family `privacy_zones` beside `declaration_exclusions`, and its removal |
+| Codes | `crates/resource-tooling/src/codes.rs` (eight codes, three vocabularies); `crates/actingcommand-contract/src/outcome/keys.rs` (six keys); `contracts/outcome-codes/resource-tooling.json`, `catalog.json` (keys, vocabularies, the domain `privacy_`) and the regenerated index |
+| Texts | [privacy-zones.md](privacy-zones.md) (new); [resource-declarations.md](resource-declarations.md), its table's row; [README.md](README.md), its line |
+
+**Codes and words** (all pending, owner resource-tooling, ladder class `none`, since 0.12.74;
+declared ahead of their first answer, as R0 declared the remedies' codes, §1.110: no emission site
+in this slice). Codes: `privacy_zone_met`, `privacy_whole_frame`, `privacy_region_unbounded`,
+`privacy_base_undeclared`, `privacy_destination_local` (errors: refusals of the later privacy
+steps, exit 1 on actinglab's own line), `privacy_undeclared`, `privacy_unseen`, `privacy_exempt`
+(warnings, exit 0). Vocabularies: `privacy_rect_kind` (the eight kinds and `scene_rect`),
+`privacy_zone_kind` (`identity`, `value`), `privacy_unseen_kind` (`expected_text`, `alias`,
+`case_other_schema`). Keys: `privacy_rect_kind`, `privacy_zone_kind`, `privacy_unseen_kind`
+(vocabularies), `privacy_zone_id` (token), `privacy_reading` (boolean), `privacy_unseen` (records
+of `privacy_unseen_kind` and `count`). The domain `privacy_` is resource tooling's. The reader's
+refusal is the existing `resource_declaration_invalid`. The design's adopt word `privacy`
+(`adopt_problem`) is left to the adopt slice, which first answers it. No decision reads a code.
+
+**Tests** (`crates/lab/src/gate_463_priv1.rs`, exec gate map row "#463 PRIV-1"; recognition packs
+as their JSON reads, synthetic frames, no Runtime, no device, no OCR model, no clock): the
+declaration's three states and its refusals (1); the scene of `gate_463_s210`'s fixture and of a
+pack of every kind byte for byte (2); the case of 11-17, found in the scene and as a recognition
+region (3); edges and corners that only touch, a press box over a zone (4); a whole-frame region, an
+unbounded region, an undeclared base (5); the counts of what cannot be seen (6); amendment 1's
+readings in `value` and `identity` zones (7), as the gate map's comment lists them. No existing
+test changes; none retires; no golden changes.
+
+**What is not changed.** Any recording's, scene's or generated package's bytes; Runtime admission;
+every interface revision; what `resource verify`, `standard-pack build` and `standard-pack adopt`
+answer (no step calls the comparison; `resource verify`'s root selection without `--base` and its
+clean check's root inputs do not name the file yet, the slice of its privacy step adds it).
+
+**Ledger and interface.** Nothing persisted: no record, request, receipt or configuration key
+changes; the codes, keys and vocabularies are catalogue entries.
+
+**At deploy.** Nothing to do. A resource repository may commit its `privacy-zones.json`;
+`resource validate` reads it, and nothing refuses for privacy until the later slices.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

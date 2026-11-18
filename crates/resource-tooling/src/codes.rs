@@ -242,8 +242,92 @@ actingcommand_contract::outcome_codes! {
         /// Workflow #463 S3-15a: this build of actinglab holds no rescue module (it is built for
         /// Windows only), so it reads no installation for `--installation`.
         PackageStatusInstallationUnbuilt => "package_status_installation_unbuilt": error / none,
+        // #463 PRIV-1 (`contracts/privacy-zones.md`, "Codes"): the privacy step of a package whose
+        // destination is public, declared ahead of their first answer: in 0.12.74 no command
+        // answers them; the privacy step of `resource verify` and `standard-pack build` and that
+        // of `standard-pack adopt` (later slices of #463 PRIV) answer them from the comparison's
+        // findings (`privacy_zones`).
+        /// #463 PRIV-1, declared ahead: a region of the package, or a rectangle of a case's scene,
+        /// meets a sensitive zone (keys `package_id`, `privacy_rect_kind`, `privacy_zone_id`,
+        /// `privacy_zone_kind`, `privacy_reading`; optional `target_id`, `path`, `json_pointer`).
+        PrivacyZoneMet => "privacy_zone_met": error / none,
+        /// #463 PRIV-1, declared ahead: a region or a scene's rectangle covers the whole base
+        /// (keys `package_id`, `privacy_rect_kind`; optional `target_id`, `path`, `json_pointer`).
+        PrivacyWholeFrame => "privacy_whole_frame": error / none,
+        /// #463 PRIV-1, declared ahead: a region is no fixed rectangle (keys `package_id`,
+        /// `privacy_rect_kind`, `target_id`; optional `path`, `json_pointer`).
+        PrivacyRegionUnbounded => "privacy_region_unbounded": error / none,
+        /// #463 PRIV-1, declared ahead: the package's base size is no base of the root's
+        /// declaration (keys `package_id`, `base_width`, `base_height`).
+        PrivacyBaseUndeclared => "privacy_base_undeclared": error / none,
+        /// #463 PRIV-1, declared ahead: a package marked for local use only is in a root whose
+        /// declaration is not `local` (key `package_id`; optional `path`).
+        PrivacyDestinationLocal => "privacy_destination_local": error / none,
+        /// Warning (#463 PRIV-1, declared ahead): the root holds no `privacy-zones.json`, so
+        /// nothing of its privacy is checked (optional `path`).
+        PrivacyUndeclared => "privacy_undeclared": warning / none,
+        /// Warning (#463 PRIV-1, declared ahead): what a rectangle check of the package cannot
+        /// see, by kind and count (keys `package_id`, `privacy_unseen`); never a pass.
+        PrivacyUnseen => "privacy_unseen": warning / none,
+        /// Warning (#463 PRIV-1, declared ahead): a finding of a package the transition list names
+        /// with its present content (keys `package_id`, `failure_code`, the finding's code;
+        /// optional `path`, `json_pointer`).
+        PrivacyExempt => "privacy_exempt": warning / none,
     }
 }
+
+// ---- #463 PRIV-1 (`contracts/privacy-zones.md`): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// #463 PRIV-1: which rectangle of a package a privacy finding names (the vocabulary
+    /// `privacy_rect_kind`): the kind of a read region of the package, or a case's scene.
+    pub enum PrivacyRectKind: "privacy_rect_kind" {
+        /// A template target's search area, which holds its crop.
+        TemplateSearch => "template_search",
+        /// A template target's colour check.
+        ColorCheck => "color_check",
+        /// A colour probe's region.
+        Color => "color",
+        /// A colour digest's region.
+        ColorDigest => "color_digest",
+        /// An OCR target's region.
+        Ocr => "ocr",
+        /// An NN target's region.
+        Nn => "nn",
+        /// A candidate layout's shared OCR read.
+        SharedOcr => "shared_ocr",
+        /// An OCR target a candidate layout reads as a feature: a select's name region.
+        SelectName => "select_name",
+        /// A rectangle of a regression case's scene.
+        SceneRect => "scene_rect",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// #463 PRIV-1 amendment 1 (the owner's ruling of 11-18): what a sensitive zone holds (the
+    /// vocabulary `privacy_zone_kind`, a zone's `kind` in `privacy-zones.json`).
+    pub enum PrivacyZoneKind: "privacy_zone_kind" {
+        /// Who the account is (a nickname, an account number, a server name): nothing may read
+        /// there. A zone without `kind` is of this kind.
+        Identity => "identity",
+        /// A quantity the account holds: only a resource reading may read there, and no scene may
+        /// hold its pixels.
+        Value => "value",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// #463 PRIV-1: what a rectangle check of a package cannot see (the vocabulary
+    /// `privacy_unseen_kind`).
+    pub enum PrivacyUnseenKind: "privacy_unseen_kind" {
+        /// A text an OCR target of the package expects.
+        ExpectedText => "expected_text",
+        /// An alias an identity entry of a candidate layout is read as.
+        Alias => "alias",
+        /// A regression case of another schema, or of none, whose scene was not compared.
+        CaseOtherSchema => "case_other_schema",
+    }
+}
+// ---- #463 PRIV-1: end ----
 
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #463 S3-12: the latest trial of the content an adoption writes, as the trial

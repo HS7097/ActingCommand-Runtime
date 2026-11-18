@@ -58,13 +58,13 @@ use crate::regression_case::{
     run_regression_case_on_bundle,
 };
 use actingcommand_contract::outcome::{Detail, Outcome};
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{LabError, LabResult, ResourceReadingDeclaration};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::page_anchor_matches;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::{
-    PackRect, PackRegion, RecognitionPack, RecognitionTarget, TargetKind,
+    PackReadArea, PackReadKind, PackReadRegion, PackRect, RecognitionPack, TargetKind,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -272,11 +272,11 @@ pub(crate) fn cases_dir_name(package_id: &str) -> String {
 
 /// A rectangle of the frame a case's scene holds, in the recording's pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Patch {
-    y: u32,
-    x: u32,
-    height: u32,
-    width: u32,
+pub(crate) struct Patch {
+    pub(crate) y: u32,
+    pub(crate) x: u32,
+    pub(crate) height: u32,
+    pub(crate) width: u32,
 }
 
 impl Patch {
@@ -337,7 +337,7 @@ pub(crate) fn regression_cases(
             "the generated package gives no page set",
         )
     })?;
-    let regions = read_regions(evaluator.pack(), plan.size)?;
+    let regions = read_regions(evaluator.pack(), &readings_of(bundle)?, plan.size)?;
     // Fix round 3: the targets whose region or search area is the whole frame, which make every
     // scene the whole frame.
     let whole_frame = regions
@@ -559,53 +559,71 @@ fn detected_page(detector: &PageDetector, game: &str, page: &str) -> LabResult<S
 }
 
 /// Every rectangle the recognition targets of the admitted package `pack` read, each once with the
-/// targets that read it in the package's order: a template's search region (and its colour check's
-/// region), a colour or colour digest probe's region, an OCR or NN target's region. A check
+/// targets that read it in the package's order: the one list of a package's read regions (#463
+/// PRIV-1, `RecognitionPack::reads`, `readings` the package's resource readings), every region of
+/// a target: a template's search region (and its colour check's region), a colour or colour digest
+/// probe's region, an OCR or NN target's region (a select's name region among them). A check
 /// (`all_of`, `any_of`), a value test and a click-only target read nothing of their own: a check's
-/// members and a value test's sides are targets of the package themselves. A region that is no
-/// fixed rectangle inside the recording's frame (`size`) cannot be pasted where it is read, and is
-/// the check's error.
-fn read_regions(
+/// members and a value test's sides are targets of the package themselves. A layout's shared OCR
+/// read is not pasted (no recording generates one, and a scene never pasted it). A region that is
+/// no fixed rectangle inside the recording's frame (`size`) cannot be pasted where it is read, and
+/// is the check's error; as before the list moved, a target's regions are all found fixed before
+/// the first of them is placed.
+pub(crate) fn read_regions(
     pack: &RecognitionPack,
+    readings: &[ResourceReadingDeclaration],
     size: RecordSize,
 ) -> LabResult<BTreeMap<Patch, Vec<String>>> {
+    let reads = pack.reads(readings);
+    let pasted = reads
+        .regions
+        .iter()
+        .filter(|region| region.kind != PackReadKind::SharedOcr)
+        .collect::<Vec<_>>();
     let mut regions: BTreeMap<Patch, Vec<String>> = BTreeMap::new();
-    for target in &pack.targets {
-        let read = match target {
-            RecognitionTarget::Template(template) => {
-                let mut read = vec![(&template.id, fixed(&template.id, &template.region)?)];
-                if let Some(check) = &template.color_check {
-                    read.push((&template.id, fixed(&template.id, &check.region)?));
-                }
-                read
-            }
-            RecognitionTarget::Color(color) => vec![(&color.id, color.region)],
-            RecognitionTarget::ColorDigest(digest) => vec![(&digest.id, digest.region)],
-            RecognitionTarget::Ocr(ocr) => vec![(&ocr.id, fixed(&ocr.id, &ocr.region)?)],
-            RecognitionTarget::Nn(nn) => vec![(&nn.id, fixed(&nn.id, &nn.region)?)],
-            RecognitionTarget::ClickOnly(_)
-            | RecognitionTarget::Composite(_)
-            | RecognitionTarget::ValueTest(_) => Vec::new(),
-        };
-        for (id, rect) in read {
-            let readers = regions.entry(patch(id, rect, size)?).or_default();
-            if !readers.contains(id) {
-                readers.push(id.clone());
+    for target in pasted.chunk_by(|one, other| one.target == other.target) {
+        let rects = target
+            .iter()
+            .copied()
+            .map(fixed)
+            .collect::<LabResult<Vec<_>>>()?;
+        for (region, rect) in target.iter().zip(rects) {
+            let readers = regions
+                .entry(patch(&region.target, rect, size)?)
+                .or_default();
+            if !readers.contains(&region.target) {
+                readers.push(region.target.clone());
             }
         }
     }
     Ok(regions)
 }
 
-/// The fixed rectangle `region` of the target `id`.
-fn fixed(id: &str, region: &PackRegion) -> LabResult<PackRect> {
-    match region {
-        PackRegion::Rect(rect) => Ok(*rect),
-        PackRegion::TemplateRelative(_) | PackRegion::Keyword(_) => Err(invalid(
+/// The resource readings the admitted package's entry task declares (`resource_readings`, a
+/// top-level member of its `task.json`; `contracts/resource-readings.md`), none when it declares
+/// none.
+fn readings_of(bundle: &LoadedBundle) -> LabResult<Vec<ResourceReadingDeclaration>> {
+    match bundle.operation().get("resource_readings") {
+        None => Ok(Vec::new()),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("the generated package's resource_readings do not decode: {error}"),
+            )
+        }),
+    }
+}
+
+/// The fixed rectangle of the read region `region`.
+fn fixed(region: &PackReadRegion) -> LabResult<PackRect> {
+    match region.area {
+        PackReadArea::Rect(rect) => Ok(rect),
+        PackReadArea::FullFrame | PackReadArea::Unbounded => Err(invalid(
             "validation_failed",
             format!(
-                "target '{id}' reads a region that is no fixed rectangle: a case's scene pastes \
-                 fixed regions only"
+                "target '{}' reads a region that is no fixed rectangle: a case's scene pastes \
+                 fixed regions only",
+                region.target
             ),
         )),
     }
@@ -643,7 +661,7 @@ fn patch(id: &str, rect: PackRect, size: RecordSize) -> LabResult<Patch> {
 
 /// The scene of the frame `loaded`: a canvas of the recording's `size` in [`CANVAS_FILL`] with
 /// every rectangle of `regions` pasted from the frame where it is, and nothing else of the frame.
-fn scene_of(
+pub(crate) fn scene_of(
     loaded: &LoadedFrame,
     regions: &BTreeMap<Patch, Vec<String>>,
     size: RecordSize,

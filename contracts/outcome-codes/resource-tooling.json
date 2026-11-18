@@ -1622,6 +1622,156 @@
       "description": "Workflow #463 S3-15a (contracts/standard-pack-schedule.md, \"Where a pack stands\"): actinglab standard-pack status was given --installation by a build that holds no rescue module (it is built for Windows only), so it reads no installation: no placement journal and no suspension report. Nothing was read. Exit 1 on actinglab's command line, which prints the CLI module's line; in the envelope a --via line prints, exit 2.",
       "common_causes": "actinglab run on another system than Windows with --installation.",
       "handling": "Run the line with the installation's own actinglab on Windows, or leave --installation out to read the root alone."
+    },
+    "privacy_zone_met": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "privacy_rect_kind": "required",
+        "privacy_zone_id": "required",
+        "privacy_zone_kind": "required",
+        "privacy_reading": "required",
+        "target_id": "optional",
+        "path": "optional",
+        "json_pointer": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the privacy step of a package whose destination is public (resource verify and standard-pack build, standard-pack adopt; later slices of #463 PRIV) answers it from a finding of the one comparison. A region a recognition target of the package package_id reads (privacy_rect_kind its kind, target_id its target), or a rectangle of one of its regression cases' scenes (privacy_rect_kind scene_rect), meets the sensitive zone privacy_zone_id of the root's privacy-zones.json at the package's base size: their intersection's area is above zero. privacy_zone_kind is the zone's kind, privacy_reading whether a resource reading of the package names the region's target (never for a scene's rectangle); path and json_pointer name where the region or the rectangle is declared. Which of these refuses is the caller's rule (a reading in a value zone may read there at run time, a scene's rectangle in any zone may not be stored); the comparison only reports them.",
+      "common_causes": "A recognition region or a template's search area drawn over a nickname, an account number, a server name or a quantity the account holds; a case's scene that pastes the region of another page, cut from this page's frame, where this page shows such information.",
+      "handling": "Move the region the target reads, or its search area, off the zone (recognise the page by a place that holds no account information), or declare the reading as a resource reading over a value zone; regenerate the package and its cases."
+    },
+    "privacy_whole_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "privacy_rect_kind": "required",
+        "target_id": "optional",
+        "path": "optional",
+        "json_pointer": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). A region of the package package_id (privacy_rect_kind its kind, target_id its target; the keyword full_frame too) or a rectangle of one of its cases' scenes (scene_rect) covers the whole base: it holds everything the screen shows, whatever the root declares, an empty zone list included. It is named once, not once per zone it meets.",
+      "common_causes": "A mark drawn over the whole screen, a template searched for anywhere on it, a text read over the whole frame; a case whose scene is the whole frame (record stop warns of it with record_case_whole_frame).",
+      "handling": "Give the target a region, or a search area, of the part of the screen it needs; regenerate the package and its cases."
+    },
+    "privacy_region_unbounded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "privacy_rect_kind": "required",
+        "target_id": "required",
+        "path": "optional",
+        "json_pointer": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). A region the target target_id of the package package_id reads is no fixed rectangle: it is placed relative to where a template was found (template_relative) or is a keyword other than full_frame, so where it reads is not known before a run and no rectangle of it can be compared with the zones.",
+      "common_causes": "A hand-made package with a relative OCR region or a relative colour check; record stop never generates one.",
+      "handling": "Give the target a fixed region inside its base."
+    },
+    "privacy_base_undeclared": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "base_width": "required",
+        "base_height": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). The base size of the package package_id (its coordinate_space, base_width by base_height) is no base of the public root's privacy-zones.json, so no zone of it is compared. A base listed with an empty zone list is declared: that list says the size has no zone.",
+      "common_causes": "A package recorded at a size the root's declaration does not list yet.",
+      "handling": "Add the base size to privacy-zones.json with its zones, or with an empty zone list when its screens hold no private information, in a pull request the resource audit reviews."
+    },
+    "privacy_destination_local": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the slice that marks a recording's destination and the later privacy step answer it. The package package_id is marked for local use only, and the root it is to enter does not declare itself local (its privacy-zones.json says public, or it holds none); path names the package's entry task.",
+      "common_causes": "A package recorded for local use, adopted into or committed to a repository that is published.",
+      "handling": "Keep the package in a local root (one whose privacy-zones.json says local), or record it again for a public destination."
+    },
+    "privacy_undeclared": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). The repository root holds no privacy-zones.json (path where it is looked for): the root is neither public nor local, nothing of its packages' privacy is checked, and nothing is refused for it.",
+      "common_causes": "A repository whose declaration is not written yet.",
+      "handling": "Write the root's privacy-zones.json: public with its zones by base size, or local."
+    },
+    "privacy_unseen": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "privacy_unseen": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"What a rectangle cannot see\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it, once per package). What a rectangle check of the package package_id cannot see, each kind with its count (privacy_unseen): the texts its OCR targets expect, the aliases its layouts' identity entries are read as, its regression cases of another schema. It never says the package passed: a person looks at what it counts.",
+      "common_causes": "A package that reads texts by OCR or a select's names, or a case written by a repository's own script.",
+      "handling": "Look at the texts and aliases the package carries, and at the scenes of the cases counted, for private information."
+    },
+    "privacy_exempt": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "failure_code": "required",
+        "path": "optional",
+        "json_pointer": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"The transition list\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). A finding of the package package_id, failure_code its code, is answered as this warning because the root's transition list (exempt) names the package with the content prefix of its present content; another content of the package is not exempt.",
+      "common_causes": "A package that was in the repository before its declaration and has not been made again.",
+      "handling": "Make the package again with regions off the zones, then take it off the transition list."
     }
   }
 }

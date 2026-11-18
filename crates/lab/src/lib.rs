@@ -145,6 +145,10 @@ mod gate_463_rm1;
 // #463 SC-1: a select step's page is checked for uniqueness on every frame of the recording.
 #[cfg(test)]
 mod gate_463_sc1;
+// #463 PRIV-1: a root's sensitive-zone declaration, the one list of a package's read regions,
+// which the scene pastes, and the comparison of the two.
+#[cfg(test)]
+mod gate_463_priv1;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
