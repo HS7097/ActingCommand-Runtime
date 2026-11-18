@@ -1242,7 +1242,13 @@ these hold, and otherwise leaves the end the failed wait gave, code, detail and 
   whose `interrupts.json` entry names no handler ends the run in the waits and in this decision
   alike, nothing pressed, with the code its `result` gives ([package-reference.md](package-reference.md),
   "An entry without handlers": `environment_reset` ends it with `contained_task_environment_reset`,
-  rerun only, not with this code);
+  rerun only, not with this code). In this decision the Runtime answers the kernel's recognition
+  (`ContainedTaskRuntime::shared_interrupt_shown`) on a frame whose one such page is shown with
+  that end of the run (`SharedInterruptShown::Ended`, the end an offer of the frame gives, for
+  `application_update_required` the instance's fact recorded first), and the kernel's
+  `linear_closing_decision` carries it out as it is: the run ends there, with no verdict and never
+  as `check_failed`; an error of that recognition stays `check_failed`, and a page whose entry names
+  a handler, or two or more pages on one frame, stay `interrupt_shown`;
 - the decision's last two captures, in capture order, and its first and its last frame are
   unchanged by the Runtime's one frame-change measure ([color-digest.md](color-digest.md), "Frame
   change": the whole frame at the default threshold, as a wait compares its frames, #411 A43b);
@@ -1312,7 +1318,7 @@ whichever word it carries. Where the closing decision ("Retries") is made, the w
 | the step's own page passed on one of its frames, after the program had seen another page since the input | `returned_to_own_page` |
 | a page the failed wait awaited passed on one of its frames | `awaited_page_late` |
 | one of its frames was a transition frame (LOAD-4, under `on`) | `transition_shown` |
-| one of its frames showed a shared interrupt page | `interrupt_shown` |
+| one of its frames showed a shared interrupt page (Workflow #463 INT-1: one whose entry names a handler, or two or more at once; a frame whose one page is an entry's that names no handler ends the run with that entry's code instead, carrying no word, "A screen the package never recorded" above) | `interrupt_shown` |
 | at its bound, its last two captures or its first and last frame differ | `screen_moving` |
 | at its bound, on its still last frame, a declared loading page passes, alone or beside another page | `loading_page_shown` |
 | at its bound, on its still last frame, another page of the package passes | `other_page_shown` |

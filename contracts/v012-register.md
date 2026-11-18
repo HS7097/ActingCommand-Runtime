@@ -38830,10 +38830,21 @@ to its title screen should cost.
   through a navigation locate too), nothing is pressed, no handler layer runs, nothing is counted,
   no limit is looked at and no `interrupt_handled` is recorded: the run ends at once with the code
   of the entry's `result` (`end_run_at`, which a handler's `end_run` now ends through as well). A
-  `linear_steps` step's closing decision, which recognises the pages without handling them
-  (#463 U1 fix round 2, rule 3; `shown_shared_interrupt`), ends the run the same way when the one
-  page it recognises names no handler, so such a screen is never taken for one the package never
-  recorded. More pages on one frame stay as before (recognised there, ambiguous at an offer).
+  `linear_steps` step's closing decision recognises the pages without handling them (#463 U1 fix
+  round 2, rule 3). Fix round 1: there the host's `shown_shared_interrupt` answers the kernel's
+  hook `ContainedTaskRuntime::shared_interrupt_shown` with one of three things,
+  `SharedInterruptShown` (it was a `bool`): `NotShown`; `Shown` (a page whose entry names a
+  handler, or two or more pages at once: the verdict `interrupt_shown`, as U1 made it); or, where
+  the one page recognised is an entry's that names no handler, `Ended` with the end of the run
+  `end_run_at` gives (for `application_update_required` the instance's fact recorded first, the
+  order of every other place). In the kernel `linear_closing_observation` hands that end out as
+  `ClosingObserved::RunEnded` beside its verdicts, and `linear_closing_decision` returns it as the
+  decision's error, as it returns a bookkeeping failure, so it leaves the step and the run as an
+  offer's end leaves a wait; every error of the hook itself (the feature package's admission, the
+  recognition) still becomes `check_failed`, as every other error of the decision does. So such a
+  screen is never taken for one the package never recorded, and its end is never
+  `page_confirmation_failed`. More pages on one frame stay as before (recognised there, ambiguous
+  at an offer).
 - *The new word* (INT-1-4). `result` gains `environment_reset`, with handlers or without, only
   beside `end_run` (else `interrupt_result_invalid`, as before): the run ends with
   `contained_task_environment_reset`, after its handler and its `interrupt_handled` where there is
@@ -38895,7 +38906,8 @@ code's and `packages_count`'s descriptions change in the catalog; the index is r
 | Part | Where |
 |---|---|
 | The parser, the word, the vocabulary | `crates/actingcommand-contract/src/standard_pack.rs`: `parse_standard_pack_interrupts`, `InterruptResult::EnvironmentReset`, `StandardPackProblem::InterruptLimitCauseInvalid`, `StandardPackInterrupt::handlers` |
-| The run | `crates/runtime-host/src/host/standard_pack.rs`: `RunInterrupt::handler` (an `Option`), `prepare_run_interrupts`, `handle_shared_interrupt`, `end_run_at`, `shown_shared_interrupt` |
+| The run | `crates/runtime-host/src/host/standard_pack.rs`: `RunInterrupt::handler` (an `Option`), `prepare_run_interrupts`, `handle_shared_interrupt`, `end_run_at`, `shown_shared_interrupt` (fix round 1: its answer `SharedInterruptShown`); `crates/runtime-host/src/host/contained_task.rs`: the two `shared_interrupt_shown` of the run and of its layers |
+| The closing decision (fix round 1) | `crates/execution-kernel/src/contained_task.rs`: `SharedInterruptShown` (`NotShown`, `Shown`, `Ended`), `ContainedTaskRuntime::shared_interrupt_shown` (default `NotShown`), `PreparedContainedTask::shown_shared_interrupt`; `crates/execution-kernel/src/contained_task/linear.rs`: `ClosingObserved`, `linear_closing_observation`, `linear_closing_decision`; the scripted runtime's hook (`contained_task/tests/scripted.rs`) answers `Shown` or `NotShown` as it answered `true` or `false` |
 | The code | `crates/runtime-host/src/codes.rs` `HostCode::ContainedTaskEnvironmentReset`; `contracts/outcome-codes/runtime-host.json`, `catalog.json`, the regenerated index |
 | The revision | `apps/actinglab/src/resource_verify/revision.rs`: two rows of `interrupts.json` (`handlers` holding an empty array, `Holds::EmptyArray`; `result` holding `environment_reset`), 19; `distribution/windows/component-interfaces.json` `package` [3, 19] |
 | Texts | [package-reference.md](package-reference.md) (the entry's members, "An entry without handlers", "`"environment_reset"`", "Shared interrupt pages"), [README.md](README.md) ("Shared interrupt pages"), [linear-steps.md](linear-steps.md) ("A screen the package never recorded"), [policy-suspension.md](policy-suspension.md) ("Which failures accumulate"), [component-interfaces.md](component-interfaces.md) (the `package` row 19), [resource-verify.md](resource-verify.md) (row 19); [resource-declarations.md](resource-declarations.md) states no handlers' count and is not changed |
@@ -38911,17 +38923,32 @@ as it declares; an installer whose range ends below 19 refuses a zip that declar
 `package` edge. No other interface range moves: `ledger` [3, 9], `runtime-client` [3, 11],
 `actingd-config` [5, 33], `runtime-outcomes` [1, 1].
 
-**Tests** (`crates/runtime-host/src/tests/gate_463_int1.rs`, on `gate_373_nav6`'s fixtures, which
-are made `pub(super)` for it and are otherwise unchanged; two tests appended to
+**Tests** (`crates/runtime-host/src/tests/gate_463_int1.rs`, on `gate_373_nav6`'s fixtures, those
+it uses made `pub(super)` for it and otherwise unchanged; two tests appended to
 `crates/resource-tooling/src/gate_373_navt.rs`; one row test appended to
 `apps/actinglab/src/tests/gate_464_p2.rs`, whose `base` gains the entries that need 18; the host
 gate map row "#463 INT-1"; manual Runtime clocks, no wall clock).
 `int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry`: a linear run meets
-such a page (`environment_reset`) after its tap, on the arrival's frames and first on the closing
-decision's frames: `contained_task_environment_reset` (error, `page_id`), not
-`contained_task_linear_unrecorded_screen`, after its own tap only, no `interrupt_handled`, no
-handler layer; scheduled under the catalog value that pauses a repeated failure, the same run is
-settled rerun only (recoverable, count 1, a retry scheduled) and starts no ladder.
+such a page (`environment_reset`) after its tap, on the arrival's frames and first at the closing
+decision (fix round 1: on U1's frames, which `gate_373_nav6`'s
+`u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing` pins: black
+until the arrival's 100 ms on the Runtime clock have passed, so the arrival's frames and the
+decision's first frame are black and its next frame is the first to show the page):
+`contained_task_environment_reset` (error, `page_id`), neither
+`contained_task_linear_unrecorded_screen` nor `page_confirmation_failed`, after its own tap only, no
+`interrupt_handled`, no handler layer, and at the closing decision the frame that shows the page is
+taken once; scheduled under the catalog value that pauses a repeated failure (fix round 1: the
+procedure bound at the package's directory, as `gate_463_u1b` binds its source package), the same
+run is settled rerun only (recoverable, count 1, a retry scheduled) and starts no ladder.
+`int1_an_entry_with_a_handler_seen_at_the_closing_decision_stays_interrupt_shown` (fix round 1): on
+the same closing frames an entry that names its handler, under `then: resume` and under `then:
+end_run` with `environment_reset`, is `interrupt_shown` there: `page_confirmation_failed` with
+`confirmation_problem` `interrupt_shown`, one tap, the page's frame taken once, nothing handled, no
+layer. `int1_an_update_page_without_handlers_at_the_closing_decision_records_its_fact_first` (fix
+round 1): `application_update_required` on an entry without handlers, first at the closing decision:
+one publication of `health.application.update_required` true, before the failed terminal, and the
+run ends with `contained_task_application_update_required` (warning, `page_id`), one tap, nothing
+handled.
 `int1_the_page_met_at_the_entry_check_ends_the_run_before_any_input`: at a linear run's entry and a
 page-graph run's entry set, no input. `int1_a_page_graph_run_ends_by_the_entry_s_result_with_nothing_pressed`:
 `environment_reset`, no word (`contained_task_interrupt_escalated`) and
@@ -38965,6 +38992,21 @@ installer whose range ends below 19 refuses such a bundle at its `package` edge.
 **Main merged** (`202fd8bc`, with §1.471 of #1821, #480 PG-2b): §1.468 to §1.471 and this section
 each once, in number order, §1.471 as main has it; the host gate map keeps main's rows and then
 this slice's.
+
+**Fix round 1** (the review of #1823; the coordinator's ruling, the review's way (a); work order
+`rd-1118/brief-463-int1-fix1.md`). The first round made the host return the end at the closing
+decision as an error of its recognition, and the kernel's `linear_closing_decision`, which lets only
+a bookkeeping failure through, turned it into `check_failed`: the run still ended
+`page_confirmation_failed`, which accumulates, and an `application_update_required` entry had
+recorded its fact while its end was swallowed. Now the hook's answer carries the end
+(`SharedInterruptShown::Ended`, INT-1-3 above) and the kernel lets only that end through beside the
+bookkeeping failure; everything else of the decision is as U1 made it. The first test's closing
+branch now stands on frames that show the page at the closing decision and pins it, two tests are
+added (an entry with a handler there, `interrupt_shown`; the update page without handlers there,
+the fact and then the end), the scheduled part of the first test binds its procedure at its
+package's directory, and `gate_373_nav6`'s `ALIAS` is private again (nothing used it). No code,
+word, key, record or interface revision is added or moves: the hook is the kernel's seam inside the
+workspace, not a component interface.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

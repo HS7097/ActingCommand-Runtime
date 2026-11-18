@@ -915,8 +915,15 @@ data files beside its package directories, one directory per game below the conf
     no `result` `contained_task_interrupt_escalated`, as an entry with handlers ends today: the
     data says the page means the standard pack no longer fits the game, the program does the same
     next (the failure accumulates and the default ladder starts as before), so it is that code, not
-    a cause of its own. `max_per_run` keeps its range 1–8 and is never reached: the first meeting
-    ends the run. `limit_cause` cannot apply (no meeting is one more than `max_per_run`) and is
+    a cause of its own. At a `linear_steps` step's closing decision, which only recognises the
+    pages, the Runtime answers the kernel's recognition (`ContainedTaskRuntime::shared_interrupt_shown`)
+    on a frame whose one page is such an entry's with that same end of the run
+    (`SharedInterruptShown::Ended`), and the kernel's `linear_closing_decision` carries it out as it
+    is: never the verdict `interrupt_shown`, never `check_failed` (an error of the recognition still
+    is), and a page whose entry names a handler, or two pages at once, stay `interrupt_shown` there.
+    With `"application_update_required"` the fact is recorded only where the run then ends by it,
+    in the same order everywhere: the fact, then the end. `max_per_run` keeps its range 1–8 and is
+    never reached: the first meeting ends the run. `limit_cause` cannot apply (no meeting is one more than `max_per_run`) and is
     refused beside an empty `handlers`, `interrupt_limit_cause_invalid` at
     `/interrupts/<i>/limit_cause`, as `result` beside another `then` is refused. The shared parser
     refuses so for the Runtime, `package bundle` and `standard-pack check` alike, and

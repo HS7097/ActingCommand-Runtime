@@ -24,7 +24,7 @@ use actingcommand_contract::{
 };
 use serde_json::{Value, json};
 
-pub(super) const ALIAS: &str = "neutral.instance";
+const ALIAS: &str = "neutral.instance";
 pub(super) const RED: [u8; 3] = [255, 0, 0];
 const BLUE: [u8; 3] = [0, 0, 255];
 const WHITE: [u8; 3] = [255, 255, 255];

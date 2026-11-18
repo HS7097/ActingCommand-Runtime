@@ -10,6 +10,11 @@
 //! `contained_task_environment_reset`, class `budget_or_permission`, which is rerun only and never
 //! accumulates toward a pause.
 //!
+//! Fix round 1 (`rd-1118/brief-463-int1-fix1.md`, the review's way (a)): a linear step's closing
+//! decision, which only recognises the shared interrupt pages, gets from the host the end of the
+//! run such a page gives (`SharedInterruptShown::Ended`) and the kernel carries it out of the
+//! decision as it is; an entry with a handler seen there stays `interrupt_shown`.
+//!
 //! The fixtures are NAV-6's (`gate_373_nav6`): the synthetic `neutral` game, whose overlay page
 //! `notice` (a white first pixel) stands here for the screen the environment throws the game back
 //! to, the run's own pages `away` (red) and `home` (blue), the feature package of `pages.json`
@@ -37,6 +42,9 @@ const ROOT_INVALID: &str = "standard_pack_root_invalid";
 const UNRECORDED_SCREEN: &str =
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen
         .as_str();
+const CONFIRMATION_FAILED: &str =
+    actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str();
+const UPDATE_KEY: &str = "health.application.update_required";
 
 /// The entry of `notice` that names no handler: `then: end_run`, `max_per_run` 8 (which a page
 /// that ends the run at its first meeting never reaches; its range is as before), and `result`
@@ -91,22 +99,107 @@ fn assert_nothing_handled(run: &Run, case: &str) {
     assert!(failed.is_empty(), "{case}: {failed:?}");
 }
 
+/// Fix round 1: the frames of the run of [`write_linear_away_to_home`] on the Runtime clock
+/// `clock`: `away` until the step's tap; after it, with `closing`, U1's frames (`gate_373_nav6`'s
+/// `u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing`: a black
+/// first pixel, no page of the run or of the feature package, until the arrival's 100 ms have
+/// passed since the first frame after the tap, so the arrival's frames and the closing decision's
+/// first frame are black and its next frame is the first to show the page), then `notice`;
+/// without it, `notice` from the first frame after the tap on. The count of the frames taken that
+/// show `notice`.
+fn notice_after_the_tap(
+    state: &FakeState,
+    clock: &Arc<ManualRuntimeClock>,
+    closing: bool,
+) -> Arc<std::sync::atomic::AtomicUsize> {
+    let script_clock = Arc::clone(clock);
+    let shown = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let shown_frames = Arc::clone(&shown);
+    let tapped_at = std::sync::Mutex::new(None::<u64>);
+    script(state, move |_capture, inputs| {
+        if inputs == 0 {
+            return frame(RED, None);
+        }
+        let now_ms = script_clock.monotonic_ms();
+        let tapped_ms = *tapped_at
+            .lock()
+            .expect("the tap's time")
+            .get_or_insert(now_ms);
+        if closing && now_ms - tapped_ms <= U1_ARRIVAL_MS {
+            frame(BLACK, None)
+        } else {
+            shown_frames.fetch_add(1, Ordering::AcqRel);
+            frame(RED, Some(Overlay::Notice))
+        }
+    });
+    shown
+}
+
+/// Fix round 1 (the review: the scheduled request's package is a directory, so its procedure is
+/// bound at it, as `gate_463_u1b` binds its source package): the fixture manifest with the
+/// catalog task's procedure `procedure.observe` bound at `package`, as actingd binds a scheduled
+/// procedure (`scheduled_execution.package_path`).
+fn procedures_at(package: &Path) -> ProcedureManifest {
+    ProcedureManifest::new(
+        [
+            "procedure.observe",
+            "procedure.observe-b",
+            "procedure.detect",
+        ]
+        .map(|procedure_ref| {
+            let binding = ProcedureBinding::new(
+                procedure_ref,
+                "operation.observe",
+                vec!["after_observation".to_owned()],
+            )
+            .expect("procedure binding");
+            if procedure_ref == "procedure.observe" {
+                binding.with_package_path(package.to_string_lossy())
+            } else {
+                binding
+            }
+        }),
+    )
+    .expect("procedure manifest")
+}
+
+/// Fix round 1: every publication of `health.application.update_required` in `events`, in ledger
+/// order: its event's sequence and its value (as `gate_373_nav6`'s UPD-1 tests read them; a direct
+/// run's host has the one instance).
+fn update_publications(events: &[PersistedEvent]) -> Vec<(u64, bool)> {
+    events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
+                Some((event.sequence(), payload.record()))
+            }
+            _ => None,
+        })
+        .filter(|(_, record)| record.key == UPDATE_KEY)
+        .filter_map(|(sequence, record)| match &record.content {
+            FactContent::Inline {
+                value: ContractFactValue::Boolean(value),
+            } => Some((sequence, *value)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A host on `clock` for a scheduled run of the fixture catalog's task on its instance, with the
-/// game root `root` (as `gate_373_nav6`'s B43-2 starts one).
+/// game root `root` and the procedure manifest `procedures` (as `gate_373_nav6`'s B43-2 starts
+/// one).
 fn scheduled_host(
     temp: &TempDir,
     clock: &Arc<ManualRuntimeClock>,
     state: &Arc<FakeState>,
     root: &GameRoot,
+    procedures: ProcedureManifest,
 ) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     RuntimeHost::start(
         config(temp)
             .with_runtime_clock(clock.clone())
-            .with_procedure_manifest(procedure_manifest_with_primary(
-                b"neutral interrupt fixture",
-                vec!["after_observation".to_owned()],
-            ))
+            .with_procedure_manifest(procedures)
             .with_standard_packs_root(Some(root.root.clone())),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
@@ -151,22 +244,26 @@ fn assert_rerun_only(failure: &PolicyFailureRecord, case: &str) {
     );
 }
 
-/// The brief's first test: a `linear_steps` run (one tap from `away` to `home`, its arrival
-/// expected within 100 ms, no retry, so its closing decision follows) meets the page of an entry
-/// without handlers (`result` `environment_reset`) after its tap: on the arrival's frames, where
-/// the arrival's wait offers each frame to the shared interrupt pages, and first on the closing
-/// decision's frames (black until the arrival's 100 ms have passed), where the closing decision
-/// recognises the page as an offer does. Both times the run ends with
-/// `contained_task_environment_reset` (error, `page_id`), not
-/// `contained_task_linear_unrecorded_screen`, after the step's own tap and nothing else: no
-/// `interrupt_handled`, no handler layer. Scheduled under the catalog value that pauses a repeated
-/// failure, the same run on the arrival's frames is settled rerun only, class recoverable, a retry
-/// scheduled: the task is not suspended, and no ladder starts.
+/// The brief's first test (fix round 1: the closing decision's branch on frames that show the page
+/// there, the scheduled part as its neighbours make it): a `linear_steps` run (one tap from `away`
+/// to `home`, its arrival expected within 100 ms, no retry, so its closing decision follows) meets
+/// the page of an entry without handlers (`result` `environment_reset`) after its tap: on the
+/// arrival's frames, where the arrival's wait offers each frame to the shared interrupt pages, and
+/// first at the closing decision, on U1's frames ([`notice_after_the_tap`]: the arrival's frames
+/// and the decision's first frame black, its next frame the first to show the page), where the
+/// host answers the decision with the end of the run and the kernel carries it out. Both times the
+/// run ends with `contained_task_environment_reset` (error, `page_id`), neither
+/// `contained_task_linear_unrecorded_screen` nor `page_confirmation_failed`, after the step's own
+/// tap and nothing else: no `interrupt_handled`, no handler layer; at the closing decision the
+/// frame that shows the page is taken once (the decision ends on it). Scheduled under the catalog
+/// value that pauses a repeated failure, the procedure bound at the package's directory as
+/// `gate_463_u1b` binds its own, the same run on the arrival's frames is settled rerun only, class
+/// recoverable, a retry scheduled: the task is not suspended, and no ladder starts.
 #[test]
 fn int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry() {
     for (case, closing) in [
         ("on the arrival's frames", false),
-        ("first on the closing decision's frames", true),
+        ("first at the closing decision", true),
     ] {
         let state = Arc::new(FakeState::default());
         let temp = TempDir::new().expect("tempdir");
@@ -178,23 +275,7 @@ fn int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry
         let package = temp.path().join("linear");
         write_linear_away_to_home(&package);
         let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
-        let script_clock = Arc::clone(&clock);
-        let tapped_at = std::sync::Mutex::new(None::<u64>);
-        script(&state, move |_capture, inputs| {
-            if inputs == 0 {
-                return frame(RED, None);
-            }
-            let now_ms = script_clock.monotonic_ms();
-            let tapped_ms = *tapped_at
-                .lock()
-                .expect("the tap's time")
-                .get_or_insert(now_ms);
-            if closing && now_ms - tapped_ms <= U1_ARRIVAL_MS {
-                frame(BLACK, None)
-            } else {
-                frame(RED, Some(Overlay::Notice))
-            }
-        });
+        let shown = notice_after_the_tap(&state, &clock, closing);
         let host = start_with(
             config(&temp).with_runtime_clock(clock.clone()),
             &state,
@@ -205,12 +286,24 @@ fn int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry
 
         assert_ended(&ended, ENVIRONMENT_RESET, Category::Error, case);
         assert_ne!(ended.failure().code().as_str(), UNRECORDED_SCREEN, "{case}");
+        assert_ne!(
+            ended.failure().code().as_str(),
+            CONFIRMATION_FAILED,
+            "{case}"
+        );
         assert_eq!(
             state.input_count.load(Ordering::Acquire),
             1,
             "{case}: the step's own tap only"
         );
         assert_nothing_handled(&ended, case);
+        if closing {
+            assert_eq!(
+                shown.load(Ordering::Acquire),
+                1,
+                "{case}: the decision ends on the first frame that shows the page"
+            );
+        }
     }
 
     let state = Arc::new(FakeState::default());
@@ -232,7 +325,7 @@ fn int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry
     let request = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
         .expect("scheduled request");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
-    let host = scheduled_host(&temp, &clock, &state, &root);
+    let host = scheduled_host(&temp, &clock, &state, &root, procedures_at(&package));
     host.activate_policy_catalog(&pausing_policy_sources())
         .expect("activate policy catalog");
     let (context, error) = b43_failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
@@ -248,6 +341,127 @@ fn int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry
         !ladder_started(&events),
         "no default trigger reads the class"
     );
+}
+
+/// Fix round 1: an entry with a handler, its page seen first at a linear step's closing decision,
+/// stays what #463 U1 made it there, recognised and not handled. On the first test's closing
+/// frames ([`notice_after_the_tap`]) with the notice's entry naming its handler `close_notice`,
+/// under `then: resume` and under `then: end_run` with the word `environment_reset` (which ends the
+/// run where its page is handled, after the handler), the closing decision's verdict is
+/// `interrupt_shown`: the run ends with `page_confirmation_failed` carrying `confirmation_problem`
+/// `interrupt_shown`, after the step's own tap only, the frame that shows the page taken once, no
+/// handler layer and nothing handled.
+#[test]
+fn int1_an_entry_with_a_handler_seen_at_the_closing_decision_stays_interrupt_shown() {
+    let mut ending = interrupt("notice", CLOSE_NOTICE, json!("end_run"), 1);
+    ending["result"] = json!("environment_reset");
+    for (case, entry) in [
+        (
+            "resume",
+            interrupt("notice", CLOSE_NOTICE, json!("resume"), 1),
+        ),
+        ("end_run with environment_reset", ending),
+    ] {
+        let state = Arc::new(FakeState::default());
+        let temp = TempDir::new().expect("tempdir");
+        let root = root_of(temp.path(), json!([entry]), true);
+        let package = temp.path().join("linear");
+        write_linear_away_to_home(&package);
+        let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+        let shown = notice_after_the_tap(&state, &clock, true);
+        let host = start_with(
+            config(&temp).with_runtime_clock(clock.clone()),
+            &state,
+            Some(&root),
+        );
+        let ended = run_at(&host, &package);
+        host.close().expect("close runtime host");
+
+        assert_eq!(
+            ended.receipt.state(),
+            RuntimeReceiptState::Failed,
+            "{case}: {:?}",
+            ended.receipt
+        );
+        let failure = ended.failure();
+        assert_eq!(failure.code().as_str(), CONFIRMATION_FAILED, "{case}");
+        assert_eq!(
+            text(&failure, "confirmation_problem"),
+            Some("interrupt_shown"),
+            "{case}: {failure:?}"
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            1,
+            "{case}: the step's own tap only"
+        );
+        assert_eq!(
+            shown.load(Ordering::Acquire),
+            1,
+            "{case}: the decision ends on the first frame that shows the page"
+        );
+        assert_nothing_handled(&ended, case);
+    }
+}
+
+/// Fix round 1: `application_update_required` on an entry without handlers, its page seen first at
+/// a linear step's closing decision (the first test's closing frames, [`notice_after_the_tap`]):
+/// the instance's `health.application.update_required` is published true once, before the run's
+/// failed terminal, and the run ends with `contained_task_application_update_required` (warning,
+/// `page_id`), in the order of the other places the page is met (an offer in a wait or at an
+/// entry; `gate_373_nav6`'s UPD-1 A9 after a handler); after the step's own tap only, on the first
+/// frame that shows the page, nothing handled and no handler layer.
+#[test]
+fn int1_an_update_page_without_handlers_at_the_closing_decision_records_its_fact_first() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = root_of(
+        temp.path(),
+        json!([without_handlers(Some("application_update_required"))]),
+        false,
+    );
+    let package = temp.path().join("linear");
+    write_linear_away_to_home(&package);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let shown = notice_after_the_tap(&state, &clock, true);
+    let host = start_with(
+        config(&temp).with_runtime_clock(clock.clone()),
+        &state,
+        Some(&root),
+    );
+    let ended = run_at(&host, &package);
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    host.close().expect("close runtime host");
+
+    assert_ended(
+        &ended,
+        UPDATE_REQUIRED,
+        Category::Warning,
+        "at the closing decision",
+    );
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        1,
+        "the step's own tap only"
+    );
+    assert_eq!(
+        shown.load(Ordering::Acquire),
+        1,
+        "the decision ends on the first frame that shows the page"
+    );
+    assert_nothing_handled(&ended, "at the closing decision");
+    let publications = update_publications(&events);
+    let [(published_at, true)] = publications.as_slice() else {
+        panic!("one publication of true: {publications:?}");
+    };
+    let terminal = events
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskFailed)
+        .map(PersistedEvent::sequence)
+        .expect("a failed task terminal");
+    assert!(*published_at < terminal, "the fact before the terminal");
 }
 
 /// The brief's second test: the same page met at the run's entry check. A `linear_steps` run
@@ -396,7 +610,16 @@ fn int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_onc
     let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
         .expect("scheduled request");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
-    let host = scheduled_host(&temp, &clock, &state, &root);
+    let host = scheduled_host(
+        &temp,
+        &clock,
+        &state,
+        &root,
+        procedure_manifest_with_primary(
+            b"neutral interrupt fixture",
+            vec!["after_observation".to_owned()],
+        ),
+    );
     host.activate_policy_catalog(&pausing_policy_sources())
         .expect("activate policy catalog");
 

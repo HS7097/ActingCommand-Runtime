@@ -351,10 +351,17 @@ whose entry names no handler (`handlers: []`, only beside `then: end_run`) is no
 is pressed, no layer runs, nothing is counted and no `interrupt_handled` is recorded, and the run
 ends on that frame with the code the entry's `result` gives (`environment_reset`:
 `contained_task_environment_reset`, rerun only; `application_update_required`: that code; none:
-`contained_task_interrupt_escalated`). A `linear_steps` step's closing decision, which recognises
-the pages without handling them ([linear-steps.md](linear-steps.md), "A screen the package never
-recorded"), ends the run on such a page the same way. Such an entry acts for the runs of every
-server ([package-reference.md](package-reference.md), "An entry without handlers").
+`contained_task_interrupt_escalated`). A `linear_steps` step's closing decision recognises the
+pages without handling them ([linear-steps.md](linear-steps.md), "A screen the package never
+recorded"): where the one page it recognises on a frame is such an entry's, the Runtime answers
+the kernel's question (`ContainedTaskRuntime::shared_interrupt_shown`) with that same end of the
+run (`SharedInterruptShown::Ended`: the same code; for `application_update_required` the
+instance's fact recorded first), and the kernel's `linear_closing_decision` ends the decision and
+the run with it as it is, as an offer in a wait ends them, never as the verdict `interrupt_shown`
+and never as `check_failed`; an error of that check stays `check_failed`, and a page whose entry
+names a handler, or two pages at once, stay `interrupt_shown` (#463 U1). Such an entry acts for
+the runs of every server ([package-reference.md](package-reference.md), "An entry without
+handlers").
 Without `interrupts.json` for the game nothing is read and nothing changes.
 
 Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task

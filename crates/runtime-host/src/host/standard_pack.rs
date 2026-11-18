@@ -33,7 +33,8 @@
 //!   handler never looks at the interrupt pages itself. Workflow #463 INT-1: an `end_run` entry
 //!   may name no handler; it applies to the runs of every server, and its page ends the run at
 //!   once, nothing pressed and no layer run, as its `result` says (`environment_reset`:
-//!   `contained_task_environment_reset`, rerun only).
+//!   `contained_task_environment_reset`, rerun only); fix round 1: a linear step's closing
+//!   decision, which only recognises the pages, gets that end as its answer and carries it out.
 //! - **Navigation data** (Workflow #373 NAV-5, §3.5, §5, §7). A game root that holds
 //!   `navigation.json` (with `pages.json`) is read in a run's preparation too, and the run keeps
 //!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
@@ -67,8 +68,8 @@ use actingcommand_contract::{
     TaskEntryRecoveryRole, TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
-    MAX_GATED_STEPS, RunTableFailure, RunTables, SharedInterruptFrame, SharedInterruptVerdict,
-    canonical_page_anchor,
+    MAX_GATED_STEPS, RunTableFailure, RunTables, SharedInterruptFrame, SharedInterruptShown,
+    SharedInterruptVerdict, canonical_page_anchor,
 };
 use serde::Serialize;
 use std::io;
@@ -1141,28 +1142,31 @@ impl RuntimeContainedTask<'_> {
     /// that its package does not declare itself match `frame`, by the check the kernel's offer
     /// makes ([`Self::offered_shared_interrupt`]), with nothing handled or counted and no record
     /// but the feature package's admission at its first use, as for an offer: a linear step's
-    /// closing decision asks it and never presses. Workflow #463 INT-1: one matched page whose
-    /// entry names no handler, which an offer would end the run on with nothing pressed, ends the
-    /// run here the same way ([`Self::end_run_at`]).
+    /// closing decision asks it and never presses. Workflow #463 INT-1 (fix round 1): where the one
+    /// matched page is of an entry that names no handler, which an offer ends the run on with
+    /// nothing pressed, the answer is that same end of the run ([`Self::end_run_at`], by the
+    /// entry's `result`: for `application_update_required` the instance's fact recorded first),
+    /// as [`SharedInterruptShown::Ended`], which the kernel's closing decision carries out as it is;
+    /// a page whose entry names a handler, and two or more pages at once, are
+    /// [`SharedInterruptShown::Shown`] as before, and a failed check stays an error.
     pub(super) fn shown_shared_interrupt(
         &mut self,
         frame: SharedInterruptFrame<'_>,
-    ) -> Result<bool, ContainedTaskRunError<RequestFailure>> {
+    ) -> Result<SharedInterruptShown<RequestFailure>, ContainedTaskRunError<RequestFailure>> {
         let Some(mut interrupts) = self.interrupts.take() else {
-            return Ok(false);
+            return Ok(SharedInterruptShown::NotShown);
         };
-        let matched = self.matched_shared_interrupts(&mut interrupts, &frame);
-        let ended = match matched.as_deref() {
-            Ok([index]) if interrupts.entries[*index].handler.is_none() => {
-                Some(self.end_run_at(&interrupts.entries[*index]))
-            }
-            _ => None,
-        };
+        let shown = self
+            .matched_shared_interrupts(&mut interrupts, &frame)
+            .map(|matched| match matched.as_slice() {
+                [] => SharedInterruptShown::NotShown,
+                [index] if interrupts.entries[*index].handler.is_none() => {
+                    SharedInterruptShown::Ended(self.end_run_at(&interrupts.entries[*index]))
+                }
+                _ => SharedInterruptShown::Shown,
+            });
         self.interrupts = Some(interrupts);
-        if let Some(ended) = ended {
-            return Err(ended);
-        }
-        matched.map(|matched| !matched.is_empty())
+        shown
     }
 
     fn check_shared_interrupt(

@@ -2610,6 +2610,23 @@ pub enum SharedInterruptVerdict {
     Handled,
 }
 
+/// Workflow #463 U1, fix round 2 (rule 3), and Workflow #463 INT-1, fix round 1: what a runtime's
+/// shared interrupt pages say of a frame they only recognise, handling none
+/// ([`ContainedTaskRuntime::shared_interrupt_shown`]): a linear step's closing decision asks it.
+#[derive(Debug)]
+pub enum SharedInterruptShown<E> {
+    /// No shared interrupt page the running package does not declare itself is on the frame.
+    NotShown,
+    /// One or more are, none of them a page whose recognition alone ends the run: the decision's
+    /// verdict is `interrupt_shown`.
+    Shown,
+    /// The one page on the frame is a page whose recognition alone ends the run, with nothing
+    /// pressed and no layer run (Workflow #463 INT-1: an `end_run` entry that names no handler),
+    /// and this is that end, the one an offer of the frame ends the run with: the decision carries
+    /// it out as it is, never as a verdict and never as `check_failed`.
+    Ended(ContainedTaskRunError<E>),
+}
+
 /// Workflow #373 NAV-6: the frame a shared interrupt check looks at, and the package whose
 /// expectation it did not meet. A shared interrupt page that package declares itself (its page
 /// id without the game prefix) is the package's own to handle (§6.1).
@@ -3111,13 +3128,17 @@ pub trait ContainedTaskRuntime {
     /// Workflow #463 U1, fix round 2 (rule 3): whether `frame` shows one of the runtime's shared
     /// interrupt pages that the running package does not declare itself, recognised as
     /// [`Self::shared_interrupt`] recognises them, one or more, with nothing handled, pressed or
-    /// counted: a linear step's closing decision asks it and never presses. A runtime without
-    /// shared interrupt pages answers `false`.
+    /// counted: a linear step's closing decision asks it and never presses. Workflow #463 INT-1,
+    /// fix round 1: where the one page shown is a page whose recognition alone ends the run (no
+    /// package handles it), the answer is that end ([`SharedInterruptShown::Ended`]), the one an
+    /// offer of the frame would end the run with, and the decision carries it out; an error of the
+    /// check itself stays an error. A runtime without shared interrupt pages answers
+    /// [`SharedInterruptShown::NotShown`].
     fn shared_interrupt_shown(
         &mut self,
         _frame: SharedInterruptFrame<'_>,
-    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
-        Ok(false)
+    ) -> Result<SharedInterruptShown<Self::Error>, ContainedTaskRunError<Self::Error>> {
+        Ok(SharedInterruptShown::NotShown)
     }
 
     /// Workflow #463 U1, fix round 2 (rule 5): whether the run is one the runtime started itself
@@ -3149,7 +3170,9 @@ pub trait ContainedTaskRuntime {
     /// failure of its own bookkeeping (a record it could not write), the failure that ends the
     /// runtime's work wherever it meets it. A linear step's closing decision passes only such a
     /// failure on; any other error of its capture, recognition or evaluation ends it with no
-    /// classification. A runtime that does not tell its failures apart answers `true`.
+    /// classification (Workflow #463 INT-1, fix round 1: the end of the run the shared interrupt
+    /// pages answer, [`SharedInterruptShown::Ended`], is no error of the decision and passes as
+    /// it is). A runtime that does not tell its failures apart answers `true`.
     fn is_bookkeeping_failure(_error: &Self::Error) -> bool {
         true
     }
@@ -4808,11 +4831,13 @@ impl PreparedContainedTask {
     /// interrupt pages that this package does not declare itself, offered as
     /// [`Self::offer_shared_interrupt`] offers it, but only recognised
     /// ([`ContainedTaskRuntime::shared_interrupt_shown`]): nothing is handled or pressed.
+    /// Workflow #463 INT-1, fix round 1: or the end of the run the one page shown gives by its
+    /// recognition alone ([`SharedInterruptShown::Ended`]).
     fn shown_shared_interrupt<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         scene: &Scene,
-    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+    ) -> Result<SharedInterruptShown<R::Error>, ContainedTaskRunError<R::Error>> {
         let own_pages = self.detector.page_ids().collect::<Vec<_>>();
         runtime.shared_interrupt_shown(SharedInterruptFrame {
             scene,
