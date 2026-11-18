@@ -153,6 +153,17 @@ const WORD: Initiator = Initiator::LabCli;
 // `scheduling`'s (`TASK_OFFSET_DETECTOR`, `CLI_PAUSE_REASON`, `CLI_DRAIN_TIMEOUT_MS`).
 
 fn main() -> ExitCode {
+    // #398 DB-3 (register §1.475): first, before any child or thread is started, this process's
+    // own stdin, stdout and stderr are made not inheritable, so that no long-lived process one of
+    // its children starts (an adb server) keeps its caller's pipes open: a command line's,
+    // `mcp-serve`'s client's, an agent channel hook's session's. A refusal is one developer line
+    // on stderr and the command goes on, as actingd's start goes on.
+    for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+        cli_line::developer_line(
+            &refusal,
+            Some(actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT),
+        );
+    }
     // Model §6 (M2): actingctl's diagnostic sink. Foreign text cut at its bound and other
     // developer text about an outcome go to stderr as `DIAG actingctl:` lines.
     if let Err(error) =

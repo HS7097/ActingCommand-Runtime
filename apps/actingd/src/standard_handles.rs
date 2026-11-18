@@ -89,6 +89,8 @@ mod tests {
             self.calls.borrow_mut().push(stream);
             if self.refused.contains(&stream) {
                 let operation = match stream {
+                    // #398 DB-3: the shared enum names stdin too; the start never clears it.
+                    StandardStream::Input => HostMetricsLocation::ProcessStdinInheritanceClear,
                     StandardStream::Output => HostMetricsLocation::ProcessStdoutInheritanceClear,
                     StandardStream::Error => HostMetricsLocation::ProcessStderrInheritanceClear,
                 };

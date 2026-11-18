@@ -7,6 +7,10 @@
 //! ways, gives the server the words after `--` and not `--client`, writes a status file of
 //! generation 2, and switches once when the install's manifest names another build: the client
 //! gets `notifications/tools/list_changed` and the next `tools/list` comes from the new child.
+//!
+//! #398 DB-3 (register §1.475): the entry, run with its output through a pipe, starts its server,
+//! which starts a long-lived grandchild; the reader of the entry's output sees the pipe's end when
+//! the entry ends, while the grandchild still runs.
 
 use serde_json::{Value, json};
 use std::fs;
@@ -189,4 +193,115 @@ fn mcp_entry_g2_process_pipes_a_session_and_switches_once() {
         );
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// #398 DB-3 (register §1.475): the entry, run as a client runs it with its stdin and stdout
+/// through pipes, starts its server (the fake as `actinglab-mcp.exe`), and the server, on a call,
+/// starts a grandchild that lingers until the test releases it, its standard handles null and
+/// every inheritable handle of the server its own. Once the client closed its input and the entry
+/// ended, the reader of the entry's stdout sees that pipe's end, and the grandchild still runs.
+/// Before DB-3 the entry's stdout was inheritable: the server, then the grandchild, received a
+/// copy, and the reader saw the end only when the grandchild ended (after its 120 s at most,
+/// past the wait here). No clock is read; the waits are the channel's, bounded by [`WAIT`].
+#[cfg(windows)]
+#[test]
+fn db3_the_entrys_output_ends_with_the_entry_while_a_grandchild_lives() {
+    use actingcommand_host_metrics::{ProcessProbe, probe_process};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = root.path().join("runtime");
+    let tools = root.path().join("tools");
+    fs::create_dir_all(&runtime).expect("runtime directory");
+    fs::create_dir_all(&tools).expect("tools directory");
+    let fake = env!("CARGO_BIN_EXE_actingcommand-mcp-entry-g2-fake-child");
+    fs::copy(fake, tools.join("actinglab-mcp.exe")).expect("the fake as actinglab-mcp.exe");
+    fs::copy(fake, tools.join("actinglab.exe")).expect("the fake as actinglab.exe");
+    write_manifest(&runtime, OLD, "first");
+    // The grandchild runs the fake from where cargo built it, so that nothing of it is left in
+    // the temporary root; it ends once this file exists or the root is gone.
+    let release = root.path().join("release");
+
+    let mut entry = Command::new(env!("CARGO_BIN_EXE_actingcommand-mcp-entry-g2"))
+        .arg("--root")
+        .arg(root.path())
+        .arg("--")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("the entry starts");
+    let mut stdin = entry.stdin.take().expect("stdin");
+    let stdout = entry.stdout.take().expect("stdout");
+    // The reader of the entry's stdout: each message, until the pipe's end, where it drops the
+    // sender.
+    let (sender, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else {
+                return;
+            };
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if sender.send(message).is_err() {
+                return;
+            }
+        }
+    });
+    let answer = |id: u64| loop {
+        let message = lines
+            .recv_timeout(WAIT)
+            .expect("the entry answers within the wait");
+        if message["id"] == id {
+            break message;
+        }
+    };
+
+    send(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "process-test", "version": "1"}}}),
+    );
+    answer(1);
+    send(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+    send(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "fake_11111111", "arguments": {
+                "linger": {"program": fake, "release": release}}}}),
+    );
+    let call = answer(2);
+    let served = call["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .expect("the fake server's own answer");
+    let lingerer = served["lingerer"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .unwrap_or_else(|| panic!("the server started the grandchild: {served}"));
+
+    // The client closes its input; the entry ends its server and itself.
+    drop(stdin);
+    let status = entry.wait().expect("the entry ends");
+    assert!(status.success(), "the entry ends cleanly: {status}");
+    // The end of the entry's stdout reaches its reader now, not when the grandchild ends.
+    loop {
+        match lines.recv_timeout(WAIT) {
+            Ok(_) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the entry ended but its stdout did not: a descendant still holds the pipe")
+            }
+        }
+    }
+    assert!(
+        matches!(probe_process(lingerer), ProcessProbe::Running { .. }),
+        "the grandchild {lingerer} still runs when the entry's output has ended"
+    );
+    fs::write(&release, b"released").expect("release the grandchild");
 }

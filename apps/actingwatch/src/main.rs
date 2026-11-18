@@ -70,6 +70,16 @@ fn main() -> ExitCode {
         // without a console leaves the standard handles as they were (a redirected one still
         // receives the lines); the exit code is set either way.
         let _attached = actingcommand_host_metrics::standard_handles::attach_parent_console();
+        // #398 DB-3 (register §1.475): then, before any child is started, the handles it now has
+        // (the console's, or those it was given) are made not inheritable, so that no long-lived
+        // process a child starts keeps its caller's pipes open; a refusal is one developer line on
+        // stderr and the subcommand goes on, as actingd's start goes on.
+        for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+            stderr_line(
+                &refusal,
+                Some(actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT),
+            );
+        }
         command(&SystemLaunch, &arguments)
     }
 }
@@ -190,6 +200,16 @@ fn developer_text(outcome: &Outcome, text: Option<&str>) -> String {
 /// The task's tick of `root`, as actingctl's `main` ran `watchdog run-once --root <root>
 /// --from-task`, with what it wrote to stderr appended to the log.
 fn tick_in_process(root: &Path, log: &'static LogLines) -> i32 {
+    // #398 DB-3 (register §1.475): first, before the tick starts any child (the Runtime, a
+    // PowerShell), this process's own standard handles, if it was given any, are made not
+    // inheritable, so that the Runtime it starts never holds a caller's pipe for its whole life; a
+    // refusal is one developer line in the log and the tick goes on, as actingd's start goes on.
+    for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+        log.append(&developer_text(
+            &refusal,
+            Some(actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT),
+        ));
+    }
     if let Err(error) =
         actingcommand_contract::outcome::install_diagnostic_sink(Box::new(move |outcome, text| {
             log.append(&format!("DIAG actingctl: {outcome} {text}"));

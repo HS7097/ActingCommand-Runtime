@@ -185,6 +185,21 @@ struct JobOptions {
 }
 
 fn main() -> ExitCode {
+    // #398 DB-3 (register §1.475): first, before any child or thread is started, this process's
+    // own stdin (its client's requests), stdout (the protocol) and stderr are made not
+    // inheritable, so that no long-lived descendant of a `serve` child, an adb or a PowerShell it
+    // starts keeps its client's pipes open. A refusal is one developer line on stderr and the
+    // server goes on, as actingd's start goes on.
+    for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+        eprintln!(
+            "{}",
+            cli_line::developer_text(
+                PROGRAM,
+                &refusal,
+                Some(actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT),
+            )
+        );
+    }
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     run(&arguments).unwrap_or_else(|ended| {
         eprintln!(
