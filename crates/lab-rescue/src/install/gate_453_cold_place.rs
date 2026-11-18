@@ -10,7 +10,9 @@
 //   `composition` passes with `expected` `unchanged` and `bound` `[]` after one read of the
 //   catalog, without a wait;
 // - `s5_a_bound_instance_waits_for_a_new_composition`: with an instance bound to the game the row
-//   waits, as before, until the catalog changes, and passes with `expected` `new`;
+//   waits, as before, until the catalog changes, and passes with `expected` `new` (adapted by
+//   Workflow #453 S5b: until the Runtime's generation has the rules digest check-config previews
+//   for the placed root);
 // - `s5_a_journal_without_bound_keeps_the_wait`: an operation stopped before its checks whose
 //   journal has no `bound` (as an earlier build writes it), resumed with no instance bound to the
 //   game, waits for a new catalog as before;
@@ -76,7 +78,8 @@
 // placement names its authorization (`fixture::authorized`), and the journal's inputs carry it.
 
 use super::fixture::{
-    BuildSpec, C1, FakeHost, STALLED_PID, code, live_root, run, speaks, tree, word, write_json,
+    BuildSpec, C1, FakeHost, STALLED_PID, code, live_root, preview_rules_digest, run, speaks, tree,
+    word, write_composed_generation, write_json,
 };
 use super::host::RunningImage;
 use crate::agent_channel::Answer as Answered;
@@ -111,6 +114,20 @@ const SCHEDULE: &[u8] = br#"{"schema_version": "actingcommand.schedule.v1"}"#;
 /// Two catalogs the fake Runtime's latest evaluation ran under.
 const CATALOG_A: &str = "neutral-catalog-a";
 const CATALOG_B: &str = "neutral-catalog-b";
+/// Workflow #453 S5b: two generations of the Runtime, as it names them (`sha256:` and 64 hex
+/// digits), and their rules digests (made up), for the row that compares digests.
+const S5B_GENERATION_A: &str = concat!(
+    "sha256:",
+    "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+);
+const S5B_GENERATION_B: &str = concat!(
+    "sha256:",
+    "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+);
+const S5B_DIGEST_A: &str = "sha256:neutral-rules-a";
+const S5B_DIGEST_B: &str = "sha256:neutral-rules-b";
 
 /// The bytes of the valid table [`TABLE`] of [`GAME`] every bundle carries.
 fn table_bytes() -> Vec<u8> {
@@ -444,18 +461,29 @@ fn s5_unbound_composition_passes_at_once() {
 // S5: an instance bound to the game, and a bundle that changes `schedule.json`. The input `bound`
 // names it; the row `composition` waits as before: the catalog read by the check is the one read
 // before the hold, so it waits 500 ms and reads again, and passes with `expected` `new` once the
-// catalog changed (four reads in all).
+// catalog changed (four reads in all). Adapted by Workflow #453 S5b (register §1.474), which
+// deliberately changes what the row compares: the live build's check-config previews the rules
+// digest of the placed root ([`S5B_DIGEST_B`]), the generation the check reads first is the one
+// read before the hold, whose digest is another ([`S5B_DIGEST_A`]), and the row passes once the
+// Runtime's generation has the previewed digest, with that digest; the row `check_config` of that
+// run stands before it.
 #[test]
 fn s5_a_bound_instance_waits_for_a_new_composition() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
     let (root, _) = prepared(temp.path(), "bound", &host);
     boot(&host, &[("neutral.a", GAME)]);
-    *host.runtime.catalog.borrow_mut() = Some(CATALOG_A.to_owned());
+    let config = root.join("actingd.config.json");
+    let state_root = actingcommand_lab_ops::locate::configured_state_root(&config)
+        .expect("the configured state root");
+    write_composed_generation(&state_root, S5B_GENERATION_A, S5B_DIGEST_A);
+    write_composed_generation(&state_root, S5B_GENERATION_B, S5B_DIGEST_B);
+    preview_rules_digest(&host, S5B_DIGEST_B);
+    *host.runtime.catalog.borrow_mut() = Some(S5B_GENERATION_A.to_owned());
     host.runtime.catalogs.borrow_mut().extend([
-        CATALOG_A.to_owned(),
-        CATALOG_A.to_owned(),
-        CATALOG_B.to_owned(),
+        S5B_GENERATION_A.to_owned(),
+        S5B_GENERATION_A.to_owned(),
+        S5B_GENERATION_B.to_owned(),
     ]);
     let zip = temp.path().join("neutral-bound.zip");
     write_bundle(&zip, CONTROL, Some(SCHEDULE));
@@ -470,12 +498,14 @@ fn s5_a_bound_instance_waits_for_a_new_composition() {
         json!(["neutral.a"]),
         "{journal}"
     );
+    assert_eq!(check_row(&journal, "check_config")["result"], "pass");
     assert_eq!(
         check_row(&journal, "composition"),
         json!({"id": "composition", "result": "pass", "values": {
-            "catalog_hash": CATALOG_B,
-            "catalog_before": CATALOG_A,
+            "catalog_hash": S5B_GENERATION_B,
+            "catalog_before": S5B_GENERATION_A,
             "expected": "new",
+            "rules_digest": S5B_DIGEST_B,
         }}),
         "{journal}"
     );

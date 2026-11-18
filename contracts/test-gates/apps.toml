@@ -2736,3 +2736,13 @@ tests = [
     "actingcommand-ios-bridge::bin:acib::args::tests::max_matching_takes_its_limit_of_twenty_and_refuses_one_more",
 ]
 incident = ["#479 ACIB-0"]
+
+# Workflow #453 S5b (0.12.73; register §1.474; briefs rd-1118/brief-453-s5b-composition-check.md and rd-1118/brief-453-s5b-rulings.md; contracts/install-cli.md, "The composition after a placement"): on fake roots and seams with an installer that declares package [3, 10] and the fake Runtime running one instance bound to the bundle's game, a placement whose schedule.json changes runs the live build's check-config once with --install-root (its row check_config before composition) and the row composition compares rules digests: check-config's preview standard_pack_schedule.rules_digest against the rules_digest of the composition record of the generation the Runtime's latest evaluation ran under, written below the state root at policy/catalogs/generations/<hex>/standard-packs.json. A schedule.json that gains only two rules, each naming a held package, previewed with the digest of the generation read before the hold: the steps pause, the one pack_item of schedule.json, post_check and release_hold; the rows rerun, standard_pack_check, check_config (pass) and composition exactly pass with catalog_hash and catalog_before that generation, expected unchanged, rules_digest the digest and schedule_changed_rules_unchanged true; three catalog reads (no wait); done, the instance resumed, the hold not kept. A rule naming a package no rule named, previewed with another digest, the check's first read on a third generation and the second on the expected one: pass with expected new, catalog_hash the expected generation and rules_digest the expected digest, four reads, the package in the journal's enabled. The Runtime staying on the third generation: fail with exactly catalog_hash (the third), expected new, rules_digest (the third's), rules_digest_before, rules_digest_expected and waited_ms of 500 or more, post_check_failed with failed exactly composition, no resume. Adapted: gate_453_cold_place::s5_a_bound_instance_waits_for_a_new_composition passes on the generation of the previewed digest with that digest, the row check_config before it; the running scene of gate_463_s318 previews its second generation's digest
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_453_s5b::s5b_rules_naming_held_packages_pass_at_the_first_read",
+    "actingcommand-lab-rescue::lib::install::gate_453_s5b::s5b_a_rule_that_enters_waits_for_the_expected_digest_not_a_third",
+    "actingcommand-lab-rescue::lib::install::gate_453_s5b::s5b_a_third_composition_alone_fails_with_the_three_digests",
+]
+incident = ["#453 S5b"]

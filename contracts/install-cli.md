@@ -1258,15 +1258,47 @@ the rescue face:
   records, as the input `bound`, the instances the running Runtime's status binds to the bundle's
   game, paused or not (those its hold is chosen from). The row `composition` of its `post_check`
   reads the catalog the Runtime's latest evaluation ran under. When the game's `schedule.json`
-  changes (placed, replaced or set aside) and `bound` is not empty, it waits, reading again every
-  500 ms, for a catalog other than the one read before the hold, within
-  `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`: `pass` with `expected`
-  `new`, else `fail` with `waited_ms`. With `bound` empty it passes at its first read, `expected`
-  `unchanged` and `bound` `[]`: the workbench reads only the games of configured instances (a game
-  root no instance binds is never read), so no new composition comes. When the file does not
-  change it passes at its first read, `expected` `unchanged`, as before. A journal without `bound`
-  (an operation an earlier build began, resumed by this one) keeps the wait. A catalog that cannot
-  be read is `not_evaluated`, as before.
+  changes (placed, replaced or set aside) and `bound` is not empty, it compares rules digests
+  (Workflow #453 S5b, since 0.12.73; register §1.474; the coordinator's rulings of 11-18 on board
+  #453, not the owner's words). A catalog's hash carries the catalog version, the ledger's head
+  when the workbench composes, so it cannot be had beforehand; the rules digest, by which the
+  workbench decides whether a check activates a new generation (it stages one only when the digest
+  changed), does not move with the version.
+  - *Expected.* The checks run the live build's check-config of the live configuration with
+    `--install-root <root>`, as without a Runtime; its row `check_config` stands before
+    `composition` with that row's outcomes ("`place` while the Runtime is stopped", below). Its
+    preview `standard_pack_schedule.rules_digest` is the expected digest: the composition of the
+    installation as placed by the same composer over the same inputs as the workbench's (every
+    game of the configured instances, the daemon's own reading of the packages and the
+    subsystems), but the catalog version, which the digest does not cover
+    ([actingd-check-config.md](actingd-check-config.md)).
+  - *The Runtime's.* The rules digest of the generation its latest evaluation ran under: the
+    catalog it answers names a directory of its catalog store below the state root
+    (`policy\catalogs\generations\<hex>`), published once under that hash and never written
+    again, whose composition record `standard-packs.json` holds `rules_digest` (none for a
+    generation the workbench did not compose).
+  - *The outcomes.* `expected` is `unchanged` when the expected digest is the one of the
+    generation read before the hold, else `new`. The row passes once the Runtime's digest is the
+    expected one, reading again every 500 ms within `standard_packs.check_interval_ms` plus
+    `install.hot.idle_wait_ms`: `pass` with `catalog_hash`, `catalog_before`, `expected` and
+    `rules_digest`, and with `expected` `unchanged` also `schedule_changed_rules_unchanged`
+    `true`, the file changed and the composition did not (a `schedule.json` whose only new rules
+    name held packages, which are not composed), at the first read; `fail` when the wait ends
+    first, with `catalog_hash` (the last read), `waited_ms`, `expected` and the three digests
+    `rules_digest_before` (the generation read before the hold), `rules_digest_expected` and
+    `rules_digest` (the last read). A check-config that gives no digest (refused or unanswered, a
+    configuration without `policy`, a composition refused: the row `check_config` says which)
+    fails the row with `catalog_before`, `expected` `unknown` and `rules_digest_expected`
+    `null`. A catalog or a composition record that cannot be read is `not_evaluated` with the
+    failure.
+
+  With `bound` empty it passes at its first read, `expected` `unchanged` and `bound` `[]`: the
+  workbench reads only the games of configured instances (a game root no instance binds is never
+  read), so no new composition comes. When the file does not change it passes at its first read,
+  `expected` `unchanged`, as before. A journal without `bound` (an operation an earlier build
+  began, resumed by this one) keeps the wait for a catalog other than the one read before the
+  hold, reading again every 500 ms within the same time: `pass` with `expected` `new`, else
+  `fail` with `waited_ms`. A catalog that cannot be read is `not_evaluated`, as before.
 - **`place` while the Runtime is stopped** (Workflow #453 S6, since 0.12.59; register §1.345; the
   coordinator's rulings of 11-13 on board #453, not the owner's words; fix 1 after the
   independent review). With no Runtime answering, `place` no longer refuses

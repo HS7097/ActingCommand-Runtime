@@ -1529,3 +1529,38 @@ pub(super) fn authorized(host: &dyn Host, root: &Path, zip: &Path, mut params: V
     }
     params
 }
+
+/// Workflow #453 S5b: writes below the state root `state_root` the composition record of the
+/// Runtime's composed generation `catalog_hash` (`sha256:` and 64 hex digits) with the rules
+/// digest `rules_digest`, where the Runtime's catalog store keeps it
+/// (`policy\catalogs\generations\<hex>\standard-packs.json`, the schema the workbench writes).
+pub(super) fn write_composed_generation(state_root: &Path, catalog_hash: &str, rules_digest: &str) {
+    let hex = catalog_hash
+        .strip_prefix("sha256:")
+        .expect("a catalog hash");
+    let directory = state_root
+        .join("policy")
+        .join("catalogs")
+        .join("generations")
+        .join(hex);
+    fs::create_dir_all(&directory).expect("the generation directory");
+    write_json(
+        &directory.join("standard-packs.json"),
+        &json!({
+            "schema_version": "actingcommand.standard-pack-composition.v1",
+            "rules_digest": rules_digest,
+            "games": {},
+            "procedures": [],
+            "pools": [],
+        }),
+    );
+}
+
+/// Workflow #453 S5b: every check-config that passes previews the composition with the rules
+/// digest `rules_digest` (its report's member `standard_pack_schedule`, no problem).
+pub(super) fn preview_rules_digest(host: &FakeHost, rules_digest: &str) {
+    host.programs.check_config_report.borrow_mut().insert(
+        "standard_pack_schedule",
+        json!({"composer_mode": true, "problems": [], "rules_digest": rules_digest}),
+    );
+}

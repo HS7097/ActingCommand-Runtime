@@ -538,13 +538,24 @@ The members of `report`:
   "Standard packs").
 - `standard_pack_schedule` is present when the configuration has a `policy`
   section (ROUT-L RL-1b): `{ composer_mode, games, rules, pools, profiles,
-  events, unclassified, problems, left_out }`, the composition the scheduler
+  events, unclassified, problems, left_out, rules_digest }`, the composition the scheduler
   workbench would make for the configured instances from the game roots below
   `standard_packs.root`, in either mode; `composer_mode` is `true` when the
   `policy` section names no `catalog`. Each refused `schedule.json`
   (`standard_pack_root_invalid`) is in `problems` and is also a note of
   `check_config_passed`; a game in use whose game root is broken is in
-  `left_out` (its problem is `standard_packs`'s).
+  `left_out` (its problem is `standard_packs`'s). Workflow #453 S5b (since
+  0.12.73; register §1.474): `rules_digest`, the composition's rules digest
+  (`StandardPackComposition::rules_digest`, the digest the scheduler workbench
+  records as a generation's `rules_digest` and by which it decides whether a
+  check activates a new generation), `null` when the composition is refused.
+  The preview composes with catalog version 1 and the workbench with the
+  ledger's head plus one; the version enters the catalog's hash, not the
+  digest, which covers the compiled items and the procedure manifest. The
+  rescue module's check after a placement compares it with the running
+  Runtime's generation ([install-cli.md](install-cli.md), "The composition
+  after a placement"). The member is new in the report; its schema is
+  unchanged.
 - `state_root_installation` is always present (Workflow #453 S11, since 0.12.60,
   [state-root-installation.md](state-root-installation.md)): what the state root's record
   `installation.json` says for the installation the configuration belongs to, judged as the start
