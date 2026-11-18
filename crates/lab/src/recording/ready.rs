@@ -239,9 +239,10 @@ pub struct RecordReadyOutcome {
     pub withheld: Option<Vec<RecordWithheld>>,
     /// #463 PRIV-3 amendment 1: under the same condition, each case that leaves out targets
     /// needing a withheld reading, `{case, page, targets, page_judged}`, as `record stop` answers
-    /// them; absent when none does.
+    /// them (fix round 2: carried as they are, the JSON `record stop`'s `lab` holds); absent when
+    /// none does.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub readings_left_out: Vec<Value>,
+    pub readings_left_out: Vec<OpaqueJson>,
 }
 
 /// #463 S2-1b: where each part of the package's identity `record ready` took came from, a word of

@@ -571,7 +571,12 @@ fn ready_of(
         sources,
     );
     outcome.withheld = withheld;
-    outcome.readings_left_out = readings_left_out;
+    // Fix round 2: the Lab's public answer carries no untyped JSON; each member is carried as it
+    // is, byte for byte what `record stop` answers.
+    outcome.readings_left_out = readings_left_out
+        .iter()
+        .map(OpaqueJson::from_serializable)
+        .collect::<LabResult<Vec<_>>>()?;
     Ok(outcome)
 }
 

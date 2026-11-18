@@ -40710,6 +40710,17 @@ list of a package's read regions it uses is [privacy-zones.md](privacy-zones.md)
   command line given a third word (12, `apps/actinglab/src/tests/gate_463_priv3_cli.rs`). Adapted:
   test 7, whose box over the reading was a template and is now a colour probe (a template there
   is refused before its case, test 10), its `withheld` naming the reading.
+- *Fix round 2* (`rd-1119/brief-463-priv3-fix2.md`, after CI's `light` and the second review). The
+  architecture guard `lab_source_obeys_dependency_law` found a public field of untyped JSON:
+  `RecordReadyOutcome::readings_left_out` is now `Vec<OpaqueJson>`, the Lab's own transparent
+  carrier that `record stop`'s `lab` and `record ready`'s generator warnings already use, so
+  `record ready`'s answer is byte for byte what it was. Nothing else the slice added exposes
+  `serde_json::Value` or a Ledger storage type in a public item, or holds a call the guard forbids.
+  The contract's paragraph on `provenance` is reflowed; the MCP manual's `ac_record_stop` names the
+  third way to `record_case_reading_withheld` (a target a page forbids passing on the canvas colour
+  inside a withheld rectangle); the code's catalogue entry says that a case failing for this cause
+  and another at once is refused with it, its `checks` still listing every failed check. Tests:
+  none added, none adapted.
 
 ### 1.484 Slice #463 SEL-2L-rows (0.12.74): a scrolling select read by detecting blocks: the recording generates the shared read (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: an archived recording of a scrolling grid of shop cards whose names take one or two lines in one title box waits for it to become a package; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1119/brief-463-sel2l-rows-generator.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slice S-rows, on main `1e5a46b7`)
 

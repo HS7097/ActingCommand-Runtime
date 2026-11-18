@@ -3039,10 +3039,10 @@ review` read the recording's own.
 
 In the package, `record stop` writes `provenance.destination: "local"` into the entry task of a
 local recording, and nothing for a public one: no mark means public, as
-[privacy-zones.md](privacy-zones.md) reads a package. Admission asks of `provenance` only that it
-is an object or null, so no package revision moves; a local recording's files are byte for byte what a
-recording made before this section generates, but for that one member. Refusing a local package in a public repository,
-at adoption and in a repository's CI, is built by a later slice.
+[privacy-zones.md](privacy-zones.md) reads a package. Admission asks of `provenance` only that it is
+an object or null, so no package revision moves; a local recording's files are byte for byte what a
+recording made before this section generates, but for that one member. Refusing a local package in a
+public repository, at adoption and in a repository's CI, is built by a later slice.
 
 ## A recording's size
 
