@@ -7,7 +7,11 @@
 //! on a connection of its own, each read through `tap.rs`, and answers per way only a word, an
 //! error's kind, a count and counts of what the phone sent. The list of applications of
 //! `running`, `launch` and `stop` is asked the way the service itself names among its features
-//! in the discovery handshake ([`Listing`]).
+//! in the discovery handshake ([`Listing`]). (ACIB-3b, third round) `probe` also asks the two
+//! lists in the form of the screenshot's request, which the phone answers (the library's
+//! `invoke_with_plist_action`, with the action the screenshot's rule gives: [`action_of`]); and
+//! `running`, `launch` and `stop` read their connections through a tap too ([`Watched`]), so that
+//! an error after the phone ended the connection has a word of its own, `connection_closed`.
 //!
 //! Everything here only reads, but for `launch`, which launches one application, and `stop`,
 //! which ends one application's own processes (ACIB-3). Of the application service's lists of
@@ -44,7 +48,8 @@ use crate::tap::{self, PhoneSent, Seen, Tapped};
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
 use idevice::services::core_device::{
-    AppServiceClient, CoreDeviceError, ImageFormat, ScreenCaptureServiceClient,
+    AppServiceClient, CoreDeviceError, CoreDeviceServiceClient, ImageFormat,
+    ScreenCaptureServiceClient,
 };
 use idevice::services::core_device_proxy::CoreDeviceProxy;
 use idevice::services::dvt::remote_server::RemoteServerClient;
@@ -86,6 +91,30 @@ type AppService = AppServiceClient<Box<dyn ReadWrite>>;
 type ScreenCaptureService = ScreenCaptureServiceClient<Box<dyn ReadWrite>>;
 /// The library's RemoteXPC client on a connection inside the tunnel.
 type Xpc = RemoteXpcClient<Box<dyn ReadWrite>>;
+/// (ACIB-3b, third round) The library's CoreDevice client on a connection inside the tunnel: the
+/// one each of its CoreDevice clients holds (the application service's, the screen capture
+/// service's), public with its `invoke_with_plist_action` (idevice 0.1.68,
+/// `services/core_device/mod.rs` 46-82).
+type CoreDevice = CoreDeviceServiceClient<Box<dyn ReadWrite>>;
+
+/// (ACIB-3b, third round) The prefixes of a CoreDevice feature's identifier and of an action's.
+/// The screenshot the phone answers is asked for by the feature
+/// `com.apple.coredevice.feature.capturescreenshot` with the action
+/// `com.apple.coredevice.action.capturescreenshot` (idevice 0.1.68,
+/// `services/core_device/screencaptureservices.rs` 59-66): the same name after the other prefix
+/// ([`action_of`]). That is the rule of this one pair: the library's one other pair, the location
+/// service's, names another action than its feature (`feature.simulatelocation`,
+/// `action.availablelocationscenarios`: `services/core_device/location_service.rs` 46-53).
+const FEATURE_PREFIX: &str = "com.apple.coredevice.feature.";
+const ACTION_PREFIX: &str = "com.apple.coredevice.action.";
+/// The features of the application service's lists of applications and of processes, as the
+/// library's `list_apps` and `list_processes` name them (`services/core_device/app_service.rs`
+/// 159 and 305) and the service lists them in the discovery handshake.
+const LIST_APPS_FEATURE: &str = "com.apple.coredevice.feature.listapps";
+const LIST_PROCESSES_FEATURE: &str = "com.apple.coredevice.feature.listprocesses";
+/// The member of the output of the list of processes that holds it, as the library's
+/// `list_processes` reads it (`services/core_device/app_service.rs` 308-311).
+const PROCESS_TOKENS: &str = "processTokens";
 
 /// (ACIB-3b, second round) The feature the application service names, among its features in the
 /// discovery handshake, when it offers the streamed list of applications (idevice 0.1.68,
@@ -149,7 +178,8 @@ impl Listing {
 
 /// A device's number, the tunnel to it, the application service's port in it and the way its list
 /// of applications is asked for, and the service's client, or the kind of the error the service's
-/// handshake failed with.
+/// handshake failed with; (ACIB-3b, third round) and what the phone sent on the client's
+/// connection, which tells the kinds of its errors.
 struct AppConnection {
     device: u32,
     /// The tunnel, which stays open while it is held.
@@ -157,6 +187,34 @@ struct AppConnection {
     port: u16,
     listing: Listing,
     client: Result<AppService, ErrorKind>,
+    watch: Watched,
+}
+
+/// (ACIB-3b, third round) A connection of `running`, `launch` or `stop` to the application
+/// service, read through a [`Tapped`] stream as `probe` reads its connections (every byte passed
+/// on unchanged, only counted): an error on it is [`ErrorKind::ConnectionClosed`] once the phone
+/// ended the connection or reset a stream of it (`tap.rs`, [`tap::kind_after`]), whatever the
+/// library made of that, and otherwise the kind the library's error tells
+/// ([`service_error_kind`]). So `answer_unreadable` is never a closed connection in these three.
+#[derive(Default)]
+struct Watched(Arc<Mutex<Seen>>);
+
+impl Watched {
+    /// `stream`, its reads counted by this watch.
+    fn tapped(&self, stream: Box<dyn ReadWrite>) -> Box<dyn ReadWrite> {
+        Box::new(Tapped::new(stream, Arc::clone(&self.0)))
+    }
+
+    /// The kind of `error`, an error of the library on this connection.
+    fn kind(&self, error: &IdeviceError) -> ErrorKind {
+        self.after(service_error_kind(error))
+    }
+
+    /// `kind`, or `connection_closed` when the phone ended this connection or reset a stream of
+    /// it.
+    fn after(&self, kind: ErrorKind) -> ErrorKind {
+        tap::kind_after(&tap::summary_of(&self.0), kind)
+    }
 }
 
 /// One application of a list, as `matching.rs` reads it: its bundle identifier and its path.
@@ -411,8 +469,9 @@ async fn service(target: &Target, name: &str, context: &Context) -> Result<Line,
 /// deadline leaves no time for is `not_asked`). Nothing changes on the phone: the two `listen`
 /// ways ask nothing, the others ask for a list. The application service not listed refuses the
 /// probe (`service_not_listed`); the screen capture service not listed is its way's word. The
-/// three ways after the application service's `listen` count the phone's messages beyond what it
-/// counted (its answers to the handshake alone).
+/// ways after the application service's `listen` (three, and the two of the screenshot's form of
+/// the third round) count the phone's messages beyond what it counted (its answers to the
+/// handshake alone).
 async fn probe(target: &Target, wait_ms: u64, context: &Context) -> Result<Line, Failure> {
     let device = locate(target, context).await?;
     let number = device.device_id;
@@ -432,9 +491,11 @@ async fn probe(target: &Target, wait_ms: u64, context: &Context) -> Result<Line,
         let (port, compared) = match way {
             ProbeWay::ListenScreenCapture => (screen, None),
             ProbeWay::Listen => (Some(application), None),
-            ProbeWay::ListApps | ProbeWay::StreamApps | ProbeWay::ListProcesses => {
-                (Some(application), baseline.as_ref())
-            }
+            ProbeWay::ListApps
+            | ProbeWay::StreamApps
+            | ProbeWay::ListProcesses
+            | ProbeWay::ListAppsAction
+            | ProbeWay::ListProcessesAction => (Some(application), baseline.as_ref()),
         };
         let result = probe_way(&mut tunnel, way, port, compared, wait, context.deadline).await;
         if way == ProbeWay::Listen {
@@ -560,7 +621,57 @@ async fn ask(
             let processes = client.list_processes().await.map_err(request)?;
             Ok(Some(processes.len()))
         }
+        // (ACIB-3b, third round) The screenshot's form: the library's CoreDevice client (its
+        // RemoteXPC handshake, as the screen capture service's `from_stream`), then its
+        // `invoke_with_plist_action` with the feature, the action the screenshot's rule gives for
+        // it and the input `list_apps` or `list_processes` sends (`mod.rs` 68-82, 161-230:
+        // protocol version 2, `CoreDevice.actionIdentifier`, the answer read on the reply
+        // channel). The output is counted as the library's own `list_apps` (a list) and
+        // `list_processes` (the list `processTokens`) read theirs; another shape is
+        // `answer_unreadable`. Of an entry nothing but the count leaves this function.
+        ProbeWay::ListAppsAction | ProbeWay::ListProcessesAction => {
+            let processes = way == ProbeWay::ListProcessesAction;
+            let (feature, input) = if processes {
+                (LIST_PROCESSES_FEATURE, Dictionary::new())
+            } else {
+                (LIST_APPS_FEATURE, list_options())
+            };
+            let action = action_of(feature).ok_or(Asked::Request(ErrorKind::Other))?;
+            // The library takes the input as a property list dictionary, which it turns back
+            // into XPC (`mod.rs` 74-75); its own conversion makes the one of the other
+            // (`xpc/format.rs` 153-172).
+            let input = XPCObject::Dictionary(input)
+                .to_plist()
+                .into_dictionary()
+                .ok_or(Asked::Request(ErrorKind::Other))?;
+            let mut client = CoreDevice::new(tapped).await.map_err(handshake)?;
+            let output = client
+                .invoke_with_plist_action(feature, input, action)
+                .await
+                .map_err(request)?;
+            let entries = if processes {
+                output
+                    .as_dictionary()
+                    .and_then(|members| members.get(PROCESS_TOKENS))
+                    .and_then(|tokens| tokens.as_array())
+                    .map(Vec::len)
+            } else {
+                output.as_array().map(Vec::len)
+            };
+            entries
+                .map(Some)
+                .ok_or(Asked::Request(ErrorKind::AnswerUnreadable))
+        }
     }
+}
+
+/// (ACIB-3b, third round) The action the screenshot's rule gives for the feature `feature`: the
+/// name after the prefix of a feature, after the prefix of an action ([`FEATURE_PREFIX`],
+/// [`ACTION_PREFIX`]); `None` for an identifier without the prefix of a feature.
+fn action_of(feature: &str) -> Option<String> {
+    feature
+        .strip_prefix(FEATURE_PREFIX)
+        .map(|name| format!("{ACTION_PREFIX}{name}"))
 }
 
 async fn images(target: &Target, context: &Context) -> Result<Line, Failure> {
@@ -801,6 +912,7 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
         port,
         listing,
         client: service,
+        watch,
     } = app_service(target, context).await?;
     let asked = Running::asked(number, bundle);
     let mut client = match service {
@@ -811,7 +923,8 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
         }
     };
     context.enter(Stage::ApplicationList);
-    let answer = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
+    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
+    let answer = match listed {
         Err(kind) => asked.failed(Problem::ApplicationListFailed, Some(kind)),
         Ok(Installation::NotInstalled) => asked.not_installed(),
         Ok(Installation::PathUnreadable) => asked
@@ -819,7 +932,7 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
             .failed(Problem::BundlePathUnreadable, None),
         Ok(Installation::Installed(directories)) => {
             context.enter(Stage::ProcessList);
-            match pids_of(&mut client, &directories).await {
+            match pids_of(&mut client, &watch, &directories).await {
                 Ok(pids) => asked.found(pids),
                 Err(kind) => asked
                     .installed()
@@ -850,6 +963,7 @@ async fn launch(
         port,
         listing,
         client: service,
+        watch,
     } = app_service(target, context).await?;
     let asked = Launch::asked(number, bundle, relaunch);
     let mut client = match service {
@@ -861,7 +975,8 @@ async fn launch(
     };
     // Where the bundle lies is not needed to launch it: a path read as no place is installed.
     context.enter(Stage::ApplicationList);
-    let asked = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
+    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
+    let asked = match listed {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
             return Ok(Line::Launch(failed));
@@ -875,7 +990,7 @@ async fn launch(
         .await;
     Ok(Line::Launch(match launched {
         Ok(process) => asked.launched(process.pid),
-        Err(error) => asked.failed(Problem::LaunchFailed, Some(service_error_kind(&error))),
+        Err(error) => asked.failed(Problem::LaunchFailed, Some(watch.kind(&error))),
     }))
 }
 
@@ -896,6 +1011,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         port,
         listing,
         client: service,
+        watch,
     } = app_service(target, context).await?;
     let asked = Stop::asked(number, bundle);
     let mut client = match service {
@@ -906,7 +1022,8 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         }
     };
     context.enter(Stage::ApplicationList);
-    let directories = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
+    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
+    let directories = match listed {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
             return Ok(Line::Stop(failed));
@@ -923,7 +1040,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         Ok(Installation::Installed(directories)) => directories,
     };
     context.enter(Stage::ProcessList);
-    let first = match pids_of(&mut client, &directories).await {
+    let first = match pids_of(&mut client, &watch, &directories).await {
         Ok(pids) => pids,
         Err(kind) => {
             let failed = asked
@@ -941,7 +1058,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         if let Err(error) = client.send_signal(pid, KILL).await {
             errors.push(SignalError {
                 pid,
-                error_kind: service_error_kind(&error),
+                error_kind: watch.kind(&error),
             });
         }
     }
@@ -950,7 +1067,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         errors,
     };
     context.enter(Stage::LooksAfterSignals);
-    let mut last = match pids_of(&mut client, &directories).await {
+    let mut last = match pids_of(&mut client, &watch, &directories).await {
         Ok(pids) => pids,
         Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
     };
@@ -964,7 +1081,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
             break verdict;
         }
         tokio::time::sleep(LOOK_INTERVAL).await;
-        match look_within(&mut client, &directories, context.deadline).await {
+        match look_within(&mut client, &watch, &directories, context.deadline).await {
             Some(Ok(pids)) => last = pids,
             Some(Err(kind)) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
             // The deadline passed during the look: the last look inside it is `last`.
@@ -978,14 +1095,15 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
 /// passes before the service answers it.
 async fn look_within(
     client: &mut AppService,
+    watch: &Watched,
     directories: &[String],
     deadline: Option<tokio::time::Instant>,
 ) -> Option<Result<Pids, ErrorKind>> {
     match deadline {
-        Some(deadline) => tokio::time::timeout_at(deadline, pids_of(client, directories))
+        Some(deadline) => tokio::time::timeout_at(deadline, pids_of(client, watch, directories))
             .await
             .ok(),
-        None => Some(pids_of(client, directories).await),
+        None => Some(pids_of(client, watch, directories).await),
     }
 }
 
@@ -1019,15 +1137,19 @@ async fn app_service(target: &Target, context: &Context) -> Result<AppConnection
         .await
         .map_err(|error| Failure::library(Problem::ServiceUnreachable, &error))?;
     context.enter(Stage::ServiceXpcHandshake);
-    let client = <AppService as RsdService>::from_stream(stream)
+    // (ACIB-3b, third round) The client's connection is read through a tap, as `probe` reads its
+    // own: the kinds of its errors tell a connection the phone ended apart (`Watched`).
+    let watch = Watched::default();
+    let client = <AppService as RsdService>::from_stream(watch.tapped(stream))
         .await
-        .map_err(|error| service_error_kind(&error));
+        .map_err(|error| watch.kind(&error));
     Ok(AppConnection {
         device: device.device_id,
         tunnel,
         port,
         listing,
         client,
+        watch,
     })
 }
 
@@ -1048,9 +1170,11 @@ async fn app_service(target: &Target, context: &Context) -> Result<AppConnection
 /// library's behaviour, and the same of an element of the streamed list without a bundle
 /// identifier or a path. (ACIB-3b, second round) The list is asked the way `listing` names: the
 /// library's `list_apps` on `client`, or the streamed list on a connection of its own to `port`
-/// through `tunnel`, with the same flags.
+/// through `tunnel`, with the same flags. (ACIB-3b, third round) An error's kind is told by what
+/// the phone sent on the connection it came on: `watch`, the client's, or the streamed list's own.
 async fn installation(
     client: &mut AppService,
+    watch: &Watched,
     tunnel: &mut AdapterHandle,
     port: u16,
     listing: Listing,
@@ -1061,7 +1185,7 @@ async fn installation(
         Listing::ListApps => client
             .list_apps(false, true, true, false, true)
             .await
-            .map_err(|error| service_error_kind(&error))?
+            .map_err(|error| watch.kind(&error))?
             .into_iter()
             .map(|application| ListedApplication {
                 bundle_identifier: application.bundle_identifier,
@@ -1081,23 +1205,27 @@ async fn installation(
 
 /// The streamed list of applications on a connection of its own to the application service's
 /// `port` through `tunnel`: the connection, the library's RemoteXPC handshake on it, then
-/// [`streamed_applications`]. Each failure is its [`ErrorKind`] alone.
+/// [`streamed_applications`]. Each failure is its [`ErrorKind`] alone, (ACIB-3b, third round)
+/// told by what the phone sent on this connection ([`Watched`]).
 async fn streamed_list(
     tunnel: &mut AdapterHandle,
     port: u16,
 ) -> Result<Vec<ListedApplication>, ErrorKind> {
+    let watch = Watched::default();
     let stream = tunnel
         .connect_to_service_port(port)
         .await
-        .map_err(|error| service_error_kind(&error))?;
-    let mut client = Xpc::new(stream)
+        .map_err(|error| watch.kind(&error))?;
+    let mut client = Xpc::new(watch.tapped(stream))
         .await
-        .map_err(|error| service_error_kind(&error))?;
+        .map_err(|error| watch.kind(&error))?;
     client
         .do_handshake()
         .await
-        .map_err(|error| service_error_kind(&error))?;
-    streamed_applications(&mut client).await
+        .map_err(|error| watch.kind(&error))?;
+    streamed_applications(&mut client)
+        .await
+        .map_err(|kind| watch.after(kind))
 }
 
 /// The streamed list of applications, asked on `client` as the library's `stream_apps` asks it
@@ -1173,10 +1301,7 @@ async fn streamed_applications(client: &mut Xpc) -> Result<Vec<ListedApplication
 /// random UUID too). `None` only if the library's decoder did not read the side channel's UUID
 /// (the library offers no other way to make an XPC UUID without a crate of its own).
 fn streamed_list_request() -> Option<XPCObject> {
-    let mut options = Dictionary::new();
-    for (key, value) in LIST_OPTIONS {
-        options.insert(key.to_owned(), XPCObject::Bool(value));
-    }
+    let options = list_options();
     let mut proxy = Dictionary::new();
     proxy.insert("sideChannel".to_owned(), uuid_object(random_uuid())?);
     let mut input = Dictionary::new();
@@ -1229,6 +1354,17 @@ fn streamed_list_request() -> Option<XPCObject> {
     Some(XPCObject::Dictionary(request))
 }
 
+/// The flags of the list of applications ([`LIST_OPTIONS`]), each a boolean, in their order: the
+/// input of the streamed list and (ACIB-3b, third round) of the list asked in the screenshot's
+/// form, as the library's `app_list_options` makes the input of its two lists.
+fn list_options() -> Dictionary {
+    let mut options = Dictionary::new();
+    for (key, value) in LIST_OPTIONS {
+        options.insert(key.to_owned(), XPCObject::Bool(value));
+    }
+    options
+}
+
 /// Sixteen bytes of a random UUID (version 4, its variant 10): two hashes of a hasher the
 /// standard library seeds at random for each new state (not for cryptography; an identifier of
 /// one request, as the library's own `Uuid::new_v4`).
@@ -1268,12 +1404,17 @@ fn uuid_object(bytes: [u8; 16]) -> Option<XPCObject> {
 
 /// The pids of the processes the application service lists whose executable lies inside one
 /// of `directories`, the application's and its extensions' apart. The list stays in this
-/// function.
-async fn pids_of(client: &mut AppService, directories: &[String]) -> Result<Pids, ErrorKind> {
+/// function. An error's kind is told by what the phone sent on the client's connection
+/// (`watch`).
+async fn pids_of(
+    client: &mut AppService,
+    watch: &Watched,
+    directories: &[String],
+) -> Result<Pids, ErrorKind> {
     let processes = client
         .list_processes()
         .await
-        .map_err(|error| service_error_kind(&error))?;
+        .map_err(|error| watch.kind(&error))?;
     Ok(matching::pids_inside(
         directories,
         processes.iter().map(|process| Process {
@@ -1863,6 +2004,16 @@ mod tests {
             request.get("CoreDevice.coreDeviceVersion"),
             Some(&XPCObject::Dictionary(version))
         );
+        // (ACIB-3b, third round) Two dictionaries are equal whatever the order of their members
+        // (an XPC dictionary is an `IndexMap`): the order of each one is pinned by its keys.
+        let version_keys: Vec<&str> = match request.get("CoreDevice.coreDeviceVersion") {
+            Some(XPCObject::Dictionary(version)) => version.keys().map(String::as_str).collect(),
+            other => panic!("the version is {other:?}"),
+        };
+        assert_eq!(
+            version_keys,
+            ["originalComponentsCount", "components", "stringValue"]
+        );
         assert_eq!(
             request.get("CoreDevice.featureIdentifier"),
             Some(&XPCObject::String(
@@ -1902,6 +2053,23 @@ mod tests {
             input.get("actualInput"),
             Some(&XPCObject::Dictionary(options))
         );
+        let option_keys: Vec<&str> = match input.get("actualInput") {
+            Some(XPCObject::Dictionary(options)) => options.keys().map(String::as_str).collect(),
+            other => panic!("the flags are {other:?}"),
+        };
+        assert_eq!(
+            option_keys,
+            [
+                "includeAppClips",
+                "includeRemovableApps",
+                "includeHiddenApps",
+                "includeInternalApps",
+                "includeDefaultApps",
+                "includeAppGroupIdentifiers",
+                "includeContainerPaths",
+                "requireContainerAccess",
+            ]
+        );
         let Some(XPCObject::Dictionary(proxy)) = input.get("streamProxy") else {
             panic!("the stream proxy is a dictionary");
         };
@@ -1921,5 +2089,51 @@ mod tests {
             "01234567-89ab-4cde-8f01-23456789abcd"
         );
         assert!(matches!(uuid_object(one), Some(XPCObject::Uuid(_))));
+    }
+
+    /// (ACIB-3b, third round) The two lists asked in the form of the screenshot's request: the
+    /// rule gives, for the screenshot's feature, the screenshot's own action (the one pair of the
+    /// library the phone answers), and for the features of the two lists
+    /// `com.apple.coredevice.action.listapps` and `com.apple.coredevice.action.listprocesses`; an
+    /// identifier that is no feature's gives none. Both ways read their answer on the reply
+    /// channel. The input of the list of applications, as the library takes it (a property list
+    /// dictionary, made by the library's own conversion), holds the flags of `list_apps`, each
+    /// with its value, and nothing else; that of the list of processes is empty.
+    #[test]
+    fn the_screenshots_form_asks_each_list_by_the_screenshots_rule() {
+        assert_eq!(
+            action_of("com.apple.coredevice.feature.capturescreenshot").as_deref(),
+            Some("com.apple.coredevice.action.capturescreenshot")
+        );
+        assert_eq!(
+            action_of(LIST_APPS_FEATURE).as_deref(),
+            Some("com.apple.coredevice.action.listapps")
+        );
+        assert_eq!(
+            action_of(LIST_PROCESSES_FEATURE).as_deref(),
+            Some("com.apple.coredevice.action.listprocesses")
+        );
+        assert_eq!(action_of("com.apple.coredevice.appservice"), None);
+        for way in [ProbeWay::ListAppsAction, ProbeWay::ListProcessesAction] {
+            assert_eq!(way.reads(), tap::Reads::Reply, "{way:?}");
+        }
+
+        let input = XPCObject::Dictionary(list_options())
+            .to_plist()
+            .into_dictionary()
+            .expect("the flags are a dictionary");
+        assert_eq!(input.len(), LIST_OPTIONS.len());
+        for (key, value) in LIST_OPTIONS {
+            assert_eq!(
+                input.get(key).and_then(|flag| flag.as_boolean()),
+                Some(value),
+                "{key}"
+            );
+        }
+        let empty = XPCObject::Dictionary(Dictionary::new())
+            .to_plist()
+            .into_dictionary()
+            .expect("an empty dictionary");
+        assert!(empty.is_empty());
     }
 }

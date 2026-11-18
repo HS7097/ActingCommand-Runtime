@@ -157,22 +157,39 @@ pub enum Problem {
 }
 
 /// How a request to the application service failed, by this program's own words: what the
-/// library's error tells apart, and `other` for everything else. The library hands the
-/// service's own refusal as the debug text of its error dictionary, which can name other
-/// applications, their paths and their processes: no text of these errors is ever shown, only
-/// the kind. A locked phone has no kind of its own: the library maps no refusal to one.
+/// library's error tells apart, and `other` for everything else; (ACIB-3b, third round) in
+/// `running`, `launch` and `stop`, `connection_closed` first, whatever the library made of it,
+/// when the phone had ended the connection or reset a stream of it, as `probe` tells it
+/// (`tap.rs`). The library hands the service's own refusal as the debug text of its error
+/// dictionary, which can name other applications, their paths and their processes: no text of
+/// these errors is ever shown, only the kind. A locked phone has no kind of its own: the library
+/// maps no refusal to one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// The service answered with its error in place of an output (the library's
     /// `CoreDevice(DeviceError)`): the phone refused the request.
     DeviceRefused,
-    /// The service answered, but not in the shape the library reads (`UnexpectedResponse`,
-    /// `Plist`, `CoreDevice(MissingField)`, `CoreDevice(MalformedField)`).
+    /// What the phone sent is not in the shape the library reads: the service's answer
+    /// (`UnexpectedResponse`, `Plist`, `CoreDevice(MissingField)`, `CoreDevice(MalformedField)`),
+    /// or an HTTP/2 frame of it the library cannot read (a window update of another length, which
+    /// it reports as an unexpected response too). In `running`, `launch` and `stop` never the
+    /// phone's ending of the connection, which the library also reports as an unexpected response
+    /// (idevice 0.1.68, `xpc/http2/mod.rs` 70-73): that is `connection_closed`. Of a `probe` way,
+    /// whose outcome `connection_closed` says the phone ended the connection, the kind beside it
+    /// is the one the library made of the end (this word, for a read that found the end).
     AnswerUnreadable,
     /// The connection under the exchange failed (`Socket`).
     ConnectionFailed,
-    /// The XPC layer over the connection failed (`Xpc`).
+    /// (ACIB-3b, third round; `running`, `launch` and `stop`) The phone had ended the connection
+    /// under the exchange, or reset a stream of it, when the error came: a read of the library
+    /// found the connection's end (which the library reports as an unexpected response), or the
+    /// phone sent a GOAWAY or a RST_STREAM frame (which it reports as XPC errors:
+    /// `xpc/http2/frame.rs` 77-83, `xpc/http2/mod.rs` 262-270), as the bytes the library read on
+    /// that connection show (`tap.rs`, as `probe` reads its connections).
+    ConnectionClosed,
+    /// The XPC layer over the connection failed (`Xpc`); in `running`, `launch` and `stop` not
+    /// by the phone's GOAWAY or reset, which is `connection_closed`.
     XpcFailed,
     /// Any other error of the library.
     Other,
@@ -371,23 +388,38 @@ pub enum ProbeWay {
     /// The library's `list_processes`: the feature `listprocesses`, protocol version 0, its
     /// answer read on the reply channel.
     ListProcesses,
+    /// (ACIB-3b, third round) The list of applications in the form of the screenshot's request,
+    /// which the phone answers: the library's CoreDevice client and its
+    /// `invoke_with_plist_action`, the feature `listapps` with the action the screenshot's rule
+    /// gives for it (`com.apple.coredevice.action.listapps`), protocol version 2, the flags of
+    /// `list_apps`, its answer read on the reply channel.
+    ListAppsAction,
+    /// (ACIB-3b, third round) The list of processes in the same form: the feature
+    /// `listprocesses` with the action `com.apple.coredevice.action.listprocesses`, protocol
+    /// version 2, an empty input, the reply channel.
+    ListProcessesAction,
 }
 
 impl ProbeWay {
     /// Every way, in the order `probe` asks them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::ListenScreenCapture,
         Self::Listen,
         Self::ListApps,
         Self::StreamApps,
         Self::ListProcesses,
+        Self::ListAppsAction,
+        Self::ListProcessesAction,
     ];
 
     /// The channels the library reads this way's answer on.
     pub const fn reads(self) -> Reads {
         match self {
             Self::ListenScreenCapture | Self::Listen => Reads::Both,
-            Self::ListApps | Self::ListProcesses => Reads::Reply,
+            Self::ListApps
+            | Self::ListProcesses
+            | Self::ListAppsAction
+            | Self::ListProcessesAction => Reads::Reply,
             Self::StreamApps => Reads::Root,
         }
     }
@@ -398,7 +430,10 @@ impl ProbeWay {
 #[serde(rename_all = "snake_case")]
 pub enum ProbeOutcome {
     /// The library returned what the way asks for: a list (`entries`, its count), or, for a
-    /// `listen`, a message with a body the phone sent unasked.
+    /// `listen`, a message with a body the phone sent unasked. (ACIB-3b, third round) Of an
+    /// action way, the service's output in the shape the library's own `list_apps` (a list) or
+    /// `list_processes` (a dictionary whose `processTokens` is a list) reads; an output of
+    /// another shape is `failed` with `answer_unreadable`.
     Answered,
     /// The service answered with its error in place of an output (`device_refused`).
     Refused,
@@ -3113,6 +3148,7 @@ mod tests {
                 ErrorKind::DeviceRefused,
                 ErrorKind::AnswerUnreadable,
                 ErrorKind::ConnectionFailed,
+                ErrorKind::ConnectionClosed,
                 ErrorKind::XpcFailed,
                 ErrorKind::Other,
             ]
@@ -3255,6 +3291,8 @@ mod tests {
             (ProbeWay::ListApps, "list_apps"),
             (ProbeWay::StreamApps, "stream_apps"),
             (ProbeWay::ListProcesses, "list_processes"),
+            (ProbeWay::ListAppsAction, "list_apps_action"),
+            (ProbeWay::ListProcessesAction, "list_processes_action"),
         ];
         let outcomes = [
             (ProbeOutcome::Answered, "answered"),
@@ -3400,6 +3438,7 @@ mod tests {
             (ErrorKind::DeviceRefused, "device_refused"),
             (ErrorKind::AnswerUnreadable, "answer_unreadable"),
             (ErrorKind::ConnectionFailed, "connection_failed"),
+            (ErrorKind::ConnectionClosed, "connection_closed"),
             (ErrorKind::XpcFailed, "xpc_failed"),
             (ErrorKind::Other, "other"),
         ];

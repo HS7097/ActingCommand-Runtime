@@ -18,6 +18,9 @@
 //! (its handshake only writes), so what is counted is everything the phone sent on the
 //! connection up to the end of the wait, its answers to the handshake included: the `listen` ways
 //! of the probe count those alone, and [`unanswered`] counts a way's messages beyond them.
+//! (ACIB-3b, third round) `running`, `launch` and `stop` read their connections to the
+//! application service through a [`Tapped`] stream too, so that an error after the phone ended
+//! the connection is told by a word of its own ([`kind_after`]).
 
 use crate::answer::{ErrorKind, ProbeOutcome};
 use idevice::ReadWrite;
@@ -435,6 +438,19 @@ pub fn failed(sent: &PhoneSent, kind: ErrorKind) -> (ProbeOutcome, Option<ErrorK
     }
 }
 
+/// (ACIB-3b, third round) The kind of an error of `running`, `launch` or `stop` on a connection
+/// the phone sent `sent` on, the library's error being of `kind`: `connection_closed` when the
+/// phone had ended the connection or reset a stream of it (as [`failed`] tells it of a way of
+/// `probe`), whatever the library made of that (it reports the end as an unexpected response,
+/// `answer_unreadable`, and the GOAWAY and the reset as XPC errors, `xpc_failed`); else `kind`.
+pub fn kind_after(sent: &PhoneSent, kind: ErrorKind) -> ErrorKind {
+    if ended(sent) {
+        ErrorKind::ConnectionClosed
+    } else {
+        kind
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,6 +729,44 @@ mod tests {
         ];
         for (sent, kind, word, named) in failures {
             assert_eq!(failed(&sent, kind), (word, named), "{sent:?} {kind:?}");
+        }
+
+        // (ACIB-3b, third round) The kind of an error of `running`, `launch` or `stop`: on a
+        // connection the phone ended (a read found its end, which the library reports as an
+        // unexpected response) or on which it sent a GOAWAY or reset a stream (which it reports as
+        // XPC errors), `connection_closed`; on one it did not, the library's own kind, each of them.
+        let closed = PhoneSent {
+            closed: true,
+            ..alive
+        };
+        let gone_away = PhoneSent {
+            frames: Frames {
+                goaway: 1,
+                ..Frames::default()
+            },
+            ..alive
+        };
+        let kinds = [
+            ErrorKind::DeviceRefused,
+            ErrorKind::AnswerUnreadable,
+            ErrorKind::ConnectionFailed,
+            ErrorKind::XpcFailed,
+            ErrorKind::Other,
+        ];
+        for kind in kinds {
+            assert_eq!(kind_after(&alive, kind), kind, "{kind:?}");
+            assert_eq!(kind_after(&PhoneSent::default(), kind), kind, "{kind:?}");
+        }
+        for (sent, kind) in [
+            (closed, ErrorKind::AnswerUnreadable),
+            (gone_away, ErrorKind::XpcFailed),
+            (reset, ErrorKind::XpcFailed),
+        ] {
+            assert_eq!(
+                kind_after(&sent, kind),
+                ErrorKind::ConnectionClosed,
+                "{sent:?} {kind:?}"
+            );
         }
     }
 }

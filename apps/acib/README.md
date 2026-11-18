@@ -255,10 +255,19 @@ are compared without regard to case, as Apple's documentation says they are. Eac
 record, the session, the tunnel, the service listed in the handshake and its port) fail with
 their own words, as every command's; from the service's handshake on, an error is shown by
 `error_kind` alone, one of: `device_refused` (the service answered with its error in place of
-an output: the phone refused), `answer_unreadable` (the service answered in a shape the library
-does not read), `connection_failed` (the connection under the exchange failed),
-`xpc_failed` (the XPC layer over it failed) and `other` (any other error of the library). A
-locked phone has no word of its own: the library maps no refusal to one, and none is guessed
+an output: the phone refused), `answer_unreadable` (what the phone sent is in a shape the
+library does not read: the service's answer, or an HTTP/2 frame of it), `connection_failed`
+(the connection under the exchange failed), `connection_closed` (ACIB-3b, third round: the
+phone had ended the connection, or reset a stream of it, when the error came), `xpc_failed`
+(the XPC layer over the connection failed otherwise) and `other` (any other error of the
+library). One cause each: the library reports the phone's ending of the connection as an
+unexpected response, the same error as an answer it cannot read (idevice 0.1.68,
+`xpc/http2/mod.rs` 70-73), and the phone's GOAWAY and reset as XPC errors (`xpc/http2/frame.rs`
+77-83, `xpc/http2/mod.rs` 262-270); so these three commands read each of their connections to
+the service through the same tap as `probe` (below), every byte passed on unchanged and only
+counted, and an error on a connection the phone ended (a read found its end), or on which it
+sent a GOAWAY or a RST_STREAM frame, is `connection_closed`, whatever the library made of it.
+A locked phone has no word of its own: the library maps no refusal to one, and none is guessed
 here; what a locked phone answers is to be observed on the phone.
 
 **The list of applications.** The service's list of applications is asked for by five flags,
@@ -297,7 +306,18 @@ features in the remote service discovery handshake, as the library's own tool ch
   `futures` stream, which `acib` cannot read without a crate of its own, so `acib` makes that
   request itself and sends it through the library's RemoteXPC client; of each entry it keeps
   its bundle identifier and its path, and an entry without either is `answer_unreadable` for
-  the whole list.
+  the whole list. **Two connections to the service are then open at once**: the client's
+  connection of the stages `service_connection` and `service_xpc_handshake`, opened and shaken
+  first and left idle (nothing is asked on it until the list of processes, the launch or the
+  signals), and the streamed list's own. The library's client of the service holds its
+  connection whole and offers its streamed list only as that `futures` stream, so the list cannot
+  be asked on the client's connection; and the client's connection is opened first so that every
+  command goes through the same stages in the same order whichever way its list is asked (a
+  line's `stage` and `stage_ms` mean one thing). Whether the idle connection matters to the
+  phone is what `probe`'s `stream_apps` tells: it asks the same streamed list with no client's
+  connection opened beside it (the connections of the ways before it are dropped when their
+  waits end; whether the library's TCP stack then closes them toward the phone has not been
+  read).
 - Otherwise **the library's `list_apps`** on the service's connection, as before: the feature
   `listapps`, protocol version 0, no action identifier, its answer read on the reply channel.
 
@@ -448,9 +468,10 @@ starts like the bundle's directory (a longer name, a sibling directory) is not o
   read its answer (it needs `processIdentifierVersion`, `processIdentifier`,
   `executableURL.relative` and `auditToken` in the answer's `processToken`; one missing or of
   another shape is enough), and the phone may have started the application all the same; with
-  `connection_failed`, `xpc_failed` or `other` the request may have reached the phone. After any
-  `launch` problem whose kind is not `device_refused`, and after a `launch` whose deadline
-  passed, `acib running` tells what is true.
+  `connection_closed` the phone ended the connection (or reset a stream of it) and the request
+  may have reached it before; with `connection_failed`, `xpc_failed` or `other` the request may
+  have reached the phone. After any `launch` problem whose kind is not `device_refused`, and
+  after a `launch` whose deadline passed, `acib running` tells what is true.
 - `acib stop --device <n> --bundle <id>`: the application's own processes the list of
   processes holds are each sent SIGKILL (9) through the service's own signal request, one after
   the other. Its extensions' processes are sent nothing: `stop` ends the application, not its
@@ -482,20 +503,22 @@ starts like the bundle's directory (a longer name, a sibling directory) is not o
   server's `kill`) because it is on the same connection as the lists and answers each signal. It
   changes what the phone runs (above).
 
-### What the application service does with a request: `probe` (ACIB-3b, second round)
+### What the application service does with a request: `probe` (ACIB-3b, second and third rounds)
 
 `acib probe --device <n> [--wait-ms <ms>]`, read-only: in the tunnel of `services`, each of
-five ways in turn, each on a connection of its own to its service's port, each waited for
+seven ways in turn, each on a connection of its own to its service's port, each waited for
 `--wait-ms` (1 to 120000, default 4000) and no later than the command's deadline (a way the
-deadline leaves no time for answers `not_asked`; with five ways of 4000 ms the default 30000 ms
-is enough). Nothing on the phone changes: two ways ask nothing, the others ask for a list. The
-ways, in this order:
+deadline leaves no time for answers `not_asked`, and the last one asked may be cut short by it:
+seven ways of 4000 ms take at most 28000 ms, within the default 30000 ms when the steps before
+them take less than 2000 ms; with a longer `--wait-ms`, give `--timeout-ms` seven times it and
+some seconds more). Nothing on the phone changes: two ways ask nothing, the others ask for a
+list of applications or of processes. The ways, in this order:
 
 - `listen_screen_capture`: CoreDevice's screen capture service, which answers on the phone, the
   library's RemoteXPC handshake on it, and nothing asked: what a service that answers sends
   unasked.
 - `listen`: the application service, the same handshake, nothing asked: what it sends unasked,
-  its answers to the handshake among it. The three ways after it count the messages beyond it.
+  its answers to the handshake among it. The five ways after it count the messages beyond it.
 - `list_apps`: the library's `list_apps`, as `running` asks it when the service names no
   streamed list: the feature `listapps`, protocol version 0, the answer read on the reply
   channel (stream 3).
@@ -504,6 +527,33 @@ ways, in this order:
   (stream 1) to the stream's end.
 - `list_processes`: the library's `list_processes`: the feature `listprocesses`, protocol
   version 0, the reply channel.
+- `list_apps_action` (third round): the list of applications in the form of the request the
+  phone answers for a screenshot. The library sends the screenshot's request through its
+  CoreDevice client's `invoke_with_plist_action` (idevice 0.1.68,
+  `services/core_device/screencaptureservices.rs` 59-66), which puts beside the feature an
+  action identifier (`CoreDevice.actionIdentifier`) and sends protocol version 2 in place of 0
+  (`services/core_device/mod.rs` 68-82, 161-205: one envelope, these two members apart). That
+  client is public, so `acib` opens it on the application service's port (its RemoteXPC
+  handshake, as every CoreDevice client of the library does) and sends through it the feature
+  `com.apple.coredevice.feature.listapps`, the flags of `list_apps` (above) as input, and the
+  action the screenshot's pair gives by its rule: its feature
+  `com.apple.coredevice.feature.capturescreenshot` and its action
+  `com.apple.coredevice.action.capturescreenshot` share the name after the prefix, so the action
+  for `…feature.listapps` is `com.apple.coredevice.action.listapps`. The library documents no
+  such rule: it is the screenshot's one pair, and the library's one other pair of a feature and
+  an action, the location service's (`services/core_device/location_service.rs` 46-53: feature
+  `…feature.simulatelocation`, action `…action.availablelocationscenarios`), does not follow
+  it; whether the phone knows this action is what the way tells. The answer is read on the
+  reply channel; `answered` when the service's output is a list, as the library's `list_apps`
+  reads its output (`entries`, its count), and `failed` with `answer_unreadable` when it is of
+  another shape.
+- `list_processes_action` (third round): the list of processes the same way: the feature
+  `com.apple.coredevice.feature.listprocesses`, an empty input (as `list_processes` sends), the
+  action `com.apple.coredevice.action.listprocesses`; `answered` when the output's
+  `processTokens` is a list, as `list_processes` reads it (`entries`, its count).
+
+`running`, `launch` and `stop` do not ask in this form: what they send is decided once `probe`
+has shown on the phone which way the service answers.
 
 The line names `wait_ms` and, in `ways`, per way: `way`, `outcome`, `error_kind` (where the
 library gave an error: the words of the application service above), `entries` (the count of the
@@ -522,12 +572,14 @@ the way ended is counted. Only counts and words: no identifier of the phone, not
 application, no content of a message. The words of `outcome`, one cause each:
 
 - `answered`: the library returned what the way asks for (for a `listen`: a message with a body
-  the phone sent unasked).
+  the phone sent unasked; for an action way, an output of the shape above).
 - `refused`: the service answered with its error in place of an output.
-- `failed`: the library returned another error, with its `error_kind`; the phone did not end
-  the connection.
+- `failed`: the library returned another error, or (an action way) the output is of another
+  shape, with its `error_kind`; the phone did not end the connection.
 - `connection_closed`: the phone ended the connection or reset a stream (a read found its end,
-  a GOAWAY or a RST_STREAM frame), with the `error_kind` the library made of it.
+  a GOAWAY or a RST_STREAM frame), with the `error_kind` the library made of it (here, unlike in
+  `running`, `launch` and `stop`, the library's own kind: `answer_unreadable` for a read that
+  found the end, `xpc_failed` for a GOAWAY or a reset; `phone_sent` tells which).
 - When the wait passed before the library returned, from what the phone sent, in this order:
   `answer_on_other_channel` (beyond `listen`, a message with a body came on the channel the way
   does not read), `answer_incomplete` (a frame or a message was started and is not whole, or
@@ -535,6 +587,12 @@ application, no content of a message. The words of `outcome`, one cause each:
   list without its end), `answer_without_body` (beyond `listen`, a message flagged as a reply
   came on the channel read with an empty dictionary or no body, which the library skips),
   `silent` (not one byte, not even HTTP/2 settings) and `no_answer` (bytes, but none of these).
+  **Of a `listen` way**, which asks nothing and has nothing to count beyond,
+  `answer_without_body` names the phone's reply to the handshake (the library's handshake
+  sends messages without a body or with an empty dictionary on both channels, `xpc/mod.rs`
+  50-85, and a message flagged as a reply and without a body that the phone sends after it is
+  its answer to them), not an answer to a request; the ways after `listen` count only what came
+  beyond it.
 - `service_not_listed` (only the screen capture service can be missing: without the
   application service the probe answers `service_not_listed` itself), `service_unreachable` and
   `handshake_failed` (the connection, or the library's handshake on it, failed, with its
@@ -551,7 +609,18 @@ The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_pas
 `orientation_failed`, `application_list_failed`, `process_list_failed`,
 `bundle_path_unreadable`, `launch_failed`, `still_running`, `not_installed`. The error kinds of
 the application service: `device_refused`, `answer_unreadable`, `connection_failed`,
-`xpc_failed`, `other`.
+`connection_closed`, `xpc_failed`, `other`.
+
+**A locked phone.** Nothing read-only that `acib` can ask tells whether the phone is locked:
+the library maps a lockdown refusal `DeviceLocked` to an error of its own (idevice 0.1.68,
+`lib.rs` 935-944) but names no request a locked phone refuses; none of its clients `acib` builds
+with (the lockdown values, the image mounter, the installation proxy, SpringBoard services, the
+instruments server's device information and notifications, the CoreDevice services) reads a
+lock state, and its lockdown client speaks of a locked phone only for the escrow bag a
+service's session may present to open data protection (`services/lockdown.rs` 348-356), which
+starts a service and asks nothing of the lock. Apple's public developer documentation read for
+this names no such query either. So `probe` does not tell a locked phone from an unlocked one:
+running it once with the phone locked and once unlocked is what tells whether the lock matters.
 
 Not in this version: which application is in front (the library offers no way to ask it: its
 lists of applications and processes carry no mark of the application in front, and its
