@@ -58,12 +58,16 @@ key, and a key holds neither the identifier nor the salt, only their digest.
   `binding_key` under the second, so a row chosen by its first key can be bound by its second.
 - **A phone by its key.** Every command that takes `--device <n>` takes, in its place,
   `--device-key <key> --key-salt-env <NAME>`: the device usbmuxd lists whose key under that
-  salt is `<key>` (the first such row, should the phone be listed twice). The two flags go
-  together; `--device` beside `--device-key`, either of the two without the other, or a key not
-  written as `sha256:` and 64 lowercase hexadecimal digits is `command_line_invalid`. No listed
-  device with that key answers `device_key_unknown`. The line's `device` stays the session
-  number of the connection the device was found on (it identifies nobody), and the line gains
-  nothing else.
+  salt is `<key>`. Rows with one key are rows of one phone, listed with one identifier: of a
+  phone listed both over USB and over the network its USB row is taken, whichever of the two
+  usbmuxd lists first, and of a phone listed only over the network its network row. (That
+  usbmuxd lists a phone's network row with the identifier of its USB row has not been checked
+  on a device; where it does not, the two rows have two keys and each key finds its own row
+  alone.) The two flags go together; `--device` beside `--device-key`, either of the two
+  without the other, or a key not written as `sha256:` and 64 lowercase hexadecimal digits is
+  `command_line_invalid`. No listed device with that key answers `device_key_unknown`. The
+  line's `device` stays the session number of the connection the device was found on (it
+  identifies nobody), and the line gains nothing else.
 
 ## The commands
 
@@ -177,12 +181,13 @@ may stand in its place.
   orientation. A reader that has not answered when the deadline passes answers
   `deadline_passed`, and so does each reader after it, which is then not asked; the readers that
   answered before keep their answers (a deadline that passes before the first reader is asked
-  answers `deadline_passed` for the whole command). The orientation words, one for each value the library
-  names (its `InterfaceOrientation`, the phone's numbers 0 to 4): `unknown` (0, or a value the
-  library does not name: "unknown or cannot be determined"), `portrait` (1, the normal vertical
-  way), `portrait_upside_down` (2), `landscape_right` (3, the home button on the right, the
-  notch to the left) and `landscape_left` (4, the home button on the left, the notch to the
-  right). The readers, by `--via` (without it, both, in this order):
+  answers `deadline_passed` for the whole command or for each reader). The orientation words,
+  one for each value the library names (its `InterfaceOrientation`, the phone's numbers 0 to
+  4): `unknown` (0, or a value the library does not name: "unknown or cannot be determined"),
+  `portrait` (1, the normal vertical way), `portrait_upside_down` (2), `landscape_right` (3,
+  the home button on the right, the notch to the left) and `landscape_left` (4, the home button
+  on the left, the notch to the right). The readers, by `--via` (without it, both, in this
+  order):
   - `springboard`: the lockdown service `com.apple.springboardservices`, started in a session
     with this host's pairing record, as `images` and `apps` start theirs; no tunnel.
   - `springboard_shim`: the same service's remote shim

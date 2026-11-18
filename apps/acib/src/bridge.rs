@@ -581,23 +581,33 @@ async fn find(number: u32) -> Result<UsbmuxdDevice, Failure> {
 }
 
 /// The device `target` names: the listed device with its number (`device_not_listed`), or the
-/// first listed device whose key under the salt of its variable is the key named
-/// (`key_salt_unusable` before usbmuxd is asked, `device_key_unknown`). The device's number is
-/// kept in the context once it is found.
+/// row [`keyed`] takes of the listed devices whose key under the salt of its variable is the key
+/// named (`key_salt_unusable` before usbmuxd is asked, `device_key_unknown`). The device's
+/// number is kept in the context once it is found.
 async fn locate(target: &Target, context: &Context) -> Result<UsbmuxdDevice, Failure> {
     let device = match target {
         Target::Number(number) => find(*number).await?,
         Target::Key { key, salt_variable } => {
             let salt = salt_of(salt_variable, Problem::KeySaltUnusable)?;
-            list()
-                .await?
-                .into_iter()
-                .find(|device| DeviceKey::of(&salt, &device.udid).matches(key))
-                .ok_or(Failure::own(Problem::DeviceKeyUnknown))?
+            keyed(list().await?, &salt, key).ok_or(Failure::own(Problem::DeviceKeyUnknown))?
         }
     };
     context.device.set(Some(device.device_id));
     Ok(device)
+}
+
+/// Of the rows usbmuxd lists, the one the phone whose key under `salt` is `key` is reached
+/// through. The rows with that key are rows of one phone (a key is made of the identifier usbmuxd
+/// lists the phone with): of a phone listed both over USB and over the network its USB row is
+/// taken, whichever of them usbmuxd lists first; of a phone not listed over USB, the first of its
+/// rows. `None` when no row has that key.
+fn keyed(listed: Vec<UsbmuxdDevice>, salt: &Salt, key: &str) -> Option<UsbmuxdDevice> {
+    listed
+        .into_iter()
+        .filter(|device| DeviceKey::of(salt, &device.udid).matches(key))
+        // Of rows with equal values `min_by_key` takes the first: a USB row (`false`) before any
+        // other, and otherwise the first row.
+        .min_by_key(|device| device.connection_type != Connection::Usb)
 }
 
 /// The salt of the environment variable `variable` of this process, or `unusable`.
@@ -701,6 +711,66 @@ fn refused_with(error: &IdeviceError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// The identifier of another phone than the test vector's.
+    const OTHER_IDENTIFIER: &str = "TESTSERIAL0002";
+
+    /// A row of usbmuxd's list: the device `number`, listed with `identifier` over `connection`.
+    fn row(number: u32, connection: Connection, identifier: &str) -> UsbmuxdDevice {
+        UsbmuxdDevice {
+            connection_type: connection,
+            udid: identifier.to_owned(),
+            device_id: number,
+        }
+    }
+
+    /// A network connection (of no address in particular).
+    fn network() -> Connection {
+        Connection::Network(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+    }
+
+    /// The number of the row the phone of the test vector's key is reached through.
+    fn taken(listed: Vec<UsbmuxdDevice>) -> Option<u32> {
+        keyed(listed, &salt(VECTOR_SALT), VECTOR_KEY).map(|device| device.device_id)
+    }
+
+    /// A phone usbmuxd lists over USB and then over the network is reached through its USB row,
+    /// and another phone's USB row listed before both is not taken.
+    #[test]
+    fn a_phone_listed_over_usb_then_the_network_is_reached_through_its_usb_row() {
+        let listed = vec![
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(3, Connection::Usb, VECTOR_IDENTIFIER),
+            row(7, network(), VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(3));
+    }
+
+    /// A phone usbmuxd lists over the network and then over USB is reached through its USB row
+    /// too: which row is listed first does not decide, and another phone's USB row listed between
+    /// them is not taken.
+    #[test]
+    fn a_phone_listed_over_the_network_then_usb_is_reached_through_its_usb_row() {
+        let listed = vec![
+            row(7, network(), VECTOR_IDENTIFIER),
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(3, Connection::Usb, VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(3));
+    }
+
+    /// A phone usbmuxd lists only over the network is found by its network row, and another
+    /// phone's USB row listed before it is not taken in its place.
+    #[test]
+    fn a_phone_listed_only_over_the_network_is_found_by_its_network_row() {
+        let listed = vec![
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(7, network(), VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(7));
+    }
 
     /// Each value of the library's `InterfaceOrientation` has its word of [`Orientation`], one
     /// word for each value.
