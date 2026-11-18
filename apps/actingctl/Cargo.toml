@@ -22,6 +22,9 @@ mcp = []
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# #398 DB-3: `standard_handles::clear_all_own_inheritance`, this process's own stdin, stdout and
+# stderr made not inheritable at its start, so no long-lived descendant keeps its caller's pipes.
+actingcommand-host-metrics = { workspace = true }
 # Workflow #434 LAB-1: actingctl's read and write modules and the helpers they share (the result
 # line, the codes, the instance selector, the material export, the child runner) live there.
 actingcommand-lab-ops = { workspace = true }

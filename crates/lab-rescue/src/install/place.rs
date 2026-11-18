@@ -87,8 +87,15 @@
 //!   `install.hot.idle_wait_ms` when the game's `schedule.json` changed and, Workflow #453 S5, an
 //!   instance was bound to the game when the operation began, the input `bound`; with none bound
 //!   the workbench never reads the game root, so the catalog is expected unchanged; a journal
-//!   without `bound`, which an earlier build began, keeps the wait), a failed check ending
-//!   the command `post_check_failed` with the instances staying paused (the items are placed:
+//!   without `bound`, which an earlier build began, keeps the wait; Workflow #453 S5b: with
+//!   `bound` not empty, the live build's check-config of the live configuration too, whose
+//!   preview gives the rules digest the placed root composes (fix round 1: run for that digest
+//!   alone, its result no row of these checks), and the row passes once the generation the
+//!   Runtime's latest evaluation ran under has that digest, at its first read when it is the
+//!   digest of the generation read before the hold, `expected` `unchanged`; without a digest it
+//!   fails only when check-config names the placed game, else it is `not_evaluated`), a
+//!   failed check ending the command `post_check_failed` with the instances staying paused (the
+//!   items are placed:
 //!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
 //!   instances the pause step paused, each while it shows the revision recorded).
 //! - **The operation while the Runtime is stopped** (Workflow #453 S6; the caller applies the
@@ -125,9 +132,11 @@ use crate::codes::{ArgumentProblem, InstallCaveat, InstallLocation, InstallRefus
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LOADING_PREFIX,
-    LoadingTarget, MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry,
-    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    BundleIndex, BundleMaintenance, BundleRevisionNeed, CATALOG_GENERATIONS_DIRECTORY,
+    CATALOG_STORE_PATH, InterruptThen, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
+    MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry, NoticeIssue,
+    RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_COMPOSITION_RECORD_FILE, STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
@@ -2146,6 +2155,23 @@ pub(crate) struct Begun<'a> {
 /// bundle's game when the operation began. A journal an earlier build began has none.
 const BOUND_INPUT: &str = "bound";
 
+/// Workflow #453 S5: the instances the operation's input [`BOUND_INPUT`] lists, in its order;
+/// `None` for a journal without the input (an operation an earlier build began).
+fn bound_of(operation: &Operation<'_>) -> Option<Vec<String>> {
+    operation
+        .journal()
+        .inputs
+        .get(BOUND_INPUT)
+        .and_then(Value::as_array)
+        .map(|bound| {
+            bound
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+}
+
 /// Opens the placement's operation (`pack_place`): S0 and the hold's reads journalled, the guards
 /// recorded, the deferred record in the pause step's evidence.
 pub(crate) fn open<'h>(
@@ -2522,36 +2548,25 @@ pub(crate) fn check_step(
     }
     // 3. Workflow #453 S6: an operation begun while no Runtime ran checks the live configuration
     // with the live build's check-config ([`check_config_row`]: its result, and its notes that
-    // name the game) and leaves the composition itself not evaluated; any other checks the new
-    // composition ([`composition_row`]).
+    // name the game) and leaves the composition itself not evaluated. Workflow #453 S5b: one begun
+    // with a Runtime, whose game's `schedule.json` changed while instances were bound to the game,
+    // runs that check-config too, for the rules digest its preview gives the placed root alone (fix
+    // round 1: its result is no row of these checks), and checks the Runtime's generation against
+    // it ([`composed_row`]); any other checks the composition as before ([`composition_row`]).
     let cold = is_cold(operation);
+    let bound = bound_of(operation);
     let composition = if cold {
-        let bound = operation
-            .journal()
-            .inputs
-            .get(BOUND_INPUT)
-            .and_then(Value::as_array)
-            .map(|bound| {
-                bound
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        rows.push(check_config_row(
-            host,
-            &paths,
-            loaded,
-            command,
-            &intent.game,
-            &bound,
-        ));
+        let bound = bound.unwrap_or_default();
+        let checked = live_check_config(host, &paths, loaded);
+        rows.push(check_config_row(&checked, command, &intent.game, &bound));
         row(
             "composition",
             "not_evaluated",
             json!({"runtime": "stopped"}),
         )
+    } else if intent.schedule_changes && bound.is_some_and(|bound| !bound.is_empty()) {
+        let checked = live_check_config(host, &paths, loaded);
+        composed_row(host, &paths, loaded, &intent, command, &checked)
     } else {
         composition_row(host, &paths, loaded, &intent, unbound)
     };
@@ -2590,7 +2605,9 @@ pub(crate) fn check_step(
 /// The row `composition` of the checks after a placement while a Runtime runs: the catalog of the
 /// latest evaluation changed, within the workbench's check interval and the hot idle wait, when
 /// the game's rules changed and (Workflow #453 S5) an instance was bound to the game (`unbound`
-/// false); with none bound, the catalog read once and expected unchanged.
+/// false); with none bound, the catalog read once and expected unchanged. Workflow #453 S5b: with
+/// instances bound the row is [`composed_row`]; the wait for a catalog other than the one read
+/// before the hold is left to a journal without `bound` (an operation an earlier build began).
 fn composition_row(
     host: &dyn Host,
     paths: &Paths,
@@ -2598,16 +2615,7 @@ fn composition_row(
     intent: &CheckIntent,
     unbound: bool,
 ) -> Value {
-    let interval = actingcommand_runtime_config::member(&loaded.config, CHECK_INTERVAL_KEY)
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            actingcommand_runtime_config::member(
-                &super::plan::defaults_of(&paths.root),
-                CHECK_INTERVAL_KEY,
-            )
-            .and_then(Value::as_u64)
-        })
-        .unwrap_or(0);
+    let interval = check_interval_ms(paths, loaded);
     let runtime = host.runtime();
     let since = host.now_unix_ms();
     loop {
@@ -2655,6 +2663,229 @@ fn composition_row(
     }
 }
 
+/// The scheduler workbench's least time between two checks: the configuration's
+/// `standard_packs.check_interval_ms`, else the live build's default, else none.
+fn check_interval_ms(paths: &Paths, loaded: &Loaded) -> u64 {
+    actingcommand_runtime_config::member(&loaded.config, CHECK_INTERVAL_KEY)
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            actingcommand_runtime_config::member(
+                &super::plan::defaults_of(&paths.root),
+                CHECK_INTERVAL_KEY,
+            )
+            .and_then(Value::as_u64)
+        })
+        .unwrap_or(0)
+}
+
+/// Workflow #453 S5b: where check-config's report holds the rules digest of the composition it
+/// previews (`standard_pack_schedule.rules_digest`, the runtime host's
+/// `StandardPackSchedulePreview::rules_digest`).
+const PREVIEW_RULES_DIGEST: &str = "/standard_pack_schedule/rules_digest";
+/// Workflow #453 S5b: the member of the row `composition` that says the game's `schedule.json`
+/// changed and the composition did not: the placed root composes the rules of the generation the
+/// Runtime had before the hold.
+const SCHEDULE_ONLY_MEMBER: &str = "schedule_changed_rules_unchanged";
+
+/// Workflow #453 S5b: the rules digest of the Runtime's generation `catalog_hash` below
+/// `state_root`, read from its composition record; `None` for a hash that names no generation
+/// directory (not `sha256:` and 64 lowercase hex digits), a generation without a record (one the
+/// workbench did not compose) or a record of another schema, which the workbench takes as none.
+/// A record that exists and cannot be read or parsed is the failure. Fix round 1: the layout is the
+/// one the runtime host's catalog store keeps, by the contract crate's constants (each generation
+/// a directory of [`CATALOG_GENERATIONS_DIRECTORY`] below [`CATALOG_STORE_PATH`], named by the hex
+/// digits of its catalog hash, published once and never written again; register RL1B-3), so a
+/// change of the layout moves both sides; a record not found there gives none, never a digest of
+/// another generation.
+fn composition_digest(state_root: &Path, catalog_hash: &str) -> Result<Option<String>, Outcome> {
+    let Some(hex) = catalog_hash
+        .strip_prefix("sha256:")
+        .filter(|hex| files::is_sha256_hex(hex))
+    else {
+        return Ok(None);
+    };
+    let path = CATALOG_STORE_PATH
+        .iter()
+        .fold(state_root.to_path_buf(), |path, part| path.join(part))
+        .join(CATALOG_GENERATIONS_DIRECTORY)
+        .join(hex)
+        .join(STANDARD_PACK_COMPOSITION_RECORD_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let record: Value = files::read_json(&path)?;
+    if record["schema_version"] != STANDARD_PACK_COMPOSITION_RECORD_SCHEMA {
+        return Ok(None);
+    }
+    Ok(record["rules_digest"].as_str().map(str::to_owned))
+}
+
+/// Workflow #453 S5b (register §1.474; `contracts/install-cli.md`, "The composition after a
+/// placement"): the row `composition` of the checks after a placement with a Runtime whose game's
+/// `schedule.json` changed while instances were bound to the game. The expected rules digest is
+/// the one the live build's check-config `checked` gives for the installation as placed (its
+/// preview, [`PREVIEW_RULES_DIGEST`]: the same composer over the same inputs as the workbench's,
+/// but the catalog version, which the digest does not cover); the Runtime's is the digest of the
+/// generation its latest evaluation ran under ([`composition_digest`] of the catalog it answers).
+/// `expected` is `unchanged` when the placed root composes the rules of the generation read
+/// before the hold ([`SCHEDULE_ONLY_MEMBER`]), else `new`; the row passes once the Runtime's
+/// digest is the expected one, read again every 500 ms within the workbench's check interval and
+/// the hot idle wait, and fails when that wait ends first with the three digests (before the hold,
+/// expected, read). Fix round 1: check-config is run for that digest alone, its result no row of
+/// these checks; a check-config that gives no digest leaves the expected composition unknown
+/// ([`undigested_row`]).
+fn composed_row(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+    intent: &CheckIntent,
+    command: InstallLocation,
+    checked: &Result<programs::Checked, programs::Failure>,
+) -> Value {
+    let state_root = &loaded.state_root;
+    let expected = checked
+        .as_ref()
+        .ok()
+        .filter(|checked| checked.passed())
+        .and_then(|checked| checked.report.pointer(PREVIEW_RULES_DIGEST))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let Some(expected) = expected else {
+        return undigested_row(intent, command, checked);
+    };
+    let before = match intent
+        .catalog_before
+        .as_deref()
+        .map(|hash| composition_digest(state_root, hash))
+        .transpose()
+    {
+        Ok(before) => before.flatten(),
+        Err(failure) => {
+            return row(
+                "composition",
+                "not_evaluated",
+                json!({"failure": crate::cli_line::warning(&failure)}),
+            );
+        }
+    };
+    let unchanged = before.as_deref() == Some(expected.as_str());
+    let word = if unchanged { "unchanged" } else { "new" };
+    let limit = check_interval_ms(paths, loaded).saturating_add(loaded.settings.hot_idle_wait_ms);
+    let runtime = host.runtime();
+    let since = host.now_unix_ms();
+    loop {
+        let now = match runtime.catalog_hash(state_root) {
+            Ok(hash) => hash,
+            Err(failure) => {
+                break row(
+                    "composition",
+                    "not_evaluated",
+                    json!({"failure": crate::cli_line::warning(&failure)}),
+                );
+            }
+        };
+        let active = match now
+            .as_deref()
+            .map(|hash| composition_digest(state_root, hash))
+            .transpose()
+        {
+            Ok(active) => active.flatten(),
+            Err(failure) => {
+                break row(
+                    "composition",
+                    "not_evaluated",
+                    json!({"failure": crate::cli_line::warning(&failure)}),
+                );
+            }
+        };
+        if active.as_deref() == Some(expected.as_str()) {
+            let mut values = json!({
+                "catalog_hash": now,
+                "catalog_before": intent.catalog_before,
+                "expected": word,
+                "rules_digest": expected,
+            });
+            if unchanged {
+                values[SCHEDULE_ONLY_MEMBER] = Value::Bool(true);
+            }
+            break row("composition", "pass", values);
+        }
+        let waited = host.now_unix_ms().saturating_sub(since);
+        if waited >= limit {
+            break row(
+                "composition",
+                "fail",
+                json!({
+                    "catalog_hash": now,
+                    "waited_ms": waited,
+                    "expected": word,
+                    "rules_digest_before": before,
+                    "rules_digest_expected": expected,
+                    "rules_digest": active,
+                }),
+            );
+        }
+        host.pause_ms(POLL_MS);
+    }
+}
+
+/// Workflow #453 S5b fix round 1 (the coordinator's ruling 2): the row `composition` of
+/// [`composed_row`] when the live build's check-config `checked` gives no expected digest. It
+/// fails only when the placed game is the cause: check-config's outcome names the game (its value
+/// `game`), or the composition's problems in its report do, each by its value `game`
+/// (`standard_pack_schedule.problems`, judged by [`GameReport`] as the row `check_config` judges
+/// them: those naming the game; one naming no game, the composition refused as a whole, which
+/// composes the placed game too; a collision recorded on another game, which cannot tell whether
+/// the placed bundle caused it); those problems in the members [`GameReport::record_composition`]
+/// writes. Anything else is `not_evaluated`, not a failed row, as a catalog that cannot be read is:
+/// another game's `schedule.json` refused (the preview then composes nothing, while the workbench
+/// falls back for that game alone and goes on), a check-config refused for a reason that names
+/// another game or none, one that did not answer, a configuration without `policy`. Either with
+/// `catalog_before`, `expected` `unknown`, `rules_digest_expected` `null` and the cause:
+/// check-config's outcome code (`check_config`) and the preview's problems as they are
+/// (`problems`, `null` without a preview), or, unanswered, its `failure`.
+fn undigested_row(
+    intent: &CheckIntent,
+    command: InstallLocation,
+    checked: &Result<programs::Checked, programs::Failure>,
+) -> Value {
+    let mut values = json!({
+        "catalog_before": intent.catalog_before,
+        "expected": "unknown",
+        "rules_digest_expected": null,
+    });
+    let names_game = match checked {
+        Ok(checked) => {
+            values["check_config"] = json!(checked.received.code().as_str());
+            values["problems"] = checked
+                .report
+                .pointer("/standard_pack_schedule/problems")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let refused_for_game = checked.received.value("game").and_then(Value::as_str)
+                == Some(intent.game.as_str());
+            let whole = GameReport::of(&checked.report, &intent.game);
+            let composition_of_game = whole.composition_fails();
+            if composition_of_game {
+                whole.record_composition(&mut values);
+            }
+            refused_for_game || composition_of_game
+        }
+        Err(failure) => {
+            values["failure"] = crate::cli_line::warning(&failure.clone().onto(super::refusal(
+                command,
+                InstallRefusal::CheckConfigUnanswered,
+            )));
+            false
+        }
+    };
+    row(
+        "composition",
+        if names_game { "fail" } else { "not_evaluated" },
+        values,
+    )
+}
+
 /// Workflow #453 S6: the row `check_config` of the checks after a placement begun while no
 /// Runtime ran: the live build's check-config of the live configuration with `--install-root
 /// <root>`, as `config replace` checks a file (`super::config_swap::candidate`). A configuration
@@ -2669,22 +2900,17 @@ fn composition_row(
 /// first; the row judges the game from the report, which nothing cuts ([`GameReport`]). An outcome
 /// whose links were cut (`causes_total`) says so (`notes` `cut`, `causes_total`), and fails the
 /// row when the report cannot rule out the one note of the game it does not carry (`game_tables`
-/// `not_judged`).
+/// `not_judged`). Workflow #453 S5b fix round 1: a row of the checks without a Runtime alone; with
+/// a Runtime the same run ([`live_check_config`]) serves the row `composition` alone, which fails
+/// on what check-config says of the placed game's composition only when it gives no digest
+/// ([`undigested_row`]).
 fn check_config_row(
-    host: &dyn Host,
-    paths: &Paths,
-    loaded: &Loaded,
+    checked: &Result<programs::Checked, programs::Failure>,
     command: InstallLocation,
     game: &str,
     bound: &[String],
 ) -> Value {
-    match programs::check_config(
-        host,
-        &paths.root.join(manifest::Half::Runtime.dir()),
-        &paths.config(),
-        Some(&paths.root),
-        Deadline::check_config(&loaded.settings),
-    ) {
+    match checked {
         Ok(checked) => {
             let game_notes = checked
                 .received
@@ -2727,10 +2953,31 @@ fn check_config_row(
             "check_config",
             "fail",
             json!({"failure": crate::cli_line::warning(
-                &failure.onto(super::refusal(command, InstallRefusal::CheckConfigUnanswered))
+                &failure
+                    .clone()
+                    .onto(super::refusal(command, InstallRefusal::CheckConfigUnanswered))
             )}),
         ),
     }
+}
+
+/// Workflow #453 S6: the live build's check-config of the live configuration with
+/// `--install-root <root>`, as `config replace` checks a file (`super::config_swap::candidate`),
+/// within `install.child.check_config_timeout_ms`. Workflow #453 S5b: run once per check after a
+/// placement, for the row `check_config` without a Runtime and, fix round 1, for the expected
+/// digest of the row `composition` alone with one.
+fn live_check_config(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &Loaded,
+) -> Result<programs::Checked, programs::Failure> {
+    programs::check_config(
+        host,
+        &paths.root.join(manifest::Half::Runtime.dir()),
+        &paths.config(),
+        Some(&paths.root),
+        Deadline::check_config(&loaded.settings),
+    )
 }
 
 /// Workflow #453 S6 fix 2: the problem a collision across the games in use records (two composed
@@ -2810,19 +3057,28 @@ impl GameReport {
 
     /// Whether nothing here fails the row.
     fn passes(&self) -> bool {
-        self.root.is_none()
-            && self.named.is_empty()
-            && self.refused.is_empty()
-            && self.collisions.is_empty()
+        self.root.is_none() && !self.composition_fails()
     }
 
-    /// Its members in the row's `values`, each only when it holds something: `game_root`,
-    /// `composition_problems`, `composition_refused`, and `collisions` with `collision_cause`
-    /// `not_told`.
-    fn record(self, values: &mut Value) {
-        if let Some(root) = self.root {
+    /// Workflow #453 S5b fix round 1: whether the composition's problems fail the row: one names
+    /// the game, one names no game, or a collision is recorded on another game.
+    fn composition_fails(&self) -> bool {
+        !self.named.is_empty() || !self.refused.is_empty() || !self.collisions.is_empty()
+    }
+
+    /// Its members in the row's `values`, each only when it holds something: `game_root`, and
+    /// those of [`Self::record_composition`].
+    fn record(mut self, values: &mut Value) {
+        if let Some(root) = self.root.take() {
             values["game_root"] = root;
         }
+        self.record_composition(values);
+    }
+
+    /// The members of the composition's problems in a row's `values`, each only when it holds
+    /// something: `composition_problems`, `composition_refused`, and `collisions` with
+    /// `collision_cause` `not_told`.
+    fn record_composition(self, values: &mut Value) {
         if !self.named.is_empty() {
             values["composition_problems"] = Value::Array(self.named);
         }

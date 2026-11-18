@@ -69,6 +69,16 @@ struct Arguments {
 }
 
 fn main() -> ExitCode {
+    // #398 DB-3 (register §1.475): first, before any child or thread is started, the entry's own
+    // stdin (its client's requests), stdout (its answers) and stderr are made not inheritable, so
+    // that no long-lived descendant of its server or plan child keeps its client's pipes open. A
+    // refusal is one line on stderr and the entry goes on, as actingd's start goes on.
+    for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+        eprintln!(
+            "ERROR actingcommand-mcp-entry-g2: {refusal} {}",
+            actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT
+        );
+    }
     let words = std::env::args().skip(1).collect::<Vec<_>>();
     if words.len() == 1 && words[0] == "--generation" {
         println!("{GENERATION}");

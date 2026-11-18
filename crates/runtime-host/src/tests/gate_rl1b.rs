@@ -2154,3 +2154,132 @@ fn gr2s_r4_check_configs_preview_names_each_game_of_a_composition_refused_as_a_w
         .collect::<BTreeSet<_>>();
     assert_eq!(named, expected, "{preview:#?}");
 }
+
+/// Workflow #453 S5b fix round 1: two packages game A's `schedule.json` holds from the start.
+const HELD_A: &str = "fixture.held-a";
+const HELD_B: &str = "fixture.held-b";
+
+/// Workflow #453 S5b fix round 1: game A's `schedule.json` of `rules`, as [`schedule_a`], holding
+/// [`HELD_A`] and [`HELD_B`].
+fn schedule_a_holding(rules: &[(&str, &str, u64)]) -> Value {
+    let mut schedule = schedule_a(rules);
+    schedule["held"] = Value::Array(
+        [HELD_A, HELD_B]
+            .iter()
+            .map(|package_id| json!({"package_id": package_id, "reason": "fixture hold"}))
+            .collect(),
+    );
+    schedule
+}
+
+/// Workflow #453 S5b fix round 1: the rules digest the composition record of the composed
+/// `generation` holds below the bench's state root, where the catalog store keeps it (the contract
+/// crate's layout).
+fn recorded_rules_digest(bench: &Bench, generation: &CatalogGeneration) -> String {
+    let hex = generation
+        .catalog_hash()
+        .strip_prefix("sha256:")
+        .expect("a catalog hash");
+    let path = actingcommand_contract::CATALOG_STORE_PATH
+        .iter()
+        .fold(bench.state.path().to_path_buf(), |path, part| {
+            path.join(part)
+        })
+        .join(actingcommand_contract::CATALOG_GENERATIONS_DIRECTORY)
+        .join(hex)
+        .join(actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_FILE);
+    let record: Value =
+        serde_json::from_slice(&fs::read(&path).expect("the composition record")).expect("JSON");
+    assert_eq!(
+        record["schema_version"],
+        actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
+        "{record}"
+    );
+    record["rules_digest"]
+        .as_str()
+        .expect("the record's rules digest")
+        .to_owned()
+}
+
+/// Workflow #453 S5b fix round 1 (register §1.474; the coordinator's fix order, item 4): the rules
+/// digest check-config's preview gives is the one the workbench records for the same rules, which
+/// the rescue module's check after a placement compares. Game A, with [`HELD_A`] and [`HELD_B`]
+/// held, is composed with rule R1 at the workbench's catalog version (the ledger's head plus one),
+/// and then with R1 and R2 at a higher one: each time the preview of the same root for the same
+/// instance (catalog version 1) gives the digest of the active generation's composition record,
+/// and the two digests differ. Two rules, each naming a held package, are then added and nothing
+/// else: the preview's digest does not move, and the workbench, reading the changed file again,
+/// activates no generation.
+#[test]
+fn s5b_the_previews_rules_digest_is_the_one_the_workbench_records() {
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    let instances = [BOUND_A]
+        .map(|(alias, game, server)| (alias.to_owned(), game.to_owned(), server.to_owned()));
+    let preview = || {
+        crate::host::preview_standard_pack_schedule(
+            Some(bench.packs.path()),
+            &instances,
+            None,
+            true,
+        )
+        .rules_digest
+    };
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1, HELD_A, HELD_B],
+        Some(&schedule_a_holding(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    let one = bench.active();
+    let digest_one = recorded_rules_digest(&bench, &one);
+    assert_eq!(preview(), Some(digest_one.clone()));
+
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1, PACKAGE_2, HELD_A, HELD_B],
+        Some(&schedule_a_holding(&[
+            (RULE_1, PACKAGE_1, 100),
+            (RULE_2, PACKAGE_2, 90),
+        ])),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
+    let two = bench.active();
+    assert!(
+        two.catalog_version() > one.catalog_version(),
+        "{one:?} {two:?}"
+    );
+    let digest_two = recorded_rules_digest(&bench, &two);
+    assert_ne!(digest_two, digest_one);
+    assert_eq!(preview(), Some(digest_two.clone()));
+
+    let reads = bench
+        .host
+        .standard_pack_schedule_reads_for_test(GAME_A)
+        .expect("reads");
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1, PACKAGE_2, HELD_A, HELD_B],
+        Some(&schedule_a_holding(&[
+            (RULE_1, PACKAGE_1, 100),
+            (RULE_2, PACKAGE_2, 90),
+            ("fixture.held-rule-a", HELD_A, 80),
+            ("fixture.held-rule-b", HELD_B, 80),
+        ])),
+    );
+    assert_eq!(preview(), Some(digest_two));
+    bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS);
+    assert!(
+        bench
+            .host
+            .standard_pack_schedule_reads_for_test(GAME_A)
+            .expect("reads")
+            > reads,
+        "the workbench read the changed file"
+    );
+    assert_eq!(bench.active(), two);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+    bench.close();
+}
