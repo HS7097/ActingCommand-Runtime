@@ -1236,7 +1236,13 @@ these hold, and otherwise leaves the end the failed wait gave, code, detail and 
 - on no frame of the decision, from its first to its bound's end, did one of its pages (the pages
   the failed wait awaited, then the step's own page) pass, by itself; no frame was a transition
   frame (LOAD-4, under `on`); and no frame showed a shared interrupt page the package does not
-  declare itself (recognised as an offer recognises it, never handled or pressed);
+  declare itself (recognised as an offer recognises it, never handled or pressed). A screen a
+  shared interrupt page takes is no screen the package never recorded: in the waits before the
+  closing decision such a page is offered and handled, and (Workflow #463 INT-1, since 0.12.73) one
+  whose `interrupts.json` entry names no handler ends the run in the waits and in this decision
+  alike, nothing pressed, with the code its `result` gives ([package-reference.md](package-reference.md),
+  "An entry without handlers": `environment_reset` ends it with `contained_task_environment_reset`,
+  rerun only, not with this code);
 - the decision's last two captures, in capture order, and its first and its last frame are
   unchanged by the Runtime's one frame-change measure ([color-digest.md](color-digest.md), "Frame
   change": the whole frame at the default threshold, as a wait compares its frames, #411 A43b);

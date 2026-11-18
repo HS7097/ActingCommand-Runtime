@@ -346,6 +346,15 @@ interrupt page the running package declares itself is the package's own
 B35: `package_bundle_interrupt_page_shadowed`). One
 matched page is handled by its handler package as a layer of the run, and the wait
 resumes with its budget paused for the handling; an entry check starts again.
+Workflow #463 INT-1 (since 0.12.73; [v012-register.md](v012-register.md) §1.473): a matched page
+whose entry names no handler (`handlers: []`, only beside `then: end_run`) is not handled: nothing
+is pressed, no layer runs, nothing is counted and no `interrupt_handled` is recorded, and the run
+ends on that frame with the code the entry's `result` gives (`environment_reset`:
+`contained_task_environment_reset`, rerun only; `application_update_required`: that code; none:
+`contained_task_interrupt_escalated`). A `linear_steps` step's closing decision, which recognises
+the pages without handling them ([linear-steps.md](linear-steps.md), "A screen the package never
+recorded"), ends the run on such a page the same way. Such an entry acts for the runs of every
+server ([package-reference.md](package-reference.md), "An entry without handlers").
 Without `interrupts.json` for the game nothing is read and nothing changes.
 
 Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task

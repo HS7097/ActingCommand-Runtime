@@ -339,6 +339,10 @@ mod gate_411_b37_entry;
 mod gate_433_rh1;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
+// Workflow #463 INT-1 (0.12.73; register §1.473): a shared interrupt page whose entry names no
+// handler ends the run with nothing pressed, as its `result` says (`environment_reset`: rerun
+// only).
+mod gate_463_int1;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
 // check-config's report.
 mod gate_357_db1;

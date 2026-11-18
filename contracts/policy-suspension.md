@@ -211,7 +211,13 @@ Only these failures can pause a task by repeating:
   identity still names `g`. UPD-1 (0.12.30): `contained_task_application_update_required` (the
   game's update dialog, an `interrupts.json` entry with `result`) is not under the
   `contained_task_interrupt_` prefix and never accumulates; it ends a scheduled run by a
-  condition ("Condition termination and owed reruns", "Which runs").
+  condition ("Condition termination and owed reruns", "Which runs"). Workflow #463 INT-1
+  (0.12.73): `contained_task_environment_reset` (an `interrupts.json` entry whose `result` is
+  `"environment_reset"`: the environment took the game out of the task) is not under that prefix
+  either and never accumulates in any scope: it is an ordinary failure rerun only, its identity's
+  `F` unique, so two in a row on similar frames leave the pair unpaused and the next evaluation
+  reruns it at once (R22). An entry without handlers and without `result` still ends its run with
+  `contained_task_interrupt_escalated`, which accumulates as above.
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,

@@ -125,12 +125,18 @@ crate::outcome_vocabulary! {
         InterruptPageUnlisted => "interrupt_page_unlisted",
         /// Two interrupts name the same page.
         InterruptDuplicate => "interrupt_duplicate",
-        /// An interrupt's `handlers` or `then.run` names no package, or more than 8.
+        /// An interrupt's `handlers` or `then.run` names no package, or more than 8. Workflow #463
+        /// INT-1 (since 0.12.73): an empty `handlers` is this word only where `then` is not
+        /// `end_run`.
         PackagesCount => "packages_count",
         /// An interrupt's `max_per_run` is outside 1..=8.
         MaxPerRunInvalid => "max_per_run_invalid",
         /// UPD-1 (0.12.30): an interrupt declares `result` but its `then` is not `end_run`.
         InterruptResultInvalid => "interrupt_result_invalid",
+        /// Workflow #463 INT-1 (since 0.12.73): an interrupt that names no handler declares
+        /// `limit_cause`, which says what a page met once more than `max_per_run` says, while such
+        /// a page ends the run the first time it is met.
+        InterruptLimitCauseInvalid => "interrupt_limit_cause_invalid",
         /// Workflow #373 NAV-5: `edges` holds more than 1024 edges.
         EdgesCount => "edges_count",
         /// Workflow #373 NAV-5: an edge's `from` or `to` is no page id: `any`, a draft's
@@ -471,6 +477,9 @@ pub struct StandardPackInterrupts {
 #[serde(deny_unknown_fields)]
 pub struct StandardPackInterrupt {
     pub page: String,
+    /// Workflow #463 INT-1 (since 0.12.73): empty only beside `then: end_run`, an entry that
+    /// presses nothing and acts for the runs of every server: the first meeting of its page ends
+    /// the run.
     pub handlers: Vec<String>,
     pub then: InterruptThen,
     pub max_per_run: u8,
@@ -495,6 +504,11 @@ pub enum InterruptResult {
     /// fact `health.application.update_required` true, which holds the instance's other tasks
     /// until a `store_update` package's run succeeds there.
     ApplicationUpdateRequired,
+    /// Workflow #463 INT-1 (since 0.12.73): the page says the environment took the game out of
+    /// the task (a session that ended, an account signed in elsewhere, a day that rolled over),
+    /// back to a screen from which the next run's entry gate goes on: the run ends with
+    /// `contained_task_environment_reset`, which is rerun only.
+    EnvironmentReset,
 }
 
 /// UPD-1: the instance fact the Runtime records for [`InterruptResult::ApplicationUpdateRequired`]
@@ -737,8 +751,13 @@ pub fn parse_standard_pack_pages(
 /// once, 1..=8 handlers, 1..=8 `then.run` packages, and `max_per_run` within 1..=8. Workflow
 /// #411 B43: an optional `limit_cause` that is not `"pack_logic"` or `"environment"` is
 /// `malformed`, as every member of another type is. UPD-1: an optional `result` that is not
-/// `"application_update_required"` is `malformed` too, and one on an entry whose `then` is not
-/// `end_run` is `interrupt_result_invalid` at `/interrupts/<i>/result`.
+/// `"application_update_required"` (Workflow #463 INT-1: or `"environment_reset"`) is
+/// `malformed` too, and one on an entry whose `then` is not `end_run` is
+/// `interrupt_result_invalid` at `/interrupts/<i>/result`. Workflow #463 INT-1 (since 0.12.73):
+/// an entry whose `then` is `end_run` may name no handler (0..=8); with another `then` an empty
+/// `handlers` stays `packages_count` at `/interrupts/<i>/handlers`; and `limit_cause` beside an
+/// empty `handlers` is `interrupt_limit_cause_invalid` at `/interrupts/<i>/limit_cause`, as
+/// `result` beside another `then` is refused: a member that cannot apply.
 pub fn parse_standard_pack_interrupts(
     bytes: &[u8],
     game: Option<&str>,
@@ -777,7 +796,11 @@ pub fn parse_standard_pack_interrupts(
                 at("page"),
             ));
         }
-        if interrupt.handlers.is_empty() || interrupt.handlers.len() > MAX_INTERRUPT_PACKAGES {
+        // Workflow #463 INT-1: a page that ends the run need not be acted on first; one that is
+        // resumed or run on from would be met again at once.
+        let handlers_empty_refused =
+            interrupt.handlers.is_empty() && interrupt.then != InterruptThen::EndRun;
+        if handlers_empty_refused || interrupt.handlers.len() > MAX_INTERRUPT_PACKAGES {
             return Err(StandardPackRootIssue::new(
                 file,
                 StandardPackProblem::PackagesCount,
@@ -806,6 +829,15 @@ pub fn parse_standard_pack_interrupts(
                 file,
                 StandardPackProblem::InterruptResultInvalid,
                 at("result"),
+            ));
+        }
+        // Workflow #463 INT-1: without a handler the first meeting ends the run, so no meeting is
+        // ever one more than `max_per_run`, and `limit_cause` has nothing to say.
+        if interrupt.limit_cause.is_some() && interrupt.handlers.is_empty() {
+            return Err(StandardPackRootIssue::new(
+                file,
+                StandardPackProblem::InterruptLimitCauseInvalid,
+                at("limit_cause"),
             ));
         }
     }

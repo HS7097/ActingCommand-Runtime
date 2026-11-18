@@ -841,7 +841,8 @@ data files beside its package directories, one directory per game below the conf
   members are refused.
 - **`interrupts.json`.** `{schema_version, game, interrupts}`: at most 32 entries
   `{page, handlers, then, max_per_run, limit_cause?, result?}`; `page` is a page of `pages.json`, named
-  once; `handlers` names 1–8 packages of the registry, at most one per server; `then` is
+  once; `handlers` names 1–8 packages of the registry, at most one per server (Workflow #463 INT-1:
+  0–8, none only where `then` is `"end_run"`, "An entry without handlers" below); `then` is
   `"resume"`, `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server);
   `max_per_run` is 1–8. The file requires `pages.json`.
   - **`limit_cause`** (Workflow #411 B43, since 0.12.28; optional): what a run that meets the
@@ -869,7 +870,8 @@ data files beside its package directories, one directory per game below the conf
     member only for a Runtime that reads it. An entry without it reads and serializes as
     before.
   - **`result`** (UPD-1, since 0.12.30; optional; Alice's rulings 95 and 96 of 2026-10-29):
-    what a run that this page ends says, a word of a closed vocabulary. Its one value,
+    what a run that this page ends says, a word of a closed vocabulary. Its first value (the
+    second, `"environment_reset"`, is Workflow #463 INT-1's, below),
     `"application_update_required"`, declares the page the game's "client out of date" dialog:
     after its handler (which may tap the game's own button that opens the store's page of the
     game) the run ends with `contained_task_application_update_required` (warning, ladder class
@@ -897,6 +899,59 @@ data files beside its package directories, one directory per game below the conf
     revision 6 (BT-PK6 names it beside `limit_cause`), admitted by code until then; a Runtime
     before 0.12.30 refuses a file that names it, so the whole game root is
     `standard_pack_root_invalid` there. An entry without it reads and serializes as before.
+  - **An entry without handlers** (Workflow #463 INT-1, since 0.12.73; register §1.473, the
+    coordinator's rulings on board #463): an entry whose `then` is `"end_run"` may name no handler
+    (`handlers: []`); with `"resume"` or `{"run": [...]}` an empty `handlers` stays
+    `packages_count` at `/interrupts/<i>/handlers` (a page that is not acted on and then resumed
+    would be met again at once). Such an entry has no handler to pick a server by, so it acts for
+    the runs of every server of the game (that has a feature package) whose package does not
+    declare the page itself. Its page is recognised where the shared interrupt pages are looked at
+    ("Shared interrupt pages" below, and a `linear_steps` step's closing decision,
+    [linear-steps.md](linear-steps.md), "A screen the package never recorded"); nothing is pressed,
+    no handler layer runs, nothing is counted, and the run ends at that first meeting, before any
+    limit is looked at, with the code its `result` gives: `"environment_reset"`
+    `contained_task_environment_reset` (below); `"application_update_required"`
+    `contained_task_application_update_required`, the instance's fact recorded true first (above);
+    no `result` `contained_task_interrupt_escalated`, as an entry with handlers ends today: the
+    data says the page means the standard pack no longer fits the game, the program does the same
+    next (the failure accumulates and the default ladder starts as before), so it is that code, not
+    a cause of its own. `max_per_run` keeps its range 1–8 and is never reached: the first meeting
+    ends the run. `limit_cause` cannot apply (no meeting is one more than `max_per_run`) and is
+    refused beside an empty `handlers`, `interrupt_limit_cause_invalid` at
+    `/interrupts/<i>/limit_cause`, as `result` beside another `then` is refused. The shared parser
+    refuses so for the Runtime, `package bundle` and `standard-pack check` alike, and
+    `package_bundle_interrupt_page_shadowed` is unchanged: a package that declares the page itself
+    (a start-up or return-home package that declares the screen it starts from) keeps it as its
+    own and is warned, and the entry does not end its runs. **What the ledger holds of such a run**,
+    record by record: the run's own records up to the frame that showed the page (its recognition
+    and capture records), no `entry_recovery_package_admitted`, `entry_recovery_completed` or
+    `entry_recovery_failed` of `role: interrupt_handler` and no `interrupt_handled` record (its
+    `handler_package_label` is a required member, and no handler ran), then the run's failed
+    terminal (`task.failed`) whose outcome is the code with `page_id`, and for a scheduled run its
+    `policy.execution_recorded` failure. A run that a handler's `end_run` ended holds, between that
+    frame and the terminal, the handler's `entry_recovery_package_admitted`, its own step records,
+    its `entry_recovery_completed` (each of `role: interrupt_handler`) and one `interrupt_handled`
+    (`then` `end_run`). No record type or member is added; the ledger revision does not move. A
+    file that holds such an entry joins `package` revision 19 ([component-interfaces.md](component-interfaces.md)):
+    a Runtime before 0.12.73 refuses an empty `handlers` (`packages_count`) and the word
+    `"environment_reset"` (`malformed`), so the whole game root is `standard_pack_root_invalid`
+    there; a resource repository adds such an entry only for a Runtime that reads it. A file
+    without one reads and serializes as before.
+  - **`"environment_reset"`** (Workflow #463 INT-1, since 0.12.73): the word of `result` that says
+    the environment took the game out of the task (a session that ended, an account signed in
+    elsewhere, a day that rolled over): the game is back at a screen from which the next run's
+    entry gate, the return-home package or the start-up package goes on. Only with `then:
+    "end_run"` (else `interrupt_result_invalid`), with handlers or without: the run ends with
+    `contained_task_environment_reset` (error, `page_id`), after its handler and its
+    `interrupt_handled` where there is one (a handler that fails ends the run with its own code, as
+    for every entry but UPD-1's). The code stands outside the `contained_task_interrupt_` prefix
+    whose failures accumulate, so a scheduled run that ends with it is rerun only
+    ([policy-suspension.md](policy-suspension.md), "Which failures accumulate"): it never pauses or
+    suspends its task pair, which the next evaluation reruns at once (R22). Its ladder class is
+    `budget_or_permission`, which no default trigger item reads (`pack_logic` reads
+    `pack_logic_mismatch`, `stability_burst` `stability_warning` and `environment_fault`), so no
+    default trigger opens a recovery ladder. A file that names the word joins `package` revision
+    19, as above.
 - **`navigation.json`** (Workflow #373 NAV-5, M-373 §3.5). `{schema_version, game, edges,
   recovery_chain}`: at most 1024 edges `{from, to, package_id}`, each "run `package_id` on the
   page `from` to reach the page `to`"; `from` and `to` are different pages of `pages.json`
@@ -1156,7 +1211,8 @@ data files beside its package directories, one directory per game below the conf
   Packages are admitted by their path when a run first uses them; a file replaced in place is
   used from the next run on, with no restart.
 - **Shared interrupt pages** (§6). A run uses its server's feature package and the
-  interrupts whose handlers name a package of its server. Each frame on which the running
+  interrupts whose handlers name a package of its server (Workflow #463 INT-1: and every entry that
+  names no handler, whatever the run's server). Each frame on which the running
   package's own expectation failed (its entry check's verdict, a page-graph frame no page of the
   package matched, a frame of a wait for a step's, transition or `expect_after` page, a frame of
   an operation's observation window that shows none of its destinations) is
@@ -1167,8 +1223,12 @@ data files beside its package directories, one directory per game below the conf
   `contained_task_interrupt_escalated` (`end_run`; UPD-1: with
   `contained_task_application_update_required` when the entry's `result` is
   `"application_update_required"`, the instance's `health.application.update_required` recorded
-  true first, and so too when that entry's handler fails short of fatal, its failure linked);
-  an `interrupt_handled` record follows each handled page.
+  true first, and so too when that entry's handler fails short of fatal, its failure linked;
+  Workflow #463 INT-1: with `contained_task_environment_reset` when its `result` is
+  `"environment_reset"`); an `interrupt_handled` record follows each handled page. A page whose
+  entry names no handler (INT-1) is not handled: nothing is pressed, no layer runs and no
+  `interrupt_handled` follows; the run ends there with the code its `result` gives ("An entry
+  without handlers" above).
   Two or more matches are an `interrupt_ambiguous` record and nothing is handled. A page
   handled `max_per_run` times, or a run that handled 16 pages, ends the run with
   `contained_task_interrupt_limit_reached`; a page whose `limit_cause` is `"environment"`

@@ -30,7 +30,10 @@
 //!   handled 16, ends the run with `contained_task_interrupt_limit_reached`; Workflow #411 B43:
 //!   a page whose `limit_cause` is `environment` ends it at its own limit with
 //!   `contained_task_interrupt_environment_limit_reached` instead, which is rerun only. A
-//!   handler never looks at the interrupt pages itself.
+//!   handler never looks at the interrupt pages itself. Workflow #463 INT-1: an `end_run` entry
+//!   may name no handler; it applies to the runs of every server, and its page ends the run at
+//!   once, nothing pressed and no layer run, as its `result` says (`environment_reset`:
+//!   `contained_task_environment_reset`, rerun only).
 //! - **Navigation data** (Workflow #373 NAV-5, §3.5, §5, §7). A game root that holds
 //!   `navigation.json` (with `pages.json`) is read in a run's preparation too, and the run keeps
 //!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
@@ -541,11 +544,14 @@ enum RunThen {
     },
 }
 
-/// One interrupt that applies to the run: its handler is a package of the run's server.
+/// One interrupt that applies to the run: its handler is a package of the run's server, or
+/// (Workflow #463 INT-1) it names no handler and applies to the runs of every server.
 #[derive(Debug, Clone)]
 struct RunInterrupt {
     page: String,
-    handler: RegisteredPack,
+    /// `None` for an entry without handlers (`then: end_run`, the shared parser's rule): its page
+    /// ends the run at once, with nothing pressed and no layer.
+    handler: Option<RegisteredPack>,
     then: RunThen,
     max_per_run: u8,
     /// Workflow #411 B43: the code that ends a run meeting the page once more than
@@ -736,8 +742,9 @@ impl HostShared {
     /// preparation. None (nothing read, nothing recorded) without a root, without the game's
     /// directory, or when the game root holds no `interrupts.json` (Workflow #373 NAV-5: and no
     /// `navigation.json`; Workflow #392 DA-4: and no `display-layout.json`); also when the root
-    /// names no feature package for the run's server, or neither a handler for it nor navigation
-    /// data the run's package can use. A broken root refuses the run. Workflow #392 DA-4 (model
+    /// names no feature package for the run's server, or neither a handler for it (Workflow #463
+    /// INT-1: nor an entry without handlers, which applies to every server) nor navigation data
+    /// the run's package can use. A broken root refuses the run. Workflow #392 DA-4 (model
     /// 392 v1.2 §4.1): a root that holds `display-layout.json` is read so, once, and a broken
     /// declaration refuses the run before any lease; a declaration replaced in place is read by
     /// the next run. Workflow #392 DA-2a: the declaration read is the run's
@@ -804,7 +811,14 @@ impl HostShared {
             .map_or(&[][..], |interrupts| interrupts.interrupts.as_slice())
             .iter()
             .filter_map(|interrupt| {
-                let handler = for_server(&interrupt.handlers)?;
+                // Workflow #463 INT-1: an entry that names no handler has no server to pick it
+                // by, so it applies to the run whatever its server; one with handlers applies
+                // only through its handler of the run's server, as before.
+                let handler = if interrupt.handlers.is_empty() {
+                    None
+                } else {
+                    Some(for_server(&interrupt.handlers)?)
+                };
                 let then = match &interrupt.then {
                     actingcommand_contract::InterruptThen::Resume => RunThen::Resume,
                     actingcommand_contract::InterruptThen::EndRun => RunThen::EndRun,
@@ -1127,7 +1141,9 @@ impl RuntimeContainedTask<'_> {
     /// that its package does not declare itself match `frame`, by the check the kernel's offer
     /// makes ([`Self::offered_shared_interrupt`]), with nothing handled or counted and no record
     /// but the feature package's admission at its first use, as for an offer: a linear step's
-    /// closing decision asks it and never presses.
+    /// closing decision asks it and never presses. Workflow #463 INT-1: one matched page whose
+    /// entry names no handler, which an offer would end the run on with nothing pressed, ends the
+    /// run here the same way ([`Self::end_run_at`]).
     pub(super) fn shown_shared_interrupt(
         &mut self,
         frame: SharedInterruptFrame<'_>,
@@ -1136,7 +1152,16 @@ impl RuntimeContainedTask<'_> {
             return Ok(false);
         };
         let matched = self.matched_shared_interrupts(&mut interrupts, &frame);
+        let ended = match matched.as_deref() {
+            Ok([index]) if interrupts.entries[*index].handler.is_none() => {
+                Some(self.end_run_at(&interrupts.entries[*index]))
+            }
+            _ => None,
+        };
         self.interrupts = Some(interrupts);
+        if let Some(ended) = ended {
+            return Err(ended);
+        }
         matched.map(|matched| !matched.is_empty())
     }
 
@@ -1401,12 +1426,19 @@ impl RuntimeContainedTask<'_> {
     }
 
     /// Handles the interrupt `index` (§6.2): its limits, its handler as a layer, its `then`.
+    /// Workflow #463 INT-1: an entry that names no handler (its `then` is `end_run`) presses
+    /// nothing, runs no layer, counts nothing and records no `interrupt_handled`: the first
+    /// meeting of its page ends the run as its entry says ([`Self::end_run_at`]), before any limit
+    /// is looked at (a page that ends the run is never met once more).
     fn handle_shared_interrupt(
         &mut self,
         interrupts: &mut RunInterrupts,
         index: usize,
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
         let entry = interrupts.entries[index].clone();
+        let Some(handler_pack) = &entry.handler else {
+            return Err(self.end_run_at(&entry));
+        };
         let handled = interrupts.counts.get(&entry.page).copied().unwrap_or(0);
         // Workflow #411 B43: the page's own limit ends the run with the code its `limit_cause`
         // chose; the run's 16 handlings of all pages together stay the pack's logic.
@@ -1443,7 +1475,7 @@ impl RuntimeContainedTask<'_> {
         let handler = self
             .admitted_layer(
                 interrupts,
-                &entry.handler,
+                handler_pack,
                 NavigationRole::Handler,
                 Some(&entry.page),
             )?
@@ -1454,7 +1486,7 @@ impl RuntimeContainedTask<'_> {
         // starts from the dialog page itself), so a handler that fails short of fatal still ends
         // the run by that result, its failure linked. A fatal failure, and a stop of the run (a
         // cancellation, a pause, the deadline), keep their own path.
-        if let Err(error) = self.run_interrupt_layer(interrupts, &entry.handler.package_id) {
+        if let Err(error) = self.run_interrupt_layer(interrupts, &handler_pack.package_id) {
             if matches!(entry.then, RunThen::EndRun)
                 && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
                 && let Some(handler_failure) = handler_failure_link(&error)
@@ -1499,24 +1531,36 @@ impl RuntimeContainedTask<'_> {
                 .count(count),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
-        // UPD-1 (design §2.2, §3.3): a page whose data names the run's result `application
-        // update required` ends it with its own code (warning, ladder class `planned_stop`).
-        if then == TaskInterruptThen::EndRun
-            && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
-        {
-            return Err(self.end_by_application_update(&entry.page, None));
-        }
         if then == TaskInterruptThen::EndRun {
-            return Err(interrupt_failure(
-                RuntimeHostError::request(
-                    HostCode::ContainedTaskInterruptEscalated,
-                    HostLocation::InterruptHandle,
-                    RuntimeErrorCode::BackendOperationFailed,
-                )
-                .with_outcome_values(|outcome| outcome.page_id(entry.page.as_str())),
-            ));
+            return Err(self.end_run_at(&entry));
         }
         Ok(SharedInterruptVerdict::Handled)
+    }
+
+    /// The failure that ends the run the `end_run` page of `entry` ended, after its handler or
+    /// (Workflow #463 INT-1) at once where the entry names none, by the word of its `result`, a
+    /// closed vocabulary the data carries: UPD-1 (design §2.2, §3.3) `application_update_required`
+    /// ends it with its own code (warning, ladder class `planned_stop`), the instance's fact
+    /// recorded first; INT-1 `environment_reset` with `contained_task_environment_reset` (error,
+    /// ladder class `budget_or_permission`, rerun only); no word with
+    /// `contained_task_interrupt_escalated` (error, `pack_logic_mismatch`), as before. Each carries
+    /// `page_id`.
+    fn end_run_at(&self, entry: &RunInterrupt) -> ContainedTaskRunError<RequestFailure> {
+        let code = match entry.result {
+            Some(InterruptResult::ApplicationUpdateRequired) => {
+                return self.end_by_application_update(&entry.page, None);
+            }
+            Some(InterruptResult::EnvironmentReset) => HostCode::ContainedTaskEnvironmentReset,
+            None => HostCode::ContainedTaskInterruptEscalated,
+        };
+        interrupt_failure(
+            RuntimeHostError::request(
+                code,
+                HostLocation::InterruptHandle,
+                RuntimeErrorCode::BackendOperationFailed,
+            )
+            .with_outcome_values(|outcome| outcome.page_id(entry.page.as_str())),
+        )
     }
 
     /// UPD-1 (design §2.2, §3.3): the failure that ends the run the update dialog `page` ended,
