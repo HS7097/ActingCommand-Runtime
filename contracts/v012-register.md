@@ -39677,6 +39677,118 @@ revision changes, and no code is added.
 **At deploy.** Nothing to do. A running MCP server or entry of the build before keeps its handles
 until it is started again.
 
+### 1.476 Slice #463 S1-R (0.12.74): a ruler on the pictures a recording hands back (Workflow #463; measured on 11-18 that most of a package's time is whole turns of judgment and of rework after a failed trial, one observed rework a slot's name region drawn 9 pixels off; the owner's ruling on board #463 that the tool hands back the material and proposes nothing; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-s1-preview-ruler.md`, on main `a8d0aa43`)
+
+This section takes 1.476 (1.477 is another slice's). It ships in 0.12.74.
+[lab-recording.md](lab-recording.md) ("A ruler on the pictures a recording hands back") is the
+contract.
+
+**Why.** An author (a model reading a picture) estimates a box's corners by eye and writes them into
+`record mark`. A ruler drawn on the picture lets it read them. It is observation only: the tool
+measures nothing for the author and proposes no box.
+
+**What each command hands back today** (read in the code; the work order's item 1).
+
+| Command | What it hands back and writes | The space of its pixels |
+|---|---|---|
+| `record review` | copies: each preview is the stored frame, read and its sha256 checked, decoded at its own size (`preview::render`, `Frame::from_png`), drawn on by plain pixel writes and written under `lab/preview/` (`review::write_previews`); the stored frame is never written | the stored frame's own pixels |
+| `record frames` | the stored frames themselves, by their paths (`around::located`, `archive::stored_frame_path`); it writes, decodes and copies nothing | the stored frame's own pixels |
+| `record mark`'s boxes | `--box`'s corners are the pixels of the step's primary frame, the recording's coordinate space (`contracts/lab-recording.md`, "Drawing a box"); a recognize box's crop is cut at them from the decoded primary frame with no scale (`boxes::box_rect`, `frames::crop_png`) | — |
+
+So a picture's pixels are the space an author writes boxes in, and the ruler's numbers are in it
+(the answer names it `frame_pixels`). No picture is of another space, so nothing stopped the build.
+
+**The rule.**
+- *The parameter.* `--ruler <edges|grid>` (MCP `ruler`) of `record review` and `record frames`,
+  the operation table's option of type `enum:edges|grid` (`PreviewRuler`); absent, no ruler.
+- *What is drawn* (`preview::render`, `Canvas::ruler`), on a copy only, before the boxes and the
+  press: `edges`, along the top edge a tick of 6 pixels at every multiple of 50 of `x` and of 12 at
+  every multiple of 100, along the left edge the same of `y`, and beside each longer tick its number
+  in a built-in bitmap font (`DIGITS`: three cells by five, each 2 pixels square, one empty cell
+  between digits), on the top edge 4 pixels right of its tick and 2 below the edge, on the left
+  edge 4 below its tick and 2 right of the edge; a number that would not lie wholly inside the frame
+  is left out. `grid`, the same over a line one pixel thin across the frame at every multiple of 100
+  both ways, in dashes of 4 pixels, dark first. A tick and a digit are dark (`#000000`) over a light
+  halo (`#ffffff`, the eight pixels around each), so that they read on a light and on a dark frame.
+  A mark outside the frame is left out (`Canvas::set`), so a frame of any size and of three or four
+  bytes a pixel is drawn without a panic; the copy keeps its alpha.
+- *Copies only.* `record review` with a ruler names each preview as ruled,
+  `s<nn>-<before|after>-ruled-<edges|grid>.png`, so that a preview without the ruler keeps its name
+  and its bytes. `record frames` hands back the stored frames themselves, so with a ruler it writes
+  a ruled copy of each frame it lists beside the previews, `lab/preview/<frame_id>-ruled-<word>.png`
+  (`review::ruled_frame_path`), through `record review`'s writer (every listed frame read and its
+  sha256 checked before any copy is written, atomic writes), and names both: each listed frame's
+  `path` (the stored frame, as before) and `ruled` (its copy). No stored frame, hash, step table or
+  manifest is written, and no offline tool reads `lab/preview/` (a scene, a template's source and a
+  case are read from `frames/`, `crops/` or a file the agent names).
+- *The answer* adds `ruler` and nothing else (`record frames` each frame's `ruled` besides):
+  `{kind, space, tick_px, long_tick_px, number_px, top_numbers, left_numbers, line_px?}` (`RulerView`),
+  the word, `frame_pixels`, 50, 100, 100, `x`, `y`, and on `grid` 100.
+- *Without the parameter* every picture, answer and file is byte for byte as before: the ruler is
+  drawn only when one is given, the previews keep their names, and the members are absent.
+
+**Choices the work order left** (each the smallest that meets it).
+- The ruled copies of `record frames` go under `lab/preview/`, beside `record review`'s, not into
+  `frames/`, which holds the content-addressed stored frames: "beside them" is read as "besides
+  them", the answer naming both.
+- A listed frame whose file is not there cannot be ruled: with a ruler `record frames` refuses it
+  `record_frame_hash_mismatch` and writes no copy, as `record review` refuses a screen it cannot draw;
+  without a ruler it is listed with `path: null` and `frame_file_missing`, as before.
+- `--ruler` beside `--no-preview` draws nothing: refused, not ignored (fail loud).
+- `record frames` now has a form that writes files: its row's `writes` is true (the MCP tool's
+  `readOnlyHint` false), its capability's needs lose `read_only` (as `record review`'s and `package
+  fmt`'s have none), and its dry run is mixed: without `--ruler` `no_effect`, with it
+  `dry_run_unsupported` after the flags and before the recording is read, its alternative `record
+  frames` (`dry_run_gate::FRAMES_FORMS`; [actinglab-dry-run.md](actinglab-dry-run.md)).
+- A wrong word: through MCP and `serve --stdio` the closed list's rule refuses it as for every
+  enumeration (no code added there). actinglab's command line hands the row's flags on as written
+  (`engine::Line::AsWritten`), so the rule does not run there and the command checks the word
+  (`session_record::ruler_flag`, against `PreviewRuler::WORDS`).
+
+**Codes and words.** No outcome code, key or catalogued word; the catalogue and its index do not
+change. The parameter's words are the operation table's closed list.
+
+| Word | One cause | Refuses or warns | Exit |
+|---|---|---|---|
+| `ruler` `edges`, `grid` (the parameter's words) | which ruler is drawn | neither | 0 |
+| `validation_failed` `details{argument: "ruler", reason: "not_recognised", value}` | actinglab's command line gave `--ruler` another word | refuses, before anything is read | 1 on actinglab's own line, 2 on a `--via` line |
+| `validation_failed` `details{argument: "ruler", reason: "previews_only"}` | `record review` was asked for a ruler and `no_preview` | refuses, before anything is read | as above |
+| `dry_run_unsupported` (`form` `record frames --ruler`) | `record frames --ruler` under `--dry-run` | refuses, after the flags | 1 |
+
+Through MCP a wrong word is `arguments_invalid` with `argument_problem` `not_recognised`, before
+anything is sent, as for every closed list. No decision reads a code.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The ruler | `crates/lab/src/recording/preview.rs`: `PreviewRuler` (`WORDS`, `from_word`, `word`, `view`), `RulerView`, the constants `RULER_*` and `DIGITS`, `render`'s parameter `ruler`, `Canvas::ruler`, `two_tone`, `number`, `multiples`, `tick_length`, `dash`; exported from `recording/mod.rs` |
+| `record review` | `crates/lab/src/recording/review.rs`: `RecordReviewRequest::ruler`, `RecordReviewOutcome::ruler`, `preview_path`, `folded_sheet` (takes the request), `ruled_frame_path`, `Planned` and `write_previews` shared; `crates/lab/src/recording_api.rs`, `record_review` (the refusal beside `no_preview`) |
+| `record frames` | `crates/lab/src/recording/around.rs`: `RecordFramesRequest::ruler`, `RecordFramesOutcome::ruler`, `RecordFramesPressFrame::ruled`, `RecordFramesFrame::ruled`, `record_frames`, `listed` |
+| The command line | `apps/actinglab/src/commands/session_record.rs`: `--ruler` in `RECORD_FRAMES_READS` and `RECORD_REVIEW_READS`, `ruler_flag`, `run_record_frames` (the dry run), `run_record_review`; `apps/actinglab/src/dry_run_gate.rs` (`FRAMES_FORMS`); `apps/actinglab/src/commands/capabilities.rs` |
+| Texts | `contracts/lab-recording.md` (the introduction, "Files", "The frames around a press", "Reviewing a recording step by step", the new "A ruler on the pictures a recording hands back"); `contracts/lab-operations.json`, the rows `record frames` (`ruler`, `help`, `output`, `writes`, `notes`) and `record review` (`ruler`, `output`, `notes`); `contracts/actinglab-dry-run.md`; `apps/actinglab-mcp/MANUAL.md`. The MCP tools are generated from the rows; `apps/actinglab-mcp` is not changed |
+
+**Tests** (`crates/lab/src/gate_463_s1r.rs`, exec gate map "#463 S1-R"; synthetic flat frames through
+the previews' renderer and a recording of two taps on S2-5's bench; no clock): the six of the work
+order, as the gate map's comment lists them. Test 1 pins "today's bytes" by the renderer's own
+oracle (a copy with nothing to draw is the stored frame decoded and encoded again, byte for byte),
+by the previews' names and bytes across a ruled review and a review again, and by the stored
+frame's pixels at the ruler's places; no golden is recorded. Test 6 pins the table's rows; the MCP
+schema of an enumeration (`{type: string, enum: [words]}`) is the generator's
+(`apps/actinglab-mcp/src/tools.rs`, `value_schema`), which `gate_434_lab5g2a` holds for every
+parameter of every offered row, `ruler` now among them: one gate file cannot reach both crates.
+Adapted, because a struct gained a member (no assertion changed): the initializers of
+`RecordReviewRequest` in `gate_463_rm1`, `gate_463_kr1`, `gate_463_t70`, `gate_463_sc1`,
+`gate_463_s29a`, `gate_463_s29b` and `gate_463_s28`, of `RecordFramesRequest` in `gate_463_s213`
+and `gate_463_s28` (`ruler: None`), and `gate_463_s22`'s call of `render` (`None`). No test leaves a
+gate map; no golden changes.
+
+**What is not changed.** The stored frames, their hashes, the step table and the manifests; what
+`record stop`, `record ready` and `record mark` read; every preview's name and bytes without the
+parameter; every other answer. No record, configuration key, request kind or interface revision.
+
+**At deploy.** Nothing to configure; `--ruler` is there for the next review.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

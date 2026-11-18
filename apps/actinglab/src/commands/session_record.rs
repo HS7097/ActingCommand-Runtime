@@ -16,13 +16,13 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
     InstalledIdentity, InstalledRow, KeyRequest, KeySpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
-    MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest,
-    RecordPoint, RecordRect, RecordReopenOptions, RecordReviewRequest, RecordStartOptions,
-    RecordStopOptions, RecordingHold, RecordingLock, StepAction, StepActionKind,
-    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
-    record_archive_warnings, record_frames, record_hold_status, record_instance_check, record_mark,
-    record_ready, record_reopen, record_review, record_start, record_start_defaults, record_status,
-    record_stop, record_stop_close,
+    MarkRequest, MarkSpec, OptionalAfterSpec, PreviewRuler, RecordArchiveOptions,
+    RecordFramesRequest, RecordPoint, RecordRect, RecordReopenOptions, RecordReviewRequest,
+    RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock, StepAction,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
+    record_archive_copy, record_archive_warnings, record_frames, record_hold_status,
+    record_instance_check, record_mark, record_ready, record_reopen, record_review, record_start,
+    record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -410,13 +410,13 @@ pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
 };
 
 /// #463 S2-13: the flags `record frames` reads: the step, how many frames each side lists and the
-/// recording named by its id.
+/// recording named by its id. #463 S1-R: and the ruler of a ruled copy of each frame listed.
 pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
     row: "record frames",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--step", "--before", "--after", "--record-id"],
+            options: &["--step", "--before", "--after", "--record-id", "--ruler"],
             switches: &[],
             refused: &[],
         },
@@ -433,7 +433,8 @@ pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            // #463 RM-1: and the bound of the warning `record_template_near_threshold`.
+            // #463 RM-1: and the bound of the warning `record_template_near_threshold`. #463
+            // S1-R: and the ruler every preview carries.
             options: &[
                 "--record-id",
                 "--step",
@@ -441,6 +442,7 @@ pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
                 "--server",
                 "--locale",
                 "--template-margin-bound",
+                "--ruler",
             ],
             switches: &["--no-preview"],
             refused: &[],
@@ -669,7 +671,8 @@ fn run_session_record_inner(
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
     // #463 S2-13: `record frames` writes nothing, not even the session directory; #463 S2-2:
-    // `record review` writes its previews alone, in the recording's own directory.
+    // `record review` writes its previews alone, in the recording's own directory (#463 S1-R: and
+    // `record frames --ruler` its ruled copies alone, there too).
     if !matches!(action, "frames" | "review") {
         fs::create_dir_all(&state_dir).map_err(|err| {
             CliError::runtime_not_running(format!(
@@ -843,7 +846,7 @@ fn run_session_record_inner(
             })
         }
         // #463 S2-13: offline, without the recording lock.
-        "frames" => run_record_frames(&flags, &state_dir, &instance_id),
+        "frames" => run_record_frames(global, &flags, &state_dir, &instance_id),
         // #463 S2-2: offline, without the recording lock; it writes its previews alone.
         "review" => run_record_review(global, &config, &flags, &state_dir, &instance_id),
         "step" => {
@@ -3510,8 +3513,16 @@ fn run_record_reopen(
 /// range, 0 to 100, `range`). #463 stage two, train 1, fix round: read as the waits of a recorded
 /// press are read (`after_capture_ms`): a flag given more than once is its last value, and a value
 /// that is no whole number is `validation_failed` with `details{argument, reason: "wrong_type",
-/// value}`. The answer is the Lab's.
-fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
+/// value}`. The answer is the Lab's. #463 S1-R: `--ruler <edges|grid>` writes a ruled copy of each
+/// frame listed (`ruler_flag`); those copies are files written, so under `--dry-run` that form is
+/// `dry_run_unsupported` after the flags and before the recording is read, its alternative the
+/// form without `--ruler`.
+fn run_record_frames(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    instance_id: &str,
+) -> CliOutcome<Value> {
     let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
         CliError::usage("record frames needs --step <k>, the step's serial number")
     })?;
@@ -3520,10 +3531,44 @@ fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> C
         step,
         before: frames_number(flags, "--before", "before")?,
         after: frames_number(flags, "--after", "after")?,
+        ruler: ruler_flag(flags)?,
     };
+    if request.ruler.is_some() {
+        crate::dry_run_gate::refuse(
+            global,
+            "record frames --ruler",
+            Some("record frames"),
+            json!({"action": "frames"}),
+        )?;
+    }
     let outcome = record_frames(state_dir, instance_id, &request)?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
+}
+
+/// #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): the
+/// ruler `--ruler` (MCP `ruler`) asks for on the copies `record review` and `record frames` write,
+/// `None` without the flag. The command line hands the flag on as written, so its word is checked
+/// here against the closed list the operation table gives it (`PreviewRuler::WORDS`): another
+/// word is `validation_failed` with `details{argument: "ruler", reason: "not_recognised", value}`,
+/// the word the table's own rule names such a value by; a flag given twice or without a value is
+/// refused as every value of these commands is.
+fn ruler_flag(flags: &FlagArgs) -> CliOutcome<Option<PreviewRuler>> {
+    record_flag_value(flags, "--ruler")?
+        .map(|word| {
+            PreviewRuler::from_word(&word).ok_or_else(|| {
+                CliError::usage(format!(
+                    "--ruler (MCP ruler) takes one of {}, got {word}",
+                    PreviewRuler::WORDS.join(", ")
+                ))
+                .with_details(json!({
+                    "argument": "ruler",
+                    "reason": "not_recognised",
+                    "value": word
+                }))
+            })
+        })
+        .transpose()
 }
 
 /// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
@@ -3563,7 +3608,8 @@ fn frames_number<T: std::str::FromStr>(
 /// function `record ready` reads them with (`identity_options`), else the recording's, the Lab's
 /// and the installation's. Under `--dry-run` the previews are files written, so the form without
 /// `--no-preview` is refused `dry_run_unsupported` before anything of the recording is read; with
-/// it nothing is written (`no_effect`). The answer is the Lab's.
+/// it nothing is written (`no_effect`). The answer is the Lab's. #463 S1-R: `--ruler <edges|grid>`
+/// draws that ruler on every preview (`ruler_flag`); beside `--no-preview` the Lab refuses it.
 fn run_record_review(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -3584,6 +3630,7 @@ fn run_record_review(
         record_id: record_flag_value(flags, "--record-id")?,
         step: frames_number(flags, "--step", "step")?,
         no_preview,
+        ruler: ruler_flag(flags)?,
     };
     // #463 RM-1: with the bound of `record_template_near_threshold`, as `record ready`.
     let options = RecordStopOptions {

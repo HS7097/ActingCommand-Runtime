@@ -509,6 +509,7 @@ impl Bench {
             record_id: None,
             step,
             no_preview: true,
+            ruler: None,
         };
         record_review(
             &self.state(),
@@ -527,6 +528,7 @@ impl Bench {
             step,
             before: None,
             after: None,
+            ruler: None,
         };
         record_frames(&self.state(), INSTANCE, &request)
             .map(|outcome| serde_json::to_value(&outcome).expect("record frames JSON"))
