@@ -113,6 +113,70 @@ first poll restarts or recognizes, and the next idle check takes a withheld wake
 instance resume. An explicit emulator control runs under any pause as before. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
 that arrives while a ladder holds the instance ends the ladder at its next step
 (`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
+A ladder's claim still queued is a routine claim, which the pause holds back in the queue; one
+granted under the pause (handed the key just before it) is suppressed at its first check
+(`recovery_ladder_suppressed`, `admission_denied`) and starts nothing. #480 PG-2b (since 0.12.73;
+the owner's requirement on board #480: a pause a person asked for stands, and the Runtime starts
+nothing after it): the ladder's holding check comes before every step of a rung that stops or
+launches the application or stops or starts the emulator. Before, it came at every rung boundary,
+before the emulator rung's Stop and Start and at every readiness poll, but not before the
+application rung's force-stop of the assigned application nor before a rung's startup package
+run (which launches the game), so a pause recorded just before either let the rung stop the game
+and launch it again. Now it also comes just before that stop and just before each rung's startup
+package run (before its `startup_package_scheduled`; an emulator rung on an instance without a
+startup package runs nothing there and ends `environment_ready` as before). The return-home
+package's first run asks at the rung boundary, its rerun after a busy hold at the hold's last
+check right before it, and (since the slice's fix round 1) its rerun from the settle gate right
+before it, after the probe: before that round the settle gate asked before its hold and probe
+only, so a pause recorded while the probe took its frames let the package start. On a member of a
+device group of several the application rung's first check comes (since fix round 1) before the
+switch that stops the member in front, or every other member, ahead of the rung's own stop, so a
+pause recorded at the rung's boundary stops no other member's application. An interruption at the
+new checks ends the rung as an interrupted Stop or Start does: the rung failed with
+`recovery_ladder_interrupted` caused by the interruption (`recovery_admission_denied` for a
+pause), the ladder `exhausted` at warning at its next holding check, no error point, its one
+release; at the settle gate's rerun it ends the climb as one during the hold does, the
+return-home rung it was about to run recorded failed with it. What a rung that already stopped the
+device group's other members owes the group stays owed as before (the member in front is
+forgotten).
+
+A rung that a pause interrupts after it took the application down (the application rung after its
+stop) or brought the emulator up (the emulator rung from its Start on: each readiness attempt and
+poll, and the check before its startup run) owes its startup run, and since fix round 1 (the
+coordinator's ruling) hands it off as an emulator start under a pause hands off its startup
+package (`contracts/emulator-control.md`): the scheduling intent `startup_package_scheduled` under
+the ladder's links, the startup claim queued as a routine entry this pause holds back (a startup
+claim of the instance still queued is cancelled first, as for every new one), and the claim kept
+in `host.idle_state` while the ladder still holds the key. Nothing is handed off when the rung has
+stopped nothing yet, when it is interrupted between the emulator rung's Stop and its Start (the
+emulator stays stopped, and a startup run against a stopped emulator is meaningless, as an
+emulator `stop` cancels one), or when another interruption ends it. The claim then goes as the
+startup claim of a start under a pause goes, once: after an instance resume it follows the
+reconnect, whose release hands the key on (a failed reconnect that admits no ladder cancels it,
+one that admits a ladder hands the key to that ladder and the claim waits behind it); after a
+global resume the queue's next pump grants it; a Runtime restart while paused drops the claim and
+the next start queues it again behind the restored pause (`host.idle_state`); its grant forgets
+what was kept, so no later restart runs it again. An explicit emulator `start` or `restart`
+meanwhile replaces it with its own claim, a `stop` cancels it. No ladder starts while the pause
+holds; a ladder that gets the key before the claim after the resume keeps it queued behind itself,
+and that ladder's own startup run does not cancel it, as a startup claim queued behind a failed
+preparation's ladder is not cancelled (#411 A50). Before fix round 1 the resume only reconnected
+and queued no startup package, so the application stayed stopped until its startup package was
+started again (the application rung of a later ladder, a person's or a client's emulator start
+or restart, an idle wake), and the instance's first task met it stopped.
+
+An emulator that a rung interrupted between its Stop and its Start (said since fix round 2) stays
+stopped while the pause holds: none of the Runtime's automatic starts starts it under a pause (the
+watch's restart, the daemon start's configured start and IDLE-1's wake are held, above, and no
+ladder is admitted); only a person's or a client's emulator control, which runs under any pause,
+does. After the resume the emulator watch restarts it at its next poll, as it restarts every
+configured instance it finds stopped (`start_emulator` on, `emulator_control.watch_enabled` on,
+within `restart_attempts` in `restart_window_ms`, not held stopped by IDLE-1; an instance
+resume's reconnect first finds the emulator stopped, `instance_not_running`, which no shipped
+trigger item names, so it admits no ladder and releases the key), and that start owes the startup
+run: as every configured start, it queues the instance's startup package and hands the key to it.
+An instance whose configuration names no automatic start (`start_emulator` off) stays stopped
+until a person or a client starts it, as before this slice.
 
 ## Global pause
 
@@ -184,9 +248,50 @@ own wait ends first finds the pause standing (the end of this section).
    pause's own. The wait ends when the claim ends: by its own deadlines, or once its key has lapsed
    and the lease sweep has taken it back. The gate stays closed throughout, and the stages go
    `draining`, `paused`, `released` as before, only later. A Runtime shutdown during such a wait
-   does not lift the pause either (below). The grace keeps its meaning for everything else (a
+   does not lift the pause either (below). #480 PG-2b (since 0.12.73; the coordinator's ruling
+   that extends R4′): the same holds for the Runtime's own stuck-recovery ladder. When the active
+   lease is a ladder's (`ClaimKind::Ladder`, its continuation's included) and nothing else is
+   waited for, the hand-back waits for it beyond the grace with no bound of the pause's own: the
+   gate stays closed, the ladder ends at its next holding check ("The dispatch gate" above: before
+   every step of a rung that stops or launches the application or stops or starts the emulator),
+   and its one release lets the hand-back go on. Before 0.12.73 a ladder's lease was waited for
+   only until the grace, like a client's: past it the pause failed with
+   `scheduling_pause_release_busy` and was lifted, and the ladder's next holding check then passed
+   and it climbed on. A ladder's claim still queued is a routine entry the pause holds back: it
+   refuses nothing and is not waited for. This holds for every requester of an instance pause, a
+   person's (the console, `actingctl`, the Lab's `pause` and MCP) and a tool's hold (a rescue
+   operation's, the recording's) alike: a tool's hold waits for the ladder as, since 0.12.72, it
+   waits for the automatic start. How long, by the code's own bounds (since the slice's fix round
+   1 in this text; the bound corrected in fix round 2): the ladder ends at its next holding check,
+   so the hand-back waits for the step the ladder is in. The longest is the emulator rung's Stop,
+   which holds the instance's admission guard from the holding check before it to the one before
+   its Start: the Stop itself, at most `210_000` ms fixed in the code (the control dispatch
+   `60_000`, the wait for the stopped state `120_000`, the last status read `10_000`, the last
+   process listing `10_000`, and the status read after a failure `10_000`; the rung's
+   `recovery_ladder.rungs[emulator_restart].stop_bound_ms`, default `210_000` ms, renews the
+   ladder's key to its value plus `recovery_ladder.hold.margin_ms`, default `5_000` ms, and may not
+   be shorter than the device's part, `200_000` ms, but does not bound the step); then, since the
+   rung's Stop is a phase of a restart (#411 A50), a Stop whose wait ran out
+   (`emulator_control_wait_timeout`) waits, still under the guard, for the old VM to exit: up to
+   `emulator_control.restart_exit_wait_ms` (default `60_000` ms; `1_000` to `300_000`), plus its
+   last status read, which may end up to `10_000` ms after it. So the bound depends on the
+   configuration: `220_000` ms plus `restart_exit_wait_ms`, that is `280_000` ms with the defaults
+   (`520_000` ms at that key's largest value). The Start that follows holds the guard up to its own
+   fixed bound, `220_000` ms (the control dispatch, the wait for the running state, the last status
+   read, the ADB baseline `30_000`; `start_bound_ms`, default `220_000` ms, renews the key to it),
+   before the first readiness attempt's check, so never longer than the Stop. Meanwhile the
+   hand-back waits on that guard and does not poll, and a shutdown is seen once the guard is let
+   go. Before fix round 2 this text gave one Stop's or Start's configured bound plus the margin,
+   `225_000` ms, and left out the wait for the old VM. Every other step between two holding checks
+   is shorter: the application stop (one ADB command, `60_000` ms at most), the application rung's entry probe
+   (`adb_probe_ms`, default `30_000` ms), a readiness attempt's preparation (the backend opens,
+   `30_000` ms), the settle gate's probe (`(probe_frames - 1) * probe_interval_ms`, default
+   `4_000` ms), a poll of a hold or of a readiness wait (`busy.poll_ms`, `readiness_poll_ms`,
+   default `500` ms); through a step that takes the admission guard the hand-back waits on it,
+   through the others it polls every `20` ms. A package run the ladder began is not waited for
+   so: it is drained again (below). The grace keeps its meaning for everything else (a
    person's or a client's run and lease, an operator's entry, an owed reset), which fails the
-   pause as before. With nothing left the stage
+   pause as before, whether or not a ladder's claim waits behind it. With nothing left the stage
    becomes `released`; the device session stays as it is and nothing is recorded. Only an
    instance outside the multi-Nemu gate (`read-session-resource-close.md`, "Device session
    lifetime") closes its session here, through the existing fenced resource-close path
@@ -197,7 +302,21 @@ own wait ends first finds the pause standing (the end of this section).
    `runtime.lifecycle_observed` `ResourceQuiescence` observation and releases the lease with
    `LeaseReleaseReason::InstancePaused` (a `lease.released` event; the reason is the
    scheduler's release reason, the event carries no reason field); such an instance whose
-   device session is not open closes nothing and records nothing.
+   device session is not open closes nothing and records nothing. #480 PG-2b (since 0.12.73):
+   this close lease is not held up by the instance's own entries that this pause holds back (its
+   routine entries: a startup package, a ladder's claim; the host's
+   `grant_dedicated_instance_lease` with the scheduler's `PauseHandBack`). When the lease reads
+   the queue, the paused instance's gate is closed by its own pause (stage `paused`); none of those
+   entries can be granted while the pause holds, the close lease takes none of them out of the
+   queue, and after the resume they are granted as queued (the resume's reconnect first). Before
+   0.12.73 the lease read every entry as an open gate does, so a startup package this pause held
+   back answered `lease_queue_ahead`, the pause was lifted, and the package then passed the opened
+   gate and launched the game. Only this close lease passes them (the lease released
+   `InstancePaused`), unlike the autostart exception above, which every grant of a dedicated lease
+   of the instance makes. Every other member's entries and every other entry of the instance
+   count as before (`lease_queue_ahead`, `lease_transfer_not_safe`). Its other refusals still fail
+   the pause and lift it, as before: a device in its takeover cooldown (`lease_cooldown`), a close
+   that leaves a fence.
 
 If a stage fails, the request fails as a whole (`Failed` receipt) and the gate it closed is
 lifted again: no half-open pause is left behind. A drain whose stopped runs have not reached
@@ -209,16 +328,17 @@ their next checkpoint `30_000` ms after the drain timeout
 0.12.72) are judged on the moment of the shutdown (since fix round 2): the hand-back reads again
 then what is in the way (the lease's kind, a refusing queued entry, a run in flight, an owed
 reset, a policy run on the worker), whatever its last check found and before its first check
-too. When the Runtime's own automatic emulator start alone is in the way (above; fix round 1),
-the request answers `scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and
-lifts nothing. When nothing is in the way any more and no refusing entry is queued (fix round 3:
+too. When the Runtime's own work alone is in the way (above: its automatic emulator start, fix
+round 1; since 0.12.73, #480 PG-2b, also its stuck-recovery ladder), the request answers
+`scheduling_pause_kept_at_shutdown` (`Failed`, `RuntimeUnavailable`) and lifts nothing. When nothing is in the way any more and no refusing entry is queued (fix round 3:
 the automatic claim may let go between the last check and the shutdown), the pause is not lifted
 either and the hand-back ends as it would have: inside the multi-Nemu gate the stage becomes
 `released` and the request answers success; outside it, where the hand-back would still close
 the instance's session, the pause is kept and the request answers
-`scheduling_pause_kept_at_shutdown`. Only work that is not the Runtime's own automatic claim in
-the way (a person's or a client's run or lease, an operator's entry, an owed reset, a policy run
-on the worker) answers `scheduling_pause_release_interrupted` and lifts the pause as before. The
+`scheduling_pause_kept_at_shutdown`. Only work that is not the Runtime's own (its automatic
+claim, its ladder) in the way (a person's or a client's run or lease, an operator's entry, an owed
+reset, a policy run on the worker) answers `scheduling_pause_release_interrupted` and lifts the
+pause as before. The
 kept
 pause stays in stage `paused` until the Runtime stops, its row of `host.scheduling_pause` stays as
 it was recorded, and the next start restores it as every persisted pause is restored ("Persistence,
@@ -228,11 +348,19 @@ the one that set the pause and the one that lifted it (none for a kept one). A f
 (an instance outside the multi-Nemu gate) fails the request with the close's own error; an
 unconfirmed close stays fatal as on every close path. The
 client's receipt wait is the drain timeout plus that grace plus its IO timeout. Since 0.12.72 the
-hand-back can last longer than that wait (it waits for an automatic emulator start with no bound
-of its own), and no client timeout changed: a caller (`actingctl`, MCP, the Lab, the console) whose
+hand-back can last longer than that wait (it waits for an automatic emulator start, and since
+0.12.73 for the Runtime's own ladder, with no bound of its own), and no client timeout changed: a caller (`actingctl`, MCP, the Lab, the console) whose
 wait ends first reports its own timeout, while the pause stands and goes on. A second pause
 request for the instance then answers `scheduling_already_paused`, and `Status` shows the pause
-and its stage (`paused` while the hand-back waits, `released` once it is done).
+and its stage (`paused` while the hand-back waits, `released` once it is done). A pause that
+waits for the ladder can still be lifted after the caller's own wait has ended, and later than
+before 0.12.73, when the ladder's lease was waited for only until the grace (#480 PG-2b, said
+since its fix round 1): by another party's entry queued meanwhile (a client's or an operator's
+claim, `lease_transfer_not_safe` at the hand-back's next check), by a package run the ladder had
+already begun (drained again under the pause's deadlines, which past the grace fails at once with
+`scheduling_pause_drain_incomplete`), or by a reset that is owed (`scheduling_pause_release_busy`
+past the grace). Each fails the request and lifts the pause as before; only the caller no longer
+hears of it, and the lift is the pause's record without it.
 
 ## Resume
 
@@ -395,7 +523,8 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
   between the record and the gate change restarts on the side the operator asked for. A failed
   instance pause stage lifts its gate and records the rows without it; if that record fails
   the request poisons the Runtime. Since 0.12.72 (#480 PG-1 fix round 1) a hand-back a shutdown
-  interrupted while the Runtime's own automatic emulator start alone was in the way (fix round 2:
+  interrupted while the Runtime's own automatic emulator start alone (since 0.12.73, #480 PG-2b,
+  or its ladder alone) was in the way (fix round 2:
   at the moment of the shutdown; `scheduling_pause_kept_at_shutdown`), or (fix round 3) at which
   nothing was in the way any more, lifts nothing and records nothing: the rows that set the
   pause stay, and the next start restores it.

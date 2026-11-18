@@ -1473,3 +1473,12 @@ tests = [
     "actingcommand-scheduler::lib::tests::gate_480_pg1::pg1_fix2_every_other_queued_entry_refuses_as_before_under_the_instances_pause",
 ]
 incident = ["#480", "PG-1"]
+
+# #480 PG-2b (0.12.73; register §1.471; brief rd-1118/brief-480-pg2b-ladder-and-close.md, item 3; contracts/scheduling-pause.md, "Instance pause: three stages", (c)), the scheduler's half: on a device of two members keyed by the map the assembly derives, under a closed routine gate, the first member's own queued startup package and ladder claim are each ahead of its dedicated close lease (lease_queue_ahead) without a word, under PG-1's word AutostartEndsAtGrant alone and under the word PauseHandBack naming the other member, and under PauseHandBack naming the first member the close lease is granted ahead of the entry, which keeps its place in the queue (1); under PauseHandBack naming the first member, the other member's queued startup package and ladder claim are still ahead of it, a queued claim of the first member that the pause does not hold back (the start's preparation, an emulator control) still refuses it (lease_transfer_not_safe), and the first member's own autostart claim is passed over as under PG-1's word; every entry stays queued (2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_480_pg2b::pg2b_the_close_lease_of_a_pause_passes_the_entries_its_pause_holds_back",
+    "actingcommand-scheduler::lib::tests::gate_480_pg2b::pg2b_every_other_queued_entry_counts_as_before_under_the_pause_hand_back",
+]
+incident = ["#480", "PG-2b"]

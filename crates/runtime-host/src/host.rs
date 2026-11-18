@@ -2270,6 +2270,8 @@ impl RuntimeHost {
             #[cfg(test)]
             recognition_admission_hook_for_test: Mutex::new(None),
             #[cfg(test)]
+            rung_step_check_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
             #[cfg(test)]
@@ -4506,6 +4508,24 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #480 PG-2b, test builds: runs `hook` once, on the ladder's worker (the ladder holding its
+    /// key), just before the next holding check a rung makes before a step that acts on the game:
+    /// the application rung's first stop (fix round 1: on a member of a device group of several
+    /// the stop of the other members), a rung's startup package run, or (fix round 1) the settle
+    /// gate's rerun of the return-home package.
+    #[cfg(test)]
+    pub(crate) fn run_before_ladder_step_check_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::GateRecoveryPause)?;
+        *lock(
+            &shared.rung_step_check_hook_for_test,
+            HostLocation::GateRecoveryPause,
+        )? = Some(hook);
+        Ok(())
+    }
+
     /// Workflow #427-A fix 1, test builds: whether a policy dispatch could go to the instance
     /// `instance_alias` names now (the admission's occupancy: no holder, no eligible waiting
     /// claim, no registered policy run and no takeover cooldown).
@@ -6699,6 +6719,11 @@ struct HostShared {
     /// its preparation takes the instance's admission guard.
     #[cfg(test)]
     recognition_admission_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2b, test only: the hook a ladder's rung runs once just before its next holding
+    /// check before its application stop, its startup package run or (fix round 1) the settle
+    /// gate's rerun.
+    #[cfg(test)]
+    rung_step_check_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]
