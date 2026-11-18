@@ -203,10 +203,11 @@ not, frames can only be added with `record mark --frame`).
 
 #463 S1-7: `record start` holds the instance (its scheduling paused with the recording's own
 reason, or another party's pause it finds), keeps the hold in the session header (`hold`; fix
-round 2: written before the pause is sent, put back when the Runtime refuses the pause) and
-answers `hold{state, reason?, taken_over?, paused?, warnings?, runtime_error?, replaced_header?}`;
-it waits as the pause waits, up to 335 s; a pause the Runtime refuses starts nothing ("A recording
-holds its instance").
+round 2: written before the pause is sent, put back when the Runtime refuses the pause; #480 PG-2a,
+since 0.12.73: put back after a pause that failed only when it is known that no pause with the
+hold's reason stands) and answers `hold{state, reason?, taken_over?, paused?, warnings?,
+runtime_error?, replaced_header?}`; it waits as the pause waits, up to 335 s; a pause the Runtime
+refuses starts nothing ("A recording holds its instance").
 
 Workflow #392 DA-5cd: before that, it reads the instance's display as the Runtime last observed it
 and refuses one of another size than the base size 1280×720, `record_display_not_base`, before
@@ -2765,18 +2766,43 @@ Runtime is asked to pause):
 - **A status the Runtime refuses**, or leaves unanswered once the connection is made: `record
   start` fails with it as above, its message saying it paused nothing and started nothing, and
   writes nothing.
-- **A pause the Runtime refuses** (its receipt says no pause was made: denied, or failed as a
-  whole, which lifts the gate it closed): the session header is put back as it was before (when
+- **A pause the Runtime refuses** (its receipt is `Denied`: the Runtime denies a pause only before
+  its gate closes, so no pause was made): the session header is put back as it was before (when
   there was none, the new one does not stay), and `record start` fails with the refusal, its
   message saying it paused nothing and started nothing: no recording.
+- **A pause that failed in a stage** (#480 PG-2a, since 0.12.73; its receipt is `Failed`). A failed
+  stage lifts the gate it closed, but since 0.12.72 a shutdown that interrupts the hand-back while
+  nothing but the Runtime's own work is in the way keeps the pause, and the next start restores it
+  (`scheduling_pause_kept_at_shutdown`, [scheduling-pause.md](scheduling-pause.md), "Instance
+  pause: three stages"). So `record start` reads the status once more, on the same connection:
+  - it shows no pause of the instance, or another party's (the common case: a drain that did not
+    finish within its time): as a refused pause, the header put back and nothing started;
+  - it shows the hold's own reason, or the read fails or gets no answer: the header stays as
+    written, naming the hold, and the start fails as below, `hold: {reason, own: true}` in its
+    details, its message saying which of the two it met. The failure's code is the pause's own
+    failure as the Lab answers a Runtime failure (`runtime_not_running` for
+    `scheduling_pause_kept_at_shutdown`, whose Runtime error code is `RuntimeUnavailable`).
+
+  PG-2a fix round 1: a `Failed` receipt that is fatal to the connection (it says the Runtime
+  halted, `host_halted`) is followed by no status read, since the client sends no request on a
+  connection after such a receipt. The header stays, as when the read fails, and the message says
+  that the read could not be sent and why; the error it shows is the pause's. The details of a
+  start that keeps its header so name the instance (`instance`, as a start that paused nothing
+  names it) and say in `pause_found` which of two facts it met: `hold_shown`, the status read
+  after the failed pause shows the instance paused with the hold's reason; `pause_unread`, the
+  instance's pause could not be read (the read failed, got no answer or could not be sent). A tool
+  reads that member, not the message; the code and the exit status do not tell the two apart.
 - **Any other end of the pause** (the connection lost, the wait for the receipt ended, the process
   killed or timed out by its caller): the session header stays as written, because a pause with
   that reason may exist. The failure (`runtime_not_running` when the connection was lost) carries
-  `hold: {reason, own: true}` in its details, and so does every failure after the header names the
-  hold (the Lab recording's start, the state directory's reach). `record stop` (or `record start
-  --force`) then finds the header and releases by its reason; a release that finds no such pause
-  is `already_gone`. (`record archive` of such a header, whose Lab recording never started, is
-  refused as `lab_recording_missing`.)
+  `hold: {reason, own: true}` in its details (PG-2a fix round 1: with `instance` and `pause_found:
+  pause_unread`, as a pause that failed in a stage and whose status was not read, so that the
+  three answers that keep the header read alike), and every failure after the header names the
+  hold (the Lab recording's start, the state directory's reach) carries `hold` too. `record stop`
+  (or `record start --force`) then finds the header and releases by its reason; a release that
+  finds no such pause is `already_gone`. (`record archive` of such a header, whose Lab recording
+  never started, is refused as `lab_recording_missing`.) A start whose failed pause still stands, or whose status
+  could not be read after it (above), leaves the same header, and the same commands release it.
 - **`--force` over a session header that cannot be read** (fix round 2): the start goes on, which
   is what `--force` is for, but the hold that header named is not known: a pause the earlier
   recording took, if any, shows as another party's to this recording and is not released by it.

@@ -16,16 +16,17 @@
 //! reads the pause the instance shows ([`instance_pause_reason`]) and, when it shows none, writes
 //! its session header naming its own hold and then pauses the instance's scheduling as `pause`
 //! does ([`pause_for_recording`]; fix round 2: the header first, so that a start that is killed in
-//! the drain leaves a header that names the pause); a pause the Runtime refused left no pause
-//! ([`pause_refused`]). The end of the recording resumes only the pause that shows its reason,
+//! the drain leaves a header that names the pause); #480 PG-2a: a pause the Runtime refused left
+//! no pause, and of a pause that failed in a stage the status tells whether one stands
+//! ([`failed_pause`]). The end of the recording resumes only the pause that shows its reason,
 //! found by that reason as the rescue module's `release_own` finds its own
 //! ([`release_recording_hold`]), and each `--record` press or application operation reads whether
 //! the instance is held ([`instance_scheduling_paused`]).
 
 use actingcommand_contract::{
     EventId, FactObservation, FactRecord, FactScope, InstancePauseState, OwnerEpoch,
-    RuntimeControlPlaneStatus, RuntimeResult, SanitizationError, SchedulingPauseExpectation,
-    SchedulingPauseReason, SchedulingPauseScope,
+    RuntimeControlPlaneStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    SanitizationError, SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde::Serialize;
@@ -124,15 +125,34 @@ pub fn pause_for_recording(
     )
 }
 
-/// #463 S1-7 fix round 2: whether the failure `error` of a pause is the Runtime's refusal, a
-/// receipt that says no pause was made: the Runtime's own receipt of the pause arrived and carries
-/// the failure (the client keeps such a receipt as the received one). By the pause's rules
-/// (`contracts/scheduling-pause.md`) a refused pause changes nothing, and a stage that fails fails
-/// the request as a whole and lifts the gate it closed. Every other failure (the connection lost,
-/// the wait for the receipt ended, a receipt that did not match the request) leaves it unknown
-/// whether the pause was made.
-pub fn pause_refused(error: &RuntimeClientError) -> bool {
-    error.received_receipt().is_some()
+/// #480 PG-2a: what the failure of a pause says about the pause, by the Runtime's own receipt of
+/// it, which the client keeps as the received one, and that receipt's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailedPause {
+    /// The receipt is `Denied`: by the pause's rules (`contracts/scheduling-pause.md`) the Runtime
+    /// denies a pause only before its gate closes (the request's own checks, an instance that is
+    /// unknown or a fixture's, `scheduling_already_paused`); every failure after that is `Failed`,
+    /// a poisoned request included. The request changed nothing, and no pause of it stands.
+    Refused,
+    /// The receipt is `Failed`: a stage of the pause failed, which lifts the gate it closed; but
+    /// since 0.12.72 a hand-back a shutdown interrupted while nothing but the Runtime's own work
+    /// was in the way keeps the pause (`scheduling_pause_kept_at_shutdown`), and a poisoned lift
+    /// may leave it. Whether a pause stands is not in the receipt: the status tells.
+    Failed,
+    /// No receipt of the Runtime's (the connection lost, the wait for the receipt ended, a receipt
+    /// that did not match the request): whether the pause was made is not known.
+    Unanswered,
+}
+
+/// #480 PG-2a (in the place of fix round 2's `pause_refused`, which took every received receipt
+/// for a pause that left nothing): what the failure `error` of a pause says about it, by the state
+/// of the receipt it carries ([`FailedPause`]).
+pub fn failed_pause(error: &RuntimeClientError) -> FailedPause {
+    match error.received_receipt().map(RuntimeReceipt::state) {
+        Some(RuntimeReceiptState::Denied) => FailedPause::Refused,
+        Some(_) => FailedPause::Failed,
+        None => FailedPause::Unanswered,
+    }
 }
 
 /// #463 S1-7: what the release of a recording's own hold did.
