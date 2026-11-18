@@ -1003,3 +1003,133 @@ fn a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_rou
         )
     );
 }
+
+/// Workflow #463 SEL-2L (register §1.480): a source layout's shared read over `region`.
+fn shared_read(region: Value) -> Value {
+    json!({
+        "region": region, "languages": ["en"], "timeout_ms": 5000,
+        "model_ref": "neutral-ocr-model", "model_sha256": "a".repeat(64),
+        "blocks": "detect", "line_merge": {"gap_factor": 0}
+    })
+}
+
+/// Workflow #463 SEL-2L (register §1.480; contracts/selection-graph.md, "Source declaration" and
+/// "Shared OCR read"): a `repeated_anchor` layout of task schema `0.9` may declare `shared_ocr`.
+/// On the 96 x 72 task whose layout's readable band is (0, 0, 96, 40), the declaration gate admits
+/// a read over the band, over more than it and over `full_frame`, and without a band a read over
+/// the whole frame; a region short of the band, or without a band short of the frame, is
+/// `InvalidValue` at `/candidate_layouts/0/shared_ocr/region`. Under task schema `0.6` the member
+/// is `UnconsumedField`, as a `fixed_slots` layout's is (no longer `UnknownField`).
+#[test]
+fn sel2l_a_repeated_anchor_layout_declares_a_shared_read_that_covers_its_band() {
+    let rect = |x: u32, y: u32, width: u32, height: u32| {
+        let rect = json!({"x": x, "y": y, "width": width, "height": height});
+        json!({"mode": "rect", "rect": rect})
+    };
+    let with_read = |band: bool, region: Value| {
+        let mut layout = anchored_layout();
+        if !band {
+            layout
+                .as_object_mut()
+                .expect("layout")
+                .remove("readable_band");
+        }
+        layout["shared_ocr"] = shared_read(region);
+        layout
+    };
+    let gate = |schema: &str, layout: Value| {
+        let mut bundle = anchored_bundle(layout);
+        bundle.data["schema_version"] = json!(schema);
+        declaration_file_requests(&[bundle]).map(|_| ())
+    };
+
+    for (band, region) in [
+        (true, rect(0, 0, 96, 40)),
+        (true, rect(0, 0, 96, 72)),
+        (true, json!({"mode": "full_frame"})),
+        (false, rect(0, 0, 96, 72)),
+        (false, json!({"mode": "full_frame"})),
+    ] {
+        gate("0.9", with_read(band, region.clone()))
+            .unwrap_or_else(|error| panic!("band {band}, {region}: {}", error.message));
+    }
+    for (band, region) in [
+        (true, rect(0, 4, 96, 36)),
+        (true, rect(0, 0, 90, 40)),
+        (false, rect(0, 0, 96, 40)),
+    ] {
+        let error = gate("0.9", with_read(band, region.clone()))
+            .expect_err("a region short of the band or the frame");
+        assert_eq!(error.code, "resource_declaration_invalid", "{region}");
+        let issue = declaration_issue(error);
+        assert_eq!(issue.declaration_file, "operations/fixture/task.json");
+        assert_eq!(
+            (issue.field_path.as_str(), issue.reason),
+            (
+                "/candidate_layouts/0/shared_ocr/region",
+                ResourceDeclarationReason::InvalidValue
+            ),
+            "band {band}, {region}"
+        );
+    }
+    let error = gate("0.6", with_read(true, rect(0, 0, 96, 40)))
+        .expect_err("a shared read under task schema 0.6");
+    let issue = declaration_issue(error);
+    assert_eq!(
+        (issue.field_path.as_str(), issue.reason),
+        (
+            "/candidate_layouts/0/shared_ocr",
+            ResourceDeclarationReason::UnconsumedField
+        )
+    );
+}
+
+/// Workflow #463 SEL-2L: the derivation writes a `repeated_anchor` layout's shared read last, its
+/// region in the pack's form (a rectangle, or `full_frame`) and its other members as declared, as
+/// a `fixed_slots` layout's; the same layout without it derives byte for byte as before.
+#[test]
+fn sel2l_the_shared_read_of_a_repeated_anchor_layout_derives_last() {
+    let targets = HashMap::from([
+        (
+            "ui/row_marker".to_string(),
+            json!({"type": "template", "id": "ui/row_marker"}),
+        ),
+        (
+            "state/row_open".to_string(),
+            json!({"type": "color", "id": "state/row_open"}),
+        ),
+    ]);
+    let derive = |layout: Value| {
+        let derived = derive_candidate_layouts(&targets, &[anchored_bundle(layout)], "fixture")
+            .expect("derived layout");
+        serde_json::to_string(&derived).expect("derived JSON")
+    };
+    let before = concat!(
+        r#"[{"id":"layout/rows","page_id":"fixture/list_page","kind":"repeated_anchor","#,
+        r#""anchor":"ui/row_marker","max_instances":4,"order":"top_to_bottom","#,
+        r#""suppress_iou_milli":0,"instance_rect":{"x":-2,"y":-2,"width":40,"height":12},"#,
+        r#""click":{"x":10,"y":0,"width":20,"height":6},"#,
+        r#""readable_band":{"x":0,"y":0,"width":96,"height":40},"#,
+        r#""features":[{"name":"open","value":"passed","target":"state/row_open","#,
+        r#""offset":{"x":30,"y":1}}]}]"#
+    );
+    assert_eq!(derive(anchored_layout()), before);
+
+    for (region, derived_region) in [
+        (
+            json!({"mode": "rect", "rect": {"x": 0, "y": 0, "width": 96, "height": 40}}),
+            json!({"x": 0, "y": 0, "width": 96, "height": 40}),
+        ),
+        (json!({"mode": "full_frame"}), json!("full_frame")),
+    ] {
+        let mut layout = anchored_layout();
+        layout["shared_ocr"] = shared_read(region);
+        let mut expected: Value = serde_json::from_str(before).expect("the layout before");
+        expected[0]["shared_ocr"] = json!({
+            "region": derived_region, "languages": ["en"], "timeout_ms": 5000,
+            "model_ref": "neutral-ocr-model", "model_sha256": "a".repeat(64),
+            "blocks": "detect", "line_merge": {"gap_factor": 0}
+        });
+        assert_eq!(derive(layout), expected.to_string());
+    }
+}
