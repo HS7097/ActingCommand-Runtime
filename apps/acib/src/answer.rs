@@ -2691,8 +2691,9 @@ mod tests {
     /// By construction, the lines of `running`, `launch` and `stop` hold no member that could
     /// carry another application's name, bundle identifier, path or pid: their members are
     /// these, every text in them is the bundle asked for or a word of this program's own
-    /// closed lists (a command, a problem, an error kind), and every number a device's number
-    /// or a pid of the bundle's own processes.
+    /// closed lists (a command, a problem, an error kind, a stage), every member of
+    /// `elapsed_ms` a stage's word, and every number a device's number, a pid of the bundle's
+    /// own processes or (ACIB-3b) a stage's milliseconds.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
         // ACIB-3b: `elapsed_ms`, whose members are the stages' words, and `stage` beside a

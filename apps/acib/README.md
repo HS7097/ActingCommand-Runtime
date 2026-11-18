@@ -261,9 +261,13 @@ the default ones (by the name, those the phone comes with), so that an applicati
 installs and the system's own are in the list; and the hidden ones, so that an application a
 person installed and then hid is not left out should the phone list it only when hidden ones
 are asked for. App Clips and internal applications are not asked for, to ask the phone for
-less. Each entry of the answer carries flags of its own (among them `isRemovable`, `isHidden`,
-`isInternal` and `isAppClip`), each true or false apart from the others; which entries the
-phone lists for which flags of the request has not been checked on a phone.
+less. Beside the five, the library puts three keys of its own into the request, each `false`:
+`includeAppGroupIdentifiers`, `includeContainerPaths` and `requireContainerAccess` (idevice
+0.1.68, `app_list_options` in `services/core_device/app_service.rs`, whose comment says the
+phone's decoder refuses a request without them); `acib` chooses none of them. Each entry of
+the answer carries flags of its own (among them `isRemovable`, `isHidden`, `isInternal` and
+`isAppClip`), each true or false apart from the others; which entries the phone lists for which
+flags of the request has not been checked on a phone.
 
 **An application the list does not hold.** The three commands answer a bundle the phone's list,
 for the categories asked, does not hold (one the phone does not have, or one it has only under
