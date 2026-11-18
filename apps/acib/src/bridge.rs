@@ -23,7 +23,8 @@
 //! made only by them ([`launched`], [`kill`]). Of the installation proxy's record and of the
 //! instruments server's list of processes nothing leaves this module but whether the one bundle
 //! asked for is installed and the pids of its own processes, the application's and its
-//! extensions' (`matching.rs`), and of the errors only their kind ([`service_error_kind`]).
+//! extensions' (`matching.rs`), (fix round 1) of the list a count and a word ([`Look`]), and of
+//! the errors only their kind ([`service_error_kind`]).
 //! usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
 //! pairing record usbmuxd holds is asked for, kept in memory for the command and never shown.
@@ -46,7 +47,7 @@ use crate::answer::{
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
 use crate::key::{DeviceKey, Salt};
-use crate::matching::{self, Application, Installation, Pids};
+use crate::matching::{self, Application, Installation, Look};
 use crate::out_file::{self, NotWritten};
 use crate::redact;
 use crate::stages::Steps;
@@ -880,8 +881,8 @@ fn reported(orientation: InterfaceOrientation) -> Orientation {
 /// and the pids of its processes and, apart, of its extensions'. (ACIB-3c) The installation proxy
 /// looks the one bundle up ([`looked_up`]); when it holds the bundle with a readable path, the
 /// instruments server inside the tunnel is asked for its list of running processes
-/// ([`instruments_server`], [`look`]). Nothing is changed on the phone: the process control
-/// channel is not opened.
+/// ([`instruments_server`], [`look`]), and its answer read ([`running_after_look`]). Nothing is
+/// changed on the phone: the process control channel is not opened.
 async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
     let LookedUp {
         device,
@@ -902,10 +903,8 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
         }
     };
     context.enter(Stage::ProcessList);
-    Ok(Line::Running(match look(&mut client, &directories).await {
-        Ok(pids) => asked.found(pids),
-        Err(kind) => asked.failed(Problem::ProcessListFailed, Some(kind)),
-    }))
+    let looked = look(&mut client, &directories).await;
+    Ok(Line::Running(running_after_look(asked, looked)))
 }
 
 /// `launch`: (ACIB-3c) the installation proxy looks the one bundle up first, as for `running`
@@ -960,8 +959,12 @@ async fn launch(
 /// starts before the command's deadline (`stopping.rs` decides; a look the deadline cuts leaves
 /// the verdict of the one before it). The verdict comes from the looks whatever became of the
 /// requests: a request's error is carried beside it by its kind. An application that does not
-/// run is answered at the first look and sent nothing. A deadline that passes before the first
-/// look after the kills has answered is the command's `deadline_passed`, as for every command.
+/// run is answered at the first look and sent nothing. (Fix round 1) A look that locates no
+/// process (no entry of the list with a location read as a place) tells nothing of the bundle:
+/// at the first look no kill request is sent ([`stop_after_first_look`]), and a look after the
+/// kills ends the looks with no verdict (`Stop::looked`); both answer `process_paths_unreadable`.
+/// A deadline that passes before the first look after the kills has answered is the command's
+/// `deadline_passed`, as for every command.
 async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
     let LookedUp {
         device,
@@ -983,7 +986,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
     };
     context.enter(Stage::ProcessList);
     let first = match look(&mut client, &directories).await {
-        Ok(pids) => pids,
+        Ok(first) => first,
         Err(kind) => {
             let failed = asked.failed(Problem::ProcessListFailed, Some(kind));
             return Ok(Line::Stop(failed));
@@ -1001,24 +1004,26 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
     };
     let mut last = match processes_on(&mut channel, &directories).await {
-        Ok(pids) => pids,
+        Ok(look) => look,
         Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
     };
+    // A look that locates no process lists none of the application's, so the looks end at it;
+    // `Stop::looked` then answers `process_paths_unreadable` for it, with no verdict.
     let verdict = loop {
         let time_left = context
             .deadline
             .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
         if let Next::Done(verdict) =
-            stopping::after_look(&signals.signalled, &last.application, time_left)
+            stopping::after_look(&signals.signalled, &last.pids.application, time_left)
         {
             break verdict;
         }
         tokio::time::sleep(LOOK_INTERVAL).await;
         match look_within(&mut channel, &directories, context.deadline).await {
-            Some(Ok(pids)) => last = pids,
+            Some(Ok(look)) => last = look,
             Some(Err(kind)) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
             // The deadline passed during the look: the last look inside it is `last`.
-            None => break stopping::verdict(&signals.signalled, &last.application),
+            None => break stopping::verdict(&signals.signalled, &last.pids.application),
         }
     };
     Ok(Line::Stop(asked.looked(signals, last, verdict)))
@@ -1075,9 +1080,7 @@ fn stop_after_lookup(
         Err(kind) => Then::Answer(Line::Stop(
             asked.failed(Problem::ApplicationLookupFailed, Some(kind)),
         )),
-        Ok(Installation::NotInstalled) => {
-            Then::Answer(Line::Stop(asked.nothing_ran(false, Vec::new())))
-        }
+        Ok(Installation::NotInstalled) => Then::Answer(Line::Stop(asked.not_installed())),
         Ok(Installation::PathUnreadable) => Then::Answer(Line::Stop(
             asked
                 .installed()
@@ -1087,14 +1090,32 @@ fn stop_after_lookup(
     }
 }
 
-/// (ACIB-3c) `stop` after its first look, which lists the bundle's processes `first`: when the
+/// (ACIB-3c) `stop` after its first look `first`: (fix round 1) when it locates no process (no
+/// entry of the list has a location read as a place), the line answered at once,
+/// `process_paths_unreadable`, no kill sent: what cannot be told is not "does not run"; when the
 /// application itself does not run, the line answered at once, no kill sent (its extensions'
-/// pids named); else the answer so far and the application's pids to send a kill request for.
-fn stop_after_first_look(asked: Stop, first: Pids) -> Then<(Stop, Vec<u32>)> {
-    if first.application.is_empty() {
-        Then::Answer(Line::Stop(asked.nothing_ran(true, first.extensions)))
+/// pids and `located` named); else the answer so far and the application's pids to send a kill
+/// request for.
+fn stop_after_first_look(asked: Stop, first: Look) -> Then<(Stop, Vec<u32>)> {
+    if first.located == 0 {
+        Then::Answer(Line::Stop(
+            asked.failed(Problem::ProcessPathsUnreadable, None),
+        ))
+    } else if first.pids.application.is_empty() {
+        Then::Answer(Line::Stop(asked.not_running(first)))
     } else {
-        Then::GoOn((asked, first.application))
+        Then::GoOn((asked, first.pids.application))
+    }
+}
+
+/// (ACIB-3c, fix round 1) `running` after its look: the line it answers. The look failed:
+/// `process_list_failed` with its kind. It locates no process: `process_paths_unreadable`, never
+/// `running` false ([`Running::found`]). Else whether the application itself runs, the pids by
+/// kind, `located` and how the application was located.
+fn running_after_look(asked: Running, look: Result<Look, ErrorKind>) -> Running {
+    match look {
+        Ok(look) => asked.found(look),
+        Err(kind) => asked.failed(Problem::ProcessListFailed, Some(kind)),
     }
 }
 
@@ -1198,8 +1219,8 @@ async fn device_info(client: &mut Instruments) -> Result<ServerChannel<'_>, Erro
 
 /// (ACIB-3c) One look, on a device information channel of its own: the pids of the processes
 /// whose executable lies inside one of `directories`, the application's and its extensions'
-/// apart.
-async fn look(client: &mut Instruments, directories: &[String]) -> Result<Pids, ErrorKind> {
+/// apart, and (fix round 1) `located` and how the application was located ([`Look`]).
+async fn look(client: &mut Instruments, directories: &[String]) -> Result<Look, ErrorKind> {
     let mut channel = device_info(client).await?;
     processes_on(&mut channel, directories).await
 }
@@ -1209,12 +1230,13 @@ async fn look(client: &mut Instruments, directories: &[String]) -> Result<Pids, 
 /// `Channel::call_method`, then its `read_message` on the channel, as its `DeviceInfoClient`
 /// does: `services/dvt/device_info.rs` 34-46), and of it the pids of the processes whose
 /// executable lies inside one of `directories`, the application's and its extensions' apart
-/// (`matching.rs`). The list stays in this function; an answer that is no list of entries with
-/// a pid is `answer_unreadable`.
+/// (`matching.rs`), with (fix round 1) the count of the list's entries whose location is read
+/// as a place and how the application was located. The list stays in this function; an answer
+/// that is no list of entries with a pid is `answer_unreadable`.
 async fn processes_on(
     channel: &mut ServerChannel<'_>,
     directories: &[String],
-) -> Result<Pids, ErrorKind> {
+) -> Result<Look, ErrorKind> {
     channel
         .call_method(Some(RUNNING_PROCESSES), None, true)
         .await
@@ -1233,7 +1255,7 @@ async fn look_within(
     channel: &mut ServerChannel<'_>,
     directories: &[String],
     deadline: Option<tokio::time::Instant>,
-) -> Option<Result<Pids, ErrorKind>> {
+) -> Option<Result<Look, ErrorKind>> {
     match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, processes_on(channel, directories))
             .await
@@ -1763,7 +1785,10 @@ fn refused_with(error: &IdeviceError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::answer::ApplicationLocated;
     use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
+    use crate::matching::Pids;
+    use crate::stopping::Verdict;
     use std::net::{IpAddr, Ipv4Addr};
 
     /// The identifier of another phone than the test vector's.
@@ -1970,7 +1995,8 @@ mod tests {
     /// Installed, each goes on, `running` and `stop` with the bundle's directories, `launch` to
     /// send its launch. At `stop`'s first look an application that does not run is answered at
     /// once (status 0), its extensions named and no kill sent; one that runs goes on to the kills
-    /// of its own pids alone, not of its extensions'.
+    /// of its own pids alone, not of its extensions'. (Fix round 1) The first look's `located` is
+    /// named in that answer.
     #[test]
     fn launch_and_stop_send_nothing_for_an_application_not_installed_or_not_running() {
         const BUNDLE: &str = "com.example.app";
@@ -2066,30 +2092,162 @@ mod tests {
             Then::GoOn((running().installed(), directories()))
         );
 
-        let pids = |application: &[u32], extensions: &[u32]| Pids {
-            application: application.to_vec(),
-            extensions: extensions.to_vec(),
+        // (Fix round 1) A look locating 180 processes; how the application was located when it
+        // runs.
+        let look = |application: &[u32], extensions: &[u32]| Look {
+            pids: Pids {
+                application: application.to_vec(),
+                extensions: extensions.to_vec(),
+            },
+            located: 180,
+            application_located: (!application.is_empty())
+                .then_some(ApplicationLocated::DirectlyInside),
         };
         for extensions in [Vec::new(), vec![530]] {
             assert_eq!(
-                stop_after_first_look(stop().installed(), pids(&[], &extensions)),
-                Then::Answer(Line::Stop(stop().nothing_ran(true, extensions.clone())))
+                stop_after_first_look(stop().installed(), look(&[], &extensions)),
+                Then::Answer(Line::Stop(stop().not_running(look(&[], &extensions))))
             );
         }
         let Then::Answer(not_running) =
-            stop_after_first_look(stop().installed(), pids(&[], &[530]))
+            stop_after_first_look(stop().installed(), look(&[], &[530]))
         else {
             panic!("stop answers an application that does not run at once");
         };
         assert_eq!(
             shown(&not_running),
-            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530]}"#
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530],"located":180}"#
         );
         assert!(not_running.answered());
         assert_eq!(
-            stop_after_first_look(stop().installed(), pids(&[412, 413], &[530])),
+            stop_after_first_look(stop().installed(), look(&[412, 413], &[530])),
             Then::GoOn((stop().installed(), vec![412, 413]))
         );
+    }
+
+    /// (ACIB-3c, fix round 1) What cannot be told is never "does not run". A list whose entries
+    /// have no location read as a place (bare names, the bundle's executable's and its bundle's
+    /// among them, a relative path, no `realAppName`, one that is no text) and an empty list
+    /// locate no process: from them `running` answers `process_paths_unreadable` (status 1), not
+    /// `running` false, and `stop` answers it at its first look and goes on to no kill request
+    /// (its decision answers at once). A look after `stop`'s kills that locates none answers it
+    /// too, keeping what was signalled, with no verdict. One entry with an absolute location, of
+    /// another application, is enough for `running` false and for `stop` to answer that nothing
+    /// ran, each with `located` 1.
+    #[test]
+    fn a_list_that_locates_no_process_is_never_an_application_that_does_not_run() {
+        use crate::matching::tests::{answer, at, listed};
+        const BUNDLE: &str = "com.example.app";
+        let directories =
+            ["/var/containers/Bundle/Application/TESTUUID-0001/Example.app".to_owned()];
+        let unlocated = || {
+            vec![
+                at(300, "Example"),
+                at(301, "Example.app"),
+                at(
+                    302,
+                    "var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
+                ),
+                listed(XPCObject::UInt64(303), None),
+                listed(XPCObject::UInt64(304), Some(XPCObject::UInt64(9))),
+            ]
+        };
+        let look_at = |reply: &idevice::services::dvt::message::Message| {
+            let processes = matching::listed_processes(reply).expect("a list");
+            matching::pids_inside(&directories, processes)
+        };
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let running = || Running::asked(3, BUNDLE).installed();
+        let stop = || Stop::asked(3, BUNDLE).installed();
+
+        for reply in [answer(unlocated()), answer(Vec::new())] {
+            let look = look_at(&reply);
+            assert_eq!(look.located, 0);
+            let line = Line::Running(running_after_look(running(), Ok(look.clone())));
+            assert_eq!(
+                shown(&line),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#
+            );
+            assert!(!line.answered());
+            let Then::Answer(stopped) = stop_after_first_look(stop(), look) else {
+                panic!("stop sends no kill request for a list that locates no process");
+            };
+            assert_eq!(
+                shown(&stopped),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#
+            );
+            assert!(!stopped.answered());
+        }
+
+        let after_kills = Line::Stop(Stop::asked(3, BUNDLE).looked(
+            Signals {
+                signalled: vec![412],
+                errors: Vec::new(),
+            },
+            look_at(&answer(unlocated())),
+            Verdict::Stopped,
+        ));
+        assert_eq!(
+            shown(&after_kills),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_paths_unreadable"}"#
+        );
+        assert!(!after_kills.answered());
+
+        let mut one_located = unlocated();
+        one_located.push(at(
+            201,
+            "/var/containers/Bundle/Application/TESTUUID-0002/Other.app/Other",
+        ));
+        let look = look_at(&answer(one_located));
+        let line = Line::Running(running_after_look(running(), Ok(look.clone())));
+        assert_eq!(
+            shown(&line),
+            r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[],"located":1}"#
+        );
+        assert!(line.answered());
+        let Then::Answer(nothing_ran) = stop_after_first_look(stop(), look) else {
+            panic!("stop answers an application that does not run at once");
+        };
+        assert_eq!(
+            shown(&nothing_ran),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[],"located":1}"#
+        );
+        assert!(nothing_ran.answered());
+    }
+
+    /// (ACIB-3c, fix round 1) The README's item on `running` opens with what a person sees when
+    /// the match fails and what it means, then the failure of a list that locates nothing, before
+    /// the command's own line; and it reads each outcome of `running` on a phone, in this order.
+    /// Pinned as the README's lists of stages are (`stages.rs`): its text, every run of blanks
+    /// read as one space.
+    #[test]
+    fn the_readme_says_first_what_a_failed_match_looks_like_and_how_to_read_running() {
+        const FIRST: &str = "**A failed match looks like an application that does not run: `installed` true, `running` false, `pids` and `extension_pids` empty (and `located` above 0); of an application open on the phone it means only that `acib` matched none of the list's entries to it, for a cause it does not tell apart, not that the application does not run.**";
+        const UNLOCATED: &str = "Where no entry of the list has a location read as a path, nothing can be matched: `running` then answers `process_paths_unreadable` (status 1), never `running` false.";
+        const READING: &str = "**Reading `running` on a phone**, each outcome and what it means:";
+        const OUTCOMES: [&str; 8] = [
+            "`running` true with `pids`: a process of the application itself is listed, in front or in the background (which application is in front `acib` cannot tell); `application_located` says how its entry was found: `directly_inside` (an executable directly in the bundle's directory), `at_directory` (the directory itself) or `both`.",
+            r#"An installed application that is open answered `installed` true, `running` false, `pids` and `extension_pids` empty (`located` above 0): it was not matched, and why is not told apart (its entry's location lies outside the bundle's directory, its entry carries a bare name where others carry paths, or the list does not hold it); it is not "does not run"."#,
+            "`running` false with `extension_pids`: processes deeper in the bundle's directory are listed and none of the application itself: only an extension runs, or the application's own entry was not matched (as above).",
+            "`installed` false: the installation proxy's lookup of the bundle, as written, does not hold it (an identifier written wrong; whether one written in another case than the phone's is found has not been seen); `stage_ms` names only `usbmuxd` and `application_lookup`: no tunnel was built.",
+            "`process_paths_unreadable`: the list was read, but no entry of it has a location read as a path (an empty list, bare names, no `realAppName`): nothing could be matched, and whether the application runs is not told.",
+            "`process_list_failed` with `answer_unreadable`: the device information channel's request was answered with a payload, or the list is of another shape; the two are not told apart. With `connection_failed`: the connection failed, or the library could not read a message the phone sent. With `other`: another error of the library, for example a channel the phone cancelled before `acib` read it (`services/dvt/remote_server.rs` 938-960).",
+            "`deadline_passed` at `server_first_message`: the phone sent on the root channel no message the library hands on (none, or capabilities it could not decode); at `process_list`: the channel's request or the list was not answered in time.",
+            "`service_handshake_failed`: the connection to the instruments server failed before or while its first message was read.",
+        ];
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        let flat = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        let opening =
+            format!("- {FIRST} {UNLOCATED} `acib running --device <n> --bundle <id>`, read-only:");
+        assert!(
+            flat.contains(&opening),
+            "the README's item on running lacks: {opening}"
+        );
+        let reading = std::iter::once(READING.to_owned())
+            .chain(OUTCOMES.iter().map(|outcome| format!("- {outcome}")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(flat.contains(&reading), "the README lacks: {reading}");
     }
 
     /// Whether a text is a UUID of version 4 written as its text.

@@ -50,8 +50,9 @@ fn main() -> ExitCode {
     // other applications, their paths and pids, and other texts of the phone's answers beside
     // it; (ACIB-3c) its instruments client traces at debug level every message it sends and
     // reads (`services/dvt/remote_server.rs` 727, 865), the phone's list of running processes
-    // among them. With no subscriber those events go nowhere. A new dependency, through which one could
-    // be installed, fails the test below (a tripwire against adding one unnoticed, not a proof).
+    // among them. With no subscriber those events go nowhere. A new dependency, through which
+    // one could be installed, fails the test below (a tripwire against adding one unnoticed, not
+    // a proof).
     let started = Instant::now();
     let arguments: Option<Vec<String>> = std::env::args_os()
         .skip(1)

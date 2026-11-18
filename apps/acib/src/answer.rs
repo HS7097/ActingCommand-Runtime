@@ -13,7 +13,8 @@
 //! `running`, `launch` and `stop` ([`Running`], [`Launch`], [`Stop`]) name the one bundle asked
 //! for, as the command line gave it, and hold of the phone's lists of applications and
 //! processes only booleans and the pids of that bundle's own processes (the application's and,
-//! apart, its extensions'); an error from the installation proxy's lookup on (ACIB-3c: the
+//! apart, its extensions'), and (ACIB-3c, fix round 1) of the list a count, `located`, and a word
+//! of [`ApplicationLocated`]; an error from the installation proxy's lookup on (ACIB-3c: the
 //! lookup and the instruments server) is an [`ErrorKind`], a word of this program's own, never
 //! its text. No member holds another application's name, bundle identifier, path or pid.
 //! (ACIB-3b, second round) The line of `probe` ([`Probe`]) holds of
@@ -23,7 +24,7 @@
 //! cut as `redact.rs` cuts a service's name.
 
 use crate::key::DeviceKey;
-use crate::matching::Pids;
+use crate::matching::Look;
 use crate::redact;
 use crate::stopping::Verdict;
 use crate::tap::{PhoneSent, Reads};
@@ -147,6 +148,13 @@ pub enum Problem {
     /// or one that is not an absolute path or a file URL): which processes are of it cannot be
     /// told.
     BundlePathUnreadable,
+    /// (ACIB-3c, fix round 1) The instruments server's list of running processes was read whole,
+    /// but no entry of it has a location read as a place (the list is empty, or each entry has a
+    /// bare name there, or none): nothing in it can be matched to the bundle, so whether the
+    /// application runs cannot be told. `running` answers it in place of `running` false;
+    /// `stop`, at its first look, sends no kill request, and at a look after its kills gives no
+    /// verdict.
+    ProcessPathsUnreadable,
     /// (ACIB-3c) The instruments server's process control did not answer the launch with a pid
     /// (its channel, or the launch on it); the line names the error's [`ErrorKind`]. Of any kind
     /// the application may have been started all the same (the library tells a refusal from no
@@ -849,8 +857,9 @@ pub enum Stage {
     /// `launch`: (ACIB-3c) the instruments server's process control channel, opened by a request
     /// of its own, and the launch request and its answer.
     LaunchRequest,
-    /// (ACIB-3c) `stop`: the process control channel and one kill request per process of the
-    /// application (the library waits for no answer to it).
+    /// (ACIB-3c) `stop`: the process control channel, whose request's answer the library waits
+    /// for, and one kill request per process of the application, whose answer it does not wait
+    /// for (it asks for none).
     KillRequests,
     /// (ACIB-3c) `stop`: a device information channel of its own and the looks at the list of
     /// running processes after the kills, and the waits between them.
@@ -1036,13 +1045,32 @@ pub struct Orientations {
     pub candidates: Vec<Candidate>,
 }
 
+/// (ACIB-3c, fix round 1) How the application's own entries of the instruments server's list were
+/// located in its bundle's directory (`application_located`, beside `located`, only when the
+/// application itself was found), by this program's own words: one word for each way a list can
+/// name the application (`matching.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationLocated {
+    /// Each of its entries lies directly in the bundle's directory (the list names executables).
+    DirectlyInside,
+    /// Each of its entries is the bundle's directory itself (the list names bundles).
+    AtDirectory,
+    /// It has entries of both kinds.
+    Both,
+}
+
 /// `acib running --device <n> --bundle <id>`, read-only: of the one bundle asked for (`bundle`,
 /// as the command line gave it), whether (ACIB-3c) the installation proxy's lookup holds it
 /// (`installed`), whether the application itself runs (`running`: a process whose executable
-/// lies directly in the bundle's directory), the pids of those processes, ascending (`pids`),
-/// and apart the pids of the bundle's extensions' processes (`extension_pids`, which do not make
-/// it run; `matching.rs`). A line stopped by a problem keeps what was read before it
-/// (`installed`), and names the error's kind where the service gave an error.
+/// lies directly in the bundle's directory, or, fix round 1, whose location is that directory),
+/// the pids of those processes, ascending (`pids`), and apart the pids of the bundle's
+/// extensions' processes (`extension_pids`, which do not make it run; `matching.rs`); (fix
+/// round 1) how many entries of the list have a location read as a place (`located`, at least 1
+/// in every answer: a list with none is `process_paths_unreadable`, never `running` false), and
+/// how the application's entries were located when it runs (`application_located`). A line
+/// stopped by a problem keeps what was read before it (`installed`), and names the error's kind
+/// where the service gave an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Running {
     pub command: CommandName,
@@ -1056,6 +1084,10 @@ pub struct Running {
     pub pids: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension_pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_located: Option<ApplicationLocated>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1076,6 +1108,8 @@ impl Running {
             running: None,
             pids: None,
             extension_pids: None,
+            located: None,
+            application_located: None,
             problem: None,
             error_kind: None,
             stage_ms: None,
@@ -1101,14 +1135,24 @@ impl Running {
         }
     }
 
-    /// The bundle is installed and `pids` are its processes: it runs when the application itself
-    /// has one; its extensions' are named apart.
-    pub fn found(self, pids: Pids) -> Self {
+    /// The bundle is installed and `look` is what the list says of it: it runs when the
+    /// application itself has a process; its extensions' are named apart, and so are `located`
+    /// and how the application was located. (Fix round 1) A list in which no entry has a
+    /// location read as a place tells nothing of the bundle: the line is then
+    /// `process_paths_unreadable`, never `running` false.
+    pub fn found(self, look: Look) -> Self {
+        if look.located == 0 {
+            return self
+                .installed()
+                .failed(Problem::ProcessPathsUnreadable, None);
+        }
         Self {
             installed: Some(true),
-            running: Some(!pids.application.is_empty()),
-            pids: Some(pids.application),
-            extension_pids: Some(pids.extensions),
+            running: Some(!look.pids.application.is_empty()),
+            pids: Some(look.pids.application),
+            extension_pids: Some(look.pids.extensions),
+            located: Some(look.located),
+            application_located: look.application_located,
             ..self
         }
     }
@@ -1223,8 +1267,12 @@ pub struct SignalError {
 /// (`signal_errors`, only when there are any), the pids of the
 /// application the last look lists (`remaining`), whether any runs (`running`) and the pids of
 /// the bundle's extensions' processes the last look lists (`extension_pids`: `stop` sends them
-/// nothing and leaves them, which is no failure). An application that does not run (or is not
-/// installed) is answered at the first look: no signal, `signalled` and `remaining` empty. The
+/// nothing and leaves them, which is no failure), and (fix round 1) of that look, as `running`
+/// names them, `located` and `application_located`. A look that locates no process (no entry
+/// with a location read as a place) is `process_paths_unreadable` (status 1): at the first look
+/// no kill request is sent, after the kills there is no verdict. An application that does not
+/// run (or is not installed) is answered at the first look: no signal, `signalled` and
+/// `remaining` empty. The
 /// last look inside the deadline still listing a process it signalled is `still_running`
 /// (status 1), whatever became of the requests; a process it lists that was not signalled (one
 /// started after the first look) is in `remaining` and `running`, and is not `still_running`. A
@@ -1249,6 +1297,10 @@ pub struct Stop {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension_pids: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub located: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_located: Option<ApplicationLocated>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
@@ -1271,6 +1323,8 @@ impl Stop {
             remaining: None,
             running: None,
             extension_pids: None,
+            located: None,
+            application_located: None,
             problem: None,
             error_kind: None,
             stage_ms: None,
@@ -1285,17 +1339,34 @@ impl Stop {
         }
     }
 
-    /// The application itself does not run at the first look (`installed` says whether it is
-    /// installed; `extension_pids` are its extensions' processes that look lists): no signal is
-    /// sent, and the first look is the last.
-    pub fn nothing_ran(self, installed: bool, extension_pids: Vec<u32>) -> Self {
+    /// (ACIB-3c, fix round 1) The installation proxy's lookup does not hold the bundle: nothing
+    /// ran, nothing was looked at and nothing is sent.
+    pub fn not_installed(self) -> Self {
         Self {
-            installed: Some(installed),
+            installed: Some(false),
             was_running: Some(false),
             signalled: Some(Vec::new()),
             remaining: Some(Vec::new()),
             running: Some(false),
-            extension_pids: Some(extension_pids),
+            extension_pids: Some(Vec::new()),
+            ..self
+        }
+    }
+
+    /// (ACIB-3c, fix round 1) The application itself does not run at the first look `first`, a
+    /// look that locates at least one process (`bridge.rs` answers one that locates none as
+    /// `process_paths_unreadable`): no signal is sent, and the first look is the last; its
+    /// extensions' pids and its `located` are named.
+    pub fn not_running(self, first: Look) -> Self {
+        Self {
+            installed: Some(true),
+            was_running: Some(false),
+            signalled: Some(Vec::new()),
+            remaining: Some(Vec::new()),
+            running: Some(false),
+            extension_pids: Some(first.pids.extensions),
+            located: Some(first.located),
+            application_located: first.application_located,
             ..self
         }
     }
@@ -1303,13 +1374,21 @@ impl Stop {
     /// The application ran and was sent `signals`, and the processes of the bundle the command's
     /// last look lists are `last`, of which `verdict` is the decision (`stopping.rs`): its
     /// application's pids are `remaining`, and `still_running` stands when the verdict is still
-    /// running.
-    pub fn looked(self, signals: Signals, last: Pids, verdict: Verdict) -> Self {
-        let running = !last.application.is_empty();
+    /// running. (Fix round 1) A last look that locates no process tells nothing of the bundle:
+    /// the line is then `process_paths_unreadable`, with what was signalled, and no verdict.
+    pub fn looked(self, signals: Signals, last: Look, verdict: Verdict) -> Self {
+        if last.located == 0 {
+            return self
+                .with_signals(signals)
+                .failed(Problem::ProcessPathsUnreadable, None);
+        }
+        let running = !last.pids.application.is_empty();
         Self {
-            remaining: Some(last.application),
+            remaining: Some(last.pids.application),
             running: Some(running),
-            extension_pids: Some(last.extensions),
+            extension_pids: Some(last.pids.extensions),
+            located: Some(last.located),
+            application_located: last.application_located,
             problem: match verdict {
                 Verdict::StillRunning => Some(Problem::StillRunning),
                 Verdict::Stopped => None,
@@ -1506,6 +1585,7 @@ impl Line {
 mod tests {
     use super::*;
     use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
+    use crate::matching::Pids;
     use crate::picture::tests::png_file;
     use std::collections::BTreeSet;
 
@@ -1995,9 +2075,24 @@ mod tests {
         let running = || Running::asked(3, BUNDLE);
         let launch = |relaunch| Launch::asked(3, BUNDLE, relaunch);
         let stop = || Stop::asked(3, BUNDLE);
-        let pids = |application: &[u32], extensions: &[u32]| Pids {
-            application: application.to_vec(),
-            extensions: extensions.to_vec(),
+        // (ACIB-3c, fix round 1) A look that locates `located` processes, the application's
+        // located directly inside its bundle's directory when it runs.
+        let look = |application: &[u32], extensions: &[u32], located: usize| Look {
+            pids: Pids {
+                application: application.to_vec(),
+                extensions: extensions.to_vec(),
+            },
+            located,
+            application_located: (!application.is_empty())
+                .then_some(ApplicationLocated::DirectlyInside),
+        };
+        let located_as = |application: &[u32], located: usize, way: ApplicationLocated| Look {
+            pids: Pids {
+                application: application.to_vec(),
+                extensions: Vec::new(),
+            },
+            located,
+            application_located: Some(way),
         };
         let signals = |signalled: &[u32], errors: &[SignalError]| Signals {
             signalled: signalled.to_vec(),
@@ -2009,24 +2104,49 @@ mod tests {
         };
         vec![
             (
-                Line::Running(running().found(pids(&[412], &[530]))),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[530]}"#,
+                Line::Running(running().found(look(&[412], &[530], 180))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[530],"located":180,"application_located":"directly_inside"}"#,
                 true,
             ),
             (
-                Line::Running(running().found(pids(&[412, 413], &[]))),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[]}"#,
+                Line::Running(running().found(look(&[412, 413], &[], 180))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[],"located":180,"application_located":"directly_inside"}"#,
                 true,
             ),
             (
-                Line::Running(running().found(pids(&[], &[530]))),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[530]}"#,
+                Line::Running(running().found(look(&[], &[530], 180))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[530],"located":180}"#,
                 true,
             ),
             (
-                Line::Running(running().found(Pids::default())),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[]}"#,
+                Line::Running(running().found(look(&[], &[], 180))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[],"located":180}"#,
                 true,
+            ),
+            // Fix round 1: the application at its bundle's directory, of both kinds, and a list
+            // that locates no process, never `running` false.
+            (
+                Line::Running(running().found(located_as(
+                    &[412],
+                    6,
+                    ApplicationLocated::AtDirectory,
+                ))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"located":6,"application_located":"at_directory"}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(located_as(
+                    &[412, 413],
+                    7,
+                    ApplicationLocated::Both,
+                ))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[],"located":7,"application_located":"both"}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(Look::default())),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#,
+                false,
             ),
             (
                 Line::Running(running().not_installed()),
@@ -2107,31 +2227,47 @@ mod tests {
                 false,
             ),
             (
-                Line::Stop(stop().nothing_ran(true, vec![530])),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                Line::Stop(stop().not_running(look(&[], &[530], 180))),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530],"located":180}"#,
                 true,
             ),
             (
-                Line::Stop(stop().nothing_ran(false, Vec::new())),
+                Line::Stop(stop().not_installed()),
                 r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":false,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[]}"#,
                 true,
             ),
             (
                 Line::Stop(stop().looked(
                     signals(&[412, 413], &[]),
-                    pids(&[], &[530]),
+                    look(&[], &[530], 179),
                     Verdict::Stopped,
                 )),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,413],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,413],"remaining":[],"running":false,"extension_pids":[530],"located":179}"#,
                 true,
             ),
             (
                 Line::Stop(stop().looked(
                     signals(&[412, 530], &[unreadable]),
-                    pids(&[530], &[]),
+                    look(&[530], &[], 179),
                     Verdict::StillRunning,
                 )),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,530],"signal_errors":[{"pid":530,"error_kind":"answer_unreadable"}],"remaining":[530],"running":true,"extension_pids":[],"problem":"still_running"}"#,
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,530],"signal_errors":[{"pid":530,"error_kind":"answer_unreadable"}],"remaining":[530],"running":true,"extension_pids":[],"located":179,"application_located":"directly_inside","problem":"still_running"}"#,
+                false,
+            ),
+            // Fix round 1: a look after the kills that locates no process, no verdict; the first
+            // look locating none, no kill.
+            (
+                Line::Stop(stop().looked(signals(&[412], &[]), Look::default(), Verdict::Stopped)),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_paths_unreadable"}"#,
+                false,
+            ),
+            (
+                Line::Stop(
+                    stop()
+                        .installed()
+                        .failed(Problem::ProcessPathsUnreadable, None),
+                ),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#,
                 false,
             ),
             (
@@ -2151,7 +2287,7 @@ mod tests {
             // command with the stage it was waiting in; (ACIB-3c) the stages of the
             // installation proxy's lookup and of the instruments server.
             (
-                Line::Running(running().found(pids(&[412], &[]))).timed(times(&[
+                Line::Running(running().found(look(&[412], &[], 180))).timed(times(&[
                     (Stage::Usbmuxd, 12),
                     (Stage::ApplicationLookup, 230),
                     (Stage::ProxyTunnel, 812),
@@ -2160,7 +2296,7 @@ mod tests {
                     (Stage::ServerFirstMessage, 20),
                     (Stage::ProcessList, 120),
                 ])),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"stage_ms":{"usbmuxd":12,"application_lookup":230,"proxy_tunnel":812,"discovery_handshake":40,"service_connection":3,"server_first_message":20,"process_list":120}}"#,
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"located":180,"application_located":"directly_inside","stage_ms":{"usbmuxd":12,"application_lookup":230,"proxy_tunnel":812,"discovery_handshake":40,"service_connection":3,"server_first_message":20,"process_list":120}}"#,
                 true,
             ),
             (
@@ -2177,19 +2313,23 @@ mod tests {
                 true,
             ),
             (
-                Line::Stop(stop().looked(signals(&[412], &[]), pids(&[], &[]), Verdict::Stopped))
-                    .timed(times(&[
-                        (Stage::Usbmuxd, 10),
-                        (Stage::ApplicationLookup, 205),
-                        (Stage::ProxyTunnel, 690),
-                        (Stage::DiscoveryHandshake, 39),
-                        (Stage::ServiceConnection, 2),
-                        (Stage::ServerFirstMessage, 18),
-                        (Stage::ProcessList, 110),
-                        (Stage::KillRequests, 30),
-                        (Stage::LooksAfterKills, 415),
-                    ])),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"remaining":[],"running":false,"extension_pids":[],"stage_ms":{"usbmuxd":10,"application_lookup":205,"proxy_tunnel":690,"discovery_handshake":39,"service_connection":2,"server_first_message":18,"process_list":110,"kill_requests":30,"looks_after_kills":415}}"#,
+                Line::Stop(stop().looked(
+                    signals(&[412], &[]),
+                    look(&[], &[], 179),
+                    Verdict::Stopped,
+                ))
+                .timed(times(&[
+                    (Stage::Usbmuxd, 10),
+                    (Stage::ApplicationLookup, 205),
+                    (Stage::ProxyTunnel, 690),
+                    (Stage::DiscoveryHandshake, 39),
+                    (Stage::ServiceConnection, 2),
+                    (Stage::ServerFirstMessage, 18),
+                    (Stage::ProcessList, 110),
+                    (Stage::KillRequests, 30),
+                    (Stage::LooksAfterKills, 415),
+                ])),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"remaining":[],"running":false,"extension_pids":[],"located":179,"stage_ms":{"usbmuxd":10,"application_lookup":205,"proxy_tunnel":690,"discovery_handshake":39,"service_connection":2,"server_first_message":18,"process_list":110,"kill_requests":30,"looks_after_kills":415}}"#,
                 true,
             ),
             (
@@ -2404,11 +2544,13 @@ mod tests {
     /// pairing record, nor (ACIB-1) for a picture's content, nor (ACIB-2) for a salt: every
     /// member any line holds is one of these (a screenshot's `stage` is a word of [`Stage`], its
     /// `out_left` a boolean; a row's `device_key` and `binding_key` are [`DeviceKey`]s, salted
-    /// digests; an orientation is a word of [`Orientation`]).
+    /// digests; an orientation is a word of [`Orientation`]; ACIB-3c, fix round 1: `located` is a
+    /// count, `application_located` a word of [`ApplicationLocated`]).
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
             "answer",
+            "application_located",
             "application_lookup",
             "binding_key",
             "bodyless",
@@ -2447,6 +2589,7 @@ mod tests {
             "kill_requests",
             "launch_request",
             "listed",
+            "located",
             "looks_after_kills",
             "matching",
             "matching_count",
@@ -2577,6 +2720,7 @@ mod tests {
             ),
             (Problem::ProcessListFailed, "process_list_failed"),
             (Problem::BundlePathUnreadable, "bundle_path_unreadable"),
+            (Problem::ProcessPathsUnreadable, "process_paths_unreadable"),
             (Problem::LaunchFailed, "launch_failed"),
             (Problem::StillRunning, "still_running"),
             (Problem::NotInstalled, "not_installed"),
@@ -3105,9 +3249,11 @@ mod tests {
     /// By construction, the lines of `running`, `launch` and `stop` hold no member that could
     /// carry another application's name, bundle identifier, path or pid: their members are
     /// these, every text in them is the bundle asked for or a word of this program's own
-    /// closed lists (a command, a problem, an error kind, a stage), every member of
-    /// `stage_ms` a stage's word, and every number a device's number, a pid of the bundle's
-    /// own processes or (ACIB-3b) a stage's milliseconds.
+    /// closed lists (a command, a problem, an error kind, a stage, and, ACIB-3c fix round 1, a
+    /// way the application was located), every member of `stage_ms` a stage's word, and every
+    /// number a device's number, a pid of the bundle's own processes, (ACIB-3b) a stage's
+    /// milliseconds or (fix round 1) `located`, a count of the list's entries. The new failure,
+    /// `process_paths_unreadable`, is among the lines, and holds only these.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
         // ACIB-3b: `stage_ms`, whose members are the stages' words, and `stage` beside a
@@ -3126,12 +3272,14 @@ mod tests {
             Stage::LooksAfterKills,
         ];
         const MEMBERS: &[&str] = &[
+            "application_located",
             "bundle",
             "command",
             "device",
             "error_kind",
             "extension_pids",
             "installed",
+            "located",
             "pid",
             "pids",
             "problem",
@@ -3156,6 +3304,7 @@ mod tests {
                 Problem::ApplicationLookupFailed,
                 Problem::ProcessListFailed,
                 Problem::BundlePathUnreadable,
+                Problem::ProcessPathsUnreadable,
                 Problem::LaunchFailed,
                 Problem::StillRunning,
                 Problem::NotInstalled,
@@ -3165,6 +3314,15 @@ mod tests {
             .map(word),
         );
         words.extend(STAGES.into_iter().map(word));
+        words.extend(
+            [
+                ApplicationLocated::DirectlyInside,
+                ApplicationLocated::AtDirectory,
+                ApplicationLocated::Both,
+            ]
+            .into_iter()
+            .map(word),
+        );
         words.extend(
             [
                 ErrorKind::DeviceRefused,
@@ -3199,7 +3357,8 @@ mod tests {
     /// in `signal_errors`: gone is stopped (status 0), still listed is `still_running`. A process
     /// the last look lists that was not signalled is named in `remaining` and is not
     /// `still_running`. A look that failed answers `process_list_failed` and keeps what was
-    /// signalled.
+    /// signalled. (ACIB-3c, fix round 1) An installed application that does not run names its
+    /// first look's `located`; one not installed was not looked for and names none.
     #[test]
     fn stop_answers_when_nothing_runs_when_all_ended_and_when_one_remains() {
         let answered = |stop: Stop| -> (Stop, bool) {
@@ -3216,21 +3375,32 @@ mod tests {
                 })
                 .collect(),
         };
-        let last = |application: &[u32], extensions: &[u32]| Pids {
-            application: application.to_vec(),
-            extensions: extensions.to_vec(),
+        // (ACIB-3c, fix round 1) A look locating 180 processes.
+        let last = |application: &[u32], extensions: &[u32]| Look {
+            pids: Pids {
+                application: application.to_vec(),
+                extensions: extensions.to_vec(),
+            },
+            located: 180,
+            application_located: (!application.is_empty())
+                .then_some(ApplicationLocated::DirectlyInside),
         };
         // The answer after `signals` when the last look lists `last`, with the decision's
         // verdict on that look.
-        let looked = |sent: Signals, seen: Pids| {
-            let verdict = crate::stopping::verdict(&sent.signalled, &seen.application);
+        let looked = |sent: Signals, seen: Look| {
+            let verdict = crate::stopping::verdict(&sent.signalled, &seen.pids.application);
             answered(Stop::asked(3, BUNDLE).looked(sent, seen, verdict))
         };
 
         for (installed, extensions) in [(true, vec![530]), (true, Vec::new()), (false, Vec::new())]
         {
-            let (nothing, status) =
-                answered(Stop::asked(3, BUNDLE).nothing_ran(installed, extensions.clone()));
+            let asked = Stop::asked(3, BUNDLE);
+            let (nothing, status) = answered(if installed {
+                asked.not_running(last(&[], &extensions))
+            } else {
+                asked.not_installed()
+            });
+            assert_eq!(nothing.located, installed.then_some(180));
             assert!(status, "nothing runs, installed {installed}");
             assert_eq!(nothing.installed, Some(installed));
             assert_eq!(nothing.was_running, Some(false));

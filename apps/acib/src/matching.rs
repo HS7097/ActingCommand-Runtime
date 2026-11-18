@@ -16,7 +16,17 @@
 //! only it counts for `running` and is ended by `stop`; a process whose executable lies deeper
 //! (an app extension in `PlugIns/`, a helper inside a nested bundle) is the bundle's, but is not
 //! the application running: a widget the system runs for it does not make the application run,
-//! and `stop` leaves it, as a person who swipes the application away does.
+//! and `stop` leaves it, as a person who swipes the application away does. (ACIB-3c, fix round
+//! 1: the coordinator's ruling) A process whose location **is** the directory itself is the
+//! application too: a list that names bundles in place of executables names the application so,
+//! and its extensions (`PlugIns/<name>.appex`) deeper; a list that names executables names no
+//! process so. Neither way of naming is misread, and the way the application was found is
+//! answered ([`ApplicationLocated`]).
+//!
+//! (ACIB-3c, fix round 1) What cannot be told is never "does not run": a look counts the entries
+//! of the whole list whose location is read as a place ([`Look::located`]); a list with none (an
+//! empty one, or one of bare names) gives nothing to match a bundle against, and `running` and
+//! `stop` answer it as a failure of its own, never as the application not running.
 //!
 //! Bundle identifiers are compared without regard to ASCII case (Apple's documentation of
 //! `CFBundleIdentifier`: "Bundle IDs are case-insensitive"); paths are compared exactly, case
@@ -27,8 +37,10 @@
 //! not absolute, is read as no place at all (a process there is of no application).
 //!
 //! Nothing here keeps or gives anything of another application: the functions answer whether
-//! the bundle asked for is installed and the pids of its own processes, by kind.
+//! the bundle asked for is installed and the pids of its own processes, by kind, and of the
+//! whole list only a count.
 
+use crate::answer::ApplicationLocated;
 use idevice::services::dvt::message::Message;
 
 /// The members of an entry of the instruments server's list of running processes that this
@@ -36,8 +48,9 @@ use idevice::services::dvt::message::Message;
 /// library's own reader of that list (`DeviceInfoClient::running_processes`, idevice 0.1.68,
 /// `services/dvt/device_info.rs` 41-92, under a feature `acib` does not turn on) reads these two
 /// beside `name`, `isApplication` and `startPageCount`, which are not read here; it documents
-/// none of them, so that `realAppName` is the path of the executable is read from no description
-/// and is to be seen on a phone.
+/// none of them, so that `realAppName` is the path of the executable is read from no
+/// description. On one phone (iOS 27.0.1, 2026-11-19, the build of `aef1bd17`) it held the
+/// executable's path directly in the bundle's directory: an observation, not a rule (README).
 const PID: &str = "pid";
 const REAL_APP_NAME: &str = "realAppName";
 
@@ -106,16 +119,30 @@ pub fn installation<'a>(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pids {
     /// The application itself: the processes whose executable lies directly in the bundle's
-    /// directory.
+    /// directory, or (fix round 1) whose location is that directory.
     pub application: Vec<u32>,
     /// The processes whose executable lies deeper in the bundle's directory: its extensions'
     /// and its nested bundles' (the bundle's, not the application running).
     pub extensions: Vec<u32>,
 }
 
+/// (ACIB-3c, fix round 1) One look at the instruments server's list, as [`pids_inside`] reads it
+/// for a bundle: the pids of its processes by kind, how many entries of the whole list have a
+/// location read as a place (`located`: 0 when the list gives nothing to match against), and,
+/// when the application itself has a process, how its entries were located. A count and a word:
+/// nothing of another process.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Look {
+    pub pids: Pids,
+    pub located: usize,
+    pub application_located: Option<ApplicationLocated>,
+}
+
 /// Where a path lies in a directory it is inside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Depth {
+    /// (Fix round 1) The directory itself.
+    At,
     /// In the directory itself: `<directory>/<name>`.
     Directly,
     /// In a directory below it.
@@ -123,29 +150,48 @@ enum Depth {
 }
 
 /// The pids of the processes whose executable lies inside one of `directories`, by kind
-/// ([`Pids`]); a process without a location, or with one read as no place, is of none.
+/// ([`Pids`]): directly in it or (fix round 1) at the directory itself, the application; deeper,
+/// its extensions. A process without a location, or with one read as no place, is of none.
+/// (Fix round 1) Beside them, how many processes have a location read as a place, and how the
+/// application's processes were located ([`Look`]).
 pub fn pids_inside<'a>(
     directories: &[String],
     processes: impl IntoIterator<Item = Process<'a>>,
-) -> Pids {
-    let mut pids = Pids::default();
+) -> Look {
+    let mut look = Look::default();
+    let (mut directly, mut at) = (false, false);
     for process in processes {
-        let depth = process.executable.and_then(place).and_then(|path| {
-            directories
-                .iter()
-                .find_map(|directory| depth_in(directory, &path))
-        });
+        let Some(path) = process.executable.and_then(place) else {
+            continue;
+        };
+        look.located += 1;
+        let depth = directories
+            .iter()
+            .find_map(|directory| depth_in(directory, &path));
         match depth {
-            Some(Depth::Directly) => pids.application.push(process.pid),
-            Some(Depth::Deeper) => pids.extensions.push(process.pid),
+            Some(Depth::At) => {
+                at = true;
+                look.pids.application.push(process.pid);
+            }
+            Some(Depth::Directly) => {
+                directly = true;
+                look.pids.application.push(process.pid);
+            }
+            Some(Depth::Deeper) => look.pids.extensions.push(process.pid),
             None => {}
         }
     }
-    for list in [&mut pids.application, &mut pids.extensions] {
+    for list in [&mut look.pids.application, &mut look.pids.extensions] {
         list.sort_unstable();
         list.dedup();
     }
-    pids
+    look.application_located = match (directly, at) {
+        (true, false) => Some(ApplicationLocated::DirectlyInside),
+        (false, true) => Some(ApplicationLocated::AtDirectory),
+        (true, true) => Some(ApplicationLocated::Both),
+        (false, false) => None,
+    };
+    look
 }
 
 /// (ACIB-3c) The processes of the instruments server's answer `reply` to `runningProcesses`, as
@@ -170,10 +216,15 @@ pub fn listed_processes(reply: &Message) -> Option<Vec<Process<'_>>> {
         .collect()
 }
 
-/// Where `path` lies in `directory`, when it lies inside it: below it, at a component's
-/// boundary (`place` leaves no empty component and no slash at the end).
+/// Where `path` lies in `directory`, when it is the directory itself (fix round 1) or lies inside
+/// it: below it, at a component's boundary (`place` leaves no empty component and no slash at
+/// the end).
 fn depth_in(directory: &str, path: &str) -> Option<Depth> {
-    let rest = path.strip_prefix(directory)?.strip_prefix('/')?;
+    let rest = path.strip_prefix(directory)?;
+    if rest.is_empty() {
+        return Some(Depth::At);
+    }
+    let rest = rest.strip_prefix('/')?;
     Some(if rest.contains('/') {
         Depth::Deeper
     } else {
@@ -237,7 +288,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use idevice::services::dvt::message::{MessageHeader, PayloadHeader};
     use idevice::xpc::{Dictionary, XPCObject};
@@ -276,7 +327,7 @@ mod tests {
     fn of_the_bundle(processes: &[Process<'_>]) -> Pids {
         match installation(BUNDLE, applications()) {
             Installation::Installed(directories) => {
-                pids_inside(&directories, processes.iter().copied())
+                pids_inside(&directories, processes.iter().copied()).pids
             }
             other => panic!("the bundle is installed: {other:?}"),
         }
@@ -393,7 +444,10 @@ mod tests {
 
     /// A process of another application whose path merely starts as the bundle's directory
     /// does (a longer directory name, a sibling) is not of the bundle: a path is inside a
-    /// directory only below it, at a component's boundary.
+    /// directory only below it, at a component's boundary. (ACIB-3c, fix round 1) A process at
+    /// the directory itself, which this test held to be of no bundle, is the application now
+    /// (the coordinator's ruling): it is pinned in
+    /// `an_entry_at_the_bundles_directory_is_the_application_and_located_counts_paths`.
     #[test]
     fn a_process_whose_path_merely_starts_alike_is_not_of_the_bundle() {
         let processes = [
@@ -408,10 +462,6 @@ mod tests {
             process(
                 603,
                 "file:///private/var/containers/Bundle/Application/TESTUUID-00011/Example.app/Example",
-            ),
-            process(
-                604,
-                "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app",
             ),
             process(
                 605,
@@ -520,7 +570,7 @@ mod tests {
     /// knows one: `pid`, `realAppName` when given, and the members that are not read, its `name`
     /// the bundle's executable's in every entry (a name is not read, so it makes no process the
     /// bundle's).
-    fn listed(pid: XPCObject, real_app_name: Option<XPCObject>) -> XPCObject {
+    pub(crate) fn listed(pid: XPCObject, real_app_name: Option<XPCObject>) -> XPCObject {
         let mut members = Dictionary::new();
         members.insert("pid".to_owned(), pid);
         members.insert("name".to_owned(), XPCObject::String("Example".to_owned()));
@@ -533,7 +583,7 @@ mod tests {
     }
 
     /// The entry of the process `pid` whose `realAppName` is `location`.
-    fn at(pid: u64, location: &str) -> XPCObject {
+    pub(crate) fn at(pid: u64, location: &str) -> XPCObject {
         listed(
             XPCObject::UInt64(pid),
             Some(XPCObject::String(location.to_owned())),
@@ -542,7 +592,7 @@ mod tests {
 
     /// The instruments server's answer holding `data` (as the library's reader decodes it, a
     /// property list value), on a channel of its own.
-    fn reply(data: Option<XPCObject>) -> Message {
+    pub(crate) fn reply(data: Option<XPCObject>) -> Message {
         Message::new(
             MessageHeader::new(0, 1, 7, 1, 1, false),
             PayloadHeader::method_invocation(),
@@ -552,13 +602,13 @@ mod tests {
     }
 
     /// The answer listing `entries`.
-    fn answer(entries: Vec<XPCObject>) -> Message {
+    pub(crate) fn answer(entries: Vec<XPCObject>) -> Message {
         reply(Some(XPCObject::Array(entries)))
     }
 
-    /// The pids of [`BUNDLE`]'s processes in the answer `reply`, its directory the installation
-    /// proxy's record's [`RECORD_PATH`], by kind.
-    fn in_reply(reply: &Message) -> Pids {
+    /// (ACIB-3c, fix round 1) The look at the answer `reply` for [`BUNDLE`], its directory the
+    /// installation proxy's record's [`RECORD_PATH`].
+    fn look_in(reply: &Message) -> Look {
         let record = [Application {
             bundle_identifier: BUNDLE,
             path: RECORD_PATH,
@@ -571,6 +621,12 @@ mod tests {
         }
     }
 
+    /// The pids of [`BUNDLE`]'s processes in the answer `reply`, its directory the installation
+    /// proxy's record's [`RECORD_PATH`], by kind.
+    fn in_reply(reply: &Message) -> Pids {
+        look_in(reply).pids
+    }
+
     /// (ACIB-3c) The cases above, on the shape of the new sources: the installation proxy's
     /// record gives the directory as a plain path, the instruments server's list each process's
     /// `realAppName`. No process of the bundle (the system's, another application's, one without
@@ -578,7 +634,10 @@ mod tests {
     /// each pid once, another application's extension neither); only an extension alive; paths
     /// that merely start alike; a path compared exactly, case included, `/var` and `/private/var`
     /// alike and a file URL read as its path. Every entry's `name` is the bundle's executable's,
-    /// and none of them is the bundle's by it.
+    /// and none of them is the bundle's by it. (Fix round 1) A process at the bundle's directory
+    /// itself, which this test held to be of no bundle, is the application now (the
+    /// coordinator's ruling): it is pinned in
+    /// `an_entry_at_the_bundles_directory_is_the_application_and_located_counts_paths`.
     #[test]
     fn the_instruments_list_gives_the_bundles_pids_by_kind() {
         let inside = |rest: &str| format!("{BUNDLES}/TESTUUID-0001/Example.app/{rest}");
@@ -642,7 +701,6 @@ mod tests {
                 603,
                 &format!("{BUNDLES}/TESTUUID-00011/Example.app/Example"),
             ),
-            at(604, RECORD_PATH),
             at(605, &inside("../Other.app/Other")),
         ]);
         assert_eq!(in_reply(&alike), Pids::default());
@@ -716,6 +774,131 @@ mod tests {
         for (case, message) in unreadable.iter().enumerate() {
             assert!(listed_processes(message).is_none(), "case {case}");
         }
+    }
+
+    /// (ACIB-3c, fix round 1) An entry located exactly at the bundle's directory is the
+    /// application itself (a list that names bundles), its pid among the application's, and an
+    /// extension's bundle deeper in it is not; the directory as the record writes it, with a
+    /// slash at its end, without `/private` and as a file URL, alike. An entry directly in the
+    /// directory is the application too (a list that names executables). The word says which way
+    /// the application's entries were located: `at_directory`, `directly_inside`, or `both` when
+    /// it has entries of each; there is none when the application has no process. `located`
+    /// counts the entries of the whole list whose location is read as a place (another
+    /// application's and the system's too, and a pid listed twice twice), not those with a bare
+    /// name, with no `realAppName` or with one that is no text; a list of only those, and an
+    /// empty list, locate nothing.
+    #[test]
+    fn an_entry_at_the_bundles_directory_is_the_application_and_located_counts_paths() {
+        let inside = |rest: &str| format!("{BUNDLES}/TESTUUID-0001/Example.app/{rest}");
+        let other = format!("{BUNDLES}/TESTUUID-0002/Other.app");
+        let unlocated = || {
+            vec![
+                at(300, "Example"),
+                at(301, "Example.app"),
+                listed(XPCObject::UInt64(302), None),
+                listed(XPCObject::UInt64(303), Some(XPCObject::UInt64(9))),
+            ]
+        };
+
+        let mut bundles = unlocated();
+        bundles.extend([
+            at(412, RECORD_PATH),
+            at(530, &inside("PlugIns/Widget.appex")),
+            at(201, &other),
+            at(1, "/sbin/launchd"),
+        ]);
+        assert_eq!(
+            look_in(&answer(bundles)),
+            Look {
+                pids: Pids {
+                    application: vec![412],
+                    extensions: vec![530],
+                },
+                located: 4,
+                application_located: Some(ApplicationLocated::AtDirectory),
+            }
+        );
+        for location in [
+            RECORD_PATH.to_owned(),
+            format!("{RECORD_PATH}/"),
+            "/var/containers/Bundle/Application/TESTUUID-0001/Example.app".to_owned(),
+            format!("file://{RECORD_PATH}"),
+        ] {
+            let look = look_in(&answer(vec![at(412, &location)]));
+            assert_eq!(look.pids, application(&[412]), "{location}");
+            assert_eq!(look.located, 1, "{location}");
+            assert_eq!(
+                look.application_located,
+                Some(ApplicationLocated::AtDirectory),
+                "{location}"
+            );
+        }
+
+        let mut executables = unlocated();
+        executables.extend([
+            at(412, &inside("Example")),
+            at(412, &inside("Example")),
+            at(530, &inside("PlugIns/Widget.appex/Widget")),
+            at(201, &format!("{other}/Other")),
+        ]);
+        assert_eq!(
+            look_in(&answer(executables)),
+            Look {
+                pids: Pids {
+                    application: vec![412],
+                    extensions: vec![530],
+                },
+                located: 4,
+                application_located: Some(ApplicationLocated::DirectlyInside),
+            }
+        );
+
+        let both = answer(vec![at(413, &inside("Example")), at(412, RECORD_PATH)]);
+        assert_eq!(
+            look_in(&both),
+            Look {
+                pids: application(&[412, 413]),
+                located: 2,
+                application_located: Some(ApplicationLocated::Both),
+            }
+        );
+
+        let elsewhere = answer(vec![
+            at(201, &other),
+            at(530, &inside("PlugIns/Widget.appex")),
+        ]);
+        assert_eq!(
+            look_in(&elsewhere),
+            Look {
+                pids: Pids {
+                    application: Vec::new(),
+                    extensions: vec![530],
+                },
+                located: 2,
+                application_located: None,
+            }
+        );
+
+        for unread in [answer(unlocated()), answer(Vec::new())] {
+            assert_eq!(look_in(&unread), Look::default());
+        }
+
+        let words: Vec<serde_json::Value> = [
+            ApplicationLocated::DirectlyInside,
+            ApplicationLocated::AtDirectory,
+            ApplicationLocated::Both,
+        ]
+        .into_iter()
+        .map(|word| serde_json::to_value(word).expect("a word serializes"))
+        .collect();
+        assert_eq!(
+            words,
+            [
+                serde_json::json!("directly_inside"),
+                serde_json::json!("at_directory"),
+                serde_json::json!("both"),
+            ]
+        );
     }
 
     /// The list of applications says whether the bundle is installed and where: not installed

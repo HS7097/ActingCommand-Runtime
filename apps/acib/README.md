@@ -4,7 +4,7 @@
 program of its own: the Runtime will speak to it as a separate process, as it speaks to adb.
 Nothing of the workspace depends on it.
 
-## This version (ACIB-0, ACIB-1 in 0.12.73, and ACIB-2, ACIB-3, ACIB-3b and ACIB-3c in 0.12.74)
+## This version (ACIB-0, ACIB-1 in 0.12.73; ACIB-2, ACIB-3 in 0.12.74; ACIB-3b, ACIB-3c in 0.12.75)
 
 Each run is one command; it prints **one JSON line** on standard output and ends with status 0
 when the command was answered, or 1 when it was refused or failed. A refused or failed line
@@ -51,7 +51,8 @@ the identifier a key was made from; a key is printed only when its salt's flag w
 phone's applications and processes are a person's too: `running`, `launch` and `stop` answer of
 them (ACIB-3c: the installation proxy's record of the one bundle, the instruments server's list
 of running processes) only the one bundle asked for (as the command line gave it), whether it is
-installed and runs, and the pids of its own processes and of its extensions'. No other
+installed and runs, the pids of its own processes and of its extensions', and of the list a count
+(`located`) and a word (`application_located`). No other
 application's name, bundle identifier, path or pid is printed, logged or kept: the record and the
 list stay in memory for the command, the answer types have no member that could hold one, and an
 error from the lookup on is shown by its kind alone, never by its text; of `probe`, an error of
@@ -312,11 +313,16 @@ as no channel):
   The answer is a list of entries; of each, `acib` reads its `pid` and its `realAppName`, as the
   location of its executable. The library's reader names these two beside `name`, `isApplication`
   and `startPageCount`, which are not read, and documents none of them: that `realAppName` is the
-  path of the executable is read from no description, and is to be seen at the first `running`
-  on a phone while the application is open. An answer that is no list, or one entry that is no
-  dictionary or has no pid from 0 to 4294967295, is `answer_unreadable` for the whole list (a
-  process whose pid cannot be read could be the bundle's); an entry without a `realAppName` text
-  is of no application.
+  path of the executable is read from no description. **What was seen** (an observation of one
+  phone and one system version, not a rule): on a phone with iOS 27.0.1, on 2026-11-19, with the
+  build of `aef1bd17`, `running` answered `running` true with one pid for each of three installed
+  applications (asked twice for one of them, the same pid both times), so there `realAppName`
+  held the path of the executable directly in the bundle's directory, and the rule below matched
+  it. Another phone or system version may name its processes otherwise: that is why an entry at
+  the bundle's directory itself, and a list that locates no process, are read as below. An
+  answer that is no list, or one entry that is no dictionary or has no pid from 0 to 4294967295,
+  is `answer_unreadable` for the whole list (a process whose pid cannot be read could be the
+  bundle's); an entry without a `realAppName` text is of no application.
 - **The launch** (`launch`): the channel `com.apple.instruments.server.services.processcontrol` and
   on it the library's `launch_app` (`services/dvt/process_control.rs` 120-218, below).
 - **The kill** (`stop`): the same process control channel and on it the library's `kill_app`, once
@@ -327,31 +333,84 @@ directory; the instruments server's list gives each process its pid and its `rea
 bundle identifier. A process is of the bundle when its executable lies inside the bundle's
 directory, and the two kinds are told apart (Apple's "Placing content in a bundle": on iOS the
 main executable is at the top of the bundle, app extensions in `PlugIns/`). **The application
-itself** is a process whose executable lies directly in the directory: only it counts for
-`running`, and only it is ended by `stop`. A process whose executable lies deeper (an app
-extension in `PlugIns/`, a helper inside a nested bundle) is the bundle's but is not the
-application running: a widget the system runs for it does not make the application run. Its pid
-is named apart, in `extension_pids`. A process's `name` is never read, so a process of another
-application with the same name is not the bundle's. Paths are compared exactly, case included
-(iOS's file system is case-sensitive); a location given as a `file://` URL is read as its
-percent-decoded path, `/private/var/…` as `/var/…`, and one that is no absolute path is of no
-application. A process of another application whose path merely starts like the bundle's
-directory (a longer name, a sibling directory) is not of it.
+itself** is a process whose executable lies directly in the directory, or (ACIB-3c, fix round 1)
+whose location is the directory itself: only it counts for `running`, and only it is ended by
+`stop`. (A list that names bundles in place of executables names the application by its
+directory and its extensions deeper, by theirs; a list that names executables names no process
+by the directory: neither is misread, and `application_located` says which way the application
+was found: `directly_inside`, `at_directory`, or `both` when it has entries of each.) A process
+whose executable lies deeper (an app extension in `PlugIns/`, a helper inside a nested bundle) is
+the bundle's but is not the application running: a widget the system runs for it does not make
+the application run. Its pid is named apart, in `extension_pids`. A process's `name` is never
+read, so a process of another application with the same name is not the bundle's. Paths are
+compared exactly, case included (iOS's file system is case-sensitive); a location given as a
+`file://` URL is read as its percent-decoded path, `/private/var/…` as `/var/…`, and one that is
+no absolute path is of no application. A process of another application whose path merely starts
+like the bundle's directory (a longer name, a sibling directory) is not of it.
 
-- `acib running --device <n> --bundle <id>`, read-only: whether the lookup holds the bundle
+**What cannot be told is not "does not run" (ACIB-3c, fix round 1).** Each look counts the
+entries of the whole list whose location is read as a path (`located`). A list with none (an
+empty one, or one whose entries carry a bare name there, or no `realAppName`) gives nothing to
+match a bundle against: `running` answers `process_paths_unreadable` (status 1) in place of
+`running` false; `stop` answers the same word and sends no kill request when its first look
+locates nothing, and gives no verdict when a look after its kills locates nothing. `located` is
+a number and `application_located` a word: no name, path or pid of another process is in any
+answer, error text or log line.
+
+- **A failed match looks like an application that does not run: `installed` true, `running`
+  false, `pids` and `extension_pids` empty (and `located` above 0); of an application open on
+  the phone it means only that `acib` matched none of the list's entries to it, for a cause it
+  does not tell apart, not that the application does not run.** Where no entry of the list has a
+  location read as a path, nothing can be matched: `running` then answers
+  `process_paths_unreadable` (status 1), never `running` false.
+
+  `acib running --device <n> --bundle <id>`, read-only: whether the lookup holds the bundle
   (`installed`), whether the application itself runs (`running`), the pids of its own processes,
-  ascending (`pids`), and the pids of its extensions' processes, ascending (`extension_pids`,
-  which do not make it run): for example
-  `{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,
-  "pids":[412],"extension_pids":[530]}`. Only an extension alive answers `running` false, `pids`
-  empty and its pid in `extension_pids`. A bundle the lookup does not hold answers `installed`
-  false, `running` false and no pid, status 0 (above). Its words: `application_lookup_failed`,
-  `service_handshake_failed` (the instruments server's first message) and `process_list_failed`
-  (each with `error_kind`; a line stopped after the lookup keeps `installed`), and
-  `bundle_path_unreadable`. Nothing on the phone changes: the process control channel is not
-  opened. That the record's path and the list's `realAppName` meet as described here (and so
-  that a running application answers `running` true) is to be seen at the first `running` on a
-  phone while the application is open.
+  ascending (`pids`), the pids of its extensions' processes, ascending (`extension_pids`, which
+  do not make it run), how many entries of the list have a location read as a path (`located`)
+  and, when the application runs, how its entries were located (`application_located`): for
+  example `{"command":"running","device":3,"bundle":"com.example.app","installed":true,
+  "running":true,"pids":[412],"extension_pids":[530],"located":180,
+  "application_located":"directly_inside"}`. Only an extension alive answers `running` false,
+  `pids` empty and its pid in `extension_pids`. A bundle the lookup does not hold answers
+  `installed` false, `running` false and no pid, status 0 (above). Its words:
+  `application_lookup_failed`, `service_handshake_failed` (the instruments server's first
+  message) and `process_list_failed` (each with `error_kind`; a line stopped after the lookup
+  keeps `installed`), `bundle_path_unreadable` and `process_paths_unreadable`. Nothing on the
+  phone changes: the process control channel is not opened. That the record's path and the
+  list's `realAppName` meet as described here was seen on one phone (iOS 27.0.1, 2026-11-19, the
+  build of `aef1bd17`: above); on another phone or system version it is to be seen again.
+
+  **Reading `running` on a phone**, each outcome and what it means:
+
+  - `running` true with `pids`: a process of the application itself is listed, in front or in
+    the background (which application is in front `acib` cannot tell); `application_located`
+    says how its entry was found: `directly_inside` (an executable directly in the bundle's
+    directory), `at_directory` (the directory itself) or `both`.
+  - An installed application that is open answered `installed` true, `running` false, `pids`
+    and `extension_pids` empty (`located` above 0): it was not matched, and why is not told
+    apart (its entry's location lies outside the bundle's directory, its entry carries a bare
+    name where others carry paths, or the list does not hold it); it is not "does not run".
+  - `running` false with `extension_pids`: processes deeper in the bundle's directory are listed
+    and none of the application itself: only an extension runs, or the application's own entry
+    was not matched (as above).
+  - `installed` false: the installation proxy's lookup of the bundle, as written, does not hold
+    it (an identifier written wrong; whether one written in another case than the phone's is
+    found has not been seen); `stage_ms` names only `usbmuxd` and `application_lookup`: no
+    tunnel was built.
+  - `process_paths_unreadable`: the list was read, but no entry of it has a location read as a
+    path (an empty list, bare names, no `realAppName`): nothing could be matched, and whether
+    the application runs is not told.
+  - `process_list_failed` with `answer_unreadable`: the device information channel's request was
+    answered with a payload, or the list is of another shape; the two are not told apart. With
+    `connection_failed`: the connection failed, or the library could not read a message the
+    phone sent. With `other`: another error of the library, for example a channel the phone
+    cancelled before `acib` read it (`services/dvt/remote_server.rs` 938-960).
+  - `deadline_passed` at `server_first_message`: the phone sent on the root channel no message
+    the library hands on (none, or capabilities it could not decode); at `process_list`: the
+    channel's request or the list was not answered in time.
+  - `service_handshake_failed`: the connection to the instruments server failed before or while
+    its first message was read.
 - `acib launch --device <n> --bundle <id> [--relaunch]`: first the lookup, as `running` and `stop`
   ask it: a bundle it does not hold answers `installed` false, as they do, with `not_installed`
   (status 1), and no launch is sent. Then the instruments server's process control launches the
@@ -399,13 +458,18 @@ directory (a longer name, a sibling directory) is not of it.
   signalled and the next look starts before the command's deadline (a look the deadline cuts
   leaves the one before it as the last). The line answers `installed`, whether the application
   ran at the first look (`was_running`), the pids a kill request was made for (`signalled`), the
-  pids of the application the last look lists (`remaining`), whether any runs (`running`) and the
-  pids of its extensions the last look lists (`extension_pids`):
+  pids of the application the last look lists (`remaining`), whether any runs (`running`), the
+  pids of its extensions the last look lists (`extension_pids`) and, of that look, `located` and,
+  while the application is still listed, `application_located`, as `running` names them:
   `{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,
-  "signalled":[412],"remaining":[],"running":false,"extension_pids":[530]}`. An application
-  that does not run (or that the lookup does not hold, above) is a success that says so:
-  `was_running` false, nothing signalled, nothing remaining, its extensions' pids named (none
-  when the lookup does not hold it). **The verdict comes from the looks, never from the
+  "signalled":[412],"remaining":[],"running":false,"extension_pids":[530],"located":181}`. An
+  application that does not run (or that the lookup does not hold, above) is a success that says
+  so: `was_running` false, nothing signalled, nothing remaining, its extensions' pids and the
+  first look's `located` named (none when the lookup does not hold it: nothing was looked at).
+  (ACIB-3c, fix round 1) A first look that locates no process answers `process_paths_unreadable`
+  (status 1) and sends no kill request: what cannot be told is not "does not run". A look after
+  the kills that locates none answers the same word, keeping `signalled`, with no verdict:
+  whether the processes ended cannot be told. **The verdict comes from the looks, never from the
   requests**: when the last look inside the deadline still lists a process the command
   signalled, the line answers `still_running` (status 1); when it lists none of them, the
   application is stopped (status 0). A kill request that failed (the process control channel not
@@ -453,8 +517,10 @@ words:
 - `process_list`: the device information channel's request and the list of running processes
   (for `stop`, the first look, before any kill).
 - `launch_request`: the process control channel's request, the launch request and its answer.
-- `kill_requests`: the process control channel's request and one kill request per process of the
-  application (no answer is waited for).
+- `kill_requests`: the process control channel's request, whose answer is waited for (as every
+  channel's request: `services/dvt/remote_server.rs` 446-455), and one kill request per process
+  of the application, whose answer is not waited for (none is asked for:
+  `services/dvt/process_control.rs` 286-296).
 - `looks_after_kills`: a device information channel's request of its own, the looks at the list
   after the kills, and the waits of 200 ms between them.
 
