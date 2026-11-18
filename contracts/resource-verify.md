@@ -395,7 +395,9 @@ key step, since Workflow #463 KP-1's fix round 1, register §1.448, so it comput
 select step's scan without an end, Workflow #463 K-c, register §1.454, since Workflow #463 S2-9b,
 register §1.458, so it computes 18; row 19, an `interrupts.json` entry without handlers or with the
 `result` `environment_reset`, Workflow #463 INT-1, register §1.473, so it computes 19 for a zip
-whose `interrupts.json` holds such an entry); and, P2's
+whose `interrupts.json` holds such an entry; row 20, a `repeated_anchor` layout's shared read,
+Workflow #463 SEL-2L, register §1.480, so it computes 20 for a zip whose pack holds such a layout);
+and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
 declares", and DB-2 declared 6 in 0.12.37), each in the file it stands in and under its condition. The files of a pack: `control.json`; a task file
@@ -449,6 +451,7 @@ as an element of its array.
 | 17 | task | `key` under `operations` when it holds an object (a key step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (every build refuses a key in a page-graph task): where the kernel's admission finds it (`TaskOperation.key`; `TaskProgram::validate_linear`, `LinearEffect::Key`), as row 13 finds a select step | KP-1 fix round 1, §1.448; [linear-steps.md](linear-steps.md), "Key steps" |
 | 18 | task | a `scan` object under the `select` of an element of `operations` that declares no `end` (absent or `null`, as the declaration gate reads it), in a pack of any execution mode (a Runtime before 18 requires `end` in its declaration gate in every pack): a member left out, which no member row can find, so read on its own (`scan_without_end`); whether the scan declares `early_stop`, without which this build refuses it, is the gate's | K-c, §1.454; S2-9b, §1.458; [selection-graph.md](selection-graph.md), "A scan without an end" |
 | 19 | root `interrupts.json` | `handlers` under `interrupts` when it holds an empty array (an entry that names no handler), and `result` under `interrupts` when it holds `environment_reset`; an entry with handlers and a `result` of before keep row 6's revision, and a file without them its bytes | INT-1, §1.473; [package-reference.md](package-reference.md), "An entry without handlers" |
+| 20 | task | `shared_ocr` of an element of `candidate_layouts` whose `kind` is `repeated_anchor`, in a pack of any execution mode (a Runtime before 20 refuses it in its declaration gate, `UnknownField`, in every pack): a member a row finds only beside its layout's `kind`, so read on its own (`anchored_shared_read`); a `fixed_slots` layout's `shared_ocr` keeps its revision (row 6 for its `preprocess`) | SEL-2L, §1.480; [selection-graph.md](selection-graph.md), "Shared OCR read" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
