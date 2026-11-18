@@ -561,6 +561,9 @@ fn ready_of(
 /// are the game, server and locale the command line gives `record review` as it gives them `record
 /// ready`, so that a recording without a locale of its own is reviewed with its self-checks run;
 /// a frame whose file is not there is answered without a path and named in `frame_file_missing`.
+/// #463 S1-R: with `request.ruler` every preview carries that ruler and the answer says what it is;
+/// a ruler beside `no_preview`, which draws no copy, is `validation_failed` (`details{argument:
+/// "ruler", reason: "previews_only"}`) before anything is read.
 pub fn record_review(
     state_dir: &Path,
     instance: &str,
@@ -570,6 +573,13 @@ pub fn record_review(
 ) -> LabResult<RecordReviewOutcome> {
     // #463 RM-1: a bound out of its range is refused before anything is read.
     template_margin_bound(options.template_margin_bound)?;
+    if request.no_preview && request.ruler.is_some() {
+        return Err(LabError::usage(
+            "ruler is drawn on the previews: give it without no_preview (--no-preview); nothing \
+             was read or written",
+        )
+        .with_details(json!({"argument": "ruler", "reason": "previews_only"})));
+    }
     let (recording, session) = ready_recording(state_dir, instance, request.record_id.as_deref())?;
     if let Some(step) = request.step {
         effective_step(&recording, step)?;

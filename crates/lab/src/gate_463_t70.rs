@@ -642,6 +642,7 @@ impl Bench {
             record_id: None,
             step: None,
             no_preview: true,
+            ruler: None,
         };
         let outcome = record_review(
             &self.state(),

@@ -40,7 +40,8 @@ more, and unfolded again ("Folding swipes into a scrolling search"), on an activ
 (fix round 1) on a stopped one as an amendment ("Marking after stop"). #463 KR-1: a step's effect
 may be the back key in place of a click, declared on the recording after the fact and never sent
 while recording; a click it replaces is kept inside it and given back when the key is taken back
-("Key steps").
+("Key steps"). #463 S1-R: the previews `record review` writes may carry a ruler, on copies only
+("A ruler on the pictures a recording hands back").
 
 The recording state lives in the Lab state directory. Nothing in this document writes to
 the Runtime ledger; the clicks and application operations themselves are executed by the
@@ -59,6 +60,7 @@ recording's hold is a scheduling pause the Runtime sets, lifts and records as ev
 <state>/record-artifacts/<record_id>/lab/out/<package_id>.<zip|json>  the package record stop generated
 <state>/record-artifacts/<record_id>/lab/archive-manifest-<n>.json      actingcommand.lab-recording-archive.v2 (Workflow #449; #463 S1-5: v1 on disk is read)
 <state>/record-artifacts/<record_id>/lab/preview/s<nn>-<before|after>.png  previews record review writes (#463 S2-2); nothing reads them
+<state>/record-artifacts/<record_id>/lab/preview/s<nn>-<before|after>-ruled-<edges|grid>.png  ruled previews record review --ruler writes (#463 S1-R); nothing reads them
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -3551,17 +3553,17 @@ answered as any step, its `artifact_step` `null`: its frames are the screens of 
 ## Reviewing a recording step by step: `record review`
 
 ```
-record review [--record-id <id>] [--step <k>] [--no-preview] [--game <g>] [--server <s>]
-              [--locale <l>] [--template-margin-bound <d>] [--state-dir <dir>]
+record review [--record-id <id>] [--step <k>] [--no-preview] [--ruler <edges|grid>] [--game <g>]
+              [--server <s>] [--locale <l>] [--template-margin-bound <d>] [--state-dir <dir>]
 ```
 
 #463 S2-2 (0.12.68; the owner approved the three-stage blueprint of package making on board #463:
 stage two turns the recorded material into a package offline, the tool hands back the material and
 the agent decides; her ruling there: a preview's boxes are rendered onto a copy, and the stored
 frames carry no box; the rules here are the coordinator's). Through the Lab's MCP server
-(`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`,
-`locale`, `template_margin_bound`, `state_dir`; [lab-operations.json](lab-operations.json), the
-row `record review`);
+(`actinglab-mcp`) it is `ac_record_review` (`record_id`, `step`, `no_preview`, `ruler`, `game`,
+`server`, `locale`, `template_margin_bound`, `state_dir`; [lab-operations.json](lab-operations.json),
+the row `record review`);
 today's server (`actingctl mcp-serve`) has no such tool.
 
 - **Which recording, which steps.** The recording `record ready` reads, found by the same function
@@ -3663,7 +3665,15 @@ today's server (`actingctl mcp-serve`) has no such tool.
   a rename, so that two reviews at once leave no torn file; every review writes the previews it
   answers anew, over those of an earlier one, and the tool never removes a preview (one of a step
   not answered, or dropped since, stays where it is, and no answer names it). The boxes exist only
-  on the previews: no stored frame is written.
+  on the previews: no stored frame is written. #463 S1-R (0.12.74): with `--ruler <edges|grid>`
+  (MCP `ruler`) every preview carries that ruler under its boxes and its press and is written
+  beside the plain previews under a name that says it is ruled,
+  `lab/preview/s<nn>-<before|after>-ruled-<edges|grid>.png`, never over
+  `s<nn>-<before|after>.png`, so that a ruled preview is never taken for the plain preview of the
+  same step and a preview without the ruler keeps its name and its bytes; the answer adds `ruler`
+  and nothing else ("A ruler on the pictures a recording hands back"). `--ruler` beside
+  `--no-preview`, which draws no copy, is `validation_failed` (`details{argument: "ruler", reason:
+  "previews_only"}`) before anything is read.
 - **Through MCP and `--dry-run`.** A long recording's answer may outgrow the MCP server's budget:
   it is then written whole to the server's export directory with `answer_exported`; `steps_total`
   says how many steps there are, and `--step` reads them one at a time. Under actinglab's
@@ -3685,6 +3695,75 @@ today's server (`actingctl mcp-serve`) has no such tool.
                          "what": "page_recognition", "code": "record_step_without_recognition",
                          "hint": "record mark --step 1 --template <id>=x,y,w,h"}]}],
  "warnings": []}
+```
+
+## A ruler on the pictures a recording hands back
+
+#463 S1-R (0.12.74; the owner's ruling on board #463 that the tool hands back the material and
+proposes nothing; the rules here are the coordinator's). An author reads a box's corners off a
+picture of a stored frame and writes them into `record mark` (`--box`, every rectangle flag); a
+ruler drawn on the picture lets it read them instead of estimating them by eye. It is observation
+only: the tool measures nothing for the author and proposes no box.
+
+- **Which pictures, and their space.** The Lab hands an author two kinds of picture of a
+  recording's frames: `record review`'s previews, copies of the stored frames written under
+  `lab/preview/`, and `record frames`' listed frames, the stored frames themselves, by their paths.
+  A preview is the stored frame decoded at its own size, so every picture's pixels are the stored
+  frame's own pixels: the space `record mark` takes a box's corners in (the step's primary frame,
+  the recording's coordinate space; "Drawing a box") and the step table holds a press's point in.
+  The ruler's numbers are in that space; the answer names it `frame_pixels`.
+- **`record review` only.** The ruler is drawn on `record review`'s previews, which it writes
+  already; a ruled preview is what an author reads coordinates from. `record frames` takes no
+  ruler: it reads only, writes and decodes nothing and is listed and gated as reading only
+  ("The frames around a press"), exactly as before this section (the coordinator's ruling on the
+  review of #463 S1-R). An author who wants a ruled picture of a step's screens asks `record
+  review --step <k> --ruler <edges|grid>`.
+- **The parameter.** `--ruler <edges|grid>` (MCP `ruler`) of `record review`, a closed list
+  ([lab-operations.json](lab-operations.json), `enum:edges|grid`); absent, no ruler. Another word
+  is refused: through MCP and `serve --stdio` by the closed list's rule of every such parameter,
+  before anything is sent; on actinglab's command line, which hands the flag on as written, by the
+  command before anything is read, as `record mark` answers another word of its closed list
+  `--transition` on that line (`validation_failed`, its text naming the words and the word given).
+- **What is drawn**, on a copy only, before the boxes and the press, so that they stay on top; a
+  mark that falls outside the frame is left out, so a frame under 100 pixels, or under 50, takes
+  what fits, whatever its bytes a pixel:
+  - `edges`: along the top edge a tick down from it at every multiple of 50 pixels of `x`, 6 pixels
+    long, and at every multiple of 100 one 12 pixels long; along the left edge the same across from
+    it at the multiples of `y`; beside each longer tick its number (`100`, `200`, …): on the top
+    edge its first pixel 4 pixels to the right of the tick and 2 below the edge, on the left edge 4
+    pixels below the tick and 2 right of the edge. A number that would not lie wholly inside the
+    frame is left out, so that no cut number is read. The digits are a built-in bitmap font, three
+    cells wide and five high, each cell 2 pixels square, one empty cell between two digits (no
+    drawing crate, no font file). Each tick and each digit is drawn dark (`#000000`) over a light
+    halo (`#ffffff`, every pixel next to it, diagonals too), so that it reads on a light and on a
+    dark frame.
+  - `grid`: the same, over a line one pixel thin across the whole frame at every multiple of 100
+    pixels, both ways, in dashes of 4 pixels, dark first and light in turn.
+- **Copies only.** The stored frames, their hashes, the step table and the archive's manifests are
+  never written; what `record stop`, `record ready` and `record mark` read is unchanged, and no
+  offline tool reads a ruled picture as a frame of its own accord (a scene, a template's source, a
+  case are read from `frames/`, `crops/` or a file the agent names): a ruled picture is for
+  reading, and where a frame is given (`--frame`, `--sample`, a scene) the agent gives a stored
+  frame's `path`, never a preview. **A ruled preview's name says it is ruled**: it is written in
+  the same directory as the plain previews, `lab/preview/`, as
+  `s<nn>-<before|after>-ruled-<edges|grid>.png` (`s01-before-ruled-grid.png`), beside and never
+  over the plain preview of the same step, `s<nn>-<before|after>.png`, so that it is never taken
+  for that preview and a review without the ruler keeps its names and its bytes; it is written as
+  every preview is (every frame read and its sha256 checked before any preview is written, atomic
+  writes, written anew by every call, removed by none). Under actinglab's `--dry-run` a ruled
+  review is a review with previews, refused `dry_run_unsupported` as such.
+- **What the answer says.** With a ruler, `record review`'s answer adds `ruler`, and its previews'
+  paths are the ruled names, and nothing else: `{kind, space, tick_px, long_tick_px, number_px,
+  top_numbers, left_numbers, line_px?}`, its word, `frame_pixels`, 50, 100, 100 (the numbers'
+  spacing, the first at 100), `x` (what the top edge's numbers are), `y` (the left edge's), and on
+  `grid` 100, the lines' spacing (absent on `edges`).
+- **Without the parameter** every preview, its name, the answer (no `ruler` member) and every file
+  is byte for byte what it was; `record frames` answers and writes exactly as before in every
+  case.
+
+```json
+"ruler": {"kind": "grid", "space": "frame_pixels", "tick_px": 50, "long_tick_px": 100,
+          "number_px": 100, "top_numbers": "x", "left_numbers": "y", "line_px": 100}
 ```
 
 ## Optional steps
