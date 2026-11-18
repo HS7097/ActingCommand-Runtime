@@ -981,6 +981,10 @@ impl HostShared {
                     .into());
             }
         }
+        // #480 PG-2c fix round 2: the last question, the admission guard in hand; a pause
+        // recorded from here on finds this start's claim lease and lists `automatic_start`
+        // (`automatic_start_hold`, which names the lines this rests on), and the start is
+        // finished as before.
         if let Some(hold) =
             self.automatic_start_hold(&resolved.instance_alias, HostLocation::RunEmulatorAutostart)?
         {

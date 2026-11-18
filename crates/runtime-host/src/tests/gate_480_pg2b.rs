@@ -32,7 +32,7 @@ use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, EmulatorInstanceAction, FactScalar, FactValue,
     InstancePauseStage, RecoveryDrillMode, RecoveryLadderOutcome, RecoveryRung,
     RecoveryRungOutcome, RuntimeConfigManifest, RuntimeLifecyclePhase, RuntimePayload,
-    SchedulingPauseReason, SchedulingPauseScope, StartupPackageDisposition,
+    SchedulingPauseMode, SchedulingPauseReason, SchedulingPauseScope, StartupPackageDisposition,
 };
 use actingcommand_runtime_config::scheduling::{
     DEVICE_GROUP_MAX_QUEUE_WAIT_MS, DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS,
@@ -65,18 +65,51 @@ fn completed(receipt: &RuntimeReceipt) {
 
 // A person's pause of `alias`, with the smallest drain timeout a request may name.
 fn instance_pause(alias: &str) -> RuntimeRequest {
+    instance_pause_as(alias, SchedulingPauseMode::Stand)
+}
+
+// #480 PG-2c: the pause of `alias` asked with `mode` (a tool's hold is `quiet_or_lift`).
+pub(super) fn instance_pause_as(alias: &str, mode: SchedulingPauseMode) -> RuntimeRequest {
     runtime_request(
         &IdentifierIssuer::new().expect("identifier issuer"),
         RuntimeOperation::PauseScheduling {
             scope: instance_scope(alias),
             pause_reason: SchedulingPauseReason::new("pg2b_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: mode,
         },
     )
 }
 
+// #480 PG-2c: the one cause of the completed pause `receipt`: its code, its `pause_stage` and its
+// `in_the_way` (absent: `None`).
+#[track_caller]
+pub(super) fn assert_cause(
+    receipt: &RuntimeReceipt,
+    code: &str,
+    stage: &str,
+    in_the_way: Option<&[&str]>,
+) {
+    let causes = receipt.outcome().causes();
+    let [cause] = causes else {
+        panic!("one cause of the completed pause: {receipt:?}");
+    };
+    let cause = cause.outcome();
+    assert_eq!(cause.code().as_str(), code, "{receipt:?}");
+    assert_eq!(
+        cause.value("pause_stage"),
+        Some(&json!(stage)),
+        "{receipt:?}"
+    );
+    assert_eq!(
+        cause.value("in_the_way"),
+        in_the_way.map(|words| json!(words)).as_ref(),
+        "{receipt:?}"
+    );
+}
+
 // The stage of the pause `alias` holds of its own, if it holds one.
-fn pause_stage(host: &RuntimeHost, alias: &str) -> Option<InstancePauseStage> {
+pub(super) fn pause_stage(host: &RuntimeHost, alias: &str) -> Option<InstancePauseStage> {
     host.scheduling_pauses_for_test()
         .expect("the held pauses")
         .1
@@ -85,7 +118,10 @@ fn pause_stage(host: &RuntimeHost, alias: &str) -> Option<InstancePauseStage> {
 }
 
 // The rows of every record of `host.scheduling_pause` after `after`, in order.
-fn pause_records_after(host: &RuntimeHost, after: u64) -> Vec<Vec<BTreeMap<String, FactScalar>>> {
+pub(super) fn pause_records_after(
+    host: &RuntimeHost,
+    after: u64,
+) -> Vec<Vec<BTreeMap<String, FactScalar>>> {
     all_events(host)
         .iter()
         .filter(|event| event.sequence() > after)
@@ -104,14 +140,14 @@ fn pause_records_after(host: &RuntimeHost, after: u64) -> Vec<Vec<BTreeMap<Strin
 }
 
 // Whether a record of the held pauses names a pause of `alias`.
-fn names_instance(rows: &[BTreeMap<String, FactScalar>], alias: &str) -> bool {
+pub(super) fn names_instance(rows: &[BTreeMap<String, FactScalar>], alias: &str) -> bool {
     rows.iter()
         .any(|row| row.get("instance_alias") == Some(&FactScalar::String(alias.to_owned())))
 }
 
 // After `before`, the pause's one record of the held pauses, naming `alias`: nothing was lifted.
 #[track_caller]
-fn assert_one_record_naming(host: &RuntimeHost, before: u64, alias: &str) {
+pub(super) fn assert_one_record_naming(host: &RuntimeHost, before: u64, alias: &str) {
     let records = pause_records_after(host, before);
     let [record] = &records[..] else {
         panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
@@ -173,7 +209,7 @@ fn emulator_actions(state: &FakeState) -> Vec<EmulatorInstanceAction> {
 // Holds the next holding check a rung makes before its application stop or its startup package run
 // (`run_before_ladder_step_check_for_test`): the ladder's worker, holding the ladder's key, sends
 // on the returned receiver's channel and waits for the returned sender before it makes the check.
-fn hold_next_rung_step(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+pub(super) fn hold_next_rung_step(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (at_tx, at_rx) = mpsc::channel::<()>();
     let (go_tx, go_rx) = mpsc::channel::<()>();
     host.run_before_ladder_step_check_for_test(Box::new(move || {
@@ -187,12 +223,12 @@ fn hold_next_rung_step(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<
 // The ladder fixture of `instance_workers` (`ladder_setup`): a physical policy run that binds a
 // return-home package, on an instance whose startup package is configured, admitted and then left
 // with captures that stay unknown, so that it and every rung run fail.
-struct Climb {
+pub(super) struct Climb {
     _root: TempDir,
     config: RuntimeHostConfig,
     registered: InstanceId,
-    host: RuntimeHost,
-    state: Arc<FakeState>,
+    pub(super) host: RuntimeHost,
+    pub(super) state: Arc<FakeState>,
     context: Box<PolicyRunContext>,
     request: ContainedTaskRequest,
 }
@@ -200,7 +236,7 @@ struct Climb {
 // The started fixture, its configuration `configure`d. With `emulator`, the instance has emulator
 // control and a discovery binding, so the emulator rung runs its Stop and Start, and Android
 // reports no foreground activity after the Start until a test lets it boot.
-fn start_climb(
+pub(super) fn start_climb(
     emulator: bool,
     configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
 ) -> Climb {
@@ -239,7 +275,7 @@ fn start_climb(
 impl Climb {
     // Runs the scheduled task; its failure hands the key to the ladder, which climbs on the
     // instance's worker.
-    fn fail_scheduled_run(&self) {
+    pub(super) fn fail_scheduled_run(&self) {
         let error = self
             .host
             .run_scheduled_contained_task(&self.context, &self.request)
@@ -385,7 +421,11 @@ fn pg2b_2_a_pause_after_the_emulator_rungs_preparation_runs_no_package() {
 // names the instance. Once the rung goes on, its holding check ends the ladder, and the pause
 // answers success, `released`, its one record still naming the instance. (Before this slice the
 // ladder's key was waited for only until the grace: `scheduling_pause_release_busy`, lifted, and
-// the ladder's next holding check passed.)
+// the ladder's next holding check passed.) #480 PG-2c (which changes what this test pinned): the
+// person's pause answers at once, at the end of its caller's time, Completed with
+// `scheduling_pause_standing` (`paused`, `recovery_ladder`); the checks after it are the host's own
+// continuation's, which brings the stage to `released` once the ladder has ended. Its
+// `quiet_or_lift` twin is `gate_480_pg2c`'s L1.
 #[test]
 fn pg2b_3_an_instance_pause_waits_for_a_rung_past_its_grace_and_stands() {
     let climb = start_climb(false, |config| {
@@ -445,17 +485,17 @@ fn pg2b_3_an_instance_pause_waits_for_a_rung_past_its_grace_and_stands() {
         ),
         "{paused:?}"
     );
-    assert!(
-        ladder_finished(&all_events(&climb.host)).is_some(),
-        "the ladder ended before the pause answered"
+    assert_cause(
+        &paused,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["recovery_ladder"]),
     );
-    assert_eq!(
-        pause_stage(&climb.host, POLICY_INSTANCE_ALIAS),
-        Some(InstancePauseStage::Released),
-        "the pause stands"
-    );
-    assert_one_record_naming(&climb.host, before, POLICY_INSTANCE_ALIAS);
     wait_for_ladder_end(&climb.host, POLICY_INSTANCE_ALIAS);
+    wait_until("the pause reaches released by itself", || {
+        pause_stage(&climb.host, POLICY_INSTANCE_ALIAS) == Some(InstancePauseStage::Released)
+    });
+    assert_one_record_naming(&climb.host, before, POLICY_INSTANCE_ALIAS);
     assert_eq!(
         rung_outcome(&climb.host, RecoveryRung::ApplicationRestart),
         Some((
@@ -476,7 +516,11 @@ fn pg2b_3_an_instance_pause_waits_for_a_rung_past_its_grace_and_stands() {
 // (4) Item 2, R4″ with the ladder: the Runtime is asked to stop while the hand-back waits for the
 // ladder alone (as in (3)). The pause is not lifted: the request fails with
 // `scheduling_pause_kept_at_shutdown`, the pause stays `paused`, and its one record of the held
-// pauses still names the instance. The next start restores it (stage `released`).
+// pauses still names the instance. The next start restores it (stage `released`). #480 PG-2c
+// (which changes what this test pinned): the person's pause has answered at once, Completed with
+// `scheduling_pause_standing`, before the shutdown, which ends the host's continuation and keeps
+// the pause; a shutdown within the caller's time answers `scheduling_pause_kept_at_shutdown`
+// (`gate_480_pg2c`'s L6), and a tool's hold is lifted then.
 #[test]
 fn pg2b_4_a_shutdown_while_the_pause_waits_for_a_rung_keeps_the_pause() {
     let climb = start_climb(false, |config| {
@@ -512,18 +556,22 @@ fn pg2b_4_a_shutdown_while_the_pause_waits_for_a_rung_keeps_the_pause() {
             .expect("the pause's thread")
             .expect("the pause's receipt")
     });
+    // #480 PG-2c: the host's continuation ends at the shutdown, before the rung goes on.
+    wait_until("the continuation ends at the shutdown", || {
+        climb
+            .host
+            .pause_carry_ons_running_for_test()
+            .expect("the continuations")
+            == 0
+    });
     go.send(()).expect("the rung goes on");
 
-    assert_eq!(kept.state(), RuntimeReceiptState::Failed, "{kept:?}");
-    let outcome = climb
-        .host
-        .failure_outcome_for_test(pause_request.request_id())
-        .expect("the refused requests")
-        .expect("the pause's failure");
-    assert_eq!(
-        outcome.code().as_str(),
-        "scheduling_pause_kept_at_shutdown",
-        "{outcome:?}"
+    completed(&kept);
+    assert_cause(
+        &kept,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["recovery_ladder"]),
     );
     assert_eq!(
         pause_stage(&climb.host, POLICY_INSTANCE_ALIAS),
@@ -578,7 +626,9 @@ fn drill_host(root: &TempDir, state: &Arc<FakeState>, instance: InstanceId) -> R
 // person pauses the instance with the grace already past: the client's lease is no work of the
 // Runtime's own, so the pause fails as before with `scheduling_pause_release_busy` and is lifted
 // (the record that set it and the record without it). The ladder's queued claim, which the pause
-// held back, refused nothing; the client's lease and that claim are as they were.
+// held back, refused nothing; the client's lease and that claim are as they were. #480 PG-2c: only
+// a tool's hold (`quiet_or_lift`) still fails so; the pause is asked so here (a person's pause
+// stands: `gate_480_pg2c`'s L3).
 #[test]
 fn pg2b_5_a_clients_lease_with_the_ladder_waiting_still_fails_and_lifts_the_pause() {
     let root = TempDir::new().expect("tempdir");
@@ -608,7 +658,7 @@ fn pg2b_5_a_clients_lease_with_the_ladder_waiting_still_fails_and_lifts_the_paus
         "the drill's ladder waits behind the client's lease"
     );
     let before = head(&host);
-    let pause_request = instance_pause(DRILL);
+    let pause_request = instance_pause_as(DRILL, SchedulingPauseMode::QuietOrLift);
 
     let failed = host
         .process_request_for_test(&pause_request, ConnectionId::new(1053).expect("connection"))
@@ -675,6 +725,12 @@ fn runs_ended_after(host: &RuntimeHost, after: u64) -> (usize, usize) {
 // lifted, and the package passed the opened gate.)
 #[test]
 fn pg2b_6_outside_the_multi_nemu_gate_the_close_lease_passes_the_startup_package_the_pause_holds() {
+    close_lease_passes_what_the_pause_holds(SchedulingPauseMode::Stand);
+}
+
+// (6)'s scenario for a pause asked with `mode` (#480 PG-2c: `gate_480_pg2c`'s L4 runs it with
+// `quiet_or_lift`; both answer success, nothing is lifted, the package stays queued).
+pub(super) fn close_lease_passes_what_the_pause_holds(mode: SchedulingPauseMode) {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let other_state = Arc::new(FakeState::default());
@@ -719,7 +775,7 @@ fn pg2b_6_outside_the_multi_nemu_gate_the_close_lease_passes_the_startup_package
         .expect("the first's admission guard");
     let closed_before = state.capture_close_count.load(Ordering::Acquire);
     let before = head(&host);
-    let pause_request = instance_pause(NEMU_FIRST);
+    let pause_request = instance_pause_as(NEMU_FIRST, mode);
 
     let paused = thread::scope(|scope| {
         let taken = admission.lock().expect("the first's admission guard");

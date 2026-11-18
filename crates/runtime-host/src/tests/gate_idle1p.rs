@@ -881,6 +881,7 @@ pub(super) fn pause_x(host: &RuntimeHost, reason: &str) {
             scope: instance_scope(X_ALIAS),
             pause_reason: SchedulingPauseReason::new(reason).expect("pause reason"),
             drain_timeout_ms: 5_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         4_401,
     );

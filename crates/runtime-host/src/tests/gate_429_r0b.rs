@@ -355,6 +355,7 @@ fn r0b_a_self_check_a_reconnect_and_an_emulator_control_show_while_they_hold_the
         scope: scope.clone(),
         pause_reason: SchedulingPauseReason::new("gate_check").expect("pause reason"),
         drain_timeout_ms: 1_000,
+        pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
     });
     assert_eq!(client.send(&pause).state(), RuntimeReceiptState::Completed);
     // A pause does not hold a direct run back; this one keeps a session for the reconnect. It

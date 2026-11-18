@@ -111,6 +111,7 @@ fn queue_startup_claim(host: &RuntimeHost) -> RequestId {
             pause_reason: actingcommand_contract::SchedulingPauseReason::new("s6clow_pause")
                 .expect("pause reason"),
             drain_timeout_ms: 5_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         201,
     );

@@ -240,20 +240,24 @@ fn accepted_pause_scheduling(document: &Value) -> Option<Value> {
 /// #378 A2a T3 (brief-a2a.md; model-378 §16 A-9 :633, coordinator answer D8): the global and
 /// the instance pause state and the `PauseScheduling` request carry their reason under
 /// `pause_reason`, round-trip, and refuse the old member `reason_code`; the reason still follows
-/// its 1..=64 byte `[a-z0-9_.-]` rule.
+/// its 1..=64 byte `[a-z0-9_.-]` rule. #480 PG-2c fix round 1 (`runtime-client` 12: every client of
+/// revision 12 writes `pause_mode`): the request is written again with its `pause_mode`, `stand`
+/// when the decoded request had none.
 #[test]
 fn gate_scheduling_pause_reason_travels_as_pause_reason() {
     let too_long = "a".repeat(65);
-    let shapes: [(&str, Value, Accepted); 3] = [
+    let shapes: [(&str, Value, Accepted, Value); 3] = [
         (
             "global pause state",
             json!({"revision": 1, "since_unix_ms": 1}),
             accepted_pause_state,
+            json!({}),
         ),
         (
             "instance pause state",
             json!({"revision": 1, "since_unix_ms": 1, "stage": "paused"}),
             accepted_instance_pause_state,
+            json!({}),
         ),
         (
             "pause scheduling request",
@@ -263,11 +267,16 @@ fn gate_scheduling_pause_reason_travels_as_pause_reason() {
                 "drain_timeout_ms": 1_000
             }),
             accepted_pause_scheduling,
+            json!({"pause_mode": "stand"}),
         ),
     ];
-    for (shape, base, accepted) in shapes {
+    for (shape, base, accepted, written) in shapes {
         let current = with_reason(base.clone(), "pause_reason", REASON);
-        assert_eq!(accepted(&current), Some(current.clone()), "{shape}");
+        let mut expected = current.clone();
+        if let (Some(members), Some(added)) = (expected.as_object_mut(), written.as_object()) {
+            members.extend(added.clone());
+        }
+        assert_eq!(accepted(&current), Some(expected), "{shape}");
         let old = with_reason(base.clone(), "reason_code", REASON);
         assert_eq!(accepted(&old), None, "{shape}");
         let empty = with_reason(base.clone(), "pause_reason", "");

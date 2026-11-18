@@ -179,6 +179,7 @@ fn operations(ids: &IdentifierIssuer) -> Vec<(&'static str, RuntimeOperation)> {
                 },
                 pause_reason: SchedulingPauseReason::new("lab_check").expect("pause reason"),
                 drain_timeout_ms: 1_000,
+                pause_mode: crate::SchedulingPauseMode::Stand,
             },
         ),
         (

@@ -293,6 +293,7 @@ impl Device {
             },
             pause_reason: SchedulingPauseReason::new("mapp1d_member_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         });
         let receipt = client.send(&pause);
         assert_eq!(

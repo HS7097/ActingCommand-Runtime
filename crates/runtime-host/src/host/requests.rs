@@ -547,11 +547,18 @@ impl HostShared {
                 scope,
                 pause_reason,
                 drain_timeout_ms,
+                pause_mode,
             } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.pause_scheduling(validated, scope, pause_reason, *drain_timeout_ms)
+                self.pause_scheduling(
+                    validated,
+                    scope,
+                    pause_reason,
+                    *drain_timeout_ms,
+                    *pause_mode,
+                )
             }
             RuntimeOperation::ResumeScheduling { scope, expected } => {
                 if let Some(instance_alias) = scope.instance_alias() {
@@ -914,6 +921,15 @@ impl OperationSuccess {
                 stopped,
                 self.failure_outcome,
             ),
+            // #480 PG-2c: a person's instance pause that answered before its instance was quiet,
+            // or whose stages a shutdown or a resume ended, carries why as the cause.
+            result @ RuntimeResult::SchedulingPaused { .. } => {
+                RuntimeReceipt::scheduling_paused(request, result, self.failure_outcome)
+            }
+            // #480 PG-2c fix round 3: a person's resume that ran no reconnect says so as the cause.
+            result @ RuntimeResult::SchedulingResumed { .. } => {
+                RuntimeReceipt::scheduling_resumed(request, result, self.failure_outcome)
+            }
             result => RuntimeReceipt::success(request, self.state, self.terminal, result),
         }
         .map_err(|_| receipt_error())

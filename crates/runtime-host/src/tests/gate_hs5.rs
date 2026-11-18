@@ -804,6 +804,7 @@ fn pause(host: &RuntimeHost, alias: &str, connection: u64) {
                 pause_reason: actingcommand_contract::SchedulingPauseReason::new("hs5_check")
                     .expect("pause reason"),
                 drain_timeout_ms: 1_000,
+                pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
             },
         ),
         connection,

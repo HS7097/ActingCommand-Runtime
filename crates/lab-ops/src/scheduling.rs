@@ -23,12 +23,15 @@
 //! ([`release_recording_hold`]), and each `--record` press or application operation reads whether
 //! the instance is held ([`instance_scheduling_paused`]).
 
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EventId, FactObservation, FactRecord, FactScope, InstancePauseState, OwnerEpoch,
-    RuntimeControlPlaneStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
-    SanitizationError, SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope,
+    EventId, FactObservation, FactRecord, FactScope, InstancePauseStage, InstancePauseState,
+    OwnerEpoch, PauseObstacle, RuntimeControlPlaneStatus, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeResult, SanitizationError, SchedulingPauseExpectation, SchedulingPauseMode,
+    SchedulingPauseReason, SchedulingPauseScope,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, SchedulingPauseAnswer};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -60,7 +63,8 @@ pub fn pause_scope(instance_alias: Option<String>) -> SchedulingPauseScope {
 // named, went with the provenance before a write.
 
 /// `pause`: scheduling paused on `scope` for `reason`, an instance's runs drained within
-/// `drain_timeout_ms`; the Runtime's result.
+/// `drain_timeout_ms`; the Runtime's result. #480 PG-2c: a person's pause (`stand`), as
+/// `actingctl pause` and its MCP send it.
 pub fn pause(
     client: &RuntimeClient,
     scope: SchedulingPauseScope,
@@ -68,6 +72,19 @@ pub fn pause(
     drain_timeout_ms: u64,
 ) -> Result<RuntimeResult, RuntimeClientError> {
     client.pause_scheduling(scope, reason, drain_timeout_ms)
+}
+
+/// #480 PG-2c (register §1.472; `contracts/scheduling-pause.md`, "Two modes"): the Lab's `pause`
+/// row (its command line and `ac_pause`): a person's or an agent's pause, `stand` always, with the
+/// receipt's outcome, whose cause says when the pause answered before its instance was quiet
+/// (`scheduling_pause_standing`) or a shutdown or a resume ended its stages.
+pub fn pause_standing(
+    client: &RuntimeClient,
+    scope: SchedulingPauseScope,
+    reason: SchedulingPauseReason,
+    drain_timeout_ms: u64,
+) -> Result<SchedulingPauseAnswer, RuntimeClientError> {
+    client.pause_scheduling_as(scope, reason, drain_timeout_ms, SchedulingPauseMode::Stand)
 }
 
 /// MCP's answer of a pause: `{paused, owner_epoch}`, the epoch `resume` expects back.
@@ -108,21 +125,60 @@ pub fn instance_pause_reason(
 }
 
 /// #463 S1-7: `record start`'s pause of the instance `alias` on `client` for the recording's own
-/// reason `hold`, as the `pause` row pauses it, with that row's drain
-/// ([`LAB_PAUSE_DRAIN_TIMEOUT_MS`]): the answer waits as that pause waits (a run in flight drained,
-/// or stopped at its next checkpoint after the drain; the client waits for the receipt the drain,
-/// the pause's checkpoint grace and its IO timeout). The Runtime's result.
+/// reason `hold`, with the `pause` row's drain ([`LAB_PAUSE_DRAIN_TIMEOUT_MS`]): the answer waits
+/// as that pause waits (a run in flight drained, or stopped at its next checkpoint after the
+/// drain; the client waits for the receipt the drain, the pause's checkpoint grace and its IO
+/// timeout). The Runtime's result. #480 PG-2c: a tool's hold, so `quiet_or_lift`, set here and
+/// never a parameter: the instance quiet within that time, or the pause fails and is lifted (a
+/// shutdown too), so `scheduling_pause_kept_at_shutdown` never answers it. Fix round 1 (item 9):
+/// the result with its receipt's outcome, which the hold reads ([`answered_unquiet`]).
 pub fn pause_for_recording(
     client: &RuntimeClient,
     alias: &str,
     hold: SchedulingPauseReason,
-) -> Result<RuntimeResult, RuntimeClientError> {
-    pause(
-        client,
+) -> Result<SchedulingPauseAnswer, RuntimeClientError> {
+    client.pause_scheduling_as(
         pause_scope(Some(alias.to_owned())),
         hold,
         LAB_PAUSE_DRAIN_TIMEOUT_MS,
+        SchedulingPauseMode::QuietOrLift,
     )
+}
+
+/// #480 PG-2c fix round 1 (item 9): whether a tool's hold's pause, answered Completed, did not get
+/// its instance quiet: its receipt's outcome has a cause under its success code (one of the
+/// informing causes `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`,
+/// `scheduling_pause_lifted_by_resume`, which only a person's pause, `stand`, is given). With
+/// `quiet_or_lift` a Runtime never answers so; a hold that meets it fails as its other failures of
+/// its pause do. Decided by the presence of a cause, never by its code.
+pub fn answered_unquiet(answer: &SchedulingPauseAnswer) -> bool {
+    !answer.outcome.causes().is_empty()
+}
+
+/// #480 PG-2c fix round 2 (item 3; one code, one cause): the failure of a tool's hold whose pause
+/// was answered before its instance was quiet ([`answered_unquiet`]), `None` for a quiet answer:
+/// `scheduling_hold_not_quiet`, an error that refuses the hold, whose values are what the receipt
+/// said and nothing else: `receipt_cause` the code of its cause, `pause_stage` and `in_the_way` as
+/// that cause carried them (each left out where the cause carried none this build reads).
+pub fn hold_not_quiet(answer: &SchedulingPauseAnswer) -> Option<Outcome> {
+    let cause = answer.outcome.causes().first()?.outcome();
+    let mut failure = Outcome::new(ActingctlCode::SchedulingHoldNotQuiet);
+    if let Some(code) = cause.code().registered() {
+        failure = failure.receipt_cause(code);
+    }
+    if let Some(stage) = cause
+        .value("pause_stage")
+        .and_then(|stage| serde_json::from_value::<InstancePauseStage>(stage.clone()).ok())
+    {
+        failure = failure.pause_stage(stage);
+    }
+    if let Some(in_the_way) = cause
+        .value("in_the_way")
+        .and_then(|words| serde_json::from_value::<Vec<PauseObstacle>>(words.clone()).ok())
+    {
+        failure = failure.in_the_way(in_the_way);
+    }
+    Some(failure)
 }
 
 /// #480 PG-2a: what the failure of a pause says about the pause, by the Runtime's own receipt of
@@ -134,10 +190,9 @@ pub enum FailedPause {
     /// unknown or a fixture's, `scheduling_already_paused`); every failure after that is `Failed`,
     /// a poisoned request included. The request changed nothing, and no pause of it stands.
     Refused,
-    /// The receipt is `Failed`: a stage of the pause failed, which lifts the gate it closed; but
-    /// since 0.12.72 a hand-back a shutdown interrupted while nothing but the Runtime's own work
-    /// was in the way keeps the pause (`scheduling_pause_kept_at_shutdown`), and a poisoned lift
-    /// may leave it. Whether a pause stands is not in the receipt: the status tells.
+    /// The receipt is `Failed`: a stage of the pause failed, which lifts the gate it closed (the
+    /// recording's hold is `quiet_or_lift` since #480 PG-2c, so no shutdown keeps it), but a
+    /// poisoned lift may leave it. Whether a pause stands is not in the receipt: the status tells.
     Failed,
     /// No receipt of the Runtime's (the connection lost, the wait for the receipt ended, a receipt
     /// that did not match the request): whether the pause was made is not known.

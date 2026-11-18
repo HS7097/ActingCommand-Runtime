@@ -1001,6 +1001,7 @@ fn pause(host: &RuntimeHost, alias: &str) {
         },
         pause_reason: SchedulingPauseReason::new("ord1c_member_pause").expect("pause reason"),
         drain_timeout_ms: 1_000,
+        pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
     });
     let receipt = client.send(&request);
     assert_eq!(

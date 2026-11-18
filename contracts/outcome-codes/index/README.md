@@ -22,37 +22,37 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3938 |
+| active | 3943 |
 | retired | 89 |
-| all | 4027 |
+| all | 4032 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 125 |
-| info | 214 |
+| info | 218 |
 | warning | 175 |
-| error | 3407 |
+| error | 3408 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 786 |
+| `common_causes` and `handling` both written | 791 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
-| `pending` | 3784 |
-| all active codes | 3938 |
+| `pending` | 3789 |
+| all active codes | 3943 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 206 | 201 | 40 | 8 |
+| [actingctl](actingctl.md) | 207 | 202 | 41 | 8 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
 | [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1166 | 1119 | 197 | 6 |
+| [runtime-host](runtime-host.md) | 1170 | 1123 | 201 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4027 | 3938 | 786 | 154 |
+| all | 4032 | 3943 | 791 | 154 |

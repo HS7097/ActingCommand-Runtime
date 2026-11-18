@@ -551,6 +551,7 @@ fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
             )
             .expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
     )
     .expect("pause request");
@@ -637,6 +638,7 @@ fn pause_instance(host: &RuntimeHost, instance_alias: &str, connection: u64) -> 
             )
             .expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
     )
     .expect("pause request");

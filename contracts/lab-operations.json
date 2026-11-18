@@ -499,7 +499,7 @@
         {"name": "reason", "form": "option", "type": "string", "required": false, "required_in": ["mcp"], "note": "CLI short form -r"},
         {"name": "drain", "form": "option", "type": "duration", "required": false, "default": "300s"}
       ],
-      "help": "Pauses scheduling on one instance or everywhere until resume lifts it; an instance pause drains the runs in flight there.",
+      "help": "Pauses scheduling on one instance or everywhere until resume lifts it; it stands: an instance not quiet in time answers what is still in the way.",
       "output": "the pause state",
       "writes": true,
       "irreversible": false,
@@ -509,7 +509,7 @@
       "source": ["actingctl pause", "MCP ac_pause", "acui: global pause (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the defaults of both front ends, the request and MCP's answer); requests add Status, with which MCP resolves <inst>"
+      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the defaults of both front ends, the request and MCP's answer); requests add Status, with which MCP resolves <inst>. #480 PG-2c (0.12.73): a person's or an agent's pause, pause_mode stand always (`scheduling::pause_standing`); when the receipt's outcome carries a cause (scheduling_pause_standing: the stage and what is in the way), the answer's outcome runtime_scheduling_paused carries that outcome as its cause, exit 0"
     },
     {
       "name": "resume",

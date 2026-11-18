@@ -192,6 +192,8 @@ fn pause(revision: u64) -> InstancePauseState {
         pause_reason: SchedulingPauseReason::new("operator.stop").expect("reason"),
         since_unix_ms: 10,
         stage: InstancePauseStage::Released,
+        pause_mode: None,
+        in_the_way: Vec::new(),
     }
 }
 

@@ -27,8 +27,9 @@ use actingcommand_contract::{
     RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
     RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
-    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseReason,
-    SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingPauseExpectation, SchedulingPauseMode,
+    SchedulingPauseReason, SchedulingPauseScope, TaskId, TaskOutcome, TaskPayload,
+    TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -433,6 +434,16 @@ pub struct ConfiguredSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoppedRun {
     pub stopped: actingcommand_contract::InstanceRunStop,
+    pub outcome: Outcome,
+}
+
+/// #480 PG-2c (register §1.472, `runtime-client` 12): what `pause_scheduling_as` answers: the
+/// `SchedulingPaused` result and its completed receipt's outcome, unchanged. A `stand` pause that
+/// answered before its instance was quiet carries `scheduling_pause_standing` (its stage and what
+/// is in the way) as the success code's cause, so the caller shows it without another read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulingPauseAnswer {
+    pub result: RuntimeResult,
     pub outcome: Outcome,
 }
 
@@ -1796,30 +1807,64 @@ impl RuntimeClient {
     }
 
     /// Pauses scheduling (`PauseScheduling`, Workflow #191 ps1) and returns the
-    /// `RuntimeResult::SchedulingPaused` result verbatim. An instance pause answers only once
-    /// its in-flight runs drained, so the receipt wait is `drain_timeout_ms` plus the host's
-    /// checkpoint grace (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) plus the IO margin.
+    /// `RuntimeResult::SchedulingPaused` result verbatim. An instance pause answers at the latest
+    /// once its drain and the host's checkpoint grace (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) have
+    /// passed, so the receipt wait is `drain_timeout_ms` plus that grace plus the IO margin. #480
+    /// PG-2c (`runtime-client` 12): the pause is a person's, `stand` ([`Self::pause_scheduling_as`]
+    /// sends another mode and returns the receipt's outcome too).
     pub fn pause_scheduling(
         &self,
         scope: SchedulingPauseScope,
         pause_reason: SchedulingPauseReason,
         drain_timeout_ms: u64,
     ) -> RuntimeClientResult<RuntimeResult> {
+        self.pause_scheduling_as(
+            scope,
+            pause_reason,
+            drain_timeout_ms,
+            SchedulingPauseMode::Stand,
+        )
+        .map(|answer| answer.result)
+    }
+
+    /// #480 PG-2c (register §1.472, `runtime-client` 12): pauses scheduling with `pause_mode`
+    /// (`stand` for a person's pause, `quiet_or_lift` for a tool's hold) and returns the
+    /// `RuntimeResult::SchedulingPaused` result with its receipt's outcome: the success code, with
+    /// `scheduling_pause_standing` (a `stand` pause that answered before its instance was quiet:
+    /// its stage and what is in the way), `scheduling_pause_kept_at_shutdown` or
+    /// `scheduling_pause_lifted_by_resume` as its cause when the Runtime gave one. The receipt
+    /// wait is [`Self::pause_scheduling`]'s. A Runtime of revision 11 or lower cannot decode the
+    /// request: it ends the connection without a receipt, and this call reports that.
+    pub fn pause_scheduling_as(
+        &self,
+        scope: SchedulingPauseScope,
+        pause_reason: SchedulingPauseReason,
+        drain_timeout_ms: u64,
+        pause_mode: SchedulingPauseMode,
+    ) -> RuntimeClientResult<SchedulingPauseAnswer> {
         let io_timeout = self
             .connection(ContractLocation::PauseScheduling.location())?
             .io_timeout;
         let response_timeout = pause_scheduling_response_timeout(drain_timeout_ms, io_timeout)?;
-        let result = self.execute_with_timeout(
+        let receipt = self.execute_receipt(
             ContractLocation::PauseScheduling.location(),
             RuntimeOperation::PauseScheduling {
                 scope: scope.clone(),
                 pause_reason,
                 drain_timeout_ms,
+                pause_mode,
             },
             Some(response_timeout),
         )?;
-        match &result {
-            RuntimeResult::SchedulingPaused { scope: paused, .. } if *paused == scope => Ok(result),
+        match receipt.result() {
+            Some(result @ RuntimeResult::SchedulingPaused { scope: paused, .. })
+                if *paused == scope =>
+            {
+                Ok(SchedulingPauseAnswer {
+                    result: result.clone(),
+                    outcome: receipt.outcome().clone(),
+                })
+            }
             _ => Err(self.unexpected_result(ContractLocation::PauseScheduling.location())),
         }
     }
