@@ -31,8 +31,8 @@ use crate::{
 };
 use actingcommand_contract::outcome::{Category, Outcome};
 use actingcommand_contract::{
-    LabError, LabResult, StandardPackProblem, StandardPackRegistry, StandardPackRootBytes,
-    read_standard_pack_root,
+    InterruptResult, LabError, LabResult, StandardPackProblem, StandardPackRegistry,
+    StandardPackRootBytes, read_standard_pack_root,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -1475,4 +1475,160 @@ fn upd1_r5_a_reset_that_invalidates_the_application_update_fact_is_refused() {
             "{case}, standard-pack check: {values}"
         );
     }
+}
+
+// ---- Workflow #463 INT-1 (register §1.473; contracts/package-reference.md, "Standard package
+// root"): an entry of `interrupts.json` that names no handler.
+
+// The valid root whose `notice` entry names no handler and ends the run: `then: "end_run"`, the
+// word `environment_reset` and `max_per_run` 8 (its range as before).
+fn without_handlers() -> Root {
+    valid()
+        .interrupt("handlers", json!([]))
+        .interrupt("then", json!("end_run"))
+        .interrupt("result", json!("environment_reset"))
+        .interrupt("max_per_run", json!(8))
+}
+
+// INT-1, the brief's fifth test and the members on such an entry: an entry that names no handler
+// beside `then: "end_run"` is read by the shared parser for both tools: `package bundle` lays the
+// file beside `bundle.json` byte for byte, the Runtime's reader reads the written root with the
+// entry's empty `handlers` and its word `environment_reset`, and the check of the installed root
+// passes. Refused by both, `standard_pack_root_invalid` with the problem at its pointer and no
+// `--out` written: an empty `handlers` beside `then: "resume"` or `{"run": [...]}`
+// (`packages_count` at `/interrupts/0/handlers`), `limit_cause` beside an empty `handlers`
+// (`interrupt_limit_cause_invalid` at `/interrupts/0/limit_cause`), and a `max_per_run` of 0
+// (`max_per_run_invalid`, its range as before).
+#[test]
+fn int1_an_entry_without_handlers_is_read_on_end_run_only_by_both_tools() {
+    let root = without_handlers();
+    let (_temp, request, result) = bundle(&root);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    let read = |name: &str| fs::read(request.out.join(name)).expect("written file");
+    assert_eq!(
+        read(INTERRUPTS),
+        fs::read(
+            request
+                .root_files
+                .interrupts
+                .as_ref()
+                .expect("given interrupts")
+        )
+        .expect("source interrupts"),
+        "the root file is laid byte for byte"
+    );
+    let (bundle_bytes, page_bytes, interrupt_bytes, navigation_bytes) = (
+        read("bundle.json"),
+        read(PAGES),
+        read(INTERRUPTS),
+        read(NAVIGATION),
+    );
+    let written = read_standard_pack_root(
+        StandardPackRootBytes {
+            bundle: Some(&bundle_bytes),
+            pages: Some(&page_bytes),
+            interrupts: Some(&interrupt_bytes),
+            navigation: Some(&navigation_bytes),
+            tables: false,
+            display_layout: None,
+        },
+        GAME,
+    )
+    .expect("a game root the Runtime reads")
+    .expect("a game root");
+    let interrupts = written.interrupts.expect("the interrupts");
+    let entry = &interrupts.interrupts[0];
+    assert!(entry.handlers.is_empty(), "{entry:?}");
+    assert_eq!(entry.result, Some(InterruptResult::EnvironmentReset));
+    let (_temp, game_root) = installed(&root, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+
+    let refusals = [
+        (
+            "an empty handlers beside resume",
+            valid().interrupt("handlers", json!([])),
+            StandardPackProblem::PackagesCount,
+            "/interrupts/0/handlers",
+        ),
+        (
+            "an empty handlers beside run",
+            valid()
+                .interrupt("handlers", json!([]))
+                .interrupt("then", json!({"run": [HOME_TO_SHOP]})),
+            StandardPackProblem::PackagesCount,
+            "/interrupts/0/handlers",
+        ),
+        (
+            "limit_cause beside an empty handlers",
+            without_handlers().interrupt("limit_cause", json!("environment")),
+            StandardPackProblem::InterruptLimitCauseInvalid,
+            "/interrupts/0/limit_cause",
+        ),
+        (
+            "max_per_run 0 beside an empty handlers",
+            without_handlers().interrupt("max_per_run", json!(0)),
+            StandardPackProblem::MaxPerRunInvalid,
+            "/interrupts/0/max_per_run",
+        ),
+    ];
+    for (case, refused, problem, pointer) in refusals {
+        let expected = (&json!(problem.as_str()), &json!(pointer));
+        let (_temp, request, result) = bundle(&refused);
+        let error = result.expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, package bundle: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, package bundle: {values}"
+        );
+        assert!(!request.out.exists(), "{case}: --out was written");
+
+        let (_temp, game_root) = installed(&refused, &[]);
+        let error = check(&game_root).expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, standard-pack check: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, standard-pack check: {values}"
+        );
+    }
+}
+
+// INT-1, the brief's fourth test, the tools' half: `package_bundle_interrupt_page_shadowed` is
+// unchanged. With the entry above, which names no handler, every pack of the registry that
+// declares `notice` and is not the feature package gets one warning naming it and the page, from
+// `package bundle` and from the check of the installed root alike, in registry order: the pack
+// that declares the page as its own (as a start-up or return-home package declares the screen it
+// starts from) and the former handler, which no longer handles it. Both still pass.
+#[test]
+fn int1_a_pack_declaring_a_page_without_handlers_is_warned_as_before() {
+    let root = without_handlers().with(own_notice());
+    let expected = vec![
+        (json!(CLOSE_NOTICE), json!("notice")),
+        (json!(OWN_NOTICE), json!("notice")),
+    ];
+
+    let (_temp, _request, result) = bundle(&root);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert_eq!(shadowed(&response.warnings), expected, "package bundle");
+
+    let (_temp, game_root) = installed(&root, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+    assert_eq!(shadowed(&checked.warnings), expected, "standard-pack check");
 }

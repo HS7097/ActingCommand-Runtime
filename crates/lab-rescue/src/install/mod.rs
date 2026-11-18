@@ -193,6 +193,10 @@ mod gate_463_s32;
 // scheduling.
 #[cfg(test)]
 mod gate_463_s318;
+// Test-only: Workflow #453 S5b, the composition check after a placement expects the rules digest
+// the placed root composes.
+#[cfg(test)]
+mod gate_453_s5b;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

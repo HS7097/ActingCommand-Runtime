@@ -21345,7 +21345,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A shared interrupt page whose then is end_run was handled (Workflow #373 NAV-6): the run ends after its handler, as the standard pack's data asks; the ladder configuration decides what follows a routine run.",
+      "description": "A shared interrupt page whose then is end_run was handled (Workflow #373 NAV-6): the run ends after its handler, as the standard pack's data asks; the ladder configuration decides what follows a routine run. Workflow #463 INT-1 (since 0.12.73): or such a page was met where its interrupts.json entry names no handler (handlers empty): the run ends at once with nothing pressed and no interrupt_handled record. In both the data says the page means the pack no longer fits the game, so the code is the same and accumulates as before.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21371,6 +21371,27 @@
       "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows. Workflow #469 V0: by this code's name, the failure identity takes it out of the contained_task_interrupt_ prefix that accumulates (its identity still names the standard pack's data, but it is rerun only, in every scope); no default trigger item reads its class (budget_or_permission).",
       "common_causes": "The game's network or its servers stayed unavailable (for example during a maintenance) while the run was handling the page.",
       "handling": "TBD"
+    },
+    "contained_task_environment_reset": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.73",
+      "description": "Workflow #463 INT-1 (contracts/package-reference.md, Standard package root): a shared interrupt page whose interrupts.json entry declares result environment_reset (page_id) ended the run (then end_run): after its handler, or, where the entry names no handler, at once on the frame that showed it, with nothing pressed, no handler layer and no interrupt_handled record. The page says the environment took the game out of the task (a session that ended, an account signed in elsewhere, a day that rolled over), so the screen is back where the next run's entry gate, the return-home package or the start-up package goes on. The run ends with no further input. A scheduled run's failure is rerun only: the code stands outside the contained_task_interrupt_ prefix whose failures accumulate, so it never accumulates toward a pause or a suspension of its task pair and the pair is rerun at once (R22). Its ladder class is budget_or_permission, which no default trigger item reads, so no default trigger opens a recovery ladder.",
+      "common_causes": "The game's session ended, the account was signed in on another device, or the game's day rolled over during the run, and the game showed the screen the standard pack declares for it.",
+      "handling": "None: the next run goes on from that screen as every run goes on from it. A page that keeps coming back on every run is the resource repository's to look at."
     },
     "contained_task_navigation_located": {
       "category": "info",

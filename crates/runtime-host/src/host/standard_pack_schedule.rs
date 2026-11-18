@@ -86,8 +86,11 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Read as _};
 use std::time::SystemTime;
 
-/// The composition record's schema, kept in each composed generation's directory.
-const COMPOSITION_RECORD_SCHEMA: &str = "actingcommand.standard-pack-composition.v1";
+/// The composition record's schema, kept in each composed generation's directory (Workflow #453
+/// S5b fix round 1: the contract crate's, which the rescue module's check after a placement reads
+/// the record by too).
+const COMPOSITION_RECORD_SCHEMA: &str =
+    actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_SCHEMA;
 /// RL-1c: how long the task package admission after start waits at a time for the workbench's
 /// first check before it looks at the shutdown request again. It bounds only how soon a stop ends
 /// a wait; the first check itself wakes the admission at once.
@@ -2009,6 +2012,14 @@ pub struct StandardPackSchedulePreview {
     /// The games in use whose game root is broken (listed with their problem in check-config's
     /// `standard_packs`), left out of the preview.
     pub left_out: Vec<String>,
+    /// Workflow #453 S5b (register §1.474): the composition's rules digest
+    /// ([`StandardPackComposition::rules_digest`]), the one the workbench records as its
+    /// generation's `rules_digest` and compares to decide whether a check activates a new
+    /// generation; `None` when the composition is refused. The catalog version (1 here, the
+    /// ledger head plus one in the workbench) does not enter it: the digest covers the compiled
+    /// items and the manifest, not the documents' catalog descriptor. The rescue module's check
+    /// after a placement compares it with the running Runtime's generation.
+    pub rules_digest: Option<String>,
 }
 
 /// ROUT-L RL-1b: check-config's preview of the composition for the bound instances
@@ -2029,6 +2040,7 @@ pub fn preview_standard_pack_schedule(
         unclassified: 0,
         problems: Vec::new(),
         left_out: Vec::new(),
+        rules_digest: None,
     };
     let Some(root) = root else {
         return preview;
@@ -2073,6 +2085,8 @@ pub fn preview_standard_pack_schedule(
                 .map(|game| game.unclassified.len())
                 .sum();
             preview.games = composition.games().to_vec();
+            // Workflow #453 S5b: the digest the workbench's `CompositionRecord::of` records.
+            preview.rules_digest = Some(composition.rules_digest().to_owned());
             // G-R2s fix round 1: a package of a composed game whose declaration could not be
             // read marks every task of its game, so no goal weighs any of them; check-config
             // shows each such package, with the reader's refusal as its cause.

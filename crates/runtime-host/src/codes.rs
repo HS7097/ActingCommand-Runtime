@@ -1499,14 +1499,22 @@ actingcommand_contract::outcome_codes! {
         /// Error. A shared interrupt page was seen once more than the run may handle it (keys
         /// `page_id`, `count`, `limit_count`).
         ContainedTaskInterruptLimitReached => "contained_task_interrupt_limit_reached": error / pack_logic_mismatch,
-        /// Error. A shared interrupt page whose `then` is `end_run` was handled (keys
-        /// `page_id`).
+        /// Error. A shared interrupt page whose `then` is `end_run` was handled, or (Workflow #463
+        /// INT-1) met where its entry names no handler (keys `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         /// Error. Workflow #411 B43: a shared interrupt page whose `limit_cause` is
         /// `environment` was seen once more than its `max_per_run` (keys `page_id`, `count`,
         /// `limit_count`); rerun only, it never accumulates toward a pause.
         ContainedTaskInterruptEnvironmentLimitReached => "contained_task_interrupt_environment_limit_reached": error / budget_or_permission,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #463 INT-1 (register §1.473): begin
+        /// Error. A shared interrupt page whose `interrupts.json` entry declares `result`
+        /// `environment_reset` ended the run (`then: end_run`), after its handler or, where the
+        /// entry names none, at once with nothing pressed: the environment took the game out of
+        /// the task (keys `page_id`). Named outside the prefix whose failures accumulate, so it is
+        /// rerun only; no default trigger item reads its class.
+        ContainedTaskEnvironmentReset => "contained_task_environment_reset": error / budget_or_permission,
+        // ---- Workflow #463 INT-1: end
         // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
         /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that
         /// second has passed: every cell of the column reads `null` (keys `game`, `path`,

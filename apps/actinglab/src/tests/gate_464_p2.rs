@@ -825,12 +825,13 @@ fn interrupt(entry: &Value) -> Entry {
     )
 }
 
-/// Entries whose content needs exactly `revision`, 3 to 11, 13, 14, 15 or 17: nothing for 3, else
-/// one member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the rows
-/// name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
+/// Entries whose content needs exactly `revision`, 3 to 11, 13, 14, 15, 17 or 18: nothing for 3,
+/// else one member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the
+/// rows name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
 /// `variables`, for row 15; 15, Workflow #463 KP-1 fix round 1, by an ending page of a
 /// `linear_steps` pack, for row 17; 17, Workflow #463 S2-9b, by a key step of a `linear_steps`
-/// pack, for row 18). No content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
+/// pack, for row 18; 18, Workflow #463 INT-1, by a select step's scan without an end, for row 19).
+/// No content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -882,6 +883,10 @@ fn base(revision: u64) -> Vec<Entry> {
             ),
             base_task(json!({"operations": [{"id": "back", "key": {"key": "back"}}]})),
         ],
+        18 => vec![base_task(json!({"operations": [{
+            "id": "choose",
+            "select": {"scan": {"early_stop": "upper_bound"}}
+        }]}))],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -1840,5 +1845,51 @@ fn p2_revision_18_a_select_scan_without_an_end() {
         ),
         18,
         "the same scan in a linear_steps pack"
+    );
+}
+
+// Row 19 (Workflow #463 INT-1, register §1.473; contracts/component-interfaces.md, the `package`
+// row 19): an `interrupts.json` entry that names no handler (`handlers` an empty array) needs 19
+// over entries that need 18 (a select step's scan without an end in another pack), and so does an
+// entry whose `result` is `environment_reset`, with a handler or without; the same entry with a
+// handler, or with the `result` `application_update_required`, stays at 18. Over entries that
+// need nothing, an entry with a handler is computed as before: 3, and 6 with a `result` of before.
+// So `standard-pack build` declares [19, 19] for a bundle whose `interrupts.json` holds such an
+// entry, which the `package` edge of an installer whose range ends below 19 refuses.
+#[test]
+fn p2_revision_19_an_interrupt_entry_without_handlers_or_resetting_the_environment() {
+    let ends = |handlers: Value, result: Option<&str>| {
+        let mut entry = json!({
+            "page": "notice",
+            "handlers": handlers,
+            "then": "end_run",
+            "max_per_run": 1
+        });
+        if let Some(result) = result {
+            entry["result"] = json!(result);
+        }
+        interrupt(&entry)
+    };
+    let handler = || json!(["neutral.close_notice"]);
+    assert_row(19, &[ends(json!([]), None)], &[ends(handler(), None)]);
+    assert_row(
+        19,
+        &[ends(handler(), Some("environment_reset"))],
+        &[ends(handler(), Some("application_update_required"))],
+    );
+    assert_eq!(
+        revision_of(18, &[ends(json!([]), Some("environment_reset"))]),
+        19,
+        "no handler and the word"
+    );
+    assert_eq!(
+        revision_of(3, &[ends(handler(), None)]),
+        3,
+        "an entry with a handler, as before"
+    );
+    assert_eq!(
+        revision_of(3, &[ends(handler(), Some("application_update_required"))]),
+        6,
+        "an entry with a result of before, as before"
     );
 }

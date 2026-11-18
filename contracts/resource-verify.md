@@ -393,7 +393,9 @@ pages of a `linear_steps` task, Workflow #463 K2, register §1.380, since Workfl
 register §1.385, so the build computes 15 for a bundle it builds; row 17, a `linear_steps` task's
 key step, since Workflow #463 KP-1's fix round 1, register §1.448, so it computes 17; row 18, a
 select step's scan without an end, Workflow #463 K-c, register §1.454, since Workflow #463 S2-9b,
-register §1.458, so it computes 18); and, P2's
+register §1.458, so it computes 18; row 19, an `interrupts.json` entry without handlers or with the
+`result` `environment_reset`, Workflow #463 INT-1, register §1.473, so it computes 19 for a zip
+whose `interrupts.json` holds such an entry); and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
 declares", and DB-2 declared 6 in 0.12.37), each in the file it stands in and under its condition. The files of a pack: `control.json`; a task file
@@ -446,6 +448,7 @@ as an element of its array.
 | 16 | root | `pack-catalog.json`, by its presence at the zip's root (`CATALOG_PACKAGE_REVISION`), so that an installer that knows no such root file refuses the zip at its `package` edge; `place` asks nothing of it | PC-1 fix round 1, §1.438; [pack-catalog.md](pack-catalog.md), "Interface" |
 | 17 | task | `key` under `operations` when it holds an object (a key step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (every build refuses a key in a page-graph task): where the kernel's admission finds it (`TaskOperation.key`; `TaskProgram::validate_linear`, `LinearEffect::Key`), as row 13 finds a select step | KP-1 fix round 1, §1.448; [linear-steps.md](linear-steps.md), "Key steps" |
 | 18 | task | a `scan` object under the `select` of an element of `operations` that declares no `end` (absent or `null`, as the declaration gate reads it), in a pack of any execution mode (a Runtime before 18 requires `end` in its declaration gate in every pack): a member left out, which no member row can find, so read on its own (`scan_without_end`); whether the scan declares `early_stop`, without which this build refuses it, is the gate's | K-c, §1.454; S2-9b, §1.458; [selection-graph.md](selection-graph.md), "A scan without an end" |
+| 19 | root `interrupts.json` | `handlers` under `interrupts` when it holds an empty array (an entry that names no handler), and `result` under `interrupts` when it holds `environment_reset`; an entry with handlers and a `result` of before keep row 6's revision, and a file without them its bytes | INT-1, §1.473; [package-reference.md](package-reference.md), "An entry without handlers" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

@@ -16,7 +16,8 @@
 //!   G-R1 brought it at 12; Workflow #463 V1 fix round 3, the row 14, brought version 2, the one
 //!   version the Tools read): by its presence, as the installer's `place` reads it, whatever
 //!   version it holds (a version 1 file is the check's `goal_version_retired`, not the table's);
-//!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a);
+//!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a), and an entry
+//!   without handlers or with the `result` `environment_reset`, 19 (Workflow #463 INT-1);
 //!   `pack-catalog.json`, 16 (Workflow #477 PC-1 fix round 1), by its presence. The game root's
 //!   tables need none (row 6: no member of a pack reads them).
 //! - **A pack's loading copy** (`resources/loading.json`, `resources/loading/`), 6 (Workflow #407
@@ -161,6 +162,8 @@ enum Holds {
     Text(&'static str),
     /// An object.
     Object,
+    /// Workflow #463 INT-1: an array with no element.
+    EmptyArray,
 }
 
 /// When a row's member needs its revision.
@@ -229,11 +232,11 @@ const fn when(
     }
 }
 
-/// The members of the bundle's files that the `package` rows 4 to 11, 13, 14 and 17 and the
-/// register sections they cite, and the B train's sections, put into a revision: each with its
-/// file, its place, what it holds, its condition and its revision (`contracts/resource-verify.md`,
-/// "The `package` revision", lists them with their sources).
-const ROWS: [Row; 46] = [
+/// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17 and (Workflow
+/// #463 INT-1) 19 and the register sections they cite, and the B train's sections, put into a
+/// revision: each with its file, its place, what it holds, its condition and its revision
+/// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
+const ROWS: [Row; 48] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -420,6 +423,25 @@ const ROWS: [Row; 46] = [
         condition: Condition::LinearSteps,
         revision: 17,
     },
+    // 19, Workflow #463 INT-1 (§1.473; contracts/package-reference.md, "Standard package root"):
+    // an `interrupts.json` entry that names no handler (`handlers` an empty array, which every
+    // Runtime before it refuses, `packages_count`) and the word `environment_reset` of an entry's
+    // `result` (which every Runtime before it refuses as `malformed`): either makes the whole game
+    // root `standard_pack_root_invalid` there.
+    holding(
+        INTERRUPTS,
+        "handlers",
+        Place::Under("interrupts"),
+        Holds::EmptyArray,
+        19,
+    ),
+    holding(
+        INTERRUPTS,
+        "result",
+        Place::Under("interrupts"),
+        Holds::Text("environment_reset"),
+        19,
+    ),
 ];
 
 /// What the rows read of the document they walk.
@@ -460,6 +482,7 @@ impl Row {
                 Holds::Anything => true,
                 Holds::Text(text) => member.as_str() == Some(text),
                 Holds::Object => member.is_object(),
+                Holds::EmptyArray => member.as_array().is_some_and(Vec::is_empty),
             }
             && match self.condition {
                 Condition::Always => true,

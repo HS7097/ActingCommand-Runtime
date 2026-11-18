@@ -20,7 +20,9 @@ name = "actingcommand-mcp-entry-g2"
 path = "src/main.rs"
 
 # Test helper of the process test (tests/entry_process.rs): a fake that serves a minimal MCP as
-# `actinglab-mcp.exe` and answers `--json mcp plan` as `actinglab.exe`. Never shipped. It keeps
+# `actinglab-mcp.exe` and answers `--json mcp plan` as `actinglab.exe`; #398 DB-3: as the server it
+# makes its own standard handles not inheritable, and on a call starts a lingering grandchild
+# (itself with `--linger`). Never shipped. It keeps
 # the default `test = true`: `cargo test --bins` runs its (empty) harness anyway, and CI's test
 # build table must list it.
 [[bin]]

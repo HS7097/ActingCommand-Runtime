@@ -2235,7 +2235,10 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     fn shared_interrupt_shown(
         &mut self,
         frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
-    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+    ) -> Result<
+        actingcommand_execution_kernel::SharedInterruptShown<Self::Error>,
+        ContainedTaskRunError<Self::Error>,
+    > {
         self.inner.shown_shared_interrupt(frame)
     }
 
@@ -4753,11 +4756,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     /// Workflow #463 U1, fix round 2 (rule 3): the run's shared interrupt pages recognised on
-    /// `frame`, none handled (`host/standard_pack.rs`).
+    /// `frame`, none handled (`host/standard_pack.rs`); Workflow #463 INT-1, fix round 1: or the
+    /// end of the run the one page shown gives where its entry names no handler.
     fn shared_interrupt_shown(
         &mut self,
         frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
-    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+    ) -> Result<
+        actingcommand_execution_kernel::SharedInterruptShown<Self::Error>,
+        ContainedTaskRunError<Self::Error>,
+    > {
         self.shown_shared_interrupt(frame)
     }
 

@@ -39007,6 +39007,561 @@ person sees of what is in the way in this build*: the Lab's `pause` answer, once
 cause), and the status' existing members (`stage`, `activity`, `lease_active`,
 `queued_request_count`); `actingctl` and the console see no cause.
 
+### 1.473 Slice #463 INT-1 (0.12.73): a shared interrupt page may end the run without a handler (Workflow #463; met by the channel that keeps the resource repositories on 11-18: a package made from a recording thrown back to the game's title screen in the middle of a run; the rules below are the coordinator's rulings in the work order and in its rulings after the implementer's stop before building, not the owner's words; coordinator work order `rd-1118/brief-463-int1-interrupt-end-only.md` and `rd-1118/brief-463-int1-rulings.md`, on main `d63bf016`)
+
+This section takes 1.473, the number the work order gives. It ships in 0.12.73.
+[package-reference.md](package-reference.md) ("Standard package root", "An entry without handlers",
+"`"environment_reset"`") is the contract.
+
+**Why.** A `linear_steps` run that meets a screen its recording lacks ends
+`contained_task_linear_unrecorded_screen` and suspends its task until the package changes (#463
+U1). A screen only the environment puts there (the session ended, the account was signed in
+elsewhere, the day rolled over: the game thrown back to its title screen) is no such screen, and
+the next run's entry gate or the start-up package goes on from it. A shared interrupt page could
+take it, but an entry had to name a handler, a handler must press something, and the title screen
+has nothing to press before the run ends: on 0.12.72 every form was refused offline but a handler
+that presses something that need not be pressed.
+
+**What a run that an `end_run` page ends was, checked before building** (the work order's item 2;
+the implementer stopped there, and the coordinator ruled): `contained_task_interrupt_escalated`,
+error, ladder class `pack_logic_mismatch` (the default trigger item `pack_logic` starts the ladder);
+its code is under the prefix `contained_task_interrupt_` that `failure_accumulates` takes as
+accumulating in every scope but `prepare`, so the first failure is rerun at once (R22) and the
+second with the same identity prefix on similar frames reaches the recommended
+`escalation_threshold` 2: `paused_task` (`pause_cause` `repeated_failure`) until the main package,
+a layer the identity names or the game root's data files (`g`) change. Not what a game thrown back
+to its title screen should cost.
+
+**The rule.**
+- *An entry without handlers* (INT-1-1). `parse_standard_pack_interrupts` takes an empty `handlers`
+  where `then` is `end_run`; beside `resume` or `{"run": [...]}` it stays `packages_count` at
+  `/interrupts/<i>/handlers`. The one parser serves the Runtime's reader, `package bundle` and
+  `standard-pack check` (and `place`'s reading of a zip's root) alike.
+- *Servers* (INT-1-2). The Runtime kept an entry for a run only through its handler of the run's
+  server (`prepare_run_interrupts`, `for_server(&interrupt.handlers)?`, which dropped the entry
+  for a run of another server). An entry without handlers has no server to pick it by, so
+  `RunInterrupt::handler` is an `Option` and such an entry is kept for the runs of every server of
+  the game (that has a feature package); an entry with handlers is kept as before.
+- *The handling* (INT-1-3). Where the run meets such a page (every place a shared interrupt page is
+  looked at: the entry checks' verdicts and every frame of a wait, `handle_shared_interrupt`,
+  through a navigation locate too), nothing is pressed, no handler layer runs, nothing is counted,
+  no limit is looked at and no `interrupt_handled` is recorded: the run ends at once with the code
+  of the entry's `result` (`end_run_at`, which a handler's `end_run` now ends through as well). A
+  `linear_steps` step's closing decision recognises the pages without handling them (#463 U1 fix
+  round 2, rule 3). Fix round 1: there the host's `shown_shared_interrupt` answers the kernel's
+  hook `ContainedTaskRuntime::shared_interrupt_shown` with one of three things,
+  `SharedInterruptShown` (it was a `bool`): `NotShown`; `Shown` (a page whose entry names a
+  handler, or two or more pages at once: the verdict `interrupt_shown`, as U1 made it); or, where
+  the one page recognised is an entry's that names no handler, `Ended` with the end of the run
+  `end_run_at` gives (for `application_update_required` the instance's fact recorded first, the
+  order of every other place). In the kernel `linear_closing_observation` hands that end out as
+  `ClosingObserved::RunEnded` beside its verdicts, and `linear_closing_decision` returns it as the
+  decision's error, as it returns a bookkeeping failure, so it leaves the step and the run as an
+  offer's end leaves a wait; every error of the hook itself (the feature package's admission, the
+  recognition) still becomes `check_failed`, as every other error of the decision does. So such a
+  screen is never taken for one the package never recorded, and its end is never
+  `page_confirmation_failed`. More pages on one frame stay as before (recognised there, ambiguous
+  at an offer).
+- *The new word* (INT-1-4). `result` gains `environment_reset`, with handlers or without, only
+  beside `end_run` (else `interrupt_result_invalid`, as before): the run ends with
+  `contained_task_environment_reset`, after its handler and its `interrupt_handled` where there is
+  one. A handler that fails keeps its own code, as for every entry but UPD-1's.
+- *Without the word* (INT-1-5). An entry without handlers and without `result` ends
+  `contained_task_interrupt_escalated`, `page_id`, as an entry with handlers ends today: the data
+  says the page means the standard pack no longer fits the game, and the program does the same next
+  (it accumulates, and the ladder starts by `pack_logic`), so by the catalogue's rule (another code
+  where the program does something else next) it is that code, not a cause of its own; whether a
+  handler ran is what the records hold, not another cause. `application_update_required` on an
+  entry without handlers ends with its code, the fact recorded first, as after a handler.
+- *`max_per_run` and `limit_cause`* (INT-1-6). `max_per_run` keeps its range 1 to 8; on an entry
+  without handlers it is never reached, the first meeting ending the run. `limit_cause` says what a
+  page met once more than `max_per_run` says, which never happens there, so it is refused beside an
+  empty `handlers`, `interrupt_limit_cause_invalid` at `/interrupts/<i>/limit_cause`, by the
+  precedent of the shared parser's members that cannot apply (`result` beside another `then` is
+  refused, `interrupt_result_invalid`).
+- *The warning* (INT-1-7). `package_bundle_interrupt_page_shadowed` is unchanged: a package that
+  declares the page itself keeps it as its own (`RunInterrupts::candidates`), so a start-up or
+  return-home package that declares the title screen is never ended by such an entry, and both
+  tools warn of it, a former handler too.
+
+**What the ledger holds** (the rulings' item 3), record by record. A run that a page without
+handlers ended: the run's own records up to the frame that showed the page (its recognition and
+capture records), no `entry_recovery_package_admitted`, `entry_recovery_completed` or
+`entry_recovery_failed` of `role: interrupt_handler` and no `interrupt_handled` (its
+`handler_package_label` is a required member, and no handler ran), then the failed terminal
+(`task.failed`) whose outcome is the code with `page_id`, and, scheduled, its
+`policy.execution_recorded` failure (outcome, failure identity, disposition). A run that a
+handler's `end_run` ended holds, between that frame and the terminal, the handler's
+`entry_recovery_package_admitted`, its steps' records, its `entry_recovery_completed` (each of
+`role: interrupt_handler`) and one `interrupt_handled` (`then` `end_run`, `count`). No record type,
+member or enum value is added, and no required member is made optional: a reader of ledger
+revision 9 reads everything this slice writes (an outcome code is a string of the catalog).
+
+**Codes and words.**
+
+| Word | What it says | Refuses or warns | Exit |
+|---|---|---|---|
+| `contained_task_environment_reset` | a page whose entry declares `result` `environment_reset` ended the run (after its handler, or at once without one); error, ladder class `budget_or_permission`, `page_id` | ends the run, a failure (receipt `Failed`), rerun only | 1 where a process exits by it (category `error`), as every run failure |
+| `standard_pack_problem` `interrupt_limit_cause_invalid` | an entry without handlers declares `limit_cause` | refuses the game root, a word of `standard_pack_root_invalid` (a run `Denied` in its preparation; `package bundle` and `standard-pack check` refuse) | that code's, unchanged |
+| `result` `environment_reset` | a word of the closed vocabulary of an entry's `result` (data, not an outcome's word) | neither | none |
+
+*The ladder class.* `budget_or_permission`, as `contained_task_interrupt_environment_limit_reached`
+has: no default trigger item reads it (`pack_logic` reads `pack_logic_mismatch`, `stability_burst`
+`stability_warning` and `environment_fault`, the others name codes), so no default trigger opens a
+ladder. `environment_fault` would be counted by `stability_burst` (three within 600 000 ms open a
+ladder), and `planned_stop` would take the record out of the errors view's failure grouping
+(#429 RG-STOP), which an ordinary failure is not. No class decides accumulation: the code is
+rerun only because its name stands outside the prefixes and the list `failure_accumulates` reads
+(`contained_task_navigation_`, `contained_task_interrupt_`, the main-scope list, the preparation
+prefix), the rule for "every other failure" (its `F` unique), as UPD-1's code stands outside; no
+list keyed by a code's name gains an entry. Nothing decides by a code's name: `end_run_at` builds
+the code from the word the data carries. The `standard_pack_problem` vocabulary, the escalated
+code's and `packages_count`'s descriptions change in the catalog; the index is regenerated.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The parser, the word, the vocabulary | `crates/actingcommand-contract/src/standard_pack.rs`: `parse_standard_pack_interrupts`, `InterruptResult::EnvironmentReset`, `StandardPackProblem::InterruptLimitCauseInvalid`, `StandardPackInterrupt::handlers` |
+| The run | `crates/runtime-host/src/host/standard_pack.rs`: `RunInterrupt::handler` (an `Option`), `prepare_run_interrupts`, `handle_shared_interrupt`, `end_run_at`, `shown_shared_interrupt` (fix round 1: its answer `SharedInterruptShown`); `crates/runtime-host/src/host/contained_task.rs`: the two `shared_interrupt_shown` of the run and of its layers |
+| The closing decision (fix round 1) | `crates/execution-kernel/src/contained_task.rs`: `SharedInterruptShown` (`NotShown`, `Shown`, `Ended`), `ContainedTaskRuntime::shared_interrupt_shown` (default `NotShown`), `PreparedContainedTask::shown_shared_interrupt`; `crates/execution-kernel/src/contained_task/linear.rs`: `ClosingObserved`, `linear_closing_observation`, `linear_closing_decision`; the scripted runtime's hook (`contained_task/tests/scripted.rs`) answers `Shown` or `NotShown` as it answered `true` or `false` |
+| The code | `crates/runtime-host/src/codes.rs` `HostCode::ContainedTaskEnvironmentReset`; `contracts/outcome-codes/runtime-host.json`, `catalog.json`, the regenerated index |
+| The revision | `apps/actinglab/src/resource_verify/revision.rs`: two rows of `interrupts.json` (`handlers` holding an empty array, `Holds::EmptyArray`; `result` holding `environment_reset`), 19; `distribution/windows/component-interfaces.json` `package` [3, 19] |
+| Texts | [package-reference.md](package-reference.md) (the entry's members, "An entry without handlers", "`"environment_reset"`", "Shared interrupt pages"), [README.md](README.md) ("Shared interrupt pages"), [linear-steps.md](linear-steps.md) ("A screen the package never recorded"), [policy-suspension.md](policy-suspension.md) ("Which failures accumulate"), [component-interfaces.md](component-interfaces.md) (the `package` row 19), [resource-verify.md](resource-verify.md) (row 19); [resource-declarations.md](resource-declarations.md) states no handlers' count and is not changed |
+
+**The `package` revision.** A file that holds an entry without handlers or the word is refused by
+every Runtime before this one (`packages_count`, `malformed`), the whole game root
+`standard_pack_root_invalid` at every run of the game, so it joins revision 19: this build declares
+[3, 19] (it was [3, 18]); `standard-pack build` computes 19 for a zip whose `interrupts.json` holds
+such an entry, and as before for one without (an entry with a handler: 3; with a `result` of
+before: 6). `place`: row 18's precedent (revisions 13, 15, 17 and 18): nothing checks it when a
+bundle is placed, so this build's `place` places a zip that holds such an entry and declares less
+as it declares; an installer whose range ends below 19 refuses a zip that declares 19 at its
+`package` edge. No other interface range moves: `ledger` [3, 9], `runtime-client` [3, 11],
+`actingd-config` [5, 33], `runtime-outcomes` [1, 1].
+
+**Tests** (`crates/runtime-host/src/tests/gate_463_int1.rs`, on `gate_373_nav6`'s fixtures, those
+it uses made `pub(super)` for it and otherwise unchanged; two tests appended to
+`crates/resource-tooling/src/gate_373_navt.rs`; one row test appended to
+`apps/actinglab/src/tests/gate_464_p2.rs`, whose `base` gains the entries that need 18; the host
+gate map row "#463 INT-1"; manual Runtime clocks, no wall clock).
+`int1_a_linear_run_meeting_a_page_without_handlers_in_a_wait_ends_by_its_entry`: a linear run meets
+such a page (`environment_reset`) after its tap, on the arrival's frames and first at the closing
+decision (fix round 1: on U1's frames, which `gate_373_nav6`'s
+`u1_the_recognise_only_entry_answers_shown_and_presses_counts_and_records_nothing` pins: black
+until the arrival's 100 ms on the Runtime clock have passed, so the arrival's frames and the
+decision's first frame are black and its next frame is the first to show the page):
+`contained_task_environment_reset` (error, `page_id`), neither
+`contained_task_linear_unrecorded_screen` nor `page_confirmation_failed`, after its own tap only, no
+`interrupt_handled`, no handler layer, and at the closing decision the frame that shows the page is
+taken once; scheduled under the catalog value that pauses a repeated failure (fix round 1: the
+procedure bound at the package's directory, as `gate_463_u1b` binds its source package), the same
+run is settled rerun only (recoverable, count 1, a retry scheduled) and starts no ladder.
+`int1_an_entry_with_a_handler_seen_at_the_closing_decision_stays_interrupt_shown` (fix round 1): on
+the same closing frames an entry that names its handler, under `then: resume` and under `then:
+end_run` with `environment_reset`, is `interrupt_shown` there: `page_confirmation_failed` with
+`confirmation_problem` `interrupt_shown`, one tap, the page's frame taken once, nothing handled, no
+layer. `int1_an_update_page_without_handlers_at_the_closing_decision_records_its_fact_first` (fix
+round 1): `application_update_required` on an entry without handlers, first at the closing decision:
+one publication of `health.application.update_required` true, before the failed terminal, and the
+run ends with `contained_task_application_update_required` (warning, `page_id`), one tap, nothing
+handled.
+`int1_the_page_met_at_the_entry_check_ends_the_run_before_any_input`: at a linear run's entry and a
+page-graph run's entry set, no input. `int1_a_page_graph_run_ends_by_the_entry_s_result_with_nothing_pressed`:
+`environment_reset`, no word (`contained_task_interrupt_escalated`) and
+`application_update_required` (its code, warning), `max_per_run` 8, nothing pressed or handled.
+`int1_a_package_that_declares_the_page_itself_handles_it_as_before`: its own `dismiss`, then `home`,
+success, nothing handled. `int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_once`:
+two scheduled runs on the same frame, each rerun only with its own identity, no ladder, no input;
+the next evaluation reruns the pair (`failure_retry_immediate`) with no `policy_task_paused`; the
+class and `failure_accumulates` false in every scope.
+`int1_the_word_on_an_entry_with_a_handler_ends_the_run_after_it_and_never_accumulates`: the handler's
+layer and one `interrupt_handled` (`end_run`, count 1), then the new code.
+`int1_an_empty_handlers_beside_resume_or_run_or_a_limit_cause_refuses_the_run`: the Runtime's reader
+refuses the run in preparation (`Denied`, `standard_pack_root_invalid`, `packages_count` at
+`/interrupts/0/handlers`, `interrupt_limit_cause_invalid` at `/interrupts/0/limit_cause`), no task
+record, no input. `int1_an_entry_without_handlers_is_read_on_end_run_only_by_both_tools`: `package
+bundle` lays such a file byte for byte, the Runtime's reader reads it back, the check passes; both
+refuse an empty `handlers` beside `resume` and `run`, `limit_cause` beside it and `max_per_run` 0.
+`int1_a_pack_declaring_a_page_without_handlers_is_warned_as_before`: the warning for the pack that
+declares the page and for the former handler, from both tools.
+`p2_revision_19_an_interrupt_entry_without_handlers_or_resetting_the_environment`: 19 over 18 for an
+entry without handlers or with the word; an entry with a handler or with
+`application_update_required` stays; over nothing as before (3, 6). Adapted, the requirement moving
+the shipped range: `gate_463_v1::v1_the_build_declares_package_through_revision_14` ([3, 19]),
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 2`) and `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`
+(`package` [3, 19]); their gate rows' comments and incidents name INT-1. No test leaves a gate map;
+no golden changes.
+
+**What is not changed.** An entry with handlers, in every `then`; a root without `interrupts.json`;
+what a `linear_steps` run does at a screen no page takes (U1, U1b); the bundle of a repository that
+has no entry without handlers and no `environment_reset`, byte for byte (its revision computed as
+before); the warning `package_bundle_interrupt_page_shadowed`; the ledger and its revision.
+
+**At deploy.** Nothing to configure. A resource repository adds an entry without handlers, or the
+word `environment_reset`, only for a Runtime that reads it (0.12.73 and later), and declares
+`package` [19, 19] for the bundle: a Runtime before 0.12.73 refuses the file (an empty `handlers`
+is `packages_count` at `/interrupts/<i>/handlers`, the word `malformed`), so the whole game root is
+`standard_pack_root_invalid` there and every run of that game is refused in its preparation; an
+installer whose range ends below 19 refuses such a bundle at its `package` edge.
+
+**Main merged** (`202fd8bc`, with §1.471 of #1821, #480 PG-2b): §1.468 to §1.471 and this section
+each once, in number order, §1.471 as main has it; the host gate map keeps main's rows and then
+this slice's.
+
+**Fix round 1** (the review of #1823; the coordinator's ruling, the review's way (a); work order
+`rd-1118/brief-463-int1-fix1.md`). The first round made the host return the end at the closing
+decision as an error of its recognition, and the kernel's `linear_closing_decision`, which lets only
+a bookkeeping failure through, turned it into `check_failed`: the run still ended
+`page_confirmation_failed`, which accumulates, and an `application_update_required` entry had
+recorded its fact while its end was swallowed. Now the hook's answer carries the end
+(`SharedInterruptShown::Ended`, INT-1-3 above) and the kernel lets only that end through beside the
+bookkeeping failure; everything else of the decision is as U1 made it. The first test's closing
+branch now stands on frames that show the page at the closing decision and pins it, two tests are
+added (an entry with a handler there, `interrupt_shown`; the update page without handlers there,
+the fact and then the end), the scheduled part of the first test binds its procedure at its
+package's directory, and `gate_373_nav6`'s `ALIAS` is private again (nothing used it). No code,
+word, key, record or interface revision is added or moves: the hook is the kernel's seam inside the
+workspace, not a component interface. Main merged again (`aa39f698`, #1822, #479 ACIB-1, which adds
+no register section): the apps gate map keeps main's rows and this slice's.
+
+### 1.474 Slice #453 S5b (0.12.73): the composition check after a placement expects the rules digest the placed root composes (Workflow #453; observed on production 0.12.72 by the channel that keeps the resource repositories; the rules below are the coordinator's rulings in the work order and in its rulings after the implementer stopped before building, not the owner's words; coordinator work order `rd-1118/brief-453-s5b-composition-check.md` and `rd-1118/brief-453-s5b-rulings.md`, on main `d63bf016`)
+
+This section takes 1.474 (1.471 to 1.473 are other slices'). It ships in 0.12.73.
+[install-cli.md](install-cli.md) ("The composition after a placement") is the contract, and
+[actingd-check-config.md](actingd-check-config.md) for the report's new member.
+
+**Why.** On production 0.12.72 a placement replaced a game's bundle whose `schedule.json` had
+changed only by two rules that name held packages. A rule that names a held package is not
+composed, so the catalog the Runtime composes from the new root is the catalog it had. The row
+`composition` (§1.345) waited its whole time (`waited_ms` 660 288) for a catalog other than the
+one read before the hold and failed: the operation ended `post_check_failed` with the files placed
+and its hold kept, to be released by hand, though nothing was wrong.
+
+**What the rescue module cannot have** (the implementer's finding before building; the reason of
+the rulings). The catalog's hash the Runtime reports cannot be computed beforehand: the workbench
+gives the composer the catalog version of the ledger's head plus one at its check
+(`host/standard_pack_schedule.rs`, `refresh_standard_pack_rules`); the composer writes it into the
+documents' `catalog` descriptor (`policy/src/compose.rs`, `documents`); the hash the schedule
+explanation answers is the compiled catalog's, over those documents (`policy/src/canonical.rs`,
+`catalog_hash`; `policy_host.rs` records `active.compiled.catalog_hash()`). Besides, the workbench
+composes every game in use together, the irreversible mark is read by the execution kernel's
+declaration reader (which the rescue module does not link), and the subsystems are the daemon's
+own manifest.
+
+**The rule** (the coordinator's rulings 1 to 5). With a Runtime, when the game's `schedule.json`
+changes (placed, replaced or set aside; ruling 4: the condition stays that file) and the input
+`bound` is not empty, the row compares rules digests, not catalogs.
+- *Expected.* The checks run the live build's check-config of the live configuration with
+  `--install-root <root>`, as the path without a Runtime does, for the expected digest alone: its
+  result is no row of these checks (fix round 1, below). Its preview
+  `standard_pack_schedule` gains `rules_digest`, the composition's `rules_digest()`, which is the
+  digest the workbench records as its generation's (`CompositionRecord::of`) and compares with the
+  active record's to decide whether a check stages a new generation. It is one function over one
+  input but the version: the composer's `rules_digest` serializes the compiled catalog's profiles,
+  pools, tasks and events and the procedure manifest, not the documents' descriptor that carries
+  the version, and no task, pool, profile or event carries it; the preview (catalog version 1)
+  and the workbench (ledger head plus one) read the same games in use (the configuration's
+  `policy.facts.instances`, which the workbench's `instance_identities` reads too), each root by
+  the same `read_schedule_game` with its declarations, and the same enabled subsystems of the
+  daemon's manifest.
+- *The Runtime's.* The rules digest of the generation the Runtime's latest evaluation ran under:
+  the catalog the row already reads (`ScheduleExplanation`'s `catalog_hash`) names a directory of
+  the Runtime's catalog store below the state root, `policy\catalogs\generations\<hex>`, whose
+  composition record `standard-packs.json` (`actingcommand.standard-pack-composition.v1`) holds
+  `rules_digest`. It is the Runtime's present truth, not a stale file: the hash is the Runtime's
+  answer at that read, and a generation's directory is published once under its hash and never
+  written again (`stage_composed` loads one that exists as it is; nothing deletes one). No request
+  type is added. A hash that is not `sha256:` and 64 hex digits, a generation without a record (one
+  the workbench did not compose) and a record of another schema give none, as the workbench takes
+  them; a record that cannot be read or parsed is `not_evaluated`. The rescue module reads the
+  daemon's layout (fix round 1, below).
+- *The outcomes.* `expected` is `unchanged` when the expected digest is the one of the generation
+  read before the hold (the intent's `catalog_before`), else `new`. The row passes once the
+  Runtime's digest is the expected one, reading again every 500 ms within
+  `standard_packs.check_interval_ms` plus `install.hot.idle_wait_ms`: `pass` with `catalog_hash`,
+  `catalog_before`, `expected` and `rules_digest`, with `unchanged` also
+  `schedule_changed_rules_unchanged` `true` (the file changed and the composition did not) at the
+  first read; `fail` when the wait ends first, with `catalog_hash`, `waited_ms`, `expected` and the
+  three digests `rules_digest_before`, `rules_digest_expected` and `rules_digest` (read). The work
+  order's "equal at the first read: `unchanged`" is judged against the generation read before the
+  hold, so that a composition the workbench activated before the first read is `new` and not called
+  unchanged. A check-config that gives no digest: fix round 1, below.
+- *Unchanged.* With `bound` empty, the file unchanged, without a Runtime (`not_evaluated`,
+  `runtime` `stopped`) and in a journal without `bound` (the wait for another catalog), the row is
+  as before. The operations whose checks have the row: `place`, and `op resume` and `install
+  resume` of a `pack_place` operation (the same step); the `undo` of a placement has no checks after
+  it.
+
+**The report's new member and the build before it** (ruling 2). The deploy of the build that
+carries this is planned by the kept copy of 0.12.72, whose planner runs the new build's
+check-config (the edge `next_check_config`). 0.12.72's rescue module parses that report in
+`programs::check_config_once` (`crates/lab-rescue/src/install/programs.rs` of the tag) as an
+untyped JSON value: it checks `schema_version`, decodes `outcome`, and reads only
+`report.standard_packs.games[].game` and `pack_count` and `report.policy_plan.plan` and
+`approvals`; the rest of `report` is kept untyped and the edge passes on the outcome's category
+(`plan.rs`); its `place` reads `standard_pack_schedule.problems` alone. An unknown member of
+`standard_pack_schedule` is neither refused nor read there, so the member goes there; the report's
+schema is unchanged and no range of `distribution/windows/component-interfaces.json` moves.
+
+**Codes and words.** No outcome code or key. The row's `expected` gains the word `unknown`, and
+the row the members `rules_digest`, `rules_digest_before`, `rules_digest_expected` and
+`schedule_changed_rules_unchanged`, and (fix round 1) with no digest `check_config`, `problems`
+and `failure`, and the stopped row's `composition_problems`, `composition_refused`, `collisions`
+and `collision_cause`: members of a check row's `values`, not of an outcome, so the catalogue and
+its index do not change. The contract crate gains four constants of the catalog store's layout
+(fix round 1), no type.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The preview's digest | `crates/runtime-host/src/host/standard_pack_schedule.rs`, `StandardPackSchedulePreview::rules_digest`, set by `preview_standard_pack_schedule` |
+| The row | `crates/lab-rescue/src/install/place.rs`: `check_step` (the case), `composed_row`, `undigested_row` (fix round 1: no digest), `composition_digest`, `live_check_config` (one run per check: the row `check_config` without a Runtime, the expected digest with one), `check_config_row` (from that run), `GameReport::composition_fails` and `GameReport::record_composition` (fix round 1: the stopped row's judgement of the composition's problems, one implementation for both rows), `bound_of`, `check_interval_ms` |
+| The layout (fix round 1) | `crates/actingcommand-contract/src/standard_pack_schedule.rs`: `CATALOG_STORE_PATH`, `CATALOG_GENERATIONS_DIRECTORY`, `STANDARD_PACK_COMPOSITION_RECORD_FILE`, `STANDARD_PACK_COMPOSITION_RECORD_SCHEMA`; read by `crates/runtime-host/src/policy_host.rs` (`catalog_store_root`, `GENERATIONS_DIR`, `COMPOSITION_RECORD_FILE`), `crates/runtime-host/src/host/standard_pack_schedule.rs` (`COMPOSITION_RECORD_SCHEMA`), `place.rs` (`composition_digest`) and the rescue module's fixture (`write_composed_generation`) |
+| Texts | [install-cli.md](install-cli.md) ("The composition after a placement"), [actingd-check-config.md](actingd-check-config.md) (`standard_pack_schedule`), the notes of the `place` row of `lab-operations.json`, the module texts of `place.rs`; `apps/actinglab-mcp/MANUAL.md` does not describe the row and is not changed |
+
+**Tests** (`crates/lab-rescue/src/install/gate_453_s5b.rs`, the apps gate map row "#453 S5b"; the
+fake host, its fake Runtime and fake clock; the composition records written where the Runtime's
+store keeps them; no clock read). `s5b_rules_naming_held_packages_pass_at_the_first_read`: the
+case observed, `schedule.json` gaining two rules that each name a held package and nothing else
+changing, check-config previewing the digest of the generation read before the hold: the steps
+`pause`, the one `pack_item` of `schedule.json`, `post_check`, `release_hold`; one check-config
+with `--install-root`; the rows `rerun`, `standard_pack_check` and (fix round 1: no row
+`check_config`) `composition` exactly `pass` with `expected` `unchanged`, the digest and
+`schedule_changed_rules_unchanged` `true`; three catalog reads (no wait); done, the instance
+resumed, `kept` false. `s5b_a_rule_that_enters_waits_for_the_expected_digest_not_a_third`: a rule
+naming a package no rule named, the first read on a third generation, the second on the expected
+one: `pass` with `expected` `new` and the expected digest, four reads, the package recorded as
+enabled. `s5b_a_third_composition_alone_fails_with_the_three_digests`: the Runtime stays on the
+third generation: `fail` with exactly `catalog_hash`, `expected` `new`, `rules_digest`,
+`rules_digest_before`, `rules_digest_expected` and `waited_ms` (500 or more),
+`post_check_failed` with that row alone failed, no resume. Adapted, because this slice
+deliberately changes what they compare: `gate_453_cold_place.rs`
+`s5_a_bound_instance_waits_for_a_new_composition` (its generations named as the Runtime names
+them, with composition records, and check-config previewing the second one's digest; it passes on
+that generation with the digest; fix round 1: the rows `rerun`, `standard_pack_check` and
+`composition`, as before this slice) and the scene of `gate_463_s318.rs` with a Runtime (its two
+catalogs such generations, check-config previewing the second one's digest, so its placements pass
+their checks as before; no assertion changed). The fixture gains `write_composed_generation` and
+`preview_rules_digest`. The tests of the file unchanged, of `bound` empty, of the path without a
+Runtime and of a journal without `bound` are unchanged. No test retired; no golden changes. Fix
+round 1's tests: below.
+
+**Fix round 1** (the coordinator's fix order after the independent review,
+`rd-1118/brief-453-s5b-fix1.md`; the coordinator's rulings of 11-18, not the owner's words).
+- *check-config serves the digest alone.* The first round pushed the whole row `check_config` into
+  the checks with a Runtime. That row fails on every note of check-config naming the placed game
+  (a table's column past its date by the system clock, a package's declaration that cannot be
+  read), which the running Runtime goes on with, so a placement that passed before would have ended
+  `post_check_failed` with its hold kept. With a Runtime the run now serves the row `composition`
+  alone; the rows are `rerun`, `standard_pack_check` and `composition` as before this slice. The
+  path without a Runtime keeps its row `check_config` as it was.
+- *No expected digest* (`undigested_row`). The row says why: `catalog_before`, `expected`
+  `unknown`, `rules_digest_expected` `null` and the cause, `check_config` (the code of
+  check-config's outcome) and `problems` (its preview's `standard_pack_schedule.problems` as they
+  are, `null` without a preview), or `failure` when check-config did not answer
+  (`check_config_unanswered` of the placement with the child's `pid` and the deadline's key, or its
+  cause). It fails only when the placed game is the cause: check-config's outcome names the game
+  (its value `game`), or the preview's composition is refused and its problems name the game, each
+  problem by its value `game` (`/values/game` of each member of
+  `report.standard_pack_schedule.problems`), judged by the stopped row's own `GameReport`, one
+  implementation: a problem naming the game (`composition_problems`); a problem naming no game, the
+  composition refused as a whole, which composes the placed game too (`composition_refused`; this
+  build's preview names every composed game in such a refusal, so none comes from it); a
+  `rule_id_conflict` recorded on another game, which cannot tell whether the placed bundle caused it
+  (`collisions`, `collision_cause` `not_told`). Anything else is `not_evaluated`, not a failed row,
+  as a catalog that cannot be read is: another game's `schedule.json` refused (the preview as a
+  whole then composes nothing, while the workbench falls back for that game alone and goes on), a
+  check-config refused for a reason that names another game or none, one that did not answer, a
+  configuration without `policy`. The contract no longer says "the row `check_config` says which".
+- *One digest.* A test where the composer's callers live (the runtime host, which the daemon runs)
+  pins that the preview's `rules_digest` is the digest the workbench records for the same rules, at
+  two catalog versions, and that rules naming held packages alone leave it unchanged.
+- *The layout.* The generation's path layout was written three times (the runtime host's catalog
+  store, `place.rs`, the rescue module's fixture). Both crates already depend on the contract
+  crate, which now holds it (`CATALOG_STORE_PATH`, `CATALOG_GENERATIONS_DIRECTORY`,
+  `STANDARD_PACK_COMPOSITION_RECORD_FILE`, `STANDARD_PACK_COMPOSITION_RECORD_SCHEMA`), and the
+  three read it from there; no dependency is added and the layout is byte for byte what it was. The
+  rescue module reads the daemon's layout; a rescue module of another build than the running
+  Runtime, if a layout ever moved on one side only, finds no record where it looks: no digest is
+  read and the row ends `fail` when its wait ends, or `not_evaluated` for a record it cannot read,
+  never a false `pass`.
+- *Tests.* In `gate_453_s5b.rs` (the apps gate map row "#453 S5b"):
+  `s5b_the_placed_games_schedule_refused_fails_with_the_digest_unknown` (the preview refused by the
+  placed game's own `schedule.json`, the problem also a note: `fail` at once with exactly
+  `catalog_before`, `expected` `unknown`, `rules_digest_expected` `null`, `check_config`,
+  `problems` and `composition_problems`, one catalog read, `post_check_failed`, no resume);
+  `s5b_another_games_schedule_refused_is_not_evaluated_and_releases_the_hold` (refused by another
+  game's: `not_evaluated` with exactly `catalog_before`, `expected` `unknown`,
+  `rules_digest_expected` `null`, `check_config` and `problems`, no failed row,
+  `install_command_done`, the instance resumed, `kept` false);
+  `s5b_a_check_config_that_does_not_answer_is_not_evaluated` (check-config still running at its
+  deadline: `not_evaluated` with `failure`, done, resumed);
+  `s5b_the_expected_digest_at_the_first_read_passes_as_new` (the Runtime on the generation of the
+  expected digest at the check's first read, the generation before the hold of another: `pass`
+  with `expected` `new`, three reads, done); `s5b_a_note_naming_the_placed_game_fails_nothing`
+  (that placement with check-config passing with a `standard_pack_table_column_expired` note naming
+  the placed game and its report listing that table's expired column: the same pass, no failed row,
+  done). In `crates/runtime-host/src/tests/gate_rl1b.rs` (the host gate map row "#453 S5b"):
+  `s5b_the_previews_rules_digest_is_the_one_the_workbench_records` (on that file's workbench bench,
+  game A holding two packages composed with one rule and then two at a higher catalog version: each
+  time the preview of the same root and instance equals the active generation's recorded
+  `rules_digest`, the two differing; two rules naming the held packages then added alone: the
+  preview's digest unchanged, the workbench reading the file again and activating no generation).
+  Adapted in this round, because the first round's row `check_config` with a Runtime is gone:
+  `s5b_rules_naming_held_packages_pass_at_the_first_read` and
+  `gate_453_cold_place::s5_a_bound_instance_waits_for_a_new_composition` (their row ids).
+
+**What is not changed.** What a placement writes, holds, waits for and releases; its plan and
+`schedule_changes`; the rows `rerun` and `standard_pack_check`; with a Runtime no row
+`check_config` (fix round 1), and the row `check_config` and every row of the path without a
+Runtime; the row's answer in every case that passed before but the case it now judges by digests.
+
+**Ledger and interface.** Nothing is written to the ledger and no request kind or record changes.
+check-config's report gains one member; its schema is unchanged. No interface revision moves.
+
+**At deploy.** Nothing to configure. The deploy of 0.12.73 runs from the kept copy of 0.12.72,
+whose planner reads the new build's check-config report as above, so the new member does not stop
+it; the row of that copy is the old one, and no placement is made during that window, since the
+channel that places packages stops for a deploy. After the deploy, a placement runs this row with
+the live build's check-config, which carries the digest.
+
+### 1.475 #398 DB-3 (0.12.73): a long-lived process the Lab's adb call starts holds no pipe of the Lab's caller (Workflow #398; observed on 11-18 by the interface's maintainer on the installer's handset page, the lines read in main by the coordinator; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-398-db3-handles.md`, on main `202fd8bc`)
+
+This section takes 1.475 (1.472 to 1.474 are other slices'). It ships in 0.12.73. The module
+text of `crates/host-metrics/src/standard_handles.rs` is the contract.
+
+**Why.** `actinglab devices` and `devices bind` run `adb devices -l` with `Command::output()`
+(`crates/lab-ops/src/devices.rs`, `run_adb`). Where no adb server runs, that adb client starts one,
+and the server lives on. Windows gives a child a copy of every inheritable handle of its parent,
+and the child hands them on to what it starts; the standard handles a caller gives a program are
+inheritable in it. So the adb client received the Lab's stdout, the pipe the Lab's caller reads
+the Lab's answer from, and the adb server took it from the client and kept it for its whole life:
+the caller waited for that pipe's end. The installer met exactly this: on a computer with no adb
+server running, its first listing of handsets waited its whole 30 s and threw away the answer the
+Lab had written in full, and a binding during installation could report a failure after the
+binding file was written (the interface works around it for these two calls). WD-MT (Workflow
+#421) had cured the same for actingd's log: `standard_handles::clear_own_inheritance` on its own
+stdout and stderr, once, before any child is started; only actingd called it.
+
+**The rule.**
+- *Every program of the workspace that can start a child clears its own standard handles at its
+  start*, with the one function: `clear_own_inheritance`, extended to standard input
+  (`StandardStream::Input`, its refusal's operation `process_stdin_inheritance_clear`), called for
+  stdin, stdout and stderr in that order, each whatever the others answered, by
+  `clear_all_own_inheritance` (its refusals). The call comes before any child is started and before
+  any thread that could start one (the table below says where).
+- *Standard input too.* An MCP server's and an MCP entry's stdin is its transport, the pipe its
+  client writes its requests into (and `actinglab serve --stdio`'s, the MCP server's to its
+  child). A long-lived descendant holding a copy of its read end does not delay the end of input
+  the server reads (that comes when every write end is closed), but it keeps a write into the pipe
+  from failing once the server has ended and, once the pipe's buffer is full, from returning at
+  all: a client that learns of the server's end from its write, or writes more than the buffer
+  holds, waits for that descendant. So stdin is cleared with the two others, by every program that
+  clears them (one rule for all; a stdin that is NUL or a console loses nothing by it). actingd
+  keeps its two (not changed by this slice).
+- *A refused call* is handled as actingd's start handles it: one developer line, and the program
+  goes on (actingd: the warning `host_stdio_inheritance_failed`, and the start goes on). A command
+  line goes on too: what it answers does not depend on the flag, which only keeps a handle out of a
+  long-lived descendant, and failing for it would make the command unusable for want of a
+  protection. The line is the refusal itself, `foreign_os_error` with its `operation`, `os_error`
+  and `raw_text`, at its category's level, beside the text `NOT_CLEARED_TEXT` ("this standard
+  handle stays inheritable, so a long-lived process a child starts may keep it open; the program
+  goes on"), on stderr (actingwatch's tick: its `watchdog.log`); stdout and the exit status are
+  unchanged. No code is added: `host_stdio_inheritance_failed` is actingd's own, and the refusal
+  says the whole cause.
+
+**Every program of the workspace.**
+
+| Program | Starts a child | What this slice does |
+|---|---|---|
+| `actingcommand-actingd` | yes: adb, MuMuManager, PowerShell, a vendor library's own | nothing (not to be changed): its daemon start, `discover` and `vision` already clear its stdout and stderr (WD-MT) |
+| `actinglab` | yes: adb (`devices`, `devices bind`), git (`standard-pack adopt`, `resource verify`), `actingd check-config` (`record draft`), PowerShell and WMI (the rescue module, the detached run); its device commands are the Runtime's | `clear_all_own_inheritance` at the top of `main`, right after the completion scripts' callback, which starts nothing and must write nothing on stderr |
+| `actinglab-mcp` | yes: `actinglab serve --stdio --front mcp` children; in its own process adb (`devices`) and the rescue module's PowerShell and detached run | at the top of `main` |
+| `actingctl` | yes: adb (`devices`), `actingd suspended` (`diagnose`), actinglab (`mcp-serve`'s Lab tools), PowerShell, a System32 tool (the watchdog's task), the Runtime's start through WMI | at the top of `main`, before `agent-channel`, whose hook's stdout is a session's |
+| `actingwatch` | yes: the Runtime (`CreateProcess` or WMI), PowerShell, a System32 tool | at the start of the task's tick (a refusal in `watchdog.log`) and of a subcommand, after it attached to its parent's console |
+| `actingcommand-mcp-entry`, `actingcommand-mcp-entry-g2` | yes: the server child and the plan child | at the top of `main` |
+| `actingledger`, `acib`, `vision-provider-check` (the provider is a library in its own process), `selection-eval`, `outcome-guard` | no | nothing |
+| the test helpers `actinglab-mcp-test-child`, `actingcommand-mcp-entry-fake-child` (never shipped) | no | nothing |
+| the test helper `actingcommand-mcp-entry-g2-fake-child` (never shipped) | its lingering grandchild, for the test below | clears as the server it stands for, before it serves |
+
+**A child given the program's own handles keeps working** (the module text: "A handle a child is
+explicitly given is duplicated for it by its starter"). Rust's `Command` gives a child an
+inheritable handle of its own making for each standard handle: a pipe or NUL it opens for that
+start, a duplicate of a file it is given, or with `Stdio::inherit()` (the default of `spawn` and
+`status`) a duplicate of this process's own handle, made with inheritance whatever this process's
+flag says; the flag cleared here is never read for it.
+
+| Child | Its standard handles, from the code | Why it is not broken |
+|---|---|---|
+| the MCP server's `serve` child (`apps/actinglab-mcp/src/children.rs`, `Child::start`) | stdin, stdout and stderr `Stdio::piped()` | std makes each pipe for that start, the child's end inheritable for it under std's own spawn lock; the server's own handles are not among them |
+| an entry's server child (`apps/mcp-entry*/src/main.rs`, `RealHost::spawn`) | stdin and stdout `Stdio::piped()`, stderr `Stdio::inherit()` | the pipes as above; the stderr is a new inheritable duplicate of the entry's, so the server's developer lines still reach the client's stderr (and the server, which clears its own, keeps it from its own children) |
+| an entry's plan child (`run_plan`) | stdin `Stdio::null()`, stdout and stderr piped | NUL opened and pipes made for it |
+| the installer's detached run with its log file (`crates/lab-rescue/src/install/host.rs`, `detach_with_wmi`) | none of the caller's: WMI `Win32_Process.Create` starts `cmd /d /s /c "… 1>>"<log>" 2>&1"`, whose `cmd` opens the log itself; the PowerShell that asks WMI (`crates/watchdog/src/powershell.rs`) has stdin null, stdout and stderr piped | a process WMI creates never received a handle of its caller; the PowerShell's are std's own |
+| the Runtime the watchdog's tick starts (`crates/watchdog/src/start.rs`, `spawn_breakaway`) | stdin null, stdout and stderr the log file | std duplicates the file handle for it |
+| a recording's and a trial's processes | their presses, frames and runs are the Runtime's, asked for by the Lab (the device crate's adb children run in actingd: `maatouch`, `minitouch` with three pipes, `link_watch` with null, a pipe, null, an adb command, `run_raw_with_boundary`, with stdout and stderr pipes and stdin by default); the Lab's own for a recording is `record draft`'s `actingd check-config` (`lab-ops` `child::run_to_end`: null, a pipe, a pipe) | pipes and NUL made for the child, and in actingd its own handles, which its start clears (WD-MT) |
+| adb for `devices` (`run_adb`, `.output()`) | stdin null, stdout and stderr pipes std makes, which `output()` reads to their end | std's own; the adb client now receives those three and nothing the Lab's caller gave the Lab, so the adb server it starts has nothing of the caller's to keep |
+
+**What a caller of the Lab sees.** Before: on a computer where no adb server ran, `actinglab
+devices` (and `devices bind`) wrote its answer and ended, but the pipe its caller read its stdout
+from stayed open while the adb server it had started ran, so a caller that reads to the end of
+the output waited until its own deadline. After: that pipe ends when actinglab ends. Nothing else
+changes: the same answer, the same exit status, nothing new on stderr. The same holds for every
+program of the table and its callers: an MCP server's and an entry's client, a hook's session.
+
+**Left as it is** (read from the code). A child given this process's own handle by
+`Stdio::inherit()` holds that duplicate as its own standard handle, and a long-lived process it
+starts may take it from it: that is the child's to clear. Every program of the workspace now
+clears its own at its start (an entry's server child clears the stderr the entry gives it); a
+program that is not ours does not. The device crate's adb command (`run_raw_with_boundary`) is
+started with stdin by default, so the adb client of a program that runs it holds a duplicate of
+that program's stdin (actingd's is NUL when the watchdog or WMI starts it), which an adb server
+that client starts may keep; what adb is called with is not changed in this slice.
+
+**Codes and words.** One location, `process_stdin_inheritance_clear` (host-metrics, since 0.12.73):
+the operation of a refused clearing of stdin. No code is added. The descriptions of
+`process_stdout_inheritance_clear` and `process_stderr_inheritance_clear` say they are now made at
+the other programs' start too. The outcome code index is regenerated (its count of locations).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The one function, extended | `crates/host-metrics/src/standard_handles.rs` (`StandardStream::Input`, `ALL_STREAMS`, `clear_all_own_inheritance`, `NOT_CLEARED_TEXT`, the module text), `crates/host-metrics/src/codes.rs` (`ProcessStdinInheritanceClear`) |
+| The calls | `main` of `apps/actinglab`, `apps/actinglab-mcp`, `apps/actingctl`, `apps/mcp-entry` and `apps/mcp-entry-g2`; `apps/actingwatch` (`main`, `tick_in_process`); `actingcommand-host-metrics` is now a dependency of actinglab, actinglab-mcp and actingctl |
+| actingd | its unit test's fake answers the new variant (one match arm); its start and its two cleared handles are as they were |
+| Texts | the module text; `contracts/outcome-codes/host-metrics.json` and the index |
+
+**Tests** (`apps/mcp-entry-g2/tests/entry_process.rs`, the process test of the entry's second
+generation, which the apps job runs on its Windows runner; apps gate map row "#398 DB-3"; Windows
+only; no clock read, the waits are the channel's, bounded by the file's `WAIT`):
+`db3_the_entrys_output_ends_with_the_entry_while_a_grandchild_lives`: the entry, run as a client
+runs it with its stdin and stdout through pipes, starts its server (the in-tree fake as
+`actinglab-mcp.exe`); a call makes the server start a grandchild (the fake, `--linger <file>`)
+with null standard handles, which lingers until the test writes the file, its folder is gone or
+120 s have passed; the client closes its input; the entry exits 0, the reader of its stdout then
+sees the pipe's end within the wait, and the grandchild still runs (`probe_process`). Before this
+slice the entry's stdout was inheritable, the server and then the grandchild received a copy, and
+the reader saw no end until the grandchild ended, past the wait. The fake
+(`apps/mcp-entry-g2/src/fake_child.rs`) gained its `--linger` mode, the call's `linger {program,
+release}` and, as the server it stands for, the clearing before it serves. The runner holds the
+grandchild alive across the assertion as it holds the test's other processes; nothing of it is
+left in the temporary root (it runs from where cargo built the fake). No existing test's assertion
+changed; none retired; no golden changes.
+
+**What is not changed.** What any command answers (stdout and the exit status; stderr gains a
+line only when a clearing is refused); what adb is called with; actingd; the salt of `devices
+--key-salt-env`, which still reaches adb's environment and its server's (judged negligible by the
+interface's reviewers in the work order).
+
+**Ledger and interface.** Nothing: no record, request, receipt, configuration key or interface
+revision changes, and no code is added.
+
+**At deploy.** Nothing to do. A running MCP server or entry of the build before keeps its handles
+until it is started again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
