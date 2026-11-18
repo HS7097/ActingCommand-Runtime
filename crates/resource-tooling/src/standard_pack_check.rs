@@ -280,6 +280,19 @@ impl RootFileInputs {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Workflow #463 S2b-1 (a test seam, in test builds only): how many root checks
+    /// ([`check_standard_pack_root_with_catalog`], which every root check runs) this thread ran.
+    static ROOT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Workflow #463 S2b-1 (a test seam): how many root checks this thread ran so far.
+#[cfg(test)]
+pub(crate) fn root_checks_run() -> usize {
+    ROOT_CHECKS.with(std::cell::Cell::get)
+}
+
 /// `actinglab standard-pack check --root <game root>` (module doc): the game is the root's
 /// directory name, its packages are the directories its `bundle.json` lists. Reads only.
 pub fn check_standard_pack_root(
@@ -294,6 +307,8 @@ pub fn check_standard_pack_root(
 pub(crate) fn check_standard_pack_root_with_catalog(
     request: StandardPackCheckRequest,
 ) -> LabResult<(StandardPackCheckResponse, Option<CompiledCatalog>)> {
+    #[cfg(test)]
+    ROOT_CHECKS.with(|count| count.set(count.get() + 1));
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     let metadata = fs::metadata(&root).map_err(|error| unreadable(&root, &error))?;
