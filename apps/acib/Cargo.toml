@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 # Workflow #479 ACIB-0: `acib`, the ActingCommand iOS Bridge (in Chinese 「iOS 调试桥」), a program of
-# its own that the Runtime will speak to as a separate process, as it speaks to adb. This first
-# version only reads: the devices usbmuxd lists, a device's lockdown values, the remote services
-# of the iOS 17.4 tunnel, what the image mounter answers about mounted images, and whether a
-# user application whose bundle identifier holds a given text is installed. Nothing of the
-# workspace depends on it, and it depends on no crate of the workspace.
+# its own that the Runtime will speak to as a separate process, as it speaks to adb. It only
+# reads: the devices usbmuxd lists, a device's lockdown values, the remote services of the
+# iOS 17.4 tunnel, what the image mounter answers about mounted images, whether a user
+# application whose bundle identifier holds a given text is installed, and (ACIB-1) one picture
+# of the screen. Nothing of the workspace depends on it, and it depends on no crate of the
+# workspace.
 
 [package]
 name = "actingcommand-ios-bridge"
@@ -24,9 +25,13 @@ path = "src/main.rs"
 # the fewest features this slice reads with: usbmuxd, the lockdown client (always built), the
 # CoreDeviceProxy tunnel with the library's own TCP stack (no network adapter), the RSD
 # handshake, the image mounter's queries and the installation proxy's application lookup; TLS
-# on rustls with the ring provider.
+# on rustls with the ring provider. ACIB-1: the two ways to take one picture of the screen inside
+# the tunnel, CoreDevice's screen capture service (`core_device`) and the instruments server's
+# screenshot channel (`dvt`).
 idevice = { version = "=0.1.68", default-features = false, features = [
+    "core_device",
     "core_device_proxy",
+    "dvt",
     "installation_proxy",
     "mobile_image_mounter",
     "ring",
