@@ -929,6 +929,7 @@ fn scheduling_pauses_survive_a_restart_until_resumed() {
             pause_reason: actingcommand_contract::SchedulingPauseReason::new("restart_check")
                 .expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         });
         let receipt = client.send(&request);
         assert_eq!(

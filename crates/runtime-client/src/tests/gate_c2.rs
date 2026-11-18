@@ -566,6 +566,8 @@ fn status_after_the_drop(
             pause_reason: reason.clone(),
             since_unix_ms: PAUSED_SINCE_UNIX_MS,
             stage: InstancePauseStage::Paused,
+            pause_mode: None,
+            in_the_way: Vec::new(),
         }))
         .expect("instance pause")
     };

@@ -23913,6 +23913,70 @@
       "handling": "Nothing was performed. Report it with the package and the variable's name; until it is fixed, run without the value, which reads the default."
     },
     "scheduling_pause_kept_at_shutdown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pause_stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.72",
+      "description": "A person's instance pause (PauseScheduling of one instance, pause_mode stand) had not reached stage released when the Runtime was asked to stop within its caller's time, during its drain or its hand-back of the device, whatever was in the way: pause_stage is the stage it had reached. Since 0.12.73 (#480 PG-2c; the coordinator's ruling on board #480: a pause a person asked for stands until a person lifts it) the code informs: the receipt is Completed with the result of a paused instance (SchedulingPaused with the runs drained so far) and this code as the success code's cause. The pause is not lifted: the gate stays closed until the Runtime stops, the runtime fact host.scheduling_pause still names the instance, and the next start restores the pause as every persisted pause is restored (stage released). A shutdown that finds nothing in the way of the hand-back on an instance inside the multi-Nemu gate still ends it as released, with no cause. A tool's hold (pause_mode quiet_or_lift) never answers it: a shutdown lifts it (scheduling_pause_drain_interrupted, scheduling_pause_release_interrupted). From 0.12.72 to the release before 0.12.73 it was a refusal (Failed, RuntimeUnavailable) answered only when the Runtime's own work alone was in the way (#480 PG-1 fix rounds 1 to 3, contracts/scheduling-pause.md \"Instance pause: three stages\"). No ledger event of its own: this code is in the request's receipt only.",
+      "common_causes": "The Runtime was stopped or restarted (a person's stop, a deploy, the watchdog) while a person's pause of an instance still waited for something in the way: a run to end, a lease, the Runtime's own emulator start or ladder, an owed reset, or the session close of an instance outside the multi-Nemu gate.",
+      "handling": "Nothing is to be undone: the instance is paused and stays paused after the next start (actingctl status shows it). Resume it when the instance may run again."
+    },
+    "scheduling_pause_standing": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pause_stage": "required",
+        "in_the_way": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.73",
+      "description": "A person's instance pause (PauseScheduling of one instance, pause_mode stand) answered at the end of its caller's time, its drain timeout and the checkpoint grace, before its instance was quiet and its device handed back (#480 PG-2c, contracts/scheduling-pause.md \"Two modes\"; the coordinator's ruling on board #480: a pause a person asked for stands until a person lifts it). pause_stage is the stage it had reached (draining or paused) and in_the_way what was still in the way then (pause_obstacle). The receipt is Completed with the result of a paused instance (SchedulingPaused with the runs drained so far) and this code as the success code's cause. The gate is closed and stays closed; the Runtime never lifts the pause. The host carries the rest of the stages on by itself, in memory: runs still in flight were asked to stop at their next checkpoint and are waited for, then the device is handed back once nothing uses it, and the stage becomes released; a refused session close outside the multi-Nemu gate is tried again, an unconfirmed one (close_unconfirmed) is not. It stops when the stage is released, when a person resumes the instance, or when the Runtime stops (the pause is then kept and restored at the next start). Whatever is in the way, one code: the consequence is the same.",
+      "common_causes": "A run on the instance that did not reach its next checkpoint within the grace, a client's or a person's lease or queued claim, the Runtime's own emulator start or ladder that still held the instance, a reset a client owed, or a refused session close.",
+      "handling": "Nothing is to be done: the pause stands. actingctl status shows the stage; it becomes released by itself once nothing is in the way. Resume the instance to lift it at any stage."
+    },
+    "scheduling_pause_lifted_by_resume": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pause_stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.73",
+      "description": "A person's instance pause (pause_mode stand) was still running its stages within its caller's time when a resume of the instance lifted it, which a stand pause accepts in every stage (#480 PG-2c, contracts/scheduling-pause.md \"Resume\"): pause_stage is the stage it had reached. The receipt is Completed with the result of the stages it ran (SchedulingPaused with the runs drained so far) and this code as the success code's cause; nothing more is done for it, and the instance is not paused any more.",
+      "common_causes": "A person resumed the instance while its pause still drained or handed the device back.",
+      "handling": "Nothing is to be done. Pause the instance again if it should not run."
+    },
+    "scheduling_pause_carry_on_spawn_failed": {
       "category": "error",
       "ladder_class": "none",
       "owner": "runtime-host",
@@ -23927,10 +23991,10 @@
       },
       "review": "pending",
       "status": "active",
-      "since": "0.12.72",
-      "description": "An instance pause (PauseScheduling of one instance) did not reach stage released because the Runtime was asked to stop during the pause's hand-back of the device (stage c), and what was in the way at that moment, read again then, was no one's work but the Runtime's own: the Runtime's own automatic emulator start alone (the autostart claim, that is the configured start at daemon start, the emulator watch's restart or recognition, or IDLE-1's wake, held the instance, and no owed reset and no policy run was waited for), or, since fix round 3, nothing any more on an instance outside the multi-Nemu gate, whose device session the hand-back would still have closed (#480 PG-1 fix rounds 1 to 3, contracts/scheduling-pause.md \"Instance pause: three stages\"). The receipt is Failed (RuntimeUnavailable), but the pause is not lifted: the gate stays closed until the Runtime stops, the runtime fact host.scheduling_pause still names the instance, and the next start restores the pause as every persisted pause is restored (stage released). A shutdown that finds nothing in the way on an instance inside the multi-Nemu gate ends the hand-back as released and the pause answers success; one that finds anything else in the way (a person's or a client's work, an operator's entry, an owed reset) is scheduling_pause_release_interrupted, which lifts the pause. A failed pause writes no ledger event of its own: this code is in the request's receipt only.",
-      "common_causes": "The Runtime was stopped or restarted (a person's stop, a deploy, the watchdog) while a person's pause of an instance waited for an emulator start the Runtime had begun by itself on that instance, or once that start had ended, before the pause had closed the session of an instance outside the multi-Nemu gate.",
-      "handling": "Nothing is to be undone: the instance is paused and stays paused after the next start (actingctl status shows it). Resume it when the instance may run again."
+      "since": "0.12.73",
+      "description": "The thread that carries the rest of a standing instance pause's stages on after its request answered (#480 PG-2c, contracts/scheduling-pause.md \"Two modes\") could not be started. The pause is not lifted, but nothing would bring it to released: the failure is fatal and stops the Runtime; the next start restores the pause (stage released).",
+      "common_causes": "The operating system refused a new thread (resources exhausted).",
+      "handling": "Restart the Runtime; the pause is restored. Check the host's resources if it repeats."
     }
   },
   "locations": {

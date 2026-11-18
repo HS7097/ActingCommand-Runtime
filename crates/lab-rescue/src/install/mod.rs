@@ -156,6 +156,9 @@ mod gate_451_place_pkg;
 // keeps the CLI's envelope.
 #[cfg(test)]
 mod gate_434_lab6s2b1;
+// Test-only: #480 PG-2c, every pause of the rescue module's hold is a tool's hold, `quiet_or_lift`.
+#[cfg(test)]
+mod gate_480_pg2c;
 // Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the
 // bundle's game, and while the Runtime is stopped.
 #[cfg(test)]

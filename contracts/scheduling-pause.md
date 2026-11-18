@@ -11,8 +11,9 @@ and an instance resume reconnects the device at once through the connection prep
 ## Operations and origin gate
 
 ```text
-PauseScheduling  { scope, pause_reason, drain_timeout_ms }
+PauseScheduling  { scope, pause_reason, drain_timeout_ms, pause_mode? }
 ResumeScheduling { scope, expected? }
+pause_mode = "stand" | "quiet_or_lift"          (absent: "stand"; #480 PG-2c, runtime-client 12)
 scope = { "kind": "global" } | { "kind": "instance", "instance_alias": "<alias>" }
 expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
 ```
@@ -31,6 +32,13 @@ expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
 - An instance scope names a registered physical instance (`require_physical_instance_alias`):
   a fixture instance is `fixture_execution_scope_forbidden`, an unknown alias
   `instance_unknown`; this holds for pause and resume alike.
+- `pause_mode` (#480 PG-2c, since 0.12.73; `SchedulingPauseMode`, a closed pair): what an instance
+  pause does when something is still in the way at the end of its caller's time ("Two modes"
+  below). Absent, it is `stand`, so a client of `runtime-client` 11 or lower sends a person's
+  pause; every client of 12 writes it. A word outside the pair fails the frame's decode, and a
+  Runtime of revision 11 or lower cannot decode a request that names the member (the operation
+  denies unknown members): it ends the connection without a receipt. The global pause has no
+  stages, so the mode changes nothing for it.
 
 ## The dispatch gate
 
@@ -88,7 +96,9 @@ start's startup package, whose claim
 waits queued as a gated entry and runs after the resume. An instance pause whose hand-back (step
 (c)) meets such a start holding the instance's key waits for it, since 0.12.72 (#480 PG-1) beyond
 the grace with no bound of the pause's own, and is never lifted because of it ("Instance pause:
-three stages", (c)). WATCH-P (since 0.12.32,
+three stages", (c)); since 0.12.73 (#480 PG-2c, "Two modes") so does a person's pause (`stand`),
+its request answering at the end of its caller's time and the host carrying the wait on, while a
+tool's hold (`quiet_or_lift`) fails at the grace as before 0.12.72. WATCH-P (since 0.12.32,
 Alice's ruling 112, which replaces ruling 35 here for the watch): the emulator watch requests no
 such claim, neither a restart nor a recognition, for an instance its own pause holds in any stage;
 it only reads and records the emulator's status, records the skip once per pause revision
@@ -184,11 +194,98 @@ until a person or a client starts it, as before this slice.
 `SchedulingPaused { scope, revision, drained: absent }`. It closes no device session and
 touches no in-flight run.
 
+## Two modes
+
+#480 PG-2c (since 0.12.73; register §1.472; the coordinator's reading of the owner's words on
+board #480: a pause a person asked for closes the gate at once and stands until a person lifts
+it; the Runtime never lifts it by itself, not for a timeout, not for something in the way, not at
+a shutdown, not for an error of its own). An instance pause carries the mode its request named.
+The mode lives in the Runtime's memory only: the persisted row (`host.scheduling_pause`) is as
+before, and a restored pause (stage `released`, where the mode changes nothing) has none.
+
+- **`stand`** (a person's or an agent's pause: the console, `actingctl pause` and its MCP, the
+  Lab's `pause` row and `ac_pause`; the absent member). The gate closes at once and the stages run
+  as below. Nothing in the way fails it, and nothing lifts it but a person's resume, accepted in
+  every stage ("Resume"):
+  - another party's run, lease or queued entry, an owed reset, the Runtime's own automatic emulator
+    start or ladder, a host package past its checkpoint: each is waited for, a client's or an
+    operator's entry queued meanwhile included (`TransferNotSafe` no longer fails it);
+  - **the end of the caller's time** (the drain timeout plus `30_000` ms; on its request's thread
+    also while something, a Start through its readiness wait, holds the instance's admission
+    guard): the request answers **Completed** with `SchedulingPaused { scope, revision, drained }`
+    (the runs counted so far) and `scheduling_pause_standing` (info, exit 0) as the success code's
+    cause, its members `pause_stage` (`draining` or `paused`) and `in_the_way` (the closed list
+    `pause_obstacle`, each word once: `contained_run`, `policy_run`, `lease`, `automatic_start`,
+    `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`), read
+    from the host's state at that moment. One code whatever is in the way: the consequence is the
+    same. A thread of the host then carries the rest of the stages on, in memory only (no state
+    file, no ledger record): runs still in flight were asked to stop at their next checkpoint and
+    are waited for with no bound; the stage becomes `paused`; the hand-back waits for everything in
+    the way with no bound and becomes `released` once nothing uses the device (outside the
+    multi-Nemu gate, after its session close). It ends at `released`, at a person's resume, or at
+    the Runtime's shutdown, which joins it after the connections and keeps the pause (restored at
+    the next start as stage `released`);
+  - outside the multi-Nemu gate a refused close lease (another member's entry ahead, the takeover
+    cooldown of `lease_cooldown`, a holder) keeps the pause in stage `paused` and is tried again at
+    the next check, every `20` ms (`close_refused`); a close that could not be confirmed fenced the
+    instance (Workflow #403) and is not tried again: the pause stays `paused` with
+    `close_unconfirmed` until a person's resume, which reconnects the fenced instance as before;
+  - **a shutdown** while the pause is not yet `released`, within its caller's time: the request
+    answers **Completed** with `scheduling_pause_kept_at_shutdown` (info, exit 0; `pause_stage`)
+    as the cause, whatever is in the way; the gate stays closed until the Runtime stops, the
+    persisted row still names the instance, and the next start restores it. One that finds nothing
+    in the way of the hand-back of an instance inside the multi-Nemu gate ends it as `released`,
+    with no cause (PG-1 fix round 3);
+  - **a person's resume** while its own request still runs its stages: the request answers
+    Completed with `scheduling_pause_lifted_by_resume` (info; `pause_stage`) as the cause;
+  - **a fatal error of a stage** (a poisoned lock, a latched condition): the request answers that
+    failure, as the door contains it (the Runtime latches, or the instance is fenced), and lifts
+    nothing: the gate stays closed and the persisted row still names the instance, so the next start
+    restores it; there is no stage to carry on, and on a Runtime that latched nothing does.
+- **`quiet_or_lift`** (a tool's hold: the rescue module's holds before a deploy, a rollback, a
+  `down`, a placement and an instance's addition, and the recording's hold; set in code, never a
+  parameter): the instance quiet within the caller's time, or nothing, as before 0.12.72, for every
+  obstacle, the Runtime's own included: anything in the way past the grace fails it
+  (`scheduling_pause_release_busy`, `scheduling_pause_drain_incomplete`), a refusing queued entry
+  at once (`lease_transfer_not_safe`), a refused or an unconfirmed close too, and a shutdown during
+  the drain or the hand-back (`scheduling_pause_drain_interrupted`,
+  `scheduling_pause_release_interrupted`); each failure lifts it ("If a stage fails" below). The
+  waits with no bound of the pause's own that #480 PG-1 (the automatic start) and PG-2b (the
+  recovery ladder) gave every requester are a `stand` pause's since 0.12.73, and
+  `scheduling_pause_kept_at_shutdown` never answers a tool's hold. What a tool's hold does not wait
+  for stays as before for both modes: the instance's own queued autostart claim refuses nothing
+  (`AutostartEndsAtGrant`), and outside the multi-Nemu gate the close lease passes the entries the
+  pause holds back (PG-2b).
+
+**The commit mark** (#480 PG-2c, PG-1's leftover). The pause takes no admission guard (that would
+keep its gate open until a Start ends, the Start holding the guard through its readiness wait).
+Instead an automatic start's last question, with the instance's admission guard in hand, just
+before the provider's Start (`drive_configured_control`) or the recognition's bind
+(`prepare_recognized_instance`), and an in-memory mark "this automatic start is committed" are one
+step under the pause table's lock, under which a pause also records its row. A pause recorded
+before that step stops the start there (PG-1); one recorded after it lists `automatic_start` in its
+way, truthfully, and the start that had begun is finished as before. The mark ends when the drive
+returns.
+
+**What is answered when**, an instance pause:
+
+| Case | `stand` | `quiet_or_lift` |
+|---|---|---|
+| `released` within the caller's time | Completed, no cause | Completed, no cause |
+| something in the way at the end of the caller's time | Completed, `scheduling_pause_standing`; carried on | Failed, its code; lifted |
+| a refusing queued entry | waited for (as above) | Failed, `lease_transfer_not_safe`; lifted |
+| a shutdown before `released` | Completed, `scheduling_pause_kept_at_shutdown`; kept | Failed, `..._drain_interrupted` or `..._release_interrupted`; lifted |
+| a person's resume meanwhile | Completed, `scheduling_pause_lifted_by_resume` | refused (`scheduling_pause_draining`, `scheduling_pause_releasing`) |
+| a fatal error of a stage | the failure; nothing lifted | the failure; lifted |
+
 ## Instance pause: three stages
 
 `Status` shows the stage of an instance pause: `draining` during (a) and (b), `paused` once (b)
 is done while (c) runs, `released` once (c) is done. The request answers after (c); a caller whose
-own wait ends first finds the pause standing (the end of this section).
+own wait ends first finds the pause standing (the end of this section). #480 PG-2c (since 0.12.73;
+"Two modes" above): a `stand` pause's request answers at the end of its caller's time at the
+latest, and what is said below of a wait past the grace, of a shutdown and of a failure that lifts
+the pause holds as written for a `quiet_or_lift` pause; for a `stand` pause "Two modes" decides.
 
 1. **(a) Stop dispatch.** The instance's gate closes at once; `Status` shows its pause with
    `stage: draining`.
@@ -258,10 +355,12 @@ own wait ends first finds the pause standing (the end of this section).
    only until the grace, like a client's: past it the pause failed with
    `scheduling_pause_release_busy` and was lifted, and the ladder's next holding check then passed
    and it climbed on. A ladder's claim still queued is a routine entry the pause holds back: it
-   refuses nothing and is not waited for. This holds for every requester of an instance pause, a
-   person's (the console, `actingctl`, the Lab's `pause` and MCP) and a tool's hold (a rescue
-   operation's, the recording's) alike: a tool's hold waits for the ladder as, since 0.12.72, it
-   waits for the automatic start. How long, by the code's own bounds (since the slice's fix round
+   refuses nothing and is not waited for. In 0.12.72 and PG-2b this held for every requester of an
+   instance pause, a person's (the console, `actingctl`, the Lab's `pause` and MCP) and a tool's
+   hold (a rescue operation's, the recording's) alike; since #480 PG-2c (0.12.73, "Two modes") the
+   wait past the grace is a `stand` pause's alone (and covers everything in the way), and a tool's
+   hold (`quiet_or_lift`) fails at the grace for the automatic start and the ladder too, as before
+   0.12.72. How long, by the code's own bounds (since the slice's fix round
    1 in this text; the bound corrected in fix round 2): the ladder ends at its next holding check,
    so the hand-back waits for the step the ladder is in. The longest is the emulator rung's Stop,
    which holds the instance's admission guard from the holding check before it to the one before
@@ -319,7 +418,13 @@ own wait ends first finds the pause standing (the end of this section).
    that leaves a fence.
 
 If a stage fails, the request fails as a whole (`Failed` receipt) and the gate it closed is
-lifted again: no half-open pause is left behind. A drain whose stopped runs have not reached
+lifted again: no half-open pause is left behind. #480 PG-2c (since 0.12.73): so it is for a
+`quiet_or_lift` pause; a `stand` pause is never lifted by a failure, and the failures and the
+shutdown exceptions this paragraph and the next name are a tool's hold's ("Two modes"): for a
+`stand` pause a shutdown before `released` within its caller's time answers
+`scheduling_pause_kept_at_shutdown` (now Completed, information) whatever is in the way, and for a
+`quiet_or_lift` pause it answers `scheduling_pause_drain_interrupted` or
+`scheduling_pause_release_interrupted` and lifts it, whatever is in the way, as before 0.12.72. A drain whose stopped runs have not reached
 their next checkpoint `30_000` ms after the drain timeout
 (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`) fails with `scheduling_pause_drain_incomplete`
 (`ContainedTaskBusy`); a Runtime shutdown during the drain fails it with
@@ -360,13 +465,30 @@ claim, `lease_transfer_not_safe` at the hand-back's next check), by a package ru
 already begun (drained again under the pause's deadlines, which past the grace fails at once with
 `scheduling_pause_drain_incomplete`), or by a reset that is owed (`scheduling_pause_release_busy`
 past the grace). Each fails the request and lifts the pause as before; only the caller no longer
-hears of it, and the lift is the pause's record without it.
+hears of it, and the lift is the pause's record without it. #480 PG-2c (since 0.12.73): none of
+this is left. A `stand` pause's request answers at the end of its caller's time
+(`scheduling_pause_standing`), so no caller's wait ends first, and the stages the host then
+carries on lift nothing; a `quiet_or_lift` pause waits past the grace for nothing.
 
 ## Resume
 
 `ResumeScheduling { scope }` lifts the matching gate and bumps the revision of that scope. A
 global resume answers `SchedulingResumed { scope, revision, selfcheck: absent }` and
 reconnects nothing.
+
+#480 PG-2c (since 0.12.73; the coordinator's ruling 5 on board #480): **a person's pause
+(`stand`) is resumable in every stage**. In stage `draining` or `paused` on an instance that is not
+fenced, the resume lifts the gate at once, under the persist gate as every resume (its rows recorded
+first; Workflow #453 S2 fix 1's hold of an unapplied `start_paused` entry applies as below), with
+no reconnect claim (something still uses the instance) and no reconnect: it answers
+`SchedulingResumed { scope, revision, selfcheck: absent }`. What still uses the instance goes on
+(a run already asked to stop at its next checkpoint still stops there; a lease is released by its
+holder); outside the multi-Nemu gate the session the hand-back had not yet closed stays open for the
+next lease; the pause's own request, or the thread that carries its stages on, ends at its next
+check (`scheduling_pause_lifted_by_resume` on the request). A fenced instance (Workflow #403)
+resumes through the reconnect below in every stage, the resume being a person's re-proof of its
+close. A tool's hold (`quiet_or_lift`) keeps the refusals below. A pause in stage `released` is
+resumed as follows, in either mode.
 
 An instance resume (ps2) accepts a pause in stage `released` only; a resume refused for its
 stage or its expectation takes no claim. Since Workflow #369 S5 the resume then waits for its
@@ -476,8 +598,8 @@ stage changes `draining` to `paused` to `released` do not.
 |---|---|---|
 | Pause while the same scope is already paused (either stage) | `Denied`, `InvalidRequest` | `scheduling_already_paused` |
 | Resume of a scope that is not paused | `Denied`, `InvalidRequest` | `scheduling_not_paused` |
-| Resume of an instance whose pause is still draining | `Denied`, `InvalidRequest` | `scheduling_pause_draining` |
-| Resume of an instance whose pause is still handing its device back (`paused`) | `Denied`, `InvalidRequest` | `scheduling_pause_releasing` |
+| Resume of an instance whose tool's hold (`quiet_or_lift`) is still draining | `Denied`, `InvalidRequest` | `scheduling_pause_draining` |
+| Resume of an instance whose tool's hold (`quiet_or_lift`) is still handing its device back (`paused`) | `Denied`, `InvalidRequest` | `scheduling_pause_releasing` |
 | Conditional resume naming another owner epoch | `Denied`, `InvalidRequest` | `scheduling_pause_owner_epoch_mismatch` |
 | Conditional resume naming another revision of the scope | `Denied`, `InvalidRequest` | `scheduling_pause_revision_mismatch` |
 
@@ -488,6 +610,23 @@ since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` 
 `pause: { revision, pause_reason, since_unix_ms, stage: draining | paused | released }` while
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
+
+#480 PG-2c (since 0.12.73; `runtime-client` 12; the ruling 4 on board #480: the console draws from
+the status and reads no receipt's outcome): the instance's `pause` gains two members, declared with
+revision 12: `pause_mode` (`stand` or `quiet_or_lift`, absent when not answered) and `in_the_way`
+(the closed list `pause_obstacle` of "Two modes", each word once, absent when empty and always in
+stage `released`). `InstancePauseState` denies unknown members, so a reader of revision 11 or lower
+refuses a status that carries either (its client fails `runtime_receipt_decode_failed` and latches
+the connection), and the Runtime cannot tell a client's revision on a connection (request v4 and
+receipt v2 keep their schema strings; [component-interfaces.md](component-interfaces.md), the
+`runtime-client` row of revision 4). So, as Workflow #437 G1 carried `device_held` over (revision
+10, register §1.433), **no Runtime of 0.12.73 answers either member**: the status of every pause is
+the four members above, which the console pinned to v0.12.71 (revision 11) reads, and `min` stays 3.
+The release whose Runtime first answers them raises `runtime-client`'s `min` to 12; **the console
+must pin v0.12.73 or later before that release**. Until then a reader learns a standing pause's
+stage from `stage` (`draining` or `paused` while the host carries it on) and the rest from
+`activity`, `lease_active` and `queued_request_count`, and a caller of the pause from its receipt's
+`scheduling_pause_standing`.
 
 ## Relation to the player hold
 
@@ -665,4 +804,7 @@ actingctl status --state-root <state-root>
 Origin `(Cli, Cli)`. Without `--instance` the scope is global. `--reason` defaults to
 `operator` and `--drain-timeout-ms` to `60000`; both are checked against the bounds above
 before any request is sent. `pause` / `resume` print the result; `status` prints the global
-and per-instance pause states within the status.
+and per-instance pause states within the status. #480 PG-2c: `actingctl pause` and its MCP's
+`ac_pause` send a person's pause (`stand`, `RuntimeClient::pause_scheduling`); the Lab's `pause` row
+(`actinglab pause`, the Lab's `ac_pause`) sends `stand` too and answers the receipt's cause
+(`RuntimeClient::pause_scheduling_as`).

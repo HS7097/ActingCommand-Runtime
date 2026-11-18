@@ -366,6 +366,7 @@ fn gate_a_resume_reconnects_on_its_claim_granted_before_the_lift() {
         pause_reason: actingcommand_contract::SchedulingPauseReason::new("gate_check")
             .expect("pause reason"),
         drain_timeout_ms: 1_000,
+        pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
     });
     assert_eq!(client.send(&pause).state(), RuntimeReceiptState::Completed);
     let resume = client.request(RuntimeOperation::ResumeScheduling {

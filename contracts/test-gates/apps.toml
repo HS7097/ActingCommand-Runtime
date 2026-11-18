@@ -2736,3 +2736,13 @@ tests = [
     "actingcommand-ios-bridge::bin:acib::args::tests::max_matching_takes_its_limit_of_twenty_and_refuses_one_more",
 ]
 incident = ["#479 ACIB-0"]
+
+# #480 PG-2c (0.12.73; register §1.472; brief rd-1118/brief-480-pg2c-pause-stands.md; the coordinator's ruling 8 on board #480, who sends what): against the runtime client's scripted Runtime, the Lab's pause row (a person's or an agent's pause) sends pause_mode stand, and when the receipt's outcome carries a cause (scheduling_pause_standing under request_pause_scheduling_completed) its line's outcome runtime_scheduling_paused carries that outcome as its cause, exit 0; a recording's hold (pause_for_recording) sends quiet_or_lift; the rescue module's own client sends its hold's instance pause and global pause with quiet_or_lift
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_480_pg2c::pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_480_pg2c::pg2c_a_recordings_hold_sends_quiet_or_lift",
+    "actingcommand-lab-rescue::lib::install::gate_480_pg2c::pg2c_every_pause_of_the_rescue_modules_hold_is_quiet_or_lift",
+]
+incident = ["#480", "PG-2c"]

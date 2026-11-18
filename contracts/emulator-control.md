@@ -1616,7 +1616,12 @@ makes the existing key settable. #480 PG-1 (since 0.12.72) adds the token `globa
 shutdown interrupted while it waited for an automatic start alone, or (fix round 3) found nothing
 in the way any more on an instance outside the multi-Nemu gate, whose session it would still have
 closed; it keeps the pause ([scheduling-pause.md](scheduling-pause.md), "Instance pause: three
-stages").
+stages"). #480 PG-2c (since 0.12.73) makes that code informing (a person's pause kept at a
+shutdown, whatever is in the way, answers Completed with it as the cause) and adds
+`scheduling_pause_standing` (info): a person's pause that answered before its instance was quiet,
+the automatic start among what is in the way (`automatic_start`) when its claim holds the key or
+its Start was committed before the pause ([scheduling-pause.md](scheduling-pause.md), "Two
+modes", the commit mark).
 
 ## Client and CLI
 

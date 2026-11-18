@@ -563,6 +563,7 @@ fn hs2_paused_instance_switches() {
             pause_reason: actingcommand_contract::SchedulingPauseReason::new("hs2_check")
                 .expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
     );
     assert_eq!(

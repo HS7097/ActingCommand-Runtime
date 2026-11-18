@@ -99,7 +99,10 @@ pub use goals::*;
 // (`goals.rs`), declared [3, 9]. Revision 10 (Workflow #437 G1 fix round 2, since 0.12.67): the
 // status member `RuntimeInstanceStatus.device_held` (`InstanceDeviceHeld`), declared [3, 10].
 // Revision 11 (Workflow #463 S3-8, since 0.12.68): the request member
-// `ContainedTaskRequest.variables`, declared [3, 11].
+// `ContainedTaskRequest.variables`, declared [3, 11]. Revision 12 (#480 PG-2c, since 0.12.73): the
+// request member `PauseScheduling.pause_mode` (`SchedulingPauseMode`) and the status members
+// `InstancePauseState.pause_mode` and `.in_the_way` (`PauseObstacle`), which no Runtime of 0.12.73
+// answers, declared [3, 12].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -2260,6 +2263,108 @@ pub enum InstancePauseStage {
     Released,
 }
 
+/// #480 PG-2c (register §1.472): the stage is also the vocabulary `instance_pause_stage`, the
+/// value `pause_stage` of `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown` and
+/// `scheduling_pause_lifted_by_resume`.
+impl crate::outcome::VocabularyToken for InstancePauseStage {
+    const VOCABULARY: &'static str = "instance_pause_stage";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::Draining => "draining",
+            Self::Paused => "paused",
+            Self::Released => "released",
+        }
+    }
+}
+
+/// #480 PG-2c (register §1.472; `runtime-client` 12; `contracts/scheduling-pause.md`, "Two
+/// modes"): what an instance pause does when something is still in the way at the end of its
+/// caller's time. A person's pause stands: it is never lifted by the Runtime, its request answers
+/// at the end of the caller's time with what is in the way, and the host carries the rest of its
+/// stages on by itself. A tool's hold (the rescue module's, the recording's) is quiet or nothing: as
+/// before 0.12.72, anything still in the way past the grace fails it and lifts it, and a shutdown
+/// lifts it. Absent from a request, the member is `stand`. A global pause has no stages, so the
+/// mode changes nothing for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulingPauseMode {
+    /// A person's or an agent's pause (the console, `actingctl`, the Lab's `pause` and MCP).
+    #[default]
+    Stand,
+    /// A tool's hold: the rescue module's holds and the recording's hold.
+    QuietOrLift,
+}
+
+impl SchedulingPauseMode {
+    /// The mode's spelling on the wire.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stand => "stand",
+            Self::QuietOrLift => "quiet_or_lift",
+        }
+    }
+}
+
+/// #480 PG-2c (register §1.472; `runtime-client` 12): what is still in the way of an instance
+/// pause's stages, a closed list (vocabulary `pause_obstacle`, the value `in_the_way` of
+/// `scheduling_pause_standing`; the status member `InstancePauseState::in_the_way`). One word per
+/// thing a reader can tell apart; each is read from the host's own state at that moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseObstacle {
+    /// A contained run of the instance is still in flight (a client's, a policy dispatch's or a
+    /// package the host started itself); past the drain it was asked to stop at its next
+    /// checkpoint.
+    ContainedRun,
+    /// A policy run the instance's worker still holds, from its hand-off to its settlement.
+    PolicyRun,
+    /// A lease of another party holds the instance (a client's lease, a direct run, an operator's
+    /// control, a Lab operation, a self-check).
+    Lease,
+    /// The Runtime's own automatic emulator start: its claim holds the instance's key, or its Start
+    /// was committed before the pause was recorded.
+    AutomaticStart,
+    /// The Runtime's own stuck-recovery ladder holds the instance's key.
+    RecoveryLadder,
+    /// An entry queued for the instance that the pause does not hold back (a client's or an
+    /// operator's claim).
+    QueuedEntry,
+    /// A client owes the instance its reset after a run of its ended cancelled.
+    ClientReset,
+    /// Outside the multi-Nemu gate, the dedicated lease of the session close was refused (another
+    /// member's entry ahead, a takeover cooldown, a holder); the close is tried again.
+    CloseRefused,
+    /// Outside the multi-Nemu gate, the session close could not be confirmed and fenced the
+    /// instance; it is not tried again: a person's resume reconnects the instance.
+    CloseUnconfirmed,
+}
+
+impl PauseObstacle {
+    /// The word's spelling on the wire.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ContainedRun => "contained_run",
+            Self::PolicyRun => "policy_run",
+            Self::Lease => "lease",
+            Self::AutomaticStart => "automatic_start",
+            Self::RecoveryLadder => "recovery_ladder",
+            Self::QueuedEntry => "queued_entry",
+            Self::ClientReset => "client_reset",
+            Self::CloseRefused => "close_refused",
+            Self::CloseUnconfirmed => "close_unconfirmed",
+        }
+    }
+}
+
+impl crate::outcome::VocabularyToken for PauseObstacle {
+    const VOCABULARY: &'static str = "pause_obstacle";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 /// The global scheduling pause as `Status` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2282,6 +2387,13 @@ impl SchedulingPauseState {
 }
 
 /// One instance's scheduling pause as `Status` reports it.
+///
+/// #480 PG-2c (register §1.472; `runtime-client` 12; `contracts/scheduling-pause.md`, "Status"):
+/// `pause_mode` and `in_the_way` are declared with revision 12, absent when unset or empty. A
+/// reader of revision 11 or lower refuses a status that carries either (this type denies unknown
+/// members), and the Runtime cannot tell a client's revision, so, as Workflow #437 G1 did for
+/// `device_held` (register §1.433), no Runtime of 0.12.73 answers them: they are filled from the
+/// release that raises `runtime-client`'s `min` to 12, which the console must have pinned before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstancePauseState {
@@ -2289,12 +2401,29 @@ pub struct InstancePauseState {
     pub pause_reason: SchedulingPauseReason,
     pub since_unix_ms: u64,
     pub stage: InstancePauseStage,
+    /// The mode the pause was asked with; absent when not answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_mode: Option<SchedulingPauseMode>,
+    /// What is still in the way of the pause's stages, each word once; absent when nothing is (and
+    /// always in stage `released`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_the_way: Vec<PauseObstacle>,
 }
 
 impl InstancePauseState {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         validate_scheduling_pause_reason(self.pause_reason.as_str())?;
         if self.revision == 0 || self.since_unix_ms == 0 {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSchedulingPauseState,
+            ));
+        }
+        // #480 PG-2c: each word once, and nothing in the way of a pause that has handed its device
+        // back.
+        let words = self.in_the_way.iter().collect::<BTreeSet<_>>();
+        if words.len() != self.in_the_way.len()
+            || (self.stage == InstancePauseStage::Released && !self.in_the_way.is_empty())
+        {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidSchedulingPauseState,
             ));
@@ -4002,10 +4131,16 @@ pub enum RuntimeOperation {
     /// for one physical instance and then drains that instance's in-flight contained runs:
     /// they finish on their own within `drain_timeout_ms` (`1_000..=600_000`, validated for
     /// both scopes, used only by `Instance`) or are asked to stop at their next checkpoint.
+    /// #480 PG-2c (register §1.472, `runtime-client` 12): `pause_mode` says what an instance pause
+    /// does when something is still in the way at the end of its caller's time
+    /// ([`SchedulingPauseMode`]); absent, it is `stand`. A Runtime of revision 11 or lower cannot
+    /// decode a request that carries it (the operation denies unknown members).
     PauseScheduling {
         scope: SchedulingPauseScope,
         pause_reason: SchedulingPauseReason,
         drain_timeout_ms: u64,
+        #[serde(default)]
+        pause_mode: SchedulingPauseMode,
     },
     /// Lifts the matching scheduling pause; any client envelope may send it, as
     /// `PauseScheduling` (Workflow #434 LAB-6S1b deleted their origin gate). With
@@ -4524,6 +4659,7 @@ impl RuntimeOperation {
                 scope,
                 pause_reason,
                 drain_timeout_ms,
+                ..
             } => {
                 scope.validate()?;
                 validate_scheduling_pause_reason(pause_reason.as_str())?;
@@ -5983,6 +6119,32 @@ impl RuntimeReceipt {
         if let Some(failure) = reset_failure {
             let outcome =
                 receipt_state_outcome(request, RuntimeReceiptState::Completed)?.caused_by(failure);
+            receipt.outcome = receipt_envelope(&outcome, receipt.outcome.detail());
+            receipt.validate()?;
+        }
+        Ok(receipt)
+    }
+
+    /// #480 PG-2c (register §1.472): a completed `PauseScheduling` receipt. Its outcome is the
+    /// kind's success code; an instance pause that answers before its instance is quiet, or whose
+    /// stages a shutdown or a person's resume ended, carries why as that code's cause (`caused_by`:
+    /// `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`,
+    /// `scheduling_pause_lifted_by_resume`, each informing), so the caller reads it from the
+    /// receipt alone, as [`Self::instance_run_stopped`] carries a failed reset.
+    pub fn scheduling_paused(
+        request: &RuntimeRequest,
+        result: RuntimeResult,
+        cause: Option<Outcome>,
+    ) -> RuntimeContractResult<Self> {
+        if !matches!(result, RuntimeResult::SchedulingPaused { .. }) {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidReceiptOutcome,
+            ));
+        }
+        let mut receipt = Self::success(request, RuntimeReceiptState::Completed, None, result)?;
+        if let Some(cause) = cause {
+            let outcome =
+                receipt_state_outcome(request, RuntimeReceiptState::Completed)?.caused_by(cause);
             receipt.outcome = receipt_envelope(&outcome, receipt.outcome.detail());
             receipt.validate()?;
         }

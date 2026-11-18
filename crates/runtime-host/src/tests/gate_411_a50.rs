@@ -366,6 +366,7 @@ fn a50_t4_an_operator_restart_of_a_paused_instance_queues_its_startup_package_be
             },
             pause_reason: SchedulingPauseReason::new("a50_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         504,
     );
@@ -456,6 +457,7 @@ fn a71_t8_a_start_during_a_pause_runs_its_startup_package_once_after_the_resume(
             },
             pause_reason: SchedulingPauseReason::new("a71_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         510,
     );
@@ -594,6 +596,7 @@ fn w2b_t9_a_start_during_a_pause_runs_its_startup_package_once_after_a_restart_a
             },
             pause_reason: SchedulingPauseReason::new("w2b_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         520,
     );

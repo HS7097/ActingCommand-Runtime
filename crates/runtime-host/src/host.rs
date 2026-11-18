@@ -2416,7 +2416,12 @@ impl RuntimeHost {
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
             clock_origin_instant,
             fatal,
+            pause_carry_ons: Mutex::new(Vec::new()),
+            own_handle: OnceLock::new(),
         });
+        // #480 PG-2c: the handle a standing pause's request gives the thread that carries its
+        // stages on; weak, so that the host's close still owns the last reference.
+        let _ = shared.own_handle.set(Arc::downgrade(&shared));
         let mut host = Self {
             info,
             info_path,
@@ -4444,6 +4449,37 @@ impl RuntimeHost {
             .load(Ordering::Acquire))
     }
 
+    /// #480 PG-2c, test builds: how many threads that carry a standing pause's stages on are
+    /// still running.
+    #[cfg(test)]
+    pub(crate) fn pause_carry_ons_running_for_test(&self) -> RuntimeHostResult<usize> {
+        Ok(lock(
+            &self
+                .shared_ref(HostLocation::ReleasePausedInstance)?
+                .pause_carry_ons,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .iter()
+        .filter(|thread| !thread.is_finished())
+        .count())
+    }
+
+    /// #480 PG-2c (the commit mark), test builds: whether an automatic emulator start of
+    /// `instance_alias` is committed now.
+    #[cfg(test)]
+    pub(crate) fn automatic_start_committed_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<bool> {
+        Ok(lock(
+            &self
+                .shared_ref(HostLocation::ReleasePausedInstance)?
+                .scheduling_pause,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .automatic_start_committed(instance_alias))
+    }
+
     /// #480 PG-1 fix round 1, test builds: runs `hook` once, on the requesting thread, just before
     /// the next autostart claim (the daemon start's, the watch's, an idle wake's) is requested,
     /// after its requester decided to ask for it.
@@ -6102,6 +6138,13 @@ impl RuntimeHost {
             &mut failure,
             join_runtime_thread(self.accept_thread.take(), HostLocation::JoinRuntimeAccept),
         );
+        // #480 PG-2c: the threads that carry standing pauses on end with the shutdown request
+        // (each keeps its pause), after the connections, which could still start one.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            shared.join_pause_carry_ons(),
+        );
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
@@ -7009,6 +7052,12 @@ struct HostShared {
     /// Test plan E-3 (EXEC-I3): the instant at which the clock read `clock_origin_monotonic_ms`.
     clock_origin_instant: Instant,
     fatal: FatalState,
+    /// #480 PG-2c (`contracts/scheduling-pause.md`, "Two modes"): the threads that carry the rest
+    /// of a standing pause's stages on after its request answered; each ends at `released`, at a
+    /// person's resume or at the shutdown, which joins them after the connections.
+    pause_carry_ons: Mutex<Vec<JoinHandle<RuntimeHostResult<()>>>>,
+    /// #480 PG-2c: this host's own handle, given to those threads (weak, set once at the start).
+    own_handle: OnceLock<std::sync::Weak<HostShared>>,
 }
 
 #[derive(Debug, Clone, Copy)]

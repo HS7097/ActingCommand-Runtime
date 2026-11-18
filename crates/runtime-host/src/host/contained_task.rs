@@ -1388,6 +1388,46 @@ impl SchedulingPauseDeadlines {
     }
 }
 
+/// #480 PG-2c: how a pause's drain ended short of a fatal failure, with the runs it counted so far
+/// (`finished` ended on their own, `cancelled` were asked to stop by it).
+pub(super) enum PauseDrainEnd {
+    /// No run of the instance is in flight any more.
+    Drained(SchedulingDrainSummary),
+    /// The Runtime was asked to stop.
+    Interrupted(SchedulingDrainSummary),
+    /// A run asked to stop had not reached its next checkpoint by the grace.
+    PastGrace(SchedulingDrainSummary),
+    /// A person's resume lifted the watched pause.
+    Lifted(SchedulingDrainSummary),
+}
+
+/// Workflow #191 ps1: a shutdown during a tool's hold's drain fails it (`Failed`) and lifts it.
+pub(super) fn pause_drain_interrupted() -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            HostCode::SchedulingPauseDrainInterrupted,
+            HostLocation::DrainPausedInstance,
+            RuntimeErrorCode::RuntimeUnavailable,
+        ),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
+/// Workflow #191 ps1: a tool's hold whose stopped runs have not reached their next checkpoint by
+/// the grace fails (`Failed`) and is lifted.
+pub(super) fn pause_drain_incomplete() -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            HostCode::SchedulingPauseDrainIncomplete,
+            HostLocation::DrainPausedInstance,
+            RuntimeErrorCode::ContainedTaskBusy,
+        ),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
 struct ActiveContainedRun<'a> {
     active: &'a Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     request_id: RequestId,
@@ -11610,15 +11650,22 @@ impl HostShared {
     }
 
     /// Workflow #191 ps1 (b): waits until no contained run of `instance_id` is in flight. A
-    /// run still in flight at the drain deadline is asked to stop at its next checkpoint
-    /// (`contained_task_paused`); no lease is preempted or reclaimed. Runs asked to stop that have
-    /// not ended by the grace deadline fail the drain. Stage (c) (ps2) drains again with the same
-    /// deadlines when a run started after (b).
+    /// run still in flight at `stop_at` (the drain deadline) is asked to stop at its next
+    /// checkpoint (`contained_task_paused`); no lease is preempted or reclaimed. Runs asked to stop
+    /// that have not ended by `grace` end the drain short. Stage (c) (ps2) drains again with the
+    /// same deadlines when a run started after (b). #480 PG-2c: the drain answers how it ended
+    /// ([`PauseDrainEnd`]) and its caller decides by the pause's mode (a tool's hold fails,
+    /// `scheduling_pause_drain_interrupted` or `scheduling_pause_drain_incomplete`; a person's
+    /// pause is kept or stands); without `grace` (a standing pause's continuation) it waits until
+    /// the runs ended; with `watched`, the pause's alias and revision, it ends once a person's
+    /// resume lifted that pause.
     pub(super) fn drain_contained_runs_for_pause(
         &self,
         instance_id: InstanceId,
-        deadlines: SchedulingPauseDeadlines,
-    ) -> Result<SchedulingDrainSummary, RequestFailure> {
+        stop_at: Instant,
+        grace: Option<Instant>,
+        watched: Option<(&str, u64)>,
+    ) -> Result<PauseDrainEnd, RequestFailure> {
         // Request identity -> (the run's control, whether this drain asked it to stop).
         let mut tracked = BTreeMap::<RequestId, (Arc<ContainedRunControl>, bool)>::new();
         let mut summary = SchedulingDrainSummary {
@@ -11634,15 +11681,14 @@ impl HostShared {
                 return Err(RequestFailure::poison_without_terminal(error));
             }
             if self.fatal.is_shutdown_requested() {
-                return Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        HostCode::SchedulingPauseDrainInterrupted,
-                        HostLocation::DrainPausedInstance,
-                        RuntimeErrorCode::RuntimeUnavailable,
-                    ),
-                    RuntimeReceiptState::Failed,
-                    None,
-                ));
+                return Ok(PauseDrainEnd::Interrupted(summary));
+            }
+            if let Some((alias, revision)) = watched
+                && !self
+                    .instance_pause_held(alias, revision)
+                    .map_err(RequestFailure::poison_without_terminal)?
+            {
+                return Ok(PauseDrainEnd::Lifted(summary));
             }
             let active = lock(&self.contained_runs, HostLocation::ReadPausedInstanceRuns)?
                 .iter()
@@ -11673,25 +11719,17 @@ impl HostShared {
                 tracked.entry(request_id).or_insert((control, false));
             }
             if tracked.is_empty() {
-                return Ok(summary);
+                return Ok(PauseDrainEnd::Drained(summary));
             }
             let now = Instant::now();
-            if now >= deadlines.drain {
+            if now >= stop_at {
                 for (control, cancelled) in tracked.values_mut() {
                     if !*cancelled && control.request_pause_cancel() {
                         *cancelled = true;
                     }
                 }
-                if now >= deadlines.grace {
-                    return Err(RequestFailure::request(
-                        RuntimeHostError::request(
-                            HostCode::SchedulingPauseDrainIncomplete,
-                            HostLocation::DrainPausedInstance,
-                            RuntimeErrorCode::ContainedTaskBusy,
-                        ),
-                        RuntimeReceiptState::Failed,
-                        None,
-                    ));
+                if grace.is_some_and(|grace| now >= grace) {
+                    return Ok(PauseDrainEnd::PastGrace(summary));
                 }
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);

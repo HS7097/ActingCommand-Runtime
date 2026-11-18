@@ -148,6 +148,7 @@ pub(super) fn pause(
             pause_reason: actingcommand_contract::SchedulingPauseReason::new("s6c_pause")
                 .expect("pause reason"),
             drain_timeout_ms: 5_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         connection,
     )

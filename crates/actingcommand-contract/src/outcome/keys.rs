@@ -415,6 +415,10 @@ outcome_keys! {
     // WATCH-P (0.12.32): why the emulator watch requested no claim it would otherwise have
     // requested (Alice's ruling 112: not for an instance its own pause holds).
     skip_reason: vocab(emulator_autostart_skip_reason),
+    // #480 PG-2c (0.12.73): the stage an instance pause had reached when its request answered, and
+    // what was still in the way of its stages then.
+    pause_stage: vocab(instance_pause_stage),
+    in_the_way: list(vocab(pause_obstacle)),
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
     duplicate_count: integer,
     dump_sealed: boolean,

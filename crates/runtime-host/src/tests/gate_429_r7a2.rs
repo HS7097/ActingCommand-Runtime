@@ -216,6 +216,7 @@ impl Gates {
             scope,
             pause_reason: SchedulingPauseReason::new("r7a2_gate_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         });
     }
 

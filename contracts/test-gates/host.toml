@@ -4362,3 +4362,28 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_9_a_pause_at_a_group_members_application_rung_stops_no_other_member",
 ]
 incident = ["#480", "PG-2b"]
+
+# #480 PG-2c (0.12.73; register §1.472; brief rd-1118/brief-480-pg2c-pause-stands.md; board #480, the coordinator's reading of the owner's words: a pause a person asked for closes the gate at once and stands until a person lifts it; a tool's hold is quiet or nothing; the design rd-1118/design-480-pg2, its slice 3): the design's inventory, each half. L1 quiet_or_lift: a ladder holding its key past a tool's hold's grace fails it with scheduling_pause_release_busy and lifts it (the record that set it and the record without it), the ladder then ending; an autostart claim keeping its key once its Start was driven, the same (the stand halves are gate_480_pg2b's (3) and gate_480_pg1's (7) and fix round 1's R4′, adapted). L2: a rung run held in a capture of the fake past its checkpoint: a person's pause answers Completed with scheduling_pause_standing (draining, contained_run), its one record naming the instance, and reaches released by itself once the run stops and the ladder ends; a tool's hold fails scheduling_pause_drain_incomplete and is lifted. L3: a client's lease and another client's entry queued behind it: a person's pause answers scheduling_pause_standing (paused, lease and queued_entry), stays paused until the entry expired and the lease was released, then reaches released, never lifted; a tool's hold fails lease_transfer_not_safe and is lifted. L4 quiet_or_lift: gate_480_pg2b's (6) for a tool's hold, success. L5: a shutdown during the drain of a held rung run: a person's pause answers Completed with scheduling_pause_kept_at_shutdown (draining), kept, one record; a tool's hold fails scheduling_pause_drain_interrupted and is lifted. L6: a shutdown while the hand-back waits for a client's lease within the caller's time: a person's pause answers scheduling_pause_kept_at_shutdown (paused), kept, restored released at the next start; a tool's hold fails scheduling_pause_release_interrupted and is lifted. L7: a fatal error latched while the hand-back waits: a person's pause answers the failure and lifts nothing (still paused, one record); a tool's hold is lifted. A request without pause_mode is stand (a client's lease past the grace answers scheduling_pause_standing). A person's resume in paused and in draining lifts the gate at once with no reconnect claim and no selfcheck, the continuation ending. The status of a standing pause carries exactly revision 11's members (pause_reason, revision, since_unix_ms, stage). The commit mark: set while an automatic Start runs, a pause recorded then answers scheduling_pause_standing (paused, automatic_start), the Start had begun is finished (one provider Start), the mark gone once the claim ended, the pause released by itself
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l1_a_tools_hold_meeting_a_ladder_past_its_grace_fails_and_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l1_a_tools_hold_meeting_an_automatic_start_past_its_grace_fails_and_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l2_a_persons_pause_meeting_a_host_package_past_its_checkpoint_stands_and_settles",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l2_a_tools_hold_meeting_a_host_package_past_its_checkpoint_fails_and_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l3_a_persons_pause_meeting_a_queued_client_entry_stands_and_settles",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l3_a_tools_hold_meeting_a_queued_client_entry_fails_and_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l4_a_tools_holds_close_lease_passes_the_startup_package_it_holds_back",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l5_a_shutdown_during_a_persons_pauses_drain_keeps_it",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l5_a_shutdown_during_a_tools_holds_drain_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l6_a_shutdown_during_a_persons_pauses_hand_back_keeps_it",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l6_a_shutdown_during_a_tools_holds_hand_back_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l7_a_fatal_error_in_a_persons_pauses_stage_lifts_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_l7_a_fatal_error_in_a_tools_holds_stage_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_an_absent_pause_mode_is_stand",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_a_resume_in_paused_lifts_a_persons_pause_without_a_reconnect",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_a_resume_in_draining_lifts_a_persons_pause_without_a_reconnect",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finished",
+]
+incident = ["#480", "PG-2c"]

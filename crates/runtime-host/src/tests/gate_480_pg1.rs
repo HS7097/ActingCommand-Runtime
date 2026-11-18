@@ -39,7 +39,7 @@ use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     FactScalar, FactValue, InstanceActivityKind, InstancePauseStage, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulingPauseReason, SchedulingPauseScope,
+    RuntimePayload, SchedulingPauseMode, SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_scheduler::ClaimKind;
@@ -223,14 +223,42 @@ fn close_x(host: &RuntimeHost, state: &FakeState) {
 
 // A person's pause of `alias`, with the smallest drain timeout a request may name.
 fn instance_pause(alias: &str) -> RuntimeRequest {
+    instance_pause_as(alias, SchedulingPauseMode::Stand)
+}
+
+// #480 PG-2c: the pause of `alias` asked with `mode` (a tool's hold is `quiet_or_lift`).
+fn instance_pause_as(alias: &str, mode: SchedulingPauseMode) -> RuntimeRequest {
     runtime_request(
         &IdentifierIssuer::new().expect("identifier issuer"),
         RuntimeOperation::PauseScheduling {
             scope: instance_scope(alias),
             pause_reason: SchedulingPauseReason::new("pg1_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: mode,
         },
     )
+}
+
+// #480 PG-2c: the cause a completed pause's receipt carries, its code, stage and what was in the
+// way (`scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`).
+#[track_caller]
+fn assert_cause(receipt: &RuntimeReceipt, code: &str, stage: &str, in_the_way: Option<&[&str]>) {
+    let causes = receipt.outcome().causes();
+    let [cause] = causes else {
+        panic!("one cause of the completed pause: {receipt:?}");
+    };
+    let cause = cause.outcome();
+    assert_eq!(cause.code().as_str(), code, "{receipt:?}");
+    assert_eq!(
+        cause.value("pause_stage"),
+        Some(&json!(stage)),
+        "{receipt:?}"
+    );
+    assert_eq!(
+        cause.value("in_the_way"),
+        in_the_way.map(|words| json!(words)).as_ref(),
+        "{receipt:?}"
+    );
 }
 
 // The stage of the pause `alias` holds of its own, if it holds one.
@@ -798,7 +826,11 @@ fn pg1_6_an_instance_both_pauses_hold_records_its_own_pause_then_the_global_one(
 // instance, which the Start holds, and then meets the claim's key, which the claim still holds
 // once its Start was driven (`run_after_configured_start_drive_for_test`). It waits for that
 // automatic claim beyond the grace, ends `released` once the claim has ended and answers success:
-// nothing is lifted, and the one record of the held pauses it made names the instance.
+// nothing is lifted, and the one record of the held pauses it made names the instance. #480 PG-2c
+// (which changes what this test pinned): the person's pause (`stand`) answers at the end of its
+// caller's time, here at once, while the Start still holds the guard: Completed with
+// `scheduling_pause_standing` (`paused`, `automatic_start`); the host carries its stages on, and
+// the stage becomes `released` by itself once the claim has ended.
 #[test]
 fn pg1_7_an_instance_pause_stands_while_an_automatic_start_outlasts_its_grace() {
     let root = TempDir::new().expect("tempdir");
@@ -863,11 +895,15 @@ fn pg1_7_an_instance_pause_stands_while_an_automatic_start_outlasts_its_grace() 
         ),
         "{paused:?}"
     );
-    assert_eq!(
-        pause_stage(&host, FIRST),
-        Some(InstancePauseStage::Released),
-        "the pause stands"
+    assert_cause(
+        &paused,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["automatic_start"]),
     );
+    wait_until("the pause reaches released by itself", || {
+        pause_stage(&host, FIRST) == Some(InstancePauseStage::Released)
+    });
     let records = pause_records_after(&host, before);
     let [record] = &records[..] else {
         panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
@@ -889,7 +925,8 @@ fn pg1_7_an_instance_pause_stands_while_an_automatic_start_outlasts_its_grace() 
 // (8) Ruling 4, the grace for everything else: a client's lease, the key a client's run holds its
 // instance by, outlasts the grace of an instance pause (already past). The pause fails as before
 // with `scheduling_pause_release_busy`, naming no holder, and is lifted: the record that set it and
-// the record without it.
+// the record without it. #480 PG-2c: only a tool's hold (`quiet_or_lift`) still fails so; the pause
+// is asked so here (a person's pause stands: `gate_480_pg2c`).
 #[test]
 fn pg1_8_an_instance_pause_still_fails_and_is_lifted_when_a_clients_lease_outlasts_its_grace() {
     let root = TempDir::new().expect("tempdir");
@@ -910,7 +947,7 @@ fn pg1_8_an_instance_pause_still_fails_and_is_lifted_when_a_clients_lease_outlas
         "{acquired:?}"
     );
     let before = head(&host);
-    let pause_request = instance_pause(FIRST);
+    let pause_request = instance_pause_as(FIRST, SchedulingPauseMode::QuietOrLift);
     let failed = host
         .process_request_for_test(&pause_request, ConnectionId::new(886).expect("connection"))
         .expect("the pause's receipt");
@@ -1172,7 +1209,10 @@ fn pg1_fix1_4b_outside_the_multi_nemu_gate_the_close_lease_passes_a_queued_autom
 // minutes past the key's lapse (as its Start renewed it) and the 30 s after it, and the lease sweep,
 // held, does not take the lapsed key back. The hand-back meets the claim check after check and
 // fails nothing: the pause stays in stage `paused` and nothing is lifted. Once the claim ends, the
-// stage goes on to `released` and the pause answers success.
+// stage goes on to `released` and the pause answers success. #480 PG-2c (which changes what this
+// test pinned): the person's pause answers at the end of its caller's time, at once: Completed with
+// `scheduling_pause_standing` (`paused`, `automatic_start`); the meetings and the stage are the
+// host's own continuation's, and the stage becomes `released` once the claim ends.
 #[test]
 fn pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound() {
     let root = TempDir::new().expect("tempdir");
@@ -1251,11 +1291,15 @@ fn pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound()
         ),
         "{paused:?}"
     );
-    assert_eq!(
-        pause_stage(&host, FIRST),
-        Some(InstancePauseStage::Released),
-        "the pause stands"
+    assert_cause(
+        &paused,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["automatic_start"]),
     );
+    wait_until("the pause reaches released by itself", || {
+        pause_stage(&host, FIRST) == Some(InstancePauseStage::Released)
+    });
     let records = pause_records_after(&host, before);
     let [record] = &records[..] else {
         panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
@@ -1278,7 +1322,10 @@ fn pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound()
 // autostart claim alone (the claim keeping its key once its Start was driven, as in (7)). The pause
 // is not lifted: the request fails with `scheduling_pause_kept_at_shutdown`, the pause stays in
 // stage `paused`, and the one record of the held pauses it made still names the instance. The next
-// start restores it, as every persisted pause is restored (stage `released`).
+// start restores it, as every persisted pause is restored (stage `released`). #480 PG-2c (which
+// changes what this test pinned): the person's pause has answered at once, Completed with
+// `scheduling_pause_standing`, before the shutdown; the shutdown ends the host's continuation, which
+// keeps the pause in stage `paused`, and the rest holds as before.
 #[test]
 fn pg1_fix1_r4b_a_shutdown_during_that_wait_keeps_the_pause_for_the_next_start() {
     let root = TempDir::new().expect("tempdir");
@@ -1327,17 +1374,20 @@ fn pg1_fix1_r4b_a_shutdown_during_that_wait_keeps_the_pause_for_the_next_start()
             .expect("the pause's thread")
             .expect("the pause's receipt")
     });
+    // #480 PG-2c: the host's continuation ends at the shutdown, before the claim lets go.
+    wait_until("the continuation ends at the shutdown", || {
+        host.pause_carry_ons_running_for_test()
+            .expect("the continuations")
+            == 0
+    });
     release_tx.send(()).expect("the claim goes on");
 
-    assert_eq!(kept.state(), RuntimeReceiptState::Failed, "{kept:?}");
-    let outcome = host
-        .failure_outcome_for_test(pause_request.request_id())
-        .expect("the refused requests")
-        .expect("the pause's failure");
-    assert_eq!(
-        outcome.code().as_str(),
-        "scheduling_pause_kept_at_shutdown",
-        "{outcome:?}"
+    completed(&kept);
+    assert_cause(
+        &kept,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["automatic_start"]),
     );
     assert_eq!(
         pause_stage(&host, FIRST),
@@ -1427,7 +1477,9 @@ fn pg1_fix1_5_a_pause_pressed_during_the_last_status_read_stops_the_start() {
 // hand-back checks again, the claim lets the key go, a client takes it and the Runtime is asked to
 // stop. What is in the way at the shutdown is the client's lease, so the pause is lifted as before:
 // `scheduling_pause_release_interrupted`, the record that set the pause and the record without it.
-// (On fix round 1's code the last check's mark, the automatic claim, kept the pause.)
+// (On fix round 1's code the last check's mark, the automatic claim, kept the pause.) #480 PG-2c:
+// only a tool's hold (`quiet_or_lift`) is still lifted at a shutdown; the pause is asked so here (a
+// person's pause is kept whatever is in the way: `gate_480_pg2c`).
 #[test]
 fn pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pause_at_shutdown() {
     let root = TempDir::new().expect("tempdir");
@@ -1457,7 +1509,7 @@ fn pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pa
         .recv_timeout(GATE_WAIT)
         .expect("the configured Start was driven");
     let before = head(&host);
-    let pause_request = instance_pause(FIRST);
+    let pause_request = instance_pause_as(FIRST, SchedulingPauseMode::QuietOrLift);
 
     let interrupted = thread::scope(|scope| {
         let pausing = scope.spawn(|| {
@@ -1531,7 +1583,9 @@ fn pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pa
 // which holds its key (`run_when_autostart_claim_granted_for_test`), and the Runtime is asked to
 // stop. What is in the way at the shutdown is the Runtime's own automatic claim alone, so the pause
 // is kept: `scheduling_pause_kept_at_shutdown`, still `paused`, its one record of the held pauses
-// naming the instance. (On fix round 1's code the last check's mark, the client, lifted it.)
+// naming the instance. (On fix round 1's code the last check's mark, the client, lifted it.) #480
+// PG-2c (which changes what this test pinned): the code informs, so the receipt is Completed with it
+// as the cause (`pause_stage` `paused`); a person's pause is kept whatever is in the way.
 #[test]
 fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pause_at_shutdown() {
     let root = TempDir::new().expect("tempdir");
@@ -1620,16 +1674,8 @@ fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pau
     });
     answered_tx.send(()).expect("the claim goes on");
 
-    assert_eq!(kept.state(), RuntimeReceiptState::Failed, "{kept:?}");
-    let outcome = host
-        .failure_outcome_for_test(pause_request.request_id())
-        .expect("the refused requests")
-        .expect("the pause's failure");
-    assert_eq!(
-        outcome.code().as_str(),
-        "scheduling_pause_kept_at_shutdown",
-        "{outcome:?}"
-    );
+    completed(&kept);
+    assert_cause(&kept, "scheduling_pause_kept_at_shutdown", "paused", None);
     assert_eq!(
         pause_stage(&host, FIRST),
         Some(InstancePauseStage::Paused),

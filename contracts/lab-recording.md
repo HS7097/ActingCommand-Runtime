@@ -2774,7 +2774,12 @@ Runtime is asked to pause):
   stage lifts the gate it closed, but since 0.12.72 a shutdown that interrupts the hand-back while
   nothing but the Runtime's own work is in the way keeps the pause, and the next start restores it
   (`scheduling_pause_kept_at_shutdown`, [scheduling-pause.md](scheduling-pause.md), "Instance
-  pause: three stages"). So `record start` reads the status once more, on the same connection:
+  pause: three stages"). #480 PG-2c (since 0.12.73): the recording's hold is a tool's hold,
+  `pause_mode` `quiet_or_lift` (`lab_ops::scheduling::pause_for_recording`, set in code), which no
+  shutdown keeps and which answers `scheduling_pause_kept_at_shutdown` never; a pause of it that
+  still shows its reason after a `Failed` receipt is one a poisoned lift left
+  ([scheduling-pause.md](scheduling-pause.md), "Two modes"). So `record start` reads the status
+  once more, on the same connection:
   - it shows no pause of the instance, or another party's (the common case: a drain that did not
     finish within its time): as a refused pause, the header put back and nothing started;
   - it shows the hold's own reason, or the read fails or gets no answer: the header stays as

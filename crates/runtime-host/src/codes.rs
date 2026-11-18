@@ -1668,12 +1668,25 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #463 S3-8: end
         // ---- #480 PG-1 fix round 1 (`contracts/scheduling-pause.md`, "Instance pause: three
         // stages", (c)): begin
-        /// Error. A shutdown came while an instance pause's hand-back waited for the Runtime's own
-        /// automatic emulator start alone (the autostart claim holding the instance): the request
-        /// fails before stage `released`, but the pause is not lifted; its fact still names the
-        /// instance and the next start restores it.
-        SchedulingPauseKeptAtShutdown => "scheduling_pause_kept_at_shutdown": error / none,
+        /// Info (an error before #480 PG-2c). A shutdown came within the caller's time of a
+        /// person's instance pause (`stand`) that had not reached stage `released`: the request
+        /// answers Completed with this cause, the pause is not lifted, its fact still names the
+        /// instance and the next start restores it (key `pause_stage` the stage it had reached).
+        SchedulingPauseKeptAtShutdown => "scheduling_pause_kept_at_shutdown": info / none,
         // ---- #480 PG-1 fix round 1: end
+        // ---- #480 PG-2c (`contracts/scheduling-pause.md`, "Two modes"): begin
+        /// Info. A person's instance pause (`stand`) answered at the end of its caller's time
+        /// before its instance was quiet: Completed with this cause (keys `pause_stage` the stage
+        /// it had reached, `in_the_way` what was still in the way); the host carries the rest of
+        /// its stages on.
+        SchedulingPauseStanding => "scheduling_pause_standing": info / none,
+        /// Info. A resume lifted a person's instance pause (`stand`) while its own request still
+        /// ran its stages: Completed with this cause (key `pause_stage`).
+        SchedulingPauseLiftedByResume => "scheduling_pause_lifted_by_resume": info / none,
+        /// Error. The thread that carries a standing pause's stages on could not be started
+        /// (fatal; the pause is restored at the next start).
+        SchedulingPauseCarryOnSpawnFailed => "scheduling_pause_carry_on_spawn_failed": error / none,
+        // ---- #480 PG-2c: end
     }
 }
 

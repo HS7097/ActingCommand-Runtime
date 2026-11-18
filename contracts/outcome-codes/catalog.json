@@ -1621,6 +1621,14 @@
       "type": "vocab:emulator_autostart_skip_reason",
       "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start; Workflow #429 R-7a registers player_held, R-7b first records it; #480 PG-1, since 0.12.72: global_paused, the global pause)."
     },
+    "pause_stage": {
+      "type": "vocab:instance_pause_stage",
+      "description": "The stage an instance pause had reached when its request answered (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Instance pause: three stages\")."
+    },
+    "in_the_way": {
+      "type": "list<vocab:pause_obstacle>",
+      "description": "What was still in the way of an instance pause's stages when its request answered, each word once (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\")."
+    },
     "duplicate_count": {
       "type": "integer",
       "description": "Records skipped because their event id was already in the ledger."
@@ -6833,6 +6841,62 @@
         },
         "start_emulator_off": {
           "description": "The instance's start_emulator in effect is off (#429 R-3, since 0.12.39): an autostart claim requested while it was on (the daemon start's, an IDLE-1 wake's, the emulator watch's restart) met it off on its key and released the key without a Start (the watch's request taking no place in its bound), or IDLE-1's wake after stop_emulator found it off and requested no claim: the wake ends without a Start and the instance is no longer kept closed. Recorded once per claim or wake."
+        }
+      }
+    },
+    "instance_pause_stage": {
+      "description": "The stage of an instance pause (contracts/scheduling-pause.md \"Instance pause: three stages\"), the value pause_stage of scheduling_pause_standing, scheduling_pause_kept_at_shutdown and scheduling_pause_lifted_by_resume (#480 PG-2c, since 0.12.73).",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime.rs",
+        "enum": "InstancePauseStage"
+      },
+      "tokens": {
+        "draining": {
+          "description": "Stage (a) and (b): the gate is closed and the instance's contained runs are drained."
+        },
+        "paused": {
+          "description": "Stage (c): no run of the instance is in flight, and the pause waits until nothing uses the device and hands it back."
+        },
+        "released": {
+          "description": "The device is handed back: nothing uses it while the gate is closed."
+        }
+      }
+    },
+    "pause_obstacle": {
+      "description": "What was still in the way of an instance pause's stages, the items of in_the_way of scheduling_pause_standing, each read from the host's own state at that moment (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\").",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/runtime.rs",
+        "enum": "PauseObstacle"
+      },
+      "tokens": {
+        "contained_run": {
+          "description": "A contained run of the instance is still in flight (a client's, a policy dispatch's or a package the host started itself); past the drain it was asked to stop at its next checkpoint."
+        },
+        "policy_run": {
+          "description": "A policy run the instance's worker still holds, from its hand-off to its settlement."
+        },
+        "lease": {
+          "description": "A lease of another party holds the instance (a client's lease, a direct run, an operator's control, a Lab operation, a self-check)."
+        },
+        "automatic_start": {
+          "description": "The Runtime's own automatic emulator start: its claim holds the instance's key, or its Start was committed before the pause was recorded."
+        },
+        "recovery_ladder": {
+          "description": "The Runtime's own stuck-recovery ladder holds the instance's key."
+        },
+        "queued_entry": {
+          "description": "An entry queued for the instance that the pause does not hold back (a client's or an operator's claim)."
+        },
+        "client_reset": {
+          "description": "A client owes the instance its reset after a run of its ended cancelled."
+        },
+        "close_refused": {
+          "description": "Outside the multi-Nemu gate, the dedicated lease of the session close was refused (another member's entry ahead, a takeover cooldown, a holder); the close is tried again."
+        },
+        "close_unconfirmed": {
+          "description": "Outside the multi-Nemu gate, the session close could not be confirmed and fenced the instance; it is not tried again: a person's resume reconnects the instance."
         }
       }
     },

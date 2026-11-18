@@ -15,8 +15,9 @@
 //!   of the `pause` row sent: a pause the Runtime refuses (denied) puts the header back as it was
 //!   (none when there was none) and fails the start; #480 PG-2a: so does a pause that failed in a
 //!   stage when the status read after it shows no pause with the hold's reason. A pause that failed
-//!   in a stage while the status shows its reason (since 0.12.72 a shutdown can keep it,
-//!   `scheduling_pause_kept_at_shutdown`), or whose status cannot be read, and any other failure
+//!   in a stage while the status shows its reason (a poisoned lift can leave it; since #480 PG-2c
+//!   the hold is `quiet_or_lift`, so no shutdown keeps it), or whose status cannot be read, and any
+//!   other failure
 //!   of the pause leave the header as written, since a pause with that reason may exist, and fail
 //!   the start with the hold in its details, so that `record stop` or `record start --force`
 //!   releases it by its reason (PG-2a fix round 1: the details name the instance too, and say in
@@ -241,8 +242,8 @@ enum Unsettled {
     /// that does not match).
     Unanswered,
     /// #480 PG-2a: the Runtime failed the pause in a stage, and the status read after it shows the
-    /// instance paused with the hold's reason (since 0.12.72 a shutdown can keep such a pause,
-    /// `scheduling_pause_kept_at_shutdown`).
+    /// instance paused with the hold's reason (a poisoned lift can leave such a pause; #480 PG-2c:
+    /// the hold is `quiet_or_lift`, which no shutdown keeps).
     Stands,
     /// #480 PG-2a: the Runtime failed the pause in a stage, and the status read after it failed
     /// or got no answer: that read's failure.

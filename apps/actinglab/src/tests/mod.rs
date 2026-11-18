@@ -201,6 +201,10 @@ mod gate_463_s13;
 // its own, and the end of the recording resumes only that pause.
 #[path = "gate_463_s17.rs"]
 mod gate_463_s17;
+// #480 PG-2c: the Lab's `pause` row sends a person's pause (`stand`) and answers the receipt's cause;
+// a recording's hold sends `quiet_or_lift`.
+#[path = "gate_480_pg2c.rs"]
+mod gate_480_pg2c;
 // #463 S1-8: without the variable, an installed actinglab reaches its installation's state root,
 // and `record start` holds its instance there.
 #[path = "gate_463_s18.rs"]

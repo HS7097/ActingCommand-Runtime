@@ -390,7 +390,8 @@ naming this file.
   Should the start end before the pause answers,
   the session header already names the hold and `ac_record_stop` releases it. #480 PG-2a (0.12.73):
   so it is when the pause fails in a stage and the status read after it shows the recording's own
-  reason (since 0.12.72 a shutdown can keep a failed pause) or cannot be read: the start fails with
+  reason (a poisoned lift can leave a failed pause; since #480 PG-2c, 0.12.73, the recording's hold
+  is a tool's hold, `quiet_or_lift`, which no shutdown keeps) or cannot be read: the start fails with
   the hold in its details and `ac_record_stop` releases it; a pause the Runtime refuses, or one that
   failed and left no pause with that reason, puts the header back and starts nothing. Fix round 1:
   a start that keeps the header after it sent the pause names in its details `instance`, `hold`
@@ -785,6 +786,17 @@ naming this file.
 - **A child that fails** before its answer is `lab_process_failed`, with the tail of its stderr.
   The call is never sent again, and the next call starts a new child; read the call's effect
   before you send it again.
+- **A pause stands** (#480 PG-2c, 0.12.73; `contracts/scheduling-pause.md`, "Two modes").
+  `ac_pause` is a person's or an agent's pause (`pause_mode` `stand`): the gate closes at once and
+  the Runtime never lifts it. An instance not quiet by the end of the drain and its checkpoint grace
+  answers success with the receipt's outcome as its cause: `scheduling_pause_standing`, its
+  `pause_stage` and what is `in_the_way` (`contained_run`, `policy_run`, `lease`,
+  `automatic_start`, `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`,
+  `close_unconfirmed`); the Runtime carries the rest on by itself, and `ac_status` shows the stage
+  becoming `released`. Do not pause again (`scheduling_already_paused`); `ac_resume` lifts it in
+  every stage. A shutdown before `released` answers `scheduling_pause_kept_at_shutdown`: the pause
+  is restored at the next start. A tool's hold (a rescue row's, a recording's) is `quiet_or_lift`:
+  quiet within its time, or it fails and is lifted.
 
 ## 9 Deploy and rollback
 

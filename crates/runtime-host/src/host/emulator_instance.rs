@@ -981,11 +981,14 @@ impl HostShared {
                     .into());
             }
         }
-        if let Some(hold) =
-            self.automatic_start_hold(&resolved.instance_alias, HostLocation::RunEmulatorAutostart)?
+        // #480 PG-2c (the commit mark): the last question and the mark in one step; a pause
+        // recorded from here on lists this start in its way, and the start is finished as before.
+        let _committed = match self
+            .commit_automatic_start(&resolved.instance_alias, HostLocation::RunEmulatorAutostart)?
         {
-            return Ok(Err(hold));
-        }
+            Ok(committed) => committed,
+            Err(hold) => return Ok(Err(hold)),
+        };
         self.append_configured_start_intent(links.clone())?;
         let mut mode = ControlMode::Configured {
             key,

@@ -265,6 +265,8 @@ pub(super) fn instance(alias: &str, pause: Option<(&str, u64)>) -> RuntimeInstan
             pause_reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
             since_unix_ms: 1,
             stage: InstancePauseStage::Released,
+            pause_mode: None,
+            in_the_way: Vec::new(),
         }))
         .expect("a paused instance's status")
 }
@@ -410,6 +412,7 @@ pub(super) fn pause_asked(
                 scope,
                 pause_reason,
                 drain_timeout_ms,
+                ..
             } => Some((
                 scope.clone(),
                 pause_reason.as_str().to_owned(),

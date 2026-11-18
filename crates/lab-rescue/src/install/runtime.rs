@@ -16,8 +16,8 @@ use actingcommand_contract::outcome::{Category, IoOp, Outcome};
 use actingcommand_contract::{
     CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_START_FACT_KEY,
     ControlGateCode, FactScalar, FactValue, OwnerEpoch, RuntimeResult,
-    ScheduleCandidateEligibility, SchedulingPauseExpectation, SchedulingPauseReason,
-    SchedulingPauseScope,
+    ScheduleCandidateEligibility, SchedulingPauseExpectation, SchedulingPauseMode,
+    SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::RuntimeClient;
@@ -27,6 +27,13 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::time::Duration;
+
+/// #480 PG-2c (register §1.472; `contracts/scheduling-pause.md`, "Two modes"): the mode of every
+/// pause the rescue module's hold sends (the instance pauses of a deploy, a rollback, a `down`, a
+/// placement and an instance's addition, and the global pause of the addition): a tool's hold,
+/// quiet or nothing within its drain and the grace (a pause that meets anything still in the way
+/// past them fails and is lifted, and a shutdown lifts it), set in code and never a parameter.
+pub(crate) const HOLD_PAUSE_MODE: SchedulingPauseMode = SchedulingPauseMode::QuietOrLift;
 
 /// One scheduling pause as a status read shows it: its reason (a pause reason name, never a
 /// code) and its revision.
@@ -461,14 +468,16 @@ impl RuntimeLink for SystemRuntime {
     ) -> Result<Drained, Outcome> {
         let client = connect(state_root, self.initiator)?;
         match client
-            .pause_scheduling(
+            .pause_scheduling_as(
                 SchedulingPauseScope::Instance {
                     instance_alias: alias.to_owned(),
                 },
                 reason.clone(),
                 drain_timeout_ms,
+                HOLD_PAUSE_MODE,
             )
             .map_err(|error| error.outcome())?
+            .result
         {
             RuntimeResult::SchedulingPaused { drained, .. } => {
                 Ok(drained.map_or_else(Drained::default, |summary| Drained {
@@ -507,12 +516,14 @@ impl RuntimeLink for SystemRuntime {
     ) -> Result<u64, Outcome> {
         let client = connect(state_root, self.initiator)?;
         let paused = client
-            .pause_scheduling(
+            .pause_scheduling_as(
                 SchedulingPauseScope::Global,
                 reason.clone(),
                 drain_timeout_ms,
+                HOLD_PAUSE_MODE,
             )
-            .map_err(|error| error.outcome())?;
+            .map_err(|error| error.outcome())?
+            .result;
         // The client answers only the `SchedulingPaused` of the scope it asked for.
         let RuntimeResult::SchedulingPaused { revision, .. } = paused else {
             return Err(Outcome::new(
