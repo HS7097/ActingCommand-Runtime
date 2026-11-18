@@ -3006,7 +3006,7 @@ review` read the recording's own.
 In the package, `record stop` writes `provenance.destination: "local"` into the entry task of a
 local recording, and nothing for a public one: no mark means public, as
 [privacy-zones.md](privacy-zones.md) reads a package. Admission asks of `provenance` only that it
-is an object, so no package revision moves; a local recording's files are byte for byte what a
+is an object or null, so no package revision moves; a local recording's files are byte for byte what a
 recording made before this section generates, but for that one member. Refusing a local package in a public repository,
 at adoption and in a repository's CI, is built by a later slice.
 
@@ -5333,18 +5333,42 @@ the package it came with.
     0) names it, in `lab.cases.warnings` and among `record ready`'s warnings; the package is
     generated and still reads the value at run time;
   - the answer names, for each written case that leaves a target out, `{case, page, targets,
-    page_judged}` in `lab.readings_left_out` (`record ready`: `readings_left_out`): ids only, never
-    a value.
+    page_judged, forbidden_left_out?}` in `lab.readings_left_out` (`record ready`:
+    `readings_left_out`): ids only, never a value; `forbidden_left_out` (fix round 1), of a case
+    made without the page judgement for it, the targets its page forbids that a scene cannot
+    evaluate (a click-only target), as `record_case_page_ambiguous` names them.
 
-  A case that fails where the target of a failed check needs **no** reading by declaration and its
-  own region (or a member's) reads inside a withheld rectangle is `record_case_reading_withheld`
-  (3, `details` as `record_case_failed`'s and `withheld`, one `{target, withheld: [{x, y, width,
-  height}]}` for each such target): a recognition box drawn over a value reading; the author
-  separates the boxes (narrows that target's region off the reading, or anchors the page
-  elsewhere) or records with `--destination local`. Every other failure is `record_case_failed`.
-  A target a page forbids that needs no reading and reads inside a withheld rectangle reads the
-  canvas there, so a case that expects it not to pass proves only that it does not pass on the
-  scene as stored; the answer names it (`forbidden`, below). `record stop` and `record ready`
+  **A target that is no reading reads, or keeps, no pixel inside a withheld rectangle**:
+  `record_case_reading_withheld` (3), one cause, a recognition box drawn over a value reading; the
+  author separates the boxes (narrows that target's region off the reading, draws the template
+  elsewhere, or anchors the page on another part of its screen) or records with `--destination
+  local`. Each entry of its `details.withheld` is `{target, withheld: [{x, y, width, height}],
+  readings}`, `readings` (fix round 1) the reading targets those rectangles hold (a shared read by
+  its layout's id). It is met three ways:
+  - a case fails where the target of a failed check needs **no** reading by declaration and its
+    own region (or a member's) reads inside a withheld rectangle (`details` as
+    `record_case_failed`'s, and `withheld`);
+  - (fix round 1) a case whose page is judged fails its page judgement with no such check to
+    blame, because a target the page forbids, which needs no reading and reads inside a withheld
+    rectangle, passes on the canvas colour there (a colour probe that expects black, for one): each
+    such target is run alone on the stored scene, and one that passes is named the same way;
+  - (fix round 1, the coordinator's ruling: a template's stored picture holds no pixel of a
+    reading) before any case is made, whether or not one would pass, a picture the package keeps
+    itself meets a withheld rectangle: a template's crop, the rectangle whose pixels its asset
+    holds (a template mark's region, the frame `record mark` cut it from; a scrolling select's
+    anchor, start and end marks, cut by `record stop`), or a colour digest's region, whose `cells`
+    keep its colours cell by cell (up to 32 by 32 cells at five bits a channel, a picture of the
+    region at that grid). The picture goes into the package, and the package into a repository.
+    `details{target, withheld}`, the one entry also naming the picture's rectangle (`kept: {x, y,
+    width, height}`); no `case`. No other kind of target keeps a pixel of a frame: a colour probe
+    and a template's colour check keep one mean colour of their region, an OCR target the texts
+    it expects (an OCR mark's `expected`, a select's aliases), an NN target its labels, and a
+    check, a value test and a click-only target nothing of a frame.
+
+  Every other failure is `record_case_failed`. A target a page forbids that needs no reading and
+  reads inside a withheld rectangle reads the canvas there, so a case that expects it not to pass
+  proves only that it does not pass on the scene as stored; the answer names it (`forbidden`,
+  below). `record stop` and `record ready`
   answer, of a public recording that withholds a rectangle, `lab.withheld` (`record ready`:
   `withheld`), each `{x, y, width, height, targets, forbidden?}`, `targets` the reading targets it
   holds (a shared read by its layout's id), `forbidden` the targets a page forbids that need no

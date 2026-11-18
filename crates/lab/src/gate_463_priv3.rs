@@ -18,14 +18,25 @@
 // - `priv3_a_banded_row_is_withheld_by_its_band_an_unbanded_one_refuses_and_a_reach_is_filled`
 //   (6).
 // - `priv3_a_box_drawn_over_a_reading_refuses_and_passes_once_the_recording_is_local` (7, amendment
-//   1).
+//   1; fix round 1: the box is a colour probe, since a template's crop over a reading is refused
+//   before any case, test 10).
 // - `priv3_another_destination_at_stop_generates_again_and_the_same_does_nothing` (8).
 // - `priv3_the_operation_table_carries_destination_with_its_closed_list` (9).
+// Fix round 1 (rd-1119/brief-463-priv3-fix1.md):
+// - `priv3_fix1_a_template_kept_over_a_reading_refuses_whether_or_not_its_case_passes` (10).
+// - `priv3_fix1_an_unbounded_reading_refuses_the_self_check_cases_with_its_code` (11).
+// The command line's third word is `actinglab`'s `gate_463_priv3_cli`.
 
-use crate::recording::cases::{self, Patch, scene_regions};
+use crate::recording::cases::{self, Patch, regression_cases, scene_regions};
+use crate::recording::crosscheck::{Failures, FrameCache};
 use crate::recording::frames::decode_frame;
+use crate::recording::generate::{
+    DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS, DEFAULT_ARRIVAL_TIMEOUT_MS, StopSettings,
+    plan as generate_plan,
+};
 use crate::recording::model::{LabRecording, RecordDestination, RecordSize, RecordWithheld};
 use crate::recording::store::{old_record_path, recording_path};
+use crate::recording_api::package_without_cases;
 use crate::{
     ClickSpec, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, RecordRect,
     RecordStartOptions, RecordStopOptions, RecordingLock, record_mark, record_start, record_status,
@@ -439,8 +450,12 @@ const NEXT: RecordRect = record_rect(8, 40, 12, 12);
 const TAP: RecordRect = record_rect(26, 24, 8, 8);
 /// The region a value test's left side reads: a quantity on the screen.
 const LEFT: RecordRect = record_rect(50, 4, 40, 10);
-/// A template drawn over the quantity's region (test 7).
+/// A colour probe drawn over the quantity's region (test 7).
 const BADGE: RecordRect = record_rect(46, 2, 12, 12);
+/// Fix round 1 (test 10): a template whose crop meets the quantity's region, and the part of it
+/// that does, which its screen shows black, the canvas colour.
+const CORNER: RecordRect = record_rect(80, 8, 12, 12);
+const CORNER_OVER: RecordRect = record_rect(80, 8, 10, 6);
 /// The gray value of a region's top-left pixel that makes the scripted provider read `25000`.
 const READS_25000: u8 = 101;
 
@@ -603,6 +618,17 @@ fn badged() -> Gray {
     Gray::frame()
         .draw(BUTTON, &Gray::noise(0x0463_0301))
         .draw(BADGE, &Gray::noise(0x0463_0303))
+        .reads(LEFT, READS_25000)
+}
+
+// Fix round 1 (test 10): step 1's screen with a template at `CORNER` over the quantity's region,
+// black where the two meet, so that the canvas colour a public scene fills the quantity's region
+// with changes nothing of the template there.
+fn cornered() -> Gray {
+    Gray::frame()
+        .draw(BUTTON, &Gray::noise(0x0463_0301))
+        .draw(CORNER, &Gray::noise(0x0463_0304))
+        .draw(CORNER_OVER, &Gray::from_fn(10, 6, |_, _| 0))
         .reads(LEFT, READS_25000)
 }
 
@@ -1053,11 +1079,13 @@ fn priv3_a_local_recording_is_todays_with_the_one_provenance_mark() {
     assert_same_package_but_the_mark(&local_package, &bench.package(&public));
 }
 
-// The brief's test 7, as amendment 1 makes it: a public recording whose page requires a template
-// drawn over the quantity a value test reads (a box over a reading, a target that needs no reading
-// itself): its case fails on that template, inside the withheld rectangle,
-// `record_case_reading_withheld`, nothing written; the same recording stopped with
-// `--destination local`, on the recording still open, generates.
+// The brief's test 7, as amendment 1 makes it: a public recording whose page requires a colour
+// probe drawn over the quantity a value test reads (a box over a reading, a target that needs no
+// reading itself and keeps no picture: fix round 1 refuses a template's crop there before any case,
+// test 10): its case fails on that probe, which reads the canvas colour inside the withheld
+// rectangle, `record_case_reading_withheld` naming the probe, the rectangle and (fix round 1) the
+// reading, nothing written; the same recording stopped with `--destination local`, on the
+// recording still open, generates.
 #[test]
 fn priv3_a_box_drawn_over_a_reading_refuses_and_passes_once_the_recording_is_local() {
     let bench = Bench::new(RecordDestination::Public);
@@ -1065,7 +1093,7 @@ fn priv3_a_box_drawn_over_a_reading_refuses_and_passes_once_the_recording_is_loc
         &badged(),
         vec![
             template_mark("ui/button", BUTTON),
-            template_mark("ui/badge", BADGE),
+            MarkSpec::region_only("ui/badge".to_owned(), MarkFamily::Color, BADGE),
             count_at_least_25000(),
         ],
     );
@@ -1077,7 +1105,8 @@ fn priv3_a_box_drawn_over_a_reading_refuses_and_passes_once_the_recording_is_loc
     assert_eq!(
         details["withheld"],
         json!([{"target": "ui/badge",
-                "withheld": [{"x": 50, "y": 4, "width": 40, "height": 10}]}]),
+                "withheld": [{"x": 50, "y": 4, "width": 40, "height": 10}],
+                "readings": ["value/count/left"]}]),
         "{details}"
     );
     assert_eq!(bench.recording_bytes(), before, "nothing is written");
@@ -1141,6 +1170,128 @@ fn priv3_another_destination_at_stop_generates_again_and_the_same_does_nothing()
     assert!(bench.recording().get("destination").is_none());
     let (_, scene) = bench.case(&again, "step_01");
     assert!(scene == step_scene(&first(), &[BUTTON, NEXT]));
+}
+
+// Fix round 1 (the coordinator's ruling: a template's stored picture holds no pixel of a reading),
+// test 10: a public recording whose step 1 holds a template whose crop meets the quantity a value
+// test reads, where its screen is the canvas colour already, so that its case would pass on the
+// scene all the same: record stop refuses `record_case_reading_withheld` before any case, naming the
+// template, its crop (`kept`), the withheld rectangle and the reading, and writes nothing; the same
+// recording made local generates as today: the case with the page judgement and every target the
+// page requires, the template's crop and the quantity's region pasted.
+#[test]
+fn priv3_fix1_a_template_kept_over_a_reading_refuses_whether_or_not_its_case_passes() {
+    let marks = || {
+        vec![
+            template_mark("ui/button", BUTTON),
+            template_mark("ui/corner", CORNER),
+            count_at_least_25000(),
+        ]
+    };
+    let screen = cornered();
+    // Where the crop meets the quantity's region the screen is the canvas colour, so a public
+    // scene leaves the template's pixels as they are.
+    for y in 8..14 {
+        for x in 80..90 {
+            assert_eq!(screen.at(x, y), 0, "({x}, {y})");
+        }
+    }
+    let public = Bench::new(RecordDestination::Public);
+    public.record(&screen, marks());
+    let before = public.recording_bytes();
+    let refusal = public.stop(None).expect_err("the public stop refuses");
+    assert_eq!(refusal.code, "record_case_reading_withheld", "{refusal:?}");
+    let details = refusal.details.clone().expect("details");
+    assert!(details.get("case").is_none(), "{details}");
+    assert_eq!(details["target"], "ui/corner", "{details}");
+    assert_eq!(
+        details["withheld"],
+        json!([{"target": "ui/corner",
+                "kept": {"x": 80, "y": 8, "width": 12, "height": 12},
+                "withheld": [{"x": 50, "y": 4, "width": 40, "height": 10}],
+                "readings": ["value/count/left"]}]),
+        "{details}"
+    );
+    assert_eq!(public.recording_bytes(), before, "nothing is written");
+
+    let local = Bench::new(RecordDestination::Local);
+    local.record(&screen, marks());
+    let lab = local.stopped(None);
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert!(lab.get("withheld").is_none(), "{lab}");
+    let (case, scene) = local.case(&lab, "step_01");
+    assert!(case["expect"].get("observe").is_some(), "{case}");
+    assert_eq!(
+        case["expect"]["recognize"],
+        json!([
+            {"target": "ui/button", "passed": true},
+            {"target": "ui/corner", "passed": true},
+            {"target": "value/count", "passed": true}
+        ]),
+        "{case}"
+    );
+    assert!(
+        scene == step_scene(&screen, &[BUTTON, CORNER, NEXT, LEFT]),
+        "the local scene is not today's"
+    );
+}
+
+// Fix round 1, test 11 (the review's remark): the unbounded reading driven to its code through the
+// self-check `cases`, which record stop runs last. No recording makes a reading nothing confines:
+// every reading a recorded package declares is a value test's side, a fixed rectangle. So the
+// package the self-checks before `cases` build of a public recording with a value test
+// (`package_without_cases`, as record stop builds it) has that side's region made the keyword
+// `full_frame` in its entry task, and `cases` is run on it as record stop runs it (its first failure
+// the refusal): `record_case_reading_unbounded` naming the side, before any case is made.
+#[test]
+fn priv3_fix1_an_unbounded_reading_refuses_the_self_check_cases_with_its_code() {
+    let bench = Bench::new(RecordDestination::Public);
+    bench.record(
+        &first(),
+        vec![template_mark("ui/button", BUTTON), count_at_least_25000()],
+    );
+    let recording: LabRecording =
+        serde_json::from_slice(&bench.recording_bytes()).expect("the recording");
+    let settings = StopSettings {
+        game: Some("neutral".to_owned()),
+        server: Some("test".to_owned()),
+        locale: Some("en-US".to_owned()),
+        package_id: None,
+        requires: None,
+        timeout_ms: None,
+        arrival_timeout_ms: DEFAULT_ARRIVAL_TIMEOUT_MS,
+        application_arrival_timeout_ms: DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS,
+    };
+    let plan = generate_plan(&recording, &settings)
+        .unwrap_or_else(|error| panic!("the plan: {}: {}", error.code, error.message));
+    let bytes = package_without_cases(&plan, &bench.ocr).expect("the package");
+    let mut entries =
+        expand_content_container(&bytes, ContentContainer::Zip, ContainmentLimits::default())
+            .expect("the package's files");
+    let name = format!("resources/operations/{TASK_ID}/task.json");
+    let mut task: Value = serde_json::from_slice(&entries[&name]).expect("task JSON");
+    let side = task["ocr_targets"]
+        .as_array_mut()
+        .expect("ocr_targets")
+        .iter_mut()
+        .find(|target| target["id"] == "value/count/left")
+        .expect("the value test's side");
+    side["region"] = json!({"mode": "full_frame"});
+    entries.insert(name, serde_json::to_vec_pretty(&task).expect("task bytes"));
+    let refusal = regression_cases(
+        &plan,
+        &entries,
+        &FrameCache::new(),
+        &bench.ocr,
+        &mut Failures::first(),
+    )
+    .expect_err("the self-check cases refuses");
+    assert_eq!(refusal.code, "record_case_reading_unbounded", "{refusal:?}");
+    assert_eq!(
+        refusal.details.as_ref().map(|details| &details["target"]),
+        Some(&json!("value/count/left")),
+        "{refusal:?}"
+    );
 }
 
 // The row `name` of the operation table this tree holds.

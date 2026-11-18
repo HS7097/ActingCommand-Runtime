@@ -41,10 +41,15 @@
 //!   requires one has its case made without the page judgement, and one left with nothing to pin
 //!   gives no case (`record_case_reading_not_written`). A case that fails where a failed check's
 //!   target needs no reading and reads inside a withheld rectangle is
-//!   `record_case_reading_withheld`; every other failure is `record_case_failed`.
-//!   `scene_construction` lists what is pasted, as before; `record stop` and `record ready` answer
-//!   the withheld rectangles and their targets, and the targets left out, each only when there is
-//!   one. A local recording's scenes are built as before.
+//!   `record_case_reading_withheld`; every other failure is `record_case_failed`. Fix round 1:
+//!   so is a page judgement that fails because a target the page forbids, which needs no reading
+//!   and reads inside a withheld rectangle, passes on the canvas colour there; and, before any
+//!   case is made, whether or not one would pass, a picture the package keeps itself (a
+//!   template's crop, a colour digest's cells, [`kept_pictures`]) whose rectangle meets a withheld
+//!   rectangle: one cause, a target that is no reading reads, or keeps, pixels inside a withheld
+//!   rectangle. `scene_construction` lists what is pasted, as before; `record stop` and `record
+//!   ready` answer the withheld rectangles and their targets, and the targets left out, each only
+//!   when there is one. A local recording's scenes are built as before.
 //! - **Ambiguity is no miss** (the coordinator's ruling after the first round, R2's ruling 4 as its
 //!   precedent): a press step of a linear run waits for its own page and does not ask which page of
 //!   the whole package a screen is (#463 SC-1: a select step's confirmation does, before its press,
@@ -66,7 +71,9 @@
 use super::crosscheck::{Failures, FrameCache, Locus, evaluator_bundle};
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
-use super::model::{RecordDestination, RecordSize, RecordWithheld, RecordedFrame};
+use super::model::{
+    MarkFamily, RecordDestination, RecordRect, RecordSize, RecordWithheld, RecordedFrame,
+};
 use super::ready::press_frame;
 use super::store::{blocked, hex_sha256, invalid, with_details};
 use crate::LabOcr;
@@ -457,6 +464,18 @@ pub(crate) fn regression_cases(
         }
         return Ok(set);
     }
+    // #463 PRIV-3 fix round 1 (the coordinator's ruling): the package keeps no pixel of a reading
+    // in a picture of its own, a template's crop or a colour digest's cells, whether or not a case
+    // would pass; a local recording withholds nothing.
+    if !built.withheld.is_empty() {
+        for (target, met) in built.kept_over(&kept_pictures(plan, evaluator.pack())?) {
+            let locus = Locus {
+                target: Some(target.clone()),
+                ..Locus::default()
+            };
+            failures.fail(locus, picture_withheld(&target, met))?;
+        }
+    }
     for source in sources {
         let page = detected_page(detector, &plan.game, &source.page)?;
         let loaded = cache.get(&source.frame.sha256).ok_or_else(|| {
@@ -531,7 +550,31 @@ pub(crate) fn regression_cases(
                     .collect::<Vec<_>>();
                 // #463 PRIV-3: a failed check's target that reads inside a withheld rectangle
                 // makes the failure the withholding's; every other failure is today's.
-                let met = built.met_by(&failed);
+                let mut met = built.met_by(&failed);
+                // Fix round 1: a page judgement that fails with no such check to blame may fail
+                // because a target the page forbids, which needs no reading and reads inside a
+                // withheld rectangle, passes on the canvas colour there (a colour probe that
+                // expects black): each such target is run alone on the scene, and one that passes
+                // is the failure's, a box drawn over a value reading.
+                if met.is_empty() && judged && failed.iter().any(|check| check.page.is_some()) {
+                    for target in forbidden
+                        .iter()
+                        .filter(|target| built.over_withheld(target))
+                    {
+                        let probe = case_document(
+                            plan,
+                            &source.id,
+                            &source.source,
+                            regions,
+                            &scene,
+                            expectation(None, &[], std::slice::from_ref(target)),
+                        )?;
+                        let probed = run_regression_case_on_bundle(bundle, &probe, &scene, ocr);
+                        if passes_on_scene(&probed, target) {
+                            met.push(built.met_json(target, &built.withheld_met(target)));
+                        }
+                    }
+                }
                 let refusal = if met.is_empty() {
                     case_failed(&source, &page, &failed)
                 } else {
@@ -557,14 +600,20 @@ pub(crate) fn regression_cases(
             set.warn_ambiguous(&source.id, &page, others, &left_out);
         }
         // #463 PRIV-3 amendment 1: the targets this case leaves out because they need a withheld
-        // reading, by their ids only, and whether its page was judged.
+        // reading, by their ids only, and whether its page was judged; fix round 1: a case made
+        // without the page judgement for it names the targets its page forbids that a scene
+        // cannot evaluate, as `record_case_page_ambiguous` names them.
         if !readings_out.is_empty() {
-            set.left_out.push(json!({
+            let mut item = json!({
                 "case": source.id,
                 "page": page,
                 "targets": readings_out,
                 "page_judged": judged
-            }));
+            });
+            if !judged && !left_out.is_empty() {
+                item["forbidden_left_out"] = json!(left_out);
+            }
+            set.left_out.push(item);
         }
         if bare.contains(&page) {
             set.warnings.push(json!({
@@ -784,8 +833,8 @@ impl SceneRegions {
 
     /// For each failed check of `failed` that names a target that needs no reading by declaration
     /// (amendment 1: a box drawn over a quantity), the withheld rectangles that target reads inside
-    /// (its rectangles meet them: their intersection's area is above zero), `{target, withheld}`,
-    /// when there is one; empty of a local recording.
+    /// (its rectangles meet them: their intersection's area is above zero), as [`Self::met_json`]
+    /// names them, when there is one; empty of a local recording.
     pub(crate) fn met_by(&self, failed: &[RegressionCheck]) -> Vec<Value> {
         failed
             .iter()
@@ -793,11 +842,60 @@ impl SceneRegions {
             .filter(|check| !self.needs.contains(&check.target))
             .filter_map(|check| {
                 let met = self.withheld_met(&check.target);
+                (!met.is_empty()).then(|| self.met_json(&check.target, &met))
+            })
+            .collect()
+    }
+
+    /// Fix round 1: whether the target `id` needs no reading by declaration and reads inside a
+    /// withheld rectangle; never of a local recording.
+    fn over_withheld(&self, id: &str) -> bool {
+        !self.needs.contains(id) && !self.withheld_met(id).is_empty()
+    }
+
+    /// The target `id` and the withheld rectangles `met` it reads or keeps pixels inside, `{target,
+    /// withheld, readings}`: each rectangle `{x, y, width, height}`, and (fix round 1) the reading
+    /// targets they belong to, each once, in their order.
+    fn met_json(&self, id: &str, met: &[&Patch]) -> Value {
+        let mut readings: Vec<&String> = Vec::new();
+        for owner in met
+            .iter()
+            .filter_map(|patch| self.withheld.get(*patch))
+            .flatten()
+        {
+            if !readings.contains(&owner) {
+                readings.push(owner);
+            }
+        }
+        json!({
+            "target": id,
+            "withheld": met.iter().map(|patch| patch_json(**patch)).collect::<Vec<_>>(),
+            "readings": readings
+        })
+    }
+
+    /// Fix round 1 (the coordinator's ruling: a template's stored picture holds no pixel of a
+    /// reading): of the pictures the package keeps, `kept` (`(target, rectangle)`,
+    /// [`kept_pictures`]), each whose rectangle meets a withheld rectangle, with the target and,
+    /// as [`Self::met_json`] names it, `kept` the rectangle; none of a local recording, which
+    /// withholds nothing.
+    pub(crate) fn kept_over(&self, kept: &[(String, PackRect)]) -> Vec<(String, Value)> {
+        kept.iter()
+            .filter_map(|(target, rect)| {
+                let met = self
+                    .withheld
+                    .keys()
+                    .filter(|patch| meets(*rect, **patch))
+                    .collect::<Vec<_>>();
                 (!met.is_empty()).then(|| {
-                    json!({
-                        "target": check.target,
-                        "withheld": met.iter().map(|patch| patch_json(**patch)).collect::<Vec<_>>()
-                    })
+                    let mut named = self.met_json(target, &met);
+                    named["kept"] = json!({
+                        "x": rect.x,
+                        "y": rect.y,
+                        "width": rect.width,
+                        "height": rect.height
+                    });
+                    (target.clone(), named)
                 })
             })
             .collect()
@@ -951,7 +1049,7 @@ fn needing_readings(pack: &RecognitionPack, readings: BTreeSet<String>) -> BTree
                 _ => false,
             };
             if needed {
-                needs.insert(target.id().to_owned());
+                needs.insert(target_id(target).to_owned());
             }
         }
         if needs.len() == before {
@@ -981,6 +1079,51 @@ fn reading_declarations(
                 format!("the generated package's {name} declares no readable reading: {error}"),
             )
         })
+}
+
+/// #463 PRIV-3 fix round 1 (the coordinator's ruling: a template's stored picture holds no pixel
+/// of a reading): the rectangles of the frame whose pixels the package of `plan`, admitted as
+/// `pack`, keeps itself, each with its target: each template's crop, the picture its asset holds
+/// (a template mark's region, cut from its frame by `record mark`; a scrolling select's anchor,
+/// start and end marks, cut from its screens by `record stop`), then each colour digest's region,
+/// whose `cells` keep its colours cell by cell (up to 32 by 32 cells, five bits a channel). No
+/// other kind of target keeps a pixel of a frame: a colour probe and a template's colour check
+/// keep one mean colour of their region, an OCR target the texts it expects, an NN target its
+/// labels, and a check, a value test and a click-only target nothing of a frame.
+fn kept_pictures(plan: &Plan, pack: &RecognitionPack) -> LabResult<Vec<(String, PackRect)>> {
+    let mut kept = Vec::new();
+    // The template marks whose crops the package carries (`Plan::template_assets`).
+    for mark in plan.emitted.iter().filter_map(|id| plan.marks.get(id)) {
+        if mark.family != MarkFamily::Template || mark.crop.is_none() {
+            continue;
+        }
+        let crop = mark.region.ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("template '{}' has no region its crop was cut from", mark.id),
+            )
+        })?;
+        kept.push((plan.target_id(&mark.id), pack_rect(crop)));
+    }
+    for (target, crop) in super::scan::template_crops(plan)? {
+        kept.push((target, pack_rect(crop)));
+    }
+    for target in &pack.targets {
+        if let RecognitionTarget::ColorDigest(digest) = target {
+            kept.push((digest.id.clone(), digest.region));
+        }
+    }
+    Ok(kept)
+}
+
+/// `rect`, a rectangle of the recording, as the package's.
+fn pack_rect(rect: RecordRect) -> PackRect {
+    PackRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
 }
 
 /// #463 PRIV-3: the rectangles each target of `pack` reads, of the list's `regions`: each of its
@@ -1013,10 +1156,31 @@ fn target_reads(
         .iter()
         .map(|target| {
             let mut rects = Vec::new();
-            gather(pack, &own, target.id(), &mut BTreeSet::new(), &mut rects);
-            (target.id().to_owned(), rects)
+            gather(
+                pack,
+                &own,
+                target_id(target),
+                &mut BTreeSet::new(),
+                &mut rects,
+            );
+            (target_id(target).to_owned(), rects)
         })
         .collect()
+}
+
+/// Fix round 1: the id of the recognition target `target`, each kind's own `id` (the recognition
+/// pack keeps its accessor of it to itself).
+fn target_id(target: &RecognitionTarget) -> &str {
+    match target {
+        RecognitionTarget::Template(target) => &target.id,
+        RecognitionTarget::Color(target) => &target.id,
+        RecognitionTarget::ClickOnly(target) => &target.id,
+        RecognitionTarget::Ocr(target) => &target.id,
+        RecognitionTarget::Nn(target) => &target.id,
+        RecognitionTarget::ColorDigest(target) => &target.id,
+        RecognitionTarget::Composite(target) => &target.id,
+        RecognitionTarget::ValueTest(target) => &target.id,
+    }
 }
 
 /// The rectangles the target `id` reads into `rects`: its own (`own`), and a check's members' or
@@ -1034,7 +1198,7 @@ fn gather<'p>(
     if let Some(found) = own.get(id) {
         rects.extend(found.iter().copied());
     }
-    match pack.targets.iter().find(|target| target.id() == id) {
+    match pack.targets.iter().find(|target| target_id(target) == id) {
         Some(RecognitionTarget::Composite(check)) => {
             for member in &check.members {
                 gather(pack, own, member, seen, rects);
@@ -1337,6 +1501,17 @@ fn others_matched(verdict: &RegressionCaseVerdict, page: &str) -> Option<Vec<Str
     })
 }
 
+/// #463 PRIV-3 fix round 1: whether the run `verdict` of a case that expects the target `target`
+/// not to pass found it passing on its scene.
+fn passes_on_scene(verdict: &RegressionCaseVerdict, target: &str) -> bool {
+    verdict.checks.iter().any(|check| {
+        check
+            .target
+            .as_ref()
+            .is_some_and(|checked| checked.target == target && checked.recognized == Some(true))
+    })
+}
+
 /// The runner's reasons, each once, for the checks of `verdict` that did not run.
 fn not_run_reasons(verdict: &RegressionCaseVerdict) -> Vec<&'static str> {
     verdict
@@ -1414,8 +1589,9 @@ fn case_details(
 
 /// #463 PRIV-3 (amendment 1, one cause): `record_case_reading_withheld`: the case of `source` of a
 /// public recording, which expects the page `page`, failed the checks `failed`, and the target of
-/// at least one of them needs no reading by declaration and reads inside a rectangle withheld from
-/// the scene (`met`, each `{target, withheld}`): a recognition box drawn over a value reading.
+/// at least one of them, or (fix round 1) a target its page forbids that passes on the scene,
+/// needs no reading by declaration and reads inside a rectangle withheld from the scene (`met`,
+/// each `{target, withheld, readings}`): a recognition box drawn over a value reading.
 fn case_reading_withheld(
     source: &Source<'_>,
     page: &str,
@@ -1436,7 +1612,7 @@ fn case_reading_withheld(
             LabCode::RecordCaseReadingWithheld.as_str(),
             format!(
                 "the regression case {} that record stop made from frame {} for page {} does not \
-                 pass, and a target its checks name, which reads no value itself, reads inside a \
+                 pass, and a target it is about, which reads no value itself, reads inside a \
                  rectangle withheld from the scene of this public recording, which holds a value \
                  reading (details.withheld): a recognition box is drawn over a value reading. \
                  Separate the boxes (narrow that target's region off the reading, or anchor the \
@@ -1446,6 +1622,32 @@ fn case_reading_withheld(
             ),
         ),
         details,
+    )
+}
+
+/// #463 PRIV-3 fix round 1 (the one cause [`case_reading_withheld`]'s is: a target that needs no
+/// reading reads, or keeps, pixels inside a withheld rectangle): `record_case_reading_withheld`:
+/// the package of a public recording would keep a picture of the target `target` (a template's
+/// crop, a colour digest's cells) whose rectangle meets rectangles withheld from its scenes, `met`
+/// (`{target, kept, withheld, readings}`), whether or not a case would pass.
+fn picture_withheld(target: &str, met: Value) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordCaseReadingWithheld.as_str(),
+            format!(
+                "the package of this public recording would keep a picture of '{target}' (a \
+                 template's image, a colour digest's cells) whose rectangle meets a rectangle \
+                 withheld from its scenes, which holds a value reading (details.withheld): the \
+                 picture would carry the reading's pixels into the package, whether or not a case \
+                 passes. Separate the boxes (draw the template or the digest off the reading), or \
+                 record with --destination local; nothing was written"
+            ),
+        ),
+        json!({
+            "target": target,
+            "withheld": [met],
+            "outcome": Outcome::new(LabCode::RecordCaseReadingWithheld).envelope(Detail::Full)
+        }),
     )
 }
 

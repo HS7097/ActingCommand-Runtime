@@ -2844,6 +2844,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--force",
                 "--holder <id>",
                 "--lease-id <id>",
+                "--destination local|public",
                 "--state-dir <dir>",
             ],
             output_fields: &[
@@ -2942,6 +2943,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--arrival-timeout-ms <ms>",
                 "--application-arrival-timeout-ms <ms>",
                 "--template-margin-bound <d>",
+                "--destination local|public",
                 "--dry-run",
                 "--state-dir <dir>",
             ],

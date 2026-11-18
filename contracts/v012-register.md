@@ -40670,6 +40670,37 @@ list of a package's read regions it uses is [privacy-zones.md](privacy-zones.md)
   the plain one now say that a call with `ruler` writes only the ruled previews, and the plain ones
   only a call without it (the contract twice, the operation table's `ruler`, the MCP manual's
   `ac_record_review`, a comment of `review.rs`).
+- *Fix round 1* (`rd-1119/brief-463-priv3-fix1.md`, after the first CI round and the independent
+  review). The Lab's library compiles: `cases.rs` reached a target's id through
+  `RecognitionTarget::id`, which the recognition pack keeps to itself (E0624); a private
+  `cases::target_id` over the eight kinds, each of whose `id` is public, takes its place, and the
+  recognition pack's interface does not move. **A template's stored picture holds no pixel of a
+  reading** (the coordinator's ruling): of a public recording, before any case is made and whether
+  or not one would pass, a picture the package keeps itself whose rectangle meets a withheld
+  rectangle refuses the self-check `cases` with `record_case_reading_withheld`, naming the target,
+  the picture's rectangle (`kept`), the withheld rectangles and the readings they hold: a
+  template's crop (a template mark's region; a scrolling select's anchor, start and end marks,
+  `scan::template_crops`) and, the one other kind found to keep pixels when each kind was checked,
+  a colour digest's region, whose `cells` keep its colours cell by cell (up to 32 by 32 cells at
+  five bits a channel); a colour probe and a colour check keep one mean colour, an OCR target its
+  expected texts, an NN target its labels, a check, a value test and a click-only target nothing
+  of a frame. The code's one cause is now said as "a target that needs no reading reads, or keeps,
+  pixels inside a withheld rectangle", which also covers a judged page that fails because a target
+  it forbids, which needs no reading and reads inside a withheld rectangle, passes on the canvas
+  colour there (each such target run alone on the stored scene). Each entry of the refusal's
+  `withheld` names its `readings`. A case made without the page judgement for a value reading names
+  in its `readings_left_out` entry the forbidden targets a scene cannot evaluate
+  (`forbidden_left_out`), as `record_case_page_ambiguous` does. `contracts/privacy-zones.md` says
+  what a public recording's scene does; the contract, the operation table and the comment of
+  `generate.rs` say that admission asks `provenance` to be an object or null; the command-line
+  contracts of `record start` and `record stop` (`lab2_cli.rs`, `session_contracts.rs`) name
+  `--destination`. Tests: a template kept over a reading, its case passing all the same, refused,
+  and the same recording local generated as before (10); the unbounded reading driven to its code
+  through the self-check `cases` (11; no recording makes a reading nothing confines, so the package
+  the self-checks before `cases` build has its value test's side made `full_frame`); actinglab's
+  command line given a third word (12, `apps/actinglab/src/tests/gate_463_priv3_cli.rs`). Adapted:
+  test 7, whose box over the reading was a template and is now a colour probe (a template there
+  is refused before its case, test 10), its `withheld` naming the reading.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

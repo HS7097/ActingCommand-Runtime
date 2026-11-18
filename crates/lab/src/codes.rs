@@ -177,12 +177,14 @@ actingcommand_contract::outcome_codes! {
         /// `record stop`'s self-check `cases`, one for each such target; no case is made and
         /// nothing is written (exit 3; actinglab details `target`).
         RecordCaseReadingUnbounded => "record_case_reading_unbounded": error / none,
-        /// Error. #463 PRIV-3 (amendment 1, one cause): a regression case of a public recording
-        /// misses on its package, and the target of a failed check needs no reading by declaration
-        /// and reads inside a rectangle withheld from its scene: a recognition box drawn over a
-        /// value reading. The case is not written and `record stop` refuses as at any self-check's
-        /// failure, nothing written (exit 3; actinglab details as `record_case_failed`'s, and
-        /// `withheld`).
+        /// Error. #463 PRIV-3 (amendment 1 and fix round 1, one cause): in a public recording, a
+        /// target that needs no reading by declaration reads, or keeps, pixels inside a rectangle
+        /// withheld from the scenes: a recognition box drawn over a value reading. A case misses
+        /// on such a target (a failed check's, or one its page forbids that passes on the canvas
+        /// colour), or, before any case, a picture the package keeps (a template's crop, a colour
+        /// digest's cells) meets such a rectangle. `record stop` refuses as at any self-check's
+        /// failure, nothing written (exit 3; actinglab details `withheld`, and those of
+        /// `record_case_failed` of a failed case, `target` of a kept picture).
         RecordCaseReadingWithheld => "record_case_reading_withheld": error / none,
         /// Warning. #463 PRIV-3 amendment 1: the page of a regression case of a public recording
         /// requires a target that needs a withheld reading by declaration, so its case is made

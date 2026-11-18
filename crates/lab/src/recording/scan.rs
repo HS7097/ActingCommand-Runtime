@@ -679,6 +679,26 @@ pub(crate) fn template_assets(plan: &Plan) -> Vec<(String, String)> {
     assets
 }
 
+/// #463 PRIV-3 fix round 1: the rectangle of the frame each template of a scrolling select of the
+/// package keeps as its picture, `(target id, rectangle)`, in the order of [`template_assets`]:
+/// the anchor and the start mark at their declared regions, the end mark at its own, as
+/// [`scan_crops`] cuts them.
+pub(crate) fn template_crops(plan: &Plan) -> LabResult<Vec<(String, RecordRect)>> {
+    let mut crops = Vec::new();
+    for (step, select) in plan.select_steps() {
+        if select.scan.is_none() {
+            continue;
+        }
+        let (rows, scan) = rows_and_scan(&select.declaration)?;
+        crops.push((target_id(plan, step, ANCHOR), rows.anchor));
+        crops.push((target_id(plan, step, START), scan.start));
+        if let Some(end) = scan.end {
+            crops.push((target_id(plan, step, END), end));
+        }
+    }
+    Ok(crops)
+}
+
 /// The frame of `frame` in `cache`.
 fn loaded_of<'c>(cache: &'c FrameCache, frame: &RecordedFrame) -> LabResult<&'c LoadedFrame> {
     cache.get(&frame.sha256).ok_or_else(|| {

@@ -703,10 +703,12 @@ naming this file.
   one is), and a page that requires one has its case made without the page judgement; a page with
   nothing else to pin gives no case, the warning `record_case_reading_not_written`. A reading
   nothing confines refuses the stop, `record_case_reading_unbounded` (bound it, or record
-  locally); a case that misses on a box drawn over a reading (a target that reads no value itself
-  whose region meets a withheld rectangle) refuses it, `record_case_reading_withheld` (separate
-  the boxes, or record locally). The refusal of a local package in a public repository is a later
-  step.
+  locally); a box drawn over a reading (a target that reads no value itself whose region meets a
+  withheld rectangle) refuses it, `record_case_reading_withheld` (separate the boxes, or record
+  locally): when a case misses on it, and, before any case and whether or not one would pass, when
+  it is a template whose crop, or a colour digest whose cells, the package would keep (the
+  refusal's `withheld[].kept`): such a picture would carry the reading's pixels into the package.
+  The refusal of a local package in a public repository is a later step.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

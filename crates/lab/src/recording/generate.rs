@@ -3326,7 +3326,7 @@ pub(crate) fn render(
     }
     // #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"): a local recording's
     // package says so; a public one's carries no mark, and no mark means public. Admission asks of
-    // `provenance` only that it is an object.
+    // `provenance` only that it is an object or null.
     if plan.destination == RecordDestination::Local {
         provenance.insert("destination".into(), json!(RecordDestination::Local.word()));
     }
