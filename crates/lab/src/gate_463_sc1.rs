@@ -18,7 +18,8 @@
 // step's stays the warning it was. Fix round 2 (rd-1118/brief-463-sc1-fix2.md): the refusal at
 // `record stop` of a frame of the step before, which the mark did not judge (a sample added to that
 // step after the select was marked), and one warning for each select step, owner of the frames and
-// other page, naming every such frame (`frames`).
+// other page, naming every such frame (`frames`). Fix round 3 (rd-1118/brief-463-sc1-fix3.md): the
+// owners told apart, a later step's own frames, its page transition's and an ending's.
 //
 // Frames are synthetic: 96x64 pixels of flat gray 60. The scripted OCR provider reads one block
 // per marker pixel inside the requested region, its text chosen by the marker's gray value, at
@@ -1035,6 +1036,76 @@ fn sc1_two_frames_of_one_later_step_are_one_warning_and_two_later_steps_two() {
     assert_eq!(
         warnings_of(&lab["warnings"], AFTER_PRESS),
         expected,
+        "{lab}"
+    );
+}
+
+// Fix round 3 (the third review's first point): the owners of the frames told apart. Step 1 the
+// select on the list; step 2 the list with a slot busy, its page `ui/busy`, pressed, f0002; step 3
+// a loading screen that keeps the list's page area beside a mark of its own (x 40), f0003, turned
+// into step 2's page transition (`to_transition`); then a screen that is not the list, f0004, the
+// package's step 3. The list's page passes beside step 2's page on step 2's own frame and beside
+// step 2's transition's page on its transition's frame: `record stop` generates and answers two
+// warnings, one whose frames are step 2's own (`frame_transition` false, beside `step_02`), one
+// whose frames are its transition's (`frame_transition` true, beside `transition_02`), each with
+// its own frames. Then, on the stopped recording, an ending taken from a screen that keeps the
+// list's page area beside a mark of its own (x 20), f0005: `record stop` regenerates and answers
+// the two and one more, whose frames are the ending's (`frame_outcome_key`, beside its page
+// `ending_01_other`).
+#[test]
+fn sc1_a_later_steps_own_and_transition_frames_are_two_warnings_and_an_endings_one() {
+    let recording = Recording::new();
+    recording.select_on_the_list();
+    recording.marked(recording.on(
+        "busy",
+        &busy_list(),
+        json!({"add": [color(BUSY, BUSY_AREA)], "click": {"region": SLOTS[0]}}),
+    ));
+    recording.press_open_step();
+    recording.marked(recording.on(
+        "loading",
+        &screen([None, None], &[(MORE_AREA, SHOWN)]),
+        json!({"add": [color("loading/mark", MORE_AREA)]}),
+    ));
+    recording.marked(json!({"step_action": {"kind": "to_transition", "step": 3}}));
+    recording.marked(recording.on(
+        "final",
+        &other_screen(&[FINAL_AREA]),
+        json!({"add": [color(FINAL, FINAL_AREA)]}),
+    ));
+    let own = later_warning(2, &["f0002"]);
+    let transition = json!({"code": AFTER_PRESS, "step": 1, "record_index": 1, "page": "step_01",
+                            "frames": ["f0003"], "frame_step": 2, "frame_record_index": 2,
+                            "frame_transition": true, "other_page": "transition_02",
+                            "other_step": 2, "other_record_index": 2, "other_transition": true,
+                            "after_press": true});
+
+    let lab = recording.stop_session();
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    assert_eq!(lab["transitions"][0]["step"], 2, "{lab}");
+    assert_eq!(lab["transitions"][0]["page"], "transition_02", "{lab}");
+    assert_eq!(
+        warnings_of(&lab["warnings"], AFTER_PRESS),
+        [own.clone(), transition.clone()],
+        "{lab}"
+    );
+
+    recording.marked(json!({"ending": {
+        "frame": recording.frame("other_end", &screen([None, None], &[(OTHER_AREA, SHOWN)])),
+        "outcome_key": "neutral_task_other",
+        "page": "other",
+        "add": [color("ending/other", OTHER_AREA)]
+    }}));
+    let ending = json!({"code": AFTER_PRESS, "step": 1, "record_index": 1, "page": "step_01",
+                        "frames": ["f0005"], "frame_outcome_key": "neutral_task_other",
+                        "other_page": "ending_01_other", "other_outcome_key": "neutral_task_other",
+                        "after_press": true});
+
+    let lab = recording.stopped();
+    assert_eq!(lab["lab_status"], "regenerated", "{lab}");
+    assert_eq!(
+        warnings_of(&lab["warnings"], AFTER_PRESS),
+        [own, transition, ending],
         "{lab}"
     );
 }

@@ -644,7 +644,7 @@ naming this file.
   `already_generated`) no self-check runs: `template_margin_bound` is taken there, its range is
   checked (outside 0 to 1 `validation_failed`) and it has no effect. What to do with a mark that
   barely passes is yours to decide.
-  #463 SC-1 (0.12.72; `contracts/lab-recording.md`, "Self-checks", item 8): a select step's
+  #463 SC-1 (0.12.73; `contracts/lab-recording.md`, "Self-checks", item 8): a select step's
   confirmation requires that exactly one page of the package is recognised on the screen it meets,
   and captures that screen before the select step's press. A select step's page that passes beside
   another page on a frame of the step before it is refused (`ac_record_mark` where it knows the

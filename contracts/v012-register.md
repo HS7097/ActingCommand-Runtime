@@ -38088,9 +38088,9 @@ while it waits: nothing bound (the endpoint pending, no `runtime.instance_bound`
 control, no `command.*` or `runtime.failed` under the claim, its key released, one skip
 `recognize` `global_paused`. No test adapted or retired; no golden changes.
 
-### 1.469 Slice #463 SC-1 (0.12.72): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`, merged with main `98c1c0f1`, the 0.12.72 train of §1.464 and §1.466; fix round 1, after the independent review, `rd-1118/brief-463-sc1-fix1.md`; fix round 2, after the second review, `rd-1118/brief-463-sc1-fix2.md`)
+### 1.469 Slice #463 SC-1 (0.12.73): a select step's page is checked for uniqueness on every frame of the recording (Workflow #463; observed on production 0.12.71; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sc1-select-uniqueness.md`, on main `c47a32ff`, merged with main `98c1c0f1`, the 0.12.72 train of §1.464 and §1.466; fix round 1, after the independent review, `rd-1118/brief-463-sc1-fix1.md`; fix round 2, after the second review, `rd-1118/brief-463-sc1-fix2.md`; fix round 3, after the third review and the release of 0.12.72, `rd-1118/brief-463-sc1-fix3.md`)
 
-This section takes 1.469, the number its work order gives. It ships in 0.12.72. Where the train
+This section takes 1.469, the number its work order gives. It ships in 0.12.73. Where the train
 meets it: §1.466's warning `record_template_near_threshold` is drawn from items 4, 7 and 9, and
 this slice's judgement in item 8 adds none; both read a page with the one evaluation of item 4
 (`Evaluation::page`), this slice its verdict alone. Fix round 1: this slice's warning
@@ -38166,6 +38166,16 @@ the five steps with two samples each, where each step's own page is the one othe
 list's, answer five, not fifteen. The branch is merged with main `9188671a`, which adds §1.468
 (#480 PG-1) before this section; the two meet in no file but this register and the outcome index's
 summary, regenerated.
+
+**Fix round 3** (after the third review, which found nothing that must change;
+`rd-1118/brief-463-sc1-fix3.md`). Release 0.12.72 was cut from main without this slice, so it ships
+in 0.12.73: this heading, the catalogue's `since` of `record_select_page_passes_after_press` (the
+outcome index regenerated), the notes of the operation table, the MCP manual and the gate map's
+comment say so. The release file `contracts/outcome-codes/released/0.12.72.json` is main's and is
+not touched: a release file holds only the settled and the retired entries of its release
+(`ci/outcome_release.py`, G9), and this slice's code is `pending`. The branch is merged with main
+`a34b0e49`, the release of 0.12.72, which touches none of this slice's files. One test more, the
+third review's: the owners of the frames told apart ("Tests"). No behaviour changes.
 
 **The rule** (as fix round 1 leaves it).
 - *Both ways.* For every select step S, where S's page passes on a live frame of the recording that
@@ -38307,8 +38317,13 @@ stop` (`select_page_passes_on_other_frame`, naming the select step and its page,
 is and the other page); and the grouping: a later step with a frame and a sample, then another later
 step, answer two warnings, the first naming both frames of the first. The assertions that read the
 warning (tests 1 to 3) read `frames`, a list of the one frame, where they read `frame_id`; nothing
-else of them changed. No golden changes; no test leaves a gate map (the renamed tests were never on
-main).
+else of them changed. Fix round 3, one more test, thirteen in all: a later step with a page
+transition, on whose own frame the select step's page passes beside that step's page and on whose
+transition's frame beside the transition's page, answers two warnings, one for each owner
+(`frame_transition` false and true), each with its own `frames`; an ending taken on the stopped
+recording, on whose frame the select step's page passes beside the ending's page, adds one whose
+owner is the ending (`frame_outcome_key`). No golden changes; no test leaves a gate map (the
+renamed tests were never on main).
 
 **What is not changed.** For a recording without a select step, what passes and what refuses, the
 package and the cases, byte for byte (the new code runs only for a select step); today's direction
