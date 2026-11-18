@@ -117,7 +117,10 @@ const SCAN_WITHOUT_END_REVISION: u64 = 18;
 const SCAN: &str = "scan";
 const END: &str = "end";
 /// Revision 20: a `repeated_anchor` layout's shared read (Workflow #463 SEL-2L), and the members
-/// it reads: a task file's `candidate_layouts`, a layout's `kind` and its `shared_ocr`.
+/// it reads: a task file's `candidate_layouts`, a layout's `kind` with the value
+/// `repeated_anchor`, and its `shared_ocr`; revision 7's masked anchor ([`layout_anchor_masked`])
+/// reads `candidate_layouts`, `kind` and the value `repeated_anchor` by the same constants, and
+/// not `shared_ocr`.
 const ANCHORED_SHARED_READ_REVISION: u64 = 20;
 const CANDIDATE_LAYOUTS: &str = "candidate_layouts";
 const KIND: &str = "kind";
@@ -732,11 +735,11 @@ fn walk(context: &Context<'_>, value: &Value, holder: Option<&str>, revision: &m
 /// `repeated_anchor` layout whose anchor names one of `masked`, the template targets of its pack
 /// that declare a mask or scales ([`masked_templates`]), wherever in the pack they stand.
 fn layout_anchor_masked(task: &Value, masked: &BTreeSet<String>) -> bool {
-    task.get("candidate_layouts")
+    task.get(CANDIDATE_LAYOUTS)
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|layout| layout.get("kind").and_then(Value::as_str) == Some("repeated_anchor"))
+        .filter(|layout| layout.get(KIND).and_then(Value::as_str) == Some(REPEATED_ANCHOR))
         .filter_map(|layout| layout.get("anchor").and_then(Value::as_str))
         .any(|anchor| masked.contains(anchor))
 }

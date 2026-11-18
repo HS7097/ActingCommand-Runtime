@@ -330,10 +330,6 @@ actingcommand_contract::outcome_vocabulary! {
         /// the finger further along the list than the kernel admits (its length less a row's, less
         /// one), which no given number changes: the scroll is recorded again with shorter swipes.
         ScanSwipeTooLong => "scan_swipe_too_long",
-        /// #463 SEL-2L-a: the request's `read` declares `blocks` beside `rows`: a scrolling
-        /// select's names are not read by detecting their blocks yet (a select of fixed slots
-        /// takes it).
-        BlocksWithRows => "blocks_with_rows",
     }
 }
 

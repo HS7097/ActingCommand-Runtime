@@ -162,6 +162,11 @@ mod gate_463_priv3;
 // refusal of a mark counts marks.
 #[cfg(test)]
 mod gate_463_sel2l_a;
+
+// #463 SEL-2L-rows: a scrolling select may read its names by detecting their blocks: its layout
+// gains the shared read over its band.
+#[cfg(test)]
+mod gate_463_sel2l_rows;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
