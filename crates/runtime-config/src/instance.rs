@@ -85,6 +85,11 @@ pub const STUCK_RECOVERY_COOLDOWN_SECS: &str = "stuck_recovery_cooldown_secs";
 pub const DEVICE_KIND: &str = "device_kind";
 /// The values of [`DEVICE_KIND`] (model-398 v1.1 §3.1).
 pub const DEVICE_KIND_TOKENS: &[&str] = &["emulator", "handset"];
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): a handset's device system,
+/// `device.system` in its entry; absent, the handset is Android.
+pub const DEVICE_SYSTEM: &str = "device_system";
+/// The values of [`DEVICE_SYSTEM`].
+pub const DEVICE_SYSTEM_TOKENS: &[&str] = &["android", "ios"];
 /// Workflow #384 D2-S2 (D2 model §3.2, v1.4.2): the instance's recognition maintenance package,
 /// `recognition_package.package` in its entry: a location only, never a digest.
 pub const RECOGNITION_PACKAGE: &str = "recognition_package";
@@ -159,6 +164,19 @@ pub(crate) static ROWS: &[KeyRow] = &[
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "RD-1b",
         since: "0.12.0",
+    },
+    // Workflow #479 F-2 (`actingd-config` revision 34): a handset's device system, reported only
+    // for an entry that names it (no default row: absent is Android), read once at assembly, so a
+    // configuration without it renders the rows it rendered before.
+    KeyRow {
+        name: KeyName::PerInstance(DEVICE_SYSTEM),
+        file_path: FilePath::InstanceMemberAt("device.system"),
+        value_type: ValueType::String,
+        range: KeyRange::Tokens(DEVICE_SYSTEM_TOKENS),
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "#479 F-2",
+        since: "0.12.74",
     },
     // #402 HS-1: the device's two backends, beside its kind.
     BACKEND_ROWS[0],

@@ -80,7 +80,11 @@ Workflow #383 AO-1's rows: the `ledger_observer` section below.
 Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
 at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
-`device`. Workflow #384 D2-S2's row: the per-instance `recognition_package` (string, the location
+`device`. Workflow #479 F-2's row (since 0.12.74, `actingd-config` revision 34): the per-instance
+`device_system` (string `android` or `ios`, from the entry's `device.system`, a handset's member
+only, default `none`, not settable, read once at assembly; [device-binding.md](device-binding.md),
+"An iOS handset"), present only for an entry that names it, so a configuration without it renders
+the rows it rendered before. Workflow #384 D2-S2's row: the per-instance `recognition_package` (string, the location
 of the instance's recognition maintenance package, from the entry's `recognition_package.package`
 resolved against the configuration file's directory; a location only, never a digest; default
 `none`, not settable, read once at assembly; [resource-readings.md](resource-readings.md),

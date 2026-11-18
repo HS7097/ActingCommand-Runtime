@@ -897,6 +897,14 @@ impl RuntimeHostError {
             }
             _ => runtime_error,
         };
+        // Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): an operation the
+        // registry refused before anything was opened, because this build has no backend for it
+        // on the instance's device system, names that as its cause, whatever operation it was.
+        let runtime_error = if error.failure_context().device_system_unsupported() {
+            runtime_error.with_caused_by(Outcome::new(HostCode::DeviceSystemBackendMissing))
+        } else {
+            runtime_error
+        };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
             runtime_error.into_fatal()
         } else {

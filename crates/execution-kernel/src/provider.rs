@@ -1426,21 +1426,86 @@ impl HandsetBinding {
     }
 }
 
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): the binding of an iOS
+/// handset as the private binding file gave it: the phone's device key (the fingerprint `acib`
+/// made of its identifier under the installation's own secret; no identifier of the phone), when
+/// it was bound and by which channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyedHandsetBinding {
+    device_key: actingcommand_contract::Sha256Fingerprint,
+    bound_at_unix_ms: u64,
+    bound_via: actingcommand_contract::DeviceBoundVia,
+}
+
+impl KeyedHandsetBinding {
+    pub fn new(
+        device_key: actingcommand_contract::Sha256Fingerprint,
+        bound_at_unix_ms: u64,
+        bound_via: actingcommand_contract::DeviceBoundVia,
+    ) -> Self {
+        Self {
+            device_key,
+            bound_at_unix_ms,
+            bound_via,
+        }
+    }
+
+    /// The device key, which the Runtime records as the device's fingerprint as it is.
+    pub const fn device_key(&self) -> &actingcommand_contract::Sha256Fingerprint {
+        &self.device_key
+    }
+
+    pub const fn bound_at_unix_ms(&self) -> u64 {
+        self.bound_at_unix_ms
+    }
+
+    pub const fn bound_via(&self) -> actingcommand_contract::DeviceBoundVia {
+        self.bound_via
+    }
+}
+
 /// Workflow #398 RD-1b (model-398 v1.1 §3.1, §3.6): the device of a handset instance, bound or
-/// not yet bound. An unbound handset is registered and refuses every session.
+/// not yet bound. An unbound handset is registered and refuses every session. Workflow #479 F-2:
+/// an iOS handset, bound by its device key or not yet bound; this build has no backend for it,
+/// so the registry refuses every session on it, bound or not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HandsetEndpoint {
     Bound(HandsetBinding),
     Unbound,
+    Ios(Option<KeyedHandsetBinding>),
 }
 
 impl HandsetEndpoint {
-    /// The binding, `None` while the handset is unbound.
+    /// The binding of an Android handset by its serial; `None` while the handset is unbound, and
+    /// for an iOS handset, which has no serial.
     pub const fn binding(&self) -> Option<&HandsetBinding> {
         match self {
             Self::Bound(binding) => Some(binding),
-            Self::Unbound => None,
+            Self::Unbound | Self::Ios(_) => None,
         }
+    }
+
+    /// Workflow #479 F-2: the device system of the handset.
+    pub const fn system(&self) -> actingcommand_contract::DeviceSystem {
+        match self {
+            Self::Bound(_) | Self::Unbound => actingcommand_contract::DeviceSystem::Android,
+            Self::Ios(_) => actingcommand_contract::DeviceSystem::Ios,
+        }
+    }
+
+    /// Workflow #479 F-2: the binding of an iOS handset by its device key; `None` while it is
+    /// unbound, and for an Android handset.
+    pub const fn keyed_binding(&self) -> Option<&KeyedHandsetBinding> {
+        match self {
+            Self::Ios(Some(binding)) => Some(binding),
+            Self::Bound(_) | Self::Unbound | Self::Ios(None) => None,
+        }
+    }
+
+    /// Workflow #479 F-2: whether the private binding file binds a device to the handset, by its
+    /// serial or by its key.
+    pub const fn is_bound(&self) -> bool {
+        matches!(self, Self::Bound(_) | Self::Ios(Some(_)))
     }
 }
 

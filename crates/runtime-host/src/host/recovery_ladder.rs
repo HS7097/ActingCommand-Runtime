@@ -1813,6 +1813,18 @@ impl HostShared {
             EventAction::RuntimeAction,
             None,
         )?;
+        // Workflow #479 F-2 fix round 2 (`contracts/device-binding.md`, "An iOS handset"): a drill
+        // of an instance whose device system has no backend in this build is refused here, after
+        // its command and before any ladder is admitted, so neither a plan nor a rung, nor the
+        // readiness's baseline probe and foreground query, meets its stand-in registration:
+        // `recovery_ladder_drill_unsupported` caused by `device_system_backend_missing`.
+        if let Some(refused) = super::lease::device_system_refusal(
+            &resolved,
+            super::lease::DeviceOperation::Drill,
+            HostLocation::RecoveryLadderDrill,
+        ) {
+            return Err(self.refuse_drill(links, refused));
+        }
         let config = self.ladder_config()?;
         let settings = self.instance_stuck_recovery(instance_id, &config)?;
         if !settings.enabled {

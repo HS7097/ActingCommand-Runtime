@@ -533,6 +533,8 @@ outcome_keys! {
     handle: token,
     // #398 DB-2: why a device row cannot be bound to a handset instance.
     device_row_problem: vocab(device_row_problem),
+    // Workflow #479 F-2: why `acib` gave no list of iOS phones.
+    ios_list_problem: vocab(ios_list_problem),
     // ---- Workflow #385 P-m (the shadow measurement's codes, PERF §11): begin ----
     pacing_stage_from: vocab(pacing_stage),
     pacing_stage_to: vocab(pacing_stage),

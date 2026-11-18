@@ -185,6 +185,10 @@ mod gate_463_s13;
 // key and the rows a bind refuses (register §1.467).
 #[cfg(test)]
 mod gate_398_db2;
+// Test-only: Workflow #479 F-2, `devices` lists and binds an iOS handset's phone through a
+// scripted `acib` (register §1.482).
+#[cfg(test)]
+mod gate_479_f2;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

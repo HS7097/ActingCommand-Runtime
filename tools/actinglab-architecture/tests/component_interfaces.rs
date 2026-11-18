@@ -96,7 +96,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `device_group.max_queue_wait_ms` of the `scheduling` section; revisions 5 to 31 are still
 ///   read, so [5, 32]. Workflow #463 U1b (0.12.63, register §1.389) raises it to 33: the members
 ///   `suspension.break_in_runs` and `suspension.break_in_ms` of the `scheduling` section; revisions
-///   5 to 32 are still read, so [5, 33].
+///   5 to 32 are still read, so [5, 33]. Workflow #479 F-2 (0.12.74, register §1.482) raises it to
+///   34: an instance entry's `device.system` (`android` or `ios`, a handset's only); revisions 5
+///   to 33 are still read, so [5, 34].
 /// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
@@ -201,7 +203,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   reader of 11 or lower refuses and no Runtime of 0.12.73 answers, so `min` stays: [3, 12].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 33]),
+    ("actingd-config", [5, 34]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 9]),

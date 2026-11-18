@@ -151,6 +151,12 @@ impl HostShared {
                 .request_links(request, Some(resolved.instance_id()), None, None),
             EventAction::RuntimeReadonlyObserve,
         )?;
+        // Workflow #479 F-2 fix round 1: before the admission, as at every capture.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Capture,
+            ContractLocation::ObserveReadonly,
+        )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let completed =
             self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
@@ -195,6 +201,12 @@ impl HostShared {
             self.events
                 .request_links(request, Some(resolved.instance_id()), None, None),
             EventAction::RuntimeCaptureSequence,
+        )?;
+        // Workflow #479 F-2 fix round 1: before the admission, as at every capture.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Capture,
+            ContractLocation::CaptureSequence,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
@@ -386,6 +398,16 @@ impl HostShared {
         owner: FrameOwner,
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
+        // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a
+        // capture of an instance whose device system has no backend in this build is refused
+        // here, before it is requested or any backend of its stand-in registration is looked at:
+        // `capture_backend_open_failed` caused by `device_system_backend_missing`, denied; nothing
+        // is recorded or changed.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Capture,
+            HostLocation::ExecuteCaptureBackend,
+        )?;
         self.require_business_capacity(links.clone())?;
         let requested_sequence = self
             .append_event(

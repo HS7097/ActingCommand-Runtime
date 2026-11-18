@@ -450,9 +450,11 @@ pub struct SchedulingPauseAnswer {
 /// #480 PG-2d (register §1.481; no wire change, `runtime-client` stays 12): what
 /// `resume_scheduling_as` and `resume_scheduling_expected_as` answer, in the shape of
 /// [`SchedulingPauseAnswer`]: the `SchedulingResumed` result and its completed receipt's outcome,
-/// unchanged. A resume of a person's pause that was not quiet yet carries
-/// `scheduling_resume_without_reconnect` as the success code's cause (no reconnect ran), so the
-/// caller can say "resumed; not reconnected" without another read; an ordinary resume carries none.
+/// unchanged. A resume that ran no reconnect carries one cause of two on its success code, so the
+/// caller can say "resumed; not reconnected" without another read: a person's pause that was not
+/// quiet yet, `scheduling_resume_without_reconnect`; or (Workflow #479 F-2) an instance whose
+/// device system has no backend in this build, an iOS handset, `scheduling_resume_without_backend`.
+/// An ordinary resume carries none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingResumeAnswer {
     pub result: RuntimeResult,
@@ -1897,8 +1899,10 @@ impl RuntimeClient {
     /// #480 PG-2d (register §1.481): [`Self::resume_scheduling`], the same request and receipt
     /// wait, returning the `RuntimeResult::SchedulingResumed` result with its receipt's outcome
     /// ([`SchedulingResumeAnswer`], the shape of [`Self::pause_scheduling_as`]): the success code,
-    /// with `scheduling_resume_without_reconnect` as its cause when the Runtime lifted a person's
-    /// pause that was not quiet yet and ran no reconnect.
+    /// with a cause when the Runtime ran no reconnect, one of two:
+    /// `scheduling_resume_without_reconnect` when it lifted a person's pause that was not quiet
+    /// yet, `scheduling_resume_without_backend` (Workflow #479 F-2) when the instance's device
+    /// system has no backend in this build (an iOS handset).
     pub fn resume_scheduling_as(
         &self,
         scope: SchedulingPauseScope,

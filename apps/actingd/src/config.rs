@@ -8,8 +8,9 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRequest, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, RuntimeConfigManifest,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRequest,
+    DeviceSystem, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
+    RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
@@ -94,6 +95,10 @@ mod gate_mapp1;
 // Test-only: Workflow #453 S2, an entry's `start_paused` at assembly and in check-config.
 #[cfg(test)]
 mod gate_453_s2;
+// Test-only: Workflow #479 F-2, an iOS handset's `device.system`, its binding by key and its
+// registration, which opens nothing.
+#[cfg(test)]
+mod gate_479_f2;
 // Test-only: Workflow #452, the real assembly judges the candidate the Lab's rescue module's
 // `instance add` composes (its fixture, crates/lab-rescue/tests/fixtures/inst5-application-id.json).
 #[cfg(test)]
@@ -1187,7 +1192,9 @@ struct InstanceConfig {
     #[serde(default)]
     start_paused: Option<bool>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
-    /// `{kind, transport}`; absent is an emulator.
+    /// `{kind, transport}`; absent is an emulator. Workflow #479 F-2: and a handset's `system`.
+    // Interface anchor `actingd-config` revision 34: a Runtime before #479 F-2 refuses a `device`
+    // that names `system`, because the member denies unknown members (`config_decode_failed`).
     #[serde(default)]
     device: Option<device_binding::InstanceDeviceConfigFile>,
     /// Workflow #398 RD-1b: a handset's device from the private binding file, bound or unbound,
@@ -1285,6 +1292,11 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// of the configuration has, in file order (`check-config` notes).
     pub(super) unused_device_bindings: Vec<String>,
+    /// Workflow #479 F-2 fix round 1: the handsets whose private row is of another device system
+    /// than their configuration names, in configuration order, each also in `unbound_handsets`: a
+    /// start registers them unbound and warns of each ([`binding_mismatch_warnings`]); check-config
+    /// refuses the file (`device_binding_file_invalid` `system_mismatch`).
+    pub(super) mismatched_handsets: Vec<String>,
     /// Workflow #369 S6a: the discovery-bound instances whose `start_emulator` is `true`, in
     /// configuration order: the daemon starts their stopped emulators at its start (S6c);
     /// `check-config` reports each instance's value.
@@ -1724,12 +1736,14 @@ impl ActingdConfigFile {
                 && device_binding::check_device(instance)
                     .map_err(|_| ActingdCode::DeviceConfigInvalid.code())?
                     == DeviceKind::Handset;
+            // Workflow #479 F-2: an iOS handset reaches no adb, so it uses none.
+            let system = device_binding::device_system(instance);
             if handset {
-                handsets.push(instance.alias.clone());
+                handsets.push((instance.alias.clone(), system));
             }
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
-            if instance.fixture_backend.is_none() {
+            if instance.fixture_backend.is_none() && system != DeviceSystem::Ios {
                 instance.adb = ac_adb::InstanceAdb::resolve(
                     installed_adb.as_ref(),
                     instance.adb_path.as_deref(),
@@ -1926,15 +1940,18 @@ impl ActingdConfigFile {
         }
         // Workflow #398 RD-1b (model-398 v1.1 §3.2, §3.6): the private binding file, read once
         // and only when a handset is configured.
-        let (unbound_handsets, unused_device_bindings) = if handsets.is_empty() {
-            (Vec::new(), Vec::new())
+        // Workflow #479 F-2 fix round 1: a row of another device system than its handset's binds
+        // nothing; that handset alone is unbound (`mismatched_handsets`).
+        let (unbound_handsets, unused_device_bindings, mismatched_handsets) = if handsets.is_empty()
+        {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             let mut bound = device_binding::bind_handsets(&self.state_root, &handsets)
                 .map_err(|refused| refused.code())?;
             for instance in &mut instances {
                 instance.handset = bound.endpoints.remove(&instance.alias);
             }
-            (bound.unbound, bound.unused)
+            (bound.unbound, bound.unused, bound.mismatched)
         };
         let configured_aliases = instances
             .iter()
@@ -2256,6 +2273,7 @@ impl ActingdConfigFile {
             adb_requirement,
             unbound_handsets,
             unused_device_bindings,
+            mismatched_handsets,
             emulator_autostart,
             process_priority,
             device_groups,
@@ -2274,7 +2292,10 @@ impl ActingdConfigFile {
             .filter(|instance| instance.fixture_backend.is_none())
         {
             match device_binding::check_device(instance) {
-                Ok(DeviceKind::Handset) => handsets.push(instance.alias.clone()),
+                Ok(DeviceKind::Handset) => handsets.push((
+                    instance.alias.clone(),
+                    device_binding::device_system(instance),
+                )),
                 Ok(DeviceKind::Emulator) => {}
                 Err(refused) => return Some(DeviceRefusal::Config(refused)),
             }
@@ -2282,9 +2303,17 @@ impl ActingdConfigFile {
         if handsets.is_empty() {
             return None;
         }
-        device_binding::bind_handsets(&self.state_root, &handsets)
-            .err()
-            .map(DeviceRefusal::BindingFile)
+        match device_binding::bind_handsets(&self.state_root, &handsets) {
+            Err(refused) => Some(DeviceRefusal::BindingFile(refused)),
+            // Workflow #479 F-2 fix round 1: a row of another device system than its handset's,
+            // which a start ignores (that handset unbound, with a warning), is the refusal
+            // check-config makes, as before.
+            Ok(bound) => (!bound.mismatched.is_empty()).then(|| {
+                DeviceRefusal::BindingFile(device_binding::system_mismatch_refusal(
+                    &self.state_root,
+                ))
+            }),
+        }
     }
 
     /// Workflow #369 S6a: the alias of the first instance whose `start_emulator: true`
@@ -2388,6 +2417,24 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
     ignored
         .iter()
         .map(|variable| Outcome::new(ActingdCode::EnvOverrideIgnored).variable(*variable))
+        .collect()
+}
+
+/// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the start's
+/// one warning for each handset of `mismatched` (`RuntimeAssembly::mismatched_handsets`), whose
+/// private row is of another device system than its configuration names and which starts
+/// unbound: `device_binding_ignored` with its `alias` and `device_binding_problem`
+/// `system_mismatch`; no identifier of a device.
+pub(super) fn binding_mismatch_warnings(mismatched: &[String]) -> Vec<Outcome> {
+    mismatched
+        .iter()
+        .map(|alias| {
+            Outcome::new(ActingdCode::DeviceBindingIgnored)
+                .alias(alias)
+                .device_binding_problem(
+                    actingcommand_contract::DeviceBindingProblem::SystemMismatch,
+                )
+        })
         .collect()
 }
 
@@ -2766,6 +2813,11 @@ impl InstanceConfig {
     fn backend(self) -> Result<ConfiguredInstance, Code> {
         if self.fixture_backend.is_some() {
             self.fixture_backend().map(ConfiguredInstance::Spec)
+        } else if matches!(self.handset, Some(HandsetEndpoint::Ios(_))) {
+            // Workflow #479 F-2: an iOS handset is registered with nothing it could open.
+            self.ios_registration()
+                .map(InstanceSpec::real)
+                .map(ConfiguredInstance::Spec)
         } else if self.handset.is_some() {
             // Workflow #398 RD-1b: a handset is addressed by its serial; it has no host or port.
             let adb_path = self.configured_adb_path()?;
@@ -3039,6 +3091,46 @@ impl InstanceConfig {
             Some(index) => registration.with_nemu_app_index(index),
             None => Ok(registration),
         })
+        .map(|registration| match handset {
+            Some(handset) => registration.with_handset(handset),
+            None => registration,
+        })
+        .map_err(|_| ActingdCode::InstanceRegistrationInvalid.code())
+    }
+
+    /// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): the registration of
+    /// an iOS handset, bound or not. This build has no backend for its device system, so the
+    /// Runtime refuses every capture, input and application operation on it before anything is
+    /// opened (`device_system_backend_missing`): its two backends are stand-ins on the stand-in
+    /// target of an unbound handset (`handset:<alias>`, no serial), never opened, and its adb is a
+    /// stand-in name that never runs, as a discovery-bound entry's is before its discovery.
+    fn ios_registration(self) -> Result<ExecutionBackendRegistration, Code> {
+        let application_id = self
+            .application_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(ActingdCode::ApplicationIdentityMissing.code())?;
+        let target = DeviceTarget {
+            serial: Some(DeviceSerial::unbound_handset(&self.alias)),
+            host: default_device_host(),
+            port: 0,
+            connect: false,
+        };
+        let adb = AdbConfig {
+            adb_path: "adb".to_owned(),
+            ..AdbConfig::default()
+        };
+        let capture = CaptureBackendConfig::new(adb.clone(), target.clone())
+            .with_requested(CaptureBackendChoice::Adb);
+        let touch = TouchBackendConfig::new(adb, target, MaaTouchConfig::default())
+            .with_requested(TouchBackendChoice::AdbShellInput);
+        let handset = self.handset;
+        ExecutionBackendRegistration::new(
+            self.alias,
+            self.instance_id,
+            application_id,
+            touch,
+            capture,
+        )
         .map(|registration| match handset {
             Some(handset) => registration.with_handset(handset),
             None => registration,
