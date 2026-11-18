@@ -38181,6 +38181,44 @@ key or record changes, and the session header keeps its shape. No interface revi
 **At deploy.** Nothing to configure. A `record start` whose pause a shutdown kept leaves its
 session header naming the hold, and `record stop` after the restart resumes that pause.
 
+**Fix round 1** (coordinator work order `rd-1118/brief-480-pg2a-fix1.md`, after the independent
+review `rd-1118/review-1820.md`, which found nothing that must change; its two "may change" and
+the member its third point names; the coordinator's ruling: a tool reads an answer's members,
+never its message). Which cases put the header back and which keep it, the outcome codes and the
+exit statuses do not change.
+- *`instance`.* The failure of a start that keeps its header after it sent the pause
+  (`pause_unsettled`) names the instance in its details again, as the same failure did before this
+  slice when it went the way of a start that paused nothing (`started_nothing`), beside the hold.
+- *`pause_found`.* Those details carry one more member, a word of two: `hold_shown`, the status
+  read after the failed pause shows the instance paused with the hold's reason
+  (`Unsettled::Stands`); `pause_unread`, the instance's pause was not read (`Unsettled::Unread`,
+  the read failed or got no answer; `Unsettled::ReadNotSent`, below; and `Unsettled::Unanswered`,
+  the pause got no receipt, so that the three answers that keep the header read alike). The member
+  and the words are snake_case, as the operation table's members and words are, the words a
+  noun and a past participle as the catalogue's state words are (`instance_hold_unread` and
+  `replaced_header_unread` are this command's words already); they are constants of
+  `record_hold.rs`, a member of an answer's details and not of an outcome, so the catalogue and its
+  index do not change. A start that puts the header back carries `instance` and no `pause_found`.
+- *A receipt fatal to the connection.* The client latches its connection on a receipt whose
+  projection is fatal (`host_halted`, which the Runtime sets only once it latched) and sends no
+  request on it after it, so the status read after such a failed pause was never sent, and its
+  "failure" was the pause's own error. `take` now sends no read after a `Failed` receipt that
+  `is_fatal()` (`Unsettled::ReadNotSent`); the header stays, as it did, and the message says that
+  the status read could not be sent and why, the error it shows being the pause's.
+- *Texts.* [lab-recording.md](lab-recording.md) ("A recording holds its instance": the item for a
+  pause that failed in a stage, "Any other end of the pause"), the notes of the `record start` row
+  in `lab-operations.json`, `apps/actinglab-mcp/MANUAL.md`, the module and function texts of
+  `record_hold.rs`.
+- *Tests.* The three tests of this section also assert the details' `instance`, and `pause_found`
+  `hold_shown` (the pause that still stands) and `pause_unread` (the status that cannot be read);
+  the put-back asserts `instance` and no `pause_found`. New:
+  `pg2a_fix_a_failed_pause_fatal_to_the_connection_sends_no_status_read`: the pause fails
+  `Failed`, `LedgerFailure`, `host_halted`; the wire ends at `pause_scheduling`;
+  `runtime_not_running` with `instance`, `hold {reason, own: true}` and `pause_found:
+  pause_unread`, a message saying the read could not be sent and not that it failed; the header
+  active and naming the hold, `record status` `own`. It joins the exec gate map row "#480 PG-2a".
+  No test of main adapted or retired; no golden changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -105,6 +105,15 @@
 // - `pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header`: the kept pause's failure,
 //   and the connection closed on the status read after it: `runtime_not_running` with the hold in
 //   its details, the message naming the failed read, the header active and naming the hold.
+// Fix round 1 (the coordinator's brief rd-1118/brief-480-pg2a-fix1.md, after the independent
+// review): the three tests above also assert the details' `instance` (the put-back's as before)
+// and `pause_found`, `hold_shown` (1) and `pause_unread` (3), none on the put-back (2).
+// - `pg2a_fix_a_failed_pause_fatal_to_the_connection_sends_no_status_read`: the pause fails with a
+//   receipt that says the Runtime halted (`Failed`, `LedgerFailure`, `host_halted`), which latches
+//   the client's connection: the wire ends at `pause_scheduling`, no status read after it; the
+//   start fails `runtime_not_running` with `instance`, `hold {reason, own: true}` and
+//   `pause_found: pause_unread` in its details, its message saying the read could not be sent
+//   and not that it failed; the header active and naming the hold, `record status` `own`.
 // No device, no clock, no sleep; made-up aliases.
 
 use super::gate_392_da5cd::{DISPLAY_READ, display_known};
@@ -344,6 +353,17 @@ fn failed_in_a_stage(
         RuntimeReceiptState::Failed,
         RuntimeErrorProjection::new(runtime, false)
             .receipt_outcome(Some(Code::relayed(code).expect("a registered code")), None),
+    )
+}
+
+/// #480 PG-2a fix round 1: a failure of a stage of the pause whose receipt says the Runtime halted
+/// (`host_halted`): `Failed`, the Runtime error code `LedgerFailure`, fatal to the connection.
+fn halted_in_a_stage(request: &RuntimeRequest) -> ScriptedAnswer {
+    ScriptedAnswer::failed(
+        request,
+        RuntimeReceiptState::Failed,
+        RuntimeErrorProjection::new(RuntimeErrorCode::LedgerFailure, true)
+            .receipt_outcome(None, None),
     )
 }
 
@@ -1404,6 +1424,9 @@ fn pg2a_a_failed_pause_that_still_stands_keeps_the_header_for_record_stop() {
             .is_some_and(|message| message.contains("paused with the recording's own reason")),
         "{failed}"
     );
+    // Fix round 1: the details name the instance, and say that the hold's pause was shown.
+    assert_eq!(failed["details"]["instance"], INSTANCE, "{failed}");
+    assert_eq!(failed["details"]["pause_found"], "hold_shown", "{failed}");
     let (code, shown) = place.record("status", &[]);
     assert_eq!(code, 0, "{shown}");
     assert_eq!(shown["hold"], json!({"state": "own", "reason": own}));
@@ -1481,6 +1504,10 @@ fn pg2a_a_failed_pause_that_left_no_pause_puts_the_header_back() {
             .is_some_and(|message| message.contains("started nothing")),
         "{failed}"
     );
+    // Fix round 1: the details name the instance, as a start that paused nothing names it; the
+    // member of a kept header is not there.
+    assert_eq!(failed["details"]["instance"], INSTANCE, "{failed}");
+    assert!(failed["details"].get("pause_found").is_none(), "{failed}");
     assert_eq!(
         fs::read(place.header_path()).expect("the earlier header"),
         earlier,
@@ -1544,6 +1571,57 @@ fn pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header() {
             .is_some_and(|message| message.contains("the status read after it failed too")),
         "{failed}"
     );
+    // Fix round 1: the details name the instance, and say that its pause was not read.
+    assert_eq!(failed["details"]["instance"], INSTANCE, "{failed}");
+    assert_eq!(failed["details"]["pause_found"], "pause_unread", "{failed}");
+    let (code, shown) = place.record("status", &[]);
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(shown["hold"], json!({"state": "own", "reason": own}));
+}
+
+#[test]
+fn pg2a_fix_a_failed_pause_fatal_to_the_connection_sends_no_status_read() {
+    let _guard = env_lock();
+    let place = Place::new();
+    // The pause fails with a receipt that says the Runtime halted: the client latches its
+    // connection and sends nothing more on it.
+    let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(display_known(None))
+                .request(status(owner_epoch, vec![instance(INSTANCE, None)]))
+                .request(halted_in_a_stage),
+        ]
+    });
+    let (code, failed) = place.start(RECORD_ID, &[]);
+    let record = runtime.finish();
+
+    assert_eq!(code, 1, "{failed}");
+    assert_eq!(failed["outcome"]["code"], "runtime_not_running", "{failed}");
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+    assert_eq!(record.connections.len(), 1);
+    // No status read after the pause: the wire ends with it.
+    assert_eq!(
+        operations(&record.connections[0]),
+        wire(&[DISPLAY_READ, "status", "pause_scheduling"])
+    );
+    let (_, own, _) = pause_asked(&record.connections[0]);
+    let header = place.header();
+    assert_eq!(header["status"], "active", "{header}");
+    assert_eq!(header["hold"], json!({"reason": own, "own": true}));
+    assert_eq!(
+        failed["details"]["hold"],
+        json!({"reason": own, "own": true}),
+        "{failed}"
+    );
+    assert_eq!(failed["details"]["instance"], INSTANCE, "{failed}");
+    assert_eq!(failed["details"]["pause_found"], "pause_unread", "{failed}");
+    let message = failed["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("the status read after it could not be sent"),
+        "{failed}"
+    );
+    assert!(!message.contains("failed too"), "{failed}");
     let (code, shown) = place.record("status", &[]);
     assert_eq!(code, 0, "{shown}");
     assert_eq!(shown["hold"], json!({"state": "own", "reason": own}));

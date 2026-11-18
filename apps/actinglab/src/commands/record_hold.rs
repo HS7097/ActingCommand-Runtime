@@ -19,7 +19,8 @@
 //!   `scheduling_pause_kept_at_shutdown`), or whose status cannot be read, and any other failure
 //!   of the pause leave the header as written, since a pause with that reason may exist, and fail
 //!   the start with the hold in its details, so that `record stop` or `record start --force`
-//!   releases it by its reason. Nothing
+//!   releases it by its reason (PG-2a fix round 1: the details name the instance too, and say in
+//!   `pause_found` whether the pause was shown, `hold_shown`, or not read, `pause_unread`). Nothing
 //!   listening where the installation's Runtime would ([`reach`]: no runtime-info, or the address
 //!   it names refuses the connection): nothing is held and the answer says `no_runtime_listening`.
 //!   Something listening that does not complete the handshake, or a status the Runtime refuses or
@@ -246,26 +247,62 @@ enum Unsettled {
     /// #480 PG-2a: the Runtime failed the pause in a stage, and the status read after it failed
     /// or got no answer: that read's failure.
     Unread(RuntimeClientError),
+    /// #480 PG-2a fix round 1: the Runtime failed the pause in a stage with a receipt that is fatal
+    /// to the connection (it says the Runtime halted, `host_halted`). The client latches its
+    /// connection on such a receipt and sends no request on it after it, so the status read was
+    /// not sent.
+    ReadNotSent,
 }
+
+/// #480 PG-2a fix round 1: the member of the details of a start that failed once the pause was
+/// sent and keeps its session header ([`pause_unsettled`]): what the start knows of the instance's
+/// pause, one word of two.
+const PAUSE_FOUND: &str = "pause_found";
+/// `pause_found`: the status read after the failed pause shows the instance paused with the
+/// hold's reason.
+const PAUSE_FOUND_HOLD_SHOWN: &str = "hold_shown";
+/// `pause_found`: the instance's pause was not read after the pause failed (the read failed or
+/// got no answer, or could not be sent after a receipt fatal to the connection, or no receipt of
+/// the pause came), so whether a pause with the hold's reason stands is not known.
+const PAUSE_FOUND_UNREAD: &str = "pause_unread";
 
 /// The start's failure `error` once the pause was sent and nothing says that no pause with its
 /// reason stands (`unsettled`): the session header stays as written and names the recording's own
 /// hold `hold`, since a pause with its reason may exist; the message says why and names what
-/// releases it, the details carry the hold.
+/// releases it. The details carry the hold, the instance (PG-2a fix round 1, as a failure that
+/// started nothing names it) and `pause_found`: `hold_shown` when the status read after the
+/// failure shows the hold's reason, `pause_unread` in every other case.
 fn pause_unsettled(
     instance: &str,
     hold: Option<&RecordingHold>,
     unsettled: Unsettled,
     mut error: CliError,
 ) -> CliError {
-    let after = match unsettled {
-        Unsettled::Unanswered => "got no answer that says no pause was made".to_owned(),
-        Unsettled::Stands => "the Runtime failed it, and the status read after it shows the \
-                              instance paused with the recording's own reason"
-            .to_owned(),
-        Unsettled::Unread(read) => format!(
-            "the Runtime failed it, and the status read after it failed too ({read}), so \
-             whether a pause with the recording's own reason stands is not known"
+    let (found, after) = match unsettled {
+        Unsettled::Unanswered => (
+            PAUSE_FOUND_UNREAD,
+            "got no answer that says no pause was made".to_owned(),
+        ),
+        Unsettled::Stands => (
+            PAUSE_FOUND_HOLD_SHOWN,
+            "the Runtime failed it, and the status read after it shows the instance paused with \
+             the recording's own reason"
+                .to_owned(),
+        ),
+        Unsettled::Unread(read) => (
+            PAUSE_FOUND_UNREAD,
+            format!(
+                "the Runtime failed it, and the status read after it failed too ({read}), so \
+                 whether a pause with the recording's own reason stands is not known"
+            ),
+        ),
+        Unsettled::ReadNotSent => (
+            PAUSE_FOUND_UNREAD,
+            "the Runtime failed it with a receipt that says it halted, which is fatal to the \
+             connection: the client sends no request on the connection after such a receipt, so \
+             the status read after it could not be sent, and whether a pause with the \
+             recording's own reason stands is not known"
+                .to_owned(),
         ),
     };
     error.message = format!(
@@ -274,7 +311,10 @@ fn pause_unsettled(
          pause with its reason",
         error.message
     );
-    with_hold(error, hold)
+    with_archive_context(
+        with_hold(error, hold),
+        &[("instance", json!(instance)), (PAUSE_FOUND, json!(found))],
+    )
 }
 
 /// `record start`'s hold of the instance of `record`, the session header it writes at `path`;
@@ -295,7 +335,9 @@ fn pause_unsettled(
 ///   PG-2a: a stage's failure (the receipt failed) is followed by one status read on the same
 ///   connection, and when it shows no pause with the hold's reason the header is put back so too;
 ///   when it shows that reason, when it fails, and on any other failure of the pause (no receipt)
-///   the header stays and the start fails with the hold in its details ([`pause_unsettled`]).
+///   the header stays and the start fails with the hold in its details ([`pause_unsettled`]). PG-2a
+///   fix round 1: a failed receipt that is fatal to the connection is followed by no status read,
+///   since the client sends nothing on that connection after it: the header stays so too.
 ///
 /// A header that cannot be written fails the start with the hold in its details.
 ///
@@ -385,6 +427,9 @@ pub(super) fn take(
     // shows no pause with that reason (another party's, or none).
     let unsettled = match scheduling::failed_pause(&pause_error) {
         FailedPause::Refused => None,
+        // PG-2a fix round 1: a receipt fatal to the connection latches it, and the client sends
+        // nothing on it after that; the status read is not sent, and the header stays.
+        FailedPause::Failed if pause_error.is_fatal() => Some(Unsettled::ReadNotSent),
         FailedPause::Failed => match scheduling::instance_pause_reason(&client, &instance) {
             Ok(Some(standing)) if standing.as_str() == reason.as_str() => Some(Unsettled::Stands),
             Ok(_) => None,

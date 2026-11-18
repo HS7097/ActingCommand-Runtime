@@ -2781,14 +2781,26 @@ Runtime is asked to pause):
     details, its message saying which of the two it met. The failure's code is the pause's own
     failure as the Lab answers a Runtime failure (`runtime_not_running` for
     `scheduling_pause_kept_at_shutdown`, whose Runtime error code is `RuntimeUnavailable`).
+
+  PG-2a fix round 1: a `Failed` receipt that is fatal to the connection (it says the Runtime
+  halted, `host_halted`) is followed by no status read, since the client sends no request on a
+  connection after such a receipt. The header stays, as when the read fails, and the message says
+  that the read could not be sent and why; the error it shows is the pause's. The details of a
+  start that keeps its header so name the instance (`instance`, as a start that paused nothing
+  names it) and say in `pause_found` which of two facts it met: `hold_shown`, the status read
+  after the failed pause shows the instance paused with the hold's reason; `pause_unread`, the
+  instance's pause could not be read (the read failed, got no answer or could not be sent). A tool
+  reads that member, not the message; the code and the exit status do not tell the two apart.
 - **Any other end of the pause** (the connection lost, the wait for the receipt ended, the process
   killed or timed out by its caller): the session header stays as written, because a pause with
   that reason may exist. The failure (`runtime_not_running` when the connection was lost) carries
-  `hold: {reason, own: true}` in its details, and so does every failure after the header names the
-  hold (the Lab recording's start, the state directory's reach). `record stop` (or `record start
-  --force`) then finds the header and releases by its reason; a release that finds no such pause
-  is `already_gone`. (`record archive` of such a header, whose Lab recording never started, is
-  refused as `lab_recording_missing`.) A start whose failed pause still stands, or whose status
+  `hold: {reason, own: true}` in its details (PG-2a fix round 1: with `instance` and `pause_found:
+  pause_unread`, as a pause that failed in a stage and whose status was not read, so that the
+  three answers that keep the header read alike), and every failure after the header names the
+  hold (the Lab recording's start, the state directory's reach) carries `hold` too. `record stop`
+  (or `record start --force`) then finds the header and releases by its reason; a release that
+  finds no such pause is `already_gone`. (`record archive` of such a header, whose Lab recording
+  never started, is refused as `lab_recording_missing`.) A start whose failed pause still stands, or whose status
   could not be read after it (above), leaves the same header, and the same commands release it.
 - **`--force` over a session header that cannot be read** (fix round 2): the start goes on, which
   is what `--force` is for, but the hold that header named is not known: a pause the earlier
