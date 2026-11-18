@@ -394,7 +394,12 @@ pub(crate) fn regression_cases(
     // cannot be public, and no case is made.
     if !built.unbounded.is_empty() {
         for target in &built.unbounded {
-            failures.fail(Locus::default(), reading_unbounded(target))?;
+            // `record ready`'s item names the target.
+            let locus = Locus {
+                target: Some(target.clone()),
+                ..Locus::default()
+            };
+            failures.fail(locus, reading_unbounded(target))?;
         }
         return Ok(set);
     }

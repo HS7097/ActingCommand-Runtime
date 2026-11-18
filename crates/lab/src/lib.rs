@@ -153,6 +153,10 @@ mod gate_463_s1r;
 // which the scene pastes, and the comparison of the two.
 #[cfg(test)]
 mod gate_463_priv1;
+// #463 PRIV-3: a recording has a destination; a public recording's scenes hold no pixel of a value
+// reading.
+#[cfg(test)]
+mod gate_463_priv3;
 
 // #463 SEL-2L-a: a select of fixed slots may read its names by detecting their blocks, and the
 // refusal of a mark counts marks.
