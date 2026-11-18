@@ -1655,12 +1655,26 @@ impl HostShared {
         )?
         .values()
         .filter(|instance| instance.device_self_checked())
-        .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+        .map(|instance| {
+            (
+                instance.instance_alias.clone(),
+                instance.instance_id,
+                instance.device_system_without_backend().is_some(),
+            )
+        })
         .collect::<Vec<_>>();
         let mut cooling = Vec::new();
-        for (instance_alias, instance_id) in instances {
+        for (instance_alias, instance_id, inert) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
+            // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): an
+            // instance inert by design (a handset whose device system has no backend in this
+            // build) is not attempted: its availability is withdrawn above under
+            // `device_system:<system>` (once, unless that withdrawal is in effect), the plain
+            // statement of what it is, and nothing is opened, recorded as a failure or counted.
+            if inert {
+                continue;
+            }
             if lock(
                 &self.scheduling_pause,
                 HostLocation::ReadInstallStartupPause,
@@ -2057,6 +2071,16 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        // Workflow #479 F-2 fix round 2 (`contracts/device-binding.md`, "An iOS handset"): the
+        // self-check of an instance whose device system has no backend in this build is refused
+        // here, before its claim, its preparation or any open of its stand-in registration:
+        // `input_backend_open_failed` (a preparation's first open) caused by
+        // `device_system_backend_missing`, denied; nothing is recorded or changed.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Preparation,
+            HostLocation::PrepareInstanceConnection,
+        )?;
         // Workflow #398 RD-2 (model-398 §4.3): a person's self-check of a handset starts a failed
         // device-link watch again.
         self.device_link_rewatch(instance_id)

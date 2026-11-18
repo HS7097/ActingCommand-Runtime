@@ -110,13 +110,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         adb_requirement,
         unbound_handsets,
         unused_device_bindings,
+        mismatched_handsets,
         emulator_autostart,
         // RB-2: check-config checks the `host` section (its rows are in the manifest) and
         // applies nothing; only the start sets its own priorities.
         process_priority: _,
         device_groups,
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
-        let error = match device.filter(|device| device.code() == code) {
+        let error = match device.as_ref().filter(|device| device.code() == code) {
             Some(device) => {
                 ActingdError::refused(code, device.outcome()).with_detail(device.to_string())
             }
@@ -125,6 +126,18 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         };
         staged(error, ActingdLocation::ConfigAssemble)
     })?;
+    // Workflow #479 F-2 fix round 1: a private row of another device system than its handset's
+    // configuration names, which a start ignores (that handset registered unbound, with one
+    // warning), is refused here as before (`device_binding_file_invalid` `system_mismatch`).
+    if !mismatched_handsets.is_empty()
+        && let Some(refused) = device
+    {
+        return Err(staged(
+            ActingdError::refused(refused.code(), refused.outcome())
+                .with_detail(refused.to_string()),
+            ActingdLocation::ConfigAssemble,
+        ));
+    }
     // Workflow #398 RD-1b (model-398 v1.1 §3.6): a handset the private binding file binds
     // no device to is refused here; a start registers it unavailable and goes on.
     if let Some(alias) = unbound_handsets.into_iter().next() {

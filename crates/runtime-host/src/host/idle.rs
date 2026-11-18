@@ -361,9 +361,14 @@ impl HostShared {
                 })
                 .unwrap_or_default(),
         };
+        // Workflow #479 F-2 fix round 1: an instance inert by design (a handset whose device
+        // system has no backend in this build) has no idle action: none is planned for it.
         let instances = lock(&self.registered_instances, IdleLocation::Check)?
             .values()
-            .filter(|instance| instance.provenance() == ExecutionBackendProvenance::PhysicalDevice)
+            .filter(|instance| {
+                instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
+                    && instance.device_system_without_backend().is_none()
+            })
             .map(|instance| {
                 (
                     instance.instance_id(),
@@ -650,9 +655,14 @@ impl HostShared {
         }
         // #405 N-2: every record from now on names this start's anchor.
         lock(&self.idle, IdleLocation::Restore)?.bind_start(anchors.current);
+        // Workflow #479 F-2 fix round 1: an instance inert by design has no idle action, so none
+        // is restored for it.
         let instances = lock(&self.registered_instances, IdleLocation::Restore)?
             .values()
-            .filter(|instance| instance.provenance() == ExecutionBackendProvenance::PhysicalDevice)
+            .filter(|instance| {
+                instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
+                    && instance.device_system_without_backend().is_none()
+            })
             .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
             .collect::<Vec<_>>();
         let startup_packages = self.startup_packages()?;

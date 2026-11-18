@@ -330,6 +330,11 @@ pause recorded while that Start runs listing `automatic_start`, and
 | a refused close lease | tried again (`close_refused`) | Failed, its code (`lease_busy`, `lease_cooldown`); lifted |
 | a fatal error of a stage, or a failure that fences the instance | the failure; nothing lifted | the failure; lifted |
 
+Workflow #479 F-2 (since 0.12.74; [device-binding.md](device-binding.md), "An iOS handset"): an
+instance whose device system has no backend in this build (an iOS handset, bound or not) meets only
+the first row, in both modes (a `stand` pause also the row of a person's resume meanwhile), because
+its stages move to `released` at once with nothing drained, waited for, handed back or closed.
+
 ## Instance pause: three stages
 
 `Status` shows the stage of an instance pause: `draining` during (a) and (b), `paused` once (b)
@@ -559,8 +564,13 @@ holder); outside the multi-Nemu gate the session the hand-back has not closed st
 next lease; the pause's own request, or the thread that carries its stages on, ends at its next
 check (`scheduling_pause_lifted_by_resume` on the request). A fenced instance (Workflow #403)
 resumes through the reconnect below in every stage, the resume being a person's re-proof of its
-close. A tool's hold (`quiet_or_lift`) keeps the refusals below. A pause in stage `released` is
-resumed as follows, in either mode.
+close. A fenced iOS handset is the exception ([device-binding.md](device-binding.md), "An iOS
+handset"): its resume, paused or not, lifts the pause if one holds and writes
+`scheduling_resume_without_backend` as on every iOS handset, and the fence stays, because nothing
+can certify the instance again until this build has a backend for its device system (an inert
+handset has no way to be fenced by a run: nothing it runs opens a session or a backend). A tool's
+hold (`quiet_or_lift`) keeps the refusals below. A pause in stage `released` is resumed as follows,
+in either mode.
 
 Fix round 1 (#480 PG-2c; outside the multi-Nemu gate, where the hand-back closes the session; inside
 it nothing is closed and nothing changes): **the hand-back's close and a person's resume decide
@@ -580,7 +590,13 @@ acts on the instance afterwards**: every check of its stages asks first whether 
 held at its revision, and a pause asked again has another revision.
 
 An instance resume (ps2) accepts a pause in stage `released` only; a resume refused for its
-stage or its expectation takes no claim. Since Workflow #369 S5 the resume then waits for its
+stage or its expectation takes no claim. An instance whose device system has no backend in this
+build (an iOS handset, bound or not) takes none of what follows
+([device-binding.md](device-binding.md), "An iOS handset"): past the same refusals its resume lifts
+the pause under the persist gate and attempts no reconnect (no claim, no preparation, no open), its
+`selfcheck` both sides `ok: false` with no values and no `failure_code` and its receipt's cause
+`scheduling_resume_without_backend` (a pause held again with `instance.added` answers as on every
+instance). Since Workflow #369 S5 the resume then waits for its
 reconnect claim (`ResumeReconnect`) in the instance's one queue, at most
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS` (`3_000` ms), before anything changes. It is an operator
 entry, so the closed gate does not hold it back, while every routine entry stays held back. Not
@@ -709,6 +725,7 @@ try:
 | a `stand` pause's caller's time ended with something in the way (also an unconfirmed close, which ends it at once) | `scheduling_pause_standing` (info): the receipt's own cause, the same code with `pause_stage`, `in_the_way` and, for `check_failed`, the failure as its cause | the request, before it answers and before its continuation starts; under the persist gate, only while the pause still holds (fix round 1) |
 | that pause later became quiet by itself (stage `released`) | `scheduling_pause_settled` (info, no member) | the continuation |
 | a person's resume lifted a `stand` pause in `draining` or `paused` without a reconnect | `scheduling_resume_without_reconnect` (info): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it |
+| Workflow #479 F-2 ([device-binding.md](device-binding.md), "An iOS handset"): an instance whose device system has no backend in this build (an iOS handset, bound or not) is resumed, a person's resume or a tool's, its pause in stage `released` (a restored one and a start's hold included) or, fenced, in any stage or none, and no reconnect is attempted (a pause held again with `instance.added` writes none) | `scheduling_resume_without_backend` (info, no member): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it; under the pause request's links, else (no request set the pause, or none holds) the instance's own under fresh system links |
 | a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time (as it writes the standing record: under the persist gate, only while the pause still holds), else the continuation |
 | a `quiet_or_lift` hold was lifted without its instance having become quiet: its caller's time ended first (its drain past the checkpoint grace, `scheduling_pause_drain_incomplete`; its hand-back past the grace, `scheduling_pause_release_busy`, the admission guard still taken by another party included) or, since fix round 1 (the coordinator's ruling: every lift of a hold without quiet is recorded), a queued entry refused its hand-back (`lease_transfer_not_safe`) or the scheduler refused its close lease (another member's entry ahead, the takeover cooldown, a holder: `lease_busy`, `lease_cooldown`) | `scheduling_pause_lifted_not_quiet` (warning): `pause_reason` the hold's reason, `in_the_way` what was in the way (what its last check read, or what is read outside the guard another party holds, which may be empty; for a refusing entry what that check read, `queued_entry` among it; for a refused close lease `close_refused`), that failure as its cause | the request, after the lift |
 
@@ -722,7 +739,10 @@ lift's record); an unconfirmed close the continuation meets (the pause stands, t
 records say it); a tool's hold that failed for anything else (an unconfirmed or an otherwise failed
 close, a failed check, a shutdown, a fatal error: the receipt and the fact records say it); a
 restored pause, at the restart or later (the restore's fact record and stdout line). The global
-pause has no stages and writes none.
+pause has no stages and writes none. An iOS handset is the exception to the resume of a pause
+already `released` and of a fenced instance ([device-binding.md](device-binding.md), "An iOS
+handset"): its resume runs no reconnect, its receipt has the cause
+`scheduling_resume_without_backend` and it writes that row's record.
 
 **The order of a pause's records** (fix round 1; what the code guarantees, no more). The request's
 own record of a pause that still holds (`scheduling_pause_standing`, or
@@ -741,9 +761,12 @@ record. A hold's `scheduling_pause_lifted_not_quiet` comes after its lift's fact
 
 The links of a pause's request are kept with the pause in the Runtime's memory until it is lifted,
 so the record a person's resume writes carries them too; a pause no request set (a restored pause, a
-start's hold) is `released` and is never resumed that way. The codes are outcome codes inside an
-existing record, so a reader of `ledger` revision 9 reads them as it reads every code it has never
-seen (it checks a code's spelling, never that it is registered: [component-interfaces.md](component-interfaces.md),
+start's hold) is `released` and is never resumed that way, except on an iOS handset
+([device-binding.md](device-binding.md), "An iOS handset"), whose resume of it writes
+`scheduling_resume_without_backend` under the instance's own links (fresh system links, as the
+emulator watch links its records), no request's links being kept for it. The codes are outcome
+codes inside an existing record, so a reader of `ledger` revision 9 reads them as it reads every
+code it has never seen (it checks a code's spelling, never that it is registered: [component-interfaces.md](component-interfaces.md),
 the `ledger` row of revision 5), and neither `ledger` nor `runtime-outcomes` moves, as for
 `global_paused` (register §1.468). A record that cannot be written changes nothing the pause does
 or answers: the failure is said in the daemon's log (the line of a skipped background step) with
@@ -965,5 +988,7 @@ and per-instance pause states within the status. #480 PG-2c: `actingctl pause` a
 the Lab's `ac_resume`), its parameters unchanged, answers the receipt's cause the same way
 (`RuntimeClient::resume_scheduling_as`, with `expect` `resume_scheduling_expected_as`): a resume of
 a person's pause that was not quiet yet answers `runtime_scheduling_resumed` caused by the receipt's
-outcome, whose cause is `scheduling_resume_without_reconnect`, exit 0; an ordinary resume answers no
-cause. `actingctl resume` and its MCP's `ac_resume` answer the result as before.
+outcome, whose cause is `scheduling_resume_without_reconnect`, exit 0, and a resume of an iOS
+handset answers the same way with `scheduling_resume_without_backend` (no backend to reconnect:
+[device-binding.md](device-binding.md), "An iOS handset"); an ordinary resume answers no cause.
+`actingctl resume` and its MCP's `ac_resume` answer the result as before.

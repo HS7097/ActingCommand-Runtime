@@ -44,20 +44,39 @@
 //!   located no state root ([`dispatch_unlocated`]); a row refused for its state carries the
 //!   state's word (`device_link_state`).
 //!
+//! - Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"; register §1.482): `list`
+//!   lists the phones `acib devices` sees beside adb's rows, each `{device_key?, system: "ios",
+//!   transport, bound_alias?}`, its key made by `acib` under the caller's salt, else the
+//!   installation's own secret, by the same function; `acib` is the install root's
+//!   `tools\acib.exe`, started as adb is (standard input from nowhere, pipes for its output and
+//!   errors), and a salt reaches it only as a variable of that one child's environment under the
+//!   Lab's fixed names ([`ACIB_KEY_SALT_VARIABLE`], [`ACIB_BINDING_SALT_VARIABLE`]), never an
+//!   argument. Fix round 1: `acib` is given its own deadline ([`ACIB_TIMEOUT_MS`]) and the Lab
+//!   waits for it a little longer, reading a bounded amount of its output ([`wait_acib`]); past
+//!   either it ends its child. When `acib` is not installed and no iOS handset is configured the
+//!   listing is as before; otherwise an iOS listing that fails is the member
+//!   `ios_devices_unlisted` `{why}` (`ios_list_problem`) beside the Android rows, never the
+//!   listing's failure. `bind` of an iOS
+//!   handset names its phone by the listing's `device_key`, has `acib` find it and answer its key
+//!   under the installation's secret, and writes the iOS row; a key or handle of the other device
+//!   system is `device_row_unbindable` `system_mismatch`.
+//!
 //! None of them runs the Runtime or records anything in the ledger: the next start reads the
 //! file and records the binding by fingerprint, so a change answers `restart_required`. No
 //! answer, outcome value or developer line names a device serial: adb's own text has every
 //! serial the file binds replaced by the device's label `[device:handset:<alias>]`
-//! (`raw_text_redacted`, model-398 §3.5 rule 4).
+//! (`raw_text_redacted`, model-398 §3.5 rule 4). Nothing of this module ever holds an
+//! identifier of an iOS phone: `acib` keeps it and answers only salted keys.
 
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem, DeviceRowProblem};
+use crate::codes::{ActingctlCode, ArgumentProblem, DeviceRowProblem, IosListProblem};
 use actingcommand_contract::codes::{ContractCode, SanitizationCode, SharedCode};
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    DEVICE_BINDINGS_SCHEMA, DeviceBinding, DeviceBindings, DeviceBindingsFile, DeviceBoundVia,
-    DeviceLinkState, InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, SecretField,
-    SecretFingerprinter, device_bindings_path, parse_device_bindings, read_device_bindings,
+    DeviceBinding, DeviceBindings, DeviceBindingsFile, DeviceBoundVia, DeviceLinkState,
+    DeviceSystem, InstalledProcess, InstanceDeviceKind, RuntimeErrorCode, SecretField,
+    SecretFingerprinter, device_bindings_path, device_bindings_schema, device_key_valid,
+    parse_device_bindings, read_device_bindings,
 };
 use actingcommand_ledger::Sha256SecretFingerprinter;
 use serde::Deserialize;
@@ -65,10 +84,12 @@ use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "devices";
 pub const LIST: &str = "list";
@@ -123,6 +144,18 @@ const STATE_DEVICE: &str = "device";
 /// The transports of a row; a handset that declares none is on USB (actingd's reading).
 const USB: &str = "usb";
 const TCP: &str = "tcp";
+/// Workflow #479 F-2: the environment variables the Lab gives `acib` its salts under, in that one
+/// child's environment alone: the salt of the rows' keys (`acib devices --key-salt-env`) and the
+/// installation's own secret (`--binding-salt-env`), whose keys are the private file's.
+pub const ACIB_KEY_SALT_VARIABLE: &str = "ACTINGCOMMAND_ACIB_KEY_SALT";
+pub const ACIB_BINDING_SALT_VARIABLE: &str = "ACTINGCOMMAND_ACIB_BINDING_SALT";
+/// Workflow #479 F-2: the member of a listing that has no iOS rows because `acib` gave none, and
+/// the member of a row, and of an iOS bind's answer, that names its device system.
+const IOS_DEVICES_UNLISTED_MEMBER: &str = "ios_devices_unlisted";
+const SYSTEM_MEMBER: &str = "system";
+/// Workflow #479 F-2: the connections `acib devices` names a phone's row by, the iOS rows'
+/// `transport`.
+const ACIB_CONNECTIONS: [&str; 3] = ["usb", "network", "unknown"];
 const USAGE: &str = "usage: actingctl devices list [--state-root <dir> | --config <file>] [--root <install root>] [--key-salt <text> | --key-salt-env <NAME>]\n       actingctl devices bind <alias> (<handle> | --device-key <key> [--key-salt <text> | --key-salt-env <NAME>]) (--state-root <dir> | --config <file>) [--root <install root>] [--bound-via ui]\n       actingctl devices unbind <alias> --state-root <dir>";
 
 /// One run of `adb devices -l`: what it printed, or why it printed nothing.
@@ -149,6 +182,449 @@ pub fn run_adb(adb: &Path) -> AdbRun {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         },
     }
+}
+
+/// Workflow #479 F-2: one run of `acib`: its arguments and the variables of that one child's
+/// environment. A salt is only ever a value of `environment`, under the Lab's own names
+/// ([`ACIB_KEY_SALT_VARIABLE`], [`ACIB_BINDING_SALT_VARIABLE`]); `removed` names the variable of
+/// the Lab's own process a caller's salt was read from (`--key-salt-env`), which the child does not
+/// inherit. Its `Debug` shows the variables' names and none of their values.
+pub struct AcibCall {
+    pub arguments: Vec<String>,
+    pub environment: Vec<(&'static str, String)>,
+    pub removed: Vec<String>,
+}
+
+impl fmt::Debug for AcibCall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcibCall")
+            .field("arguments", &self.arguments)
+            .field(
+                "environment",
+                &self
+                    .environment
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("removed", &self.removed)
+            .finish()
+    }
+}
+
+/// Workflow #479 F-2: what one run of `acib` gave.
+pub enum AcibRun {
+    /// It ended with status 0: its standard output, one JSON line.
+    Answered(Vec<u8>),
+    /// It ended with another status: its standard output, its problem line.
+    Refused(Vec<u8>),
+    /// It did not start.
+    NotStarted(std::io::Error),
+    /// Workflow #479 F-2 fix round 1: it had not ended with its answer when the Lab's wait
+    /// ([`ACIB_WAIT_MS`]) passed, and the Lab ended it.
+    Overdue,
+    /// Workflow #479 F-2 fix round 1: it printed more than [`ACIB_OUTPUT_LIMIT_BYTES`] on one of
+    /// its two streams, and the Lab ended it.
+    TooLong,
+    /// Workflow #479 F-2 fix round 1: the Lab asked it to end (past its wait, past its cap, or
+    /// after a stream or its state could not be read) and ending it failed: it may still run.
+    /// Fix round 2: this cause alone.
+    NotEnded,
+    /// Workflow #479 F-2 fix round 2: the Lab could not read whether it had ended, so it ended it,
+    /// and ending it succeeded: it runs no more, and what it answered is not known.
+    StateUnread,
+}
+
+/// Workflow #479 F-2 fix round 1: the deadline the Lab gives `acib` for one call (`--timeout-ms`):
+/// 10 s, well under the 30 s the installer waits for a Lab call (register §1.475), so a listing
+/// whose wait for Apple's device service runs out still answers adb's rows in time.
+pub const ACIB_TIMEOUT_MS: u64 = 10_000;
+/// Workflow #479 F-2 fix round 1: how long the Lab waits for `acib`, a little above its own
+/// deadline: a child still running then is ended (it is the Lab's own child) and the call answers
+/// `no_answer_in_time`.
+pub const ACIB_WAIT_MS: u64 = 12_000;
+/// Workflow #479 F-2 fix round 1: the most the Lab reads of each of `acib`'s two streams (its
+/// output, and its errors, which are read and dropped); a child that prints more is ended and the
+/// call answers `answer_too_long`. A `devices` line of many phones is a few kilobytes.
+pub const ACIB_OUTPUT_LIMIT_BYTES: usize = 64 * 1024;
+/// How often the Lab looks whether `acib` ended.
+const ACIB_POLL_MS: u64 = 10;
+
+/// Workflow #479 F-2 fix round 1: the bounds of one wait for `acib` ([`wait_acib`]).
+#[derive(Debug, Clone, Copy)]
+pub struct AcibBounds {
+    /// The longest the Lab waits for the child to end with its answer.
+    pub wait: Duration,
+    /// The most read of each of its two streams.
+    pub output_limit: usize,
+    /// The time between two looks.
+    pub poll: Duration,
+}
+
+impl AcibBounds {
+    /// The bounds of [`run_acib`]: [`ACIB_WAIT_MS`], [`ACIB_OUTPUT_LIMIT_BYTES`] and a look every
+    /// 10 ms.
+    pub const fn lab() -> Self {
+        Self {
+            wait: Duration::from_millis(ACIB_WAIT_MS),
+            output_limit: ACIB_OUTPUT_LIMIT_BYTES,
+            poll: Duration::from_millis(ACIB_POLL_MS),
+        }
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: a started `acib` as [`wait_acib`] follows it: the Lab's own
+/// child process, or a test's scripted one.
+pub trait AcibChild {
+    /// Whether it ended, `Some(true)` with status 0; `None` while it runs.
+    fn ended(&mut self) -> std::io::Result<Option<bool>>;
+    /// Ends it and waits for its end.
+    fn end(&mut self) -> std::io::Result<()>;
+}
+
+impl AcibChild for Child {
+    fn ended(&mut self) -> std::io::Result<Option<bool>> {
+        self.try_wait()
+            .map(|status| status.map(|status| status.success()))
+    }
+
+    fn end(&mut self) -> std::io::Result<()> {
+        self.kill()?;
+        self.wait().map(|_| ())
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: the clock a wait for `acib` reads: the wall clock in
+/// [`run_acib`], a test's own in its tests.
+pub trait AcibClock {
+    /// The time since the wait began.
+    fn elapsed(&self) -> Duration;
+    /// Waits `span` before the next look.
+    fn pause(&self, span: Duration);
+}
+
+/// The wall clock of one wait, from its start.
+struct WallClock(Instant);
+
+impl AcibClock for WallClock {
+    fn elapsed(&self) -> Duration {
+        self.0.elapsed()
+    }
+
+    fn pause(&self, span: Duration) {
+        std::thread::sleep(span);
+    }
+}
+
+/// Workflow #479 F-2: runs `acib` at `acib` as `call` says, started as adb is: standard input from
+/// nowhere, its output and errors through pipes (register §1.475), and the salts in its own
+/// environment alone. Fix round 1: the call carries `acib`'s own deadline ([`ACIB_TIMEOUT_MS`],
+/// [`AcibSalts::call`]), and the Lab waits for it within [`AcibBounds::lab`] ([`wait_acib`]).
+pub fn run_acib(acib: &Path, call: &AcibCall) -> AcibRun {
+    let mut command = Command::new(acib);
+    command
+        .args(&call.arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for name in &call.removed {
+        command.env_remove(name);
+    }
+    for (name, value) in &call.environment {
+        command.env(name, value);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return AcibRun::NotStarted(error),
+    };
+    let clock = WallClock(Instant::now());
+    match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => wait_acib(
+            &mut child,
+            Box::new(stdout),
+            Box::new(stderr),
+            AcibBounds::lab(),
+            &clock,
+        ),
+        // Both were asked for as pipes, so both are there; without them no line can be read.
+        _ => ended_as(&mut child, AcibRun::Refused(Vec::new())),
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: what one reader of a stream of `acib` read to the stream's end.
+enum StreamRead {
+    /// Its bytes (none for the errors, which are dropped).
+    Ended(Vec<u8>),
+    /// More than the limit.
+    TooLong,
+    /// The read failed.
+    Failed,
+}
+
+/// Which of `acib`'s two streams a [`StreamRead`] is of.
+#[derive(Clone, Copy)]
+enum AcibStream {
+    Output,
+    Errors,
+}
+
+/// Reads `stream` to its end, at most `limit` bytes, keeping them when `keep` is set.
+fn read_bounded(mut stream: Box<dyn Read + Send>, limit: usize, keep: bool) -> StreamRead {
+    let mut kept = Vec::new();
+    let mut read = 0_usize;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => return StreamRead::Ended(kept),
+            Ok(count) => {
+                read = read.saturating_add(count);
+                if read > limit {
+                    return StreamRead::TooLong;
+                }
+                if keep {
+                    kept.extend_from_slice(&buffer[..count]);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return StreamRead::Failed,
+        }
+    }
+}
+
+/// `child`'s run as `run` once it is ended; [`AcibRun::NotEnded`] when ending it fails.
+fn ended_as(child: &mut dyn AcibChild, run: AcibRun) -> AcibRun {
+    match child.end() {
+        Ok(()) => run,
+        Err(_) => AcibRun::NotEnded,
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: follows the started `acib` `child`, whose standard output and
+/// errors are `output` and `errors`, within `bounds` on `clock`. Each stream is read on a thread
+/// of its own, at most `bounds.output_limit` bytes (the errors read and dropped), so a child that
+/// fills a pipe never blocks. The run is the child's answer once it ended and both streams
+/// reached their end; a stream past the limit ends the child, [`AcibRun::TooLong`]; a child (or
+/// a stream) not at its end when `bounds.wait` has passed is ended, [`AcibRun::Overdue`]; a
+/// stream that cannot be read ends the child, as a line the Lab cannot read
+/// ([`AcibRun::Refused`] with nothing). Fix round 2, one word each: a state that cannot be read
+/// ends the child, [`AcibRun::StateUnread`]; ending the child failing, whatever asked for it, is
+/// [`AcibRun::NotEnded`].
+pub fn wait_acib(
+    child: &mut dyn AcibChild,
+    output: Box<dyn Read + Send>,
+    errors: Box<dyn Read + Send>,
+    bounds: AcibBounds,
+    clock: &dyn AcibClock,
+) -> AcibRun {
+    let (sender, receiver) = mpsc::channel();
+    for (stream, which) in [(output, AcibStream::Output), (errors, AcibStream::Errors)] {
+        let sender = sender.clone();
+        let limit = bounds.output_limit;
+        let keep = matches!(which, AcibStream::Output);
+        // A reader the wait no longer listens to ends with its stream (the ended child's pipe);
+        // nothing joins it, and what it would send has nobody left to read it.
+        let _reader = std::thread::spawn(move || {
+            let read = read_bounded(stream, limit, keep);
+            sender.send((which, read)).ok();
+        });
+    }
+    drop(sender);
+    let mut answer = None;
+    let mut errors_read = false;
+    let mut status = None;
+    loop {
+        while let Ok((which, read)) = receiver.try_recv() {
+            match (which, read) {
+                (_, StreamRead::TooLong) => return end_unless(child, status, AcibRun::TooLong),
+                (_, StreamRead::Failed) => {
+                    return end_unless(child, status, AcibRun::Refused(Vec::new()));
+                }
+                (AcibStream::Output, StreamRead::Ended(bytes)) => answer = Some(bytes),
+                (AcibStream::Errors, StreamRead::Ended(_)) => errors_read = true,
+            }
+        }
+        if status.is_none() {
+            match child.ended() {
+                Ok(ended) => status = ended,
+                // Fix round 2: whether it ended is not known here, so the Lab ends it; ended, the
+                // state that could not be read is the word, else `not_ended` (`ended_as`).
+                Err(_) => return ended_as(child, AcibRun::StateUnread),
+            }
+        }
+        if let (Some(success), true) = (status, errors_read)
+            && let Some(answer) = answer.take()
+        {
+            return if success {
+                AcibRun::Answered(answer)
+            } else {
+                AcibRun::Refused(answer)
+            };
+        }
+        if clock.elapsed() >= bounds.wait {
+            return end_unless(child, status, AcibRun::Overdue);
+        }
+        clock.pause(bounds.poll);
+    }
+}
+
+/// `run` for `child`, ended first unless it already ended (`status` is some).
+fn end_unless(child: &mut dyn AcibChild, status: Option<bool>, run: AcibRun) -> AcibRun {
+    if status.is_some() {
+        run
+    } else {
+        ended_as(child, run)
+    }
+}
+
+/// Workflow #479 F-2: the salts of one `acib devices` call: the rows' keys under `key`, and the
+/// keys under the installation's own secret beside them (`binding`); `removed`, the variable of
+/// the Lab's process a caller's salt came from.
+struct AcibSalts<'a> {
+    key: Option<&'a [u8]>,
+    binding: Option<&'a [u8]>,
+    removed: Option<&'a str>,
+}
+
+impl AcibSalts<'_> {
+    /// The call: `devices`, `--key-salt-env` naming the Lab's variable when there is a key salt,
+    /// and `--binding-salt-env` when there is a secret too; the salts as those variables' values.
+    /// Fix round 1: and `--timeout-ms` [`ACIB_TIMEOUT_MS`], `acib`'s own deadline.
+    fn call(&self) -> AcibCall {
+        let mut arguments = vec!["devices".to_owned()];
+        let mut environment = Vec::new();
+        if let Some(key) = self.key {
+            arguments.push("--key-salt-env".to_owned());
+            arguments.push(ACIB_KEY_SALT_VARIABLE.to_owned());
+            environment.push((
+                ACIB_KEY_SALT_VARIABLE,
+                String::from_utf8_lossy(key).into_owned(),
+            ));
+            if let Some(binding) = self.binding {
+                arguments.push("--binding-salt-env".to_owned());
+                arguments.push(ACIB_BINDING_SALT_VARIABLE.to_owned());
+                environment.push((
+                    ACIB_BINDING_SALT_VARIABLE,
+                    String::from_utf8_lossy(binding).into_owned(),
+                ));
+            }
+        }
+        arguments.push("--timeout-ms".to_owned());
+        arguments.push(ACIB_TIMEOUT_MS.to_string());
+        AcibCall {
+            arguments,
+            environment,
+            removed: self.removed.map(str::to_owned).into_iter().collect(),
+        }
+    }
+}
+
+/// Workflow #479 F-2: one phone `acib devices` lists: its connection, its key under the call's key
+/// salt and its key under the installation's secret, each when the call gave its salt. No
+/// identifier of the phone.
+struct IosListed {
+    connection: String,
+    device_key: Option<String>,
+    binding_key: Option<String>,
+}
+
+/// Workflow #479 F-2: the line `acib devices` answers.
+#[derive(Deserialize)]
+struct AcibDevicesLine {
+    devices: Vec<AcibDevice>,
+}
+
+#[derive(Deserialize)]
+struct AcibDevice {
+    connection: String,
+    #[serde(default)]
+    device_key: Option<String>,
+    #[serde(default)]
+    binding_key: Option<String>,
+}
+
+/// Workflow #479 F-2: the line `acib` answers when it refuses: its problem word.
+#[derive(Deserialize)]
+struct AcibProblemLine {
+    problem: String,
+}
+
+/// Workflow #479 F-2: the phones `acib` at `acib` lists under `salts`, in its order; `None` when no
+/// iOS phone is to be listed (`acib` is not installed and `ios_configured` is false: the listing
+/// is as before). Otherwise [`ios_phones`].
+fn ios_listing(
+    acib: &Path,
+    ios_configured: bool,
+    salts: &AcibSalts<'_>,
+    run: &dyn Fn(&Path, &AcibCall) -> AcibRun,
+) -> Option<Result<Vec<IosListed>, IosListProblem>> {
+    (ios_configured || acib.is_file()).then(|| ios_phones(acib, salts, run))
+}
+
+/// Workflow #479 F-2: the phones `acib` at `acib` lists under `salts`, in its order. `acib` not
+/// installed (no file there; nothing is started), not started, refusing or answering a line this
+/// does not read is its word of `ios_list_problem`.
+fn ios_phones(
+    acib: &Path,
+    salts: &AcibSalts<'_>,
+    run: &dyn Fn(&Path, &AcibCall) -> AcibRun,
+) -> Result<Vec<IosListed>, IosListProblem> {
+    if !acib.is_file() {
+        return Err(IosListProblem::NotInstalled);
+    }
+    ios_rows(acib, salts, run)
+}
+
+/// Workflow #479 F-2: one `acib devices` run under `salts` and its rows; a key not of the
+/// contract's form, or a connection `acib` does not name, is a line this does not read.
+fn ios_rows(
+    acib: &Path,
+    salts: &AcibSalts<'_>,
+    run: &dyn Fn(&Path, &AcibCall) -> AcibRun,
+) -> Result<Vec<IosListed>, IosListProblem> {
+    let line = match run(acib, &salts.call()) {
+        AcibRun::NotStarted(_) => return Err(IosListProblem::NotStarted),
+        // Workflow #479 F-2 fix round 1: past the Lab's wait, past its cap, or not ended; fix
+        // round 2: or ended because its state could not be read.
+        AcibRun::Overdue => return Err(IosListProblem::NoAnswerInTime),
+        AcibRun::TooLong => return Err(IosListProblem::AnswerTooLong),
+        AcibRun::NotEnded => return Err(IosListProblem::NotEnded),
+        AcibRun::StateUnread => return Err(IosListProblem::StateUnreadable),
+        AcibRun::Refused(stdout) => {
+            return Err(serde_json::from_slice::<AcibProblemLine>(&stdout)
+                .ok()
+                .and_then(|refused| {
+                    IosListProblem::ALL
+                        .iter()
+                        .copied()
+                        .find(|word| word.as_str() == refused.problem)
+                })
+                .unwrap_or(IosListProblem::AnswerUnreadable));
+        }
+        AcibRun::Answered(stdout) => serde_json::from_slice::<AcibDevicesLine>(&stdout)
+            .map_err(|_| IosListProblem::AnswerUnreadable)?,
+    };
+    let key_of = |key: Option<String>, given: bool| match (key, given) {
+        (Some(key), true) if device_key_valid(&key) => Ok(Some(key)),
+        (None, false) => Ok(None),
+        _ => Err(IosListProblem::AnswerUnreadable),
+    };
+    line.devices
+        .into_iter()
+        .map(|device| {
+            if !ACIB_CONNECTIONS.contains(&device.connection.as_str()) {
+                return Err(IosListProblem::AnswerUnreadable);
+            }
+            Ok(IosListed {
+                connection: device.connection,
+                device_key: key_of(device.device_key, salts.key.is_some())?,
+                binding_key: key_of(
+                    device.binding_key,
+                    salts.key.is_some() && salts.binding.is_some(),
+                )?,
+            })
+        })
+        .collect()
 }
 
 /// One device row of `adb devices -l`.
@@ -225,6 +701,20 @@ struct ConfigDevice {
     /// #398 DB-2: a handset's transport; absent, [`USB`], as actingd reads it.
     #[serde(default)]
     transport: Option<String>,
+    /// Workflow #479 F-2: a handset's device system; absent, Android, as actingd reads it.
+    #[serde(default)]
+    system: Option<String>,
+}
+
+impl ConfigInstance {
+    /// Workflow #479 F-2: whether the entry is an iOS handset (`device.kind` `handset`,
+    /// `device.system` `ios`); actingd refuses any other use of `system`.
+    fn ios_handset(&self) -> bool {
+        self.device.as_ref().is_some_and(|device| {
+            device.kind == InstanceDeviceKind::Handset
+                && device.system.as_deref() == Some(DeviceSystem::Ios.as_str())
+        })
+    }
 }
 
 /// #398 DB-2: a salt the caller gives for the device keys (`--key-salt <text>`, or
@@ -232,8 +722,12 @@ struct ConfigDevice {
 /// [`MAX_KEY_SALT_BYTES`] bytes of text, the bounds of the installation's own secret. The
 /// installer makes a random one for each run and gives it to the listing and to the bind. It is
 /// never printed, logged or written: its `Debug` shows none of it, and no answer, outcome value
-/// or developer line carries it.
-pub struct KeySalt(Vec<u8>);
+/// or developer line carries it. Workflow #479 F-2: it remembers the variable it was read from,
+/// which `acib`'s environment does not inherit (the salt reaches `acib` under the Lab's own name).
+pub struct KeySalt {
+    bytes: Vec<u8>,
+    variable: Option<String>,
+}
 
 impl KeySalt {
     /// The salt `text`; one outside the bounds is `actingctl_usage_invalid` naming
@@ -251,7 +745,10 @@ impl KeySalt {
                     .range_max(MAX_KEY_SALT_BYTES),
             );
         }
-        Ok(Self(text.as_bytes().to_vec()))
+        Ok(Self {
+            bytes: text.as_bytes().to_vec(),
+            variable: None,
+        })
     }
 
     /// #398 DB-2: the salt of the environment variable `name` of this process, as `environment`
@@ -272,7 +769,9 @@ impl KeySalt {
             .to_str()
             .filter(|text| !text.is_empty())
             .ok_or_else(|| refused(ArgumentProblem::Unusable))?;
-        Self::given(text, KEY_SALT_ENV_FLAG)
+        let mut salt = Self::given(text, KEY_SALT_ENV_FLAG)?;
+        salt.variable = Some(name.to_owned());
+        Ok(salt)
     }
 }
 
@@ -322,21 +821,46 @@ fn secret_of(document: &Value) -> Option<Vec<u8>> {
 }
 
 /// #398 DB-2: the secret of the selected configuration `config`, read as [`configured_instances`]
-/// reads it (`config_read_failed`, `config_decode_failed`, each with its `path`).
+/// reads it (`config_read_failed`, `config_decode_failed`, each with its `path`). Workflow #479
+/// F-2: and whether it configures an iOS handset (a configuration whose instances do not decode
+/// configures none here).
 fn installation_secret(
     installation: Option<&InstalledProcess>,
     config: &Path,
-) -> Result<Option<Vec<u8>>, Outcome> {
+) -> Result<(Option<Vec<u8>>, bool), Outcome> {
     let bytes = configuration_bytes(installation, config)?;
     let document =
         serde_json::from_slice::<Value>(&bytes).map_err(|error| decode_failed(config, &error))?;
-    Ok(secret_of(&document))
+    Ok((secret_of(&document), ios_configured(&document)))
 }
 
-/// The selected configuration of the install root and its adb, found as `actingctl packs` finds
+/// Workflow #479 F-2: whether the configuration `document` has an iOS handset.
+fn ios_configured(document: &Value) -> bool {
+    ConfigFile::deserialize(document)
+        .is_ok_and(|file| file.instances.iter().any(ConfigInstance::ios_handset))
+}
+
+/// The install root's programs a `devices` call runs: its adb and (Workflow #479 F-2) its acib.
+struct Tools {
+    adb: PathBuf,
+    acib: PathBuf,
+}
+
+/// The tools of the install root `install_root`: `<install root>\tools\platform-tools\adb.exe`
+/// and `<install root>\tools\acib.exe`.
+fn tools_of(install_root: &Path) -> Tools {
+    let tools = install_root.join("tools");
+    Tools {
+        adb: tools.join("platform-tools").join("adb.exe"),
+        acib: tools.join("acib.exe"),
+    }
+}
+
+/// The selected configuration of the install root and its tools, found as `actingctl packs` finds
 /// them (command table D5): this process's install selection, else `root`'s, else the install
-/// root this executable runs from. Its adb is `<install root>\tools\platform-tools\adb.exe`.
-fn install(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf, PathBuf), Outcome> {
+/// root this executable runs from. Its adb is `<install root>\tools\platform-tools\adb.exe`, its
+/// acib `<install root>\tools\acib.exe`.
+fn install(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf, Tools), Outcome> {
     let (installation, config) =
         crate::packs::selected_config(root).map_err(|error| error.outcome())?;
     let install_root = installation
@@ -345,15 +869,7 @@ fn install(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf, Pa
         .or_else(|| root.map(Path::to_path_buf))
         .or_else(crate::packs::executable_install_root)
         .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))?;
-    Ok((installation, config, adb_of(&install_root)))
-}
-
-/// The adb of the install root `install_root`, `<install root>\tools\platform-tools\adb.exe`.
-fn adb_of(install_root: &Path) -> PathBuf {
-    install_root
-        .join("tools")
-        .join("platform-tools")
-        .join("adb.exe")
+    Ok((installation, config, tools_of(&install_root)))
 }
 
 /// #398 DB-1 fix round 1: the adb a bind against a candidate configuration lists the devices
@@ -361,11 +877,11 @@ fn adb_of(install_root: &Path) -> PathBuf {
 /// at `program` runs from by its place alone (`locate::root_of_place`). No install selection is
 /// read, of this process (one it inherited from another installation included) or of a root, so
 /// a root whose files are laid and whose configuration is not selected yet binds, from a slot too.
-/// Neither root: `install_root_unresolved`.
-fn candidate_adb(root: Option<&Path>, program: Option<&Path>) -> Result<PathBuf, Outcome> {
+/// Neither root: `install_root_unresolved`. Workflow #479 F-2: and the acib of that root.
+fn candidate_tools(root: Option<&Path>, program: Option<&Path>) -> Result<Tools, Outcome> {
     root.map(Path::to_path_buf)
         .or_else(|| program.and_then(crate::locate::root_of_place))
-        .map(|install_root| adb_of(&install_root))
+        .map(|install_root| tools_of(&install_root))
         .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved))
 }
 
@@ -384,12 +900,13 @@ fn bindings(state_root: &Path) -> Result<DeviceBindings, Outcome> {
 fn redacted(text: &str, bindings: &DeviceBindings) -> (String, bool) {
     let mut text = text.to_owned();
     let mut replaced = false;
-    for binding in bindings.iter() {
-        if text.contains(binding.serial()) {
-            text = text.replace(
-                binding.serial(),
-                &format!("[device:handset:{}]", binding.alias),
-            );
+    // Workflow #479 F-2: an iOS row holds no serial, so adb's text cannot name it.
+    for (serial, alias) in bindings
+        .iter()
+        .filter_map(|binding| binding.serial().map(|serial| (serial, &binding.alias)))
+    {
+        if text.contains(serial) {
+            text = text.replace(serial, &format!("[device:handset:{alias}]"));
             replaced = true;
         }
     }
@@ -468,7 +985,7 @@ pub struct ListRequest<'a> {
 ///   (`config_read_failed`, `config_decode_failed`) its cause (`device_keys_unmade`
 ///   `config_unreadable`); the listing is not refused for it.
 /// - Against a candidate configuration: the bindings of the state root it names, the adb of
-///   `root`, else of the root the program runs from by its place ([`candidate_adb`]; no install
+///   `root`, else of the root the program runs from by its place ([`candidate_tools`]; no install
 ///   selection is read), the keys under the salt, else under the candidate's secret.
 /// - Against neither: no binding is read, the adb as against a candidate, the keys under the salt
 ///   alone; the answer says that the bindings were not read, and why (`bindings_unread`
@@ -479,41 +996,81 @@ pub fn list_from(
     program: Option<&Path>,
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
-    let salt = request.key_salt.map(|salt| salt.0.as_slice());
-    let (bindings, adb, secret, unmade) = match request.against {
+    list_with_acib(request, program, run, &run_acib)
+}
+
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): [`list_from`] with `acib`
+/// for its run of `acib devices` ([`run_acib`] in [`list_from`]; a test's scripted `acib`). After
+/// adb's rows come the phones `acib` lists, each `{device_key?, system: "ios", transport,
+/// bound_alias?}`: its key under the caller's salt, else under the installation's own secret (the
+/// rule of adb's rows), and the alias of the iOS row of the private file whose key is the phone's
+/// key under that secret. A salt reaches `acib` only as a variable of its environment
+/// ([`AcibSalts`]). When `acib` is not installed and the configuration this listing reads has no
+/// iOS handset nothing is asked and the answer is as before; otherwise a listing `acib` did not
+/// give is the member `ios_devices_unlisted` `{why}` beside adb's rows, and the listing answers.
+pub fn list_with_acib(
+    request: &ListRequest<'_>,
+    program: Option<&Path>,
+    run: &dyn Fn(&Path) -> AdbRun,
+    acib: &dyn Fn(&Path, &AcibCall) -> AcibRun,
+) -> Result<Value, Outcome> {
+    let salt = request.key_salt.map(|salt| salt.bytes.as_slice());
+    let (bindings, tools, secret, unmade, ios_configured) = match request.against {
         Against::StateRoot(state_root) => {
             let bindings = bindings(state_root)?;
-            let (installation, config, adb) = install(request.root)?;
-            let (secret, unmade) = match salt {
-                Some(_) => (None, None),
-                None => match installation_secret(installation.as_ref(), &config) {
-                    Ok(secret) => (secret, None),
-                    Err(refused) => (None, Some(refused)),
-                },
-            };
-            (Some(bindings), adb, secret, unmade)
+            let (installation, config, tools) = install(request.root)?;
+            // Workflow #479 F-2: the secret is read beside a caller's salt too, for the iOS rows'
+            // keys under it (the binding keys); its refusal is said only where the rows' keys
+            // needed it, as before.
+            let (secret, unmade, ios_configured) =
+                match (salt, installation_secret(installation.as_ref(), &config)) {
+                    (_, Ok((secret, ios))) => (secret, None, ios),
+                    (Some(_), Err(_)) => (None, None, false),
+                    (None, Err(refused)) => (None, Some(refused), false),
+                };
+            (Some(bindings), tools, secret, unmade, ios_configured)
         }
         Against::Candidate(file) => {
-            let adb = candidate_adb(request.root, program)?;
+            let tools = candidate_tools(request.root, program)?;
             let candidate = read_candidate(file)?;
+            let ios_configured = candidate.instances.iter().any(ConfigInstance::ios_handset);
             (
                 Some(bindings(&candidate.state_root)?),
-                adb,
+                tools,
                 candidate.secret,
                 None,
+                ios_configured,
             )
         }
-        Against::Unnamed => (None, candidate_adb(request.root, program)?, None, None),
+        Against::Unnamed => (
+            None,
+            candidate_tools(request.root, program)?,
+            None,
+            None,
+            false,
+        ),
     };
-    let keyer = salt.or(secret.as_deref()).map(Keyer::new).transpose()?;
+    let key_salt = salt.or(secret.as_deref());
+    let keyer = key_salt.map(Keyer::new).transpose()?;
     let unread = DeviceBindings::default();
-    let listed = listing(&adb, bindings.as_ref().unwrap_or(&unread), run)?;
+    let listed = listing(&tools.adb, bindings.as_ref().unwrap_or(&unread), run)?;
     let detail = cli_line::detail().unwrap_or(Detail::Full);
     let mut answer = Map::new();
-    answer.insert(
-        "devices".to_owned(),
-        Value::Array(rows(&listed, bindings.as_ref(), keyer.as_ref())?),
-    );
+    let mut devices = rows(&listed, bindings.as_ref(), keyer.as_ref())?;
+    let salts = AcibSalts {
+        key: key_salt,
+        binding: secret.as_deref(),
+        removed: request.key_salt.and_then(|salt| salt.variable.as_deref()),
+    };
+    let unlisted = match ios_listing(&tools.acib, ios_configured, &salts, acib) {
+        None => None,
+        Some(Ok(phones)) => {
+            devices.extend(ios_device_rows(&phones, bindings.as_ref()));
+            None
+        }
+        Some(Err(problem)) => Some(problem),
+    };
+    answer.insert("devices".to_owned(), Value::Array(devices));
     if bindings.is_none() {
         answer.insert(
             BINDINGS_UNREAD_MEMBER.to_owned(),
@@ -526,7 +1083,41 @@ pub fn list_from(
             not_done(CONFIG_UNREADABLE, Some(refused), detail),
         );
     }
+    if let Some(problem) = unlisted {
+        answer.insert(
+            IOS_DEVICES_UNLISTED_MEMBER.to_owned(),
+            not_done(problem.as_str(), None, detail),
+        );
+    }
     Ok(Value::Object(answer))
+}
+
+/// Workflow #479 F-2: the rows of the phones `acib` listed, in its order: each with its key under
+/// the listing's salt when it was given one, `system` `ios`, its connection as its `transport`,
+/// and the alias of the private file's iOS row whose key is its key under the installation's
+/// secret. No identifier of a phone: `acib` answered none.
+fn ios_device_rows(phones: &[IosListed], bindings: Option<&DeviceBindings>) -> Vec<Value> {
+    phones
+        .iter()
+        .map(|phone| {
+            let mut row = Map::new();
+            if let Some(device_key) = &phone.device_key {
+                row.insert(DEVICE_KEY_MEMBER.to_owned(), json!(device_key));
+            }
+            row.insert(SYSTEM_MEMBER.to_owned(), json!(DeviceSystem::Ios.as_str()));
+            row.insert("transport".to_owned(), json!(phone.connection));
+            if let Some(binding) = phone.binding_key.as_deref().and_then(|binding_key| {
+                bindings.and_then(|bindings| {
+                    bindings
+                        .iter()
+                        .find(|binding| binding.device_key() == Some(binding_key))
+                })
+            }) {
+                row.insert("bound_alias".to_owned(), json!(binding.alias));
+            }
+            Value::Object(row)
+        })
+        .collect()
 }
 
 /// #398 DB-2 fix round 1: what a listing did not do, as its member says it: `{why, cause?}`, the
@@ -573,7 +1164,7 @@ fn rows(
             if let Some(binding) = bindings.and_then(|bindings| {
                 bindings
                     .iter()
-                    .find(|binding| binding.serial() == listed.serial)
+                    .find(|binding| binding.serial() == Some(listed.serial.as_str()))
             }) {
                 row.insert("bound_alias".to_owned(), json!(binding.alias));
             }
@@ -626,10 +1217,15 @@ struct Request<'a> {
     via: DeviceBoundVia,
 }
 
-/// #398 DB-2: how [`bound`] finds the device in its listing.
+/// #398 DB-2: how [`bound`] finds the device in its listing. Workflow #479 F-2: a key keeps the
+/// salt it was made with, which `acib` is asked under when no adb row carries the key.
 enum Finder<'a> {
     Handle(&'a str),
-    Key { device_key: &'a str, keyer: Keyer },
+    Key {
+        device_key: &'a str,
+        keyer: Keyer,
+        key_salt: Vec<u8>,
+    },
 }
 
 /// Binds the device of `handle` to the handset `alias`: `{alias, handle, model?,
@@ -646,12 +1242,12 @@ pub fn bind(
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
     let against = Against::StateRoot(state_root.to_path_buf());
-    bind_against(&against, root, None, &request.by_handle(), run)
+    bind_against(&against, root, None, &request.by_handle(), run, &run_acib)
 }
 
 /// #398 DB-2 (`contracts/device-binding.md`, "Choosing a device"): the binding `request` against
 /// the state root (its configuration the selected one, its adb found by [`install`]), against the
-/// candidate configuration (its adb by [`candidate_adb`] for the program at `program`, the answer
+/// candidate configuration (its adb by [`candidate_tools`] for the program at `program`, the answer
 /// naming the file as `config`), or against neither (`--state-root` `required`). [`bind`],
 /// [`bind_candidate_from`] and [`dispatch_in`] call it. A device named by its key is found in a
 /// fresh listing by the key under the request's salt, else under the installation's own secret
@@ -659,32 +1255,44 @@ pub fn bind(
 /// `actingctl_usage_invalid` [`KEY_SALT_FLAG`] `required`, no row with the key
 /// `device_key_unknown`. The binding written is the one a bind by the row's handle writes; the
 /// answer by key is `{alias, device_key, handle?, model?, restart_required: true}` and, against a
-/// candidate, `config`.
+/// candidate, `config`. Workflow #479 F-2: `acib` runs `acib devices` ([`run_acib`] but in a
+/// test); an iOS handset is bound by [`bound_ios`].
 fn bind_against(
     against: &Against,
     root: Option<&Path>,
     program: Option<&Path>,
     request: &Request<'_>,
     run: &dyn Fn(&Path) -> AdbRun,
+    acib: &dyn Fn(&Path, &AcibCall) -> AcibRun,
 ) -> Result<Value, Outcome> {
     match against {
         Against::StateRoot(state_root) => {
-            let (installation, config, adb) = install(root)?;
+            let (installation, config, tools) = install(root)?;
             let instances = configured_instances(installation.as_ref(), &config)?;
-            let secret = || installation_secret(installation.as_ref(), &config);
-            bound(state_root, &adb, &instances, request, &secret, run).map(Value::Object)
+            let secret =
+                || installation_secret(installation.as_ref(), &config).map(|(secret, _)| secret);
+            let devices = Devices {
+                tools: &tools,
+                run,
+                acib,
+            };
+            bound(state_root, &devices, &instances, request, &secret).map(Value::Object)
         }
         Against::Candidate(file) => {
-            let adb = candidate_adb(root, program)?;
+            let tools = candidate_tools(root, program)?;
             let candidate = read_candidate(file)?;
             let secret = || -> Result<Option<Vec<u8>>, Outcome> { Ok(candidate.secret.clone()) };
+            let devices = Devices {
+                tools: &tools,
+                run,
+                acib,
+            };
             let mut answer = bound(
                 &candidate.state_root,
-                &adb,
+                &devices,
                 &candidate.instances,
                 request,
                 &secret,
-                run,
             )?;
             answer.insert(
                 CONFIG_MEMBER.to_owned(),
@@ -703,7 +1311,7 @@ fn bind_against(
 /// configuration `file` in place of the selected one. The alias is checked in `file` by the same
 /// rules and codes, and the binding goes into the private file of the state root `file` names,
 /// which a check-config of `file` reads; no install selection is read, and the install root is
-/// asked for its adb alone ([`candidate_adb`]: `root`, else the root this program runs from by its
+/// asked for its adb alone ([`candidate_tools`]: `root`, else the root this program runs from by its
 /// place). A file that cannot be read is `config_read_failed`, one that does not decode
 /// `config_decode_failed`, each with its `path`; one without an absolute `state_root` is
 /// `install_state_root_unresolved` with `config_path`. The answer is [`bind`]'s and `config`, the
@@ -729,21 +1337,37 @@ pub fn bind_candidate_from(
     run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Value, Outcome> {
     let against = Against::Candidate(file.to_path_buf());
-    bind_against(&against, root, program, &request.by_handle(), run)
+    bind_against(
+        &against,
+        root,
+        program,
+        &request.by_handle(),
+        run,
+        &run_acib,
+    )
+}
+
+/// Workflow #479 F-2: where a bind lists the devices: the install root's tools and the runs of its
+/// adb and its acib.
+struct Devices<'a> {
+    tools: &'a Tools,
+    run: &'a dyn Fn(&Path) -> AdbRun,
+    acib: &'a dyn Fn(&Path, &AcibCall) -> AcibRun,
 }
 
 /// The binding of `request` into the private file of `state_root`: its alias checked among
 /// `instances` (the configuration's), the device read from adb at `adb`, by its handle or by its
 /// key (#398 DB-2: under the request's salt, else under `secret`, the installation's, read only
 /// for a bind by key), and refused before anything is written when it cannot be the handset's
-/// ([`bindable`]). The answer's members.
+/// ([`bindable`]). The answer's members. Workflow #479 F-2: an iOS handset is bound by
+/// [`bound_ios`]; a key no adb row carries that `acib` lists under the same salt is an iOS phone's,
+/// `device_row_unbindable` `system_mismatch` ([`unknown_key`]).
 fn bound(
     state_root: &Path,
-    adb: &Path,
+    devices: &Devices<'_>,
     instances: &[ConfigInstance],
     request: &Request<'_>,
     secret: &dyn Fn() -> Result<Option<Vec<u8>>, Outcome>,
-    run: &dyn Fn(&Path) -> AdbRun,
 ) -> Result<Map<String, Value>, Outcome> {
     let instance = instances
         .iter()
@@ -757,22 +1381,47 @@ fn bound(
         }
         _ => return Err(Outcome::new(ActingctlCode::DeviceKindUnsupported).alias(request.alias)),
     };
+    if instance.ios_handset() {
+        return bound_ios(state_root, devices, request, secret);
+    }
     let finder = match request.chosen {
         Chosen::Handle(handle) => Finder::Handle(handle),
-        Chosen::Key { device_key, salt } => Finder::Key {
-            device_key,
-            keyer: key_maker(salt, secret)?,
-        },
+        Chosen::Key { device_key, salt } => {
+            let (keyer, key_salt) = key_maker(salt, secret)?;
+            Finder::Key {
+                device_key,
+                keyer,
+                key_salt,
+            }
+        }
     };
     let bindings = bindings(state_root)?;
-    let rows = listing(adb, &bindings, run)?;
+    let rows = listing(&devices.tools.adb, &bindings, devices.run)?;
     let listed = match &finder {
         Finder::Handle(handle) => rows
             .into_iter()
             .find(|listed| listed.handle().as_deref() == Some(*handle))
             .ok_or_else(|| Outcome::new(ActingctlCode::DeviceHandleUnknown).handle(*handle))?,
-        Finder::Key { device_key, keyer } => keyed(rows, keyer, device_key)?
-            .ok_or_else(|| Outcome::new(ActingctlCode::DeviceKeyUnknown))?,
+        Finder::Key {
+            device_key,
+            keyer,
+            key_salt,
+        } => match keyed(rows, keyer, device_key)? {
+            Some(listed) => listed,
+            None => {
+                let removed = match request.chosen {
+                    Chosen::Key { salt, .. } => salt.and_then(|salt| salt.variable.as_deref()),
+                    Chosen::Handle(_) => None,
+                };
+                return Err(unknown_key(
+                    devices,
+                    key_salt,
+                    removed,
+                    device_key,
+                    request.alias,
+                ));
+            }
+        },
     };
     bindable(&listed, declared, request.alias)?;
     let mut kept = bindings
@@ -807,18 +1456,148 @@ fn bound(
     Ok(answer)
 }
 
+/// Workflow #479 F-2: the refusal of a bind of an Android handset by `device_key`, which no adb
+/// row carries under `key_salt`: when the install root's `acib` lists a phone with that key under
+/// the same salt, the key is an iOS phone's, `device_row_unbindable` `system_mismatch` (no handle:
+/// a phone has none); otherwise, `acib` not installed or not answering included,
+/// `device_key_unknown` as before.
+fn unknown_key(
+    devices: &Devices<'_>,
+    key_salt: &[u8],
+    removed: Option<&str>,
+    device_key: &str,
+    alias: &str,
+) -> Outcome {
+    let salts = AcibSalts {
+        key: Some(key_salt),
+        binding: None,
+        removed,
+    };
+    let ios = devices.tools.acib.is_file()
+        && ios_rows(&devices.tools.acib, &salts, devices.acib).is_ok_and(|phones| {
+            phones
+                .iter()
+                .any(|phone| phone.device_key.as_deref() == Some(device_key))
+        });
+    if ios {
+        Outcome::new(ActingctlCode::DeviceRowUnbindable)
+            .alias(alias)
+            .device_row_problem(DeviceRowProblem::SystemMismatch)
+    } else {
+        Outcome::new(ActingctlCode::DeviceKeyUnknown)
+    }
+}
+
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): the binding of the iOS
+/// handset `request.alias` into the private file of `state_root`. Its phone is named by the
+/// listing's `device_key`, under the request's salt, else under the installation's own secret;
+/// `acib` lists the phones under that salt and under the secret, and the row written holds the
+/// phone's key under the secret (what the Runtime records as its fingerprint), never an
+/// identifier. Before anything is written: a handle is adb's, an Android device's
+/// (`device_row_unbindable` `system_mismatch` when adb lists it, `device_handle_unknown`
+/// otherwise); a
+/// configuration without the secret is `device_binding_secret_missing`; a listing `acib` did not
+/// give is `device_ios_list_failed` with its `ios_list_problem`; a key no phone carries is an
+/// Android device's when adb lists one with it under the same salt (`system_mismatch`), else
+/// `device_key_unknown`; a phone bound to another alias is `device_bindings_invalid`
+/// `duplicate_serial`, as an Android device is. The answer is `{alias, device_key, system: "ios",
+/// restart_required: true}`.
+fn bound_ios(
+    state_root: &Path,
+    devices: &Devices<'_>,
+    request: &Request<'_>,
+    secret: &dyn Fn() -> Result<Option<Vec<u8>>, Outcome>,
+) -> Result<Map<String, Value>, Outcome> {
+    let bindings = bindings(state_root)?;
+    let mismatch = |handle: Option<String>| {
+        let refused = Outcome::new(ActingctlCode::DeviceRowUnbindable)
+            .alias(request.alias)
+            .device_row_problem(DeviceRowProblem::SystemMismatch);
+        match handle {
+            Some(handle) => refused.handle(handle),
+            None => refused,
+        }
+    };
+    let (device_key, salt) = match request.chosen {
+        // A handle is adb's: an Android device's, never an iOS phone's.
+        Chosen::Handle(handle) => {
+            let listed = listing(&devices.tools.adb, &bindings, devices.run)?
+                .into_iter()
+                .find(|listed| listed.handle().as_deref() == Some(handle))
+                .ok_or_else(|| Outcome::new(ActingctlCode::DeviceHandleUnknown).handle(handle))?;
+            return Err(mismatch(listed.handle()));
+        }
+        Chosen::Key { device_key, salt } => (device_key, salt),
+    };
+    let secret = secret()?.ok_or_else(|| {
+        Outcome::new(ActingctlCode::DeviceBindingSecretMissing).alias(request.alias)
+    })?;
+    let key_salt = salt.map_or_else(|| secret.clone(), |salt| salt.bytes.clone());
+    let salts = AcibSalts {
+        key: Some(&key_salt),
+        binding: Some(&secret),
+        removed: salt.and_then(|salt| salt.variable.as_deref()),
+    };
+    let list_failed = |problem: IosListProblem| {
+        Outcome::new(ActingctlCode::DeviceIosListFailed)
+            .alias(request.alias)
+            .ios_list_problem(problem)
+    };
+    let phones = ios_phones(&devices.tools.acib, &salts, devices.acib).map_err(list_failed)?;
+    let Some(phone) = phones
+        .into_iter()
+        .find(|phone| phone.device_key.as_deref() == Some(device_key))
+    else {
+        // A key of an Android device under the same salt is the other system's.
+        let android = Keyer::new(&key_salt).ok().and_then(|keyer| {
+            listing(&devices.tools.adb, &bindings, devices.run)
+                .ok()
+                .and_then(|rows| keyed(rows, &keyer, device_key).ok().flatten())
+        });
+        return Err(match android {
+            Some(listed) => mismatch(listed.handle()),
+            None => Outcome::new(ActingctlCode::DeviceKeyUnknown),
+        });
+    };
+    let binding_key = phone
+        .binding_key
+        .ok_or_else(|| list_failed(IosListProblem::AnswerUnreadable))?;
+    let mut kept = bindings
+        .iter()
+        .filter(|binding| binding.alias != request.alias)
+        .cloned()
+        .collect::<Vec<_>>();
+    kept.push(DeviceBinding::ios(
+        request.alias,
+        binding_key,
+        now_unix_ms()?,
+        request.via,
+    ));
+    write(state_root, kept)?;
+    let mut answer = Map::new();
+    answer.insert("alias".to_owned(), json!(request.alias));
+    answer.insert(DEVICE_KEY_MEMBER.to_owned(), json!(device_key));
+    answer.insert(SYSTEM_MEMBER.to_owned(), json!(DeviceSystem::Ios.as_str()));
+    answer.insert("restart_required".to_owned(), json!(true));
+    Ok(answer)
+}
+
 /// #398 DB-2: the keyer a bind by key finds its device with: the caller's `salt`, else the
 /// installation's own `secret`; neither is `actingctl_usage_invalid` [`KEY_SALT_FLAG`]
-/// `required`, since no row could carry a key.
+/// `required`, since no row could carry a key. Workflow #479 F-2: with the salt it was made with.
 fn key_maker(
     salt: Option<&KeySalt>,
     secret: &dyn Fn() -> Result<Option<Vec<u8>>, Outcome>,
-) -> Result<Keyer, Outcome> {
+) -> Result<(Keyer, Vec<u8>), Outcome> {
     if let Some(salt) = salt {
-        return Keyer::new(&salt.0);
+        let keyer = Keyer::new(&salt.bytes)?;
+        return Ok((keyer, salt.bytes.clone()));
     }
     match secret()? {
-        Some(secret) => Keyer::new(&secret),
+        Some(secret) => {
+            let keyer = Keyer::new(&secret)?;
+            Ok((keyer, secret))
+        }
         None => Err(cli_line::usage_invalid(
             Some(KEY_SALT_FLAG),
             ArgumentProblem::Required,
@@ -976,8 +1755,10 @@ fn write(state_root: &Path, bindings: Vec<DeviceBinding>) -> Result<(), Outcome>
             .path(&path)
             .caused_by(Outcome::from_io_error(error, op).path(at))
     };
+    // Workflow #479 F-2: version 2 when an iOS row is among them, version 1 otherwise, so a file of
+    // Android rows alone is written as before.
     let file = DeviceBindingsFile {
-        schema: DEVICE_BINDINGS_SCHEMA.to_owned(),
+        schema: device_bindings_schema(&bindings).to_owned(),
         bindings,
     };
     let bytes = serde_json::to_vec_pretty(&file).map_err(|error| {
@@ -1236,7 +2017,18 @@ pub fn dispatch_in(
     run: &dyn Fn(&Path) -> AdbRun,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Option<cli_line::Exit> {
-    dispatch_answer(arguments, run, environment, None)
+    dispatch_answer(arguments, run, &run_acib, environment, None)
+}
+
+/// Workflow #479 F-2: [`dispatch_in`] with `acib` for its run of `acib devices` ([`run_acib`] in
+/// [`dispatch_in`]; a test's scripted `acib`, which sees the call's arguments and environment).
+pub fn dispatch_in_with_acib(
+    arguments: &[OsString],
+    run: &dyn Fn(&Path) -> AdbRun,
+    acib: &dyn Fn(&Path, &AcibCall) -> AcibRun,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<cli_line::Exit> {
+    dispatch_answer(arguments, run, acib, environment, None)
 }
 
 /// #398 DB-2 fix round 1: [`dispatch`] of the words the Lab's row `devices` gives where its place
@@ -1257,14 +2049,16 @@ pub fn dispatch_unlocated_with(
     run: &dyn Fn(&Path) -> AdbRun,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Option<cli_line::Exit> {
-    dispatch_answer(arguments, run, environment, Some(located))
+    dispatch_answer(arguments, run, &run_acib, environment, Some(located))
 }
 
 /// The answer of [`dispatch_in`] and [`dispatch_unlocated_with`]: `unlocated`, the refusal of a
-/// place that located no state root, is the cause of a listing's `bindings_unread`.
+/// place that located no state root, is the cause of a listing's `bindings_unread`. Workflow #479
+/// F-2: `acib` runs `acib devices`.
 fn dispatch_answer(
     arguments: &[OsString],
     run: &dyn Fn(&Path) -> AdbRun,
+    acib: &dyn Fn(&Path, &AcibCall) -> AcibRun,
     environment: &dyn Fn(&str) -> Option<OsString>,
     unlocated: Option<&Outcome>,
 ) -> Option<cli_line::Exit> {
@@ -1298,8 +2092,15 @@ fn dispatch_answer(
                 chosen,
                 via: parsed.bound_via.unwrap_or(DeviceBoundVia::Cli),
             };
-            bind_against(&parsed.against, root, program.as_deref(), &request, run)
-                .map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
+            bind_against(
+                &parsed.against,
+                root,
+                program.as_deref(),
+                &request,
+                run,
+                acib,
+            )
+            .map(|answer| (answer, ActingctlCode::DeviceBindingChanged))
         }
         (UNBIND, Some(alias)) => match &parsed.against {
             Against::StateRoot(state_root) => unbind(state_root, alias)
@@ -1322,7 +2123,7 @@ fn dispatch_answer(
                 key_salt: parsed.key_salt.as_ref(),
                 unlocated,
             };
-            list_from(&request, program.as_deref(), run)
+            list_with_acib(&request, program.as_deref(), run, acib)
                 .map(|answer| (answer, ActingctlCode::DeviceListReported))
         }
     };
@@ -1430,7 +2231,7 @@ mod tests {
         let binding = bindings.get(PHONE).expect("the phone's binding");
         assert_eq!(
             (binding.serial(), binding.bound_via),
-            ("TESTSERIAL0001", DeviceBoundVia::Cli)
+            (Some("TESTSERIAL0001"), DeviceBoundVia::Cli)
         );
         assert!(binding.bound_at_unix_ms > 0);
     }
@@ -1531,7 +2332,7 @@ mod tests {
         let bindings = read_device_bindings(state.path()).expect("the private file");
         assert!(bindings.get(PHONE).is_none());
         assert_eq!(
-            bindings.get(SECOND_PHONE).map(DeviceBinding::serial),
+            bindings.get(SECOND_PHONE).and_then(DeviceBinding::serial),
             Some("TESTSERIAL0002")
         );
         assert_eq!(

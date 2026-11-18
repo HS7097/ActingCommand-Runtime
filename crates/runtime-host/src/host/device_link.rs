@@ -55,6 +55,13 @@ use actingcommand_runtime_config::{DeviceLinkConfig, OfflineAction};
 
 /// The runtime fact of a handset's link state (instance scope, string, model-398 §4.7).
 pub(super) const DEVICE_LINK_FACT_KEY: &str = "device.link";
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): the runtime fact of an
+/// iOS handset's device system (instance scope, string `ios`), recorded at the start; an Android
+/// handset and an emulator have none.
+pub(super) const DEVICE_SYSTEM_FACT_KEY: &str = "device.system";
+/// Workflow #479 F-2: the runtime fact of whether the private binding file binds a phone to an iOS
+/// handset (instance scope, boolean), recorded at the start beside [`DEVICE_SYSTEM_FACT_KEY`].
+pub(super) const DEVICE_BOUND_FACT_KEY: &str = "device.bound";
 
 /// What the Runtime knows about one bound handset's link.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,6 +458,7 @@ pub(super) struct PendingLinkRestore {
 /// bound handset, then the watch when there is one (§4.1). A watch that cannot start is
 /// `device_watch_failed` and leaves the handsets `unwatched`; the Runtime goes on.
 pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
+    record_ios_handsets(shared)?;
     let handsets = lock(&shared.registered_instances, HostLocation::DeviceLinkWatch)?
         .values()
         .filter(|instance| {
@@ -469,6 +477,41 @@ pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
         return Ok(());
     }
     open_watch(shared, None)
+}
+
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): each registered iOS
+/// handset's device system and whether the private binding file binds a phone to it, as the
+/// program facts [`DEVICE_SYSTEM_FACT_KEY`] and [`DEVICE_BOUND_FACT_KEY`], which the Lab's status
+/// shows on its row. No watch sees an iOS handset's link in this build, and nothing here names its
+/// phone. Nothing is recorded for an Android handset or an emulator.
+fn record_ios_handsets(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
+    let handsets = lock(&shared.registered_instances, HostLocation::DeviceLinkWatch)?
+        .values()
+        .filter_map(|instance| {
+            let handset = instance
+                .bound_adb_endpoint()
+                .and_then(ResolvedAdbEndpoint::handset)?;
+            (handset.system() == actingcommand_contract::DeviceSystem::Ios)
+                .then_some((instance.instance_id(), handset.is_bound()))
+        })
+        .collect::<Vec<_>>();
+    for (instance_id, bound) in handsets {
+        shared.record_device_link_fact(
+            instance_id,
+            DEVICE_SYSTEM_FACT_KEY,
+            RuntimeFactValue::String(
+                actingcommand_contract::DeviceSystem::Ios
+                    .as_str()
+                    .to_owned(),
+            ),
+        )?;
+        shared.record_device_link_fact(
+            instance_id,
+            DEVICE_BOUND_FACT_KEY,
+            RuntimeFactValue::Boolean(bound),
+        )?;
+    }
+    Ok(())
 }
 
 /// Opens the watch and starts its reader (`restart` names the problem a restart follows;

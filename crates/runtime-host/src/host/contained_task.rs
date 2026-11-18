@@ -5003,6 +5003,27 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .task_timing
             .begin_boundary(Boundary::Capture, self.timing_identity(Boundary::Capture));
         let result = (|| {
+            // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a
+            // run's capture of an instance whose device system has no backend in this build fails
+            // the run here, before the capture is requested or any backend, baseline or session of
+            // its stand-in registration is looked at: `capture_backend_open_failed` caused by
+            // `device_system_backend_missing`, not severe; nothing is recorded or changed.
+            if let Some(refused) = self.host.device_system_refusal_of(
+                self.instance_alias,
+                super::lease::DeviceOperation::Capture,
+                HostLocation::RunContainedTaskCapture,
+            )? {
+                return Err(RequestFailure {
+                    state: RuntimeReceiptState::Failed,
+                    terminal: None,
+                    poison_runtime: false,
+                    task_failure: Some(TaskFailureEvidence {
+                        outcome: refused.outcome(),
+                        severe: false,
+                    }),
+                    error: Box::new(refused),
+                });
+            }
             let active_started = self.task_timing.begin_boundary(
                 Boundary::CaptureActivePressure,
                 self.timing_identity(Boundary::CaptureActivePressure),

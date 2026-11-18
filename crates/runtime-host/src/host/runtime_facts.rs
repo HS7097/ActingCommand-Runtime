@@ -525,6 +525,14 @@ impl HostShared {
             };
             let (active, active_value) =
                 self.active_policy_instance_availability(&instance_alias)?;
+            // Workflow #479 F-2: a handset whose device system has no backend in this build.
+            if let Some(system) = self.handset_system_without_backend(instance_id)? {
+                return self.withdraw_handset_without_backend(
+                    &instance_alias,
+                    system,
+                    active.as_ref(),
+                );
+            }
             if self.handset_unbound(instance_id)? {
                 return self.withdraw_unbound_handset(&instance_alias, active.as_ref());
             }
@@ -592,6 +600,12 @@ impl HostShared {
             return Ok(());
         };
         let (active, active_value) = self.active_policy_instance_availability(&instance_alias)?;
+        // Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): a handset whose
+        // device system has no backend in this build (an iOS handset, bound or not) is never
+        // available to policy, under `device_system:<system>`, whatever its self-check says.
+        if let Some(system) = self.handset_system_without_backend(instance_id)? {
+            return self.withdraw_handset_without_backend(&instance_alias, system, active.as_ref());
+        }
         // Workflow #398 RD-1b: a handset without a bound device stays unavailable, under its
         // device link's state, whatever its self-check says.
         if self.handset_unbound(instance_id)? {
@@ -778,6 +792,34 @@ impl HostShared {
         .and_then(RegisteredInstance::bound_adb_endpoint)
         .and_then(ResolvedAdbEndpoint::handset)
         .is_some_and(|handset| handset.binding().is_none()))
+    }
+
+    /// Workflow #479 F-2: the device system of the registered instance when it is a handset of a
+    /// system this build has no backend for (an iOS handset, bound or not); `None` otherwise.
+    fn handset_system_without_backend(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<actingcommand_contract::DeviceSystem>> {
+        Ok(lock(
+            &self.registered_instances,
+            HostLocation::ReadBackendSelfcheckInstance,
+        )?
+        .get(&instance_id)
+        .and_then(RegisteredInstance::device_system_without_backend))
+    }
+
+    /// Workflow #479 F-2: such a handset is unavailable with the source `device_system:<system>`;
+    /// published once, unless that withdrawal is in effect.
+    fn withdraw_handset_without_backend(
+        &self,
+        instance_alias: &str,
+        system: actingcommand_contract::DeviceSystem,
+        active: Option<&FactRecord>,
+    ) -> RuntimeHostResult<()> {
+        if Self::withdrawn_for_device_system(active, system) {
+            return Ok(());
+        }
+        self.publish_device_system_unavailable(instance_alias, system)
     }
 
     /// Workflow #398 RD-1b (model-398 v1.1 §3.6, §4.2): an unbound handset is unavailable with
