@@ -23,7 +23,7 @@
 //! #463 S2-1c: every failure of each self-check, not only the first (`check_items`), and for each
 //! self-check that ran whether that list is all it has ([`ReadyCheckRun`]).
 
-use super::crosscheck::{CheckFailure, CheckRun};
+use super::crosscheck::{CheckFailure, CheckRun, SelectPagePassesAfterPress};
 use super::generate::{Lack, effective_steps};
 use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
 use super::near::TemplateNearThreshold;
@@ -177,7 +177,9 @@ pub struct ReadyOptionConflict {
 /// #463 S2-1b fix round 1: or, on a packaged recording, a given part of its identity that is not
 /// its package's ([`ReadyOptionConflict`]); #463 RM-1: or a template mark whose score lies nearer
 /// its threshold than the bound, on the side a self-check needs it on, as `record stop` answers it
-/// after its other warnings ([`TemplateNearThreshold`]).
+/// after its other warnings ([`TemplateNearThreshold`]); #463 SC-1 fix round 1: or a select step's
+/// page passing beside another page on a frame after its press, as `record stop` answers it after
+/// the warnings its package records ([`SelectPagePassesAfterPress`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ReadyWarningItem {
@@ -185,6 +187,7 @@ pub enum ReadyWarningItem {
     Generator(OpaqueJson),
     OptionConflict(ReadyOptionConflict),
     NearThreshold(TemplateNearThreshold),
+    SelectPageAfterPress(SelectPagePassesAfterPress),
 }
 
 /// #463 S2-1c: one self-check `record ready` ran: whether the failures `missing` lists of it are all
@@ -216,8 +219,9 @@ pub struct RecordReadyOutcome {
     /// `press_point_only` for each step whose press is a recorded point without a press region,
     /// then the generator's own warnings as `record stop` prints them (#463 RM-1: with its
     /// `record_template_near_threshold` after them, once every self-check before `cases` passed,
-    /// fix round 2: whatever `cases` finds); on a packaged recording (#463 S2-1b fix round 1), then
-    /// each given part of its identity that is not its package's, and no self-check runs.
+    /// fix round 2: whatever `cases` finds; #463 SC-1 fix round 1: and, so too, before those, its
+    /// `record_select_page_passes_after_press`); on a packaged recording (#463 S2-1b fix round 1),
+    /// then each given part of its identity that is not its package's, and no self-check runs.
     pub warnings: Vec<ReadyWarningItem>,
     /// #463 S2-1c: each self-check that ran, in the order they ran, and whether its failures in
     /// `missing` are all it has; empty when none ran.

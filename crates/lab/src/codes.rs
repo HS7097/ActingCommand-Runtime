@@ -117,9 +117,11 @@ actingcommand_contract::outcome_codes! {
         RecordCaseFailed => "record_case_failed": error / none,
         /// Warning. #463 S2-10, the coordinator's ruling after the first round (R2's ruling 4 as
         /// precedent): a regression case's page is recognised on its scene, but so is another page
-        /// of the package, which a linear run never asks; the case is written without
-        /// `expect.observe`, every target its page requires passing and (fix round 3) every target
-        /// it forbids failing. `record stop` and `record ready` name it, with the other pages.
+        /// of the package, which a press step of a linear run does not ask (#463 SC-1: a select
+        /// step's confirmation does, before its press, and `record stop`'s self-check item 8 judges
+        /// that before the cases); the case is written without `expect.observe`, every target its
+        /// page requires passing and (fix round 3) every target it forbids failing. `record stop`
+        /// and `record ready` name it, with the other pages.
         RecordCasePageAmbiguous => "record_case_page_ambiguous": warning / none,
         /// Warning. #463 S2-10: the page a regression case `record stop` wrote expects is also a
         /// page the bare canvas answers, the canvas with no patch at all, so the case proves
@@ -158,6 +160,15 @@ actingcommand_contract::outcome_codes! {
         /// margin and the bound; it refuses nothing, proposes nothing and is not written into the
         /// package.
         RecordTemplateNearThreshold => "record_template_near_threshold": warning / none,
+        /// Warning. #463 SC-1 fix round 1: on a recorded frame after a select step's press (a later
+        /// step's, a page transition's of a later step, an ending's), the select step's page passes
+        /// and so does another page of the package; a select step's confirmation requires that
+        /// exactly one page of the package is recognised on the screen it meets. `lab.warnings`,
+        /// `record ready` and `record review` (at the select step) name the select step, the frames
+        /// and whose they are, both pages (fix round 2: one warning for each select step, owner of
+        /// the frames and other page, with every such frame); it refuses nothing, proposes nothing
+        /// and is not written into the package.
+        RecordSelectPagePassesAfterPress => "record_select_page_passes_after_press": warning / none,
     }
 }
 

@@ -74,7 +74,10 @@ never holds a path of the machine, an instance, an account or a device. Its `id`
 `final` or `ending_<outcome_key>`; it expects its page (`expect.observe.page`) and every target that
 page requires to pass (`expect.recognize`), and nothing else; or, when its page is recognised on
 its scene beside another page of the package (`page_conflict` among whose pages its page is, which a
-linear run never asks), without `expect.observe`, every target its page requires to pass and every
+press step of a linear run does not ask; a select step's confirmation does, and `record stop`
+refuses a select step's page that passes beside another on a recorded frame that confirmation can
+meet and warns of one on a frame after its press, #463 SC-1), without
+`expect.observe`, every target its page requires to pass and every
 target its page forbids to fail (#463 S2-10 fix round 3), so that it states that this page holds on
 this scene, named where it is written with the warning `record_case_page_ambiguous`; such a page
 with no target to pin gives no case (the warning `record_case_ambiguous_not_written`).

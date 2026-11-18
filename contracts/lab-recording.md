@@ -950,7 +950,8 @@ frame_id, …}`, checked once every mark of the step holds:
 | `select_pressed_absent` | on the primary frame the pressed name selects no slot (`pressed`; `decision`, its kind) |
 | `select_press_mismatch` | the step's press was executed and lies outside the slot the pressed name selects on the primary frame (`slot`, `click_rect`, `point`) |
 | `select_other_page_passes` | fix 1: the page of another effective step the mark knows (every step before it; on a stopped recording every other step), or its page transition's page, passes on a live frame of the select step too, each of its marks evaluated as its self-test evaluates it (`step`, the other step's index; `transition`, whether it is the transition's page); the run's select would not know its page there. Pages of steps recorded later are checked by `record stop` (self-check item 8) |
-| `self_test_error` | the dry run fails on a frame (`failure`: the kernel's `code` and `detail`), or (fix 1) a mark of another step's page cannot be evaluated on it (`step`, `mark_id`, `error`) |
+| `select_page_passes_on_other_frame` | #463 SC-1, the other way round, a cause of its own: the select step's page, as this mark leaves it, passes on a live frame its confirmation can meet that is not its own, and on that frame another page the mark knows (another step's, a page transition's, the select step's own transition's too) passes as well (`select_step`, the select step's index; `step` and `transition`, the other page's step and whether it is its page transition's; `frame_step` and `frame_transition`, whose frame it is). The run's select confirms, before its press, on a fresh frame that exactly one page of the whole package is recognised there (`contained_task_recognition_conflict` otherwise); that frame shows the select step's own screen or, taken on arrival, the screen left after the press of the step before it. Fix round 1 (the coordinator's ruling after the review): the frames judged are those of the step before the select step, the nearest effective step before it in the path that is not optional (the optional steps between are self-check item 7b's), its page transition's frames when it has one, else its own (the group item 7a calls `previous`). A frame after the select step's press, its own page transition's among them, is no such frame and is not judged at the mark; `record stop` and `record ready` warn of a later one (`record_select_page_passes_after_press`, "Self-checks", item 8) |
+| `self_test_error` | the dry run fails on a frame (`failure`: the kernel's `code` and `detail`), or (fix 1) a mark of another step's page cannot be evaluated on it (`step`, `mark_id`, `error`); #463 SC-1: or a mark of the select step's page or of another page cannot be evaluated on a frame of the step before it (`step` the step whose frame it is, `mark_id`, `error`) |
 
 A sample frame on which the pressed name stands in another slot is accepted: that is the point of
 the select. The decision with the wanted value's default is reported on every frame, never a
@@ -3565,7 +3566,9 @@ today's server (`actingctl mcp-serve`) has no such tool.
   - `warnings` (#463 RM-1, 0.12.72): the warnings `record_template_near_threshold` of `record
     ready` whose `record_index` is the step's ("Self-checks", item 11), as `record ready` answers
     them with the `--template-margin-bound` it is given; absent when there is none, so that every
-    other step is answered as before.
+    other step is answered as before. #463 SC-1 fix round 1: and, at a select step, the warnings
+    `record_select_page_passes_after_press` of `record ready` whose `record_index` is the step's
+    ("Self-checks", item 8), as `record ready` answers them, in its order.
 - **Warnings.** `warnings` is `[]`, or `[{"code": "frame_file_missing", "frame_ids": [...]}]`
   naming once, in the order the answer gives them, each frame whose file is not where the manifest
   names it, as `record frames` answers it; such a frame's `path` is `null`, with `--no-preview`
@@ -4876,17 +4879,70 @@ guard execution still requires the corresponding frames, provider and Runtime ev
 8. **Select steps** (#463 R1, "Selecting in a list"). On every live frame of every select step the
    kernel's dry run of the admitted package decides, with the default and with the pressed name: the
    step's page must be the one page of the package that passes on the frame (the page rule and the
-   layout share the frame; the run refuses a confirmation frame on which another page passes too,
+   layout share the frame; #463 SC-1, as the kernel's code has it: the run's confirmation frame is
+   recognised against every page of the package, two that pass are
+   `contained_task_recognition_conflict` and one that is not the step's page, or none,
    `selection_page_changed`), every slot's name reads a known name, and on the primary frame the
    pressed name selects a slot, the one the recorded press hit. A frame that does not hold is
    `record_step_self_mismatch` (3, `details{step, record_index, frame_id, reason, …}`, `reason`
    `self_test_error` with the kernel's `failure`, `select_name_unread`, `select_pressed_absent` or
    `select_press_mismatch`, as at mark time). Fix 1: the page of a step the mark already knew is
    refused at mark time (`select_other_page_passes`); another page that passes here (a step
-   recorded after the select) is `self_test_error` with the kernel's `select_page_mismatch`. The
-   result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their kind),
-   present only with a select step; without an OCR model nothing is called, each frame is
-   `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps.
+   recorded after the select) is `self_test_error` with the kernel's `select_page_mismatch`.
+   #463 SC-1, the other way round, after the step's own frames, so that a failure there is
+   answered first, with the evaluator of item 4: where the select step's page passes on a live
+   frame that is not its own, does another page of the package (another step's, a page
+   transition's, the select step's own transition's among them, an ending's) pass there too? Fix
+   round 1 (the coordinator's ruling after the review): the run's select confirms before its press,
+   on a fresh frame of the select step's own screen or, taken on arrival before the screen changed,
+   of the screen left after the press of the step before it; it never meets a screen after its own
+   press in the same run. A screen after the press may be the select step's own screen as a later
+   run finds it, or another screen on which the list's marks stay visible; the recording does not
+   say which. So:
+   - on the frames of the step before the select step (the nearest step before it that is not
+     optional, its page transition's frames when it has one, else its own: the group item 7a
+     calls `previous`; the optional steps between are item 7b's), each other page that passes
+     beside the select step's page is `record_step_self_mismatch` with `reason`
+     `select_page_passes_on_other_frame` (`details{step, record_index, frame_id, reason, page,
+     other_page, other_step, other_record_index, other_transition | other_outcome_key,
+     frame_step, frame_record_index, frame_transition}`: the select step and its page, the frame
+     and whose it is, the other page and whose it is); `record ready` lists each (`what`
+     `selects`, the select step, `frames` the frame, `page` the select step's page). On such a
+     screen the run's select would see two pages and fail;
+   - on every frame after the select step's press (every later step's own frames, its page
+     transition's frames, and every ending's frames), each other page that passes beside the
+     select step's page is the warning `record_select_page_passes_after_press`: `{code, step,
+     record_index, page, frames, frame_step?, frame_record_index?, frame_transition?,
+     frame_outcome_key?, other_page, other_step?, other_record_index?, other_transition?,
+     other_outcome_key?, after_press}` (`step`, `record_index` and `page` the select step's,
+     `frames` the frames and the `frame_` members whose they are, a step's, `frame_transition`
+     true for the frames of its page transition, or an ending's; the `other_` members the other
+     page and whose it is; `after_press` `true`, the frames come after the select step's press).
+     Fix round 2 (the coordinator's ruling): one warning for each select step, owner of the
+     frames (a later step's own frames, a later step's page transition's, an ending's) and other
+     page, as `arrival_unconfirmed` and `record_optional_step_ambiguous` carry theirs: `frames`
+     lists every frame of that owner on which the two pages pass, in the order the owner holds
+     them, none left out; the warnings come in the order of the owners (the later steps in path
+     order, each step's own frames before its page transition's, then the endings), then of the
+     other pages (the steps' pages in path order, each followed by its page transition's, then
+     the endings'). It is the fact only: on those frames both pages pass, and a select step's
+     confirmation requires that exactly one page of the package is recognised on the screen it
+     meets. It refuses nothing
+     (exit 0 on actinglab's own line, on the `--via` line and through MCP: a warning changes no
+     exit status) and is not the cases' `record_case_page_ambiguous`. `lab.warnings` lists these
+     warnings after the warnings the provenance records (and before `record_template_near_threshold`,
+     item 11), `record ready` lists them among its warnings when and where it lists those of item
+     11 (its readiness unchanged), and `record review` shows each at the select step
+     (`steps[].warnings`, the step whose `record_index` it names). The package's provenance does
+     not carry them, so the package is byte for byte what it is without them;
+   - the frames of the select step's own page transition are judged neither way, nor is any other
+     frame before its press (an earlier step's, or the own frames of the step before it when the
+     frames of its page transition are the ones judged).
+
+   The result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their
+   kind), present only with a select step; without an OCR model nothing is called, each frame is
+   `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps
+   (nor is the other way round judged then).
 9. **Endings** (#463 R2, "Endings"; checked after the cross-check, items 4 to 7, and before item 8,
    so that an ending page that passes on the frames of a select step before the last press is the
    ending's refusal; fix 1: the order the code has).
@@ -4974,7 +5030,8 @@ guard execution still requires the corresponding frames, provider and Runtime ev
     `validation_failed`) and it has no effect (fix round 2).
 
 Warnings never refuse. The provenance and the output carry the same warnings, but (#463 RM-1)
-`record_template_near_threshold`, which only the output carries.
+`record_template_near_threshold` and (#463 SC-1 fix round 1) `record_select_page_passes_after_press`,
+which only the output carries.
 
 **Every failure, for `record ready`** (#463 S2-1c, 0.12.68). Each check above is one
 implementation with two callers. `record stop` ends at the first failure of the first check that
@@ -5065,10 +5122,17 @@ the package it came with.
   page judgement, because the Lab has no text-recognition model, and are judged where one is.
 - **A page recognised beside another page is no miss** (the coordinator's ruling after the slice's
   first round; R2's ruling 4 is its precedent: the usual ending's page passing on an ending's frames
-  is no refusal, "Endings"). A linear run never asks which page of the whole package a screen is:
-  each step waits for its own page. That another page of the package also matches a recorded screen
-  is what the cross-check already calls a warning (`arrival_unconfirmed`,
-  `ending_usual_insensitive`); the case's `expect.observe.page` asks the stricter question. So:
+  is no refusal, "Endings"). #463 SC-1, what is so: a press step of a linear run waits for its own
+  page and does not ask which page of the whole package a screen is; a select step's confirmation
+  does ask, before its press, and refuses a screen on which two pages pass
+  (`contained_task_recognition_conflict`), which is why self-check item 8, before this check runs,
+  refuses a select step's page that passes beside another page on a recorded frame that
+  confirmation can meet (its own, and those of the step before it: `self_test_error`,
+  `select_page_passes_on_other_frame`) and (fix round 1) warns of one on a frame after its press
+  (`record_select_page_passes_after_press`). That another page of the package also matches a
+  recorded screen, where neither is a select step's page, is what the cross-check already calls a
+  warning (`arrival_unconfirmed`, `ending_usual_insensitive`); the case's `expect.observe.page`
+  asks the stricter question. So:
   1. **A real miss refuses**: the runner does not recognise the case's page on its scene
      (`page_mismatch`, or a `page_conflict` among which its page is not), a target the case expects
      fails (`target_mismatch`), or another check fails: `record_case_failed`, below.
