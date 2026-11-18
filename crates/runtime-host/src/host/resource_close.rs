@@ -1123,8 +1123,8 @@ impl HostShared {
     /// among them) and the daemon start's preparation of a physical instance
     /// (`ClaimKind::DaemonStartPreparation`, `prepare_physical_instance_on_start`). #480 PG-2b:
     /// with `hand_back`, the lease is the close lease of the instance's own pause handing its
-    /// device back (`close_retained_instance_while_guarded` to be released
-    /// `LeaseReleaseReason::InstancePaused`, `release_paused_instance`); while that pause holds the
+    /// device back (`close_retained_instance_with`, whose one caller with `hand_back` is
+    /// `release_paused_instance`, fix round 1); while that pause holds the
     /// instance, the entries of the instance it holds back (its routine entries: a startup package,
     /// a ladder's claim) are not ahead of the lease either (`PauseHandBack`): none of them can be
     /// granted while the pause holds, they keep their place, and after the resume they are granted
@@ -1285,12 +1285,38 @@ impl HostShared {
 
     /// The instance admission guard excludes capture registration and business native calls.
     /// A dedicated close lease is released with `release_reason` once the close is confirmed.
+    /// No caller of this one is an instance pause's hand-back
+    /// ([`Self::close_retained_instance_with`] with `hand_back` false).
     pub(super) fn close_retained_instance_while_guarded(
         &self,
         instance_id: InstanceId,
         links: EventLinksDraft,
         reuse_active_lease: bool,
         release_reason: LeaseReleaseReason,
+        admission: &MutexGuard<'_, ()>,
+    ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
+        self.close_retained_instance_with(
+            instance_id,
+            links,
+            reuse_active_lease,
+            release_reason,
+            false,
+            admission,
+        )
+    }
+
+    /// [`Self::close_retained_instance_while_guarded`], with `hand_back` the caller's word that
+    /// the close is an instance pause's hand-back (#480 PG-2b fix round 1, the review's point:
+    /// said by its one caller, `release_paused_instance`, no longer read from `release_reason`):
+    /// the dedicated close lease it grants then passes the instance's own entries that pause
+    /// holds back (`grant_dedicated_instance_lease`).
+    pub(super) fn close_retained_instance_with(
+        &self,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        reuse_active_lease: bool,
+        release_reason: LeaseReleaseReason,
+        hand_back: bool,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
         if !self
@@ -1324,13 +1350,12 @@ impl HostShared {
                 })?;
             (token, connection_id, false)
         } else {
-            // #480 PG-2b: the close lease an instance pause's hand-back takes is the one released
-            // `InstancePaused` (`release_paused_instance`).
+            // #480 PG-2b: the close lease of an instance pause's hand-back, as its caller says.
             let (token, connection_id, _) = self.grant_dedicated_instance_lease(
                 instance_id,
                 RESOURCE_CLOSE_CONNECTION_VALUE,
                 ClaimKind::ResourceClose,
-                release_reason == LeaseReleaseReason::InstancePaused,
+                hand_back,
             )?;
             (token, connection_id, true)
         };

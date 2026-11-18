@@ -1137,14 +1137,19 @@ end a climb; an interrupted climb ends `exhausted` at warning and one whose rung
 own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary,
 every control step, every readiness poll, every busy-hold poll (#411 B37), the settle gate's
 probe (#411 A35) and (#480 PG-2b, since 0.12.73; [scheduling-pause.md](scheduling-pause.md),
-"The dispatch gate") the application rung's stop of the assigned application and each rung's
-startup package run, just before them, checks that it
+"The dispatch gate") the application rung's first stop (on a member of a device group of several
+the stop of the other members, else the stop of the assigned application), each rung's startup
+package run and the settle gate's rerun of the return-home package, just before them, checks that it
 still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`) or shutdown
 (`recovery_ladder_shutdown_requested`; one accepted while the check runs is
 `recovery_ladder_drain_requested`, which an install drain raised until 0.12.62) intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
 cancelled). Such an interruption fails the current rung (`recovery_ladder_interrupted`, caused
 by that reason) and ends the ladder `exhausted` at warning, followed by its one release. A
+scheduling pause that interrupts a rung after it took the application down or brought the
+emulator up, before its startup run, leaves that run owed: the rung hands it off as an emulator
+start under a pause hands off its startup package, its claim queued behind the pause (#480
+PG-2b fix round 1; [scheduling-pause.md](scheduling-pause.md), "The dispatch gate"). A
 superseded preparation trigger records `preparation_superseded`; these two reasons use
 `until_unix_ms: 0` (no inferred wake time).
 

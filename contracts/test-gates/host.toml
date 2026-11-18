@@ -4345,3 +4345,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_6_outside_the_multi_nemu_gate_the_close_lease_passes_the_startup_package_the_pause_holds",
 ]
 incident = ["#480", "PG-2b"]
+
+# #480 PG-2b fix round 1 (0.12.73; register §1.471, its fix round 1; brief rd-1118/brief-480-pg2b-fix1.md after the review rd-1118/review-1821.md): on #411 A35's settle fixture (a manual Runtime clock, a moving screen), after the return-home rung's changing verdict the screen settles and the clock passes the recheck, and a person pauses the instance just before the settle gate's rerun of the return-home package (the test-only hook run_before_ladder_step_check_for_test, which that rerun's holding check now runs too): no rerun (no task.requested), the return-home rung recorded failed with recovery_rung_screen_changing and then recovery_admission_denied, the ladder finished exhausted at Warning with recovery_ladder_interrupted, no application command, the pause success and released (7); the application rung's check before its stop passes and it stops the assigned application, and a person pauses the instance just before its startup run: the run is handed off (one startup_package_scheduled, no task.requested, the startup claim queued behind the pause), the rung failed with recovery_admission_denied, the ladder interrupted, nothing launched, the pause released; after the resume the claim is granted and its package runs once (one task.requested, no second startup_package_scheduled, one run ended, the queue empty) (8). pg2b_2 of the row above now also pins its handed-off startup run (one startup_package_scheduled, the claim queued behind "pause all")
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_7_a_pause_before_the_settle_gates_rerun_runs_no_return_home_package",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_8_a_rung_paused_after_its_stop_hands_its_startup_run_off_and_it_runs_once_after_the_resume",
+]
+incident = ["#480", "PG-2b"]

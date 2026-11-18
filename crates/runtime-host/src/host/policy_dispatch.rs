@@ -3412,7 +3412,8 @@ impl HostShared {
     /// it closes nothing. #480 PG-2b: that close lease is granted past the instance's own entries
     /// this pause holds back (its routine entries: a startup package, a ladder's claim), which
     /// cannot be granted while the pause holds and are granted in their place after the resume
-    /// (`grant_dedicated_instance_lease`, `actingcommand_scheduler::PauseHandBack`).
+    /// (`grant_dedicated_instance_lease`, `actingcommand_scheduler::PauseHandBack`); fix round 1:
+    /// this hand-back says so itself (`close_retained_instance_with`, `hand_back`).
     fn release_paused_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -3486,11 +3487,14 @@ impl HostShared {
                 if self.keeps_device_session(instance_id)? {
                     return Ok(PauseRelease::Released);
                 }
-                return match self.close_retained_instance_while_guarded(
+                // #480 PG-2b fix round 1: this close is the pause's hand-back, and says so
+                // (`hand_back`), so its close lease passes what this pause holds back.
+                return match self.close_retained_instance_with(
                     instance_id,
                     links,
                     false,
                     LeaseReleaseReason::InstancePaused,
+                    true,
                     &admission,
                 ) {
                     Ok(Ok(())) => Ok(PauseRelease::Released),

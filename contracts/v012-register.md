@@ -38037,19 +38037,19 @@ observed; main `98c1c0f1`, with §1.464 and §1.466, merged in). The coordinator
   round 2's place, the last thing before the provider's Start), then the start's
   `command.received` (`append_configured_start_intent`) and the Start with all that follows it
   (`perform_control_phase`). Held at that ask, the claim ends as held on its key: under its request
-  `lease.granted`, the renewal's records (`scheduler.admitted`, the lease intent
-  `lease.transition_intent`, `lease.renewed`), the records of an old session's close when one was
-  still open, and `lease.released`, and no `command.*` or `runtime.failed` record (corrected by
-  §1.471, the fourth review's first point); under the instance its skip (`device_state_observed`, `emulator_autostart_skipped` with
+  `lease.granted`, the records of an old session's close when one was still open, then the
+  renewal's records (`scheduler.admitted`, the lease intent `lease.transition_intent`,
+  `lease.renewed`), and `lease.released`, and no `command.*` or `runtime.failed` record (corrected
+  by §1.471, the fourth review's first point, and in its fix round 1 the order); under the instance its skip (`device_state_observed`, `emulator_autostart_skipped` with
   `skip_reason`, once per revision and start) and the daemon's report line; the watch's request
   given back, an idle wake left owed. A failure before the ask (the fence's refusal, a failed
   close, a refused renewal) comes back unrecorded (`ControlMode::Configured` with
   `intent_recorded` false; `control_failed`) and is recorded after its intent, `command.received`,
   `command.rejected`, `runtime.failed`, as `refuse_configured_start` records a start refused before
   anything was driven. The one difference a reader can see, there and for a start that is made
-  alike, is that the renewal's records (`scheduler.admitted`, `lease.transition_intent`,
-  `lease.renewed`) and the close of an old session, when one is still open, now come before the
-  start's `command.received` (corrected by §1.471). A person's, an
+  alike, is that the close of an old session, when one is still open, and after it the renewal's
+  records (`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`) now come before the
+  start's `command.received` (corrected by §1.471, the order in its fix round 1). A person's, an
   agent's or the Lab's explicit emulator control (`drive_emulator_control`, `ControlMode::Operator`),
   an operator's restart and the ladder's rung drive `drive_control_phase` as before, both parts in
   one go: their records and their order are unchanged. The shared path gave the automatic claim
@@ -38275,6 +38275,84 @@ stands: the ladder ends at its next step that would stop or launch the applicati
 start the emulator, and the pause answers once it has ended, whatever the caller's own wait; a
 stop of the Runtime meanwhile keeps the pause for the next start. Outside the multi-Nemu gate a
 startup package queued behind the pause no longer fails it.
+
+**Fix round 1** (coordinator work order `rd-1118/brief-480-pg2b-fix1.md`, after the independent
+review `rd-1118/review-1821.md`; items 3 to 7 are the coordinator's rulings).
+- *The gate file's waits* (the review's first must-fix). `gate_480_pg2b.rs` waited with
+  `recv_timeout(CLIMB_WAIT)`; the guard `gate_tests_are_deterministic` takes a bounded wait
+  (`recv_timeout`, `wait_timeout`) only with the constant `GATE_WAIT`, besides refusing
+  `thread::sleep`, `Instant::now` and `SystemTime::now` (also through an import of `sleep` or
+  `now`, or a glob of `thread`) and a bounded wait inside a macro it cannot parse. The constant is
+  now `GATE_WAIT`, 120 s as before; nothing else of the file met the guard.
+- *The settle gate's rerun asks first* (the review's second must-fix). `settle_rerun_interrupted`
+  (`host/recovery_ladder.rs`) makes the holding check right before each of `climb_screen_gate`'s
+  two reruns of the return-home package (settled on a recheck; an entry page shown, after its
+  renewal); an interruption ends the climb as one during the hold does (`finish_interrupted_ladder`
+  with the return-home rung, `exhausted` at warning, `ScreenStep::Ended`). Before, a pause
+  recorded while the probe took its frames let the package start, and only the drain stopped it.
+- *A device group's other members* (item 3). The application rung's first holding check moves
+  from just before the stop of the assigned application (`restart_assigned_application`) to just
+  before the switch that stops the other members (`recovery_application_restart`, ahead of
+  `stop_others_before_start`); for an instance alone on its device that is the same place.
+  Interrupted there the rung stopped nothing, so the member in front is no longer forgotten for it.
+  No test: the gate file's fixtures have no device group of several.
+- *An interrupted rung owes the startup run, by the existing way* (item 4). `rung_hold_interrupted`
+  reads the holding check's rule (`ladder_hold_invariant`, which `ladder_hold_interrupted` now
+  spells) and, where the rung owes its startup run, hands that run off on `LadderInvariant::Paused`
+  as `hand_off_startup_package` does behind a closed gate (`hand_off_owed_startup_run`:
+  `prepare_startup_package`, `schedule_startup_package`, `keep_startup_package`; nothing new is
+  built): `startup_package_scheduled` under the ladder's links, the claim queued as a routine entry
+  the pause holds back, kept in `host.idle_state`; the ladder's own release then hands it nothing.
+  It owes the run at the application rung's check before its startup run after its stop, and at the
+  emulator rung's checks from its Start on (each attempt of `await_recovery_readiness`, each poll of
+  `await_recovery_retry`, the check before its startup run). Nothing is handed off when the rung
+  stopped nothing yet, for another interruption, or between the emulator rung's Stop and its Start:
+  the brief's "took the emulator down" is set aside there, since a startup run against a stopped
+  emulator is meaningless and an emulator `stop` cancels one (`end_emulator_control_hold`, the
+  coordinator's ruling on review #716); after a global resume it would fail against the stopped
+  emulator. What becomes of the claim is the startup claim's way ([scheduling-pause.md](scheduling-pause.md),
+  "The dispatch gate"): an instance resume's reconnect goes first and its release hands the key on
+  (a failed reconnect that admits no ladder cancels the claim); a global resume's next pump grants
+  it; a restart while paused drops it and the next start queues it again behind the restored pause
+  (`requeue_startup_packages_on_start`), and its grant forgets what was kept; one startup claim per
+  instance, so an explicit `start` or `restart` replaces it and a `stop` cancels it. A ladder that
+  gets the key before it after the resume keeps it queued behind itself and does not cancel it, as
+  for a failed preparation's ladder (#411 A50): if that ladder runs the startup package itself, the
+  claim's run follows it.
+- *`hand_back` said, not inferred* (item 5). `close_retained_instance_with` (`host/resource_close.rs`)
+  takes `hand_back`; its one caller with `true` is `release_paused_instance`; every other caller
+  goes through `close_retained_instance_while_guarded`, which passes `false`. The release reason no
+  longer decides it.
+- *Texts* (items 6 and 7). [scheduling-pause.md](scheduling-pause.md): "The dispatch gate" (the
+  settle gate's rerun, the device group's switch, the owed startup run and what becomes of it);
+  "Instance pause: three stages" (c): how long a hand-back waits for a ladder by the code's bounds
+  (one emulator control step at most, `start_bound_ms` 220 000 ms or `stop_bound_ms` 210 000 ms
+  plus `hold.margin_ms` 5 000 ms by default, on the admission guard, no poll; every other step
+  shorter) and that, after the caller's own wait has ended, a pause that waited for the ladder can
+  still be lifted, later than before, by another party's entry queued meanwhile, a package run the
+  ladder had begun (the drain again past the grace) or an owed reset.
+  [emulator-control.md](emulator-control.md): the checkpoint list and the owed startup run. §1.468's
+  two corrected sentences put the old session's close before the renewal's records, as
+  `ready_control_phase` does (the close, then the renewal before the provider step).
+- *Tests of fix round 1* (gate map `contracts/test-gates/host.toml`, the row "#480 PG-2b fix round
+  1"; the same gate file).
+  `pg2b_7_a_pause_before_the_settle_gates_rerun_runs_no_return_home_package`: #411 A35's settle
+  fixture built in the gate file (a manual Runtime clock, a moving screen); after the changing
+  verdict the screen settles and the clock passes the recheck, and a person pauses the instance just
+  before the rerun (the test hook, which the rerun's check now runs too); no rerun, the two
+  return-home records (changing, then `recovery_admission_denied`), the ladder interrupted, no
+  application command, the pause success, `released`.
+  `pg2b_8_a_rung_paused_after_its_stop_hands_its_startup_run_off_and_it_runs_once_after_the_resume`:
+  the application rung's stop made, a person's pause just before its startup run; one
+  `startup_package_scheduled` and no `task.requested`, the claim queued, the rung failed with
+  `recovery_admission_denied`, the ladder interrupted, nothing launched, the pause `released`;
+  after the resume one `task.requested`, no second scheduling, one run ended, the queue empty.
+  Adapted: `pg2b_2_a_pause_after_the_emulator_rungs_preparation_runs_no_package` (item 4 changes
+  what it pinned: still no run, now one `startup_package_scheduled` and the claim queued behind the
+  pause). No test retired; no golden changes.
+- No code, word, key or vocabulary added; the ledger's revision does not move (the hand-off writes
+  the records an emulator start under a pause writes). A ladder with no pause in effect records
+  what it recorded before: the moved and the new checks record nothing, and only a pause hands off.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
