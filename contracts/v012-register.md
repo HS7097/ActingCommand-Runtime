@@ -38088,6 +38088,99 @@ while it waits: nothing bound (the endpoint pending, no `runtime.instance_bound`
 control, no `command.*` or `runtime.failed` under the claim, its key released, one skip
 `recognize` `global_paused`. No test adapted or retired; no golden changes.
 
+### 1.470 Slice #480 PG-2a (0.12.73): a recording's hold keeps its header when a failed pause still stands (Workflow #480; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-480-pg2a-record-hold.md`, on main `9188671a`, which holds #480 PG-1, §1.468)
+
+This section takes 1.470 (1.469 is another slice's). It ships in 0.12.73.
+[lab-recording.md](lab-recording.md) (`record start`, "A recording holds its instance") is the
+contract.
+
+**Why** (read in main by a designer and a reviewer). `record start` writes its session header
+naming its own hold (`lab-record-<ms>`) before it pauses the instance (#463 S1-7 fix round 2,
+§1.424). Until this slice a pause whose receipt arrived carrying a failure was taken for one that
+changed nothing (`scheduling::pause_refused`: any received receipt), and the header was put back
+as it was before. Since 0.12.72 (§1.468, R4″) a hand-back that a shutdown interrupts while nothing
+but the Runtime's own work is in the way answers `scheduling_pause_kept_at_shutdown` (`Failed`,
+`RuntimeUnavailable`) and keeps the pause, which the next start restores. The recording had then
+put its header back, and after the restart a pause with the recording's reason stood on the
+instance with no header that named it: nothing released it, and another recording's start found
+the instance paused by a hold it could not end.
+
+**The rule.**
+- *Refused or failed, told by the receipt's state.* `scheduling::failed_pause` (in the place of
+  `pause_refused`) reads the state of the receipt the client kept
+  (`RuntimeClientError::received_receipt`): `Denied` is `FailedPause::Refused`, any other state
+  `FailedPause::Failed`, no receipt `FailedPause::Unanswered`. It reads a closed vocabulary the
+  receipt carries and names no code. Why `Denied` is sound: the host denies a pause only before its
+  gate closes (the request's own checks, `resolve_instance`'s `instance_unknown`,
+  `scheduling_already_paused`: `scheduling_pause_denied` in `host/policy_dispatch.rs`); once the
+  gate has closed, every failure of a stage is `Failed` (`scheduling_pause_release_failure`, the
+  drain's `scheduling_pause_drain_incomplete` and `scheduling_pause_drain_interrupted`,
+  `RequestFailure::poison`), and a failure whose lift of the gate cannot be recorded is poisoned,
+  `Failed` too (`replace_with_poison`). So a `Denied` pause left nothing, and every pause that can
+  still stand after its failure (one a shutdown kept, a poisoned lift) is `Failed`.
+- *Refused:* the header is put back as it was and the start fails, as before (`nothing_paused`,
+  the put-back that stood inline in `take`).
+- *Failed:* one status read on the same connection (`scheduling::instance_pause_reason`, the read
+  the start already makes). It shows no pause of the instance, or another party's: the header is
+  put back and the start fails having started nothing, as before (the common case: a drain that
+  did not finish within its time). It shows the hold's own reason, or the read fails or gets no
+  answer: the header stays as written and the start fails as when the pause's outcome is unknown
+  (`pause_unsettled`, `hold {reason, own: true}` in its details), so that `record stop` or `record
+  start --force` releases the pause by its reason, or answers that it is already gone. The
+  message says which it met (`Unsettled::Stands`; `Unsettled::Unread`, with the read's failure).
+  A receipt whose failure is fatal latches the client's connection, so its status read fails and
+  the header stays.
+- *Unanswered:* as before (`Unsettled::Unanswered`, the message byte for byte as before).
+
+**Codes and words.** None is added. "The pause failed and still stands" and "it is unknown
+whether the pause was made" are two causes, but a person and a tool do the same next in both: the
+header names the hold, and `record stop` or `record start --force` releases a pause with its
+reason, or answers `already_gone`. By the catalogue's rule (another code where the program or its
+reader does something else next) the first is a cause of `pause_unsettled`, not a code of its own.
+Its failure keeps the code the Lab answers the pause's own failure with
+(`runtime_slice_cli::map_runtime_error`: `runtime_not_running` for
+`scheduling_pause_kept_at_shutdown`, whose Runtime error code is `RuntimeUnavailable`;
+`device_error` for a failure with another code), refuses, exit status 1 on actinglab's own line,
+as every failed start; its message names which cause it met.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The reading of the receipt | `crates/lab-ops/src/scheduling.rs` `FailedPause`, `failed_pause` (in the place of `pause_refused`) |
+| The start | `apps/actinglab/src/commands/record_hold.rs` `take` (the status read after a `Failed` receipt), `nothing_paused` (the put-back, moved out of `take`), `Unsettled` and `pause_unsettled` (its message by cause) |
+| Texts | [lab-recording.md](lab-recording.md) (`record start`; "A recording holds its instance": the refused pause, a new item for a pause that failed in a stage, the end of "Any other end of the pause"), the notes of the `record start` row in `lab-operations.json`, `apps/actinglab-mcp/MANUAL.md` ("Recordings"), the module texts of `record_hold.rs` and `scheduling.rs` |
+
+**Tests** (`apps/actinglab/src/tests/gate_463_s17.rs`, the exec gate map row "#480 PG-2a"; the
+runtime client's scripted Runtime, every request of every connection in order; no clock).
+`pg2a_a_failed_pause_that_still_stands_keeps_the_header_for_record_stop`: the pause fails as a
+kept one answers (`scheduling_pause_kept_at_shutdown`, `Failed`, `RuntimeUnavailable`) and the
+status then shows the hold's reason; the wire is the handshake, the display read, `status`,
+`pause_scheduling`, `status`; the start fails `runtime_not_running` with `hold {reason, own:
+true}`, the header stays active and names it, `record status` shows `own`; after a restart (the
+pause restored at revision 1) `record stop` sends `status` and one `resume_scheduling` expecting
+that epoch and revision and answers `stopped`, `release: resumed`.
+`pg2a_a_failed_pause_that_left_no_pause_puts_the_header_back`: a drain that did not finish
+(`scheduling_pause_drain_incomplete`, `Failed`, `ContainedTaskBusy`) and the status then shows no
+pause: `device_error`, "started nothing", an earlier stopped header put back byte for byte, no
+recording directory, the same wire. `pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header`:
+the kept pause's failure, and the connection closed on the status read after it:
+`runtime_not_running` with the hold in its details, the message naming the failed read, the header
+active and naming the hold. `s17_a_refused_pause_starts_nothing` (a `Denied` receipt) passes
+unchanged: its wire has no status read after the pause. No test adapted or retired; no golden
+changes.
+
+**What is not changed.** A start whose pause succeeds, one that finds the instance paused by
+another party, one with no Runtime listening, one whose pause got no receipt; the release of a
+hold; what `record archive`, `record stop` and `record status` answer for a session header that
+names a hold; the Runtime's host.
+
+**Ledger and interface.** Nothing: no request kind, wire shape, outcome code, word, configuration
+key or record changes, and the session header keeps its shape. No interface revision moves.
+
+**At deploy.** Nothing to configure. A `record start` whose pause a shutdown kept leaves its
+session header naming the hold, and `record stop` after the restart resumes that pause.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

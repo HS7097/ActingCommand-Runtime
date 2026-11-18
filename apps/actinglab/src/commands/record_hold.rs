@@ -12,10 +12,14 @@
 //!   to pause): a connection and one status read, with nothing to undo so far. An instance the
 //!   status shows paused is held by that pause and nothing is sent. Otherwise the session header is
 //!   written first, naming the recording's own hold `lab-record-<ms>`, and only then is the pause
-//!   of the `pause` row sent: a pause the Runtime refuses puts the header back as it was (none when
-//!   there was none) and fails the start; any other failure of the pause leaves the header as
-//!   written, since a pause with that reason may exist, and fails the start with the hold in its
-//!   details, so that `record stop` or `record start --force` releases it by its reason. Nothing
+//!   of the `pause` row sent: a pause the Runtime refuses (denied) puts the header back as it was
+//!   (none when there was none) and fails the start; #480 PG-2a: so does a pause that failed in a
+//!   stage when the status read after it shows no pause with the hold's reason. A pause that failed
+//!   in a stage while the status shows its reason (since 0.12.72 a shutdown can keep it,
+//!   `scheduling_pause_kept_at_shutdown`), or whose status cannot be read, and any other failure
+//!   of the pause leave the header as written, since a pause with that reason may exist, and fail
+//!   the start with the hold in its details, so that `record stop` or `record start --force`
+//!   releases it by its reason. Nothing
 //!   listening where the installation's Runtime would ([`reach`]: no runtime-info, or the address
 //!   it names refuses the connection): nothing is held and the answer says `no_runtime_listening`.
 //!   Something listening that does not complete the handshake, or a status the Runtime refuses or
@@ -47,7 +51,7 @@ use actingcommand_lab::{
     LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING, LAB_RECORDING_WARNING_REPLACED_HEADER_UNREAD,
     RECORDING_BASE_SIZE, RecordSize, RecordingHold, RecordingHoldFound, RecordingHoldView,
 };
-use actingcommand_lab_ops::scheduling::{self, RecordingHoldReleased};
+use actingcommand_lab_ops::scheduling::{self, FailedPause, RecordingHoldReleased};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -200,15 +204,74 @@ fn started_nothing(instance: &str, reason: &str, mut error: CliError) -> CliErro
     error
 }
 
-/// The start's failure `error` once the pause was sent and got no answer that says it was not
-/// made (the connection lost, the wait ended, a receipt that does not match): the session header
-/// stays as written and names the recording's own hold `hold`, since a pause with its reason may
-/// exist; the message says so and names what releases it, the details carry the hold.
-fn pause_unsettled(instance: &str, hold: Option<&RecordingHold>, mut error: CliError) -> CliError {
+/// The start's failure `error` once no pause with the hold's reason stands: the Runtime refused
+/// the pause (its receipt denied), or (#480 PG-2a) failed it in a stage and the status read after
+/// it shows no pause with that reason. The session header at `path` is put back as it was before
+/// (`before`; none when there was none) and the failure says the start paused and started nothing
+/// ([`started_nothing`]); a header that cannot be put back is said in its message, with the hold
+/// `hold` the header names in its details.
+fn nothing_paused(
+    path: &Path,
+    before: Option<&[u8]>,
+    hold: Option<&RecordingHold>,
+    instance: &str,
+    reason: &str,
+    error: CliError,
+) -> CliError {
+    let refused = started_nothing(instance, reason, error);
+    match put_back(path, before) {
+        Ok(()) => refused,
+        Err(failure) => {
+            let mut unrestored = with_hold(refused, hold);
+            unrestored.message = format!(
+                "{}; the session header {} could not be put back as it was ({failure}): \
+                 it names a hold whose release finds no pause",
+                unrestored.message,
+                path.display()
+            );
+            unrestored
+        }
+    }
+}
+
+/// Why a pause with the hold's reason may stand once the pause failed ([`pause_unsettled`]).
+enum Unsettled {
+    /// No answer says that the pause was not made (the connection lost, the wait ended, a receipt
+    /// that does not match).
+    Unanswered,
+    /// #480 PG-2a: the Runtime failed the pause in a stage, and the status read after it shows the
+    /// instance paused with the hold's reason (since 0.12.72 a shutdown can keep such a pause,
+    /// `scheduling_pause_kept_at_shutdown`).
+    Stands,
+    /// #480 PG-2a: the Runtime failed the pause in a stage, and the status read after it failed
+    /// or got no answer: that read's failure.
+    Unread(RuntimeClientError),
+}
+
+/// The start's failure `error` once the pause was sent and nothing says that no pause with its
+/// reason stands (`unsettled`): the session header stays as written and names the recording's own
+/// hold `hold`, since a pause with its reason may exist; the message says why and names what
+/// releases it, the details carry the hold.
+fn pause_unsettled(
+    instance: &str,
+    hold: Option<&RecordingHold>,
+    unsettled: Unsettled,
+    mut error: CliError,
+) -> CliError {
+    let after = match unsettled {
+        Unsettled::Unanswered => "got no answer that says no pause was made".to_owned(),
+        Unsettled::Stands => "the Runtime failed it, and the status read after it shows the \
+                              instance paused with the recording's own reason"
+            .to_owned(),
+        Unsettled::Unread(read) => format!(
+            "the Runtime failed it, and the status read after it failed too ({read}), so \
+             whether a pause with the recording's own reason stands is not known"
+        ),
+    };
     error.message = format!(
-        "record start sent the pause of {instance} and got no answer that says no pause was made: \
-         {}; the session header stays and names the recording's own hold, so that record stop or \
-         record start --force releases a pause with its reason",
+        "record start sent the pause of {instance} and {after}: {}; the session header stays and \
+         names the recording's own hold, so that record stop or record start --force releases a \
+         pause with its reason",
         error.message
     );
     with_hold(error, hold)
@@ -227,9 +290,12 @@ fn pause_unsettled(instance: &str, hold: Option<&RecordingHold>, mut error: CliE
 ///   and the answer warns `no_runtime_listening`;
 /// - the instance shown paused: the header holds that pause, its own when taken over, another
 ///   party's otherwise; nothing is sent;
-/// - otherwise the header is written naming the own hold, then the pause is sent: a refusal puts
-///   the header back as it was and fails the start; any other failure leaves the header and fails
-///   the start with the hold in its details ([`pause_unsettled`]).
+/// - otherwise the header is written naming the own hold, then the pause is sent: a refusal (the
+///   receipt denied) puts the header back as it was and fails the start ([`nothing_paused`]); #480
+///   PG-2a: a stage's failure (the receipt failed) is followed by one status read on the same
+///   connection, and when it shows no pause with the hold's reason the header is put back so too;
+///   when it shows that reason, when it fails, and on any other failure of the pause (no receipt)
+///   the header stays and the start fails with the hold in its details ([`pause_unsettled`]).
 ///
 /// A header that cannot be written fails the start with the hold in its details.
 ///
@@ -307,37 +373,37 @@ pub(super) fn take(
     record.hold = RecordingHold::at_start(&RecordingHoldFound::Paused(reason.clone()), replaced);
     let mut answer = start_answer(record.hold.as_ref(), replaced);
     write_header(path, record)?;
-    match scheduling::pause_for_recording(&client, &instance, own) {
+    let pause_error = match scheduling::pause_for_recording(&client, &instance, own) {
         Ok(paused) => {
             answer["paused"] = json!(paused);
-            Ok((answer, display_last_observed))
+            return Ok((answer, display_last_observed));
         }
-        Err(error) if scheduling::pause_refused(&error) => {
-            let refused = started_nothing(
-                &instance,
-                &reason,
-                crate::runtime_slice_cli::map_runtime_error(error),
-            );
-            match put_back(path, before) {
-                Ok(()) => Err(refused),
-                Err(failure) => {
-                    let mut unrestored = with_hold(refused, record.hold.as_ref());
-                    unrestored.message = format!(
-                        "{}; the session header {} could not be put back as it was ({failure}): \
-                         it names a hold whose release finds no pause",
-                        unrestored.message,
-                        path.display()
-                    );
-                    Err(unrestored)
-                }
-            }
-        }
-        Err(error) => Err(pause_unsettled(
-            &instance,
+        Err(pause_error) => pause_error,
+    };
+    // #480 PG-2a: the header is put back only when it is known that no pause with the hold's
+    // reason stands: the receipt denied the pause, or a stage failed and the status read after it
+    // shows no pause with that reason (another party's, or none).
+    let unsettled = match scheduling::failed_pause(&pause_error) {
+        FailedPause::Refused => None,
+        FailedPause::Failed => match scheduling::instance_pause_reason(&client, &instance) {
+            Ok(Some(standing)) if standing.as_str() == reason.as_str() => Some(Unsettled::Stands),
+            Ok(_) => None,
+            Err(read) => Some(Unsettled::Unread(read)),
+        },
+        FailedPause::Unanswered => Some(Unsettled::Unanswered),
+    };
+    let error = crate::runtime_slice_cli::map_runtime_error(pause_error);
+    Err(match unsettled {
+        None => nothing_paused(
+            path,
+            before,
             record.hold.as_ref(),
-            crate::runtime_slice_cli::map_runtime_error(error),
-        )),
-    }
+            &instance,
+            &reason,
+            error,
+        ),
+        Some(unsettled) => pause_unsettled(&instance, record.hold.as_ref(), unsettled, error),
+    })
 }
 
 /// Workflow #392 DA-5cd fix round 1: the display the Runtime last observed for an instance, the
