@@ -1,30 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The five commands against the device, through the `idevice` library (board #479, ACIB-0).
+//! The six commands against the device, through the `idevice` library (board #479, ACIB-0 and
+//! ACIB-1).
 //!
 //! Everything here only reads. usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
 //! pairing record usbmuxd holds is asked for, kept in memory for the command and never shown.
 //! The tunnel of iOS 17.4 and later is the lockdown service CoreDeviceProxy with the library's
 //! own TCP stack inside this process: no network adapter is created. No library type is ever
-//! printed with its `Debug` form: only the values the answer types name leave this module.
+//! printed with its `Debug` form: only the values the answer types name leave this module. A
+//! picture of the screen is written, as the service gave it, to the file `--out` names and is
+//! kept nowhere else.
 
 use crate::answer::{
-    Apps, CommandName, DeviceEntry, Devices, Failure, ImageQuery, ImageQueryName, Images, Info,
-    Line, Link, ListedImage, Mounted, Problem, Reading, ServiceEntry, Services,
+    Apps, CommandName, DeviceEntry, Devices, Elapsed, Failure, ImageQuery, ImageQueryName, Images,
+    Info, Line, Link, ListedImage, Mounted, Problem, Reading, Screenshot, ServiceEntry, Services,
+    Way,
 };
 use crate::args::Request;
 use crate::redact;
 use idevice::pairing_file::PairingFile;
-use idevice::provider::{IdeviceProvider, UsbmuxdProvider};
+use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
+use idevice::services::core_device::{ImageFormat, ScreenCaptureServiceClient};
 use idevice::services::core_device_proxy::CoreDeviceProxy;
+use idevice::services::dvt::remote_server::RemoteServerClient;
+use idevice::services::dvt::screenshot::ScreenshotClient;
 use idevice::services::installation_proxy::InstallationProxyClient;
 use idevice::services::lockdown::LockdownClient;
 use idevice::services::mobile_image_mounter::ImageMounter;
 use idevice::services::rsd::RsdHandshake;
+use idevice::tcp::handle::AdapterHandle;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
-use idevice::{Idevice, IdeviceError, IdeviceService};
+use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService};
 use std::borrow::Cow;
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 /// The label the library sends with each connection.
 const LABEL: &str = "acib";
@@ -36,9 +46,9 @@ const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
 /// The application type the installation proxy is asked for: the user's own applications.
 const USER_APPLICATIONS: &str = "User";
 
-/// Runs one request and gives its line.
-pub async fn answer(request: Request) -> Line {
-    let (command, device) = (request.name(), request.device());
+/// Runs one request, of a command that started at `started`, and gives its line.
+pub async fn answer(request: Request, started: Instant) -> Line {
+    let (command, device, via) = (request.name(), request.device(), request.via());
     let answered = match request {
         Request::Devices => devices().await,
         Request::Info(number) => info(number).await,
@@ -49,8 +59,13 @@ pub async fn answer(request: Request) -> Line {
             contains,
             max_matching,
         } => apps(number, &contains, max_matching).await,
+        Request::Screenshot {
+            device: number,
+            out,
+            via: way,
+        } => screenshot(number, &out, way, started).await,
     };
-    answered.unwrap_or_else(|failure| Line::refused(Some(command), device, failure))
+    answered.unwrap_or_else(|failure| Line::refused_on(Some(command), device, via, failure))
 }
 
 async fn devices() -> Result<Line, Failure> {
@@ -118,28 +133,7 @@ async fn info(number: u32) -> Result<Line, Failure> {
 async fn services(number: u32) -> Result<Line, Failure> {
     let device = find(number).await?;
     let record = paired_record(&device).await?;
-    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
-    let connection = open_service(
-        &provider,
-        &record,
-        <CoreDeviceProxy as IdeviceService>::service_name(),
-    )
-    .await?;
-    let proxy = CoreDeviceProxy::new(connection)
-        .await
-        .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;
-    let rsd_port = proxy.tunnel_info().server_rsd_port;
-    let adapter = proxy
-        .create_software_tunnel()
-        .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;
-    let mut tunnel = adapter.to_async_handle();
-    let stream = tunnel
-        .connect(rsd_port)
-        .await
-        .map_err(|error| Failure::library(Problem::RsdUnreachable, &error))?;
-    let handshake = RsdHandshake::new(stream)
-        .await
-        .map_err(|error| Failure::library(Problem::RsdHandshakeFailed, &error))?;
+    let (_tunnel, handshake) = open_tunnel(&device, &record).await?;
     // Of each service the handshake describes, its port and the entitlement it names are
     // shown; its other members are not.
     let mut services: Vec<ServiceEntry> = handshake
@@ -227,6 +221,153 @@ async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, 
         max_matching,
         applications.keys().map(String::as_str),
     )))
+}
+
+/// One picture of the screen, the way `way` takes it, written as the service gave it to `out`,
+/// which must name nothing that exists: that is checked before the device is asked. A way the
+/// device refuses writes no file.
+async fn screenshot(number: u32, out: &str, way: Way, started: Instant) -> Result<Line, Failure> {
+    match std::fs::symlink_metadata(out) {
+        Ok(_) => return Err(Failure::own(Problem::OutExists)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Failure::library(Problem::OutUnwritable, &error)),
+    }
+    let device = find(number).await?;
+    let record = paired_record(&device).await?;
+    let (mut tunnel, handshake) = open_tunnel(&device, &record).await?;
+    let (picture, request) = match way {
+        Way::ScreenCapture => screen_capture(&mut tunnel, &handshake).await?,
+        Way::Instruments => instruments(&mut tunnel, &handshake).await?,
+    };
+    write_new(out, &picture)?;
+    let elapsed = Elapsed::of(request, started.elapsed());
+    Ok(Line::Screenshot(Screenshot::of(
+        number, way, &picture, elapsed, out,
+    )))
+}
+
+/// The picture of CoreDevice's screen capture service, asked for as PNG, of the main display;
+/// and how long the request alone took.
+async fn screen_capture(
+    tunnel: &mut AdapterHandle,
+    handshake: &RsdHandshake,
+) -> Result<(Vec<u8>, Duration), Failure> {
+    type Client = ScreenCaptureServiceClient<Box<dyn ReadWrite>>;
+    let stream = remote_service(
+        tunnel,
+        handshake,
+        &<Client as RsdService>::rsd_service_name(),
+    )
+    .await?;
+    let mut client = <Client as RsdService>::from_stream(stream)
+        .await
+        .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    let asked = Instant::now();
+    let picture = client
+        .take_screenshot(None, ImageFormat::Png)
+        .await
+        .map_err(|error| Failure::library(Problem::ScreenshotFailed, &error))?;
+    Ok((picture, asked.elapsed()))
+}
+
+/// The picture of the instruments server's screenshot channel, in the format the device gives;
+/// and how long the request alone took. The server's first message (the capabilities it
+/// publishes) is read before the channel is asked for, as the library's own screenshot tool
+/// does, and dropped unread.
+async fn instruments(
+    tunnel: &mut AdapterHandle,
+    handshake: &RsdHandshake,
+) -> Result<(Vec<u8>, Duration), Failure> {
+    type Client = RemoteServerClient<Box<dyn ReadWrite>>;
+    let stream = remote_service(
+        tunnel,
+        handshake,
+        &<Client as RsdService>::rsd_service_name(),
+    )
+    .await?;
+    let mut client = <Client as RsdService>::from_stream(stream)
+        .await
+        .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    client
+        .read_message(0)
+        .await
+        .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    let mut channel = ScreenshotClient::new(&mut client)
+        .await
+        .map_err(|error| Failure::library(Problem::ChannelRefused, &error))?;
+    let asked = Instant::now();
+    let picture = channel
+        .take_screenshot()
+        .await
+        .map_err(|error| Failure::library(Problem::ScreenshotFailed, &error))?;
+    Ok((picture, asked.elapsed()))
+}
+
+/// Writes `picture` to a new file at `out`; a file that exists by then is not touched.
+fn write_new(out: &str, picture: &[u8]) -> Result<(), Failure> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .map_err(|error| {
+            let problem = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Problem::OutExists
+            } else {
+                Problem::OutUnwritable
+            };
+            Failure::library(problem, &error)
+        })?;
+    file.write_all(picture)
+        .and_then(|()| file.flush())
+        .map_err(|error| Failure::library(Problem::OutUnwritable, &error))
+}
+
+/// The tunnel of iOS 17.4 and later (CoreDeviceProxy, with the library's own TCP stack inside
+/// this process) and the remote service discovery handshake through it.
+async fn open_tunnel(
+    device: &UsbmuxdDevice,
+    record: &PairingFile,
+) -> Result<(AdapterHandle, RsdHandshake), Failure> {
+    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+    let connection = open_service(
+        &provider,
+        record,
+        <CoreDeviceProxy as IdeviceService>::service_name(),
+    )
+    .await?;
+    let proxy = CoreDeviceProxy::new(connection)
+        .await
+        .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;
+    let rsd_port = proxy.tunnel_info().server_rsd_port;
+    let adapter = proxy
+        .create_software_tunnel()
+        .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;
+    let mut tunnel = adapter.to_async_handle();
+    let stream = tunnel
+        .connect(rsd_port)
+        .await
+        .map_err(|error| Failure::library(Problem::RsdUnreachable, &error))?;
+    let handshake = RsdHandshake::new(stream)
+        .await
+        .map_err(|error| Failure::library(Problem::RsdHandshakeFailed, &error))?;
+    Ok((tunnel, handshake))
+}
+
+/// A connection, inside the tunnel, to the remote service the handshake lists as `name`.
+async fn remote_service(
+    tunnel: &mut AdapterHandle,
+    handshake: &RsdHandshake,
+    name: &str,
+) -> Result<Box<dyn ReadWrite>, Failure> {
+    let port = handshake
+        .services
+        .get(name)
+        .map(|service| service.port)
+        .ok_or(Failure::own(Problem::ServiceNotListed))?;
+    tunnel
+        .connect_to_service_port(port)
+        .await
+        .map_err(|error| Failure::library(Problem::ServiceUnreachable, &error))
 }
 
 /// The devices usbmuxd lists now.

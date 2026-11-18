@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The one JSON line `acib` prints for each command (board #479, ACIB-0).
+//! The one JSON line `acib` prints for each command (board #479, ACIB-0 and ACIB-1).
 //!
 //! These types are the whole of what the program shows. None of them has a member for a
 //! device's serial number, UDID, name or address, or for anything of a pairing record: the
 //! line cannot carry them. A library error is shown through [`crate::redact`], which cuts a
-//! text that could carry such a value to the error's kind.
+//! text that could carry such a value to the error's kind. Of a picture of the screen the line
+//! holds its format, its width and its height as its header gives them and its length, never
+//! a byte of its content: the picture goes to the file `--out` names and nowhere else.
 
 use crate::redact;
 use serde::{Serialize, Serializer};
+use std::time::Duration;
 
 /// The command a line answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -19,6 +22,7 @@ pub enum CommandName {
     Services,
     Images,
     Apps,
+    Screenshot,
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
@@ -26,7 +30,7 @@ pub enum CommandName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
-    /// The command line is not one of the five commands with their options.
+    /// The command line is not one of the six commands with their options.
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
@@ -52,7 +56,8 @@ pub enum Problem {
     SessionRefused,
     /// The device refused to start the service.
     ServiceRefused,
-    /// The started service could not be connected to.
+    /// The started service, or a remote service's port inside the tunnel, could not be
+    /// connected to.
     ServiceUnreachable,
     /// The CoreDeviceProxy tunnel or the TCP stack inside this process failed.
     TunnelFailed,
@@ -65,6 +70,26 @@ pub enum Problem {
     /// More bundle identifiers hold the text than `--max-matching` allows, or more than half of
     /// the user's applications do: `apps` names none of them, only the two counts.
     TooManyMatching,
+    /// `--out` names something that exists already: refused before the device is asked.
+    OutExists,
+    /// The place `--out` names could not be looked at, or the picture could not be written
+    /// there; nothing of the picture is kept.
+    OutUnwritable,
+    /// The remote service discovery handshake lists no service of the way asked for.
+    ServiceNotListed,
+    /// A remote service inside the tunnel took the connection, but its own first exchange
+    /// failed (a CoreDevice service's XPC handshake, the instruments server's first message).
+    ServiceHandshakeFailed,
+    /// The instruments server did not open its screenshot channel.
+    ChannelRefused,
+    /// The service did not answer the screenshot request with a picture; no file is written.
+    ScreenshotFailed,
+    /// The picture ends before its header gives its size; the file holds it as the service gave
+    /// it.
+    PictureHeaderTruncated,
+    /// The picture does not start with a header this program reads (PNG or JPEG); the file holds
+    /// it as the service gave it.
+    PictureHeaderUnknown,
 }
 
 /// A refusal or failure: the word, and the library's error text where the library gave one.
@@ -398,6 +423,117 @@ impl Apps {
     }
 }
 
+/// A way of `acib screenshot` to take the picture, by this program's own word (`--via`): each
+/// goes through the tunnel of iOS 17.4 and later to a remote service the handshake lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Way {
+    /// CoreDevice's screen capture service (`com.apple.coredevice.screencaptureservice`),
+    /// asked for a PNG picture of the main display.
+    ScreenCapture,
+    /// The instruments server (`com.apple.instruments.dtservicehub`) and its screenshot
+    /// channel.
+    Instruments,
+}
+
+impl Way {
+    /// Every way, in the order the README names them.
+    pub const ALL: [Self; 2] = [Self::ScreenCapture, Self::Instruments];
+
+    /// The way's word, as `--via` takes it and the line names it.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::ScreenCapture => "screen_capture",
+            Self::Instruments => "instruments",
+        }
+    }
+
+    /// The way `word` names, if it names one (exactly, case included).
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|way| way.word() == word)
+    }
+}
+
+/// A picture's format as its own header says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PictureFormat {
+    Png,
+    Jpeg,
+}
+
+/// How long the screenshot request alone took and how long the whole command took, in
+/// milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Elapsed {
+    pub request: u64,
+    pub command: u64,
+}
+
+impl Elapsed {
+    /// The two durations in whole milliseconds.
+    pub fn of(request: Duration, command: Duration) -> Self {
+        Self {
+            request: whole_milliseconds(request),
+            command: whole_milliseconds(command),
+        }
+    }
+}
+
+fn whole_milliseconds(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// `acib screenshot --device <n> --out <file> [--via <way>]`: the way used, the picture's
+/// format, width and height as its header gives them, its length in bytes, the two durations
+/// and the file it was written to. A picture whose header cannot be read keeps its length and
+/// its file, names no format or size and answers its header's word (status 1). Nothing of the
+/// picture's content is a member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Screenshot {
+    pub command: CommandName,
+    pub device: u32,
+    pub via: Way,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<PictureFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    pub bytes: usize,
+    pub elapsed_ms: Elapsed,
+    pub out: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
+}
+
+impl Screenshot {
+    /// The answer for `picture`, written to `out`: only its header and its length are read.
+    pub fn of(device: u32, via: Way, picture: &[u8], elapsed_ms: Elapsed, out: &str) -> Self {
+        let (format, width, height, problem) = match crate::picture::read_header(picture) {
+            Ok(header) => (
+                Some(header.format),
+                Some(header.width),
+                Some(header.height),
+                None,
+            ),
+            Err(problem) => (None, None, None, Some(problem)),
+        };
+        Self {
+            command: CommandName::Screenshot,
+            device,
+            via,
+            format,
+            width,
+            height,
+            bytes: picture.len(),
+            elapsed_ms,
+            out: out.to_owned(),
+            problem,
+        }
+    }
+}
+
 /// A refused or failed command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refused {
@@ -405,6 +541,9 @@ pub struct Refused {
     pub command: Option<CommandName>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<u32>,
+    /// The way a refused `screenshot` was to take its picture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<Way>,
     pub problem: Problem,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -419,15 +558,27 @@ pub enum Line {
     Services(Services),
     Images(Images),
     Apps(Apps),
+    Screenshot(Screenshot),
     Refused(Refused),
 }
 
 impl Line {
     /// A refusal of `command` on `device`.
     pub fn refused(command: Option<CommandName>, device: Option<u32>, failure: Failure) -> Self {
+        Self::refused_on(command, device, None, failure)
+    }
+
+    /// A refusal of `command` on `device` that was to go the way `via`.
+    pub fn refused_on(
+        command: Option<CommandName>,
+        device: Option<u32>,
+        via: Option<Way>,
+        failure: Failure,
+    ) -> Self {
         Self::Refused(Refused {
             command,
             device,
+            via,
             problem: failure.problem,
             error: failure.error,
         })
@@ -439,6 +590,7 @@ impl Line {
             Self::Refused(_) => false,
             Self::Info(info) => info.problem.is_none(),
             Self::Apps(apps) => apps.problem.is_none(),
+            Self::Screenshot(screenshot) => screenshot.problem.is_none(),
             Self::Devices(_) | Self::Services(_) | Self::Images(_) => true,
         }
     }
@@ -447,6 +599,7 @@ impl Line {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::picture::tests::png_file;
     use std::collections::BTreeSet;
 
     fn json(line: &Line) -> String {
@@ -689,6 +842,57 @@ mod tests {
                 false,
             ),
             (
+                Line::Screenshot(Screenshot::of(
+                    3,
+                    Way::ScreenCapture,
+                    &png_file(750, 1334, b"\0\0\0\x04IDATxxxx"),
+                    Elapsed {
+                        request: 412,
+                        command: 1830,
+                    },
+                    "screen.png",
+                )),
+                r#"{"command":"screenshot","device":3,"via":"screen_capture","format":"png","width":750,"height":1334,"bytes":45,"elapsed_ms":{"request":412,"command":1830},"out":"screen.png"}"#,
+                true,
+            ),
+            (
+                Line::Screenshot(Screenshot::of(
+                    3,
+                    Way::Instruments,
+                    &[0x89, 0x50, 0x4E],
+                    Elapsed {
+                        request: 9,
+                        command: 2001,
+                    },
+                    "screen.png",
+                )),
+                r#"{"command":"screenshot","device":3,"via":"instruments","bytes":3,"elapsed_ms":{"request":9,"command":2001},"out":"screen.png","problem":"picture_header_truncated"}"#,
+                false,
+            ),
+            (
+                Line::refused_on(
+                    Some(CommandName::Screenshot),
+                    Some(3),
+                    Some(Way::Instruments),
+                    Failure {
+                        problem: Problem::ScreenshotFailed,
+                        error: Some("unexpected response from device: missing screenshot data in DVT response".to_owned()),
+                    },
+                ),
+                r#"{"command":"screenshot","device":3,"via":"instruments","problem":"screenshot_failed","error":"unexpected response from device: missing screenshot data in DVT response"}"#,
+                false,
+            ),
+            (
+                Line::refused_on(
+                    Some(CommandName::Screenshot),
+                    Some(3),
+                    Some(Way::ScreenCapture),
+                    Failure::own(Problem::OutExists),
+                ),
+                r#"{"command":"screenshot","device":3,"via":"screen_capture","problem":"out_exists"}"#,
+                false,
+            ),
+            (
                 Line::refused(
                     Some(CommandName::Devices),
                     None,
@@ -716,12 +920,14 @@ mod tests {
     }
 
     /// The answer types have no member for a serial number, a UDID, a name, an address or a
-    /// pairing record: every member any line holds is one of these.
+    /// pairing record, nor (ACIB-1) for a picture's content: every member any line holds is one
+    /// of these.
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
             "answer",
             "build_version",
+            "bytes",
             "command",
             "connection",
             "contains",
@@ -730,9 +936,12 @@ mod tests {
             "device",
             "device_class",
             "devices",
+            "elapsed_ms",
             "entitlement",
             "error",
             "error_kind",
+            "format",
+            "height",
             "image_type",
             "listed",
             "matching",
@@ -740,6 +949,7 @@ mod tests {
             "members",
             "mounted",
             "name",
+            "out",
             "paired",
             "password_protected",
             "port",
@@ -749,9 +959,12 @@ mod tests {
             "queries",
             "query",
             "refused",
+            "request",
             "services",
             "user_applications",
             "value",
+            "via",
+            "width",
         ];
         fn collect(value: &serde_json::Value, found: &mut BTreeSet<String>) {
             match value {
@@ -803,6 +1016,14 @@ mod tests {
             (Problem::RsdHandshakeFailed, "rsd_handshake_failed"),
             (Problem::AppsLookupFailed, "apps_lookup_failed"),
             (Problem::TooManyMatching, "too_many_matching"),
+            (Problem::OutExists, "out_exists"),
+            (Problem::OutUnwritable, "out_unwritable"),
+            (Problem::ServiceNotListed, "service_not_listed"),
+            (Problem::ServiceHandshakeFailed, "service_handshake_failed"),
+            (Problem::ChannelRefused, "channel_refused"),
+            (Problem::ScreenshotFailed, "screenshot_failed"),
+            (Problem::PictureHeaderTruncated, "picture_header_truncated"),
+            (Problem::PictureHeaderUnknown, "picture_header_unknown"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -1033,6 +1254,112 @@ mod tests {
                 let text = json(&line);
                 assert!(!text.contains("com.example"), "{case}: {text}");
             }
+        }
+    }
+
+    /// A screenshot's line names the picture's format, width and height as its header gives
+    /// them and its length, and holds nothing of its content: no text a chunk of it carries, no
+    /// byte of its data. A picture whose header cannot be read answers the header's word
+    /// (status 1) and keeps its length and its file.
+    #[test]
+    fn a_screenshot_line_holds_the_header_and_nothing_of_the_picture() {
+        fn members(value: &serde_json::Value, found: &mut BTreeSet<String>) {
+            if let serde_json::Value::Object(map) = value {
+                for (key, member) in map {
+                    found.insert(key.clone());
+                    members(member, found);
+                }
+            }
+        }
+        let elapsed = Elapsed {
+            request: 5,
+            command: 7,
+        };
+        let mut text_chunk = 16u32.to_be_bytes().to_vec();
+        text_chunk.extend_from_slice(b"tEXtComment\0SEENTEXT");
+        text_chunk.extend_from_slice(b"\0\0\0\x05IDATPIXEL");
+        let picture = png_file(1170, 2532, &text_chunk);
+        let screenshot = Screenshot::of(4, Way::Instruments, &picture, elapsed, "shot.png");
+        assert_eq!(screenshot.format, Some(PictureFormat::Png));
+        assert_eq!(
+            (screenshot.width, screenshot.height),
+            (Some(1170), Some(2532))
+        );
+        assert_eq!(screenshot.bytes, picture.len());
+        assert_eq!(screenshot.problem, None);
+        let line = Line::Screenshot(screenshot);
+        assert!(line.answered());
+        let text = json(&line);
+        for content in ["SEENTEXT", "PIXEL", "IDAT", "tEXt", "Comment"] {
+            assert!(!text.contains(content), "{content} in {text}");
+        }
+        let mut found = BTreeSet::new();
+        members(
+            &serde_json::to_value(&line).expect("a line serializes"),
+            &mut found,
+        );
+        let expected: BTreeSet<String> = [
+            "bytes",
+            "command",
+            "device",
+            "elapsed_ms",
+            "format",
+            "height",
+            "out",
+            "request",
+            "via",
+            "width",
+        ]
+        .iter()
+        .map(|member| (*member).to_owned())
+        .collect();
+        assert_eq!(found, expected);
+
+        for (picture, problem) in [
+            (b"GIF89a-SEENTEXT".to_vec(), Problem::PictureHeaderUnknown),
+            (Vec::new(), Problem::PictureHeaderTruncated),
+            (
+                png_file(1170, 2532, &[])[..20].to_vec(),
+                Problem::PictureHeaderTruncated,
+            ),
+        ] {
+            let screenshot = Screenshot::of(4, Way::ScreenCapture, &picture, elapsed, "shot.png");
+            assert_eq!(screenshot.problem, Some(problem), "{picture:?}");
+            assert_eq!(
+                (screenshot.format, screenshot.width, screenshot.height),
+                (None, None, None)
+            );
+            assert_eq!(screenshot.bytes, picture.len());
+            assert_eq!(screenshot.out, "shot.png");
+            let line = Line::Screenshot(screenshot);
+            assert!(!line.answered());
+            assert!(!json(&line).contains("SEENTEXT"));
+        }
+    }
+
+    /// Each way has a word of its own, the one `--via` takes and the line names; no other text
+    /// names a way.
+    #[test]
+    fn every_way_has_a_word_of_its_own() {
+        let mut seen = BTreeSet::new();
+        for way in Way::ALL {
+            assert_eq!(
+                serde_json::to_value(way).expect("a way serializes"),
+                serde_json::Value::String(way.word().to_owned())
+            );
+            assert_eq!(Way::from_word(way.word()), Some(way));
+            assert!(seen.insert(way.word()), "{} is one word", way.word());
+        }
+        assert_eq!(seen, BTreeSet::from(["instruments", "screen_capture"]));
+        for word in [
+            "",
+            "SCREEN_CAPTURE",
+            "screencapture",
+            "screen-capture",
+            "dvt",
+            "screenshotr",
+        ] {
+            assert_eq!(Way::from_word(word), None, "{word}");
         }
     }
 }
