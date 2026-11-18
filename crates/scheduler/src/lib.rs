@@ -358,6 +358,15 @@ pub trait MemberGates {
     fn autostart_ends_at_grant(&self, _member: InstanceId) -> bool {
         false
     }
+
+    /// #480 PG-2b (`contracts/scheduling-pause.md`, "Instance pause: three stages", (c)): whether
+    /// a dedicated lease of `member` is the close lease of `member`'s own scheduling pause handing
+    /// its device back, as the caller says: the entries of `member` that pause holds back (its
+    /// routine entries, [`ClaimKind::gated_by_pause`]) are then not ahead of that lease
+    /// ([`SeedScheduler::prepare_dedicated_lease`]). None by default.
+    fn pause_hands_back(&self, _member: InstanceId) -> bool {
+        false
+    }
 }
 
 impl MemberGates for ClaimGate {
@@ -391,17 +400,55 @@ impl<G: MemberGates> MemberGates for AutostartEndsAtGrant<G> {
     }
 }
 
-/// #480 PG-1: the queue a dedicated lease would jump, as [`ClaimGate::Open`] sees it, less the
-/// entries whose claim the caller says ends at its grant.
-struct DedicatedLeaseGate<'a>(&'a dyn MemberGates);
+/// #480 PG-2b: `gates` for the dedicated close lease of an instance pause's hand-back, with the
+/// word that the lease is `member`'s own pause handing its device back
+/// ([`MemberGates::pause_hands_back`]). That pause holds `member`'s automatic starts, so its queued
+/// autostart claims end at their grant too ([`MemberGates::autostart_ends_at_grant`], as
+/// [`AutostartEndsAtGrant`] says it).
+#[derive(Debug, Clone, Copy)]
+pub struct PauseHandBack<G> {
+    pub gates: G,
+    pub member: InstanceId,
+}
 
-impl MemberGates for DedicatedLeaseGate<'_> {
-    fn gate_of(&self, _member: InstanceId) -> ClaimGate {
-        ClaimGate::Open
+impl<G: MemberGates> MemberGates for PauseHandBack<G> {
+    fn gate_of(&self, member: InstanceId) -> ClaimGate {
+        self.gates.gate_of(member)
     }
 
     fn autostart_ends_at_grant(&self, member: InstanceId) -> bool {
-        self.0.autostart_ends_at_grant(member)
+        member == self.member
+    }
+
+    fn pause_hands_back(&self, member: InstanceId) -> bool {
+        member == self.member
+    }
+}
+
+/// #480 PG-1: the queue a dedicated lease of `member` would jump, as [`ClaimGate::Open`] sees it,
+/// less the entries whose claim the caller says ends at its grant. #480 PG-2b: less, too, when the
+/// lease is the close lease of `member`'s own pause handing its device back
+/// ([`MemberGates::pause_hands_back`]), the entries of `member` that pause holds back, read as
+/// [`ClaimGate::RoutineHeld`] reads them (its routine entries): none of them can be granted while
+/// the pause holds, the lease takes none of them out of the queue, and after the resume they are
+/// granted in their place. Every other member's entries, and every entry of `member` that the
+/// pause does not hold back, are read as before.
+struct DedicatedLeaseGate<'a> {
+    gates: &'a dyn MemberGates,
+    member: InstanceId,
+}
+
+impl MemberGates for DedicatedLeaseGate<'_> {
+    fn gate_of(&self, member: InstanceId) -> ClaimGate {
+        if member == self.member && self.gates.pause_hands_back(member) {
+            ClaimGate::RoutineHeld
+        } else {
+            ClaimGate::Open
+        }
+    }
+
+    fn autostart_ends_at_grant(&self, member: InstanceId) -> bool {
+        self.gates.autostart_ends_at_grant(member)
     }
 }
 
@@ -1257,6 +1304,9 @@ impl SeedScheduler {
     /// (`TransferNotSafe`); a routine entry the pause holds back waits for the device. #480 PG-1:
     /// an autostart entry whose member `gate` says its claim ends at its grant neither refuses it
     /// nor is an entry ahead of it (`QueueAhead`): it is granted after the lease, in its place.
+    /// #480 PG-2b: when `gate` says the lease is `instance_id`'s own pause handing its device back
+    /// ([`PauseHandBack`]), an entry of `instance_id` that pause holds back is not ahead of it
+    /// either; it keeps its place and is granted after the resume.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_dedicated_lease(
         &mut self,
@@ -1282,7 +1332,10 @@ impl SeedScheduler {
                 lease_ttl_ms,
                 kind,
             },
-            &DedicatedLeaseGate(&gate),
+            &DedicatedLeaseGate {
+                gates: &gate,
+                member: instance_id,
+            },
             now_monotonic_ms,
         )?;
         match &mut preparation {

@@ -205,6 +205,10 @@ mod gate_pause_auto;
 // #480 PG-1 (0.12.72; register §1.468): the global pause holds every automatic emulator start, and
 // an instance pause stands while an automatic start holds its instance.
 mod gate_480_pg1;
+// #480 PG-2b (0.12.73; register §1.471): a recovery rung starts nothing after a pause, an instance
+// pause's hand-back waits for the Runtime's own ladder, and its close lease passes what the pause
+// itself holds back.
+mod gate_480_pg2b;
 // Workflow #429 R-3 (register §1.272): `start_emulator` set while the Runtime runs, on a
 // discovery-bound instance, and read in effect by every automatic emulator start.
 mod gate_r3;

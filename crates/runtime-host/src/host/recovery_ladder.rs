@@ -2691,6 +2691,18 @@ impl HostShared {
         pending: &PendingRecoveryLadder,
         key: &HostKey,
     ) -> RuntimeHostResult<Option<&'static str>> {
+        Ok(self
+            .ladder_hold_invariant(pending, key)?
+            .map(LadderInvariant::interruption))
+    }
+
+    /// The holding check's rule (`ladder_hold_interrupted`): the first rule of §2.2b that stops
+    /// the ladder now, before it is spelled as an interruption.
+    fn ladder_hold_invariant(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &HostKey,
+    ) -> RuntimeHostResult<Option<LadderInvariant>> {
         let mut facts = LadderFacts {
             shutdown: self.fatal.is_shutdown_requested(),
             ..LadderFacts::PASSING
@@ -2708,7 +2720,127 @@ impl HostShared {
         if ladder_invariants(&facts).is_none() {
             facts.device_linked = self.device_link_hold(pending.instance_id)?.is_none();
         }
-        Ok(ladder_invariants(&facts).map(LadderInvariant::interruption))
+        Ok(ladder_invariants(&facts))
+    }
+
+    /// #480 PG-2b (`contracts/scheduling-pause.md`, "The dispatch gate"; board #480: a pause a
+    /// person asked for stands, and the Runtime starts nothing after it): the holding check a rung
+    /// makes just before a step that would act on the game where no check came right before it:
+    /// the application rung's first step that stops something (fix round 1, item 3: on a member of
+    /// a device group of several the stop of the other members, else the stop of the assigned
+    /// application), and each rung's startup package run (before its `startup_package_scheduled`).
+    /// An interruption ends the rung as an interrupted Stop or Start of the emulator rung ends it:
+    /// `RungAttempt::Failed` with the interruption's reason and no run, which the climb records as
+    /// the rung failed with `recovery_ladder_interrupted` and then ends at its next holding check
+    /// (`finish_interrupted_ladder`), no error point. With `owes_startup` (the rung took the
+    /// application down or brought the emulator up and has not run its startup package), a pause
+    /// that interrupts it hands that run off (`rung_hold_interrupted`). Otherwise nothing is
+    /// recorded here, so a ladder that nothing interrupts records what it recorded before.
+    fn rung_step_interrupted(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &HostKey,
+        owes_startup: bool,
+    ) -> RuntimeHostResult<Option<RungAttempt>> {
+        #[cfg(test)]
+        self.before_rung_step_check_for_test()?;
+        Ok(self
+            .rung_hold_interrupted(pending, key, owes_startup)?
+            .map(|reason| RungAttempt::Failed {
+                run_id: None,
+                reason,
+            }))
+    }
+
+    /// #480 PG-2b fix round 1 (the coordinator's ruling, item 4: an interrupted rung owes the
+    /// startup run, by the existing way): the holding check (`ladder_hold_interrupted`) of a rung
+    /// that, with `owes_startup`, has taken the application down (the application rung after its
+    /// stop) or brought the emulator up (the emulator rung after its Start: every readiness
+    /// attempt and poll, and the check before its startup run) and not yet run its startup package.
+    /// A scheduling pause that interrupts it there (`LadderInvariant::Paused`) leaves the startup
+    /// run owed, and the rung hands it off as an emulator start under a pause hands off its own
+    /// (`hand_off_startup_package` behind a closed gate): its scheduling intent
+    /// (`startup_package_scheduled` under the ladder's links), its claim queued as a routine entry
+    /// the pause holds back (`schedule_startup_package`, which first cancels one still queued for
+    /// the instance), and the claim kept in `host.idle_state` while the ladder still holds the key
+    /// (`keep_startup_package`), so a restart before the resume queues it again. The ladder's one
+    /// release hands nothing on to it while the pause holds; after the resume it is granted as
+    /// queued. Any other interruption, a check without `owes_startup` (nothing stopped yet; the
+    /// emulator rung between its Stop and its Start, which leaves the emulator stopped, where a
+    /// startup run is meaningless, as an emulator stop cancels one: `end_emulator_control_hold`),
+    /// and an instance without a startup package, hands nothing off.
+    fn rung_hold_interrupted(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &HostKey,
+        owes_startup: bool,
+    ) -> RuntimeHostResult<Option<&'static str>> {
+        let invariant = self.ladder_hold_invariant(pending, key)?;
+        if owes_startup && invariant == Some(LadderInvariant::Paused) {
+            self.hand_off_owed_startup_run(pending)?;
+        }
+        Ok(invariant.map(LadderInvariant::interruption))
+    }
+
+    /// #480 PG-2b fix round 1: the hand-off of `rung_hold_interrupted`, on the ladder's worker
+    /// while the ladder holds its key. A failure that poisons the Runtime is fatal.
+    fn hand_off_owed_startup_run(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<()> {
+        let resolved = self
+            .resolve_instance(&pending.instance_alias)
+            .map_err(owed_startup_failure)?;
+        let Some(owed) = self
+            .prepare_startup_package(&resolved, pending.links.clone(), pending.request_id)
+            .map_err(owed_startup_failure)?
+        else {
+            return Ok(());
+        };
+        self.schedule_startup_package(Some(owed))
+            .map_err(owed_startup_failure)?;
+        self.keep_startup_package(pending.instance_id, &pending.instance_alias)
+    }
+
+    /// #480 PG-2b fix round 1 (the review's second must-fix): the holding check right before the
+    /// settle gate runs the return-home rung again after its probe (`climb_screen_gate`: settled
+    /// on a recheck, or an entry page shown), as the busy hold's rerun has its hold's last check
+    /// right before it. An interruption ends the climb as one during the hold does: the
+    /// return-home rung it was about to run recorded failed with it, the ladder `exhausted` at
+    /// warning (`finish_interrupted_ladder`), no error point; `true` when it ended.
+    fn settle_rerun_interrupted(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &HostKey,
+        rungs_tried: u8,
+    ) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        self.before_rung_step_check_for_test()?;
+        let Some(interruption) = self.ladder_hold_interrupted(pending, key)? else {
+            return Ok(false);
+        };
+        self.finish_interrupted_ladder(
+            pending,
+            key,
+            Some(RecoveryRung::ReturnHome),
+            interruption,
+            rungs_tried,
+        )?;
+        Ok(true)
+    }
+
+    /// #480 PG-2b, test builds: runs, once, the hook a test set for the next holding check a rung
+    /// makes before a step that acts on the game where no check came right before it
+    /// (`rung_step_interrupted`; fix round 1: and the settle gate's rerun,
+    /// `settle_rerun_interrupted`), on the ladder's worker, which holds the ladder's key.
+    #[cfg(test)]
+    fn before_rung_step_check_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.rung_step_check_hook_for_test,
+            HostLocation::GateRecoveryPause,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// Workflow #369 H-3 (ruling Q8; review L-7): an interrupted climb records the current rung
@@ -2908,7 +3040,9 @@ impl HostShared {
     /// `escalate` goes on to the next rung (`Escalate`). A holding interruption during a hold,
     /// or a renewal refused before a later probe or before an entry page's rerun (renewed to
     /// `hold.margin_ms` after the comparison), ends the climb as at every rung boundary, the
-    /// return-home rung recorded failed with it (`Ended`).
+    /// return-home rung recorded failed with it (`Ended`). #480 PG-2b fix round 1: so does a
+    /// holding interruption found by the check right before either rerun
+    /// (`settle_rerun_interrupted`), after the probe and its comparison.
     fn climb_screen_gate(
         &self,
         pending: &PendingRecoveryLadder,
@@ -2967,6 +3101,10 @@ impl HostShared {
                             )?;
                             return Ok(ScreenStep::Ended);
                         }
+                        // #480 PG-2b fix round 1: the holding check right before the rerun.
+                        if self.settle_rerun_interrupted(pending, key, rungs_tried)? {
+                            return Ok(ScreenStep::Ended);
+                        }
                         let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
                         return Ok(ScreenStep::Rerun { failure, attempt });
                     }
@@ -2992,6 +3130,10 @@ impl HostShared {
                 }
                 (ScreenProbe::Settled, Some(failure)) => {
                     if self.ladder_rerun_suppressed(pending, deadline_ms)? {
+                        return Ok(ScreenStep::Ended);
+                    }
+                    // #480 PG-2b fix round 1: the holding check right before the rerun.
+                    if self.settle_rerun_interrupted(pending, key, rungs_tried)? {
                         return Ok(ScreenStep::Ended);
                     }
                     let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
@@ -3382,6 +3524,14 @@ impl HostShared {
             RestartEntry::Stop => true,
             RestartEntry::RunOnly => false,
         };
+        // #480 PG-2b (fix round 1, item 3, ruled by the coordinator): the holding check comes just
+        // before the rung's first step that stops something: on a member of a device group of
+        // several the stop of the other members below, else the stop of the assigned application.
+        // Interrupted here, the rung has stopped nothing: it owes nothing, and nothing is
+        // forgotten.
+        if stops && let Some(interrupted) = self.rung_step_interrupted(pending, key, false)? {
+            return Ok(interrupted);
+        }
         // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The switch before a run", "Where the
         // switch runs"): on a member of a device group of several the rung first stops the member
         // in front (every other member with the front unknown) on the ladder's key, before it
@@ -3418,7 +3568,11 @@ impl HostShared {
     /// The application restart rung after its entry and, on a member of a device group of
     /// several, after the member in front was stopped ([`Self::recovery_application_restart`]):
     /// with `stops`, the assigned application stopped on the key and a fenced instance prepared
-    /// again (each step renewed to `hold_ms`), then the startup package's run.
+    /// again (each step renewed to `hold_ms`), then the startup package's run. #480 PG-2b: the
+    /// holding check comes just before the startup package's run (`rung_step_interrupted`; the
+    /// one before the stop is made by the caller, fix round 1); an interruption ends the rung
+    /// there, before anything more is done to the game, and a pause that interrupts it after the
+    /// stop hands the startup run off (fix round 1, item 4).
     fn restart_assigned_application(
         &self,
         pending: &PendingRecoveryLadder,
@@ -3453,6 +3607,9 @@ impl HostShared {
                     reason: HostCode::RecoveryEnvironmentNotReady.as_str(),
                 });
             }
+        }
+        if let Some(interrupted) = self.rung_step_interrupted(pending, key, stops)? {
+            return Ok(interrupted);
         }
         let mut startup = self
             .prepare_startup_package(resolved, pending.links.clone(), pending.request_id)
@@ -3655,7 +3812,11 @@ impl HostShared {
     /// configured bound and the margin (review L-3; Workflow #387 D1c); the readiness wait
     /// renews to its window's end. Workflow #369-1: the rung then waits for a usable environment
     /// (`await_recovery_readiness`), records `recovery_environment_ready`, and runs the
-    /// instance's startup package on the key; only that run's success recovers the rung.
+    /// instance's startup package on the key; only that run's success recovers the rung. #480
+    /// PG-2b: the holding check comes again just before that run (`rung_step_interrupted`). Fix
+    /// round 1 (item 4): from the Start on (each readiness attempt and poll, and that check), a
+    /// pause that interrupts the rung hands its startup run off (`rung_hold_interrupted`); the
+    /// checks before the Stop and before the Start hand nothing off.
     fn recovery_emulator_restart(
         &self,
         pending: &PendingRecoveryLadder,
@@ -3789,6 +3950,15 @@ impl HostShared {
                     },
                 ),
             )?;
+            // #480 PG-2b: the holding check before the startup package's run, as before the Stop
+            // and the Start; an instance without a startup package runs nothing here and ends
+            // `environment_ready` as before. Fix round 1 (item 4): a pause that interrupts it
+            // hands the startup run off.
+            if self.startup_packages()?.contains_key(&pending.instance_id)
+                && let Some(interrupted) = self.rung_step_interrupted(pending, key, true)?
+            {
+                return Ok(interrupted);
+            }
             let startup = self
                 .prepare_startup_package(&current, pending.links.clone(), pending.request_id)
                 .map_err(|failure| *failure.error)?;
@@ -3822,7 +3992,10 @@ impl HostShared {
     /// when the window ends before the boot check ever passed (so no preparation ran, review
     /// L-R4-2), otherwise `recovery_environment_not_ready`. The window, the backoff and every
     /// poll's verdict read the host's `RuntimeClock` (test plan v2.2 section 3.10 H-1-rest,
-    /// HOST-I2); a poll still sleeps `readiness_poll_ms` and reads the clock when it wakes.
+    /// HOST-I2); a poll still sleeps `readiness_poll_ms` and reads the clock when it wakes. #480
+    /// PG-2b fix round 1 (item 4): the emulator is up, so each of these holding checks, and every
+    /// one of the retry wait (`await_recovery_retry`), owes the startup run: a pause that
+    /// interrupts it hands that run off (`rung_hold_interrupted`).
     fn await_recovery_readiness<'guard>(
         &self,
         pending: &PendingRecoveryLadder,
@@ -3839,7 +4012,7 @@ impl HostShared {
         let mut retries = 0_usize;
         let mut prepared = false;
         loop {
-            if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
+            if let Some(reason) = self.rung_hold_interrupted(pending, key, true)? {
                 return Ok(Err(reason));
             }
             let window_ms = deadline_ms.saturating_sub(self.monotonic_ms()?);
@@ -3978,7 +4151,8 @@ impl HostShared {
         let alias = pending.instance_alias.as_str();
         let stopped = || self.fatal.is_shutdown_requested();
         loop {
-            if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
+            // #480 PG-2b fix round 1 (item 4): after the Start; a pause hands the startup run off.
+            if let Some(reason) = self.rung_hold_interrupted(pending, key, true)? {
                 return Ok(Some(reason));
             }
             let now_ms = self.monotonic_ms()?;
@@ -4012,7 +4186,7 @@ impl HostShared {
             return Ok(Some(not_ready));
         }
         loop {
-            if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
+            if let Some(reason) = self.rung_hold_interrupted(pending, key, true)? {
                 return Ok(Some(reason));
             }
             let now_ms = self.monotonic_ms()?;
@@ -4344,6 +4518,17 @@ fn drill_suppressed(reason: RecoveryLadderSuppression, until_unix_ms: u64) -> Ru
             HostLocation::RecoveryLadderDrill,
             RuntimeErrorCode::RuntimeBusy,
         ),
+    }
+}
+
+/// #480 PG-2b fix round 1: a failure of a rung's hand-off of its owed startup run
+/// (`hand_off_owed_startup_run`), where the ladder can return a Runtime error only: one that
+/// poisons the Runtime is fatal.
+fn owed_startup_failure(failure: RequestFailure) -> RuntimeHostError {
+    if failure.poison_runtime {
+        (*failure.error).into_fatal()
+    } else {
+        *failure.error
     }
 }
 
