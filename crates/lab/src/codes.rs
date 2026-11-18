@@ -169,6 +169,20 @@ actingcommand_contract::outcome_codes! {
         /// the frames and other page, with every such frame); it refuses nothing, proposes nothing
         /// and is not written into the package.
         RecordSelectPagePassesAfterPress => "record_select_page_passes_after_press": warning / none,
+        /// Error. #463 PRIV-3: the package of a public recording reads a value (a reading of the
+        /// one list of its read regions) where nothing confines it to a rectangle smaller than the
+        /// frame (`full_frame`, a region placed relative to a template, a `repeated_anchor` layout
+        /// without a readable band, or a bound that is the whole frame), so no regression case's
+        /// scene can be made without its pixels: the recording cannot be public. A failure of
+        /// `record stop`'s self-check `cases`, one for each such target; no case is made and
+        /// nothing is written (exit 3; actinglab details `target`).
+        RecordCaseReadingUnbounded => "record_case_reading_unbounded": error / none,
+        /// Error. #463 PRIV-3: a regression case of a public recording misses on its package, and
+        /// the target of a failed check reads inside a rectangle withheld from its scene: a page of
+        /// a public recording is recognised by a target whose region holds a value reading. The
+        /// case is not written and `record stop` refuses as at any self-check's failure, nothing
+        /// written (exit 3; actinglab details as `record_case_failed`'s, and `withheld`).
+        RecordCaseReadingWithheld => "record_case_reading_withheld": error / none,
     }
 }
 

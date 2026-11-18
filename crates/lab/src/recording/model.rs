@@ -121,6 +121,74 @@ pub struct LabRecording {
     /// byte-identical to one an earlier build wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_size: Option<RecordSize>,
+    /// #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"): where the package
+    /// the recording makes goes, as the person who records chooses it at `record start` (and may
+    /// change at `record stop`). A public recording does not write it, so a recording made before
+    /// it loads as public and is written byte for byte as it was.
+    #[serde(default, skip_serializing_if = "RecordDestination::is_public")]
+    pub destination: RecordDestination,
+}
+
+/// #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"; the owner's ruling of
+/// 11-18): the destination of the package a recording makes, a closed pair of words. `public` is
+/// whatever goes to GitHub (a private repository too) or is handed to anybody else: its privacy is
+/// checked and restricted, and the scenes of its regression cases hold no pixel of a value reading;
+/// `local` is used on this machine only, and nothing of privacy is handled. Absent means public.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordDestination {
+    /// Submitted to a public place, or handed to anybody else.
+    #[default]
+    Public,
+    /// Used on this machine only.
+    Local,
+}
+
+impl RecordDestination {
+    /// The words the parameter `destination` takes, as the operation table lists them.
+    pub const WORDS: [&'static str; 2] = ["local", "public"];
+
+    /// The destination `word` names; `None` for every other word.
+    pub fn from_word(word: &str) -> Option<Self> {
+        match word {
+            "local" => Some(Self::Local),
+            "public" => Some(Self::Public),
+            _ => None,
+        }
+    }
+
+    /// Its word.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Local => "local",
+        }
+    }
+
+    /// Whether it is public, the destination a recording does not write.
+    pub fn is_public(&self) -> bool {
+        *self == Self::Public
+    }
+}
+
+/// #463 PRIV-3 (`contracts/lab-recording.md`, "Regression cases written with the package"): a
+/// rectangle of the recording's frame withheld from every scene of a public recording's regression
+/// cases (filled with the canvas colour after every patch is pasted), and the reading targets it
+/// belongs to; `record stop` and `record ready` answer it as a fact, never a value and never a
+/// pixel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecordWithheld {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// The reading targets whose region it holds (by its reach, or by its bound), in the order the
+    /// package's read regions list them; a layout's shared read is named by its layout's id.
+    pub targets: Vec<String>,
+    /// The targets a page of the package forbids whose region meets it, when there is one: on a
+    /// scene they read the canvas colour there.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<String>,
 }
 
 /// #463 R2 (`contracts/lab-recording.md`, "Endings"): a screen that ends the business another way
@@ -377,6 +445,11 @@ pub struct RecordStopOptions {
     /// `record_template_near_threshold`; `None`: 0.03. `record ready` and `record review` read it
     /// too; it changes nothing that passes or refuses, and nothing of the package.
     pub template_margin_bound: Option<f64>,
+    /// #463 PRIV-3 (`--destination`): the destination of the recording's package; a word other
+    /// than the one the recording holds changes it and generates the package again, as a mark
+    /// after the stop does; `None`, or the word it holds, changes nothing. `record ready` and
+    /// `record review` read the recording's own.
+    pub destination: Option<RecordDestination>,
 }
 
 /// The Lab part of `record stop`.
@@ -2062,6 +2135,9 @@ pub struct RecordStartOptions {
     /// Workflow #392 DA-5cd fix round 1: the base size written in the new recording's header
     /// (`LabRecording::base_size`); `None` writes none.
     pub base_size: Option<RecordSize>,
+    /// #463 PRIV-3 (`--destination`): the destination of the recording's package; public by
+    /// default.
+    pub destination: RecordDestination,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -2072,6 +2148,8 @@ pub struct LabRecordingStart {
     pub path: String,
     pub record_id: String,
     pub defaults: RecordingDefaults,
+    /// #463 PRIV-3: the destination of the recording's package, in its word.
+    pub destination: RecordDestination,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -2349,6 +2427,8 @@ pub struct LabStatusView {
     pub open_step: Option<u32>,
     pub steps: Vec<StepView>,
     pub artifact: Option<RecordingArtifact>,
+    /// #463 PRIV-3: the destination of the recording's package, in its word.
+    pub destination: RecordDestination,
     /// Workflow #390 LAB-2: a stopped recording marked again since its package was generated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amended_at_unix_ms: Option<u64>,

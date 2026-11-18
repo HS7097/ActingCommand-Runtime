@@ -11,8 +11,9 @@ use super::follow::{follow_invalid, located_page_problem};
 use super::key::key_invalid;
 use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
-    ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
-    RecordedKey, RecordedMark, RecordingDefaults, RecordingEnding, RecordingStep, ScanNumber,
+    ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordDestination, RecordRect,
+    RecordSize, RecordedFrame, RecordedKey, RecordedMark, RecordingDefaults, RecordingEnding,
+    RecordingStep, ScanNumber,
     SelectConfirmSpec, SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick,
     StepOptional, StepSelect, StepTransition,
 };
@@ -254,6 +255,10 @@ pub(crate) struct Plan {
     pub(crate) needs_review: Vec<Value>,
     /// #463 R2: the recording's endings, in the order it took them.
     pub(crate) endings: Vec<PlanEnding>,
+    /// #463 PRIV-3: the recording's destination: a local package's entry task marks it
+    /// (`provenance.destination: "local"`), and a public recording's regression cases hold no pixel
+    /// of a value reading (`cases::scene_regions`).
+    pub(crate) destination: RecordDestination,
 }
 
 impl Plan {
@@ -1506,6 +1511,7 @@ pub(crate) fn survey(recording: &LabRecording, settings: &StopSettings) -> LabRe
         warnings,
         needs_review,
         endings,
+        destination: recording.destination,
     })))
 }
 
@@ -2864,6 +2870,8 @@ pub(crate) fn select_probe_plan(
         warnings: Vec::new(),
         needs_review: Vec::new(),
         endings: Vec::new(),
+        // #463 PRIV-3: a probe package is written nowhere and made no case of.
+        destination: RecordDestination::Public,
     })
 }
 
@@ -3316,6 +3324,15 @@ pub(crate) fn render(
         for (key, value) in checks {
             provenance.insert(key.clone(), value.clone());
         }
+    }
+    // #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"): a local recording's
+    // package says so; a public one's carries no mark, and no mark means public. Admission asks of
+    // `provenance` only that it is an object.
+    if plan.destination == RecordDestination::Local {
+        provenance.insert(
+            "destination".into(),
+            json!(RecordDestination::Local.word()),
+        );
     }
 
     let mut task = Map::new();

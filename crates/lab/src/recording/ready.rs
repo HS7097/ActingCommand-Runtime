@@ -25,7 +25,7 @@
 
 use super::crosscheck::{CheckFailure, CheckRun, SelectPagePassesAfterPress};
 use super::generate::{Lack, effective_steps};
-use super::model::{LabRecording, OpaqueJson, RecordRect, RecordingStep};
+use super::model::{LabRecording, OpaqueJson, RecordRect, RecordWithheld, RecordingStep};
 use super::near::TemplateNearThreshold;
 use super::steps::{POINT_SOURCE, SWIPE_SOURCE};
 use super::store::invalid;
@@ -231,6 +231,11 @@ pub struct RecordReadyOutcome {
     /// #463 S2-1b: where the package's game, server and locale this answer took came from; on a
     /// packaged recording (fix round 1), what its package holds.
     pub sources: ReadySources,
+    /// #463 PRIV-3: on a public recording whose self-check `cases` made its scenes, the rectangles
+    /// withheld from them and the reading targets they belong to, as `record stop` answers them;
+    /// absent otherwise (a local recording, a packaged one, or `cases` not run that far).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<Vec<RecordWithheld>>,
 }
 
 /// #463 S2-1b: where each part of the package's identity `record ready` took came from, a word of
@@ -634,5 +639,6 @@ pub(crate) fn ready_outcome(
             .map(|check| check.as_str().to_string())
             .collect(),
         sources,
+        withheld: None,
     }
 }

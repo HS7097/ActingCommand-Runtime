@@ -675,12 +675,32 @@ naming this file.
   `ac_record_mark` takes a box's corners in: `edges` a tick every 50 pixels along the top and the
   left edge, a longer one with its number every 100 (the top edge's numbers are `x`, the left
   edge's `y`); `grid` the same and a thin line across the frame every 100 pixels, both ways. Each
-  ruled preview is written beside the plain ones under a name that says it is ruled,
+  ruled preview is written under a name of its own that says it is ruled,
   `lab/preview/s<nn>-<before|after>-ruled-<word>.png`, never over `s<nn>-<before|after>.png` (not
   with `no_preview`: `validation_failed`), and the answer adds `ruler` (`kind`, `space`
   `frame_pixels`, `tick_px`, `long_tick_px`, `number_px`, `top_numbers`, `left_numbers`, `line_px`
-  on `grid`). Read the numbers; give a stored frame's `path`, never a preview, where a frame is
-  taken. Without `ruler` every preview and the answer are as before.
+  on `grid`). A call with `ruler` writes only the ruled previews: the plain previews are written
+  only by a call without `ruler`. Read the numbers; give a stored frame's `path`, never a preview,
+  where a frame is taken. Without `ruler` every preview and the answer are as before.
+  #463 PRIV-3 (0.12.74; `contracts/lab-recording.md`, "A recording's destination" and "Regression
+  cases written with the package"): `ac_record_start` and `ac_record_stop` take `destination`
+  (`local` or `public`; absent, public), the person's choice of where the package goes: `public`
+  is whatever goes to GitHub (a private repository too) or is handed to anybody else, and its
+  privacy is checked and restricted; `local` is this machine only, and nothing of privacy is
+  handled. Ask the person; do not choose for them. The recording stores it only when it is local;
+  `ac_record_start` (`lab_recording.destination`), `ac_record_status` and `ac_record_stop`
+  (`lab.destination`) answer it in its word. `ac_record_stop` with another word than the
+  recording's, on an open or a stopped recording, changes it and generates the package again; the
+  same word, or none, changes nothing. A local package's entry task carries
+  `provenance.destination: "local"`, a public one's no mark. The scenes of a public recording's
+  regression cases hold no pixel of a value reading: such a region is not pasted and its reach (or
+  the band a row is confined to, or a shared read whole) is filled with the canvas colour; the
+  answer's `lab.withheld` (and `ac_record_ready`'s `withheld`) names each rectangle with its reading
+  targets and the targets a page forbids that read inside it, never a value. A reading nothing
+  confines refuses the stop, `record_case_reading_unbounded` (bound it, or record locally); a case
+  that misses because a target its page needs reads inside a withheld rectangle refuses it,
+  `record_case_reading_withheld` (anchor the page elsewhere, narrow that target, or record locally).
+  The refusal of a local package in a public repository is a later step.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
