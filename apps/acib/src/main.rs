@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0, ACIB-1 and ACIB-2): the project's
-//! own bridge to iOS devices, a program the Runtime will speak to as a separate process, as it
-//! speaks to adb.
+//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0 to ACIB-3): the project's own bridge
+//! to iOS devices, a program the Runtime will speak to as a separate process, as it speaks to
+//! adb.
 //!
-//! This version only reads, one command per run (`acib devices`, `info`, `services`, `images`,
-//! `apps`, `screenshot`, `orientation`; see `args.rs` and `README.md`). Each run prints one JSON
-//! line on standard output and ends with status 0 when the command was answered, 1 when it was
-//! refused or failed, the line then naming this program's `problem` word and, where the library
-//! gave one, its error text. After the line of a picture asked for with `--out -`, the picture's
-//! bytes follow on the standard output (`framing.rs`). The one file it writes is the picture
-//! `screenshot` takes, to the path `--out` names, and it removes that file again when the
-//! picture could not be written whole into it; it installs no logger, so nothing the library
-//! traces is shown.
+//! One command per run (`acib devices`, `info`, `services`, `images`, `apps`, `screenshot`,
+//! `orientation` and `running`, which only read; `launch` and `stop`, which start and end one
+//! application on the phone; see `args.rs` and `README.md`). Each run prints one JSON line on
+//! standard output and ends with status 0 when the command was answered, 1 when it was refused
+//! or failed, the line then naming this program's `problem` word and, where the library gave
+//! one, its error text (of the application service, only the error's kind). After the line of a
+//! picture asked for with `--out -`, the picture's bytes follow on the standard output
+//! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
+//! names, and it removes that file again when the picture could not be written whole into it;
+//! it installs no logger, so nothing the library traces is shown.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +22,7 @@ mod args;
 mod bridge;
 mod framing;
 mod key;
+mod matching;
 mod out_file;
 mod picture;
 mod redact;

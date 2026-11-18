@@ -4,20 +4,32 @@
 program of its own: the Runtime will speak to it as a separate process, as it speaks to adb.
 Nothing of the workspace depends on it.
 
-## This version (ACIB-0, ACIB-1 in 0.12.73, and ACIB-2 in 0.12.74)
+## This version (ACIB-0, ACIB-1 in 0.12.73, and ACIB-2 and ACIB-3 in 0.12.74)
 
-It only reads. Each run is one command; it prints **one JSON line** on standard output and ends
-with status 0 when the command was answered, or 1 when it was refused or failed. A refused or
-failed line names a `problem` word of this program (the words are its own, not Runtime outcome
-codes) and, where the library gave one, its error text in `error`. The one file it writes is
-the picture `screenshot` takes, at the path `--out` names; it removes that file again when the
-picture could not be written whole into it. With `--out -` it writes no file: the picture's
-bytes follow the line on the standard output (below).
+Each run is one command; it prints **one JSON line** on standard output and ends with status 0
+when the command was answered, or 1 when it was refused or failed. A refused or failed line
+names a `problem` word of this program (the words are its own, not Runtime outcome codes) and,
+where the library gave one, its error text in `error` (of the application service, only the
+error's kind, in `error_kind`). The one file it writes is the picture `screenshot` takes, at the
+path `--out` names; it removes that file again when the picture could not be written whole into
+it. With `--out -` it writes no file: the picture's bytes follow the line on the standard output
+(below).
+
+**Two commands change what the phone runs and shows: `launch` and `stop`.** Every other
+command only reads. `launch` starts one application, which comes to the front; with
+`--relaunch` it first ends that application if it runs (what was not saved in it is lost). It is
+undone by `acib stop` with the same bundle, or by the person on the phone (the home gesture
+leaves it; the app switcher ends it); `acib` does not bring back what was in front before.
+`stop` ends every process of one application at once (SIGKILL, which the application cannot
+catch: what was not saved in it is lost). It is undone by `acib launch` with the
+same bundle, which starts the application anew, not in the state it was in. A `launch` or `stop`
+whose deadline passes may already have changed the phone: `acib running` tells what runs.
 
 usbmuxd is reached where the library finds it on this platform: on Windows the TCP port 27015
 of 127.0.0.1, which the device service of Apple's own software serves. Pairing is not part of
 this version: a device whose pairing record usbmuxd does not hold answers `not_paired` (to
-`services`, `images`, `apps`, `screenshot` and `orientation`, and to the second half of `info`).
+`services`, `images`, `apps`, `screenshot`, `orientation`, `running`, `launch` and `stop`, and
+to the second half of `info`).
 
 It never prints, logs or writes a device's serial number, UDID, name or address, nor anything of
 a pairing record (the record is asked for, kept in memory for the command and never shown). It
@@ -30,7 +42,14 @@ screen is theirs too: of a picture `screenshot` prints only its format, width an
 header gives them and its length; no pixel, no text in it or recognised in it is printed,
 logged or kept anywhere but in the file `--out` names, or on the standard output after the line
 when `--out -` asks for it there. A salt is never printed, logged or written, and neither is
-the identifier a key was made from; a key is printed only when its salt's flag was given.
+the identifier a key was made from; a key is printed only when its salt's flag was given. The
+phone's lists of applications and of processes are a person's too: `running`, `launch` and
+`stop` answer of them only the one bundle asked for (as the command line gave it), whether it is
+installed and runs, and the pids of its own processes. No other application's name, bundle
+identifier, path or pid is printed, logged or kept: the lists stay in memory for the command,
+the answer types have no member that could hold one, and an error of the application service is
+shown by its kind alone, never by its text (the library hands the phone's refusal as the text of
+its error dictionary, which can name other applications).
 
 ## Keys: naming a phone across connections
 
@@ -202,6 +221,73 @@ may stand in its place.
   after the turn), so it is not built; neither is WebDriverAgent's orientation, which would run
   another project's program on the phone.
 
+### One application: `running`, `launch`, `stop`
+
+These three speak to CoreDevice's application service (`com.apple.coredevice.appservice`)
+inside the tunnel of `services`, in a session with this host's pairing record, and take
+`--bundle <id>`: one bundle identifier, written in the characters Apple allows in one (ASCII
+letters and digits, `-` and `.`; anything else is `command_line_invalid`). Bundle identifiers
+are compared without regard to case, as Apple's documentation says they are. Each line names
+`bundle` as the command line gave it. The steps before the service (the device, the pairing
+record, the session, the tunnel, the service listed in the handshake and its port) fail with
+their own words, as every command's; from the service's handshake on, an error is shown by
+`error_kind` alone, one of: `device_refused` (the service answered with its error in place of
+an output: the phone refused), `answer_unreadable` (the service answered in a shape the library
+does not read), `connection_failed` (the connection under the exchange failed),
+`xpc_failed` (the XPC layer over it failed) and `other` (any other error of the library). A
+locked phone has no word of its own: the library maps no refusal to one, and none is guessed
+here; what a locked phone answers is to be observed on the phone.
+
+**Which processes are of a bundle.** The service's list of applications gives each application
+its bundle identifier and the path of its bundle, a directory; its list of processes gives each
+process its pid and the location of its executable, and no bundle identifier. A process is of
+the bundle when its executable lies inside the bundle's directory: the application's main
+executable at the top of the directory, and every executable nested in it, as an app extension
+in `PlugIns/` (Apple's "Placing content in a bundle"). An extension is the application's own
+code, signed, installed and removed with it, and runs for it, so it counts: `running` names it
+and `stop` ends it too. Paths are compared exactly, case included (iOS's file system is
+case-sensitive); a location given as a `file://` URL is read as its percent-decoded path,
+`/private/var/…` as `/var/…`, and one that is no absolute path is of no application. A process
+of another application whose path merely starts like the bundle's directory (a longer name, a
+sibling directory) is not of it.
+
+- `acib running --device <n> --bundle <id>`, read-only: whether the list of applications holds
+  the bundle (`installed`; every kind of application the service lists is asked for), whether a
+  process of it runs (`running`) and the pids of its processes, ascending (`pids`): for example
+  `{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,
+  "pids":[412,530]}`. A bundle not installed answers `installed` false, `running` false and no
+  pid, status 0. Its words: `application_list_failed` and `process_list_failed` (each with
+  `error_kind`; a line stopped after the list of applications keeps `installed`), and
+  `bundle_path_unreadable` (the bundle is listed with a path that is no absolute path or file
+  URL, so which processes are of it cannot be told). Nothing on the phone changes.
+- `acib launch --device <n> --bundle <id> [--relaunch]`: the service launches the application
+  and the line answers the pid of its process (`pid`) and `relaunch`. Without `--relaunch` an
+  application that already runs is not ended first (the service is asked with `terminateExisting`
+  false): what the phone then does (bring it to the front, start a second one, refuse) the
+  library does not say, and the line answers what the service answered; it is to be observed on
+  the phone. With `--relaunch` it is ended and started anew. The application is started as the
+  active user's, not suspended at its start, with no argument and no environment of its own. A
+  launch the phone refuses answers `launch_failed` with its `error_kind` (status 1). It changes
+  what the phone runs and shows (above).
+- `acib stop --device <n> --bundle <id>`: the processes of the bundle the list of processes
+  holds are each sent SIGKILL (9) through the service's own signal request, one after the other,
+  and then the list is read again. The line answers `installed`, whether a process of it ran
+  (`was_running`), the pids the signal was sent to and the service answered (`ended`), those it
+  could not be sent to with the error's kind (`refused`, only when there are any), the pids of
+  the bundle the second look lists (`remaining`) and whether any runs (`running`):
+  `{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,
+  "ended":[412,530],"remaining":[],"running":false}`. A bundle that does not run (or is not
+  installed) is a success that says so: `was_running` false, nothing sent, nothing remaining. A
+  process of the bundle still listed after the second look answers `still_running` (status 1);
+  a refused signal whose process is gone at the second look is shown in `refused` and does not
+  fail the command; the second look failing answers `process_list_failed` and keeps `ended`.
+  SIGKILL rather than SIGTERM: an application can catch or ignore SIGTERM, so a look after it
+  would tell what the application chose, not whether its processes ended; SIGKILL cannot be
+  caught. The service's own signal request is used (not the instruments server's `kill`) because
+  it is on the same connection as the lists and answers each signal. The second look is taken
+  at once after the last signal: a process that is still being ended then is listed as
+  remaining. It changes what the phone runs (above).
+
 The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_passed`,
 `usbmuxd_unreachable`, `usbmuxd_list_failed`, `device_not_listed`, `lockdown_unreachable`,
 `lockdown_read_failed`, `lockdown_value_unexpected`, `pair_record_unreadable`, `not_paired`,
@@ -210,13 +296,15 @@ The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_pas
 `out_exists`, `out_unwritable`, `out_write_failed`, `service_not_listed`,
 `service_handshake_failed`, `channel_refused`, `screenshot_failed`, `picture_header_truncated`,
 `picture_header_unknown`, `key_salt_unusable`, `binding_salt_unusable`, `device_key_unknown`,
-`orientation_failed`.
+`orientation_failed`, `application_list_failed`, `process_list_failed`,
+`bundle_path_unreadable`, `launch_failed`, `still_running`. The error kinds of the application
+service: `device_refused`, `answer_unreadable`, `connection_failed`, `xpc_failed`, `other`.
 
-Not in this version: pairing, mounting an image, any input, starting or stopping an
-application, a stream of pictures, a mode that stays up between requests, and which application
-is in front: the library offers no way to ask it (its process lists carry no mark of the
-application in front and no bundle identifier, and its application state notifications tell
-only what changes after they are turned on), so there is no command for it.
+Not in this version: which application is in front (the library offers no way to ask it: its
+lists of applications and processes carry no mark of the application in front, and its
+application state notifications tell only what changes after they are turned on, so there is no
+command for it), any input, pairing, mounting an image, a stream of pictures, and a mode that
+stays up between requests.
 
 ## Clean room
 

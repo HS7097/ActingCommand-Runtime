@@ -2780,6 +2780,27 @@ tests = [
 ]
 incident = ["#479 ACIB-2"]
 
+# Workflow #479 ACIB-3 (0.12.74; apps/acib, its README; brief rd-1118/brief-479-acib3-apps-running-launch-stop.md): running, launch and stop through CoreDevice's application service. A process is of the bundle when its executable lies inside the bundle's directory, the list of applications giving the directory: no process, one (the main executable), several (the main executable and its extensions nested in PlugIns/, ascending and each once), another application's beside them none; a path that merely starts alike (a longer name, a sibling, the directory itself, a .. component) is not inside; a bundle identifier is matched without regard to ASCII case and a path exactly, case included; a location is read as a path (a plain absolute path, a file:// URL with an empty host or localhost, percent-decoded, /private/var as /var, a slash at its end dropped), and a relative path, another scheme or host, a bad escape or an empty, . or .. component as no place; the list of applications says not installed, the directories, or path unreadable (1 to 7). running, launch and stop take a device by its number or its key and --bundle, a bundle identifier in its own characters, required and once; --relaunch, a flag without a value, is launch's alone and once; no other command takes --bundle; the device flags are refused in the same pairs as before (8, 9). By construction their lines hold only the members bundle, command, device, ended, error_kind, installed, pid, pids, problem, refused, relaunch, remaining, running and was_running, and every text in them is the bundle asked for or a word of the program's own lists (10); stop answers, when nothing runs, installed or not, at the first look with nothing ended or remaining (status 0), when all ended, the ended pids and none remaining (status 0), when one remains, still_running (status 1), a refused signal by its pid and kind, and the second look failing process_list_failed keeping ended (11); each error kind (device_refused, answer_unreadable, connection_failed, xpc_failed, other) has a word of its own (12); each library error of the application service maps to its kind, the device's refusal to device_refused, a locked phone having no kind of its own (13); the service's refusal text, which names another application, its path and a pid, is in no answer built from it (14). Adapted (ACIB-0's own tests, in the row above): each_answer_is_one_json_line_of_its_shape_and_its_status holds the running, launch and stop lines; the_answers_hold_no_member_for_an_identifier their members bundle, ended, installed, pid, pids, relaunch, remaining, running and was_running; every_problem_word_is_this_programs_own_snake_case_word the five new words application_list_failed, process_list_failed, bundle_path_unreadable, launch_failed and still_running.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ios-bridge::bin:acib::matching::tests::a_bundle_with_no_process_has_no_pid",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::a_bundle_with_one_process_has_its_pid",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::an_application_and_its_extension_processes_are_all_of_the_bundle",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::a_process_whose_path_merely_starts_alike_is_not_of_the_bundle",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::a_bundle_identifier_matches_without_regard_to_case_and_a_path_only_exactly",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::a_location_is_read_as_its_path",
+    "actingcommand-ios-bridge::bin:acib::matching::tests::the_list_of_applications_says_whether_and_where_the_bundle_is_installed",
+    "actingcommand-ios-bridge::bin:acib::args::tests::the_application_commands_take_a_device_and_a_bundle",
+    "actingcommand-ios-bridge::bin:acib::args::tests::every_other_application_command_line_is_refused",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::the_application_answers_hold_no_member_for_another_applications_identity",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::stop_answers_when_nothing_runs_when_all_ended_and_when_one_remains",
+    "actingcommand-ios-bridge::bin:acib::answer::tests::every_error_kind_has_a_word_of_its_own",
+    "actingcommand-ios-bridge::bin:acib::bridge::tests::each_error_of_the_application_service_maps_to_its_kind",
+    "actingcommand-ios-bridge::bin:acib::bridge::tests::the_text_of_a_service_error_is_in_no_answer",
+]
+incident = ["#479 ACIB-3"]
+
 # #480 PG-2c (0.12.73; register §1.472; brief rd-1118/brief-480-pg2c-pause-stands.md; the coordinator's ruling 8 on board #480, who sends what): against the runtime client's scripted Runtime, the Lab's pause row (a person's or an agent's pause) sends pause_mode stand, and when the receipt's outcome carries a cause (scheduling_pause_standing under request_pause_scheduling_completed) its line's outcome runtime_scheduling_paused carries that outcome as its cause, exit 0; a recording's hold (pause_for_recording) sends quiet_or_lift; the rescue module's own client sends its hold's instance pause and global pause with quiet_or_lift
 [[gate]]
 coverage = "Y"
