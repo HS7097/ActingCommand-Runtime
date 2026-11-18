@@ -6,6 +6,9 @@ use actingcommand_contract::{IdentifierIssuer, IssuedHolderId};
 // #480 PG-1 fix round 2 (register §1.468): only the instance's own queued autostart claim is
 // passed over by its pause's hand-back and a dedicated lease, and only under its pause.
 mod gate_480_pg1;
+// #480 PG-2b (register §1.471): the close lease of an instance pause's hand-back passes only the
+// paused member's own entries that its pause holds back.
+mod gate_480_pg2b;
 mod gate_mapp1;
 // Workflow #437 MAPP-1c (register §1.350): the grant of the session close ahead.
 mod gate_mapp1c;
