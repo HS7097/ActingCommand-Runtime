@@ -452,8 +452,15 @@ fn int1_an_update_page_without_handlers_at_the_closing_decision_records_its_fact
         "the decision ends on the first frame that shows the page"
     );
     assert_nothing_handled(&ended, "at the closing decision");
+    // Fix round 2: the host's start seeds the key `false` for the fixture's configured policy
+    // instance (`application_update:seed`, `gate_upd1`'s A7), in every start of this fixture; that
+    // seed is not this test's business. The run's write is its one `true`.
     let publications = update_publications(&events);
-    let [(published_at, true)] = publications.as_slice() else {
+    let published = publications
+        .iter()
+        .filter_map(|&(sequence, value)| value.then_some(sequence))
+        .collect::<Vec<_>>();
+    let [published_at] = published.as_slice() else {
         panic!("one publication of true: {publications:?}");
     };
     let terminal = events
@@ -461,7 +468,10 @@ fn int1_an_update_page_without_handlers_at_the_closing_decision_records_its_fact
         .find(|event| event.event_type() == EventType::TaskFailed)
         .map(PersistedEvent::sequence)
         .expect("a failed task terminal");
-    assert!(*published_at < terminal, "the fact before the terminal");
+    assert!(
+        *published_at < terminal,
+        "the fact before the terminal ({terminal}): {publications:?}"
+    );
 }
 
 /// The brief's second test: the same page met at the run's entry check. A `linear_steps` run
