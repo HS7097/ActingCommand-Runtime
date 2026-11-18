@@ -58,7 +58,7 @@ use actingcommand_contract::codes::{ContractLocation, ReceiptCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     ContainedTaskRecoveryBinding, ContainedTaskRequest, MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
-    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState,
+    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, RequestId, RuntimeReceiptState, RuntimeResult,
     SchedulingPauseExpectation, SchedulingPauseReason,
 };
 use actingcommand_runtime_client::{
@@ -798,17 +798,22 @@ fn served(
         }
         "resume" => {
             let scope = scheduling::pause_scope(optional_alias(client, params)?);
+            // #480 PG-2d: the result with the receipt's outcome, whose cause the answer carries.
             let resumed = match params.get("expect") {
                 Some(expected) => {
                     let expected =
                         serde_json::from_value::<SchedulingPauseExpectation>(expected.clone())
                             .map_err(|_| usage("--expect", ArgumentProblem::WrongType))?;
-                    scheduling::resume_expected(client, scope, expected)
+                    scheduling::resume_expected_as(client, scope, expected)
                 }
-                None => scheduling::resume(client, scope),
+                None => scheduling::resume_as(client, scope),
             }
             .map_err(|error| client_failed(&error))?;
-            reported(&resumed, ActingctlCode::RuntimeSchedulingResumed)
+            reported_with_cause(
+                &resumed.result,
+                &resumed.outcome,
+                ActingctlCode::RuntimeSchedulingResumed,
+            )
         }
         "config set" | "config clear" => {
             let action = if name == "config set" { "set" } else { "clear" };
@@ -1515,15 +1520,28 @@ fn reported(result: &impl Serialize, code: ActingctlCode) -> Exit {
 /// `scheduling_pause_standing` with its stage and what is in the way, or one a shutdown or a
 /// resume ended), that outcome as the line's cause, unchanged: facts only. Exit 0 either way.
 fn reported_pause(paused: &actingcommand_runtime_client::SchedulingPauseAnswer) -> Exit {
-    match serde_json::to_value(&paused.result) {
+    reported_with_cause(
+        &paused.result,
+        &paused.outcome,
+        ActingctlCode::RuntimeSchedulingPaused,
+    )
+}
+
+/// #480 PG-2c, and since #480 PG-2d the `resume` row's answer too: `code` beside the Runtime's
+/// `result`; when the completed receipt's `outcome` carries a cause (`resume`:
+/// `scheduling_resume_without_reconnect`, a person's pause lifted before it was quiet, with no
+/// reconnect), that outcome as the line's cause, unchanged: facts only. Decided by the presence of
+/// a cause, never by its code. Exit 0 either way.
+fn reported_with_cause(result: &RuntimeResult, outcome: &Outcome, code: ActingctlCode) -> Exit {
+    match serde_json::to_value(result) {
         Ok(value) => {
-            let outcome = Outcome::new(ActingctlCode::RuntimeSchedulingPaused);
-            let outcome = if paused.outcome.causes().is_empty() {
-                outcome
+            let line = Outcome::new(code);
+            let line = if outcome.causes().is_empty() {
+                line
             } else {
-                outcome.caused_by(paused.outcome.clone())
+                line.caused_by(outcome.clone())
             };
-            cli_line::success(cli_line::members(value, RESULT_MEMBER), &outcome)
+            cli_line::success(cli_line::members(value, RESULT_MEMBER), &line)
         }
         Err(error) => output_failed(&error),
     }

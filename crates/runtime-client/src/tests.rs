@@ -40,6 +40,8 @@ mod gate_429_r0c;
 mod gate_429_r7a;
 // Workflow #434 LAB-6S1a: a Lab session's initiator in the handshake, its echo and its reconnects.
 mod gate_434_lab6s1a;
+// #480 PG-2d (register §1.481): the resume calls return the receipt's outcome beside the result.
+mod gate_480_pg2d;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

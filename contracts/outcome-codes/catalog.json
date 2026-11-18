@@ -1627,7 +1627,7 @@
     },
     "in_the_way": {
       "type": "list<vocab:pause_obstacle>",
-      "description": "What was still in the way of an instance pause's stages when its request answered, each word once (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\")."
+      "description": "What was still in the way of an instance pause's stages when its request answered, each word once (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\"); #480 PG-2d (since 0.12.74): also what was in the way when a tool's hold's caller's time ended before it was quiet (scheduling_pause_lifted_not_quiet)."
     },
     "receipt_cause": {
       "type": "code",

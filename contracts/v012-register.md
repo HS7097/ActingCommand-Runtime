@@ -39778,6 +39778,172 @@ nothing in the checkout.
 **At deploy.** Nothing to configure. An adoption's answer is longer by its `timings`, some 600
 bytes.
 
+### 1.481 Slice #480 PG-2d (0.12.74): a pause's life is in the ledger; a resume's cause reaches the client (Workflow #480; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-480-pg2d-pause-records-resume-cause.md`, after the design `rd-1118/design-480-pg2.md`, its section 4 "Ledger" (its slice 4, whose names are older than what was built), and the last review of PG-2c with the coordinator's disposition, `rd-1118/review-1826-fix3.md`; on main `5d0c8c3e`)
+
+This section takes 1.481 (1.476 and 1.478 to 1.480 are other slices'). It ships in 0.12.74.
+[scheduling-pause.md](scheduling-pause.md) ("A pause's life in the ledger", "Resume", "Status",
+"CLI") is the contract.
+
+**Why.** PG-2c (0.12.73, §1.472) made a person's pause stand, but only the client that asked for it
+learned what happened to it, from its one receipt: a second console, the Lab, or the same console
+after a restart saw a stage `draining` or `paused` and could not tell from the ledger whether it
+stood with something in the way, when it became quiet or how it ended (the two status members that
+would say it, `pause_mode` and `in_the_way`, are declared at `runtime-client` 12 and not answered,
+§1.472; answering them is a later slice). A resume's cause, `scheduling_resume_without_reconnect`,
+never left the client crate: `resume_scheduling` and `resume_scheduling_expected` returned the result
+alone. And the contract's "Status" said the console reads no receipt's outcome, which is no longer
+so.
+
+**What each moment wrote before this slice** (read at `5d0c8c3e`; P is
+`crates/runtime-host/src/host/policy_dispatch.rs`, S `crates/runtime-host/src/host/scheduling_pause.rs`).
+Both modes record `host.scheduling_pause` (a `runtime.fact_recorded`, S 131-162) when a pause is set
+or lifted; nothing else of a pause's life was recorded:
+
+| Moment | Answered | Recorded or said |
+|---|---|---|
+| the gate closes (`pause_scheduling`, P 3746-3791) | nothing yet | the fact with the pause (P 3781), then the gate (P 3786) |
+| a `stand` pause's caller's time ends with something in the way (P 3924-3934 the drain, 4372-4380 the hand-back, 4479-4489 the guard taken, 4594-4599 a run drained again; 4549-4557 an unconfirmed close at once) | Completed, `scheduling_pause_standing` (`stages_cause`, P 1374-1388; P 3877-3886), the continuation started (P 3866) | nothing |
+| the continuation reaches quiet (P 3955-3966) | nothing (the request answered) | nothing (P 4092); outside the multi-Nemu gate only the close's own `ResourceQuiescence` and `lease.released` (P 4526-4535) |
+| a check fails and is tried again (P 4362-4367, `note_check_failed` P 4221-4242) | at the end of the caller's time `scheduling_pause_standing` with `check_failed` | the daemon's log once per pause and code (`report_skipped`, P 4235-4237); no record |
+| a resume comes before quiet (P 4814-4822, `resume_unquiet_instance_pause` P 4950-5023) | Completed, `scheduling_resume_without_reconnect` (P 5007); a request still running answers `scheduling_pause_lifted_by_resume` (P 1389-1391) | the fact without the pause (P 4991); a continuation ends silently (P 4334-4340) |
+| a resume comes after quiet (P 4824-4910) | Completed with the reconnect's self-check, no cause | the fact, the reconnect claim's and the reconnect's own records |
+| a shutdown (P 3917-3922 the drain, P 4341-4342 and `release_at_shutdown` P 4395-4420 the hand-back) | the request within its caller's time: Completed, `scheduling_pause_kept_at_shutdown` (P 1371-1373); a continuation: nothing | nothing; the fact unchanged; the continuation joined at the shutdown (`host.rs` 6331-6337) |
+| a restart restores the pause (`restore_scheduling_pauses`, S 263-370) | no request | the fact again with `restored_from_owner_epoch` (S 364), stage `released` (S 341-352), the stdout line `scheduling_pause_restored` (S 353-357) |
+| a `quiet_or_lift` hold is not quiet in its time (P 3935 `scheduling_pause_drain_incomplete`; P 4382 and 4490 `scheduling_pause_release_busy`; P 4601 a run drained again) and is lifted (P 3811-3815, `lift_failed_instance_pause` S 234-252) | Failed, that code | the fact without the pause; nothing else ("A failed pause writes no ledger event of its own") |
+
+**A reader of `ledger` revision 9 reads a new code in the existing record** (established before
+building, the design had left it unverified). `RuntimeLifecyclePhase::DeviceStateObserved { outcome }`
+(`crates/actingcommand-contract/src/event/payload.rs` 1960-1962) holds an `Outcome`, whose reader
+takes any code spelling (`CodeStr`, `outcome.rs` 740-744) and any values (`WireBody`, 1594-1603;
+`Deserialize for Outcome`, 1719-1735); the ledger's read validates a record (`crates/ledger/src/fact/metadata.rs`
+180-220: its schema, sequence, type, payload schema, sensitivity and `EventPayload::validate`, whose
+lifecycle checks, `payload.rs` 13081-13203, read nothing of this phase's outcome) and checks no code
+against a catalogue. Neither file has changed since v0.12.71, so the console pinned there and every
+kept Lab of 0.12.71 to 0.12.73 read the records; the `ledger` row of revision 5
+([component-interfaces.md](component-interfaces.md)) says the same in general (the spelling of a
+code, never whether it is registered), and §1.468's `global_paused` and WATCH-P's
+`emulator_autostart_skipped` are the precedent. So no range moves and the records were built.
+
+**The rule** ([scheduling-pause.md](scheduling-pause.md), "A pause's life in the ledger").
+- *One record per moment*, a `runtime.lifecycle_observed` `device_state_observed` record under the
+  instance carrying the links of the pause's own request (its request and correlation
+  identifiers, the instance), its severity the outcome's category, never per poll or try:
+  `scheduling_pause_standing` (the receipt's own cause, written by the request before it answers and
+  before the continuation starts, so a pause's records come in the order of its life; also for an
+  unconfirmed close, which ends the caller's time at once); `scheduling_pause_settled` (new, info:
+  the continuation reached `released`); `scheduling_resume_without_reconnect` (the resume's own
+  cause, written by the resume after the lift under the pause's links, which the pause table keeps
+  in memory from the pause's request until the lift, `SchedulingPauseTable::pause_links`);
+  `scheduling_pause_kept_at_shutdown` (the request's answer within its caller's time, else the
+  continuation's at the shutdown); `scheduling_pause_lifted_not_quiet` (new, warning: a
+  `quiet_or_lift` hold not quiet by the end of its caller's time and lifted, with `pause_reason` the
+  hold's reason, `in_the_way` what was in the way and the Runtime's own code of that failure,
+  `scheduling_pause_drain_incomplete` or `scheduling_pause_release_busy`, as its cause, written
+  after the lift).
+- *What decides.* Where the stages end (`StagesEnd::Standing`, `KeptAtShutdown`, `Released` on a
+  continuation), never a code; a hold's lift is recorded only when the place that failed it for
+  time marked it (`HostShared::mark_not_quiet`, `StageCheck::not_quiet`, at the four places a hold's
+  time ends: the drain past its grace, the hand-back past it, the guard still taken then, a run
+  drained again past it). For that record a hold's checks now keep what is in the way in memory
+  too (`note_in_the_way` for both modes); it decides nothing for the hold.
+- *None for*: a pause quiet within its caller's time, a check tried again, a resume of a pause
+  already `released` or of a fenced instance or one whose close had begun (the reconnect's records),
+  a resume while the request still runs (the request's receipt answers it; the resume writes the
+  lift), an unconfirmed close the continuation meets (the fence's records), a hold that failed for
+  anything but its time, a restored pause, the global pause.
+- *A record that cannot be written* changes nothing the pause does or answers
+  (`HostShared::record_pause_moment`): the failure is said in the daemon's log
+  (`FatalState::report_skipped`) with the record it could not write as a related link; a write the
+  ledger gave up on stops the Runtime by its own path, as every append does.
+
+**A resume's cause reaches the caller.** `runtime-client` gains `SchedulingResumeAnswer { result,
+outcome }`, the shape of `SchedulingPauseAnswer`, and `resume_scheduling_as(scope)` and
+`resume_scheduling_expected_as(scope, expected)`, the same requests, receipt waits, reading after a
+dropped connection and failures as `resume_scheduling` and `resume_scheduling_expected`, which now
+delegate and return the result alone as before (`send_or_dropped_receipt` keeps the whole receipt;
+`send_or_dropped` reads its result as before). No wire change, no revision: the receipt carried the
+outcome since 0.12.73. The Lab's `resume` row (`lab_ops::core_ops`, with `scheduling::resume_as` and
+`scheduling::resume_expected_as`) answers like the `pause` row: `runtime_scheduling_resumed`, and
+when the receipt's outcome carries a cause, that outcome as its cause (`reported_with_cause`, which
+`reported_pause` now calls too), decided by the presence of a cause, so `actinglab --json resume
+<inst>` and `ac_resume` say `scheduling_resume_without_reconnect`; exit 0. The row's parameters and
+the MCP schema are unchanged; its `help` and `notes` say it. `actingctl resume`, its MCP's
+`ac_resume`, the recording's release and the rescue module's own resumes (a hold's release) keep
+reading the result only.
+
+**The contract's "Status"** says what is true, with no version promised: until a Runtime answers the
+two members, a console learns what is in the way of its own pause from that pause's receipt's cause,
+and any observer learns what happened to a pause from the records above; once a Runtime answers the
+members, the status is the source. The parenthesis on the ruling 4 of board #480 says it was made
+while the console drew from the status alone.
+
+**PG-2c's leftovers** (the disposition at the end of `review-1826-fix3.md`).
+- *1, the Lab's test of the `pause` row* scripted a global pause answered with a standing cause, which
+  the host never answers: `gate_480_pg2c::pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause`
+  now pauses one instance (`pause neutral.a`: the status that resolves it, then the pause).
+- *2, the comment of `release_paused_instance`* that still said what is in the way is read every
+  20 ms while a failed check waits says what the code does: the whole check rests until it is tried
+  again (`SCHEDULING_PAUSE_RETRY_INTERVAL`), only the loop's top checks and the end of the caller's
+  time keep the poll, and a refused close rests the close alone.
+- *3, an operation-scope failure* handled otherwise on the two threads (unreachable under
+  `tried_again`): noted, not changed.
+- *4, the rulings without a test* (fix round 2, items 8 and 10): a continuation's panic is caught
+  where it runs and latches the Runtime at once (`gate_480_pg2d`, host); the answer of an instance's
+  addition whose added instance's pause stands names no pause by hand (`gate_480_pg2d`, the rescue
+  module).
+
+**Codes and words** (one cause each; no key, configuration key or vocabulary added):
+
+| Word | What it stands for | Refuses, warns or informs | Severity | Where it shows |
+|---|---|---|---|---|
+| `scheduling_pause_settled` (new code of the `runtime-host` fragment; `HostCode::SchedulingPauseSettled`) | a person's pause that answered `scheduling_pause_standing` reached `released` by itself | informs | info | one `device_state_observed` record under the instance; never an answer |
+| `scheduling_pause_lifted_not_quiet` (new code; `HostCode::SchedulingPauseLiftedNotQuiet`; `pause_reason`, `in_the_way` required) | a tool's hold (`quiet_or_lift`) was not quiet by the end of its caller's time and was lifted | warns | warning | one `device_state_observed` record under the instance, the failure (`scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`) as its cause; the request's receipt answers that failure as before |
+
+Changed texts only: `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown` and
+`scheduling_resume_without_reconnect` say they are also one record each; the key `in_the_way` says it
+also carries the hold's words. The index is regenerated.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The records | `host/policy_dispatch.rs`: `HostShared::record_pause_moment`, `pause_record_links`; `pause_scheduling` (standing, kept, lifted not quiet), `carry_on_instance_pause` (settled, kept), `resume_unquiet_instance_pause` (the lift) |
+| The pause's links | `SchedulingPauseTable::pause_links` (set by `pause_scheduling`, ended by `lift_instance`) |
+| A hold not quiet in time | `SchedulingPauseTable::mark_not_quiet`, `not_quiet_in_the_way`, `StageCheck::not_quiet`; `HostShared::mark_not_quiet` at `run_instance_pause_stages`, `release_paused_instance` and `hand_back_check`; `HostShared::note_in_the_way` for both modes |
+| The client | `crates/runtime-client/src/client.rs`: `SchedulingResumeAnswer`, `resume_scheduling_as`, `resume_scheduling_expected_as`, `resumed_answer`, `send_or_dropped_receipt`, `SentReceipt` |
+| The Lab | `crates/lab-ops/src/scheduling.rs`: `resume_as`, `resume_expected_as`; `crates/lab-ops/src/core_ops.rs`: the `resume` row, `reported_with_cause` |
+| Texts | the outcome catalog (`runtime-host.json`: the two codes and three descriptions; `catalog.json`: the key `in_the_way`), its regenerated index; [scheduling-pause.md](scheduling-pause.md); the operation table's row `resume` (`help`, `notes`) |
+
+**Tests** (no clock read in a gate file). `crates/runtime-host/src/tests/gate_480_pg2d.rs` (host gate
+map "#480 PG-2d"): the eight of the gate map's comment, on one instance and a client's lease with
+every caller's time already past: standing then settled, each once with the request's links and the
+standing record equal to the receipt's cause in code, `pause_stage`, `in_the_way` and the causes
+under it; three failed checks tried again and one standing record only; a resume before quiet; a
+shutdown kept by the continuation; a shutdown within the caller's time (by the hand-back's hook);
+a hold lifted not quiet (warning, reason, `lease`, `scheduling_pause_release_busy`); a pause quiet
+in its time and its restore, none; the continuation's panic latched at once.
+`crates/runtime-client/src/tests/gate_480_pg2d.rs` (contract gate map): the new calls answer the
+cause or none, the old ones the result alone. `apps/actinglab/src/tests/gate_480_pg2d.rs`,
+`apps/actinglab-mcp/src/gate_480_pg2d.rs` and `crates/lab-rescue/src/install/gate_480_pg2d.rs` (apps
+gate map): the `resume` row's cause on both forms and none for an ordinary resume, its parameters,
+`ac_resume`'s schema, and the instance's addition whose pause stands. Adapted: the Lab's PG-2c
+`pause` row test (leftover 1); `gate_421_inst5`'s helpers made visible to the new rescue gate
+(`pub(super)`), unchanged. No test leaves a gate map; no golden changes.
+
+**What is not changed.** The wire and every interface range; the status (the two members stay
+declared and unanswered); what a pause and a resume answer, but for the Lab's `resume` row gaining
+the cause; a `stand` pause is never lifted by the Runtime; a `quiet_or_lift` hold is all or nothing;
+nothing is recorded per poll or per try; the record types.
+
+**Ledger and interface.** No revision moves: the two new codes and the three codes now also recorded
+are outcome codes inside the existing `device_state_observed` record, which a reader of revision 9
+reads (above); `runtime-outcomes` stays 1, new codes in the catalog only; `runtime-client` stays 12.
+
+**At deploy.** Nothing to configure. A Runtime of this build writes the records from its start; a
+console or a Lab of 0.12.71 to 0.12.73 reads them as records of codes it does not know. The Lab's
+`resume` answers the cause against a Runtime of 0.12.73 or later (the first that gives it); against an
+older one it answers no cause, as for an ordinary resume.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
