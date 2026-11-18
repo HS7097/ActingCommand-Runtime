@@ -160,6 +160,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   (0.12.70, register §1.454) raises it to 18: a select step's scan that declares `early_stop`
 ///   and no `end`, which every Runtime before it refuses at its declaration gate (`MissingField`
 ///   at `/operations/<i>/select/scan/end`); a pack without one keeps its revision, so [3, 18].
+///   Workflow #463 INT-1 (0.12.73, register §1.473) raises it to 19: an `interrupts.json` entry
+///   that names no handler or whose `result` is `environment_reset`, which every Runtime before
+///   it refuses (the whole game root `standard_pack_root_invalid`); a root without one keeps its
+///   revision, so [3, 19].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -194,7 +198,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 9]),
-    ("package", [3, 18]),
+    ("package", [3, 19]),
     ("runtime-client", [3, 11]),
     ("runtime-outcomes", [1, 1]),
 ];

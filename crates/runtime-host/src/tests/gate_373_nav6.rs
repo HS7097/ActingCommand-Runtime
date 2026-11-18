@@ -25,20 +25,20 @@ use actingcommand_contract::{
 use serde_json::{Value, json};
 
 const ALIAS: &str = "neutral.instance";
-const RED: [u8; 3] = [255, 0, 0];
+pub(super) const RED: [u8; 3] = [255, 0, 0];
 const BLUE: [u8; 3] = [0, 0, 255];
 const WHITE: [u8; 3] = [255, 255, 255];
-const BLACK: [u8; 3] = [0, 0, 0];
+pub(super) const BLACK: [u8; 3] = [0, 0, 0];
 
 const FEATURES: &str = "neutral.test.features";
-const CLOSE_NOTICE: &str = "neutral.test.close_notice";
+pub(super) const CLOSE_NOTICE: &str = "neutral.test.close_notice";
 const CLOSE_ALERT: &str = "neutral.test.close_alert";
 const CLOSE_BANNER: &str = "neutral.test.close_banner";
 const CLEANUP: &str = "neutral.test.cleanup";
 
 /// An overlay over the first pixel `under` shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Overlay {
+pub(super) enum Overlay {
     Notice,
     Alert,
     Banner,
@@ -55,13 +55,13 @@ impl Overlay {
 }
 
 /// The first pixel `first` with `overlay` over it.
-fn frame(first: [u8; 3], overlay: Option<Overlay>) -> Vec<(usize, [u8; 3])> {
+pub(super) fn frame(first: [u8; 3], overlay: Option<Overlay>) -> Vec<(usize, [u8; 3])> {
     let mut pixels = vec![(0, first)];
     pixels.extend(overlay.map(Overlay::pixels).unwrap_or_default());
     pixels
 }
 
-fn script(
+pub(super) fn script(
     state: &FakeState,
     script: impl Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sync + 'static,
 ) {
@@ -70,7 +70,7 @@ fn script(
 
 /// `overlay` until the device's input count passes `base`, then `away` until it passes
 /// `base + 1`, then `home`.
-fn overlay_then_away_then_home(state: &FakeState, base: usize, overlay: Overlay) {
+pub(super) fn overlay_then_away_then_home(state: &FakeState, base: usize, overlay: Overlay) {
     script(state, move |_, inputs| match inputs.saturating_sub(base) {
         0 => frame(RED, Some(overlay)),
         1 => frame(RED, None),
@@ -97,11 +97,11 @@ fn recurring_overlay(state: &FakeState, kind: impl Fn(usize) -> Overlay + Send +
 
 // ---- The run's own package: an assembled package with the device's pixels as its pages.
 
-const AWAY: &[&str] = &["pixel/first_red"];
-const HOME: &[&str] = &["pixel/first_blue", "pixel/second_green"];
-const OWN_NOTICE: &[&str] = &["pixel/first_white"];
+pub(super) const AWAY: &[&str] = &["pixel/first_red"];
+pub(super) const HOME: &[&str] = &["pixel/first_blue", "pixel/second_green"];
+pub(super) const OWN_NOTICE: &[&str] = &["pixel/first_white"];
 
-fn operation(id: &str, from: &str, to: &str) -> Value {
+pub(super) fn operation(id: &str, from: &str, to: &str) -> Value {
     json!({
         "id": id,
         "from": from,
@@ -113,7 +113,7 @@ fn operation(id: &str, from: &str, to: &str) -> Value {
 }
 
 /// A `navigable_route` package around `task` (control v2 for task schema 0.9, v1 otherwise).
-fn run_package(task: Value, pages: &[(&str, &[&str])]) -> Vec<u8> {
+pub(super) fn run_package(task: Value, pages: &[(&str, &[&str])]) -> Vec<u8> {
     let control = json!({
         "schema_version": if task["schema_version"] == "0.9" {
             "Lab-1y.control.v2"
@@ -176,7 +176,7 @@ fn run_package(task: Value, pages: &[(&str, &[&str])]) -> Vec<u8> {
 }
 
 /// From `away` to `home`, with no entry check.
-fn away_to_home() -> Vec<u8> {
+pub(super) fn away_to_home() -> Vec<u8> {
     run_package(
         json!({
             "schema_version": "0.6",
@@ -194,7 +194,7 @@ fn away_to_home() -> Vec<u8> {
 
 /// From `away` to `home` with the entry set `{away}`, which the host checks first; `own_notice`
 /// also declares the page `notice`, which the package leaves from itself.
-fn entry_away_to_home(own_notice: bool) -> Vec<u8> {
+pub(super) fn entry_away_to_home(own_notice: bool) -> Vec<u8> {
     let mut operations = vec![operation("go", "away", "home")];
     let mut pages: Vec<(&str, &[&str])> = vec![("away", AWAY), ("home", HOME)];
     if own_notice {
@@ -304,7 +304,11 @@ fn features_task() -> Value {
 }
 
 /// A handler of the interrupt page `page` (its probe `probe`) that leaves it to `target`.
-fn handler_task(page: &str, probe: &'static str, target: (&str, &'static [&'static str])) -> Value {
+pub(super) fn handler_task(
+    page: &str,
+    probe: &'static str,
+    target: (&str, &'static [&'static str]),
+) -> Value {
     source_task(
         &[(page, &[probe]), target],
         page,
@@ -315,16 +319,16 @@ fn handler_task(page: &str, probe: &'static str, target: (&str, &'static [&'stat
     )
 }
 
-const TO_AWAY: (&str, &[&str]) = ("away", &["first_red"]);
+pub(super) const TO_AWAY: (&str, &[&str]) = ("away", &["first_red"]);
 
-struct GameRoot {
-    root: PathBuf,
+pub(super) struct GameRoot {
+    pub(super) root: PathBuf,
     game: PathBuf,
     packs: Vec<String>,
 }
 
 impl GameRoot {
-    fn new(base: &Path) -> Self {
+    pub(super) fn new(base: &Path) -> Self {
         let root = base.join("packages");
         let game = root.join("neutral");
         fs::create_dir_all(&game).expect("game root");
@@ -336,7 +340,7 @@ impl GameRoot {
     }
 
     /// A listed package whose directory holds `task` (16x9 unless `width` says otherwise).
-    fn pack(&mut self, package_id: &str, mode: &str, task: Value) -> &mut Self {
+    pub(super) fn pack(&mut self, package_id: &str, mode: &str, task: Value) -> &mut Self {
         let width = task["coordinate_space"]["width"].as_u64().expect("width");
         let height = task["coordinate_space"]["height"].as_u64().expect("height");
         // Workflow #336 PKG-S5: a bundle v4 pack's directory is its `package_id`.
@@ -379,7 +383,7 @@ impl GameRoot {
         self
     }
 
-    fn features(&mut self) -> &mut Self {
+    pub(super) fn features(&mut self) -> &mut Self {
         self.pack(FEATURES, "recognize_only", features_task())
     }
 
@@ -391,7 +395,7 @@ impl GameRoot {
         .expect("write root file");
     }
 
-    fn bundle(&self) -> &Self {
+    pub(super) fn bundle(&self) -> &Self {
         self.write(
             "bundle.json",
             &json!({
@@ -414,7 +418,7 @@ impl GameRoot {
         self
     }
 
-    fn pages(&self) -> &Self {
+    pub(super) fn pages(&self) -> &Self {
         self.write(
             "pages.json",
             &json!({
@@ -432,7 +436,7 @@ impl GameRoot {
         self
     }
 
-    fn interrupts(&self, interrupts: Value) -> &Self {
+    pub(super) fn interrupts(&self, interrupts: Value) -> &Self {
         self.write(
             "interrupts.json",
             &json!({
@@ -445,7 +449,7 @@ impl GameRoot {
     }
 }
 
-fn interrupt(page: &str, handler: &str, then: Value, max_per_run: u8) -> Value {
+pub(super) fn interrupt(page: &str, handler: &str, then: Value, max_per_run: u8) -> Value {
     json!({"page": page, "handlers": [handler], "then": then, "max_per_run": max_per_run})
 }
 
@@ -471,12 +475,16 @@ fn notice_root(base: &Path, then: Value, max_per_run: u8) -> GameRoot {
 
 // ---- Running.
 
-fn start(temp: &TempDir, state: &Arc<FakeState>, root: Option<&GameRoot>) -> RuntimeHost {
+pub(super) fn start(
+    temp: &TempDir,
+    state: &Arc<FakeState>,
+    root: Option<&GameRoot>,
+) -> RuntimeHost {
     start_with(config(temp), state, root)
 }
 
 /// `start` with `config` as the host's configuration.
-fn start_with(
+pub(super) fn start_with(
     config: RuntimeHostConfig,
     state: &Arc<FakeState>,
     root: Option<&GameRoot>,
@@ -489,13 +497,13 @@ fn start_with(
     .expect("runtime host")
 }
 
-struct Run {
-    receipt: RuntimeReceipt,
+pub(super) struct Run {
+    pub(super) receipt: RuntimeReceipt,
     events: Vec<PersistedEvent>,
 }
 
 impl Run {
-    fn facts(&self) -> Vec<&TaskSemanticFact> {
+    pub(super) fn facts(&self) -> Vec<&TaskSemanticFact> {
         self.events
             .iter()
             .filter_map(|event| match event.payload() {
@@ -506,7 +514,7 @@ impl Run {
     }
 
     /// The run's terminal outcome: a failed run's failure.
-    fn failure(&self) -> Outcome {
+    pub(super) fn failure(&self) -> Outcome {
         self.facts()
             .into_iter()
             .find_map(|fact| match fact {
@@ -519,7 +527,7 @@ impl Run {
             .expect("a failed terminal")
     }
 
-    fn handled(&self) -> Vec<(String, String, TaskInterruptThen, u8, Outcome)> {
+    pub(super) fn handled(&self) -> Vec<(String, String, TaskInterruptThen, u8, Outcome)> {
         self.facts()
             .into_iter()
             .filter_map(|fact| match fact {
@@ -543,7 +551,7 @@ impl Run {
 
     /// The `role: interrupt_handler` layers: each completed one's final page, `None` for a
     /// failed one with its failure.
-    fn handler_layers(&self) -> (usize, Vec<String>, Vec<Outcome>) {
+    pub(super) fn handler_layers(&self) -> (usize, Vec<String>, Vec<Outcome>) {
         let role = Some(TaskEntryRecoveryRole::InterruptHandler);
         let facts = self.facts();
         let admitted = facts
@@ -577,7 +585,7 @@ impl Run {
         (admitted, completed, failed)
     }
 
-    fn succeeded(&self) -> bool {
+    pub(super) fn succeeded(&self) -> bool {
         self.receipt.state() == RuntimeReceiptState::Completed
             && matches!(
                 self.receipt.result(),
@@ -589,14 +597,14 @@ impl Run {
     }
 }
 
-fn run(host: &RuntimeHost, temp: &TempDir, name: &str, target: &[u8]) -> Run {
+pub(super) fn run(host: &RuntimeHost, temp: &TempDir, name: &str, target: &[u8]) -> Run {
     let path = temp.path().join(format!("{name}.zip"));
     fs::write(&path, target).expect("write run package");
     run_at(host, &path)
 }
 
 /// The direct run of the package at `path` (a zip or a source package directory).
-fn run_at(host: &RuntimeHost, path: &Path) -> Run {
+pub(super) fn run_at(host: &RuntimeHost, path: &Path) -> Run {
     let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
@@ -622,7 +630,7 @@ fn run_at(host: &RuntimeHost, path: &Path) -> Run {
 }
 
 /// The outcomes of the `standard_pack_read` lifecycle records, in ledger order.
-fn standard_pack_reads(host: &RuntimeHost) -> Vec<Outcome> {
+pub(super) fn standard_pack_reads(host: &RuntimeHost) -> Vec<Outcome> {
     host.query_persisted_events_for_test(EventQuery {
         event_type: Some(EventType::RuntimeLifecycleObserved),
         ..EventQuery::default()
@@ -639,7 +647,7 @@ fn standard_pack_reads(host: &RuntimeHost) -> Vec<Outcome> {
     .collect()
 }
 
-fn text<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
+pub(super) fn text<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
     outcome.value(key).and_then(Value::as_str)
 }
 
@@ -1127,7 +1135,7 @@ fn db2_a_layer_package_with_a_broken_table_ends_the_run_that_admits_it() {
 const ENVIRONMENT_LIMIT: &str = "contained_task_interrupt_environment_limit_reached";
 const PACK_LOGIC_LIMIT: &str = "contained_task_interrupt_limit_reached";
 /// The fixture catalog's one task (`contracts/scheduling/examples/catalog-a`).
-const B43_TASK: &str = "fixture.observe";
+pub(super) const B43_TASK: &str = "fixture.observe";
 
 /// `notice_root` with `then: resume`, whose notice entry declares `limit_cause` when one is
 /// given.
@@ -1217,7 +1225,7 @@ fn b43_1_an_environment_limit_ends_the_run_with_its_own_code_and_without_it_as_b
 /// The fixture catalog with the recommended `on_failure` of a page-graph task
 /// (`contracts/policy-suspension.md`, "Catalog"): a failure that repeats its identity pauses
 /// the pair.
-fn pausing_policy_sources() -> CatalogSources {
+pub(super) fn pausing_policy_sources() -> CatalogSources {
     let mut sources = policy_sources(1);
     let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("policy tasks");
     tasks["tasks"][0]["on_failure"] = json!({
@@ -1231,14 +1239,14 @@ fn pausing_policy_sources() -> CatalogSources {
 }
 
 /// The Runtime clock's time now.
-fn clock_now(clock: &ManualRuntimeClock) -> u64 {
+pub(super) fn clock_now(clock: &ManualRuntimeClock) -> u64 {
     clock.sample().expect("sample the runtime clock").unix_ms
 }
 
 /// Evaluates at `at` (or at the Runtime clock's time when that is later; the clock moved there
 /// first), admits the task's dispatch and runs it as a scheduled run that fails without
 /// poisoning the Runtime (as `gate_390_exec3` does).
-fn b43_failed_scheduled_run(
+pub(super) fn b43_failed_scheduled_run(
     host: &RuntimeHost,
     clock: &ManualRuntimeClock,
     request: &ContainedTaskRequest,
@@ -1269,7 +1277,7 @@ fn b43_failed_scheduled_run(
 }
 
 /// The failure the policy execution record of `run_id` settled.
-fn b43_recorded_failure(
+pub(super) fn b43_recorded_failure(
     host: &RuntimeHost,
     run_id: RunId,
 ) -> actingcommand_contract::PolicyFailureRecord {
@@ -1302,7 +1310,7 @@ fn b43_recorded_failure(
 
 /// R22's rerun time: the retry backoff and the activity's sampled interval after the admission
 /// of `context` have both passed.
-fn b43_rerun_time(
+pub(super) fn b43_rerun_time(
     failure: &actingcommand_contract::PolicyFailureRecord,
     context: &PolicyRunContext,
 ) -> u64 {
@@ -1515,14 +1523,14 @@ fn n6_8_two_interrupt_pages_on_one_frame_are_recorded_and_none_is_handled() {
 // "A screen the package never recorded"): the recognise-only entry of the shared interrupt pages.
 
 /// The arrival budget of the step of [`write_linear_away_to_home`].
-const U1_ARRIVAL_MS: u64 = 100;
+pub(super) const U1_ARRIVAL_MS: u64 = 100;
 const U1_CONFIRMATION_FAILED: &str =
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str();
 
 /// A `linear_steps` source package at `directory`: one tap `go` from `away` to `home`, expected
 /// within `U1_ARRIVAL_MS`, with no retry, so that a failed arrival is followed by the step's
 /// closing decision, which waits the step timeout of 600 ms and never inputs.
-fn write_linear_away_to_home(directory: &Path) {
+pub(super) fn write_linear_away_to_home(directory: &Path) {
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.test.linear",
@@ -2252,7 +2260,7 @@ fn failed_terminal(events: &[PersistedEvent]) -> u64 {
 }
 
 /// Whether any recovery ladder started in `events`.
-fn ladder_started(events: &[PersistedEvent]) -> bool {
+pub(super) fn ladder_started(events: &[PersistedEvent]) -> bool {
     super::instance_workers::phases(events)
         .iter()
         .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))

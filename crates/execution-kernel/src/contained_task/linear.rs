@@ -37,7 +37,11 @@
 //! #463 U1b: the runtime tells the run at its start which code that verdict ends with
 //! ([`super::UnrecordedScreenEnd`]); past its package's break-in a scheduled run ends with
 //! `page_confirmation_failed` as that end gives it, with the word `unrecorded_screen` (Workflow
-//! #469 K1, below). The decision is made and judged the same way.
+//! #469 K1, below). The decision is made and judged the same way. Workflow #463 INT-1 (fix round
+//! 1): where the runtime answers a frame of the decision with the end of the run, its one shared
+//! interrupt page ending the run by its recognition alone ([`super::SharedInterruptShown::Ended`]),
+//! the decision and the run end there with that end as it is, as an offer of the frame in a wait
+//! ends them; every error of that check is still `check_failed`.
 //!
 //! Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): an operation's effect may be a
 //! select step. Its attempt is the page graph's ([`PreparedContainedTask::select_attempt`]): it
@@ -80,11 +84,11 @@ use super::{
     ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS,
     ExtraRounds, InputRecheck, KeyInputSupport, MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
     MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation,
-    PostAdmissionOcrCollector, PreparedContainedTask, RecheckedInput, SampleRetries, StepKey,
-    StepPacing, TaskControl, TaskOperation, TaskProgram, UnrecordedScreenEnd, budget_elapsed_since,
-    budget_now, budget_observation_now, invariant_broken, is_geometry_change, pace_pause,
-    paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
-    step_point_draw,
+    PostAdmissionOcrCollector, PreparedContainedTask, RecheckedInput, SampleRetries,
+    SharedInterruptShown, StepKey, StepPacing, TaskControl, TaskOperation, TaskProgram,
+    UnrecordedScreenEnd, budget_elapsed_since, budget_now, budget_observation_now,
+    invariant_broken, is_geometry_change, pace_pause, paced_step, resolve_page_reference,
+    runtime_touch_choice, sample_budget_invalid, selection, step_point_draw,
 };
 use crate::codes::{ConfirmationProblem, ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{InputFrameContext, RunOperationPolicy};
@@ -607,6 +611,15 @@ impl LinearClosing<'_> {
         }
         self
     }
+}
+
+/// Workflow #463 INT-1, fix round 1: how the observation of a closing decision ended: with its
+/// verdict, or on a frame whose one shared interrupt page ends the run by its recognition alone,
+/// with the runtime's end of the run ([`SharedInterruptShown::Ended`]), which the decision carries
+/// out as it is.
+enum ClosingObserved<E> {
+    Verdict(ConfirmationProblem),
+    RunEnded(ContainedTaskRunError<E>),
 }
 
 /// Why one attempt did not reach the next step's page.
@@ -2159,7 +2172,12 @@ impl PreparedContainedTask {
     /// failed check of the shared interrupt pages), `check_failed`: the failed wait's end
     /// stands. The one exception is a failure of the runtime's own bookkeeping, a record it could
     /// not write ([`ContainedTaskRuntime::is_bookkeeping_failure`]), which ends the run as it ends
-    /// any run.
+    /// any run. Workflow #463 INT-1, fix round 1: and a frame on which the runtime's shared
+    /// interrupt pages answer with the end of the run ([`SharedInterruptShown::Ended`]: the one
+    /// page shown ends the run by its recognition alone, an `end_run` entry that names no
+    /// handler) ends the decision and the run with that end, carried out as it is, as an offer of
+    /// the frame in a wait ends them; it is no verdict and no error of the decision, so it is never
+    /// `check_failed`, and every error of that check stays `check_failed` as before.
     fn linear_closing_decision<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2167,11 +2185,12 @@ impl PreparedContainedTask {
         pages: &[&str],
     ) -> Result<ConfirmationProblem, ContainedTaskRunError<R::Error>> {
         match self.linear_closing_observation(runtime, (run, loading), pages) {
+            Ok(ClosingObserved::Verdict(problem)) => Ok(problem),
+            Ok(ClosingObserved::RunEnded(ended)) => Err(ended),
             Err(ContainedTaskRunError::Boundary(error)) if R::is_bookkeeping_failure(&error) => {
                 Err(ContainedTaskRunError::Boundary(error))
             }
             Err(_) => Ok(ConfirmationProblem::CheckFailed),
-            observed => observed,
         }
     }
 
@@ -2183,13 +2202,15 @@ impl PreparedContainedTask {
     /// does, `transition_shown` on a transition frame,
     /// `interrupt_shown` on a shared interrupt page, `screen_moving` at its bound when its frames
     /// changed, the word of [`Self::another_page_on`] at its bound when another page of the
-    /// package is on the last frame, and `unrecorded_screen` otherwise.
+    /// package is on the last frame, and `unrecorded_screen` otherwise. Workflow #463 INT-1, fix
+    /// round 1: on a frame whose one shared interrupt page ends the run by its recognition alone,
+    /// that end ([`ClosingObserved::RunEnded`]).
     fn linear_closing_observation<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         (run, loading): (LinearRun, &mut LoadingAllowance),
         pages: &[&str],
-    ) -> Result<ConfirmationProblem, ContainedTaskRunError<R::Error>> {
+    ) -> Result<ClosingObserved<R::Error>, ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         let pace = run.timing.pace();
         let game = self.control.game.as_str();
@@ -2205,12 +2226,16 @@ impl PreparedContainedTask {
         let mut previous: Option<ColorDigest> = None;
         loop {
             if budget_now(runtime, pace) >= deadline {
-                return Ok(ConfirmationProblem::DeadlineReached);
+                return Ok(ClosingObserved::Verdict(
+                    ConfirmationProblem::DeadlineReached,
+                ));
             }
             let observation =
                 self.linear_observe_scene(runtime, pages, run.timing, Some(&mut *loading))?;
             if budget_now(runtime, pace) >= deadline {
-                return Ok(ConfirmationProblem::DeadlineReached);
+                return Ok(ClosingObserved::Verdict(
+                    ConfirmationProblem::DeadlineReached,
+                ));
             }
             let frame_at = budget_now(runtime, pace);
             let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
@@ -2242,22 +2267,31 @@ impl PreparedContainedTask {
             // LOAD-4: a transition frame. Neither is a screen the package never recorded.
             let scene = match observation {
                 Ok(passed) => {
-                    return Ok(
+                    return Ok(ClosingObserved::Verdict(
                         if pages.last().is_some_and(|own| *own == passed.page_label) {
                             ConfirmationProblem::InputNotTaken
                         } else {
                             ConfirmationProblem::AwaitedPageLate
                         },
-                    );
+                    ));
                 }
                 Err(_) if judged.row == FrameRow::Transition => {
-                    return Ok(ConfirmationProblem::TransitionShown);
+                    return Ok(ClosingObserved::Verdict(
+                        ConfirmationProblem::TransitionShown,
+                    ));
                 }
                 Err(scene) => scene,
             };
-            // Rule 3: a shared interrupt page on the frame, recognised and not handled.
-            if self.shown_shared_interrupt(runtime, &scene)? {
-                return Ok(ConfirmationProblem::InterruptShown);
+            // Rule 3: a shared interrupt page on the frame, recognised and not handled. Workflow
+            // #463 INT-1, fix round 1: one whose recognition alone ends the run ends it here.
+            match self.shown_shared_interrupt(runtime, &scene)? {
+                SharedInterruptShown::NotShown => {}
+                SharedInterruptShown::Shown => {
+                    return Ok(ClosingObserved::Verdict(
+                        ConfirmationProblem::InterruptShown,
+                    ));
+                }
+                SharedInterruptShown::Ended(ended) => return Ok(ClosingObserved::RunEnded(ended)),
             }
             // PERF-B1 (R3).
             backoff.frame(&scene)?;
@@ -2275,11 +2309,12 @@ impl PreparedContainedTask {
                     None => false,
                 };
                 if !first_still || !last_two_still {
-                    return Ok(ConfirmationProblem::ScreenMoving);
+                    return Ok(ClosingObserved::Verdict(ConfirmationProblem::ScreenMoving));
                 }
-                return Ok(self
-                    .another_page_on(pages, &scene)
-                    .unwrap_or(ConfirmationProblem::UnrecordedScreen));
+                return Ok(ClosingObserved::Verdict(
+                    self.another_page_on(pages, &scene)
+                        .unwrap_or(ConfirmationProblem::UnrecordedScreen),
+                ));
             }
             if first.is_none() {
                 first = Some(digest.clone());

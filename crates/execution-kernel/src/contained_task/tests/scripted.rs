@@ -654,7 +654,7 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     fn shared_interrupt_shown(
         &mut self,
         _frame: SharedInterruptFrame<'_>,
-    ) -> Result<bool, ContainedTaskRunError<Self::Error>> {
+    ) -> Result<SharedInterruptShown<Self::Error>, ContainedTaskRunError<Self::Error>> {
         self.popup_checks += 1;
         if self
             .failing_popup_check_from
@@ -664,7 +664,11 @@ impl ContainedTaskRuntime for ScriptedRuntime {
                 actingcommand_contract::codes::SharedCode::ContainedTaskRecognitionFailed.code(),
             )));
         }
-        Ok(self.popup_shown())
+        Ok(if self.popup_shown() {
+            SharedInterruptShown::Shown
+        } else {
+            SharedInterruptShown::NotShown
+        })
     }
 
     fn host_started_run(&self) -> bool {
