@@ -1600,8 +1600,9 @@ fn read_record(path: &Path) -> LabResult<PackTrialRecord> {
     })
 }
 
-/// Whether `text` is a content prefix: [`CONTENT_PREFIX_DIGITS`] lowercase hex digits.
-fn content_prefix(text: &str) -> bool {
+/// Whether `text` is a content prefix: [`CONTENT_PREFIX_DIGITS`] lowercase hex digits. #463
+/// PRIV-1: the transition list of `privacy-zones.json` names a content by it too.
+pub(crate) fn content_prefix(text: &str) -> bool {
     text.len() == CONTENT_PREFIX_DIGITS
         && text
             .bytes()

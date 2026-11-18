@@ -3023,6 +3023,10 @@ fn derive_candidate_layouts(
                         derived[key] = value.clone();
                     }
                 }
+                // Workflow #463 SEL-2L: the shared read, last, as a `fixed_slots` layout's.
+                if let Some(shared) = derived_shared_ocr(layout)? {
+                    derived["shared_ocr"] = shared;
+                }
                 keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
                 continue;
             }
@@ -3119,33 +3123,44 @@ fn derive_candidate_layouts(
                 }
             }
             // Workflow #396 REC-8: the shared read with its region in the pack's form.
-            if let Some(shared) = layout.get("shared_ocr") {
-                let mut generated = ordered_object([(
-                    "region",
-                    ocr_region_to_pack(required_field(shared, "region")?)?,
-                )]);
-                for key in [
-                    "languages",
-                    "timeout_ms",
-                    "model_ref",
-                    "model_sha256",
-                    "blocks",
-                ] {
-                    generated[key] = required_field(shared, key)?.clone();
-                }
-                if let Some(line_merge) = shared.get("line_merge") {
-                    generated["line_merge"] = line_merge.clone();
-                }
-                // Workflow #428 CFL-2: the read's chain, as declared.
-                if let Some(preprocess) = shared.get("preprocess") {
-                    generated["preprocess"] = preprocess.clone();
-                }
-                derived["shared_ocr"] = generated;
+            if let Some(shared) = derived_shared_ocr(layout)? {
+                derived["shared_ocr"] = shared;
             }
             keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
         }
     }
     Ok(layouts)
+}
+
+/// Workflow #396 REC-8: a source layout's shared read as the pack writes it, its region in the
+/// pack's form (a rectangle or `full_frame`) and its other members as declared, in the order of
+/// the contract's example; `None` for a layout without one. Workflow #463 SEL-2L: of a layout of
+/// either kind.
+fn derived_shared_ocr(layout: &Value) -> CliOutcome<Option<Value>> {
+    let Some(shared) = layout.get("shared_ocr") else {
+        return Ok(None);
+    };
+    let mut generated = ordered_object([(
+        "region",
+        ocr_region_to_pack(required_field(shared, "region")?)?,
+    )]);
+    for key in [
+        "languages",
+        "timeout_ms",
+        "model_ref",
+        "model_sha256",
+        "blocks",
+    ] {
+        generated[key] = required_field(shared, key)?.clone();
+    }
+    if let Some(line_merge) = shared.get("line_merge") {
+        generated["line_merge"] = line_merge.clone();
+    }
+    // Workflow #428 CFL-2: the read's chain, as declared.
+    if let Some(preprocess) = shared.get("preprocess") {
+        generated["preprocess"] = preprocess.clone();
+    }
+    Ok(Some(generated))
 }
 
 /// Keeps one derived candidate layout: the same ID with an identical definition once, any other

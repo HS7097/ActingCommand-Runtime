@@ -1627,7 +1627,7 @@
     },
     "in_the_way": {
       "type": "list<vocab:pause_obstacle>",
-      "description": "What was still in the way of an instance pause's stages when its request answered, each word once (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\")."
+      "description": "What was still in the way of an instance pause's stages when its request answered, each word once (#480 PG-2c, since 0.12.73; contracts/scheduling-pause.md \"Two modes\"); #480 PG-2d (since 0.12.74): also what was in the way when a tool's hold was lifted without its instance having become quiet (scheduling_pause_lifted_not_quiet)."
     },
     "receipt_cause": {
       "type": "code",
@@ -2919,6 +2919,34 @@
     "key_problem": {
       "type": "vocab:key_problem",
       "description": "Why a Lab recording step's key, the back key a step presses in place of a click, declared after the fact and never sent while recording, cannot be declared or generated (record_key_invalid; #463 KR-1, since 0.12.70)."
+    },
+    "privacy_rect_kind": {
+      "type": "vocab:privacy_rect_kind",
+      "description": "Which rectangle of a package a privacy finding names: the kind of a region a recognition target of the package reads, or a rectangle of a regression case's scene (#463 PRIV-1, contracts/privacy-zones.md, since 0.12.74; declared ahead of the first answer of the privacy_ codes)."
+    },
+    "privacy_zone_id": {
+      "type": "token",
+      "description": "The id of a sensitive zone of a repository root's privacy-zones.json, unique within its base size (#463 PRIV-1, since 0.12.74)."
+    },
+    "privacy_zone_kind": {
+      "type": "vocab:privacy_zone_kind",
+      "description": "What a sensitive zone holds, its kind in privacy-zones.json: identity (nothing may read there) or value (only a reading may read there, and no scene may hold its pixels) (#463 PRIV-1 amendment 1, the owner's ruling of 11-18, since 0.12.74)."
+    },
+    "privacy_reading": {
+      "type": "boolean",
+      "description": "Whether the region of a privacy finding is a reading: a region the kernel reads as a number at run time, whether or not the number is published as a fact (a mark's target, an adjustment's amount, a candidate layout's integer feature, ocr_integer, a select's quantity column among them, an integer field of the entry task's OCR fields, in a field list or not, a value test's sides), or a layout's shared read that gives its text to one; a rectangle of a case's scene is never one (#463 PRIV-1 amendment 1 and fix rounds 1 and 2, contracts/privacy-zones.md \"A reading\", since 0.12.74)."
+    },
+    "privacy_unseen_kind": {
+      "type": "vocab:privacy_unseen_kind",
+      "description": "What a rectangle check of a package cannot see: a text an OCR target expects, an alias a candidate layout's identity entry is read as, a regression case of another schema (#463 PRIV-1, since 0.12.74)."
+    },
+    "privacy_unseen_counts": {
+      "type": "records",
+      "fields": {
+        "privacy_unseen_kind": "required",
+        "count": "required"
+      },
+      "description": "What a rectangle check of a package cannot see, each kind with its count, in the vocabulary's order (#463 PRIV-1, contracts/privacy-zones.md \"What a rectangle cannot see\", since 0.12.74)."
     }
   },
   "vocabularies": {
@@ -5286,6 +5314,9 @@
         },
         "scan_swipe_too_long": {
           "description": "The first forward swipe of the fold, the package's advance, moves the finger further along the list than the kernel's admission allows (the list's length less a row's, less one), which no given number changes; details displacement_px and most_px; the scroll is recorded again with shorter swipes, so that neighbouring screens share at least one row (#463 S2-9a fix round 1, since 0.12.70)."
+        },
+        "blocks_with_rows": {
+          "description": "The request's read declares blocks (and line_merge) beside rows: a scrolling select's names are not read by detecting their blocks yet, only a select of fixed slots takes the two members; they are left out of a select with rows (#463 SEL-2L-a, since 0.12.74)."
         }
       }
     },
@@ -11545,6 +11576,81 @@
           "description": "record stop meets a scrolling select that reads its list to its end and declares no end mark: the demonstration never reached the list's end (#463 S2-9a)."
         }
       }
+    },
+    "privacy_rect_kind": {
+      "description": "Which rectangle of a package a privacy finding names, the value privacy_rect_kind of the privacy_ codes: the kind of a region of the one list of a package's read regions, or a rectangle of a regression case's scene (#463 PRIV-1, contracts/privacy-zones.md, since 0.12.74).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PrivacyRectKind"
+      },
+      "tokens": {
+        "template_search": {
+          "description": "A template target's search area, its region, which holds the template's crop (with the margin record mark gives a search area it is not told)."
+        },
+        "color_check": {
+          "description": "A template target's colour check region."
+        },
+        "color": {
+          "description": "A colour probe's region."
+        },
+        "color_digest": {
+          "description": "A colour digest's region."
+        },
+        "ocr": {
+          "description": "An OCR target's region, when no candidate layout reads the target as a feature."
+        },
+        "nn": {
+          "description": "An NN target's region."
+        },
+        "shared_ocr": {
+          "description": "A candidate layout's shared OCR read, shared_ocr.region as declared (a fixed_slots layout's, or since #463 SEL-2L-b a repeated_anchor layout's); the finding's target is the layout's id."
+        },
+        "select_name": {
+          "description": "An OCR target a candidate layout reads as a feature (a fixed_slots slot's targets, a feature's target), and none as an integer: a select's name region."
+        },
+        "select_quantity": {
+          "description": "An OCR target a candidate layout reads as an integer feature (ocr_integer): a select's quantity column, the integer column a read_list step publishes into its list; the kernel reads it as a number, so such a region is a reading (fix rounds 1 and 2)."
+        },
+        "scene_rect": {
+          "description": "A rectangle of a regression case's scene, scene_construction.rects."
+        }
+      }
+    },
+    "privacy_zone_kind": {
+      "description": "What a sensitive zone of privacy-zones.json holds, a zone's kind and the value privacy_zone_kind of privacy_zone_met (#463 PRIV-1 amendment 1, the owner's ruling of 11-18, since 0.12.74).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PrivacyZoneKind"
+      },
+      "tokens": {
+        "identity": {
+          "description": "Who the account is (a nickname, an account number, a server name): nothing may read there. A zone that declares no kind is of this kind."
+        },
+        "value": {
+          "description": "A quantity the account holds: only a reading, a region the kernel reads as a number at run time, may read there, and no scene may hold its pixels."
+        }
+      }
+    },
+    "privacy_unseen_kind": {
+      "description": "What a rectangle check of a package cannot see, the kinds of the value privacy_unseen_counts of privacy_unseen (#463 PRIV-1, since 0.12.74).",
+      "review": "pending",
+      "source": {
+        "file": "crates/resource-tooling/src/codes.rs",
+        "enum": "PrivacyUnseenKind"
+      },
+      "tokens": {
+        "expected_text": {
+          "description": "A text an OCR target of the package expects (its expected values): a text is no rectangle."
+        },
+        "alias": {
+          "description": "An alias an identity entry of a candidate layout of the package is read as."
+        },
+        "case_other_schema": {
+          "description": "A regression case of another schema than actingcommand.resource-regression-case.v1, or of none, whose scene's rectangles were not read."
+        }
+      }
     }
   },
   "domains": {
@@ -14471,6 +14577,9 @@
       "resource-tooling"
     ],
     "enabling_": [
+      "resource-tooling"
+    ],
+    "privacy_": [
       "resource-tooling"
     ]
   },

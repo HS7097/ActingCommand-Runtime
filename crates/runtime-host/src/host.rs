@@ -2294,6 +2294,8 @@ impl RuntimeHost {
             #[cfg(test)]
             pause_request_guard_taken_hook_for_test: Mutex::new(None),
             #[cfg(test)]
+            held_pause_record_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             autostart_claim_request_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             autostart_last_read_hook_for_test: Mutex::new(None),
@@ -4670,6 +4672,22 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #480 PG-2d fix round 1, test builds: runs `hook` once, on the request's thread, when an
+    /// instance pause's stages ended standing or kept at a shutdown and the request has not yet
+    /// taken the persist gate to record that moment.
+    #[cfg(test)]
+    pub(crate) fn run_before_held_pause_record_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::PauseInstanceScheduling)?;
+        *lock(
+            &shared.held_pause_record_hook_for_test,
+            HostLocation::PauseInstanceScheduling,
+        )? = Some(hook);
+        Ok(())
+    }
+
     /// #480 PG-1 fix round 1, test builds: runs `hook` once, on the requesting thread, just before
     /// the next autostart claim (the daemon start's, the watch's, an idle wake's) is requested,
     /// after its requester decided to ask for it.
@@ -6985,6 +7003,10 @@ struct HostShared {
     /// first finds its instance's admission guard taken.
     #[cfg(test)]
     pause_request_guard_taken_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2d fix round 1, test only: the hook an instance pause's request runs once when its
+    /// stages ended standing or kept at a shutdown, before it takes the persist gate to record it.
+    #[cfg(test)]
+    held_pause_record_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #480 PG-1 fix round 1, test only: the hook an autostart claim runs once just before it is
     /// requested.
     #[cfg(test)]

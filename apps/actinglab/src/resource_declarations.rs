@@ -28,8 +28,8 @@ use actingcommand_policy::{
     ScopeSelector, validate_catalog_declaration,
 };
 use actingcommand_resource_tooling::{
-    DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions, check_loading_root_file,
-    check_pack_loading_copy, check_policy_tables, declared_policy_tables,
+    DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions, PRIVACY_ZONES_FILE, PrivacyDeclaration,
+    check_loading_root_file, check_pack_loading_copy, check_policy_tables, declared_policy_tables,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -589,6 +589,11 @@ impl DeclarationReader {
         } else if path == Path::new(DECLARATION_EXCLUSIONS_FILE) {
             DeclarationExclusions::parse(&bytes)?;
             "declaration_exclusions"
+        } else if path == Path::new(PRIVACY_ZONES_FILE) {
+            // #463 PRIV-1: a root's sensitive-zone declaration, by its one reader
+            // (contracts/privacy-zones.md).
+            PrivacyDeclaration::parse(&bytes)?;
+            "privacy_zones"
         } else if path == Path::new(STANDARD_PACK_PAGES_FILE) {
             // Workflow #373 NAV-6: the standard-pack page list, with the Runtime's own checks;
             // the bundle generator checks the packages it names (M-373 §3.9).
@@ -998,6 +1003,7 @@ impl DeclarationReader {
             && name != "control.json"
             && !is_applications_table(path)
             && path != Path::new(DECLARATION_EXCLUSIONS_FILE)
+            && path != Path::new(PRIVACY_ZONES_FILE)
         {
             return self.unmapped(
                 path,

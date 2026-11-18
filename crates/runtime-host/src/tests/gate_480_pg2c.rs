@@ -53,7 +53,7 @@ const CLIENT: &str = "pg2c.client";
 const AUTOSTART: &str = "pg2c.autostart";
 /// Fix round 1: the first of two instances that capture through the Nemu IPC (outside the
 /// multi-Nemu gate), and the second.
-const NEMU: &str = "pg2c.first";
+pub(super) const NEMU: &str = "pg2c.first";
 const NEMU_OTHER: &str = "pg2c.second";
 /// Fix round 1: the code of a check made to fail (`fail_next_pause_checks_for_test`).
 const CHECK_FAILED_FOR_TEST: &str = "pause_check_failed_for_test";
@@ -189,7 +189,7 @@ fn at_once(config: RuntimeHostConfig) -> RuntimeHostConfig {
 // Fix round 1: a started host with two instances that capture through the Nemu IPC (`gate_480_pg2b`'s
 // (6)), so `NEMU` is outside the multi-Nemu gate and a pause's hand-back closes its device session,
 // which a keyless observation opened; its configuration `configure`d. The host and `NEMU`'s fake.
-fn nemu_host(
+pub(super) fn nemu_host(
     root: &TempDir,
     configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
 ) -> (RuntimeHost, Arc<FakeState>) {

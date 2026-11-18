@@ -159,6 +159,10 @@ mod gate_434_lab6s2b1;
 // Test-only: #480 PG-2c, every pause of the rescue module's hold is a tool's hold, `quiet_or_lift`.
 #[cfg(test)]
 mod gate_480_pg2c;
+// Test-only: #480 PG-2d, an instance's addition whose added instance's pause stands names no pause
+// by hand (PG-2c's leftover test).
+#[cfg(test)]
+mod gate_480_pg2d;
 // Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the
 // bundle's game, and while the Runtime is stopped.
 #[cfg(test)]

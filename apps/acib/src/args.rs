@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The command line of `acib` (board #479, ACIB-0, ACIB-1 and ACIB-2):
+//! The command line of `acib` (board #479, ACIB-0 to ACIB-3):
 //!
 //! ```text
 //! acib devices     [--key-salt-env <NAME> [--binding-salt-env <NAME2>]] [--timeout-ms <ms>]
@@ -10,6 +10,9 @@
 //! acib apps        <device> --contains <text> [--max-matching <m>] [--timeout-ms <ms>]
 //! acib screenshot  <device> --out <file|-> [--via <way>]   [--timeout-ms <ms>]
 //! acib orientation <device> [--via <reader>]               [--timeout-ms <ms>]
+//! acib running     <device> --bundle <id>                  [--timeout-ms <ms>]
+//! acib launch      <device> --bundle <id> [--relaunch]     [--timeout-ms <ms>]
+//! acib stop        <device> --bundle <id>                  [--timeout-ms <ms>]
 //! ```
 //!
 //! `<device>` is `--device <n>`, the device's usbmuxd session number as `acib devices` lists
@@ -20,13 +23,17 @@
 //! at least three characters. `<m>` is the most identifiers `apps` names (1 to
 //! [`MAX_MATCHING_LIMIT`]). `<file>` is where the picture is written, a path that must not exist
 //! yet, and `-` the standard output ([`Out`]). `<way>` is one of the words of [`Way`] (default
-//! [`DEFAULT_WAY`]), `<reader>` one of [`Reader`]'s (default: each in turn). Anything else is
-//! refused with `command_line_invalid`: an option given twice, `--device` beside
+//! [`DEFAULT_WAY`]), `<reader>` one of [`Reader`]'s (default: each in turn). `<id>` is one
+//! bundle identifier, written in the characters Apple allows in one (ASCII letters and digits,
+//! `-` and `.`). `--relaunch` is a flag without a value, taken by `launch` alone. Anything else
+//! is refused with `command_line_invalid`: an option given twice, `--device` beside
 //! `--device-key`, either of `--device-key` and `--key-salt-env` without the other, a key or a
-//! variable name that cannot be one, an option the command does not take.
+//! variable name that cannot be one, a bundle identifier that cannot be one, an option the
+//! command does not take.
 
 use crate::answer::{CommandName, Reader, Way};
 use crate::key;
+use crate::redact;
 
 /// How long a command may take when `--timeout-ms` does not say.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -44,6 +51,8 @@ pub const MAX_MATCHING_LIMIT: usize = 20;
 pub const DEFAULT_WAY: Way = Way::ScreenCapture;
 /// The `--out` that names the standard output in place of a file.
 pub const STANDARD_OUTPUT: &str = "-";
+/// The flag of `launch` that ends the application first; it takes no value.
+const RELAUNCH: &str = "--relaunch";
 
 /// The device a command asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +104,22 @@ pub enum Request {
         device: Target,
         via: Option<Reader>,
     },
+    /// `running`: whether the bundle is installed and runs, and its processes' pids.
+    Running {
+        device: Target,
+        bundle: String,
+    },
+    /// `launch`: the bundle launched, ended first when `relaunch` says so.
+    Launch {
+        device: Target,
+        bundle: String,
+        relaunch: bool,
+    },
+    /// `stop`: the application's own processes ended (not its extensions').
+    Stop {
+        device: Target,
+        bundle: String,
+    },
 }
 
 impl Request {
@@ -108,6 +133,9 @@ impl Request {
             Self::Apps { .. } => CommandName::Apps,
             Self::Screenshot { .. } => CommandName::Screenshot,
             Self::Orientation { .. } => CommandName::Orientation,
+            Self::Running { .. } => CommandName::Running,
+            Self::Launch { .. } => CommandName::Launch,
+            Self::Stop { .. } => CommandName::Stop,
         }
     }
 
@@ -129,7 +157,10 @@ impl Request {
             | Self::Images(device)
             | Self::Apps { device, .. }
             | Self::Screenshot { device, .. }
-            | Self::Orientation { device, .. } => Some(device),
+            | Self::Orientation { device, .. }
+            | Self::Running { device, .. }
+            | Self::Launch { device, .. }
+            | Self::Stop { device, .. } => Some(device),
         }
     }
 
@@ -142,7 +173,10 @@ impl Request {
             | Self::Services(_)
             | Self::Images(_)
             | Self::Apps { .. }
-            | Self::Orientation { .. } => None,
+            | Self::Orientation { .. }
+            | Self::Running { .. }
+            | Self::Launch { .. }
+            | Self::Stop { .. } => None,
         }
     }
 }
@@ -167,22 +201,32 @@ struct Options {
     max_matching: Option<usize>,
     out: Option<Out>,
     via: Option<String>,
+    bundle: Option<String>,
+    relaunch: bool,
 }
 
-/// The command line after the program's name; `None` when it is not one of the seven commands
+/// The command line after the program's name; `None` when it is not one of the ten commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
 /// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`], an empty `--out`, a way or a
 /// reader that is not one of its command's words, a key that is not written as a key, a
-/// variable name that is empty or holds `=` or NUL, `--device` beside `--device-key`, one of
-/// `--device-key` and `--key-salt-env` without the other, `--binding-salt-env` without
-/// `--key-salt-env` or on another command than `devices`).
+/// variable name that is empty or holds `=` or NUL, a bundle identifier that is not written as
+/// one, `--device` beside `--device-key`, one of `--device-key` and `--key-salt-env` without
+/// the other, `--binding-salt-env` without `--key-salt-env` or on another command than
+/// `devices`, `--relaunch` on another command than `launch`). Every option but `--relaunch`
+/// takes the argument after it as its value, whatever it is.
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, given) = arguments.split_first()?;
     let mut options = Options::default();
-    for pair in given.chunks(2) {
-        let [option, value] = pair else {
-            return None;
-        };
+    let mut rest = given.iter();
+    while let Some(option) = rest.next() {
+        if option.as_str() == RELAUNCH {
+            if options.relaunch {
+                return None;
+            }
+            options.relaunch = true;
+            continue;
+        }
+        let value = rest.next()?;
         match option.as_str() {
             "--device" if options.device.is_none() => {
                 options.device = Some(number::<u32>(value)?);
@@ -208,6 +252,7 @@ pub fn parse(arguments: &[String]) -> Option<Invocation> {
             }
             "--out" if options.out.is_none() => options.out = Some(out(value)?),
             "--via" if options.via.is_none() => options.via = Some(value.clone()),
+            "--bundle" if options.bundle.is_none() => options.bundle = Some(bundle(value)?),
             _ => return None,
         }
     }
@@ -235,6 +280,8 @@ fn devices(options: Options) -> Option<Request> {
         max_matching: None,
         out: None,
         via: None,
+        bundle: None,
+        relaunch: false,
     } = options
     else {
         return None;
@@ -259,6 +306,8 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
         max_matching,
         out,
         via,
+        bundle,
+        relaunch,
     } = options
     else {
         return None;
@@ -268,16 +317,16 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
         (None, Some(key), Some(salt_variable)) => Target::Key { key, salt_variable },
         _ => return None,
     };
-    let request = match (command, contains, max_matching, out, via) {
-        ("info", None, None, None, None) => Request::Info(target),
-        ("services", None, None, None, None) => Request::Services(target),
-        ("images", None, None, None, None) => Request::Images(target),
-        ("apps", Some(contains), max_matching, None, None) => Request::Apps {
+    let request = match (command, contains, max_matching, out, via, bundle, relaunch) {
+        ("info", None, None, None, None, None, false) => Request::Info(target),
+        ("services", None, None, None, None, None, false) => Request::Services(target),
+        ("images", None, None, None, None, None, false) => Request::Images(target),
+        ("apps", Some(contains), max_matching, None, None, None, false) => Request::Apps {
             device: target,
             contains,
             max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
         },
-        ("screenshot", None, None, Some(out), via) => Request::Screenshot {
+        ("screenshot", None, None, Some(out), via, None, false) => Request::Screenshot {
             device: target,
             out,
             via: match via {
@@ -285,12 +334,25 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
                 Some(word) => Way::from_word(&word)?,
             },
         },
-        ("orientation", None, None, None, via) => Request::Orientation {
+        ("orientation", None, None, None, via, None, false) => Request::Orientation {
             device: target,
             via: match via {
                 None => None,
                 Some(word) => Some(Reader::from_word(&word)?),
             },
+        },
+        ("running", None, None, None, None, Some(bundle), false) => Request::Running {
+            device: target,
+            bundle,
+        },
+        ("launch", None, None, None, None, Some(bundle), relaunch) => Request::Launch {
+            device: target,
+            bundle,
+            relaunch,
+        },
+        ("stop", None, None, None, None, Some(bundle), false) => Request::Stop {
+            device: target,
+            bundle,
         },
         _ => return None,
     };
@@ -322,6 +384,11 @@ fn out(value: &str) -> Option<Out> {
         STANDARD_OUTPUT => Some(Out::Stdout),
         path => Some(Out::File(path.to_owned())),
     }
+}
+
+/// The bundle identifier of `--bundle`, when it is written as one is.
+fn bundle(value: &str) -> Option<String> {
+    redact::is_bundle_identifier(value).then(|| value.to_owned())
 }
 
 /// The key of `--device-key`, when it is written as a key is.
@@ -1064,6 +1131,253 @@ mod tests {
         ];
         for line in refused {
             assert_eq!(parsed(line), None, "{line:?}");
+        }
+    }
+
+    /// The bundle the application commands' tests ask for.
+    const BUNDLE: &str = "com.example.app";
+
+    /// `running`, `launch` and `stop` take a device (by its number or by its key) and
+    /// `--bundle`, in any order, with `--timeout-ms`; `launch` takes `--relaunch`, a flag
+    /// without a value, anywhere among its options; each names its command and its device.
+    #[test]
+    fn the_application_commands_take_a_device_and_a_bundle() {
+        assert_eq!(
+            parsed(&["running", "--device", "3", "--bundle", BUNDLE]),
+            Some(Invocation {
+                request: Request::Running {
+                    device: Target::Number(3),
+                    bundle: BUNDLE.to_owned(),
+                },
+                timeout_ms: DEFAULT_TIMEOUT_MS,
+            })
+        );
+        assert_eq!(
+            parsed(&[
+                "stop",
+                "--bundle",
+                BUNDLE,
+                "--timeout-ms",
+                "9000",
+                "--device",
+                "4"
+            ]),
+            Some(Invocation {
+                request: Request::Stop {
+                    device: Target::Number(4),
+                    bundle: BUNDLE.to_owned(),
+                },
+                timeout_ms: 9_000,
+            })
+        );
+        let launch = |relaunch| Request::Launch {
+            device: Target::Number(5),
+            bundle: BUNDLE.to_owned(),
+            relaunch,
+        };
+        assert_eq!(
+            request(&["launch", "--device", "5", "--bundle", BUNDLE]),
+            Some(launch(false))
+        );
+        for line in [
+            ["launch", "--relaunch", "--device", "5", "--bundle", BUNDLE],
+            ["launch", "--device", "5", "--relaunch", "--bundle", BUNDLE],
+            ["launch", "--device", "5", "--bundle", BUNDLE, "--relaunch"],
+        ] {
+            assert_eq!(request(&line), Some(launch(true)), "{line:?}");
+        }
+        for (identifier, read) in [
+            ("COM.Example.App-2", "COM.Example.App-2"),
+            ("a", "a"),
+            ("com.example.app.widget", "com.example.app.widget"),
+        ] {
+            assert_eq!(
+                request(&["running", "--bundle", identifier, "--device", "3"]),
+                Some(Request::Running {
+                    device: Target::Number(3),
+                    bundle: read.to_owned(),
+                }),
+                "{identifier}"
+            );
+        }
+        let by_key = ["--device-key", VECTOR_KEY, "--key-salt-env", SALT_VARIABLE];
+        let cases: Vec<(Vec<&str>, Request, CommandName)> = vec![
+            (
+                vec!["running", "--bundle", BUNDLE],
+                Request::Running {
+                    device: key_target(),
+                    bundle: BUNDLE.to_owned(),
+                },
+                CommandName::Running,
+            ),
+            (
+                vec!["launch", "--relaunch", "--bundle", BUNDLE],
+                Request::Launch {
+                    device: key_target(),
+                    bundle: BUNDLE.to_owned(),
+                    relaunch: true,
+                },
+                CommandName::Launch,
+            ),
+            (
+                vec!["stop", "--bundle", BUNDLE],
+                Request::Stop {
+                    device: key_target(),
+                    bundle: BUNDLE.to_owned(),
+                },
+                CommandName::Stop,
+            ),
+        ];
+        for (line, expected, name) in cases {
+            let mut keyed = line.clone();
+            keyed.extend(by_key);
+            assert_eq!(request(&keyed), Some(expected.clone()), "{keyed:?}");
+            assert_eq!(expected.name(), name);
+            assert_eq!(expected.device(), None);
+            assert_eq!(expected.via(), None);
+        }
+        assert_eq!(launch(true).name(), CommandName::Launch);
+        assert_eq!(launch(true).device(), Some(5));
+    }
+
+    /// `--bundle` is required by `running`, `launch` and `stop` and taken by no other command;
+    /// it takes one bundle identifier written in its own characters, once; `--relaunch` is
+    /// taken by `launch` alone, once, and takes no value; the device flags are refused in the
+    /// same pairs as before.
+    #[test]
+    fn every_other_application_command_line_is_refused() {
+        let lines: Vec<Vec<&str>> = vec![
+            // --bundle is required.
+            vec!["running", "--device", "3"],
+            vec!["launch", "--device", "3"],
+            vec!["launch", "--device", "3", "--relaunch"],
+            vec!["stop", "--device", "3"],
+            vec!["running", "--device", "3", "--bundle"],
+            // --bundle takes a bundle identifier, once.
+            vec!["running", "--device", "3", "--bundle", ""],
+            vec![
+                "running",
+                "--device",
+                "3",
+                "--bundle",
+                "com.example.end_game",
+            ],
+            vec![
+                "running",
+                "--device",
+                "3",
+                "--bundle",
+                "com.example.app two",
+            ],
+            vec!["stop", "--device", "3", "--bundle", "com.example.\u{e4}pp"],
+            vec!["launch", "--device", "3", "--bundle", "com/example/app"],
+            vec![
+                "running", "--device", "3", "--bundle", BUNDLE, "--bundle", BUNDLE,
+            ],
+            // --relaunch is launch's alone, once, without a value.
+            vec!["running", "--device", "3", "--bundle", BUNDLE, "--relaunch"],
+            vec!["stop", "--relaunch", "--device", "3", "--bundle", BUNDLE],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--relaunch",
+                "--relaunch",
+            ],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--relaunch",
+                "true",
+            ],
+            vec!["info", "--device", "3", "--relaunch"],
+            vec!["devices", "--relaunch"],
+            // No other command takes --bundle; the application commands take no other option.
+            vec!["info", "--device", "3", "--bundle", BUNDLE],
+            vec![
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "app",
+                "--bundle",
+                BUNDLE,
+            ],
+            vec!["devices", "--bundle", BUNDLE],
+            vec![
+                "running",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--via",
+                "springboard",
+            ],
+            vec![
+                "launch", "--device", "3", "--bundle", BUNDLE, "--out", "a.png",
+            ],
+            vec![
+                "stop",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--contains",
+                "app",
+            ],
+            vec!["RUNNING", "--device", "3", "--bundle", BUNDLE],
+            // The device flags, refused as before.
+            vec!["running", "--bundle", BUNDLE],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--bundle",
+                BUNDLE,
+            ],
+            vec!["stop", "--device-key", VECTOR_KEY, "--bundle", BUNDLE],
+            vec![
+                "running",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--bundle",
+                BUNDLE,
+            ],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--bundle",
+                BUNDLE,
+            ],
+            vec![
+                "stop",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--binding-salt-env",
+                "ACIB_BINDING",
+                "--bundle",
+                BUNDLE,
+            ],
+            vec![
+                "running", "--device", "3", "--device", "3", "--bundle", BUNDLE,
+            ],
+        ];
+        for line in lines {
+            assert_eq!(parsed(&line), None, "{line:?}");
         }
     }
 }

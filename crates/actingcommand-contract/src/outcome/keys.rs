@@ -916,4 +916,14 @@ outcome_keys! {
     // ---- #463 KR-1 (a recording's step may press the back key, contracts/lab-recording.md "Key
     // steps"): why a step's key cannot be declared or generated (`record_key_invalid`). ----
     key_problem: vocab(key_problem),
+    // ---- #463 PRIV-1 (contracts/privacy-zones.md, "Codes"): the facts of a privacy finding,
+    // declared ahead of the first answer of the `privacy_` codes: which rectangle, which zone and
+    // of what kind, whether the region is a reading, and what a rectangle cannot see (fix round 1:
+    // the records key is `privacy_unseen_counts`, so that no key is spelled as a code). ----
+    privacy_rect_kind: vocab(privacy_rect_kind),
+    privacy_zone_id: token,
+    privacy_zone_kind: vocab(privacy_zone_kind),
+    privacy_reading: boolean,
+    privacy_unseen_kind: vocab(privacy_unseen_kind),
+    privacy_unseen_counts: records(privacy_unseen_kind, count),
 }

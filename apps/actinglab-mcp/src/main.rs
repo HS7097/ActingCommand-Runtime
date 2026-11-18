@@ -96,6 +96,10 @@ mod gate_398_db1;
 // its header, and `ac_run_show` of its job.
 #[cfg(test)]
 mod gate_434_pp1;
+// Test-only: #480 PG-2d, `ac_resume` takes the parameters it took
+// (`pg2d_ac_resume_takes_the_parameters_it_took`).
+#[cfg(test)]
+mod gate_480_pg2d;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

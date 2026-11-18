@@ -149,6 +149,15 @@ mod gate_463_sc1;
 // frames` as before.
 #[cfg(test)]
 mod gate_463_s1r;
+// #463 PRIV-1: a root's sensitive-zone declaration, the one list of a package's read regions,
+// which the scene pastes, and the comparison of the two.
+#[cfg(test)]
+mod gate_463_priv1;
+
+// #463 SEL-2L-a: a select of fixed slots may read its names by detecting their blocks, and the
+// refusal of a mark counts marks.
+#[cfg(test)]
+mod gate_463_sel2l_a;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

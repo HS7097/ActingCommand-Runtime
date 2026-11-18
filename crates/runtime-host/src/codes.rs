@@ -1707,6 +1707,19 @@ actingcommand_contract::outcome_codes! {
         /// self-check has both sides `ok: false`, no values and no `failure_code`.
         SchedulingResumeWithoutReconnect => "scheduling_resume_without_reconnect": info / none,
         // ---- #480 PG-2c: end
+        // ---- #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): begin
+        /// Info. A person's instance pause (`stand`) that answered `scheduling_pause_standing`
+        /// reached stage `released` by itself, its stages carried on by the host: written once,
+        /// as a `device_state_observed` record under the instance with its request's links.
+        SchedulingPauseSettled => "scheduling_pause_settled": info / none,
+        /// Warning. A tool's hold (`quiet_or_lift`) was lifted without its instance having become
+        /// quiet (its caller's time ended first; fix round 1: or a queued entry refused its
+        /// hand-back, or its close lease was refused): written once, as a `device_state_observed`
+        /// record under the instance with its request's links (keys `pause_reason` the hold's
+        /// reason, `in_the_way` what was in the way; the Runtime's own code of that failure is its
+        /// cause).
+        SchedulingPauseLiftedNotQuiet => "scheduling_pause_lifted_not_quiet": warning / none,
+        // ---- #480 PG-2d: end
     }
 }
 

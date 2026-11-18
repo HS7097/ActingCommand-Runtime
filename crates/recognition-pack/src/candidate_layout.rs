@@ -18,6 +18,10 @@
 //! in-task select step, the online observation and the offline Lab share this one entry, so the
 //! same scene and pack give the same bytes everywhere. A budget is an error, never a
 //! truncation, and a value the backend does not give is absent, never defaulted.
+//!
+//! Workflow #463 SEL-2L (since 0.12.74): a layout of either kind may declare one shared OCR
+//! read (`shared_ocr`); a `repeated_anchor` layout's read covers its readable band, and every
+//! actionable instance takes the text of its targets from it, block by block as a slot does.
 
 use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
@@ -106,6 +110,8 @@ const REPEATED_ANCHOR_FIELDS: &[&str] = &[
     "features",
     "unknown_identity",
     "sample_interval_ms",
+    // Workflow #463 SEL-2L.
+    "shared_ocr",
 ];
 const FEATURE_FIELDS: &[&str] = &[
     "name",
@@ -176,8 +182,8 @@ pub struct CandidateLayout {
     /// Required for multiple capture frames; one bounded interval between successive frames.
     #[serde(default)]
     pub sample_interval_ms: u16,
-    /// `fixed_slots`, Workflow #396 REC-8: one detection read the OCR targets of the slots and
-    /// features share.
+    /// `fixed_slots`, Workflow #396 REC-8, and (Workflow #463 SEL-2L) `repeated_anchor`: one
+    /// detection read the OCR targets of the slots and features share.
     #[serde(default)]
     pub shared_ocr: Option<CandidateSharedOcr>,
 }
@@ -187,6 +193,9 @@ pub struct CandidateLayout {
 /// resolved for the sample, lies inside the read's region takes its text from the read: the
 /// blocks whose center lies in its region, in `(y, x)` order joined by line feeds, with the
 /// lowest of their confidences. Each frame's read is one provider call of the projection.
+/// Workflow #463 SEL-2L: of a `repeated_anchor` layout too, whose read covers its readable band:
+/// there every such target of an actionable instance takes its text from the read, its region
+/// placed at the instance, by the same rules.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateSharedOcr {
@@ -241,6 +250,23 @@ impl CandidateSharedOcr {
             PackRegion::Rect(rect) => Some(*rect),
             PackRegion::Keyword(value) if value == "full_frame" => coordinate_space.map(space_rect),
             _ => None,
+        }
+    }
+
+    /// Workflow #463 SEL-2L: whether the read covers `band`, a `repeated_anchor` layout's
+    /// readable band, or the whole of `coordinate_space` when the layout declares none:
+    /// `full_frame`, or a rectangle that holds it.
+    fn covers_band(
+        &self,
+        band: Option<PackRect>,
+        coordinate_space: Option<PackCoordinateSpace>,
+    ) -> bool {
+        match &self.region {
+            PackRegion::Keyword(value) if value == "full_frame" => true,
+            PackRegion::Rect(rect) => band
+                .or_else(|| coordinate_space.map(space_rect))
+                .is_some_and(|band| rect_is_within(band, *rect)),
+            _ => false,
         }
     }
 }
@@ -682,11 +708,12 @@ impl SceneEvaluation<'_> {
             evaluator.pack.coordinate_space,
             |target_id| evaluator.target(target_id).ok(),
         );
-        if provider > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
+        let one = provider.for_instances(1);
+        if one > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
             return Err(CandidateProjectionError::budget_exceeded(
                 "provider_evaluations",
                 format!(
-                    "layout '{layout_id}' needs {provider} OCR and NN evaluations above the {CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}-evaluation budget"
+                    "layout '{layout_id}' needs {one} OCR and NN evaluations above the {CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}-evaluation budget"
                 ),
             )
             .into());
@@ -734,8 +761,10 @@ impl SceneEvaluation<'_> {
                 .collect::<Vec<_>>(),
             CandidateLayoutKind::RepeatedAnchor => {
                 let instances = self.anchor_instances(layout)?;
-                // `provider` counts one instance; each actionable instance repeats it.
-                let needed = provider.saturating_mul(
+                // `provider` counts one instance's own evaluations, which each actionable instance
+                // repeats; Workflow #463 SEL-2L: the shared read is called once a frame, whatever
+                // the instances.
+                let needed = provider.for_instances(
                     instances
                         .iter()
                         .filter(|instance| instance.actionable)
@@ -787,13 +816,21 @@ impl SceneEvaluation<'_> {
                         let started = Instant::now();
                         let frame_index = usize::from(sample.frame);
                         let in_frame = std::ptr::eq(scenes[frame_index], self.scene);
-                        // Workflow #396 REC-8: a target inside the shared read takes its blocks.
+                        // Workflow #396 REC-8: a target inside the shared read takes its blocks;
+                        // Workflow #463 SEL-2L: on a `repeated_anchor` layout, every target the
+                        // read gives text to.
                         let shared = match &layout.shared_ocr {
                             None => Ok(None),
-                            Some(shared) if in_frame => {
-                                self.shared_text(shared, target_id, at, *sample, &mut shared_reads)
-                            }
-                            Some(shared) => contexts[frame_index].shared_text(
+                            Some(shared) if in_frame => self.layout_shared_text(
+                                layout.kind,
+                                shared,
+                                target_id,
+                                at,
+                                *sample,
+                                &mut shared_reads,
+                            ),
+                            Some(shared) => contexts[frame_index].layout_shared_text(
+                                layout.kind,
                                 shared,
                                 target_id,
                                 at,
@@ -1350,13 +1387,39 @@ impl SceneEvaluation<'_> {
         }
     }
 
-    /// Workflow #396 REC-8: the evaluation of `target_id` from the layout's shared read of this
-    /// frame, when `target_id` is an OCR target the read gives text to and its region, moved to
-    /// `placement` and shifted by the sample, lies inside the read's region; `None` for any
-    /// other target, which reads on its own. The frame's read calls the provider once; its
-    /// result, an error too, is kept in `reads` under the sample's frame.
+    /// Workflow #396 REC-8: `layout_shared_text` of a `fixed_slots` layout's read.
+    #[cfg(test)]
     pub(crate) fn shared_text(
         &self,
+        shared: &CandidateSharedOcr,
+        target_id: &str,
+        placement: Option<PackPoint>,
+        sample: CandidateSampleVariant,
+        reads: &mut BTreeMap<u8, RecognitionPackResult<SharedTextRead>>,
+    ) -> RecognitionPackResult<Option<TargetEvaluation>> {
+        self.layout_shared_text(
+            CandidateLayoutKind::FixedSlots,
+            shared,
+            target_id,
+            placement,
+            sample,
+            reads,
+        )
+    }
+
+    /// Workflow #396 REC-8: the evaluation of `target_id` from the shared read of this frame of a
+    /// layout of `kind`, when `target_id` is an OCR target the read gives text to and its region,
+    /// moved to `placement` and shifted by the sample, lies inside the read's region; `None` for
+    /// any other target, which reads on its own. The frame's read calls the provider once; its
+    /// result, an error too, is kept in `reads` under the sample's frame. Workflow #463 SEL-2L:
+    /// on a `repeated_anchor` layout, whose read covers its readable band (`validate_shared_ocr`)
+    /// and whose features are read only on an instance inside the band, every target the read
+    /// gives text to takes it from the read, so no instance falls back to a read of its own (a
+    /// region placed at a scaled match may reach past the band, where the read holds no block);
+    /// the blocks it takes, their order, their joining and their confidence are a slot's.
+    fn layout_shared_text(
+        &self,
+        kind: CandidateLayoutKind,
         shared: &CandidateSharedOcr,
         target_id: &str,
         placement: Option<PackPoint>,
@@ -1386,7 +1449,7 @@ impl SceneEvaluation<'_> {
         };
         let (region, region_evidence) = self.ocr_region(&target)?;
         let shared_rect = provider_region(self.scene, target_id, &shared.region)?;
-        if !rect_is_within(region, shared_rect) {
+        if kind == CandidateLayoutKind::FixedSlots && !rect_is_within(region, shared_rect) {
             return Ok(None);
         }
         let first = !reads.contains_key(&sample.frame);
@@ -1766,6 +1829,9 @@ impl CandidateLayout {
     /// task and step deadline; this admission lower bound never allocates another budget. A
     /// `repeated_anchor` layout counts its per-instance provider time once for each instance
     /// the provider-evaluation budget lets one projection evaluate, at most `max_instances`.
+    /// Workflow #463 SEL-2L: its shared read takes its timeout once on each frame it serves, as a
+    /// `fixed_slots` layout's does, whatever the instances, and leaves the instances what is left
+    /// of the evaluation budget after it.
     pub fn maximum_provider_and_wait_ms(&self, evaluator: &RecognitionEvaluator) -> u64 {
         let lookup = |target_id: &str| evaluator.target(target_id).ok();
         // Workflow #396 REC-8: a call the shared read serves takes no provider time of its own;
@@ -1810,7 +1876,8 @@ impl CandidateLayout {
                     lookup,
                 );
                 let budgeted = CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS
-                    .checked_div(calls)
+                    .saturating_sub(calls.shared)
+                    .checked_div(calls.own)
                     .unwrap_or(0);
                 u64::from(self.max_instances.unwrap_or(0))
                     .min(u64::try_from(budgeted).unwrap_or(u64::MAX))
@@ -1828,7 +1895,11 @@ impl CandidateLayout {
 /// inside the read's region. A `template_relative` region is known only on the frame, so the
 /// count keeps its call; the frame may still serve it. Workflow #428 CFL-2: with `any_chain`, a
 /// target counts whatever its chain (the calls the read would serve if the chains were equal).
-fn shared_calls<'t>(
+/// Workflow #463 SEL-2L: a `repeated_anchor` instance's place is known only on the frame, but the
+/// layout's read covers its readable band (`validate_shared_ocr`) and the frame's read serves
+/// every call of an OCR target it gives text to on an instance inside the band
+/// (`SceneEvaluation::layout_shared_text`), so every such call is served.
+pub(crate) fn shared_calls<'t>(
     layout: &CandidateLayout,
     default_metric: crate::RecognitionMatchMetric,
     coordinate_space: Option<PackCoordinateSpace>,
@@ -1837,7 +1908,7 @@ fn shared_calls<'t>(
 ) -> (BTreeSet<SampleKey>, BTreeSet<u8>) {
     let mut served = BTreeSet::new();
     let mut frames = BTreeSet::new();
-    let (Some(shared), CandidateLayoutKind::FixedSlots) = (&layout.shared_ocr, layout.kind) else {
+    let Some(shared) = &layout.shared_ocr else {
         return (served, frames);
     };
     let Some(shared_rect) = shared.rect(coordinate_space) else {
@@ -1855,30 +1926,35 @@ fn shared_calls<'t>(
         if !serves {
             continue;
         }
-        let (dx, dy) = (i32::from(key.1), i32::from(key.2));
-        let region = match (key.5, &ocr.region) {
-            (Some((x, y)), PackRegion::Rect(rect)) => PackRect {
-                x: x.saturating_add(dx),
-                y: y.saturating_add(dy),
-                ..*rect
-            },
-            (None, PackRegion::Rect(rect)) => PackRect {
-                x: rect.x.saturating_add(dx),
-                y: rect.y.saturating_add(dy),
-                ..*rect
-            },
-            (None, PackRegion::Keyword(value)) if value == "full_frame" && dx == 0 && dy == 0 => {
-                match coordinate_space {
-                    Some(space) => space_rect(space),
-                    None => continue,
+        if layout.kind == CandidateLayoutKind::FixedSlots {
+            let (dx, dy) = (i32::from(key.1), i32::from(key.2));
+            let region = match (key.5, &ocr.region) {
+                (Some((x, y)), PackRegion::Rect(rect)) => PackRect {
+                    x: x.saturating_add(dx),
+                    y: y.saturating_add(dy),
+                    ..*rect
+                },
+                (None, PackRegion::Rect(rect)) => PackRect {
+                    x: rect.x.saturating_add(dx),
+                    y: rect.y.saturating_add(dy),
+                    ..*rect
+                },
+                (None, PackRegion::Keyword(value))
+                    if value == "full_frame" && dx == 0 && dy == 0 =>
+                {
+                    match coordinate_space {
+                        Some(space) => space_rect(space),
+                        None => continue,
+                    }
                 }
+                _ => continue,
+            };
+            if !rect_is_within(region, shared_rect) {
+                continue;
             }
-            _ => continue,
-        };
-        if rect_is_within(region, shared_rect) {
-            frames.insert(key.0);
-            served.insert(key);
         }
+        frames.insert(key.0);
+        served.insert(key);
     }
     (served, frames)
 }
@@ -2119,16 +2195,37 @@ fn floor_milli(target_id: &str, value: f32) -> Result<i64, CandidateProjectionFa
     Ok(milli as i64)
 }
 
+/// Workflow #463 SEL-2L: the OCR and NN evaluations of one projection, in their two parts: `own`,
+/// those of the targets read on their own (for a `repeated_anchor` layout, those of one instance,
+/// which every actionable instance repeats), and `shared`, the shared read's, one on each frame
+/// it serves, whatever the instances.
+#[derive(Clone, Copy)]
+struct ProviderEvaluations {
+    own: usize,
+    shared: usize,
+}
+
+impl ProviderEvaluations {
+    /// The evaluations of a projection whose features are read on `instances` instances: their
+    /// own evaluations each, and the shared read's once.
+    fn for_instances(self, instances: usize) -> usize {
+        self.own
+            .saturating_mul(instances)
+            .saturating_add(self.shared)
+    }
+}
+
 /// OCR and NN evaluations one projection of `layout` performs: one per distinct OCR or NN
 /// target its slots read, and one per OCR or NN member of each distinct composite they read.
 /// For a `repeated_anchor` layout, the evaluations of one instance. Workflow #396 REC-8: a
-/// target the shared read serves counts none, and the shared read one on each frame it serves.
+/// target the shared read serves counts none, and the shared read one on each frame it serves
+/// (Workflow #463 SEL-2L: apart, so that a `repeated_anchor` layout's instances do not repeat it).
 fn provider_evaluations<'t>(
     layout: &CandidateLayout,
     default_metric: crate::RecognitionMatchMetric,
     coordinate_space: Option<PackCoordinateSpace>,
     target: impl Fn(&str) -> Option<&'t RecognitionTarget>,
-) -> usize {
+) -> ProviderEvaluations {
     let is_provider = |target_id: &str| {
         matches!(
             target(target_id),
@@ -2150,7 +2247,10 @@ fn provider_evaluations<'t>(
             _ => 0,
         })
         .sum::<usize>();
-    own + shared_frames.len()
+    ProviderEvaluations {
+        own,
+        shared: shared_frames.len(),
+    }
 }
 
 /// The wire shape of the schema `0.7` top-level `candidate_layouts`: unknown fields, a field
@@ -2641,7 +2741,8 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
             pack.defaults.match_metric,
             pack.coordinate_space,
             |target_id| targets.get(target_id).copied(),
-        );
+        )
+        .for_instances(1);
         if provider > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
             let field = match layout.kind {
                 CandidateLayoutKind::FixedSlots => "slots",
@@ -2657,10 +2758,12 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
     }
 }
 
-/// Workflow #396 REC-8: a layout's `shared_ocr` belongs to a `fixed_slots` layout, reads a
-/// rectangle inside `coordinate_space` or `full_frame` with the detector and a declared line
-/// merge, within the OCR timeout, and gives text to at least one OCR target its slots or
-/// features read (a shared read nothing uses is refused).
+/// Workflow #396 REC-8: a layout's `shared_ocr` reads a rectangle inside `coordinate_space` or
+/// `full_frame` with the detector and a declared line merge, within the OCR timeout, and gives
+/// text to at least one OCR target its slots or features read (a shared read nothing uses is
+/// refused). Workflow #463 SEL-2L: a `repeated_anchor` layout declares it too (a `fixed_slots`
+/// layout only before it), and its region covers the layout's `readable_band`, or the whole
+/// frame when the layout declares none.
 fn validate_shared_ocr(
     pack: &RecognitionPack,
     targets: &HashMap<&str, &RecognitionTarget>,
@@ -2670,9 +2773,6 @@ fn validate_shared_ocr(
     errors: &mut Vec<String>,
 ) {
     let pointer = format!("{pointer}/shared_ocr");
-    if layout.kind != CandidateLayoutKind::FixedSlots {
-        errors.push(format!("{pointer}: only a fixed_slots layout declares it"));
-    }
     let region = format!("{pointer}/region");
     match &shared.region {
         PackRegion::Rect(rect) => {
@@ -2688,6 +2788,13 @@ fn validate_shared_ocr(
         _ => errors.push(format!(
             "{region}: a shared read reads a rectangle or full_frame"
         )),
+    }
+    if layout.kind == CandidateLayoutKind::RepeatedAnchor
+        && !shared.covers_band(layout.readable_band, pack.coordinate_space)
+    {
+        errors.push(format!(
+            "{region}: the shared read of a repeated_anchor layout covers its readable_band, or the whole frame when it declares none"
+        ));
     }
     match (shared.blocks, shared.line_merge) {
         (OcrLocateBlocks::Region, _) => errors.push(format!(
@@ -2728,10 +2835,11 @@ fn validate_shared_ocr(
 
 impl RecognitionPack {
     /// Workflow #428 CFL-2 (design CF v2 §5.6, the resource side's request): each OCR target a
-    /// `fixed_slots` layout's slots or features read inside its shared read, with the read's model
-    /// and languages, whose chain differs from the read's (colors in another order too), so that
-    /// it reads on its own instead: `(layout index, target id)`, once per pair, in layout order
-    /// and then in the order of the layout's sample calls. `standard-pack check` warns of each.
+    /// `fixed_slots` layout's slots or features read inside its shared read (Workflow #463
+    /// SEL-2L: or a `repeated_anchor` layout's features read), with the read's model and
+    /// languages, whose chain differs from the read's (colors in another order too), so that it
+    /// reads on its own instead: `(layout index, target id)`, once per pair, in layout order and
+    /// then in the order of the layout's sample calls. `standard-pack check` warns of each.
     pub fn preprocess_divergences(&self) -> Vec<(usize, String)> {
         let lookup = |target_id: &str| self.targets.iter().find(|target| target.id() == target_id);
         let mut divergences = Vec::new();
@@ -3140,3 +3248,8 @@ mod gate_411_b2;
 #[cfg(test)]
 #[path = "anchor_search_tests.rs"]
 mod anchor_search_tests;
+
+// Workflow #463 SEL-2L: a `repeated_anchor` layout's shared read.
+#[cfg(test)]
+#[path = "gate_463_sel2l.rs"]
+mod gate_463_sel2l;

@@ -1112,14 +1112,20 @@ fn evaluate_batch(
     })
 }
 
-fn rejected(rejections: &[MarkRejection], total: usize) -> LabError {
+/// `record_mark_rejected` for the refusals `rejections` of a batch of `total` marks. #463 SEL-2L-a:
+/// its message counts marks on both sides, the refused ones by their distinct ids, so that a
+/// select refused on several frames, screens or rows counts once; `details.marks` keeps every
+/// refusal.
+pub(crate) fn rejected(rejections: &[MarkRejection], total: usize) -> LabError {
+    let failed = rejections
+        .iter()
+        .map(|rejection| rejection.id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
     with_details(
         blocked(
             "record_mark_rejected",
-            format!(
-                "{} of {total} marks failed; nothing recorded",
-                rejections.len()
-            ),
+            format!("{failed} of {total} marks failed; nothing recorded"),
         ),
         json!({"marks": rejections.iter().map(MarkRejection::to_json).collect::<Vec<_>>()}),
     )

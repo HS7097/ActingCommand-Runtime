@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The one JSON line `acib` prints for each command (board #479, ACIB-0, ACIB-1 and ACIB-2).
+//! The one JSON line `acib` prints for each command (board #479, ACIB-0 to ACIB-3).
 //!
 //! These types are the whole of what the program shows. None of them has a member for a
 //! device's serial number, UDID, name or address, or for anything of a pairing record: the
@@ -9,10 +9,18 @@
 //! holds its format, its width and its height as its header gives them and its length, never
 //! a byte of its content: the picture goes to the file or the standard output `--out` names and
 //! nowhere else. A device's key is a [`DeviceKey`], a salted digest made by the key function
-//! alone: no member holds a salt or the identifier a key was made from.
+//! alone: no member holds a salt or the identifier a key was made from. (ACIB-3) The lines of
+//! `running`, `launch` and `stop` ([`Running`], [`Launch`], [`Stop`]) name the one bundle asked
+//! for, as the command line gave it, and hold of the phone's lists of applications and
+//! processes only booleans and the pids of that bundle's own processes (the application's and,
+//! apart, its extensions'); an error of the application service is an [`ErrorKind`], a word of
+//! this program's own, never its text. No member holds another application's name, bundle
+//! identifier, path or pid.
 
 use crate::key::DeviceKey;
+use crate::matching::Pids;
 use crate::redact;
+use crate::stopping::Verdict;
 use serde::{Serialize, Serializer};
 use std::time::Duration;
 
@@ -27,6 +35,9 @@ pub enum CommandName {
     Apps,
     Screenshot,
     Orientation,
+    Running,
+    Launch,
+    Stop,
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
@@ -34,7 +45,7 @@ pub enum CommandName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
-    /// The command line is not one of the seven commands with their options.
+    /// The command line is not one of the ten commands with their options.
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
@@ -99,6 +110,8 @@ pub enum Problem {
     ServiceNotListed,
     /// A remote service inside the tunnel took the connection, but its own first exchange
     /// failed (a CoreDevice service's XPC handshake, the instruments server's first message).
+    /// Of the application service (`running`, `launch`, `stop`), the line names the error's
+    /// [`ErrorKind`] and no text.
     ServiceHandshakeFailed,
     /// The instruments server did not open its screenshot channel.
     ChannelRefused,
@@ -113,6 +126,47 @@ pub enum Problem {
     /// The SpringBoard service took the connection but did not answer the request of the
     /// interface orientation with one.
     OrientationFailed,
+    /// The application service did not answer its list of applications; the line names the
+    /// error's [`ErrorKind`].
+    ApplicationListFailed,
+    /// The application service did not answer its list of processes; the line names the
+    /// error's [`ErrorKind`].
+    ProcessListFailed,
+    /// The list of applications holds the bundle, with a path that is read as no place (not an
+    /// absolute path or a file URL): which processes are of it cannot be told.
+    BundlePathUnreadable,
+    /// The application service did not answer the launch with a process; the line names the
+    /// error's [`ErrorKind`]. Of any kind but `device_refused` the application may have been
+    /// started all the same: `running` tells.
+    LaunchFailed,
+    /// `stop`'s last look inside the command's deadline still lists a process of the
+    /// application that `stop` sent the kill signal to.
+    StillRunning,
+    /// `launch`: the list of applications does not hold the bundle, so no launch was sent (the
+    /// line's `installed` is false, as `running` and `stop` answer it).
+    NotInstalled,
+}
+
+/// How a request to the application service failed, by this program's own words: what the
+/// library's error tells apart, and `other` for everything else. The library hands the
+/// service's own refusal as the debug text of its error dictionary, which can name other
+/// applications, their paths and their processes: no text of these errors is ever shown, only
+/// the kind. A locked phone has no kind of its own: the library maps no refusal to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+    /// The service answered with its error in place of an output (the library's
+    /// `CoreDevice(DeviceError)`): the phone refused the request.
+    DeviceRefused,
+    /// The service answered, but not in the shape the library reads (`UnexpectedResponse`,
+    /// `Plist`, `CoreDevice(MissingField)`, `CoreDevice(MalformedField)`).
+    AnswerUnreadable,
+    /// The connection under the exchange failed (`Socket`).
+    ConnectionFailed,
+    /// The XPC layer over the connection failed (`Xpc`).
+    XpcFailed,
+    /// Any other error of the library.
+    Other,
 }
 
 /// A refusal or failure: the word, and the library's error text where the library gave one.
@@ -684,6 +738,301 @@ pub struct Orientations {
     pub candidates: Vec<Candidate>,
 }
 
+/// `acib running --device <n> --bundle <id>`, read-only: of the one bundle asked for (`bundle`,
+/// as the command line gave it), whether the application service's list of applications holds
+/// it (`installed`), whether the application itself runs (`running`: a process whose executable
+/// lies directly in the bundle's directory), the pids of those processes, ascending (`pids`),
+/// and apart the pids of the bundle's extensions' processes (`extension_pids`, which do not make
+/// it run; `matching.rs`). A line stopped by a problem keeps what was read before it
+/// (`installed`), and names the error's kind where the service gave an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Running {
+    pub command: CommandName,
+    pub device: u32,
+    pub bundle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+}
+
+impl Running {
+    /// The answer for `bundle` on `device`, before anything is read.
+    pub fn asked(device: u32, bundle: &str) -> Self {
+        Self {
+            command: CommandName::Running,
+            device,
+            bundle: bundle.to_owned(),
+            installed: None,
+            running: None,
+            pids: None,
+            extension_pids: None,
+            problem: None,
+            error_kind: None,
+        }
+    }
+
+    /// The list of applications does not hold the bundle, for the categories asked: no process
+    /// of it is looked for.
+    pub fn not_installed(self) -> Self {
+        Self {
+            installed: Some(false),
+            running: Some(false),
+            pids: Some(Vec::new()),
+            extension_pids: Some(Vec::new()),
+            ..self
+        }
+    }
+
+    /// The bundle is installed (and what follows was not read).
+    pub fn installed(self) -> Self {
+        Self {
+            installed: Some(true),
+            ..self
+        }
+    }
+
+    /// The bundle is installed and `pids` are its processes: it runs when the application itself
+    /// has one; its extensions' are named apart.
+    pub fn found(self, pids: Pids) -> Self {
+        Self {
+            installed: Some(true),
+            running: Some(!pids.application.is_empty()),
+            pids: Some(pids.application),
+            extension_pids: Some(pids.extensions),
+            ..self
+        }
+    }
+
+    /// Stopped by `problem`, of `kind` where the service gave an error.
+    pub fn failed(self, problem: Problem, kind: Option<ErrorKind>) -> Self {
+        Self {
+            problem: Some(problem),
+            error_kind: kind,
+            ..self
+        }
+    }
+}
+
+/// `acib launch --device <n> --bundle <id> [--relaunch]`: the bundle asked for, whether it was
+/// to be ended first (`relaunch`), whether the list of applications holds it (`installed`, looked
+/// up before any launch is sent) and the pid of the process the service answered the launch with
+/// (`pid`); or `not_installed` (no launch sent), `launch_failed` with the error's kind, or a word
+/// of the steps before (the application service's handshake, its list of applications).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Launch {
+    pub command: CommandName,
+    pub device: u32,
+    pub bundle: String,
+    pub relaunch: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+}
+
+impl Launch {
+    /// The answer for `bundle` on `device`, before anything is read.
+    pub fn asked(device: u32, bundle: &str, relaunch: bool) -> Self {
+        Self {
+            command: CommandName::Launch,
+            device,
+            bundle: bundle.to_owned(),
+            relaunch,
+            installed: None,
+            pid: None,
+            problem: None,
+            error_kind: None,
+        }
+    }
+
+    /// The list of applications holds the bundle (and the launch is sent).
+    pub fn installed(self) -> Self {
+        Self {
+            installed: Some(true),
+            ..self
+        }
+    }
+
+    /// The list of applications does not hold the bundle: no launch is sent.
+    pub fn not_installed(self) -> Self {
+        Self {
+            installed: Some(false),
+            problem: Some(Problem::NotInstalled),
+            ..self
+        }
+    }
+
+    /// The service launched the bundle as the process `pid`.
+    pub fn launched(self, pid: u32) -> Self {
+        Self {
+            pid: Some(pid),
+            ..self
+        }
+    }
+
+    /// Stopped by `problem`, of `kind` where the service gave an error.
+    pub fn failed(self, problem: Problem, kind: Option<ErrorKind>) -> Self {
+        Self {
+            problem: Some(problem),
+            error_kind: kind,
+            ..self
+        }
+    }
+}
+
+/// What `stop` sent: the pids of the application's processes the kill signal was sent to,
+/// ascending, and each signal whose answer was an error or could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signals {
+    pub signalled: Vec<u32>,
+    pub errors: Vec<SignalError>,
+}
+
+/// A kill signal whose answer was an error or could not be read: the pid it was sent to and the
+/// error's kind, a fact beside `stop`'s verdict (which comes from the looks, not from it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SignalError {
+    pub pid: u32,
+    pub error_kind: ErrorKind,
+}
+
+/// `acib stop --device <n> --bundle <id>`: of the bundle asked for, whether it is installed,
+/// whether the application itself ran at the first look (`was_running`), the pids of its
+/// processes the kill signal was sent to (`signalled`), each signal whose answer was an error or
+/// could not be read, with its kind (`signal_errors`, only when there are any), the pids of the
+/// application the last look lists (`remaining`), whether any runs (`running`) and the pids of
+/// the bundle's extensions' processes the last look lists (`extension_pids`: `stop` sends them
+/// nothing and leaves them, which is no failure). An application that does not run (or is not
+/// installed) is answered at the first look: no signal, `signalled` and `remaining` empty. The
+/// last look inside the deadline still listing a process it signalled is `still_running`
+/// (status 1), whatever the signals answered; a process it lists that was not signalled (one
+/// started after the first look) is in `remaining` and `running`, and is not `still_running`. A
+/// line stopped by another problem keeps what was read and done before it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Stop {
+    pub command: CommandName,
+    pub device: u32,
+    pub bundle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub was_running: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signalled: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub signal_errors: Vec<SignalError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+}
+
+impl Stop {
+    /// The answer for `bundle` on `device`, before anything is read.
+    pub fn asked(device: u32, bundle: &str) -> Self {
+        Self {
+            command: CommandName::Stop,
+            device,
+            bundle: bundle.to_owned(),
+            installed: None,
+            was_running: None,
+            signalled: None,
+            signal_errors: Vec::new(),
+            remaining: None,
+            running: None,
+            extension_pids: None,
+            problem: None,
+            error_kind: None,
+        }
+    }
+
+    /// The bundle is installed (and what follows was not read).
+    pub fn installed(self) -> Self {
+        Self {
+            installed: Some(true),
+            ..self
+        }
+    }
+
+    /// The application itself does not run at the first look (`installed` says whether it is
+    /// installed; `extension_pids` are its extensions' processes that look lists): no signal is
+    /// sent, and the first look is the last.
+    pub fn nothing_ran(self, installed: bool, extension_pids: Vec<u32>) -> Self {
+        Self {
+            installed: Some(installed),
+            was_running: Some(false),
+            signalled: Some(Vec::new()),
+            remaining: Some(Vec::new()),
+            running: Some(false),
+            extension_pids: Some(extension_pids),
+            ..self
+        }
+    }
+
+    /// The application ran and was sent `signals`, and the processes of the bundle the command's
+    /// last look lists are `last`, of which `verdict` is the decision (`stopping.rs`): its
+    /// application's pids are `remaining`, and `still_running` stands when the verdict is still
+    /// running.
+    pub fn looked(self, signals: Signals, last: Pids, verdict: Verdict) -> Self {
+        let running = !last.application.is_empty();
+        Self {
+            remaining: Some(last.application),
+            running: Some(running),
+            extension_pids: Some(last.extensions),
+            problem: match verdict {
+                Verdict::StillRunning => Some(Problem::StillRunning),
+                Verdict::Stopped => None,
+            },
+            ..self.with_signals(signals)
+        }
+    }
+
+    /// The application ran and was sent `signals`, and a look after them failed with `kind`.
+    pub fn look_failed(self, signals: Signals, kind: ErrorKind) -> Self {
+        self.with_signals(signals)
+            .failed(Problem::ProcessListFailed, Some(kind))
+    }
+
+    /// The application ran and was sent `signals`.
+    fn with_signals(self, signals: Signals) -> Self {
+        Self {
+            installed: Some(true),
+            was_running: Some(true),
+            signalled: Some(signals.signalled),
+            signal_errors: signals.errors,
+            ..self
+        }
+    }
+
+    /// Stopped by `problem`, of `kind` where the service gave an error.
+    pub fn failed(self, problem: Problem, kind: Option<ErrorKind>) -> Self {
+        Self {
+            problem: Some(problem),
+            error_kind: kind,
+            ..self
+        }
+    }
+}
+
 /// A refused or failed command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refused {
@@ -717,6 +1066,9 @@ pub enum Line {
     Apps(Apps),
     Screenshot(Screenshot),
     Orientations(Orientations),
+    Running(Running),
+    Launch(Launch),
+    Stop(Stop),
     Refused(Refused),
 }
 
@@ -789,6 +1141,9 @@ impl Line {
             Self::Info(info) => info.problem.is_none(),
             Self::Apps(apps) => apps.problem.is_none(),
             Self::Screenshot(screenshot) => screenshot.problem.is_none(),
+            Self::Running(running) => running.problem.is_none(),
+            Self::Launch(launch) => launch.problem.is_none(),
+            Self::Stop(stop) => stop.problem.is_none(),
             Self::Orientations(orientations) => orientations
                 .candidates
                 .iter()
@@ -895,7 +1250,7 @@ mod tests {
             problem: Problem::SessionRefused,
             error: Some("InvalidHostID".to_owned()),
         });
-        vec![
+        let mut shapes = vec![
             (
                 Line::Devices(Devices {
                     command: CommandName::Devices,
@@ -1270,9 +1625,175 @@ mod tests {
                 r#"{"command":"info","problem":"device_key_unknown"}"#,
                 false,
             ),
+        ];
+        shapes.extend(every_application_shape());
+        shapes.push((
+            Line::refused(None, None, Failure::own(Problem::CommandLineInvalid)),
+            r#"{"problem":"command_line_invalid"}"#,
+            false,
+        ));
+        shapes
+    }
+
+    /// The bundle the application lines ask for.
+    const BUNDLE: &str = "com.example.app";
+
+    /// One line of every shape `running`, `launch` and `stop` print, with its text and whether
+    /// it is answered.
+    fn every_application_shape() -> Vec<(Line, &'static str, bool)> {
+        let running = || Running::asked(3, BUNDLE);
+        let launch = |relaunch| Launch::asked(3, BUNDLE, relaunch);
+        let stop = || Stop::asked(3, BUNDLE);
+        let pids = |application: &[u32], extensions: &[u32]| Pids {
+            application: application.to_vec(),
+            extensions: extensions.to_vec(),
+        };
+        let signals = |signalled: &[u32], errors: &[SignalError]| Signals {
+            signalled: signalled.to_vec(),
+            errors: errors.to_vec(),
+        };
+        let unreadable = SignalError {
+            pid: 530,
+            error_kind: ErrorKind::AnswerUnreadable,
+        };
+        vec![
             (
-                Line::refused(None, None, Failure::own(Problem::CommandLineInvalid)),
-                r#"{"problem":"command_line_invalid"}"#,
+                Line::Running(running().found(pids(&[412], &[530]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(pids(&[412, 413], &[]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(pids(&[], &[530]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(Pids::default())),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().not_installed()),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":false,"running":false,"pids":[],"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().installed().failed(
+                    Problem::ProcessListFailed,
+                    Some(ErrorKind::ConnectionFailed),
+                )),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"problem":"process_list_failed","error_kind":"connection_failed"}"#,
+                false,
+            ),
+            (
+                Line::Running(
+                    running()
+                        .installed()
+                        .failed(Problem::BundlePathUnreadable, None),
+                ),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"problem":"bundle_path_unreadable"}"#,
+                false,
+            ),
+            (
+                Line::Running(running().failed(
+                    Problem::ApplicationListFailed,
+                    Some(ErrorKind::DeviceRefused),
+                )),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","problem":"application_list_failed","error_kind":"device_refused"}"#,
+                false,
+            ),
+            (
+                Line::Running(
+                    running().failed(Problem::ServiceHandshakeFailed, Some(ErrorKind::XpcFailed)),
+                ),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","problem":"service_handshake_failed","error_kind":"xpc_failed"}"#,
+                false,
+            ),
+            (
+                Line::Launch(launch(false).installed().launched(412)),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"pid":412}"#,
+                true,
+            ),
+            (
+                Line::Launch(launch(true).installed().launched(413)),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"installed":true,"pid":413}"#,
+                true,
+            ),
+            (
+                Line::Launch(
+                    launch(false)
+                        .installed()
+                        .failed(Problem::LaunchFailed, Some(ErrorKind::DeviceRefused)),
+                ),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"problem":"launch_failed","error_kind":"device_refused"}"#,
+                false,
+            ),
+            (
+                Line::Launch(
+                    launch(true)
+                        .installed()
+                        .failed(Problem::LaunchFailed, Some(ErrorKind::AnswerUnreadable)),
+                ),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"installed":true,"problem":"launch_failed","error_kind":"answer_unreadable"}"#,
+                false,
+            ),
+            (
+                Line::Launch(launch(false).not_installed()),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":false,"problem":"not_installed"}"#,
+                false,
+            ),
+            (
+                Line::Launch(
+                    launch(true).failed(Problem::ApplicationListFailed, Some(ErrorKind::Other)),
+                ),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"problem":"application_list_failed","error_kind":"other"}"#,
+                false,
+            ),
+            (
+                Line::Stop(stop().nothing_ran(true, vec![530])),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().nothing_ran(false, Vec::new())),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":false,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().looked(
+                    signals(&[412, 413], &[]),
+                    pids(&[], &[530]),
+                    Verdict::Stopped,
+                )),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,413],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().looked(
+                    signals(&[412, 530], &[unreadable]),
+                    pids(&[530], &[]),
+                    Verdict::StillRunning,
+                )),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,530],"signal_errors":[{"pid":530,"error_kind":"answer_unreadable"}],"remaining":[530],"running":true,"extension_pids":[],"problem":"still_running"}"#,
+                false,
+            ),
+            (
+                Line::Stop(stop().look_failed(signals(&[412], &[]), ErrorKind::Other)),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_list_failed","error_kind":"other"}"#,
+                false,
+            ),
+            (
+                Line::Stop(
+                    stop()
+                        .installed()
+                        .failed(Problem::ProcessListFailed, Some(ErrorKind::XpcFailed)),
+                ),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_list_failed","error_kind":"xpc_failed"}"#,
                 false,
             ),
         ]
@@ -1299,6 +1820,7 @@ mod tests {
             "answer",
             "binding_key",
             "build_version",
+            "bundle",
             "bytes",
             "candidates",
             "command",
@@ -1314,9 +1836,11 @@ mod tests {
             "entitlement",
             "error",
             "error_kind",
+            "extension_pids",
             "format",
             "height",
             "image_type",
+            "installed",
             "listed",
             "matching",
             "matching_count",
@@ -1328,6 +1852,8 @@ mod tests {
             "out_left",
             "paired",
             "password_protected",
+            "pid",
+            "pids",
             "port",
             "problem",
             "product_type",
@@ -1335,12 +1861,18 @@ mod tests {
             "queries",
             "query",
             "refused",
+            "relaunch",
+            "remaining",
             "request",
+            "running",
             "services",
+            "signal_errors",
+            "signalled",
             "stage",
             "user_applications",
             "value",
             "via",
+            "was_running",
             "width",
         ];
         fn collect(value: &serde_json::Value, found: &mut BTreeSet<String>) {
@@ -1406,6 +1938,12 @@ mod tests {
             (Problem::BindingSaltUnusable, "binding_salt_unusable"),
             (Problem::DeviceKeyUnknown, "device_key_unknown"),
             (Problem::OrientationFailed, "orientation_failed"),
+            (Problem::ApplicationListFailed, "application_list_failed"),
+            (Problem::ProcessListFailed, "process_list_failed"),
+            (Problem::BundlePathUnreadable, "bundle_path_unreadable"),
+            (Problem::LaunchFailed, "launch_failed"),
+            (Problem::StillRunning, "still_running"),
+            (Problem::NotInstalled, "not_installed"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -1886,5 +2424,242 @@ mod tests {
         .map(|word| (*word).to_owned())
         .collect();
         assert_eq!(words, expected);
+    }
+
+    /// Every member and every text a line of `running`, `launch` or `stop` can hold.
+    fn members_and_texts(line: &Line) -> (BTreeSet<String>, BTreeSet<String>) {
+        fn walk(
+            value: &serde_json::Value,
+            members: &mut BTreeSet<String>,
+            texts: &mut BTreeSet<String>,
+        ) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, member) in map {
+                        members.insert(key.clone());
+                        walk(member, members, texts);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        walk(item, members, texts);
+                    }
+                }
+                serde_json::Value::String(text) => {
+                    texts.insert(text.clone());
+                }
+                _ => {}
+            }
+        }
+        let (mut members, mut texts) = (BTreeSet::new(), BTreeSet::new());
+        let value = serde_json::to_value(line).expect("a line serializes");
+        walk(&value, &mut members, &mut texts);
+        (members, texts)
+    }
+
+    /// The word a value of this program's own closed lists serializes to.
+    fn word<T: Serialize>(value: T) -> String {
+        serde_json::to_value(value)
+            .expect("a word serializes")
+            .as_str()
+            .expect("a word is a text")
+            .to_owned()
+    }
+
+    /// By construction, the lines of `running`, `launch` and `stop` hold no member that could
+    /// carry another application's name, bundle identifier, path or pid: their members are
+    /// these, every text in them is the bundle asked for or a word of this program's own
+    /// closed lists (a command, a problem, an error kind), and every number a device's number
+    /// or a pid of the bundle's own processes.
+    #[test]
+    fn the_application_answers_hold_no_member_for_another_applications_identity() {
+        const MEMBERS: &[&str] = &[
+            "bundle",
+            "command",
+            "device",
+            "error_kind",
+            "extension_pids",
+            "installed",
+            "pid",
+            "pids",
+            "problem",
+            "relaunch",
+            "remaining",
+            "running",
+            "signal_errors",
+            "signalled",
+            "was_running",
+        ];
+        let mut words: BTreeSet<String> = [BUNDLE.to_owned()].into();
+        words.extend(
+            [CommandName::Running, CommandName::Launch, CommandName::Stop]
+                .into_iter()
+                .map(word),
+        );
+        words.extend(
+            [
+                Problem::ServiceHandshakeFailed,
+                Problem::ApplicationListFailed,
+                Problem::ProcessListFailed,
+                Problem::BundlePathUnreadable,
+                Problem::LaunchFailed,
+                Problem::StillRunning,
+                Problem::NotInstalled,
+            ]
+            .into_iter()
+            .map(word),
+        );
+        words.extend(
+            [
+                ErrorKind::DeviceRefused,
+                ErrorKind::AnswerUnreadable,
+                ErrorKind::ConnectionFailed,
+                ErrorKind::XpcFailed,
+                ErrorKind::Other,
+            ]
+            .into_iter()
+            .map(word),
+        );
+        let mut found = BTreeSet::new();
+        for (line, text, _) in every_application_shape() {
+            let (members, texts) = members_and_texts(&line);
+            found.extend(members);
+            for shown in texts {
+                assert!(words.contains(&shown), "{shown} in {text}");
+            }
+        }
+        let allowed: BTreeSet<String> = MEMBERS.iter().map(|member| (*member).to_owned()).collect();
+        assert_eq!(found, allowed);
+    }
+
+    /// `stop`'s answer, its verdict taken from its last look by `stopping.rs`: when the
+    /// application itself does not run (installed or not), it is answered at the first look,
+    /// nothing signalled and nothing remaining, its extensions' pids named, status 0; when every
+    /// process it signalled is gone at the last look, status 0, the extensions it left named and
+    /// no failure; when one remains, `running` true and `still_running`, status 1. A signal whose
+    /// answer was an error or could not be read is a fact beside the verdict, its pid and kind
+    /// in `signal_errors`: gone is stopped (status 0), still listed is `still_running`. A process
+    /// the last look lists that was not signalled is named in `remaining` and is not
+    /// `still_running`. A look that failed answers `process_list_failed` and keeps what was
+    /// signalled.
+    #[test]
+    fn stop_answers_when_nothing_runs_when_all_ended_and_when_one_remains() {
+        let answered = |stop: Stop| -> (Stop, bool) {
+            let line = Line::Stop(stop.clone());
+            (stop, line.answered())
+        };
+        let signals = |signalled: &[u32], errors: &[(u32, ErrorKind)]| Signals {
+            signalled: signalled.to_vec(),
+            errors: errors
+                .iter()
+                .map(|(pid, error_kind)| SignalError {
+                    pid: *pid,
+                    error_kind: *error_kind,
+                })
+                .collect(),
+        };
+        let last = |application: &[u32], extensions: &[u32]| Pids {
+            application: application.to_vec(),
+            extensions: extensions.to_vec(),
+        };
+        // The answer after `signals` when the last look lists `last`, with the decision's
+        // verdict on that look.
+        let looked = |sent: Signals, seen: Pids| {
+            let verdict = crate::stopping::verdict(&sent.signalled, &seen.application);
+            answered(Stop::asked(3, BUNDLE).looked(sent, seen, verdict))
+        };
+
+        for (installed, extensions) in [(true, vec![530]), (true, Vec::new()), (false, Vec::new())]
+        {
+            let (nothing, status) =
+                answered(Stop::asked(3, BUNDLE).nothing_ran(installed, extensions.clone()));
+            assert!(status, "nothing runs, installed {installed}");
+            assert_eq!(nothing.installed, Some(installed));
+            assert_eq!(nothing.was_running, Some(false));
+            assert_eq!(nothing.signalled, Some(Vec::new()));
+            assert_eq!(nothing.remaining, Some(Vec::new()));
+            assert_eq!(nothing.running, Some(false));
+            assert_eq!(nothing.extension_pids, Some(extensions));
+            assert_eq!((nothing.problem, nothing.error_kind), (None, None));
+            assert!(nothing.signal_errors.is_empty());
+        }
+
+        let (all_ended, status) = looked(signals(&[412, 415], &[]), last(&[], &[530]));
+        assert!(status, "all ended, an extension left");
+        assert_eq!(all_ended.was_running, Some(true));
+        assert_eq!(all_ended.signalled, Some(vec![412, 415]));
+        assert_eq!(all_ended.remaining, Some(Vec::new()));
+        assert_eq!(all_ended.running, Some(false));
+        assert_eq!(all_ended.extension_pids, Some(vec![530]));
+        assert_eq!((all_ended.problem, all_ended.error_kind), (None, None));
+
+        let (one_remains, status) = looked(signals(&[412, 413], &[]), last(&[413], &[]));
+        assert!(!status, "one remains");
+        assert_eq!(one_remains.remaining, Some(vec![413]));
+        assert_eq!(one_remains.running, Some(true));
+        assert_eq!(one_remains.problem, Some(Problem::StillRunning));
+        assert_eq!(one_remains.error_kind, None);
+        assert!(one_remains.signal_errors.is_empty());
+
+        for kind in [ErrorKind::DeviceRefused, ErrorKind::AnswerUnreadable] {
+            let beside = vec![SignalError {
+                pid: 413,
+                error_kind: kind,
+            }];
+            let (gone, status) = looked(signals(&[412, 413], &[(413, kind)]), last(&[], &[]));
+            assert!(status, "a signal of kind {kind:?} whose process is gone");
+            assert_eq!(gone.signal_errors, beside);
+            assert_eq!((gone.running, gone.problem), (Some(false), None));
+            let (listed, status) = looked(signals(&[412, 413], &[(413, kind)]), last(&[413], &[]));
+            assert!(
+                !status,
+                "a signal of kind {kind:?} whose process is still listed"
+            );
+            assert_eq!(listed.signal_errors, beside);
+            assert_eq!(listed.problem, Some(Problem::StillRunning));
+        }
+
+        let (started_anew, status) = looked(signals(&[412], &[]), last(&[777], &[]));
+        assert!(status, "only a process it did not signal is listed");
+        assert_eq!(started_anew.remaining, Some(vec![777]));
+        assert_eq!(started_anew.running, Some(true));
+        assert_eq!(started_anew.problem, None);
+
+        let (unseen, status) = answered(Stop::asked(3, BUNDLE).look_failed(
+            signals(&[412], &[(412, ErrorKind::Other)]),
+            ErrorKind::ConnectionFailed,
+        ));
+        assert!(!status, "a look failed");
+        assert_eq!(unseen.signalled, Some(vec![412]));
+        assert_eq!(unseen.signal_errors.len(), 1);
+        assert_eq!(
+            (unseen.remaining, unseen.running, unseen.extension_pids),
+            (None, None, None)
+        );
+        assert_eq!(unseen.problem, Some(Problem::ProcessListFailed));
+        assert_eq!(unseen.error_kind, Some(ErrorKind::ConnectionFailed));
+    }
+
+    /// Each error kind of the application service has a snake_case word of its own.
+    #[test]
+    fn every_error_kind_has_a_word_of_its_own() {
+        let words = [
+            (ErrorKind::DeviceRefused, "device_refused"),
+            (ErrorKind::AnswerUnreadable, "answer_unreadable"),
+            (ErrorKind::ConnectionFailed, "connection_failed"),
+            (ErrorKind::XpcFailed, "xpc_failed"),
+            (ErrorKind::Other, "other"),
+        ];
+        let mut seen = BTreeSet::new();
+        for (kind, expected) in words {
+            assert_eq!(word(kind), expected);
+            assert!(
+                expected
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{expected} is snake_case"
+            );
+            assert!(seen.insert(expected), "{expected} is one word for one kind");
+        }
     }
 }
