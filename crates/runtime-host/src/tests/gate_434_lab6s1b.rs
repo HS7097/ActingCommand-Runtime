@@ -80,6 +80,7 @@ fn lab6s1b_a_lab_connections_pause_and_resume_are_taken_and_recorded_as_the_clis
                     scope,
                     pause_reason: reason(),
                     drain_timeout_ms: 1_000,
+                    pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
                 },
             );
             let receipt = client.send(&pause);

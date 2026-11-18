@@ -343,6 +343,8 @@ impl HostShared {
                         pause_reason,
                         since_unix_ms,
                         stage: InstancePauseStage::Released,
+                        pause_mode: None,
+                        in_the_way: Vec::new(),
                     };
                     state
                         .validate()

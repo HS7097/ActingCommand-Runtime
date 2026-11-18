@@ -660,6 +660,7 @@ fn a_scheduling_pause_stops_no_wake_and_a_wake_changes_no_scheduling() {
             },
             pause_reason: SchedulingPauseReason::new("neutral_pause").expect("pause reason"),
             drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
     );
     assert_eq!(paused.state(), RuntimeReceiptState::Completed, "{paused:?}");

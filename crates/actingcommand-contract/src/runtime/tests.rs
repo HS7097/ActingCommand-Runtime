@@ -3188,3 +3188,215 @@ fn g1_status_device_held_round_trips_and_is_strict() {
         serde_json::json!("fenced");
     assert!(serde_json::from_value::<RuntimeResult>(word).is_err());
 }
+
+/// #480 PG-2c (register §1.472; `runtime-client` 12): `PauseScheduling.pause_mode` is `stand` when
+/// absent (the request of a client of revision 11 or lower), each of its two words decodes, it is
+/// written on every request, and a word outside the pair is refused.
+#[test]
+fn pg2c_pause_mode_is_stand_when_absent_and_a_closed_pair() {
+    let operation = |mode: Option<&str>| {
+        let mut wire = serde_json::json!({
+            "operation": "pause_scheduling",
+            "scope": {"kind": "instance", "instance_alias": "node.a"},
+            "pause_reason": "operator",
+            "drain_timeout_ms": 1_000,
+        });
+        if let Some(mode) = mode {
+            wire["pause_mode"] = serde_json::json!(mode);
+        }
+        serde_json::from_value::<RuntimeOperation>(wire)
+    };
+    let mode_of = |decoded: RuntimeOperation| match decoded {
+        RuntimeOperation::PauseScheduling { pause_mode, .. } => pause_mode,
+        other => panic!("a pause: {other:?}"),
+    };
+    assert_eq!(
+        mode_of(operation(None).expect("absent")),
+        SchedulingPauseMode::Stand
+    );
+    assert_eq!(
+        mode_of(operation(Some("stand")).expect("stand")),
+        SchedulingPauseMode::Stand
+    );
+    let hold = operation(Some("quiet_or_lift")).expect("quiet_or_lift");
+    hold.validate().expect("a valid pause");
+    assert_eq!(
+        serde_json::to_value(&hold).expect("encodes")["pause_mode"],
+        serde_json::json!("quiet_or_lift")
+    );
+    assert_eq!(mode_of(hold), SchedulingPauseMode::QuietOrLift);
+    assert!(operation(Some("lift")).is_err(), "a word outside the pair");
+}
+
+/// #480 PG-2c (register §1.472; `runtime-client` 12): a reader of revision 12 reads the instance
+/// pause's `pause_mode` and `in_the_way` in a `Status` result; a pause without them has neither
+/// key (what a reader of revision 11 reads); a word outside `pause_obstacle` is refused at the
+/// decode, a word twice and anything in the way of a `released` pause by the check.
+#[test]
+fn pg2c_status_pause_members_round_trip_and_are_strict() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let pause = |stage: InstancePauseStage, in_the_way: Vec<PauseObstacle>| InstancePauseState {
+        revision: 1,
+        pause_reason: SchedulingPauseReason::new("operator").expect("reason"),
+        since_unix_ms: 10,
+        stage,
+        pause_mode: (!in_the_way.is_empty()).then_some(SchedulingPauseMode::Stand),
+        in_the_way,
+    };
+    let instance = |alias: &str, held: InstancePauseState| {
+        RuntimeInstanceStatus::new(
+            alias,
+            *ids.mint_instance_id().expect("instance id").transport(),
+            false,
+            0,
+            false,
+            false,
+            false,
+        )
+        .and_then(|status| status.with_pause(Some(held)))
+        .expect("instance status")
+    };
+    let standing = pause(
+        InstancePauseStage::Paused,
+        vec![PauseObstacle::Lease, PauseObstacle::QueuedEntry],
+    );
+    let status = RuntimeControlPlaneStatus::new(
+        owner_epoch,
+        vec![
+            instance("node.a", pause(InstancePauseStage::Released, Vec::new())),
+            instance("node.b", standing.clone()),
+        ],
+    )
+    .expect("status");
+    let result = RuntimeResult::Status { status };
+    let encoded = serde_json::to_value(&result).expect("status encodes");
+    let decoded: RuntimeResult = serde_json::from_value(encoded.clone()).expect("status decodes");
+    assert_eq!(decoded, result);
+    let rows = encoded["status"]["instances"]
+        .as_array()
+        .expect("instance rows");
+    let quiet = rows[0]["pause"].as_object().expect("node.a's pause");
+    assert!(
+        !quiet.contains_key("pause_mode") && !quiet.contains_key("in_the_way"),
+        "{encoded}"
+    );
+    assert_eq!(rows[1]["pause"]["pause_mode"], serde_json::json!("stand"));
+    assert_eq!(
+        rows[1]["pause"]["in_the_way"],
+        serde_json::json!(["lease", "queued_entry"])
+    );
+
+    let mut word = encoded;
+    word["status"]["instances"][1]["pause"]["in_the_way"] = serde_json::json!(["in_the_way"]);
+    assert!(serde_json::from_value::<RuntimeResult>(word).is_err());
+    let twice = pause(
+        InstancePauseStage::Paused,
+        vec![PauseObstacle::Lease, PauseObstacle::Lease],
+    );
+    assert!(twice.validate().is_err(), "a word twice");
+    let released = pause(
+        InstancePauseStage::Released,
+        vec![PauseObstacle::ContainedRun],
+    );
+    assert!(
+        released.validate().is_err(),
+        "nothing in the way once released"
+    );
+    standing.validate().expect("a standing pause");
+}
+
+/// #480 PG-2c fix round 3: the completed receipt of a resume of `scope` with `selfcheck`, as the
+/// Runtime builds it.
+fn resumed_receipt(
+    scope: &SchedulingPauseScope,
+    selfcheck: Option<SchedulingResumeSelfCheck>,
+) -> RuntimeContractResult<RuntimeReceipt> {
+    RuntimeReceipt::success(
+        &request(RuntimeOperation::ResumeScheduling {
+            scope: scope.clone(),
+            expected: None,
+        }),
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::SchedulingResumed {
+            scope: scope.clone(),
+            revision: 2,
+            selfcheck,
+        },
+    )
+}
+
+/// #480 PG-2c fix round 3 (the coordinator's ruling: the rule stays as v0.12.72 has it): an
+/// instance resume always carries a self-check, so a completed receipt of one without it is still
+/// refused (`invalid_scheduling_pause_receipt`), as every client of an earlier build refuses it.
+#[test]
+fn pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused() {
+    let instance = SchedulingPauseScope::Instance {
+        instance_alias: "node.a".to_owned(),
+    };
+
+    let refused = resumed_receipt(&instance, None).expect_err("an instance resume without one");
+
+    assert_eq!(
+        refused.code().as_str(),
+        "invalid_scheduling_pause_receipt",
+        "{refused:?}"
+    );
+}
+
+/// #480 PG-2c fix round 3 (`contracts/scheduling-pause.md`, "Resume"): the self-check of a resume
+/// that ran no reconnect, both sides `ok: false` with no values and no `failure_code`, validates;
+/// the completed receipt of an instance resume that carries it with
+/// `scheduling_resume_without_reconnect` as its success code's cause
+/// (`RuntimeReceipt::scheduling_resumed`) validates and carries that cause.
+#[test]
+fn pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt() {
+    let instance = SchedulingPauseScope::Instance {
+        instance_alias: "node.a".to_owned(),
+    };
+    let selfcheck = SchedulingResumeSelfCheck {
+        capture: SchedulingResumeCaptureCheck {
+            ok: false,
+            width: None,
+            height: None,
+            capture_backend: None,
+        },
+        touch: SchedulingResumeTouchCheck {
+            ok: false,
+            backend: None,
+            max_x: None,
+            max_y: None,
+            invasive: false,
+        },
+        failure_code: None,
+    };
+
+    selfcheck
+        .validate()
+        .expect("the self-check of no reconnect");
+    let receipt = RuntimeReceipt::scheduling_resumed(
+        &request(RuntimeOperation::ResumeScheduling {
+            scope: instance.clone(),
+            expected: None,
+        }),
+        RuntimeResult::SchedulingResumed {
+            scope: instance,
+            revision: 2,
+            selfcheck: Some(selfcheck),
+        },
+        Some(crate::outcome::Outcome::relayed(
+            "scheduling_resume_without_reconnect",
+        )),
+    )
+    .expect("the receipt of a resume without a reconnect");
+    let [cause] = receipt.outcome().causes() else {
+        panic!("one cause: {receipt:?}");
+    };
+    assert_eq!(
+        cause.outcome().code().as_str(),
+        "scheduling_resume_without_reconnect",
+        "{receipt:?}"
+    );
+    assert!(resumed_receipt(&SchedulingPauseScope::Global, None).is_ok());
+}

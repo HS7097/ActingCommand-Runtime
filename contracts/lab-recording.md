@@ -2774,7 +2774,20 @@ Runtime is asked to pause):
   stage lifts the gate it closed, but since 0.12.72 a shutdown that interrupts the hand-back while
   nothing but the Runtime's own work is in the way keeps the pause, and the next start restores it
   (`scheduling_pause_kept_at_shutdown`, [scheduling-pause.md](scheduling-pause.md), "Instance
-  pause: three stages"). So `record start` reads the status once more, on the same connection:
+  pause: three stages"). #480 PG-2c (since 0.12.73): the recording's hold is a tool's hold,
+  `pause_mode` `quiet_or_lift` (`lab_ops::scheduling::pause_for_recording`, set in code), which no
+  shutdown keeps and which answers `scheduling_pause_kept_at_shutdown` never (a shutdown fails it
+  `scheduling_pause_drain_interrupted` or `scheduling_pause_release_interrupted` and lifts it); a
+  pause of it can still stand after a `Failed` receipt only where its lift failed, which latches
+  the Runtime, so that receipt says the Runtime halted and no status is read after it (PG-2a fix
+  round 1, below) ([scheduling-pause.md](scheduling-pause.md), "Two modes"). Fix round 1: the hold
+  reads its receipt's outcome, and a pause answered `Completed` with a cause under its success
+  code (one of the informing causes only a person's pause is given) did not get a quiet instance:
+  the start fails (fix round 2, one code, one cause) `scheduling_hold_not_quiet` (exit 5), its
+  details that code's values, what the receipt said (`receipt_cause` the cause's code, `pause_stage`,
+  `in_the_way`), after the same status read as below (the details' `pause_found` `hold_shown` when
+  it shows the hold's reason). So `record start` reads the status once more, on the same
+  connection:
   - it shows no pause of the instance, or another party's (the common case: a drain that did not
     finish within its time): as a refused pause, the header put back and nothing started;
   - it shows the hold's own reason, or the read fails or gets no answer: the header stays as

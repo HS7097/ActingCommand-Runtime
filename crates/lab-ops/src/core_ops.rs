@@ -790,9 +790,11 @@ fn served(
                     None,
                 ));
             }
-            let paused = scheduling::pause(client, scheduling::pause_scope(alias), reason, drain)
-                .map_err(|error| client_failed(&error))?;
-            reported(&paused, ActingctlCode::RuntimeSchedulingPaused)
+            // #480 PG-2c: a person's or an agent's pause, `stand` always.
+            let paused =
+                scheduling::pause_standing(client, scheduling::pause_scope(alias), reason, drain)
+                    .map_err(|error| client_failed(&error))?;
+            reported_pause(&paused)
         }
         "resume" => {
             let scope = scheduling::pause_scope(optional_alias(client, params)?);
@@ -1503,6 +1505,25 @@ fn reported(result: &impl Serialize, code: ActingctlCode) -> Exit {
     match serde_json::to_value(result) {
         Ok(value) => {
             cli_line::success(cli_line::members(value, RESULT_MEMBER), &Outcome::new(code))
+        }
+        Err(error) => output_failed(&error),
+    }
+}
+
+/// #480 PG-2c: the `pause` row's answer, `runtime_scheduling_paused` beside the Runtime's result;
+/// when the receipt's outcome carries a cause (a pause that stands and is not yet quiet,
+/// `scheduling_pause_standing` with its stage and what is in the way, or one a shutdown or a
+/// resume ended), that outcome as the line's cause, unchanged: facts only. Exit 0 either way.
+fn reported_pause(paused: &actingcommand_runtime_client::SchedulingPauseAnswer) -> Exit {
+    match serde_json::to_value(&paused.result) {
+        Ok(value) => {
+            let outcome = Outcome::new(ActingctlCode::RuntimeSchedulingPaused);
+            let outcome = if paused.outcome.causes().is_empty() {
+                outcome
+            } else {
+                outcome.caused_by(paused.outcome.clone())
+            };
+            cli_line::success(cli_line::members(value, RESULT_MEMBER), &outcome)
         }
         Err(error) => output_failed(&error),
     }

@@ -92,8 +92,11 @@
 // whose receipt is `Failed` (a stage's failure) is followed by one status read on the same
 // connection; `s17_a_refused_pause_starts_nothing` (a `Denied` receipt) is unchanged.
 // - `pg2a_a_failed_pause_that_still_stands_keeps_the_header_for_record_stop`: the pause fails as a
-//   shutdown that kept it answers (`scheduling_pause_kept_at_shutdown`, `Failed`,
-//   `RuntimeUnavailable`) and the status then shows the hold's reason: the wire is the handshake,
+//   shutdown fails it (#480 PG-2c fix round 2: `scheduling_pause_release_interrupted`, `Failed`,
+//   `RuntimeUnavailable`, which a recording's `quiet_or_lift` hold really receives; before,
+//   `scheduling_pause_kept_at_shutdown`, which it is never given now) and the status then shows the
+//   hold's reason (a status no build of 0.12.73 shows after that failure: the Lab's rule that the
+//   status read decides is what this pins): the wire is the handshake,
 //   the display read, `status`, `pause_scheduling`, `status`; the start fails
 //   `runtime_not_running` with `hold {reason, own: true}` in its details, the header stays active
 //   and names it, `record status` shows `own`; after a restart `record stop` sends `status` and one
@@ -102,7 +105,8 @@
 //   (`scheduling_pause_drain_incomplete`, `Failed`, `ContainedTaskBusy`) and the status then shows
 //   no pause: `device_error`, "started nothing", an earlier stopped header put back byte for byte,
 //   no recording directory, the same wire.
-// - `pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header`: the kept pause's failure,
+// - `pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header`: that failure (fix round 2:
+//   `scheduling_pause_release_interrupted`; before, the kept pause's),
 //   and the connection closed on the status read after it: `runtime_not_running` with the hold in
 //   its details, the message naming the failed read, the header active and naming the hold.
 // Fix round 1 (the coordinator's brief rd-1118/brief-480-pg2a-fix1.md, after the independent
@@ -265,6 +269,8 @@ pub(super) fn instance(alias: &str, pause: Option<(&str, u64)>) -> RuntimeInstan
             pause_reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
             since_unix_ms: 1,
             stage: InstancePauseStage::Released,
+            pause_mode: None,
+            in_the_way: Vec::new(),
         }))
         .expect("a paused instance's status")
 }
@@ -338,8 +344,11 @@ fn denied(request: &RuntimeRequest, code: RuntimeErrorCode) -> ScriptedAnswer {
     )
 }
 
-/// #480 PG-2a: the code of a pause a shutdown kept (`Failed`, `RuntimeUnavailable`).
-const KEPT_AT_SHUTDOWN: &str = "scheduling_pause_kept_at_shutdown";
+/// #480 PG-2a: the code of a pause a shutdown ended (`Failed`, `RuntimeUnavailable`). #480 PG-2c
+/// fix round 2: a recording's hold is `quiet_or_lift`, which a shutdown fails with this code and
+/// lifts (before PG-2c these tests answered `scheduling_pause_kept_at_shutdown`, which a tool's hold
+/// is never given now).
+const RELEASE_INTERRUPTED: &str = "scheduling_pause_release_interrupted";
 
 /// #480 PG-2a: a failure of a stage of the pause, as the Runtime answers one: `Failed`, its own
 /// `code` on top and `runtime` as the receipt's Runtime error code.
@@ -410,6 +419,7 @@ pub(super) fn pause_asked(
                 scope,
                 pause_reason,
                 drain_timeout_ms,
+                ..
             } => Some((
                 scope.clone(),
                 pause_reason.as_str().to_owned(),
@@ -1362,8 +1372,13 @@ fn s17_fix_a_stop_whose_release_fails_names_the_retry() {
 fn pg2a_a_failed_pause_that_still_stands_keeps_the_header_for_record_stop() {
     let _guard = env_lock();
     let place = Place::new();
-    // The reason the pause was sent with, which the status read after its failure shows: a pause a
-    // shutdown kept.
+    // The reason the pause was sent with, which the status read after its failure shows. #480 PG-2c
+    // fix round 2: the failure is one a recording's hold (`quiet_or_lift`) really receives, a
+    // shutdown during its hand-back; with it the Runtime lifts the pause, so no build of 0.12.73
+    // shows the hold's reason after it (only a lift that fails could leave it, and that answers the
+    // Runtime halted: `pg2a_fix_a_failed_pause_fatal_to_the_connection_sends_no_status_read`). What
+    // this pins is the Lab's rule: the status read, not the code, decides, and a status that shows
+    // the hold's reason keeps the header.
     let sent = Arc::new(Mutex::new(None::<String>));
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         let seen = Arc::clone(&sent);
@@ -1380,7 +1395,7 @@ fn pg2a_a_failed_pause_that_still_stands_keeps_the_header_for_record_stop() {
                     }
                     failed_in_a_stage(
                         request,
-                        KEPT_AT_SHUTDOWN,
+                        RELEASE_INTERRUPTED,
                         RuntimeErrorCode::RuntimeUnavailable,
                     )
                 })
@@ -1529,7 +1544,9 @@ fn pg2a_a_failed_pause_that_left_no_pause_puts_the_header_back() {
 fn pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header() {
     let _guard = env_lock();
     let place = Place::new();
-    // The pause fails as a kept one answers, and the connection ends on the status read after it.
+    // The pause fails as a shutdown during its hand-back fails a recording's hold (#480 PG-2c fix
+    // round 2: before PG-2c, as a kept one answered), and the connection ends on the status read
+    // after it: whether a pause with the hold's reason stands is not known.
     let runtime = ScriptedRuntime::start(&place.runtime(), |owner_epoch| {
         vec![
             ScriptedConnection::new()
@@ -1538,7 +1555,7 @@ fn pg2a_a_failed_pause_whose_status_cannot_be_read_keeps_the_header() {
                 .request(|request| {
                     failed_in_a_stage(
                         request,
-                        KEPT_AT_SHUTDOWN,
+                        RELEASE_INTERRUPTED,
                         RuntimeErrorCode::RuntimeUnavailable,
                     )
                 })

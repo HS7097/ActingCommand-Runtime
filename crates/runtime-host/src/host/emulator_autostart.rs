@@ -1015,6 +1015,20 @@ impl HostShared {
     /// the instance's own pause answers (one stable word). #429 R-7b extends this place with the
     /// player hold. An explicit emulator control (a person, an agent, Lab) never asks it. `at`
     /// names the caller's operation for a poisoned lock.
+    ///
+    /// #480 PG-2c fix round 2 (`contracts/scheduling-pause.md`, "Two modes"; the commit mark of
+    /// the slice's ruling 7 is withdrawn): the last question, with the instance's admission guard
+    /// in hand just before the provider's Start (`drive_configured_control`) or the recognition's
+    /// bind (`prepare_recognized_instance`), is asked here as before PG-2c. A pause recorded after
+    /// it finds the automatic start's claim lease and lists `automatic_start` in its way
+    /// (`release_obstacles`, `lease_obstacle`), because that lease is there until the drive ends.
+    /// This rests on three lines: `drive_configured_control` takes the admission guard (`let
+    /// admission = lock(&instance_guard, ..)`) before its last question and keeps it to its end;
+    /// `prepare_recognized_instance` takes it (`let admission = self.lock_admission(..)`) before
+    /// its last question and drops it only after the preparation; and the lease sweep collects an
+    /// expired lease only when the guard is free (`cleanup_expired_if_guard_free`: `let
+    /// Some(admission) = self.try_lock_admission(..) else { return Ok(false) }`). Whoever changes
+    /// one of the three changes what a pause lists in its way.
     pub(super) fn automatic_start_hold(
         &self,
         alias: &str,

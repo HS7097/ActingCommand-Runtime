@@ -266,6 +266,12 @@ actingcommand_contract::outcome_codes! {
         ReportPartMissing => "report_part_missing": warning / none,
         ReportTrimmed => "report_trimmed": warning / none,
         // ---- end of RPT-1
+        // ---- #480 PG-2c fix round 2 (`contracts/scheduling-pause.md`, "Two modes"): a tool's
+        // hold (the rescue module's, a recording's) whose pause the Runtime answered Completed
+        // with a cause under its success code did not get a quiet instance
+        // (`scheduling::hold_not_quiet`).
+        SchedulingHoldNotQuiet => "scheduling_hold_not_quiet": error / none,
+        // ---- end of PG-2c fix round 2
     }
 }
 

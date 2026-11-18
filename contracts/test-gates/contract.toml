@@ -957,3 +957,21 @@ tests = [
     "actingcommand-contract::lib::runtime::gate_463_s38::s38_fix1_a_reader_of_revision_ten_refuses_a_request_with_values",
 ]
 incident = ["#463 S3-8"]
+
+# #480 PG-2c (0.12.73; register §1.472; brief rd-1118/brief-480-pg2c-pause-stands.md; runtime-client 12): PauseScheduling's pause_mode decodes stand when absent, stand and quiet_or_lift when named, is written on every request (quiet_or_lift as such) and refuses a word outside the pair; the instance pause's status members pause_mode and in_the_way round-trip in a Status result for a reader of revision 12, a pause without them has neither key, a word outside pause_obstacle is refused at the decode, a word twice and anything in the way of a released pause by the check
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::pg2c_pause_mode_is_stand_when_absent_and_a_closed_pair",
+    "actingcommand-contract::lib::runtime::tests::pg2c_status_pause_members_round_trip_and_are_strict",
+]
+incident = ["#480", "PG-2c"]
+
+# #480 PG-2c fix round 3 (0.12.73; register §1.472; the coordinator's rulings on the fix round's item A and the console maintainer's reading): the rule stays as v0.12.72 has it, a completed instance resume without a selfcheck is refused invalid_scheduling_pause_receipt; the selfcheck of a resume that ran no reconnect (both sides ok false, no values, no failure_code) validates, and its completed receipt built by RuntimeReceipt::scheduling_resumed carries scheduling_resume_without_reconnect as its success code's one cause; a global resume without a selfcheck is valid
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused",
+    "actingcommand-contract::lib::runtime::tests::pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt",
+]
+incident = ["#480", "PG-2c"]

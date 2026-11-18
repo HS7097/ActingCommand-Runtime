@@ -43,6 +43,25 @@ pub(super) enum RecognitionPreparation {
     Held(AutomaticStartHold),
 }
 
+/// #480 PG-2c fix round 1: how a close of an instance's retained session went
+/// ([`HostShared::close_retained_instance_with`]).
+pub(super) enum RetainedClose {
+    /// The close ran, or there was nothing to close: its result.
+    Ran(Result<(), ExecutionKernelError>),
+    /// Its dedicated close lease was refused (another member's entry ahead, the takeover cooldown,
+    /// a holder), a failure that is not fatal: nothing was closed and nothing was written to the
+    /// ledger.
+    LeaseRefused(RuntimeHostError),
+}
+
+/// #480 PG-2c fix round 1: a dedicated lease of the Runtime granted (its token, its connection and
+/// the grant's request id), or refused by the scheduler's preparation
+/// ([`HostShared::try_grant_dedicated_instance_lease`]).
+enum DedicatedGrant {
+    Granted(LeaseToken, ConnectionId, RequestId),
+    Refused(RuntimeHostError),
+}
+
 impl HostShared {
     /// Workflow #191 H: the device session belongs to the instance, not to the lease. The caller
     /// holds the instance admission guard. A kept session forgets its input frames, so the next
@@ -1138,10 +1157,52 @@ impl HostShared {
         kind: ClaimKind,
         hand_back: bool,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
-        self.grant_runtime_lease(
+        match self.try_grant_dedicated_instance_lease(
+            instance_id,
+            connection_value,
+            kind,
+            hand_back,
+        )? {
+            DedicatedGrant::Granted(token, connection_id, request_id) => {
+                Ok((token, connection_id, request_id))
+            }
+            DedicatedGrant::Refused(error) => Err(error),
+        }
+    }
+
+    /// [`Self::grant_dedicated_instance_lease`], telling a refusal of the scheduler's preparation
+    /// apart (#480 PG-2c fix round 1): a preparation the scheduler refused without its failure
+    /// being fatal (another member's entry ahead, the takeover cooldown, a holder, a refusing
+    /// entry of the instance) granted nothing, wrote nothing to the ledger and is `Refused`;
+    /// every other failure is the call's.
+    fn try_grant_dedicated_instance_lease(
+        &self,
+        instance_id: InstanceId,
+        connection_value: u64,
+        kind: ClaimKind,
+        hand_back: bool,
+    ) -> RuntimeHostResult<DedicatedGrant> {
+        let mut refused = false;
+        let granted = self.grant_runtime_lease(
             instance_id,
             connection_value,
             |request_id, holder_id, connection_id| {
+                // #480 PG-2c fix round 1, tests: the hand-back's close lease refused as the
+                // scheduler refuses it (`refuse_hand_back_closes_for_test`).
+                #[cfg(test)]
+                if hand_back
+                    && let Some(refusal) = lock(
+                        &self.hand_back_close_refusals_for_test,
+                        HostLocation::PrepareResourceCloseLease,
+                    )?
+                    .pop_front()
+                {
+                    refused = !refusal.projection().fatal;
+                    return Err(RuntimeHostError::scheduler(
+                        HostLocation::PrepareResourceCloseLease,
+                        &refusal,
+                    ));
+                }
                 let gate = self.routine_gate(instance_id)?;
                 let autostart_ends = self.autostart_ends_at_grant(
                     instance_id,
@@ -1189,10 +1250,18 @@ impl HostShared {
                     )
                 };
                 prepared.map_err(|error| {
+                    refused = !error.projection().fatal;
                     RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
                 })
             },
-        )
+        );
+        match granted {
+            Ok((token, connection_id, request_id)) => {
+                Ok(DedicatedGrant::Granted(token, connection_id, request_id))
+            }
+            Err(error) if refused && !error.is_fatal() => Ok(DedicatedGrant::Refused(error)),
+            Err(error) => Err(error),
+        }
     }
 
     /// Workflow #437 MAPP-1c: the session close ahead of `instance_id`'s device
@@ -1295,21 +1364,27 @@ impl HostShared {
         release_reason: LeaseReleaseReason,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
-        self.close_retained_instance_with(
+        match self.close_retained_instance_with(
             instance_id,
             links,
             reuse_active_lease,
             release_reason,
             false,
             admission,
-        )
+        )? {
+            RetainedClose::Ran(result) => Ok(result),
+            RetainedClose::LeaseRefused(error) => Err(error),
+        }
     }
 
     /// [`Self::close_retained_instance_while_guarded`], with `hand_back` the caller's word that
     /// the close is an instance pause's hand-back (#480 PG-2b fix round 1, the review's point:
     /// said by its one caller, `release_paused_instance`, no longer read from `release_reason`):
     /// the dedicated close lease it grants then passes the instance's own entries that pause
-    /// holds back (`grant_dedicated_instance_lease`).
+    /// holds back (`grant_dedicated_instance_lease`). #480 PG-2c fix round 1: a close lease that is
+    /// refused (a holder of the instance's key when no lease may be reused, or the scheduler's
+    /// refusal of its preparation that is not fatal) is told apart from every other failure
+    /// (`RetainedClose::LeaseRefused`): nothing was closed and nothing written to the ledger.
     pub(super) fn close_retained_instance_with(
         &self,
         instance_id: InstanceId,
@@ -1318,7 +1393,7 @@ impl HostShared {
         release_reason: LeaseReleaseReason,
         hand_back: bool,
         admission: &MutexGuard<'_, ()>,
-    ) -> RuntimeHostResult<Result<(), ExecutionKernelError>> {
+    ) -> RuntimeHostResult<RetainedClose> {
         if !self
             .execution()?
             .has_owned_resources(instance_id)
@@ -1326,7 +1401,7 @@ impl HostShared {
                 RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
             })?
         {
-            return Ok(Ok(()));
+            return Ok(RetainedClose::Ran(Ok(())));
         }
         let active = lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
             .active_tokens()
@@ -1334,14 +1409,14 @@ impl HostShared {
             .find(|token| token.instance_id() == instance_id);
         let (token, connection_id, acquired) = if let Some(token) = active {
             if !reuse_active_lease {
-                return Err(RuntimeHostError::scheduler(
+                return Ok(RetainedClose::LeaseRefused(RuntimeHostError::scheduler(
                     HostLocation::AcquireResourceCloseLease,
                     &SchedulerError::Busy {
                         holder_id: token.holder_id(),
                         lease_id: token.lease_id(),
                         expires_at_monotonic_ms: token.expires_at_monotonic_ms(),
                     },
-                ));
+                )));
             }
             let connection_id = lock(&self.scheduler, HostLocation::ReadResourceCloseConnection)?
                 .connection_for_token(&token)
@@ -1351,13 +1426,15 @@ impl HostShared {
             (token, connection_id, false)
         } else {
             // #480 PG-2b: the close lease of an instance pause's hand-back, as its caller says.
-            let (token, connection_id, _) = self.grant_dedicated_instance_lease(
+            match self.try_grant_dedicated_instance_lease(
                 instance_id,
                 RESOURCE_CLOSE_CONNECTION_VALUE,
                 ClaimKind::ResourceClose,
                 hand_back,
-            )?;
-            (token, connection_id, true)
+            )? {
+                DedicatedGrant::Granted(token, connection_id, _) => (token, connection_id, true),
+                DedicatedGrant::Refused(error) => return Ok(RetainedClose::LeaseRefused(error)),
+            }
         };
         let result = self
             .close_instance_resources_result(&token, connection_id, links)
@@ -1378,7 +1455,7 @@ impl HostShared {
         if acquired && confirmed {
             self.cleanup_token_inner(&token, connection_id, release_reason, None, Some(admission))?;
         }
-        Ok(result)
+        Ok(RetainedClose::Ran(result))
     }
 
     pub(super) fn finish_input_failure(
@@ -2198,6 +2275,9 @@ impl HostShared {
         self.before_recognition_admission_for_test()?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.lock_admission(&instance_guard, instance_id)?;
+        // #480 PG-2c fix round 2: the last question, the admission guard in hand until the
+        // preparation returned; a pause recorded from here on finds this claim's lease and lists
+        // `automatic_start` (`automatic_start_hold`, which names the lines this rests on).
         if let Some(hold) =
             self.automatic_start_hold(instance_alias, HostLocation::RunEmulatorAutostart)?
         {

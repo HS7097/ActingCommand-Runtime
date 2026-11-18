@@ -89,7 +89,7 @@ use crate::install::lock::WriterLock;
 use crate::install::manifest::Half;
 use crate::install::plan::{self, Loaded};
 use crate::install::programs::{self, Deadline};
-use crate::install::runtime::Drained;
+use crate::install::runtime::{Drained, PauseFailed};
 use crate::install::state::{KindLocation, Paths};
 use crate::install::{self, Answer, Face, config_swap, instance_add, place};
 use crate::rescue_reads;
@@ -1562,11 +1562,15 @@ fn commit(
                 let paused = pause_added(context, loaded, &adding.added.asked.alias);
                 steps.push(step("pause_added", &paused.outcome, paused.result));
                 if let Some(refusal) = paused.refusal {
-                    add_next(
-                        &mut swapped.members,
-                        "pause_added",
-                        pause_form(context, &adding.added.asked.alias),
-                    );
+                    // #480 PG-2c fix round 2 (item 10): for a pause that stands, no pause by hand
+                    // is named.
+                    if !paused.stands {
+                        add_next(
+                            &mut swapped.members,
+                            "pause_added",
+                            pause_form(context, &adding.added.asked.alias),
+                        );
+                    }
                     swapped.outcome = plan::with_notes(swapped.outcome, &[refusal]);
                 }
             }
@@ -1584,14 +1588,18 @@ fn commit(
         steps.push(step("pause_added", &paused.outcome, paused.result));
         if let Some(refusal) = paused.refusal {
             // The added instance is not paused: the hold stays, its global pause too (INST-5b), and
-            // `next` says how to pause it and, by `ways_out`, how to lift the global pause.
+            // `next` says how to pause it and, by `ways_out`, how to lift the global pause. #480
+            // PG-2c fix round 2 (item 10): a pause the Runtime answered before the instance was
+            // quiet stands: the hold stays all the same, and `next` names no pause by hand.
             let mut members = Map::new();
             for member in ["hold", "next"] {
                 if let Some(value) = swapped.members.get(member) {
                     members.insert(member.to_owned(), value.clone());
                 }
             }
-            add_next(&mut members, "pause_added", pause_form(context, alias));
+            if !paused.stands {
+                add_next(&mut members, "pause_added", pause_form(context, alias));
+            }
             members.insert("added".to_owned(), adding.added.value());
             return Ok(composite_exit(context, steps, refusal, members));
         }
@@ -1673,11 +1681,14 @@ fn instance_add(context: &Context<'_>, params: Params<'_>) -> Exit {
 }
 
 /// Workflow #421 INST-5: what the pause of the added instance did: its step's outcome and result,
-/// and the refusal that ends the command when the instance could not be paused.
+/// and the refusal that ends the command when the instance could not be paused. #480 PG-2c fix
+/// round 2 (item 10): `stands` when the refusal is a pause the Runtime answered before the instance
+/// was quiet, which stands: no pause by hand is named then.
 struct PausedAdded {
     outcome: Outcome,
     result: Value,
     refusal: Option<Outcome>,
+    stands: bool,
 }
 
 /// Workflow #421 INST-5 fix 1: the result of the step `pause_added`: the alias, the reason the
@@ -1698,6 +1709,11 @@ struct PauseAddedResult<'a> {
     already_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     drained: Option<Drained>,
+    /// #480 PG-2c fix round 2 (item 10): the Runtime answered the pause before the instance was
+    /// quiet (`scheduling_hold_not_quiet`): it was set and stands (`set` true), and its drain is
+    /// not known.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    not_quiet: bool,
 }
 
 impl<'a> PauseAddedResult<'a> {
@@ -1711,6 +1727,7 @@ impl<'a> PauseAddedResult<'a> {
             registered: None,
             already_paused: false,
             drained: None,
+            not_quiet: false,
         }
     }
 
@@ -1738,6 +1755,7 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
             outcome: refusal.clone(),
             result,
             refusal: Some(refusal),
+            stands: false,
         }
     };
     let reason = match instance_add::pause_reason() {
@@ -1781,6 +1799,7 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
             outcome: install::done(ADD).alias(alias.to_owned()),
             result: result.value(),
             refusal: None,
+            stands: false,
         };
     }
     match runtime.pause(
@@ -1799,9 +1818,25 @@ fn pause_added(context: &Context<'_>, loaded: &Loaded, alias: &str) -> PausedAdd
                 outcome: install::done(ADD).alias(alias.to_owned()),
                 result: result.value(),
                 refusal: None,
+                stands: false,
             }
         }
-        Err(cause) => failed(Some(cause), unset.value()),
+        // #480 PG-2c fix round 2 (item 10): the Runtime answered the pause before the instance
+        // was quiet: the pause was set and stands (`set`, `not_quiet`), and the refusal's cause is
+        // `scheduling_hold_not_quiet`; a pause by hand would only answer
+        // `scheduling_already_paused`, so none is named (`stands`).
+        Err(PauseFailed::Stands(cause)) => {
+            let result = PauseAddedResult {
+                set: true,
+                not_quiet: true,
+                ..unset
+            };
+            PausedAdded {
+                stands: true,
+                ..failed(Some(cause), result.value())
+            }
+        }
+        Err(PauseFailed::Failed(cause)) => failed(Some(cause), unset.value()),
     }
 }
 

@@ -209,6 +209,9 @@ mod gate_480_pg1;
 // pause's hand-back waits for the Runtime's own ladder, and its close lease passes what the pause
 // itself holds back.
 mod gate_480_pg2b;
+// #480 PG-2c (0.12.73; register §1.472): a person's pause stands (`stand`), a tool's hold is quiet
+// or nothing (`quiet_or_lift`); the receipt says what is in the way; the commit mark.
+mod gate_480_pg2c;
 // Workflow #429 R-3 (register §1.272): `start_emulator` set while the Runtime runs, on a
 // discovery-bound instance, and read in effect by every automatic emulator start.
 mod gate_r3;

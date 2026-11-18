@@ -282,6 +282,7 @@ fn pause_first(host: &RuntimeHost, reason: &str, connection: u64) -> RuntimeRece
             scope: instance_scope(FIRST),
             pause_reason: SchedulingPauseReason::new(reason).expect("pause reason"),
             drain_timeout_ms: 5_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
         },
         connection,
     )

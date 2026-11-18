@@ -530,6 +530,7 @@ fn mapp1b_a_pause_of_one_member_waits_only_for_its_own_work_and_leaves_the_other
         },
         pause_reason: SchedulingPauseReason::new("mapp1b_member_pause").expect("pause reason"),
         drain_timeout_ms: 1_000,
+        pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
     });
     let receipt = client.send(&pause);
     assert_eq!(
