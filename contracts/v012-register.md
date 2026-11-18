@@ -40173,7 +40173,8 @@ layout of fixed slots and its shared read (`shared_ocr`, `blocks` `detect`, `lin
 - *A select of rows with `blocks`* is refused at the request, before anything is read:
   `record_select_invalid` (exit 3) with the new `select_problem` `blocks_with_rows`, the word of a
   member a kind does not take yet, as `confirm_with_rows` is; nothing is written. The rows' side
-  needs the kernel's slice.
+  needs the kernel's slice. (#463 SEL-2L-rows, §1.484: a select of rows takes the members, and the
+  word is removed.)
 - *The self-checks read as the run will.* `record mark`, `record ready` and `record stop` judge such
   a select through the same generated probe package as before; no second reader is added.
 - *The count.* `record_mark_rejected`'s message counts marks on both sides: the refused ones by
@@ -40185,8 +40186,10 @@ one local commit, never compiled or run. Read again as a reviewer: the check's b
 shared read's region are one function (`bounding_rect`, which `bounding_box` now calls, its answers
 as before); the test's assertion about the provider was established from the kernel (above) and now
 says it exactly: with `blocks`, every request of a mark's self-test is the shared read, four for
-two frames and two for one, each frame read by the default's dry run and the pressed name's.
-Formatting checked; the contract, the catalogue, the operation table, this section and the gate
+two frames and two for one, each frame read by the default's dry run and the pressed name's
+(#463 SEL-2L-rows, §1.484, after the review: the tests now assert that every request is the shared
+read and that there is one, not the count, which pins how many dry runs the Lab makes and how often
+the kernel reads a projection). Formatting checked; the contract, the catalogue, the operation table, this section and the gate
 map written; main merged.
 
 **Where it is built.**
@@ -40227,8 +40230,12 @@ changes.
 **What is not changed.** A select without the two members, in the recording, the answer and the
 package; the Runtime; the regression cases' scenes (`cases.rs`, `read_regions`, which another slice
 moves), which paste the regions the targets read: for a select with `blocks` the slots' name boxes,
-not the whole shared region, so text between two name boxes is not in a case's scene; every other
-self-check's answer; `details` of `record_mark_rejected`.
+not the whole shared region; every other self-check's answer; `details` of
+`record_mark_rejected`. Said exactly (#463 SEL-2L-rows, §1.484, after the review): a shared read
+uses pixels of its region outside the name boxes too (the detector's context and its padding), and
+a case's scene is black there, so a scene cannot reproduce the read the recording made, even where
+every name lies inside its box; that does not matter today only because the case runner evaluates
+no candidate layout (`regression_case.rs`: `expect.observe.candidates` is `not_evaluated`).
 
 **At deploy.** Nothing to configure. A select of fixed slots may declare `"blocks": "detect"` and a
 `line_merge`; a package generated so needs no newer Runtime: the layout's shared read is in the task
@@ -40369,8 +40376,10 @@ bytes with the member last and, without it, as before.
 `gate_463_v1::v1_the_build_declares_package_through_revision_14` ([3, 20]),
 `gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
 (`KEY_REVISION + 3`) and `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`
-(`package` [3, 20]); their gate rows' comments and incidents name SEL-2L. No test leaves a gate
-map; no golden changes.
+(`package` [3, 20]); the gate rows of the first two (apps "#463 V1", exec "#463 KP-1") name SEL-2L
+in their comments and incidents, and the third's (contract key K27, Workflow #378 A8) is
+unchanged, as #463 INT-1 left it (narrowed by #463 SEL-2L-rows, §1.484, after the review). No test
+leaves a gate map; no golden changes.
 
 **What is not changed.** A `fixed_slots` layout's reading, with or without `shared_ocr`; a
 `repeated_anchor` layout without the member (its derived bytes, projection, count and answers); a
@@ -40808,6 +40817,143 @@ private file, which a build before this one refuses (`device_binding_file_invali
 before going back. Rollback: before going back to a build before 0.12.74, unbind every iOS handset
 with 0.12.74's Lab (`devices unbind`); an earlier Runtime reads a version-2 file as malformed and
 refuses to start while a handset is configured.
+
+### 1.484 Slice #463 SEL-2L-rows (0.12.74): a scrolling select read by detecting blocks: the recording generates the shared read (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: an archived recording of a scrolling grid of shop cards whose names take one or two lines in one title box waits for it to become a package; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1119/brief-463-sel2l-rows-generator.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slice S-rows, on main `1e5a46b7`)
+
+This section takes 1.484, the number the work order gives (1.481 to 1.483 are other slices'). It
+ships in 0.12.74. It changes the Lab (`crates/lab`), its texts and the outcome catalogue, and one
+reader of `standard-pack build`'s revision table; nothing of the recognition pack, the package
+containment or the execution kernel, whose side SEL-2L-b built (§1.480).
+
+**Why.** Since SEL-2L-a (§1.479) a select of fixed slots reads its names by detecting their blocks
+when its `read` declares `blocks` and `line_merge`; since SEL-2L-b (§1.480) the Runtime admits
+`shared_ocr` on a `repeated_anchor` layout (`package` 20). The Lab still refused a scrolling select
+whose `read` declared `blocks` (`record_select_invalid`, `blocks_with_rows`), so a scrolling list of
+cards whose names take two lines could not be recorded into a package that reads them.
+
+**What it rests on** (read in the code; the design's line numbers were of an older tree and were
+found again).
+- *The kernel's rule for the region* (`CandidateSharedOcr::covers_band` and `validate_shared_ocr`
+  in `crates/recognition-pack/src/candidate_layout.rs`; `Declaration::shared_read_covers_band` in
+  the source gate): a `repeated_anchor` layout's read covers its `readable_band`, or the whole
+  frame where the layout declares none (`full_frame`, or a rectangle that holds it). A scrolling
+  select's layout always declares a band: the request's `scan.list`, a required member, which
+  `scan::layout_json` writes as `readable_band`. So the case of a scan without a band does not exist
+  in the Lab's generator, and the read's region is the band itself.
+- *Who is served* (`SceneEvaluation::layout_shared_text`, `shared_calls`): on a `repeated_anchor`
+  layout every OCR target the read gives text to (`reads_text_of`: no `locate`, the read's model,
+  digest, languages and chain) takes its text from the read wherever the instance places it; the
+  test "its region lies inside the read" is skipped there, because only an instance inside the band
+  is actionable and read (`anchor_instances`), a feature's region lies inside `instance_rect` (the
+  pack's rule at `/candidate_layouts/<i>/features/<j>/offset`), and the read covers the band.
+- *Where a generated package states its range*: nowhere. `record stop` writes no `interfaces.json`
+  ([lab-recording.md](lab-recording.md), S2-9b's "The package format"); a bundle's `package` range
+  is its packaging's, and `standard-pack build`'s revision table counts a task file's
+  `repeated_anchor` layout with `shared_ocr` as 20 (`anchored_shared_read`, §1.480, which words it
+  so: "a bundle whose packs declare such a layout declares `package` [20, 20]"). The work order's
+  item 2 ("a generated package that uses the member declares the `package` range the member needs")
+  is met by that rule: the package carries the member row 20 counts, and nothing else of it moves.
+- *The self-checks* (`check_scan_select`, `scan_select_checks`): every screen of the demonstration
+  is read by `select::decide` (the kernel's `dry_run_select`) and the forward screens by the
+  kernel's offline entry `dry_run_scan_decide`, on the probe package or the package `record stop`
+  generates, both built by `scan::layout_json`. So mark, ready and stop read through the shared read
+  with no new code.
+
+**The rule.**
+- *The generator.* A scrolling select whose `read` declares `blocks` and `line_merge` generates its
+  `repeated_anchor` layout with, last (after `features`), `shared_ocr {region: {mode: rect, rect:
+  scan.list}, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge}`, by the one
+  writer a select of fixed slots uses (`generate::select_shared_read`, which now takes the region and
+  the name targets: of fixed slots the bounding rectangle of the name boxes and the slot targets, of
+  rows the list and the row's name target). It refuses to generate (`validation_failed`, nothing
+  written) a name target the read would not serve (`shared_read_serves`: no `locate`, the read's
+  languages, model, digest and chain, a rectangle inside the region). The name target lies at the
+  name region of the list's first screen, inside the row, and the row inside the list (a mark that
+  breaks either is refused, `scan_region_outside_row`, `scan_region_outside_list`), so as generated
+  it is served: every row the band holds reads through the read, and a row the band's edge cuts is
+  not read, as before.
+- *Without the members* a scrolling select generates byte for byte what it generated:
+  `shared_ocr` is written only when `blocks` is declared, and absent members are not written in the
+  recording or the answers (§1.479). Its package keeps its revision.
+- *The range.* A package with such a layout needs `package` 20 by row 20 (§1.480); `record stop`
+  writes no range.
+- *The refusal goes.* `select_problem` `blocks_with_rows` is no longer produced. It is removed from
+  `SelectProblem`, from the catalogue's vocabulary (the catalogue's rule: guard G7 holds a
+  vocabulary enum and its catalogue vocabulary equal, word for word, so the two lose it together;
+  a release file under `contracts/outcome-codes/released/` holds only codes and locations, the
+  signatures guard G9 binds, and no vocabulary, so no release binds a word of one; 0.12.74 has no
+  release file yet either; so it is removed), from `record_select_invalid`'s texts in `lab.json`
+  (the index regenerated: current, unchanged), from the operation table and from
+  lab-recording.md. A refusal writes nothing, so no recording on disk holds the word, and every
+  recording loads as before.
+- *The self-checks* need no new code (above): a screen captured while the list still moved reads
+  its names poorly and is refused there, `select_name_unread`, one refusal for each row the band
+  holds whole, the message counting the select once (§1.479).
+
+**What the two reviews left, done here** (the coordinator's dispositions of #1832 and #1833).
+- SEL-2L-a's gate: the two tests that pinned the provider's calls to 4 and 2 assert that every
+  request is the shared read and that there is one; the file's header says what is true of its
+  expected values (the golden layout and targets are the contract written out in the order the
+  generator writes them, read against the generator).
+- The scenes (§1.479, "What is not changed", and lab-recording.md, "Reading names by detecting
+  blocks"): said exactly.
+- SEL-2L-b: the end-to-end test from a source `task.json` through the derivation to a loaded
+  package with the member is this slice's test 5 (the Lab writes the source task file,
+  `load_content_entries` runs the declaration gate, the derivation and the admission on it, and
+  record stop's self-checks read through the loaded package's shared read); §1.480's sentence on the
+  range-pinning tests' gate rows narrowed; `apps/actinglab/src/resource_verify/revision.rs`:
+  `layout_anchor_masked` reads `candidate_layouts`, `kind` and `repeated_anchor` by the constants
+  row 20 added, one spelling of each.
+
+**Codes and words.** No code or key added. One word removed: `select_problem` `blocks_with_rows`
+(it refused, `record_select_invalid`, exit 3). No decision reads a code or a word.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The one writer of a select's shared read | `crates/lab/src/recording/generate.rs`: `select_shared_read`, `shared_read_serves`, `select_layout_json` |
+| The rows' layout | `crates/lab/src/recording/scan.rs`: `layout_json`; `validate_scan_shape` (the refusal gone) |
+| The word | `crates/lab/src/codes.rs`: `SelectProblem`; `contracts/outcome-codes/catalog.json`; `contracts/outcome-codes/lab.json` |
+| The revision table's reader | `apps/actinglab/src/resource_verify/revision.rs`: `layout_anchor_masked` |
+| Texts | [lab-recording.md](lab-recording.md) ("Selecting in a list", the members and the table; "Reading names by detecting blocks"; "A scrolling choice: reading the list to its end", the refusals and what record stop generates); `contracts/lab-operations.json` (`record mark`, the request's note and the notes); `apps/actinglab-mcp/MANUAL.md` (`blocks` and `line_merge`, which it lacked) |
+
+**Tests** (`crates/lab/src/gate_463_sel2l_rows.rs`, exec gate map row "#463 SEL-2L-rows"; synthetic
+128x128 screens of a list of cards in two columns, every row of the grid a two-line and a one-line
+name, made by `record_press` with a fake Runtime as S2-9a's gate makes them; a scripted provider
+that detects each run of one marker gray as one block and reads a region asked whole as one line;
+no clock is read). `sel2l_rows_the_layout_gains_the_shared_read_over_its_band_and_without_blocks_is_todays`:
+with `blocks` the layout is today's with `shared_ocr` over the list after its features, the name
+target unchanged, and the package writes no `interfaces.json`; without them (every name on one
+line) the recording holds no `line_merge` and the layout and name target are today's golden, byte
+for byte (1). `sel2l_rows_every_card_the_band_holds_is_read_through_the_shared_read_and_a_cut_card_is_not`:
+read whole, a two-line name is `select_name_unread` `low_confidence`; with `blocks` every card the
+band holds whole reads its name on every screen, the cards the band's edge cuts are not read, every
+request of the mark is the shared read, the offline entry covers twelve positions and decides
+`hotel`, record ready lists nothing and record stop's self-checks decide `hotel` (2).
+`sel2l_rows_a_screen_still_moving_is_unread_there_and_counts_once`: six `select_name_unread`
+`low_confidence` on that screen alone, "1 of 2 marks failed", nothing written (3).
+`sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`: the source task's
+shared read, the kernel's admission in memory, record stop's self-checks through it, and the range
+[3, 20] holds [20, 20], which a range ending at 19 refuses (5).
+`sel2l_rows_blocks_with_rows_is_gone_from_the_vocabulary`: the catalogue's `select_problem` is the
+enum, without the word, and neither `lab.json` nor its index holds it (6). The work order's test 4
+(a scan without a band) has no case: no layout the Lab generates lacks a band. Adapted, the
+requirement removing the refusal: `gate_463_sel2l_a::sel2l_blocks_and_line_merge_come_together_and_not_on_rows`,
+renamed `sel2l_blocks_and_line_merge_come_together` without its rows part (its retirement with its
+mapping in `ci/retired-gates.toml`); and, the review's leftover, the provider counts of
+`sel2l_blocks_read_two_line_and_centred_names_in_one_row_as_the_run_reads_them` and
+`sel2l_a_neighbours_text_belongs_to_the_slot_its_centre_lies_in`. No golden re-recorded.
+
+**What is not changed.** A select of fixed slots and its generated files; a scrolling select without
+the members, byte for byte; the Runtime's reading of either layout kind and the order of blocks (top,
+then left; an author whose one line comes back as two blocks raises `line_merge`'s gap factor);
+every interface revision; the privacy modules of PRIV-1; the scan's numbers (`max_ms` still counts
+one read of every anchor per screen, a bound the shared read only lowers).
+
+**At deploy.** Nothing to configure. A package generated from a scrolling select that reads by
+blocks needs a Runtime of 0.12.74 or later, and its bundle declares `package` [20, 20], which
+`standard-pack build` computes.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

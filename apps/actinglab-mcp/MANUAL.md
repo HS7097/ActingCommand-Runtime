@@ -609,6 +609,20 @@ naming this file.
   the pressed name, no absent name is run (that is judged only on the device), and the self-check
   refuses a wanted default no forward screen shows (`scan_default_not_shown`). `ac_record_review`'s
   `scan.when_absent` says the kind, whether an end is declared and what a run does without the item.
+  #463 SEL-2L (0.12.74; `contracts/lab-recording.md`, "Reading names by detecting blocks"): a
+  select's `read`, of fixed slots or of `rows`, may add two members, together or neither:
+  `"blocks": "detect"` and `"line_merge"`, `{"gap_factor": n}` (0 to 16, the kernel's bound) or
+  `"none"`. The names are then read by detecting their text blocks, so that a name drawn on two
+  lines in one title box reads whole where a read of its box as one line reads it poorly
+  (`select_name_unread`, `low_confidence`): `ac_record_stop` gives the select's layout one shared
+  read per frame, over the bounding rectangle of the slots' name boxes or over the scrolling
+  select's `scan.list`, and each slot or row takes the blocks whose centre lies in its name box,
+  top to bottom, then left to right. One member without the other is `validation_failed` naming
+  the missing one; a factor the kernel refuses is `record_select_invalid` `kernel_refused`; left
+  out, nothing changes. A row the list's edge cuts is not read; a screen captured while the list
+  still moved reads its names poorly and is refused there (`select_name_unread`). Where one line
+  comes back as two blocks, raise `gap_factor`. A package whose scrolling select reads so needs
+  `package` 20 (`standard-pack build` counts it).
   #463 KR-1 (0.12.70; `contracts/lab-recording.md`, "Key steps"): the back key is not recorded
   while playing; stage two or three adds it. `ac_record_mark` with `key` `back` (`request_json`
   `"key": {"key": "back"}`) makes the step's one effect the back key, declared and never sent: on a
