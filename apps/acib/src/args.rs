@@ -1,23 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The command line of `acib` (board #479, ACIB-0 and ACIB-1):
+//! The command line of `acib` (board #479, ACIB-0, ACIB-1 and ACIB-2):
 //!
 //! ```text
-//! acib devices                                   [--timeout-ms <ms>]
-//! acib info       --device <n>                   [--timeout-ms <ms>]
-//! acib services   --device <n>                   [--timeout-ms <ms>]
-//! acib images     --device <n>                   [--timeout-ms <ms>]
-//! acib apps       --device <n> --contains <text> [--max-matching <m>] [--timeout-ms <ms>]
-//! acib screenshot --device <n> --out <file>      [--via <way>] [--timeout-ms <ms>]
+//! acib devices     [--key-salt-env <NAME> [--binding-salt-env <NAME2>]] [--timeout-ms <ms>]
+//! acib info        <device>                                [--timeout-ms <ms>]
+//! acib services    <device>                                [--timeout-ms <ms>]
+//! acib images      <device>                                [--timeout-ms <ms>]
+//! acib apps        <device> --contains <text> [--max-matching <m>] [--timeout-ms <ms>]
+//! acib screenshot  <device> --out <file|-> [--via <way>]   [--timeout-ms <ms>]
+//! acib orientation <device> [--via <reader>]               [--timeout-ms <ms>]
 //! ```
 //!
-//! `<n>` is the device's usbmuxd session number, as `acib devices` lists it. `<text>` is what the
-//! bundle identifiers asked for hold, at least three characters. `<m>` is the most identifiers
-//! `apps` names (1 to [`MAX_MATCHING_LIMIT`]). `<file>` is where the picture is written, a path
-//! that must not exist yet. `<way>` is one of the words of [`Way`] (default [`DEFAULT_WAY`]).
-//! Anything else is refused with `command_line_invalid`.
+//! `<device>` is `--device <n>`, the device's usbmuxd session number as `acib devices` lists
+//! it, or, in its place, `--device-key <key> --key-salt-env <NAME>`: the listed device whose
+//! key under the salt of the environment variable `NAME` is `<key>` (`sha256:` and 64 lowercase
+//! hexadecimal digits). `devices` takes `--key-salt-env` alone to add each row's key, and
+//! `--binding-salt-env` only beside it. `<text>` is what the bundle identifiers asked for hold,
+//! at least three characters. `<m>` is the most identifiers `apps` names (1 to
+//! [`MAX_MATCHING_LIMIT`]). `<file>` is where the picture is written, a path that must not exist
+//! yet, and `-` the standard output ([`Out`]). `<way>` is one of the words of [`Way`] (default
+//! [`DEFAULT_WAY`]), `<reader>` one of [`Reader`]'s (default: each in turn). Anything else is
+//! refused with `command_line_invalid`: an option given twice, `--device` beside
+//! `--device-key`, either of `--device-key` and `--key-salt-env` without the other, a key or a
+//! variable name that cannot be one, an option the command does not take.
 
-use crate::answer::{CommandName, Way};
+use crate::answer::{CommandName, Reader, Way};
+use crate::key;
 
 /// How long a command may take when `--timeout-ms` does not say.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -33,23 +42,58 @@ pub const MAX_MATCHING_LIMIT: usize = 20;
 /// The way `screenshot` takes its picture when `--via` does not say: the screen capture
 /// service, which answers one request with a picture in the format asked for.
 pub const DEFAULT_WAY: Way = Way::ScreenCapture;
+/// The `--out` that names the standard output in place of a file.
+pub const STANDARD_OUTPUT: &str = "-";
+
+/// The device a command asks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// `--device <n>`: the usbmuxd session number `acib devices` lists.
+    Number(u32),
+    /// `--device-key <key> --key-salt-env <NAME>`: the listed device whose key under the salt of
+    /// the environment variable `salt_variable` is `key`.
+    Key { key: String, salt_variable: String },
+}
+
+/// The environment variables `devices` reads the salts of its keys from: `device_key` under the
+/// first, `binding_key` under the second when it is given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyVariables {
+    pub key: String,
+    pub binding: Option<String>,
+}
+
+/// Where `screenshot` puts the picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Out {
+    /// A new file at this path.
+    File(String),
+    /// The standard output, after the line (`--out -`, which the line names as `"out": "-"`):
+    /// no file is written.
+    Stdout,
+}
 
 /// What a command line asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    Devices,
-    Info(u32),
-    Services(u32),
-    Images(u32),
+    Devices(Option<KeyVariables>),
+    Info(Target),
+    Services(Target),
+    Images(Target),
     Apps {
-        device: u32,
+        device: Target,
         contains: String,
         max_matching: usize,
     },
     Screenshot {
-        device: u32,
-        out: String,
+        device: Target,
+        out: Out,
         via: Way,
+    },
+    /// `orientation`: the reader `--via` names, or each reader in turn.
+    Orientation {
+        device: Target,
+        via: Option<Reader>,
     },
 }
 
@@ -57,24 +101,35 @@ impl Request {
     /// The command's name.
     pub fn name(&self) -> CommandName {
         match self {
-            Self::Devices => CommandName::Devices,
+            Self::Devices(_) => CommandName::Devices,
             Self::Info(_) => CommandName::Info,
             Self::Services(_) => CommandName::Services,
             Self::Images(_) => CommandName::Images,
             Self::Apps { .. } => CommandName::Apps,
             Self::Screenshot { .. } => CommandName::Screenshot,
+            Self::Orientation { .. } => CommandName::Orientation,
         }
     }
 
-    /// The device number the command names, if it names one.
+    /// The device number the command line names, if it names one (`--device`; a device named
+    /// by its key has its number only once it is found).
     pub fn device(&self) -> Option<u32> {
+        match self.target()? {
+            Target::Number(number) => Some(*number),
+            Target::Key { .. } => None,
+        }
+    }
+
+    /// The device the command asks, if it asks one.
+    pub fn target(&self) -> Option<&Target> {
         match self {
-            Self::Devices => None,
+            Self::Devices(_) => None,
             Self::Info(device)
             | Self::Services(device)
             | Self::Images(device)
             | Self::Apps { device, .. }
-            | Self::Screenshot { device, .. } => Some(*device),
+            | Self::Screenshot { device, .. }
+            | Self::Orientation { device, .. } => Some(device),
         }
     }
 
@@ -82,11 +137,12 @@ impl Request {
     pub fn via(&self) -> Option<Way> {
         match self {
             Self::Screenshot { via, .. } => Some(*via),
-            Self::Devices
+            Self::Devices(_)
             | Self::Info(_)
             | Self::Services(_)
             | Self::Images(_)
-            | Self::Apps { .. } => None,
+            | Self::Apps { .. }
+            | Self::Orientation { .. } => None,
         }
     }
 }
@@ -99,60 +155,146 @@ pub struct Invocation {
     pub timeout_ms: u64,
 }
 
-/// The command line after the program's name; `None` when it is not one of the six commands
+/// The options of a command line, each given once at most.
+#[derive(Default)]
+struct Options {
+    device: Option<u32>,
+    device_key: Option<String>,
+    key_salt: Option<String>,
+    binding_salt: Option<String>,
+    timeout_ms: Option<u64>,
+    contains: Option<String>,
+    max_matching: Option<usize>,
+    out: Option<Out>,
+    via: Option<String>,
+}
+
+/// The command line after the program's name; `None` when it is not one of the seven commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
-/// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`], an empty `--out`, a way that
-/// is not one of [`Way`]'s words).
+/// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`], an empty `--out`, a way or a
+/// reader that is not one of its command's words, a key that is not written as a key, a
+/// variable name that is empty or holds `=` or NUL, `--device` beside `--device-key`, one of
+/// `--device-key` and `--key-salt-env` without the other, `--binding-salt-env` without
+/// `--key-salt-env` or on another command than `devices`).
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
-    let (command, options) = arguments.split_first()?;
-    let mut device = None;
-    let mut timeout_ms = None;
-    let mut contains = None;
-    let mut max_matching = None;
-    let mut out = None;
-    let mut via = None;
-    for pair in options.chunks(2) {
+    let (command, given) = arguments.split_first()?;
+    let mut options = Options::default();
+    for pair in given.chunks(2) {
         let [option, value] = pair else {
             return None;
         };
         match option.as_str() {
-            "--device" if device.is_none() => device = Some(number::<u32>(value)?),
-            "--timeout-ms" if timeout_ms.is_none() => {
-                timeout_ms = Some(number::<u64>(value).filter(|ms| *ms > 0)?);
+            "--device" if options.device.is_none() => {
+                options.device = Some(number::<u32>(value)?);
             }
-            "--contains" if contains.is_none() => contains = Some(text(value)?),
-            "--max-matching" if max_matching.is_none() => {
-                max_matching = Some(
+            "--device-key" if options.device_key.is_none() => {
+                options.device_key = Some(key_text(value)?);
+            }
+            "--key-salt-env" if options.key_salt.is_none() => {
+                options.key_salt = Some(variable(value)?);
+            }
+            "--binding-salt-env" if options.binding_salt.is_none() => {
+                options.binding_salt = Some(variable(value)?);
+            }
+            "--timeout-ms" if options.timeout_ms.is_none() => {
+                options.timeout_ms = Some(number::<u64>(value).filter(|ms| *ms > 0)?);
+            }
+            "--contains" if options.contains.is_none() => options.contains = Some(text(value)?),
+            "--max-matching" if options.max_matching.is_none() => {
+                options.max_matching = Some(
                     number::<usize>(value)
                         .filter(|most| (1..=MAX_MATCHING_LIMIT).contains(most))?,
                 );
             }
-            "--out" if out.is_none() => out = Some(path(value)?),
-            "--via" if via.is_none() => via = Some(Way::from_word(value)?),
+            "--out" if options.out.is_none() => options.out = Some(out(value)?),
+            "--via" if options.via.is_none() => options.via = Some(value.clone()),
             _ => return None,
         }
     }
-    let request = match (command.as_str(), device, contains, max_matching, out, via) {
-        ("devices", None, None, None, None, None) => Request::Devices,
-        ("info", Some(device), None, None, None, None) => Request::Info(device),
-        ("services", Some(device), None, None, None, None) => Request::Services(device),
-        ("images", Some(device), None, None, None, None) => Request::Images(device),
-        ("apps", Some(device), Some(contains), max_matching, None, None) => Request::Apps {
-            device,
-            contains,
-            max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
-        },
-        ("screenshot", Some(device), None, None, Some(out), via) => Request::Screenshot {
-            device,
-            out,
-            via: via.unwrap_or(DEFAULT_WAY),
-        },
-        _ => return None,
+    let timeout_ms = options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    let request = match command.as_str() {
+        "devices" => devices(options)?,
+        _ => on_a_device(command, options)?,
     };
     Some(Invocation {
         request,
-        timeout_ms: timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
+        timeout_ms,
     })
+}
+
+/// `devices`, which takes no option but the two salts' variables, the second only beside the
+/// first.
+fn devices(options: Options) -> Option<Request> {
+    let Options {
+        device: None,
+        device_key: None,
+        key_salt,
+        binding_salt,
+        timeout_ms: _,
+        contains: None,
+        max_matching: None,
+        out: None,
+        via: None,
+    } = options
+    else {
+        return None;
+    };
+    match (key_salt, binding_salt) {
+        (None, None) => Some(Request::Devices(None)),
+        (Some(key), binding) => Some(Request::Devices(Some(KeyVariables { key, binding }))),
+        (None, Some(_)) => None,
+    }
+}
+
+/// A command on one device: `--device`, or `--device-key` with `--key-salt-env`, and the
+/// command's own options.
+fn on_a_device(command: &str, options: Options) -> Option<Request> {
+    let Options {
+        device,
+        device_key,
+        key_salt,
+        binding_salt: None,
+        timeout_ms: _,
+        contains,
+        max_matching,
+        out,
+        via,
+    } = options
+    else {
+        return None;
+    };
+    let target = match (device, device_key, key_salt) {
+        (Some(number), None, None) => Target::Number(number),
+        (None, Some(key), Some(salt_variable)) => Target::Key { key, salt_variable },
+        _ => return None,
+    };
+    let request = match (command, contains, max_matching, out, via) {
+        ("info", None, None, None, None) => Request::Info(target),
+        ("services", None, None, None, None) => Request::Services(target),
+        ("images", None, None, None, None) => Request::Images(target),
+        ("apps", Some(contains), max_matching, None, None) => Request::Apps {
+            device: target,
+            contains,
+            max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
+        },
+        ("screenshot", None, None, Some(out), via) => Request::Screenshot {
+            device: target,
+            out,
+            via: match via {
+                None => DEFAULT_WAY,
+                Some(word) => Way::from_word(&word)?,
+            },
+        },
+        ("orientation", None, None, None, via) => Request::Orientation {
+            device: target,
+            via: match via {
+                None => None,
+                Some(word) => Some(Reader::from_word(&word)?),
+            },
+        },
+        _ => return None,
+    };
+    Some(request)
 }
 
 /// A decimal number of ASCII digits only (no sign, no space).
@@ -172,9 +314,25 @@ fn text(value: &str) -> Option<String> {
     }
 }
 
-/// The path of `--out`, when it is not empty (whether it exists is the command's to check).
-fn path(value: &str) -> Option<String> {
-    if value.is_empty() {
+/// Where `--out` puts the picture: the standard output for `-`, else the file at the path, when
+/// it is not empty (whether it exists is the command's to check; a file named `-` is `./-`).
+fn out(value: &str) -> Option<Out> {
+    match value {
+        "" => None,
+        STANDARD_OUTPUT => Some(Out::Stdout),
+        path => Some(Out::File(path.to_owned())),
+    }
+}
+
+/// The key of `--device-key`, when it is written as a key is.
+fn key_text(value: &str) -> Option<String> {
+    key::is_key_text(value).then(|| value.to_owned())
+}
+
+/// The name of an environment variable a salt is read from, when a variable can have it: not
+/// empty, without `=` and NUL. Whether it is set is the command's to read.
+fn variable(value: &str) -> Option<String> {
+    if value.is_empty() || value.contains(['=', '\0']) {
         None
     } else {
         Some(value.to_owned())
@@ -195,28 +353,28 @@ mod tests {
         assert_eq!(
             parsed(&["devices"]),
             Some(Invocation {
-                request: Request::Devices,
+                request: Request::Devices(None),
                 timeout_ms: DEFAULT_TIMEOUT_MS,
             })
         );
         assert_eq!(
             parsed(&["info", "--device", "3"]),
             Some(Invocation {
-                request: Request::Info(3),
+                request: Request::Info(Target::Number(3)),
                 timeout_ms: DEFAULT_TIMEOUT_MS,
             })
         );
         assert_eq!(
             parsed(&["services", "--timeout-ms", "45000", "--device", "12"]),
             Some(Invocation {
-                request: Request::Services(12),
+                request: Request::Services(Target::Number(12)),
                 timeout_ms: 45_000,
             })
         );
         assert_eq!(
             parsed(&["images", "--device", "0", "--timeout-ms", "1"]),
             Some(Invocation {
-                request: Request::Images(0),
+                request: Request::Images(Target::Number(0)),
                 timeout_ms: 1,
             })
         );
@@ -271,7 +429,7 @@ mod tests {
             parsed(&["apps", "--device", "3", "--contains", "game"]),
             Some(Invocation {
                 request: Request::Apps {
-                    device: 3,
+                    device: Target::Number(3),
                     contains: "game".to_owned(),
                     max_matching: DEFAULT_MAX_MATCHING,
                 },
@@ -290,7 +448,7 @@ mod tests {
             ]),
             Some(Invocation {
                 request: Request::Apps {
-                    device: 4,
+                    device: Target::Number(4),
                     contains: "Abc".to_owned(),
                     max_matching: DEFAULT_MAX_MATCHING,
                 },
@@ -301,7 +459,7 @@ mod tests {
             parsed(&["apps", "--device", "3", "--contains", "äöü"])
                 .map(|invocation| invocation.request),
             Some(Request::Apps {
-                device: 3,
+                device: Target::Number(3),
                 contains: "äöü".to_owned(),
                 max_matching: DEFAULT_MAX_MATCHING,
             })
@@ -319,7 +477,7 @@ mod tests {
                 ])
                 .map(|invocation| invocation.request),
                 Some(Request::Apps {
-                    device: 3,
+                    device: Target::Number(3),
                     contains: "game".to_owned(),
                     max_matching: most,
                 }),
@@ -403,7 +561,7 @@ mod tests {
         assert_eq!(
             line("20").map(|invocation| invocation.request),
             Some(Request::Apps {
-                device: 3,
+                device: Target::Number(3),
                 contains: "game".to_owned(),
                 max_matching: 20,
             })
@@ -415,12 +573,23 @@ mod tests {
 
     #[test]
     fn a_request_names_its_command_and_its_device() {
-        assert_eq!(Request::Devices.name(), CommandName::Devices);
-        assert_eq!(Request::Devices.device(), None);
-        assert_eq!(Request::Info(3).name(), CommandName::Info);
-        assert_eq!(Request::Services(4).device(), Some(4));
-        assert_eq!(Request::Images(5).name(), CommandName::Images);
-        assert_eq!(Request::Images(5).device(), Some(5));
+        assert_eq!(Request::Devices(None).name(), CommandName::Devices);
+        assert_eq!(Request::Devices(None).device(), None);
+        assert_eq!(Request::Info(Target::Number(3)).name(), CommandName::Info);
+        assert_eq!(Request::Services(Target::Number(4)).device(), Some(4));
+        assert_eq!(
+            Request::Images(Target::Number(5)).name(),
+            CommandName::Images
+        );
+        assert_eq!(Request::Images(Target::Number(5)).device(), Some(5));
+        assert_eq!(Request::Info(key_target()).device(), None);
+        let orientation = Request::Orientation {
+            device: Target::Number(7),
+            via: None,
+        };
+        assert_eq!(orientation.name(), CommandName::Orientation);
+        assert_eq!(orientation.device(), Some(7));
+        assert_eq!(orientation.via(), None);
     }
 
     /// `screenshot` needs `--device` and a non-empty `--out`, takes `--via` with a word of
@@ -432,8 +601,8 @@ mod tests {
             parsed(&["screenshot", "--device", "3", "--out", "screen.png"]),
             Some(Invocation {
                 request: Request::Screenshot {
-                    device: 3,
-                    out: "screen.png".to_owned(),
+                    device: Target::Number(3),
+                    out: Out::File("screen.png".to_owned()),
                     via: Way::ScreenCapture,
                 },
                 timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -457,8 +626,8 @@ mod tests {
                 ]),
                 Some(Invocation {
                     request: Request::Screenshot {
-                        device: 4,
-                        out: "shots/one.png".to_owned(),
+                        device: Target::Number(4),
+                        out: Out::File("shots/one.png".to_owned()),
                         via: way,
                     },
                     timeout_ms: 60_000,
@@ -467,15 +636,15 @@ mod tests {
             );
         }
         let request = Request::Screenshot {
-            device: 6,
-            out: "screen.png".to_owned(),
+            device: Target::Number(6),
+            out: Out::File("screen.png".to_owned()),
             via: Way::Instruments,
         };
         assert_eq!(request.name(), CommandName::Screenshot);
         assert_eq!(request.device(), Some(6));
         assert_eq!(request.via(), Some(Way::Instruments));
-        assert_eq!(Request::Info(3).via(), None);
-        assert_eq!(Request::Devices.via(), None);
+        assert_eq!(Request::Info(Target::Number(3)).via(), None);
+        assert_eq!(Request::Devices(None).via(), None);
     }
 
     /// Every other `screenshot` line is refused, no other command takes `--out` or `--via`, and
@@ -560,6 +729,340 @@ mod tests {
             &["foreground", "--device", "3", "--is", "com.example.app"],
         ];
         for line in lines {
+            assert_eq!(parsed(line), None, "{line:?}");
+        }
+    }
+
+    use crate::key::tests::VECTOR_KEY;
+
+    /// The variable name the tests give `--key-salt-env`.
+    const SALT_VARIABLE: &str = "ACIB_TEST_KEY_SALT";
+
+    /// The device named by [`VECTOR_KEY`] under the salt of [`SALT_VARIABLE`].
+    fn key_target() -> Target {
+        Target::Key {
+            key: VECTOR_KEY.to_owned(),
+            salt_variable: SALT_VARIABLE.to_owned(),
+        }
+    }
+
+    /// The request of `line`, when it parses.
+    fn request(line: &[&str]) -> Option<Request> {
+        parsed(line).map(|invocation| invocation.request)
+    }
+
+    /// Each command on a device takes `--device-key <key> --key-salt-env <NAME>` in place of
+    /// `--device <n>`, the two in any order and among the command's other options.
+    #[test]
+    fn a_device_key_with_its_salt_variable_names_the_device_in_place_of_its_number() {
+        let by_key = ["--device-key", VECTOR_KEY, "--key-salt-env", SALT_VARIABLE];
+        let cases: Vec<(Vec<&str>, Request)> = vec![
+            (vec!["info"], Request::Info(key_target())),
+            (vec!["services"], Request::Services(key_target())),
+            (vec!["images"], Request::Images(key_target())),
+            (
+                vec!["apps", "--contains", "game"],
+                Request::Apps {
+                    device: key_target(),
+                    contains: "game".to_owned(),
+                    max_matching: DEFAULT_MAX_MATCHING,
+                },
+            ),
+            (
+                vec!["screenshot", "--out", "screen.png"],
+                Request::Screenshot {
+                    device: key_target(),
+                    out: Out::File("screen.png".to_owned()),
+                    via: DEFAULT_WAY,
+                },
+            ),
+            (
+                vec!["orientation"],
+                Request::Orientation {
+                    device: key_target(),
+                    via: None,
+                },
+            ),
+        ];
+        for (line, expected) in cases {
+            let mut first = line.clone();
+            first.extend(by_key);
+            assert_eq!(request(&first), Some(expected.clone()), "{first:?}");
+            let mut last = vec![line[0], "--key-salt-env", SALT_VARIABLE];
+            last.extend(&line[1..]);
+            last.extend(["--device-key", VECTOR_KEY]);
+            assert_eq!(request(&last), Some(expected), "{last:?}");
+        }
+    }
+
+    /// `--device` beside `--device-key` is refused, and so is either of `--device-key` and
+    /// `--key-salt-env` without the other, a key not written as one, a variable name a variable
+    /// cannot have, a flag given twice, `--binding-salt-env` on a command on a device, and a
+    /// command on a device that names none.
+    #[test]
+    fn every_refused_pair_of_the_device_flags() {
+        let digits = &VECTOR_KEY["sha256:".len()..];
+        let upper = format!("sha256:{}", digits.to_uppercase());
+        let short = format!("sha256:{}", &digits[1..]);
+        let lines: Vec<Vec<&str>> = vec![
+            vec![
+                "info",
+                "--device",
+                "3",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec!["info", "--device", "3", "--device-key", VECTOR_KEY],
+            vec!["info", "--device", "3", "--key-salt-env", SALT_VARIABLE],
+            vec!["info", "--device-key", VECTOR_KEY],
+            vec!["info", "--key-salt-env", SALT_VARIABLE],
+            vec!["screenshot", "--device-key", VECTOR_KEY, "--out", "a.png"],
+            vec!["orientation", "--key-salt-env", SALT_VARIABLE],
+            vec![
+                "info",
+                "--device-key",
+                upper.as_str(),
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec![
+                "info",
+                "--device-key",
+                short.as_str(),
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec![
+                "info",
+                "--device-key",
+                digits,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec!["info", "--device-key", "", "--key-salt-env", SALT_VARIABLE],
+            vec!["info", "--device-key", VECTOR_KEY, "--key-salt-env", ""],
+            vec!["info", "--device-key", VECTOR_KEY, "--key-salt-env", "A=B"],
+            vec!["info", "--device-key", VECTOR_KEY, "--key-salt-env", "A\0B"],
+            vec![
+                "info",
+                "--device-key",
+                VECTOR_KEY,
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec![
+                "info",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            vec![
+                "info",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--binding-salt-env",
+                "ACIB_BINDING",
+            ],
+            vec![
+                "info",
+                "--device",
+                "3",
+                "--binding-salt-env",
+                "ACIB_BINDING",
+            ],
+            vec!["orientation"],
+        ];
+        for line in lines {
+            assert_eq!(parsed(&line), None, "{line:?}");
+        }
+    }
+
+    /// `devices` takes `--key-salt-env` for each row's `device_key`, and `--binding-salt-env`
+    /// for its `binding_key` only beside it; it takes neither `--device` nor `--device-key`.
+    #[test]
+    fn devices_takes_a_key_salt_variable_and_a_binding_salt_variable_beside_it() {
+        assert_eq!(
+            request(&["devices", "--key-salt-env", SALT_VARIABLE]),
+            Some(Request::Devices(Some(KeyVariables {
+                key: SALT_VARIABLE.to_owned(),
+                binding: None,
+            })))
+        );
+        assert_eq!(
+            request(&[
+                "devices",
+                "--binding-salt-env",
+                "ACIB_BINDING",
+                "--timeout-ms",
+                "900",
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ]),
+            Some(Request::Devices(Some(KeyVariables {
+                key: SALT_VARIABLE.to_owned(),
+                binding: Some("ACIB_BINDING".to_owned()),
+            })))
+        );
+        let refused: &[&[&str]] = &[
+            &["devices", "--binding-salt-env", "ACIB_BINDING"],
+            &["devices", "--key-salt-env", ""],
+            &["devices", "--key-salt-env", "A=B"],
+            &[
+                "devices",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--binding-salt-env",
+                "",
+            ],
+            &[
+                "devices",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            &[
+                "devices",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--binding-salt-env",
+                "ACIB_BINDING",
+                "--binding-salt-env",
+                "ACIB_BINDING",
+            ],
+            &["devices", "--device-key", VECTOR_KEY],
+            &[
+                "devices",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ],
+            &[
+                "devices",
+                "--key-salt-env",
+                SALT_VARIABLE,
+                "--via",
+                "springboard",
+            ],
+        ];
+        for line in refused {
+            assert_eq!(parsed(line), None, "{line:?}");
+        }
+    }
+
+    /// `--out -` is the standard output; any other non-empty `--out` a file, `./-` the file
+    /// named `-`.
+    #[test]
+    fn out_dash_is_the_standard_output() {
+        let out_of = |value| match request(&["screenshot", "--device", "3", "--out", value]) {
+            Some(Request::Screenshot { out, .. }) => Some(out),
+            _ => None,
+        };
+        assert_eq!(out_of("-"), Some(Out::Stdout));
+        assert_eq!(out_of("./-"), Some(Out::File("./-".to_owned())));
+        assert_eq!(out_of("--"), Some(Out::File("--".to_owned())));
+        assert_eq!(out_of(""), None);
+        assert_eq!(
+            request(&[
+                "screenshot",
+                "--out",
+                "-",
+                "--via",
+                "instruments",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ]),
+            Some(Request::Screenshot {
+                device: key_target(),
+                out: Out::Stdout,
+                via: Way::Instruments,
+            })
+        );
+        assert_eq!(
+            parsed(&["orientation", "--device", "3", "--out", "-"]),
+            None
+        );
+    }
+
+    /// `orientation` takes a device, `--via` with a word of [`Reader`] (without it: each reader
+    /// in turn) and `--timeout-ms`; `--via` takes only its own command's words.
+    #[test]
+    fn the_orientation_command_takes_a_device_and_a_reader() {
+        assert_eq!(
+            parsed(&["orientation", "--device", "3"]),
+            Some(Invocation {
+                request: Request::Orientation {
+                    device: Target::Number(3),
+                    via: None,
+                },
+                timeout_ms: DEFAULT_TIMEOUT_MS,
+            })
+        );
+        for (word, reader) in [
+            ("springboard", Reader::Springboard),
+            ("springboard_shim", Reader::SpringboardShim),
+        ] {
+            assert_eq!(
+                parsed(&[
+                    "orientation",
+                    "--timeout-ms",
+                    "8000",
+                    "--via",
+                    word,
+                    "--device",
+                    "5",
+                ]),
+                Some(Invocation {
+                    request: Request::Orientation {
+                        device: Target::Number(5),
+                        via: Some(reader),
+                    },
+                    timeout_ms: 8_000,
+                }),
+                "--via {word}"
+            );
+        }
+        let refused: &[&[&str]] = &[
+            &["orientation", "--device", "3", "--via", ""],
+            &["orientation", "--device", "3", "--via", "screen_capture"],
+            &["orientation", "--device", "3", "--via", "SPRINGBOARD"],
+            &["orientation", "--device", "3", "--via", "devicecontrol"],
+            &[
+                "orientation",
+                "--device",
+                "3",
+                "--via",
+                "springboard",
+                "--via",
+                "springboard",
+            ],
+            &["orientation", "--device", "3", "--contains", "game"],
+            &["orientation", "--device", "3", "--max-matching", "2"],
+            &["orientation", "--device", "3", "--out", "a.png"],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--via",
+                "springboard",
+            ],
+            &["info", "--device", "3", "--via", "springboard"],
+        ];
+        for line in refused {
             assert_eq!(parsed(line), None, "{line:?}");
         }
     }

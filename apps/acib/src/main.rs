@@ -1,30 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0 and ACIB-1): the project's own
-//! bridge to iOS devices, a program the Runtime will speak to as a separate process, as it
+//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0, ACIB-1 and ACIB-2): the project's
+//! own bridge to iOS devices, a program the Runtime will speak to as a separate process, as it
 //! speaks to adb.
 //!
 //! This version only reads, one command per run (`acib devices`, `info`, `services`, `images`,
-//! `apps`, `screenshot`; see `args.rs` and `README.md`). Each run prints one JSON line on
-//! standard output and ends with status 0 when the command was answered, 1 when it was refused
-//! or failed, the line then naming this program's `problem` word and, where the library gave
-//! one, its error text. The one file it writes is the picture `screenshot` takes, to the path
-//! `--out` names, and it removes that file again when the picture could not be written whole
-//! into it; it installs no logger, so nothing the library traces is shown.
+//! `apps`, `screenshot`, `orientation`; see `args.rs` and `README.md`). Each run prints one JSON
+//! line on standard output and ends with status 0 when the command was answered, 1 when it was
+//! refused or failed, the line then naming this program's `problem` word and, where the library
+//! gave one, its error text. After the line of a picture asked for with `--out -`, the picture's
+//! bytes follow on the standard output (`framing.rs`). The one file it writes is the picture
+//! `screenshot` takes, to the path `--out` names, and it removes that file again when the
+//! picture could not be written whole into it; it installs no logger, so nothing the library
+//! traces is shown.
 
 #![forbid(unsafe_code)]
 
 mod answer;
 mod args;
 mod bridge;
+mod framing;
+mod key;
 mod out_file;
 mod picture;
 mod redact;
 
-use answer::{Failure, Line, Problem, Stage};
+use answer::{Failure, Line, Problem};
 use args::Invocation;
-use std::cell::Cell;
-use std::io::Write;
+use bridge::Context;
+use framing::Printed;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -37,16 +41,21 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|argument| argument.into_string().ok())
         .collect();
-    let line = match arguments.as_deref().and_then(args::parse) {
+    let printed = match arguments.as_deref().and_then(args::parse) {
         Some(invocation) => run(invocation, started),
-        None => Line::refused(None, None, Failure::own(Problem::CommandLineInvalid)),
+        None => Printed::line(Line::refused(
+            None,
+            None,
+            Failure::own(Problem::CommandLineInvalid),
+        )),
     };
-    emit(&line)
+    emit(&printed)
 }
 
 /// Runs the command, which started at `started`, on a current-thread runtime of its own,
-/// within its deadline; a screenshot whose deadline passes names the stage it was waiting in.
-fn run(invocation: Invocation, started: Instant) -> Line {
+/// within its deadline; a screenshot whose deadline passes names the stage it was waiting in,
+/// and a command whose device was found by its key the device's number.
+fn run(invocation: Invocation, started: Instant) -> Printed {
     let Invocation {
         request,
         timeout_ms,
@@ -59,27 +68,35 @@ fn run(invocation: Invocation, started: Instant) -> Line {
         Ok(runtime) => runtime,
         Err(error) => {
             let failure = Failure::library(Problem::AsyncRuntimeFailed, &error);
-            return Line::refused_on(Some(command), device, via, failure);
+            return Printed::line(Line::refused_on(Some(command), device, via, failure));
         }
     };
     let deadline = Duration::from_millis(timeout_ms);
-    // The stage a screenshot is in; no other command sets it.
-    let stage: Cell<Option<Stage>> = Cell::new(None);
-    runtime
-        .block_on(async {
-            tokio::time::timeout(deadline, bridge::answer(request, started, &stage)).await
-        })
-        .unwrap_or_else(|_| Line::deadline_passed(command, device, via, stage.get()))
+    runtime.block_on(async {
+        // The context's deadline is taken before the command's own timeout starts, so a reader
+        // of `orientation` that is cut by it is cut no later than the whole command.
+        let context = Context::new(tokio::time::Instant::now().checked_add(deadline));
+        tokio::time::timeout(deadline, bridge::answer(request, started, &context))
+            .await
+            .unwrap_or_else(|_| {
+                Printed::line(Line::deadline_passed(
+                    command,
+                    device.or(context.device.get()),
+                    via,
+                    context.stage.get(),
+                ))
+            })
+    })
 }
 
-/// Prints the line; the status is 0 only for an answered command whose line was written.
-fn emit(line: &Line) -> ExitCode {
-    let (text, answered) = match serde_json::to_string(line) {
-        Ok(text) => (text, line.answered()),
-        Err(_) => (UNWRITABLE.to_owned(), false),
+/// Prints the line, and the picture's bytes after it when they were asked for on the standard
+/// output; the status is 0 only for an answered command whose output was written whole.
+fn emit(printed: &Printed) -> ExitCode {
+    let (text, picture, answered) = match serde_json::to_string(&printed.line) {
+        Ok(text) => (text, printed.picture.as_deref(), printed.line.answered()),
+        Err(_) => (UNWRITABLE.to_owned(), None, false),
     };
-    let mut stdout = std::io::stdout().lock();
-    let written = writeln!(stdout, "{text}").and_then(|()| stdout.flush());
+    let written = framing::write_framed(std::io::stdout().lock(), &text, picture);
     if written.is_ok() && answered {
         ExitCode::SUCCESS
     } else {
