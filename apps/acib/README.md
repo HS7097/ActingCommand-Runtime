@@ -58,9 +58,10 @@ logger. The library itself traces, at warning level, the whole error dictionary 
 a CoreDevice request with (idevice 0.1.68, `services/core_device/mod.rs`: "XPC response did not
 have an output"), which can name other applications, their paths and their processes, and other
 texts of the phone's answers beside it; with no subscriber those events go nowhere. A
-subscriber or a logger may be added only with a redaction that holds all of the above. `acib`
-depends on no crate through which it could install one (a test pins its dependencies), and a
-comment where `main` would install one says why.
+subscriber or a logger may be added only with a redaction that holds all of the above. A test
+fails on any new dependency of `acib` (a tripwire against adding one unnoticed, not a proof that
+none of its dependencies could install one), and a comment where `main` would install one says
+why.
 
 ## Keys: naming a phone across connections
 
@@ -249,15 +250,33 @@ does not read), `connection_failed` (the connection under the exchange failed),
 locked phone has no word of its own: the library maps no refusal to one, and none is guessed
 here; what a locked phone answers is to be observed on the phone.
 
-**The list of applications.** The service is asked for two of the five kinds of application it
-lists (the library names them only by the request's keys: `includeAppClips`,
-`includeRemovableApps`, `includeHiddenApps`, `includeInternalApps`, `includeDefaultApps`): the
-removable ones, the kind an application a person installs is in, and the default ones, the
-system's own applications that come with the phone. App clips, hidden and internal applications
-are not asked for. The library reads each entry of the list into a record of its own (the
-entry's identifier, name, path and flags); one entry it cannot read fails the whole list, for
-every bundle: `application_list_failed` with `answer_unreadable`. That is the library's
-behaviour, not `acib`'s; asking for fewer kinds only makes it less likely.
+**The list of applications.** The service's list of applications is asked for by five flags,
+one per category of application. The library (idevice 0.1.68, `list_apps`) names them by the
+request's keys, `includeAppClips`, `includeRemovableApps`, `includeHiddenApps`,
+`includeInternalApps` and `includeDefaultApps`, and documents none of them: what each category
+holds is read here from the key's name alone, not from any description. Three are asked for:
+the removable applications (by the name, those a person can remove, as one they installed) and
+the default ones (by the name, those the phone comes with), so that an application a person
+installs and the system's own are in the list; and the hidden ones, so that an application a
+person installed and then hid is not left out should the phone list it only when hidden ones
+are asked for. App Clips and internal applications are not asked for, to ask the phone for
+less. Each entry of the answer carries flags of its own (among them `isRemovable`, `isHidden`,
+`isInternal` and `isAppClip`), each true or false apart from the others; which entries the
+phone lists for which flags of the request has not been checked on a phone.
+
+**An application the list does not hold.** The three commands answer a bundle the phone's list,
+for the categories asked, does not hold (one the phone does not have, or one it has only under
+a category not asked for) alike, as not installed: `running` answers `installed` false and
+`running` false, status 0, whether or not it runs; `stop` answers `installed` false and
+`was_running` false, status 0, and sends nothing, so an application that runs goes on running;
+`launch` answers `installed` false with `not_installed`, status 1, and sends nothing. So
+`installed` false, and the word `not_installed`, have one cause: the phone's list, for the
+categories asked, does not hold this bundle.
+
+The library reads each entry of the list into a record of its own (the entry's identifier,
+name, path and flags); one entry it cannot read fails the whole list, for every bundle:
+`application_list_failed` with `answer_unreadable`. That is the library's behaviour, not
+`acib`'s.
 
 **Which processes are of a bundle.** The service's list of applications gives each application
 its bundle identifier and the path of its bundle, a directory; its list of processes gives each
@@ -275,19 +294,19 @@ is no absolute path is of no application. A process of another application whose
 starts like the bundle's directory (a longer name, a sibling directory) is not of it.
 
 - `acib running --device <n> --bundle <id>`, read-only: whether the list of applications holds
-  the bundle (`installed`, of the two kinds above), whether the application itself runs
+  the bundle (`installed`, for the three categories above), whether the application itself runs
   (`running`), the pids of its own processes, ascending (`pids`), and the pids of its
   extensions' processes, ascending (`extension_pids`, which do not make it run): for example
   `{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,
   "pids":[412],"extension_pids":[530]}`. Only an extension alive answers `running` false,
-  `pids` empty and its pid in `extension_pids`. A bundle not installed answers `installed`
-  false, `running` false and no pid, status 0. Its words: `application_list_failed` and
-  `process_list_failed` (each with `error_kind`; a line stopped after the list of applications
-  keeps `installed`), and `bundle_path_unreadable` (the bundle is listed with a path that is no
-  absolute path or file URL, so which processes are of it cannot be told). Nothing on the phone
-  changes. That the list's paths and the process list's locations meet as described here (and
-  so that a running application answers `running` true) is to be seen at the first `running`
-  on a phone while the application is open.
+  `pids` empty and its pid in `extension_pids`. A bundle the list does not hold answers
+  `installed` false, `running` false and no pid, status 0 (above). Its words:
+  `application_list_failed` and `process_list_failed` (each with `error_kind`; a line stopped
+  after the list of applications keeps `installed`), and `bundle_path_unreadable` (the bundle is
+  listed with a path that is no absolute path or file URL, so which processes are of it cannot
+  be told). Nothing on the phone changes. That the list's paths and the process list's
+  locations meet as described here (and so that a running application answers `running` true)
+  is to be seen at the first `running` on a phone while the application is open.
 - `acib launch --device <n> --bundle <id> [--relaunch]`: first the list of applications is
   asked, as `running` and `stop` ask it: a bundle it does not hold answers `installed` false,
   as they do, with `not_installed` (status 1), and no launch is sent. Then the service launches
@@ -349,9 +368,10 @@ starts like the bundle's directory (a longer name, a sibling directory) is not o
   (`extension_pids`):
   `{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,
   "signalled":[412],"remaining":[],"running":false,"extension_pids":[530]}`. An application
-  that does not run (or is not installed) is a success that says so: `was_running` false,
-  nothing signalled, nothing remaining, its extensions' pids named. **The verdict comes from the
-  looks, never from the signals' answers**: when the last look inside the deadline still lists a
+  that does not run (or that the list does not hold, above) is a success that says so:
+  `was_running` false, nothing signalled, nothing remaining, its extensions' pids named (none
+  when the list does not hold it). **The verdict comes from the looks, never from the signals'
+  answers**: when the last look inside the deadline still lists a
   process the command signalled, the line answers `still_running` (status 1); when it lists none
   of them, the application is stopped (status 0). A signal whose answer was an error or could
   not be read is a fact beside the verdict: its pid and the error's kind are in `signal_errors`

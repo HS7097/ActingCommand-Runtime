@@ -780,7 +780,8 @@ impl Running {
         }
     }
 
-    /// The bundle is not installed: nothing of it runs.
+    /// The list of applications does not hold the bundle, for the categories asked: no process
+    /// of it is looked for.
     pub fn not_installed(self) -> Self {
         Self {
             installed: Some(false),

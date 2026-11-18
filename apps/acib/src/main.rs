@@ -45,8 +45,8 @@ fn main() -> ExitCode {
     // the whole error dictionary a phone answers a CoreDevice request with (idevice 0.1.68,
     // `services/core_device/mod.rs`, "XPC response did not have an output"), which can name
     // other applications, their paths and pids, and other texts of the phone's answers beside
-    // it. With no subscriber those events go nowhere. `acib` cannot install one without a new
-    // dependency: none of its own offers one (the test below pins them).
+    // it. With no subscriber those events go nowhere. A new dependency, through which one could
+    // be installed, fails the test below (a tripwire against adding one unnoticed, not a proof).
     let started = Instant::now();
     let arguments: Option<Vec<String>> = std::env::args_os()
         .skip(1)
@@ -117,13 +117,17 @@ fn emit(printed: &Printed) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    /// The names of the crates the manifest `manifest` makes this program depend on, in its
-    /// order; every table of dependencies other than `[dependencies]` (development, build or a
-    /// target's) is refused.
+    /// The keys of the table `[dependencies]` of the manifest `manifest`, in its order: every
+    /// line of it that holds `=` and is no comment, read without the blanks around it and around
+    /// its `=` (so a line indented, or written without spaces around `=`, is read too). A line
+    /// inside a value that spans lines (a list of features) is read only when it holds `=`, which
+    /// no such line of `acib`'s manifest does; one more key read only fails the test. Every other
+    /// table of dependencies (development, build or a target's) is refused, its header read
+    /// without the blanks around it.
     fn dependencies(manifest: &str) -> Vec<&str> {
         let mut names = Vec::new();
         let mut in_dependencies = false;
-        for line in manifest.lines() {
+        for line in manifest.lines().map(str::trim) {
             if line.starts_with('[') {
                 assert!(
                     !line.contains("dependencies") || line == "[dependencies]",
@@ -132,26 +136,38 @@ mod tests {
                 in_dependencies = line == "[dependencies]";
                 continue;
             }
-            if !in_dependencies || line.starts_with([' ', '#', ']']) {
+            if !in_dependencies || line.starts_with('#') {
                 continue;
             }
-            if let Some((name, _)) = line.split_once(" = ") {
-                names.push(name);
+            if let Some((name, _)) = line.split_once('=') {
+                names.push(name.trim_end());
             }
         }
         names
     }
 
-    /// By construction no log subscriber and no logger can be installed: a program installs one
-    /// only through a crate that offers it (`tracing-subscriber`, `tracing` itself, `log` and
-    /// its loggers), and `acib` depends on exactly these crates, none of which installs one or
-    /// lets `acib` name `tracing` or `log` (a crate it does not depend on itself cannot be named
-    /// in its code). A new dependency fails this test, and is to be held against the ruling that
-    /// nothing the library traces is ever shown without redaction (the comment in `main`).
-    /// Whether a subscriber is installed while the program runs cannot be asked without the
-    /// `tracing` crate itself.
+    /// A tripwire against adding a dependency unnoticed, not a proof that no log subscriber is
+    /// installed. A program installs a subscriber or a logger through a crate that offers one
+    /// (`tracing-subscriber`, `tracing` itself, `log` and its loggers); any new line of `acib`'s
+    /// dependencies, in any of the forms read below, fails this test, and is then to be held
+    /// against the ruling that nothing the library traces is ever shown without redaction (the
+    /// comment in `main`). What the crates `acib` depends on do, or let it name, is not checked
+    /// here, and whether a subscriber is installed while the program runs cannot be asked
+    /// without the `tracing` crate itself.
     #[test]
     fn acib_depends_on_no_crate_that_could_install_a_log_subscriber() {
+        // The forms a new dependency could be written in are read: indented, without spaces
+        // around `=`, with a dotted key; a value that spans lines is read as its one key.
+        let added = "[dependencies]\n\
+                     serde = { workspace = true, features = [\n    \"derive\",\n] }\n\
+                     \x20 log = \"0.4\"\n\
+                     tracing=\"0.1\"\n\
+                     \ttracing-subscriber.workspace = true\n\
+                     # comment = \"no dependency\"\n";
+        assert_eq!(
+            dependencies(added),
+            ["serde", "log", "tracing", "tracing-subscriber.workspace"]
+        );
         assert_eq!(
             dependencies(include_str!("../Cargo.toml")),
             ["idevice", "serde", "serde_json", "sha2", "tokio"]

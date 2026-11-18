@@ -675,16 +675,24 @@ async fn app_service(target: &Target, context: &Context) -> Result<AppConnection
 }
 
 /// What the application service's list of applications says of `bundle`. The list stays in
-/// this function. Of the five kinds the service lists (the library's `list_apps` names them by
-/// the request's keys alone: `includeAppClips`, `includeRemovableApps`, `includeHiddenApps`,
-/// `includeInternalApps`, `includeDefaultApps`) only two are asked for: the removable ones, the
-/// kind an application a person installs is in, and the default ones, the system's own
-/// applications that come with the phone (the coordinator's ruling on board #479: ask the phone
-/// for less). An entry the library cannot read fails the whole list (`answer_unreadable`): the
-/// library's behaviour, which fewer kinds make less likely.
+/// this function. The list is asked for by five flags, one per category of application: the
+/// library's `list_apps` names them by the request's keys (`includeAppClips`,
+/// `includeRemovableApps`, `includeHiddenApps`, `includeInternalApps`, `includeDefaultApps`) and
+/// documents none of them, so what each category holds is read here from the key's name alone,
+/// not from any description. Three are asked for (the coordinator's rulings on board #479): the
+/// removable and the default ones, by their names the applications a person can remove, as one
+/// they installed, and those the phone comes with; and the hidden ones, so that an application
+/// a person installed and then hid is not left out should the phone list it only when they are
+/// asked for. App Clips and internal applications are not asked for (ask the phone for less).
+/// A bundle the list does not hold, for the categories asked, is [`Installation::NotInstalled`],
+/// whether or not the phone has it under another category: `running` and `stop` answer it
+/// `installed` false and `stop` sends it nothing, `launch` answers `not_installed` and sends
+/// nothing. An entry the library cannot read fails the whole list (`answer_unreadable`): the
+/// library's behaviour.
 async fn installation(client: &mut AppService, bundle: &str) -> Result<Installation, ErrorKind> {
+    // The library's order of the flags: App Clips, removable, hidden, internal, default.
     let applications = client
-        .list_apps(false, true, false, false, true)
+        .list_apps(false, true, true, false, true)
         .await
         .map_err(|error| service_error_kind(&error))?;
     Ok(matching::installation(
