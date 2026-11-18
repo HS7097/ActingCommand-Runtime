@@ -74,6 +74,12 @@
 //! [`judge_readiness_and_placement`], which answers the same readiness and, per pack, its directory
 //! and whether the game's `schedule.json` enables it, from the classification S2 read, in the same
 //! reading of the root. Nothing the items decide, and nothing the readiness answers, changes.
+//!
+//! Workflow #463 S2b-1 (register §1.477): `standard-pack adopt` calls the one function through
+//! [`judge_checked_readiness`], handing it the warnings of its own `standard-pack check` of the
+//! same root, which accepted it and after which nothing under the root was written: the root is
+//! checked once in an adoption. Nothing the items decide, and nothing the readiness answers,
+//! changes.
 
 use crate::StandardPackCheckRequest;
 use crate::codes::{
@@ -445,6 +451,27 @@ pub(crate) struct PackPlacement {
 pub(crate) fn judge_readiness_and_placement(
     request: &StandardPackReadyRequest,
 ) -> LabResult<(StandardPackReadiness, BTreeMap<String, PackPlacement>)> {
+    judge_with_check(request, None)
+}
+
+/// Workflow #463 S2b-1 (register §1.477): [`judge_standard_pack_readiness`] of a root that the
+/// caller's own call checked by `standard-pack check` a moment before (`standard-pack adopt`'s
+/// check tree, on which nothing was written since), and that the check accepted with `warnings`:
+/// those warnings are taken as that check's answer instead of checking the root again. Everything
+/// else is judged as that function judges it, by the same code.
+pub(crate) fn judge_checked_readiness(
+    request: &StandardPackReadyRequest,
+    warnings: &[Outcome],
+) -> LabResult<StandardPackReadiness> {
+    judge_with_check(request, Some(warnings)).map(|(readiness, _)| readiness)
+}
+
+/// The one readiness function: with `accepted`, the warnings of the check of the same root the
+/// caller ran and that accepted it ([`judge_checked_readiness`]); without, the check run here.
+fn judge_with_check(
+    request: &StandardPackReadyRequest,
+    accepted: Option<&[Outcome]>,
+) -> LabResult<(StandardPackReadiness, BTreeMap<String, PackPlacement>)> {
     let root = std::path::absolute(&request.root)
         .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
     if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -462,12 +489,15 @@ pub(crate) fn judge_readiness_and_placement(
         .to_owned();
     let checked = read_root(&root, &game)?;
     // Fix round 1 (the coordinator's ruling): `standard-pack check` on the same root, called, not
-    // copied; a refusal is carried by the packs, never the whole answer.
-    let (warnings, refusals) =
-        match check_standard_pack_root(StandardPackCheckRequest { root: root.clone() }) {
+    // copied; a refusal is carried by the packs, never the whole answer. Workflow #463 S2b-1: or
+    // the warnings of the caller's own check of it, which accepted it.
+    let (warnings, refusals) = match accepted {
+        Some(warnings) => (warnings.to_vec(), Vec::new()),
+        None => match check_standard_pack_root(StandardPackCheckRequest { root: root.clone() }) {
             Ok(response) => (response.warnings, Vec::new()),
             Err(error) => (Vec::new(), check_refusals(&error, &checked.root)),
-        };
+        },
+    };
     // Workflow #463 S3-6: each warning with the pack it names, for that pack's row.
     let named = warnings
         .iter()

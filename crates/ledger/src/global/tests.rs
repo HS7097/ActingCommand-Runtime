@@ -2879,6 +2879,23 @@ fn rd1b_t3_a_device_serial_fingerprint_follows_the_salt_and_never_is_the_serial(
     assert!(first.as_str().starts_with("sha256:"));
 }
 
+// Workflow #479 ACIB-2 (apps/acib, its README): the iOS bridge acib names a phone by a key it
+// makes itself, of the identifier usbmuxd lists, by this fingerprinter's function for a handset's
+// serial. acib depends on no crate of the Runtime, so the two implementations hold one test
+// vector, the same literal salt, identifier and expected string, asserted here and in acib's
+// own test (`key::tests::the_key_function_gives_the_test_vector_the_ledger_gives`).
+#[test]
+fn acib2_the_device_key_test_vector_is_the_device_serial_fingerprint() {
+    let fingerprint = Sha256SecretFingerprinter::new(b"acib-and-ledger-shared-test-salt")
+        .expect("fingerprinter")
+        .fingerprint(SecretField::DeviceSerial, "TESTSERIAL0001")
+        .expect("device serial fingerprint");
+    assert_eq!(
+        fingerprint.as_str(),
+        "sha256:b74e1be265fea5ee2fd1b1b2243df7dcb16530f24a6b1bef41b050f8b2f427bf"
+    );
+}
+
 #[test]
 fn config_debug_redacts_owner_and_root() {
     let temp = TempDir::new().expect("temp");
