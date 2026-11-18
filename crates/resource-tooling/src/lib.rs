@@ -185,6 +185,8 @@ mod package_publish;
 mod package_validate;
 // Workflow #463 V3: `package variables`, what one package's control declaration declares.
 mod package_variables;
+// #463 PRIV-1: a root's `privacy-zones.json`, and the comparison of a package's read regions.
+mod privacy_zones;
 mod resource_convert;
 mod resource_restore;
 // Workflow #477 PC-1: `standard-pack catalog`, the writer of a game root's `pack-catalog.json`.
@@ -246,6 +248,13 @@ pub use package_publish::{
 };
 pub use package_validate::validate_package;
 pub use package_variables::package_variables;
+// #463 PRIV-1: the sensitive-zone declaration's reader, the comparison and their words.
+pub use codes::{PrivacyRectKind, PrivacyUnseenKind, PrivacyZoneKind};
+pub use privacy_zones::{
+    PRIVACY_ZONES_FILE, PRIVACY_ZONES_SCHEMA, PrivacyBase, PrivacyCase, PrivacyComparison,
+    PrivacyDeclaration, PrivacyExemption, PrivacyExtent, PrivacyFinding, PrivacyPlace,
+    PrivacyUnseen, PrivacyZone, PublicPrivacyZones, compare_privacy_zones,
+};
 pub use resource_convert::{
     Bundle, OperationParser, ParseOutputs, ResolvedResourceRoot, canonical_game, canonical_locale,
     canonical_server, resolve_resource_root, validate_maa_semantic_declarations,

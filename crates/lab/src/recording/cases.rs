@@ -64,7 +64,7 @@ use actingcommand_execution_kernel::page_anchor_matches;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::{
-    PackRect, PackRegion, RecognitionPack, RecognitionTarget, TargetKind,
+    PackReadArea, PackReadRegion, PackReadingDeclarations, PackRect, RecognitionPack, TargetKind,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -272,11 +272,11 @@ pub(crate) fn cases_dir_name(package_id: &str) -> String {
 
 /// A rectangle of the frame a case's scene holds, in the recording's pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Patch {
-    y: u32,
-    x: u32,
-    height: u32,
-    width: u32,
+pub(crate) struct Patch {
+    pub(crate) y: u32,
+    pub(crate) x: u32,
+    pub(crate) height: u32,
+    pub(crate) width: u32,
 }
 
 impl Patch {
@@ -559,60 +559,64 @@ fn detected_page(detector: &PageDetector, game: &str, page: &str) -> LabResult<S
 }
 
 /// Every rectangle the recognition targets of the admitted package `pack` read, each once with the
-/// targets that read it in the package's order: a template's search region (and its colour check's
-/// region), a colour or colour digest probe's region, an OCR or NN target's region. A check
-/// (`all_of`, `any_of`), a value test and a click-only target read nothing of their own: a check's
-/// members and a value test's sides are targets of the package themselves. A region that is no
-/// fixed rectangle inside the recording's frame (`size`) cannot be pasted where it is read, and is
-/// the check's error.
-fn read_regions(
+/// targets that read it in the package's order: of the one list of a package's read regions (#463
+/// PRIV-1, `RecognitionPack::reads`, which marks no reading here), the regions a target declares
+/// itself: a template's search region (and its colour check's region), a colour or colour digest
+/// probe's region, an OCR or NN target's region (a select's name region or quantity column among
+/// them). A check (`all_of`, `any_of`), a value test and a click-only target read nothing of their
+/// own: a check's members and a value test's sides are targets of the package themselves. What a
+/// candidate layout reads itself (the list's regions with a `layout`: its shared OCR read, a
+/// feature it reads at an offset) is not pasted, as a scene never pasted it: a recording generates
+/// no feature read at an offset, and a select's shared read (#463 SEL-2L-a) only beside the slot
+/// targets the scene pastes. A region that is no fixed rectangle inside the recording's frame
+/// (`size`) cannot be pasted where it is read, and is the check's error; as before the list moved,
+/// a target's regions are all found fixed before the first of them is placed.
+pub(crate) fn read_regions(
     pack: &RecognitionPack,
     size: RecordSize,
 ) -> LabResult<BTreeMap<Patch, Vec<String>>> {
+    let reads = pack.reads(&PackReadingDeclarations::default());
+    let pasted = reads
+        .regions
+        .iter()
+        .filter(|region| region.layout.is_none())
+        .collect::<Vec<_>>();
     let mut regions: BTreeMap<Patch, Vec<String>> = BTreeMap::new();
-    for target in &pack.targets {
-        let read = match target {
-            RecognitionTarget::Template(template) => {
-                let mut read = vec![(&template.id, fixed(&template.id, &template.region)?)];
-                if let Some(check) = &template.color_check {
-                    read.push((&template.id, fixed(&template.id, &check.region)?));
-                }
-                read
-            }
-            RecognitionTarget::Color(color) => vec![(&color.id, color.region)],
-            RecognitionTarget::ColorDigest(digest) => vec![(&digest.id, digest.region)],
-            RecognitionTarget::Ocr(ocr) => vec![(&ocr.id, fixed(&ocr.id, &ocr.region)?)],
-            RecognitionTarget::Nn(nn) => vec![(&nn.id, fixed(&nn.id, &nn.region)?)],
-            RecognitionTarget::ClickOnly(_)
-            | RecognitionTarget::Composite(_)
-            | RecognitionTarget::ValueTest(_) => Vec::new(),
-        };
-        for (id, rect) in read {
-            let readers = regions.entry(patch(id, rect, size)?).or_default();
-            if !readers.contains(id) {
-                readers.push(id.clone());
+    for target in pasted.chunk_by(|one, other| one.target == other.target) {
+        let rects = target
+            .iter()
+            .copied()
+            .map(fixed)
+            .collect::<LabResult<Vec<_>>>()?;
+        for (region, rect) in target.iter().zip(rects) {
+            let readers = regions
+                .entry(patch(&region.target, rect, size)?)
+                .or_default();
+            if !readers.contains(&region.target) {
+                readers.push(region.target.clone());
             }
         }
     }
     Ok(regions)
 }
 
-/// The fixed rectangle `region` of the target `id`.
-fn fixed(id: &str, region: &PackRegion) -> LabResult<PackRect> {
-    match region {
-        PackRegion::Rect(rect) => Ok(*rect),
-        PackRegion::TemplateRelative(_) | PackRegion::Keyword(_) => Err(invalid(
+/// The fixed rectangle of the read region `region`.
+fn fixed(region: &PackReadRegion) -> LabResult<PackRect> {
+    match region.area {
+        PackReadArea::Rect(rect) => Ok(rect),
+        PackReadArea::FullFrame | PackReadArea::Unbounded => Err(invalid(
             "validation_failed",
             format!(
-                "target '{id}' reads a region that is no fixed rectangle: a case's scene pastes \
-                 fixed regions only"
+                "target '{}' reads a region that is no fixed rectangle: a case's scene pastes \
+                 fixed regions only",
+                region.target
             ),
         )),
     }
 }
 
 /// `rect`, which the target `id` reads, as a patch inside the recording's frame of `size`.
-fn patch(id: &str, rect: PackRect, size: RecordSize) -> LabResult<Patch> {
+pub(crate) fn patch(id: &str, rect: PackRect, size: RecordSize) -> LabResult<Patch> {
     let inside = |start: i32, length: i32, bound: u32| {
         u32::try_from(start)
             .ok()
@@ -643,7 +647,7 @@ fn patch(id: &str, rect: PackRect, size: RecordSize) -> LabResult<Patch> {
 
 /// The scene of the frame `loaded`: a canvas of the recording's `size` in [`CANVAS_FILL`] with
 /// every rectangle of `regions` pasted from the frame where it is, and nothing else of the frame.
-fn scene_of(
+pub(crate) fn scene_of(
     loaded: &LoadedFrame,
     regions: &BTreeMap<Patch, Vec<String>>,
     size: RecordSize,
