@@ -1614,34 +1614,17 @@ fn mark_region(mark: &RecordedMark) -> LabResult<RecordRect> {
 
 /// The bounding box of `rects`, which hold at least one rectangle.
 fn bounding_box(rects: &[RecordRect], mark: &RecordedMark) -> LabResult<RecordRect> {
-    let mut bounds: Option<(i64, i64, i64, i64)> = None;
-    for rect in rects {
-        let (left, top) = (i64::from(rect.x), i64::from(rect.y));
-        let (right, bottom) = (left + i64::from(rect.width), top + i64::from(rect.height));
-        bounds = Some(match bounds {
-            None => (left, top, right, bottom),
-            Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),
-        });
-    }
-    let (left, top, right, bottom) = bounds.ok_or_else(|| {
-        invalid(
+    if rects.is_empty() {
+        return Err(invalid(
             "validation_failed",
             format!("{} '{}' has no members", mark.family.as_str(), mark.id),
+        ));
+    }
+    bounding_rect(rects.iter().copied()).ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("{} bounding box overflow", mark.family.as_str()),
         )
-    })?;
-    let field = |value: i64| {
-        i32::try_from(value).map_err(|_| {
-            invalid(
-                "validation_failed",
-                format!("{} bounding box overflow", mark.family.as_str()),
-            )
-        })
-    };
-    Ok(RecordRect {
-        x: field(left)?,
-        y: field(top)?,
-        width: field(right - left)?,
-        height: field(bottom - top)?,
     })
 }
 
@@ -2427,7 +2410,7 @@ fn select_layout_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> LabR
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({
+    let mut layout = json!({
         "id": plan.select_layout_id(step),
         "page_id": page,
         "kind": "fixed_slots",
@@ -2445,7 +2428,112 @@ fn select_layout_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> LabR
             }
         }],
         "slots": slots
-    }))
+    });
+    // #463 SEL-2L-a: present only when the select's read declares `blocks`.
+    if let Some(shared) = select_shared_read(plan, step, select)? {
+        layout["shared_ocr"] = shared;
+    }
+    Ok(layout)
+}
+
+/// #463 SEL-2L-a (`contracts/lab-recording.md`, "Reading names by detecting blocks"): the one
+/// shared read (`shared_ocr`) of a select of fixed slots whose `read` declares `blocks` and
+/// `line_merge`, `None` for one that declares neither. Its region is the bounding rectangle of the
+/// slots' name boxes and its members are the read's (`languages`, `timeout_ms`, `model_ref`,
+/// `model_sha256`, `blocks`, `line_merge`; no `preprocess`), the ones its slot targets
+/// ([`select_slot_targets`]) are made of, so the kernel gives each slot target its text from the
+/// read: the detected blocks whose centre lies in the slot's name box, in `(y, x)` order joined by
+/// line feeds, at the lowest of their confidences, from one provider call per frame. A slot target
+/// the read would not serve (it would read its name box alone, as a single block) refuses the
+/// generation instead of being generated so.
+fn select_shared_read(
+    plan: &Plan,
+    step: &PlanStep,
+    select: &SelectSpec,
+) -> LabResult<Option<Value>> {
+    let (blocks, line_merge) = match (select.read.blocks, select.read.line_merge) {
+        (None, None) => return Ok(None),
+        (Some(blocks), Some(line_merge)) => (blocks, line_merge),
+        _ => {
+            return Err(invalid(
+                "validation_failed",
+                format!(
+                    "the select of step {} declares one of read.blocks and read.line_merge: give \
+                     both or neither",
+                    step.step.index
+                ),
+            ));
+        }
+    };
+    let region = bounding_rect(select.slots.iter().map(|slot| slot.name)).ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!(
+                "the select of step {} has no slot whose name box a shared read could hold",
+                step.step.index
+            ),
+        )
+    })?;
+    let shared = json!({
+        "region": region_json(region),
+        "languages": select.read.languages,
+        "timeout_ms": select.read.timeout_ms,
+        "model_ref": select.read.model_ref,
+        "model_sha256": select.read.model_sha256,
+        "blocks": blocks,
+        "line_merge": line_merge
+    });
+    for (slot, target) in select_slot_targets(plan, step, select).iter().enumerate() {
+        if !shared_read_serves(&shared, region, target) {
+            return Err(invalid(
+                "validation_failed",
+                format!(
+                    "slot {slot} of the select of step {} would not take its name from the \
+                     select's shared read and would read its name box alone; nothing was written",
+                    step.step.index
+                ),
+            ));
+        }
+    }
+    Ok(Some(shared))
+}
+
+/// The smallest rectangle that holds every one of `rects`; `None` without one, or when it does not
+/// fit the coordinates of a rectangle. A check's bounding box ([`bounding_box`]) and #463
+/// SEL-2L-a's shared read of a select's name boxes are this one rectangle.
+fn bounding_rect(rects: impl IntoIterator<Item = RecordRect>) -> Option<RecordRect> {
+    let mut bounds: Option<(i64, i64, i64, i64)> = None;
+    for rect in rects {
+        let (left, top) = (i64::from(rect.x), i64::from(rect.y));
+        let (right, bottom) = (left + i64::from(rect.width), top + i64::from(rect.height));
+        bounds = Some(match bounds {
+            None => (left, top, right, bottom),
+            Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),
+        });
+    }
+    let (left, top, right, bottom) = bounds?;
+    Some(RecordRect {
+        x: i32::try_from(left).ok()?,
+        y: i32::try_from(top).ok()?,
+        width: i32::try_from(right - left).ok()?,
+        height: i32::try_from(bottom - top).ok()?,
+    })
+}
+
+/// #463 SEL-2L-a: whether the shared read `shared` over `region` gives the OCR target `target` its
+/// text, as the kernel decides it (the recognition pack's `CandidateSharedOcr::reads_text_of` and
+/// its count of the calls a shared read serves): a target without `locate` whose `languages`,
+/// `model_ref`, `model_sha256` and `preprocess` are the read's, whose region is a rectangle that
+/// lies inside the read's.
+fn shared_read_serves(shared: &Value, region: RecordRect, target: &Value) -> bool {
+    let inside = target["region"]["mode"] == "rect"
+        && serde_json::from_value::<RecordRect>(target["region"]["rect"].clone())
+            .is_ok_and(|rect| super::frames::rect_contains(region, rect));
+    inside
+        && target.get("locate").is_none()
+        && ["languages", "model_ref", "model_sha256", "preprocess"]
+            .into_iter()
+            .all(|member| target.get(member) == shared.get(member))
 }
 
 /// #463 R1: the policy document of a select with `allowed` as its one gate's values: the
