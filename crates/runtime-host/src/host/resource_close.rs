@@ -2071,6 +2071,16 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        // Workflow #479 F-2 fix round 2 (`contracts/device-binding.md`, "An iOS handset"): the
+        // self-check of an instance whose device system has no backend in this build is refused
+        // here, before its claim, its preparation or any open of its stand-in registration:
+        // `input_backend_open_failed` (a preparation's first open) caused by
+        // `device_system_backend_missing`, denied; nothing is recorded or changed.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Preparation,
+            HostLocation::PrepareInstanceConnection,
+        )?;
         // Workflow #398 RD-2 (model-398 §4.3): a person's self-check of a handset starts a failed
         // device-link watch again.
         self.device_link_rewatch(instance_id)

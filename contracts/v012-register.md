@@ -40612,7 +40612,7 @@ does changes: no decision, wait, lock order or lift differs.
   `scheduling_pause_lifted_not_quiet` with their words and cause. `gate_480_pg2c`'s `nemu_host` and
   `NEMU` are made visible to that gate (`pub(super)`), unchanged; no existing test is adapted.
 
-### 1.482 #479 F-2 (0.12.74): an iOS handset is an instance the Runtime knows: configuration and binding, nothing captured or pressed (Workflow #479; the owner's rulings of 11-18 on board #479: an iPhone is scheduled like any instance, the release may carry `acib`, the phone's frames may be kept in the state root; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-479-f2-ios-handset-config-binding.md`, the design `rd-1118/design-479-f1.md` (its F-2), on main `5d0c8c3e`, which holds ACIB-2; fix round 1, work order `rd-1119/brief-479-f2-fix1.md`)
+### 1.482 #479 F-2 (0.12.74): an iOS handset is an instance the Runtime knows: configuration and binding, nothing captured or pressed (Workflow #479; the owner's rulings of 11-18 on board #479: an iPhone is scheduled like any instance, the release may carry `acib`, the phone's frames may be kept in the state root; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-479-f2-ios-handset-config-binding.md`, the design `rd-1118/design-479-f1.md` (its F-2), on main `5d0c8c3e`, which holds ACIB-2; fix round 1, work order `rd-1119/brief-479-f2-fix1.md`; fix round 2, work order `rd-1119/brief-479-f2-fix2.md`)
 
 1.482 is the number the coordinator assigned this section; §1.476 and §1.478 to §1.481 are other
 slices dispatched with it. It ships in 0.12.74. [device-binding.md](device-binding.md), "An iOS
@@ -40623,7 +40623,8 @@ program the Runtime did not know. An iOS handset is now an instance: configured
 (`device.system` `ios`), listed and bound by the Lab through `acib`, registered and recorded by the
 Runtime by its key, shown by status, never available to policy, never attempted by a party that
 acts without a person asking, and refused every capture, input and application operation at the
-front of the host's admission. Nothing is captured and nothing is pressed: capture is the next
+front of the host's admission (fix round 2: and a person's self-check, resume and ladder drill at
+their entry). Nothing is captured and nothing is pressed: capture is the next
 slice (F-3). `apps/acib` is not changed.
 
 **The configuration** (`actingd-config` revision 34; the last slice that added configuration
@@ -40681,7 +40682,10 @@ installer's 30 s of §1.475, the review's suggestion), and `wait_acib` follows t
 dropped, so neither pipe can fill), a look every 10 ms; past the wait the child (the Lab's own) is
 ended, `no_answer_in_time`; past the cap it is ended, `answer_too_long`; a child that had to be
 ended and could not be (or whose state could not be read) is `not_ended` (`AcibChild`,
-`AcibClock`). Not installed and no iOS handset configured: nothing is asked and the answer is the
+`AcibClock`). Fix round 2, one word one cause: `not_ended` only when the Lab asked the child to
+end and ending it failed; a state that cannot be read (`try_wait` failing) ends the child at once
+and, ended, is its own word `state_unreadable` (`AcibRun::StateUnread`): what the code knows at
+that line is that it could not tell, so it ends the child and says which of the two followed. Not installed and no iOS handset configured: nothing is asked and the answer is the
 one of before. Otherwise a list `acib` did not give is the member `ios_devices_unlisted` `{why}`
 (`ios_list_problem`) beside adb's rows, the listing a success. `devices bind` of an iOS handset takes the listing's `device_key`,
 has `acib` find the phone and answer its key under the secret, and writes the row; the answer is
@@ -40710,14 +40714,39 @@ iOS handset first, bound or not, with the stage `device_system_unsupported` and 
 mark `device_system_unsupported` (`crates/device/src/error.rs`), which the kernel's failure context
 carries (`ExecutionFailureContext::device_system_unsupported`) and `RuntimeHostError::execution`
 turns into the same cause; the ADB baseline probe and the foreground query answer that mark, and no
-party asks them of an iOS handset without a person asking. Fix round 1: it is inert: the start's
+party asks them of an iOS handset without a person asking. Fix round 2: the three paths a person
+starts that still reached the stand-in registration are refused at their entry the same way
+(`DeviceOperation::Preparation`, `DeviceOperation::Drill`): a self-check (`self_check_instance`,
+before its claim) and an instance resume's reconnect (`resume_scheduling`, before the reconnect's
+claim, after the pause's own refusals and the lift without a reconnect of a pause still draining
+or handing back) `input_backend_open_failed`, the code their preparation ends with at its first
+open, the input's, denied, nothing recorded, the resumed pause left as it was; a ladder drill
+(`drill_recovery_ladder`, plan or device, after its command's intent) the new
+`recovery_ladder_drill_unsupported` through `refuse_drill` (its `command.rejected`), before any
+ladder is admitted, so neither a rung nor the readiness's baseline probe and foreground query
+(`recovery_ladder.rs`, `recovery_android_booted`, `recovery_adb_unanswered`) meets it; each caused
+by `device_system_backend_missing`. None needed more than a few lines at its entry. Fix round 1:
+it is inert: the start's
 preparation (`prepare_physical_instances_on_start`) withholds its availability and attempts nothing
 more, and the idle planner (`check_idle`, `restore_idle_state`) passes it over, so no failure,
 ladder, idle step or stability count arises from it. The policy availability is withdrawn under
 `runtime.device-system`, `device_system:ios`, before the unbound check (`host/runtime_facts.rs`,
-`host/facts.rs`), once per start unless that withdrawal is in effect, and Workflow #469 H1's
-`availability_source` reads `device_system`. `device_link::start` records `device.system` and
-`device.bound` for each iOS handset; the Lab's overview row shows them as `device` `{kind, system,
+`host/facts.rs`), and Workflow #469 H1's `availability_source` reads `device_system`. Fix round 2,
+when that statement is written: on change, the rule of the availability records of the other
+reasons, and the precedent is Workflow #398 RD-1b's unbound handset (`withdraw_unbound_handset`,
+`device_link:unbound`, "published once, unless that withdrawal is in effect"; the device link's,
+the device state's and the self-check gate's withdrawals at a start follow the same rule, and
+#469 H1 fix round 2's test shows a restart publishing none of the gate's). The start's preparation
+(`withhold_policy_instance_availability`), and the self-check gate wherever it decides again
+(`gate_policy_availability_on_selfcheck`), writes it for a policy instance (one the configuration's
+policy inputs seed; one without a seed has no availability) only when the record in effect is not
+that withdrawal (`withdraw_handset_without_backend`): the first start with the handset writes it
+once, and a restart over the same ledger writes none, because the fact store reloads the record
+from the ledger and it stays in effect. A person reading the ledger after a restart finds the
+record of the earlier start, still the one in effect, and the status says it at every read (the
+capability table below), so nothing more is written. `device_link::start` records `device.system`
+and `device.bound` for each iOS handset when their value changes (`record_device_link_fact`, the
+rule of `device.link`); the Lab's overview row shows them as `device` `{kind, system,
 bound}` (`crates/lab-ops/src/overview.rs`, `handset_device`). Fix round 1: its capability table,
 which status carries, names no backend: every row unsupported and unavailable, its source
 `device_system:ios` and its failure semantics why (`provider.rs`,
@@ -40728,9 +40757,13 @@ which status carries, names no backend: every row unsupported and unavailable, i
 `device_system_unsupported` (runtime-host), `device_ios_list_failed` (actingctl, error, exit 1:
 `alias`, `ios_list_problem`) and `device_binding_secret_missing` (actingctl, error, exit 1:
 `alias`); fix round 1: `device_binding_ignored` (actingd, warning, a start's daemon line: `alias`,
-`device_binding_problem`); the key and vocabulary `ios_list_problem` (`not_installed`,
-`not_started`, `answer_unreadable`, `acib`'s seven words for `devices`, and fix round 1's
-`no_answer_in_time`, `answer_too_long` and `not_ended`); the words `system_unsupported` and (fix
+`device_binding_problem`); fix round 2: `recovery_ladder_drill_unsupported` (runtime-host, error,
+ladder class `none`: refuses a person's drill of an iOS handset's ladder, denied, actingctl and the
+Lab exit 1; no existing drill refusal says it: `recovery_ladder_drill_disabled` is stuck recovery
+switched off); the key and vocabulary `ios_list_problem` (`not_installed`,
+`not_started`, `answer_unreadable`, `acib`'s seven words for `devices`, fix round 1's
+`no_answer_in_time`, `answer_too_long` and `not_ended`, and fix round 2's `state_unreadable`); the
+words `system_unsupported` and (fix
 round 1, in place of `acib_path_without_ios`) `adb_member_with_ios` (`device_config_problem`),
 `device_key_invalid` and `system_mismatch` (`device_binding_problem`), `system_mismatch`
 (`device_row_problem`), `device_system` (`availability_source`). `duplicate_serial` and
@@ -40748,6 +40781,15 @@ mismatched row that unbinds its handset alone, the adb members of an iOS handset
 deadline, wait and cap on a scripted child, and a version-1 row with a `null` `system`; its
 `business_step` is test-only (`#[cfg(test)]`), as `gate_419_w2e`'s is, so the architecture guard
 `fenced_close_requires_scheduler_witness` meets no production reference to the issuing bridge.
+Fix round 2 adds the host's `f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry`
+(a self-check, the resume of a released pause and a drill in each mode on a bound iOS handset, each
+denied with its code and the cause, the pause left, nothing asked of the fake, its foreground
+failure never taken, no preparation or ladder record), and extends F-2's own tests: `f2_t7` (a
+child whose state cannot be read is ended, `StateUnread`, and `NotEnded` only when ending it then
+fails; the listing's `state_unreadable`) and `f2_fix1_a_start_attempts_no_ios_handset…` (its
+handsets are the fixture's two policy instances; the first start writes each one's one withdrawal
+under `device_system:ios`, in effect, and the status's capability table says it; a restart over
+the same ledger writes none, the same record stays in effect and the status still says it).
 Adapted because the row may now hold a key and no serial (`DeviceBinding::serial` is an `Option`):
 `devices::tests::rd1c_t2_…` and `rd1c_t5_…` compare `Some(serial)`; fix round 1: F-2's own
 `f2_t1` (the call's `--timeout-ms`) and `f2_config_system_is_a_handsets_member…` (`acib_path`

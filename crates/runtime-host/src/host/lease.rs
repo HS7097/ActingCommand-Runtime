@@ -4626,7 +4626,8 @@ pub(super) fn instance_not_running(instance: &RegisteredInstance) -> RuntimeHost
 /// the slice's work order): the operations the host refuses on an instance whose device system
 /// this build has no backend for, each with its own failure code, the one the device registry's
 /// own refusal ends it with (`require_bound`), so such an instance is refused in one way wherever
-/// it is met.
+/// it is met. Fix round 2: and the paths a person starts that would reach the stand-in
+/// registration otherwise, each with its own failure code.
 #[derive(Clone, Copy)]
 pub(super) enum DeviceOperation {
     /// An input (`input_backend_open_failed`).
@@ -4635,12 +4636,19 @@ pub(super) enum DeviceOperation {
     Capture,
     /// An application command (`application_backend_operation_failed`).
     Application,
+    /// Fix round 2: a connection preparation a person asks for, a self-check
+    /// (`SelfCheckInstance`) or an instance resume's reconnect (`input_backend_open_failed`, the
+    /// code such a preparation ends with at its first open, the input's).
+    Preparation,
+    /// Fix round 2: a person's drill of the instance's recovery ladder
+    /// (`recovery_ladder_drill_unsupported`).
+    Drill,
 }
 
 impl DeviceOperation {
     fn code(self) -> actingcommand_contract::outcome::Code {
         match self {
-            Self::Input => {
+            Self::Input | Self::Preparation => {
                 actingcommand_contract::codes::DeviceSelfCheckFailure::InputBackendOpenFailed.code()
             }
             Self::Capture => {
@@ -4648,6 +4656,7 @@ impl DeviceOperation {
                     .code()
             }
             Self::Application => SharedCode::ApplicationBackendOperationFailed.code(),
+            Self::Drill => HostCode::RecoveryLadderDrillUnsupported.code(),
         }
     }
 }
@@ -4657,7 +4666,9 @@ impl DeviceOperation {
 /// failure code ([`DeviceOperation`]) with the cause `device_system_backend_missing`, of that
 /// instance, not fatal; `None` for every other instance. It is made at the front of the host's
 /// admission, before anything of the instance's stand-in registration is looked at (a key table,
-/// the foreground gate, the ADB baseline, a backend), and records nothing.
+/// the foreground gate, the ADB baseline, a backend), and records nothing; fix round 2: also at
+/// the entry of a person's self-check, instance resume's reconnect and ladder drill (whose own
+/// `command.rejected` the drill writes).
 pub(super) fn device_system_refusal(
     instance: &RegisteredInstance,
     operation: DeviceOperation,

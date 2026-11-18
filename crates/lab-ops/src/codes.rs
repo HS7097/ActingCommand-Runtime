@@ -333,7 +333,7 @@ actingcommand_contract::outcome_vocabulary! {
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #479 F-2 (vocabulary `ios_list_problem`): why `acib`, the project's iOS device
     /// bridge, gave no list of iOS phones: one of its own words for `acib devices`, or one of the
-    /// Lab's (three, and fix round 1's three). A listing says it in its member
+    /// Lab's (three, fix round 1's three and fix round 2's one). A listing says it in its member
     /// `ios_devices_unlisted` and lists its Android rows as before; a bind of an iOS handset is
     /// refused `device_ios_list_failed` with it.
     pub enum IosListProblem: "ios_list_problem" {
@@ -364,9 +364,13 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #479 F-2 fix round 1: `acib` printed more than the Lab reads of one of its
         /// streams; the Lab ended it.
         AnswerTooLong => "answer_too_long",
-        /// Workflow #479 F-2 fix round 1: the Lab had to end `acib` (past its wait or its cap) or
-        /// could not tell whether it had ended, and ending it failed: it may still run.
+        /// Workflow #479 F-2 fix round 1: the Lab asked `acib` to end (past its wait, past its cap,
+        /// or after a stream or its state could not be read) and ending it failed: it may still
+        /// run. Fix round 2: this cause alone.
         NotEnded => "not_ended",
+        /// Workflow #479 F-2 fix round 2: the Lab could not read whether `acib` had ended, so it
+        /// ended it, and ending it succeeded: it runs no more, and what it answered is not known.
+        StateUnreadable => "state_unreadable",
     }
 }
 

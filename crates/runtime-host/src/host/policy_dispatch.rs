@@ -5089,6 +5089,16 @@ impl HostShared {
                 return Ok(resumed);
             }
         }
+        // Workflow #479 F-2 fix round 2 (`contracts/device-binding.md`, "An iOS handset"): the
+        // reconnect of an instance whose device system has no backend in this build is refused
+        // here, before its claim, the lift or any open of its stand-in registration:
+        // `input_backend_open_failed` (its preparation's first open) caused by
+        // `device_system_backend_missing`, denied; nothing has changed, so the pause stays.
+        self.refuse_device_system_without_backend(
+            instance_alias,
+            super::lease::DeviceOperation::Preparation,
+            HostLocation::PrepareInstanceConnection,
+        )?;
         let token = self.await_preparation_claim(
             original,
             instance_alias,

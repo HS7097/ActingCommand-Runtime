@@ -1663,8 +1663,15 @@ actingcommand_contract::outcome_codes! {
         /// refused by the device registry before anything was opened or run: this build has no
         /// backend for that operation on that device system (the stage
         /// `device_system_unsupported`). The `caused_by` of the operation's own failure; only that
-        /// instance's operation fails.
+        /// instance's operation fails. Fix round 2: also of a person's self-check, instance
+        /// resume's reconnect and ladder drill on it, each refused at its entry.
         DeviceSystemBackendMissing => "device_system_backend_missing": error / declaration_error,
+        /// Error. Workflow #479 F-2 fix round 2: a person's drill of the recovery ladder of an
+        /// instance whose device system has no backend in this build (an iOS handset, bound or
+        /// not) was refused at its entry, before any ladder was admitted or anything of the
+        /// instance's stand-in registration was asked: no rung can act on it (the command's
+        /// `command.rejected` and the receipt, caused by `device_system_backend_missing`).
+        RecoveryLadderDrillUnsupported => "recovery_ladder_drill_unsupported": error / none,
         // ---- Workflow #479 F-2: end
         // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
         // contained run"): begin. Each refuses a direct run in its preparation, before any record,

@@ -7296,7 +7296,7 @@
       }
     },
     "ios_list_problem": {
-      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones: one of acib's own words for acib devices, or one of the Lab's (three, and fix round 1's three: the Lab calls acib with a deadline, waits for it a little longer, reads a bounded amount of its output and ends it past either) (Workflow #479 F-2, contracts/device-binding.md, An iOS handset). A listing says it in its member ios_devices_unlisted and answers its Android rows; an iOS bind is refused device_ios_list_failed with it.",
+      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones: one of acib's own words for acib devices, or one of the Lab's (three; fix round 1's three: the Lab calls acib with a deadline, waits for it a little longer, reads a bounded amount of its output and ends it past either; and fix round 2's one, a state of the child that could not be read, each word one cause) (Workflow #479 F-2, contracts/device-binding.md, An iOS handset). A listing says it in its member ios_devices_unlisted and answers its Android rows; an iOS bind is refused device_ios_list_failed with it.",
       "tokens": {
         "not_installed": {
           "description": "acib is not installed: no file at the install root's tools\\acib.exe."
@@ -7335,7 +7335,10 @@
           "description": "acib printed more than the Lab reads of one of its streams (64 KiB of its output or of its errors); the Lab ended it (Workflow #479 F-2 fix round 1)."
         },
         "not_ended": {
-          "description": "The Lab had to end acib (past its wait or its cap) or could not tell whether it had ended, and ending it failed: it may still run (Workflow #479 F-2 fix round 1)."
+          "description": "The Lab asked acib to end (past its wait, past its cap, or after a stream or its state could not be read) and ending it failed: it may still run (Workflow #479 F-2 fix round 1; fix round 2: this cause alone)."
+        },
+        "state_unreadable": {
+          "description": "The Lab could not read whether acib had ended, so it ended it, and ending it succeeded: it runs no more, and what it answered is not known (Workflow #479 F-2 fix round 2)."
         }
       }
     },

@@ -481,7 +481,10 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   rows as before and one member, `ios_devices_unlisted` `{why}`, `why` a word of
   `ios_list_problem`: `not_installed` (no file), `not_started`, `answer_unreadable`, fix round 1's
   `no_answer_in_time` (not ended with its answer within the Lab's wait; ended), `answer_too_long`
-  (more than the cap on a stream; ended) and `not_ended` (it had to be ended and could not be), or
+  (more than the cap on a stream; ended) and `not_ended` (the Lab asked it to end and ending it
+  failed: it may still run; fix round 2, that cause alone), fix round 2's `state_unreadable` (the
+  Lab could not read whether it had ended, so it ended it, and it did end: what it answered is not
+  known; a state that cannot be read and an end that then fails is `not_ended`), or
   one of `acib`'s own words for `devices` (`usbmuxd_unreachable` when Apple's device service does
   not answer, `usbmuxd_list_failed`, `deadline_passed`, `async_runtime_failed`,
   `command_line_invalid`, `key_salt_unusable`, `binding_salt_unusable`); the listing is a success.
@@ -515,15 +518,36 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   system; nothing is recorded or changed. Behind it the registry refuses the same way (the stage
   `device_system_unsupported`, the same codes and cause), the ADB baseline probe and the
   foreground query included, before anything is opened or run. Only that instance's operation
-  fails. It is inert (fix round 1): the start's preparation, the idle planner and every other
-  party that acts on an instance without a person asking skip it, so nothing is attempted, and no
-  failure, ladder or stability count arises from it; what the ledger says of it is, once per
-  start, the availability withdrawal above (when not already in effect) and the program facts
-  `device.system` (`ios`) and `device.bound` (boolean), which the Lab's status shows on its row as
-  `device` `{kind: "handset", system, bound}` (nothing of these for an Android handset or an
-  emulator). Its capability table names no backend: every row unsupported and unavailable, its
-  source `device_system:ios`, its failure semantics why. No adb device-link watch or device-state
-  read concerns it.
+  fails. Fix round 2: the three paths a person starts that would otherwise reach its stand-in
+  registration are refused at their entry the same way, denied, each with its own failure code
+  caused by `device_system_backend_missing`: a self-check (`SelfCheckInstance`), before its claim
+  and its preparation, `input_backend_open_failed` (the code a preparation ends with at its first
+  open, the input's); an instance resume (`ResumeScheduling`) of a pause that has reached
+  `released`, whose reconnect is refused before its claim, the lift and any open, the same code,
+  so the pause stays (a pause still draining or handing back is lifted without a reconnect, as for
+  any instance); a drill of its recovery ladder (`DrillRecoveryLadder`, plan or device),
+  `recovery_ladder_drill_unsupported` (error, exit 1), after the command's `command.rejected` and
+  before any ladder is admitted, so neither a rung nor the readiness's baseline probe and
+  foreground query meets the stand-in. It is inert (fix round 1): the start's preparation, the
+  idle planner and every other party that acts on an instance without a person asking skip it, so
+  nothing is attempted, and no failure, ladder or stability count arises from it. What the ledger
+  says of it is the availability withdrawal above, information and no failure, and the program
+  facts `device.system` (`ios`) and `device.bound` (boolean), which the Lab's status shows on its
+  row as `device` `{kind: "handset", system, bound}` (nothing of these for an Android handset or an
+  emulator). Fix round 2, when they are written: on change, the rule every other availability
+  withdrawal follows (Workflow #398 RD-1b's unbound handset, `device_link:unbound`, is the
+  precedent; the device link's, the device state's and the backend self-check gate's at a start
+  follow it too). The start's preparation, and the self-check gate wherever it decides again,
+  writes the withdrawal of a policy instance (one the configuration's policy inputs seed; an
+  instance without a seed has no availability) only when the record in effect is not already that
+  withdrawal: the first start with the handset writes it once, and a restart over the same ledger
+  writes none, because the fact store reloads that record from the ledger and it stays in effect
+  (a person reading the ledger finds it there, written by the earlier start, and the scheduler's
+  explanation reads `availability_source` `device_system` from it). The program facts are written
+  when their value changes, as `device.link`'s are. The status says it at every read: its
+  capability table names no backend, every row unsupported and unavailable, its source
+  `device_system:ios`, its failure semantics why. No adb device-link watch or device-state read
+  concerns it.
 
 ## Later slices
 

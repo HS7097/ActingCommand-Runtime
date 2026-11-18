@@ -227,9 +227,13 @@ pub enum AcibRun {
     /// Workflow #479 F-2 fix round 1: it printed more than [`ACIB_OUTPUT_LIMIT_BYTES`] on one of
     /// its two streams, and the Lab ended it.
     TooLong,
-    /// Workflow #479 F-2 fix round 1: the Lab had to end it (past its wait or its cap) or could not
-    /// tell whether it had ended, and ending it failed: it may still run.
+    /// Workflow #479 F-2 fix round 1: the Lab asked it to end (past its wait, past its cap, or
+    /// after a stream or its state could not be read) and ending it failed: it may still run.
+    /// Fix round 2: this cause alone.
     NotEnded,
+    /// Workflow #479 F-2 fix round 2: the Lab could not read whether it had ended, so it ended it,
+    /// and ending it succeeded: it runs no more, and what it answered is not known.
+    StateUnread,
 }
 
 /// Workflow #479 F-2 fix round 1: the deadline the Lab gives `acib` for one call (`--timeout-ms`):
@@ -403,7 +407,8 @@ fn ended_as(child: &mut dyn AcibChild, run: AcibRun) -> AcibRun {
 /// reached their end; a stream past the limit ends the child, [`AcibRun::TooLong`]; a child (or
 /// a stream) not at its end when `bounds.wait` has passed is ended, [`AcibRun::Overdue`]; a
 /// stream that cannot be read ends the child, as a line the Lab cannot read
-/// ([`AcibRun::Refused`] with nothing). Ending the child or reading its state failing is
+/// ([`AcibRun::Refused`] with nothing). Fix round 2, one word each: a state that cannot be read
+/// ends the child, [`AcibRun::StateUnread`]; ending the child failing, whatever asked for it, is
 /// [`AcibRun::NotEnded`].
 pub fn wait_acib(
     child: &mut dyn AcibChild,
@@ -442,7 +447,9 @@ pub fn wait_acib(
         if status.is_none() {
             match child.ended() {
                 Ok(ended) => status = ended,
-                Err(_) => return ended_as(child, AcibRun::NotEnded),
+                // Fix round 2: whether it ended is not known here, so the Lab ends it; ended, the
+                // state that could not be read is the word, else `not_ended` (`ended_as`).
+                Err(_) => return ended_as(child, AcibRun::StateUnread),
             }
         }
         if let (Some(success), true) = (status, errors_read)
@@ -577,10 +584,12 @@ fn ios_rows(
 ) -> Result<Vec<IosListed>, IosListProblem> {
     let line = match run(acib, &salts.call()) {
         AcibRun::NotStarted(_) => return Err(IosListProblem::NotStarted),
-        // Workflow #479 F-2 fix round 1: past the Lab's wait, past its cap, or not ended.
+        // Workflow #479 F-2 fix round 1: past the Lab's wait, past its cap, or not ended; fix
+        // round 2: or ended because its state could not be read.
         AcibRun::Overdue => return Err(IosListProblem::NoAnswerInTime),
         AcibRun::TooLong => return Err(IosListProblem::AnswerTooLong),
         AcibRun::NotEnded => return Err(IosListProblem::NotEnded),
+        AcibRun::StateUnread => return Err(IosListProblem::StateUnreadable),
         AcibRun::Refused(stdout) => {
             return Err(serde_json::from_slice::<AcibProblemLine>(&stdout)
                 .ok()

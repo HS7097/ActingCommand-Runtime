@@ -32,7 +32,9 @@
 //   Lab's: on a scripted child and a clock that moves only when it is asked to wait, a child that
 //   never ends is ended past the wait, `no_answer_in_time`; one that prints without end is ended
 //   past the cap, `answer_too_long` (its output or its errors); one that ends gives its line;
-//   one that cannot be ended is `not_ended`; a listing answers adb's rows and the word.
+//   one that cannot be ended is `not_ended`; a listing answers adb's rows and the word. Fix round
+//   2 (rd-1119/brief-479-f2-fix2.md, item 1), one word one cause: a child whose state cannot be
+//   read is ended and is `state_unreadable`; only when ending it then fails is it `not_ended`.
 
 use crate::cli_line::Exit;
 use crate::devices::{
@@ -893,11 +895,13 @@ fn f2_t6_the_private_file_reads_version_1_as_before_and_version_2_with_ios_rows(
 }
 
 /// A scripted `acib` child: it ends with status 0 at its look number `ends_at` (never without
-/// one); ending it fails when `end_fails` is set. It counts the times it is ended.
+/// one); ending it fails when `end_fails` is set; fix round 2: its state cannot be read when
+/// `state_fails` is set ([`ScriptedChild::state_unreadable`]). It counts the times it is ended.
 struct ScriptedChild {
     looks: usize,
     ends_at: Option<usize>,
     end_fails: bool,
+    state_fails: bool,
     ends: usize,
 }
 
@@ -907,7 +911,16 @@ impl ScriptedChild {
             looks: 0,
             ends_at,
             end_fails,
+            state_fails: false,
             ends: 0,
+        }
+    }
+
+    /// The same child, whose state no look can read.
+    fn state_unreadable(self) -> Self {
+        Self {
+            state_fails: true,
+            ..self
         }
     }
 }
@@ -915,6 +928,9 @@ impl ScriptedChild {
 impl AcibChild for ScriptedChild {
     fn ended(&mut self) -> std::io::Result<Option<bool>> {
         self.looks += 1;
+        if self.state_fails {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
         Ok(self
             .ends_at
             .is_some_and(|at| self.looks >= at)
@@ -1020,16 +1036,42 @@ fn f2_t7_acib_is_called_with_its_deadline_and_ended_past_the_labs_wait_or_its_ca
         &StepClock::new(),
     );
     assert!(matches!(waited, AcibRun::NotEnded));
+    assert_eq!(child.ends, 1);
+
+    // Fix round 2, one word one cause: a child whose state cannot be read is ended at once; ended,
+    // the unread state is the word, and it is `not_ended` only when ending it fails.
+    let mut child = ScriptedChild::new(None, false).state_unreadable();
+    let waited = devices::wait_acib(
+        &mut child,
+        ended_stream(),
+        ended_stream(),
+        no_wait(),
+        &StepClock::new(),
+    );
+    assert!(matches!(waited, AcibRun::StateUnread));
+    assert_eq!(child.ends, 1);
+    let mut child = ScriptedChild::new(None, true).state_unreadable();
+    let waited = devices::wait_acib(
+        &mut child,
+        ended_stream(),
+        ended_stream(),
+        no_wait(),
+        &StepClock::new(),
+    );
+    assert!(matches!(waited, AcibRun::NotEnded));
+    assert_eq!(child.ends, 1);
 
     // A listing answers adb's rows and the word for each.
     let at = roots(&mixed(), true);
     let overdue = |_: &Path, _: &AcibCall| AcibRun::Overdue;
     let too_long = |_: &Path, _: &AcibCall| AcibRun::TooLong;
     let not_ended = |_: &Path, _: &AcibCall| AcibRun::NotEnded;
-    let cases: [(ScriptedAcib<'_>, &str); 3] = [
+    let state_unread = |_: &Path, _: &AcibCall| AcibRun::StateUnread;
+    let cases: [(ScriptedAcib<'_>, &str); 4] = [
         (&overdue, "no_answer_in_time"),
         (&too_long, "answer_too_long"),
         (&not_ended, "not_ended"),
+        (&state_unread, "state_unreadable"),
     ];
     for (acib, word) in cases {
         let exit = run_devices(&at, acib);
