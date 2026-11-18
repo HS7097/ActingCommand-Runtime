@@ -24,6 +24,8 @@
 // - `priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region` (8, fix round 1):
 //   one region per source of a reading marked, a target of no source not.
 // - `priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it` (9, fix round 1).
+// - `priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not` (10, fix
+//   round 1, after #463 SEL-2L-b).
 
 use crate::recording::cases::{self, Patch, read_regions, scene_of};
 use crate::recording::frames::decode_frame;
@@ -1537,6 +1539,131 @@ fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
     );
     assert_eq!(
         read_regions_before(&package, SIZE).expect("the old function's patches"),
+        patches(&pasted)
+    );
+}
+
+// Fix round 1, the coordinator's addition after #463 SEL-2L-b (register §1.480), which lets a
+// `repeated_anchor` layout declare a shared read over its readable band: the list gives that
+// read's declared region as the layout's `shared_ocr` read, a fixed rectangle, as a `fixed_slots`
+// layout's, which the comparison finds in a zone with its layout; the rows' names and quantities
+// the layout reads at an offset from the anchor's match stay without a fixed rectangle, reported
+// unbounded, the quantity a reading. The scene pastes the targets' own regions only, as the old
+// function did.
+#[test]
+fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not() {
+    let band = rect(0, 20, 160, 60);
+    let package = pack(
+        json!([
+            template("row/anchor", json!(band), None, band),
+            ocr("row/name", json!(rect(0, 0, 30, 10)), &[]),
+            ocr("row/count", json!(rect(0, 0, 20, 10)), &[])
+        ]),
+        json!([{
+            "id": "rows", "page_id": "list", "kind": "repeated_anchor", "anchor": "row/anchor",
+            "max_instances": 4, "order": "top_to_bottom", "instance_rect": rect(0, 0, 150, 12),
+            "click": rect(0, 0, 150, 12), "readable_band": band,
+            "shared_ocr": {"region": band, "languages": ["en"], "timeout_ms": 1000,
+                           "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256,
+                           "blocks": "detect"},
+            "features": [
+                identity_feature(
+                    "name",
+                    json!([{"id": "alpha", "aliases": ["ALPHA"]}]),
+                    Some(("row/name", 4, 1))
+                ),
+                integer_feature("count", Some(("row/count", 100, 1)))
+            ]
+        }]),
+    );
+    let reads = package.reads(&PackReadingDeclarations::default());
+    assert_eq!(
+        reads.regions,
+        vec![
+            read_region(
+                "row/anchor",
+                PackReadKind::TemplateSearch,
+                PackReadArea::Rect(band),
+                false,
+                None
+            ),
+            read_region(
+                "row/name",
+                PackReadKind::SelectName,
+                PackReadArea::Rect(rect(0, 0, 30, 10)),
+                false,
+                None
+            ),
+            read_region(
+                "row/count",
+                PackReadKind::SelectQuantity,
+                PackReadArea::Rect(rect(0, 0, 20, 10)),
+                true,
+                None
+            ),
+            read_region(
+                "rows",
+                PackReadKind::SharedOcr,
+                PackReadArea::Rect(band),
+                false,
+                Some("rows")
+            ),
+            read_region(
+                "row/name",
+                PackReadKind::SelectName,
+                PackReadArea::Unbounded,
+                false,
+                Some("rows")
+            ),
+            read_region(
+                "row/count",
+                PackReadKind::SelectQuantity,
+                PackReadArea::Unbounded,
+                true,
+                Some("rows")
+            ),
+        ]
+    );
+    let stock_zone = rect(120, 30, 30, 10);
+    let zones = public(&zones_at_base(json!([zone_of(
+        "z_stock", "value", stock_zone
+    )])));
+    let compared = compare_privacy_zones("neutral.test.neutral_task", &reads, &[], BASE, &zones);
+    assert_eq!(
+        compared.findings,
+        vec![
+            met(
+                region("row/anchor", PrivacyRectKind::TemplateSearch, false),
+                band,
+                "z_stock",
+                PrivacyZoneKind::Value,
+                stock_zone
+            ),
+            met(
+                layout_region("rows", PrivacyRectKind::SharedOcr, false, "rows"),
+                band,
+                "z_stock",
+                PrivacyZoneKind::Value,
+                stock_zone
+            ),
+            PrivacyFinding::RegionUnbounded {
+                place: layout_region("row/name", PrivacyRectKind::SelectName, false, "rows"),
+            },
+            PrivacyFinding::RegionUnbounded {
+                place: layout_region("row/count", PrivacyRectKind::SelectQuantity, true, "rows"),
+            },
+        ]
+    );
+    // The scene pastes the targets' own regions, as the old function did: no shared read, no row.
+    let textured = |x: u32, y: u32| [u8::try_from(x).expect("x"), u8::try_from(y).expect("y"), 9];
+    assert_scene_as_before("a repeated anchor's shared read", &package, &textured);
+    let pasted: [(PackRect, &[&str]); 3] = [
+        (band, &["row/anchor"]),
+        (rect(0, 0, 30, 10), &["row/name"]),
+        (rect(0, 0, 20, 10), &["row/count"]),
+    ];
+    assert_eq!(
+        read_regions(&package, SIZE).expect("the scene's patches"),
         patches(&pasted)
     );
 }

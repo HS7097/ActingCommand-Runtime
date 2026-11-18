@@ -39957,7 +39957,9 @@ held that page's private information.
   amendment 1, whether it is a reading. A feature with `target` and `offset` is listed where the
   kernel reads it, beside the target's own region: in a `fixed_slots` layout one region per slot at
   the slot's origin plus the offset, of the target's size; in a `repeated_anchor` layout one region
-  with no fixed rectangle. Press boxes are not in it. The scene pastes the regions that name no
+  with no fixed rectangle. A layout's shared read is its declared `shared_ocr.region`, of a
+  `fixed_slots` layout or (§1.480, #463 SEL-2L-b) a `repeated_anchor` one, whose rows' reads at
+  an offset stay without a fixed rectangle. Press boxes are not in it. The scene pastes the regions that name no
   layout, which are exactly what it pasted before, and finds all of a target's regions fixed before
   it places the first, as before: every scene the Lab builds is byte for byte what it was.
 - *A reading* is a region whose recognised value the package publishes as, or into, a fact of the
@@ -40021,8 +40023,9 @@ byte the scene the replaced function builds, kept in the gate file as the oracle
 press box over a zone (4); a whole-frame region, an unbounded region, an undeclared base (5); the
 counts of what cannot be seen (6); amendment 1's readings in `value` and `identity` zones (7);
 every place of a reading marked, one region per source, a target of no source not (8); a feature
-read at an offset listed where the kernel reads it (9), as the gate map's comment lists them. No
-existing test changes; none retires; no golden changes.
+read at an offset listed where the kernel reads it (9); a `repeated_anchor` layout's shared read a
+fixed rectangle, its rows' reads not (10), as the gate map's comment lists them. No existing test
+changes; none retires; no golden changes.
 
 **What is not changed.** Any recording's, scene's or generated package's bytes; Runtime admission;
 every interface revision; what `resource verify`, `standard-pack build` and `standard-pack adopt`
@@ -40050,14 +40053,20 @@ marks, adjustments and lists (`resource_reading:`, `resource_adjustment:`, `list
 is no fifth place. (3) A feature read at an offset was listed at its target's own rectangle, so it
 was neither compared nor unbounded: it is now listed where the kernel reads it, and each region
 names the layout whose read it is, by which the scene builder keeps pasting exactly what it pasted
-(no recording generates a candidate layout with an offset feature, a shared read or an integer
-feature: a select's generated layout maps one name target per slot). Also: a finding names a case
+(a recording generates no feature read at an offset and no integer feature: a select's generated
+layout maps one name target per slot, and its shared read, §1.479, is a layout's read the scene
+never pasted). Also: a finding names a case
 by its id only (`PrivacyCase::V1` takes the rectangles alone, `PrivacySceneRect` and the place's
 `content` are gone); the records key `privacy_unseen` is `privacy_unseen_counts`, after
 `source_counts`, so that no key is spelled as a code; the scene builder asks for no reading, and
 the decoding of `resource_readings` it had gained is gone; test 2 compares with the function the
 list replaced; tests 8 and 9 are added; the registration's change for a repository that has the
-file is written down.
+file is written down. Merged, as the coordinator ordered, the head `8ffd362d` of #1833 (§1.480,
+which holds main `000cfb2f`'s content and #1832, §1.479): the register's sections ascend, §1.476
+to §1.480, each whole; the exec gate map keeps both sides' rows; the Lab's crate root both sides'
+modules. Since §1.480 a `repeated_anchor` layout may declare a shared read: the list gives its
+declared region as the layout's `shared_ocr` read, a fixed rectangle, as a `fixed_slots`
+layout's, and its rows' reads at an offset without one (test 10).
 
 ### 1.479 Slice #463 SEL-2L-a (0.12.74): a select's names may be read by detecting blocks (fixed slots), and the refusal counts marks (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: the cards of a shop carry names of one or two lines in one title box, which a select read as one block each; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sel2l-a-fixed-blocks.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slices S-count and S-fixed, on main `a8d0aa43`; finished after a stop at a safe point under `rd-1118/brief-463-sel2l-a-finish.md`, merged with main `5d0c8c3e`)
 

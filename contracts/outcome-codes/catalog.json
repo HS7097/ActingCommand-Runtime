@@ -11538,7 +11538,7 @@
           "description": "An NN target's region."
         },
         "shared_ocr": {
-          "description": "A fixed_slots layout's shared OCR read, shared_ocr.region; the finding's target is the layout's id."
+          "description": "A candidate layout's shared OCR read, shared_ocr.region as declared (a fixed_slots layout's, or since #463 SEL-2L-b a repeated_anchor layout's); the finding's target is the layout's id."
         },
         "select_name": {
           "description": "An OCR target a candidate layout reads as a feature (a fixed_slots slot's targets, a feature's target), and none as an integer: a select's name region."

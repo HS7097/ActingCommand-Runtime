@@ -108,7 +108,7 @@ it reads at an offset:
 | `select_name` | an OCR target a candidate layout reads as a feature (a `fixed_slots` slot's `targets`, a feature's `target`), and none as an integer: a select's name region | the target |
 | `select_quantity` | an OCR target a candidate layout reads as an integer feature (`ocr_integer`): a select's quantity column, the integer column a `read_list` step publishes into its list; it is a reading | the target |
 | `nn` | an NN target's region | the target |
-| `shared_ocr` | a `fixed_slots` layout's shared read, `shared_ocr.region` | the layout's id |
+| `shared_ocr` | a candidate layout's shared read, `shared_ocr.region` as declared, a rectangle or `full_frame`: a `fixed_slots` layout's, or since #463 SEL-2L-b a `repeated_anchor` layout's, which covers its readable band | the layout's id |
 
 - A check (`all_of`, `any_of`), a value test and a click-only target read nothing of their own.
 - **A press box is not in it**: a target's `click`, a click-only target, a slot's or a layout's
@@ -122,15 +122,17 @@ it reads at an offset:
   a `fixed_slots` layout one region per slot, at the slot's origin (its rectangle's top-left
   corner) plus the offset, the rectangle the kernel reads; in a `repeated_anchor` layout one region
   with no fixed rectangle, since the anchor's match, which places it and scales its offset, is
-  known only on a frame. A template read so takes a colour check relative to its match, which its
+  known only on a frame, also when the layout declares a shared read (whose own region the list
+  gives as `shared_ocr`, a fixed rectangle). A template read so takes a colour check relative to its
   own region already gives as no fixed rectangle. A sample's jitter (a feature's `consensus`, at
   most 8 pixels) is not in the list, of any region.
 - **Each region names the layout** whose read it is (its shared read, a feature it reads at an
   offset); a region its target declares itself names none.
 - **The scene** pastes the regions a target declares itself, those that name no layout, and nothing
-  a layout reads itself, which no recording generates and a scene never pasted: every scene the Lab
-  builds is byte for byte what it was before this list moved into the recognition pack. The scene
-  asks for no reading.
+  a layout reads itself, which a scene never pasted (a recording generates no feature read at an
+  offset, and a select's shared read, #463 SEL-2L-a, only beside the slot targets the scene
+  pastes): every scene the Lab builds is byte for byte what it was before this list moved into the
+  recognition pack. The scene asks for no reading.
 
 ### A reading
 

@@ -10,10 +10,12 @@
 //!   own (a template's search area, `region`, where `record mark` writes the crop with its margin,
 //!   then its colour check's region; a colour or colour digest probe's region; an OCR or NN
 //!   target's region); then, layout by layout, what a candidate layout reads itself: its shared
-//!   OCR read (`shared_ocr.region`), then (fix round 1) each feature that reads its target at an
-//!   `offset`, where the kernel reads it: in a `fixed_slots` layout once per slot, the target's own
-//!   size at the slot's origin plus the offset; in a `repeated_anchor` layout at the anchor's match
-//!   plus the offset, scaled as the match is, which only a frame shows, so no fixed rectangle. An
+//!   OCR read (`shared_ocr.region`, as declared, of a layout of either kind: since #463 SEL-2L-b a
+//!   `repeated_anchor` layout's covers its readable band), then (fix round 1) each feature that
+//!   reads its target at an `offset`, where the kernel reads it: in a `fixed_slots` layout once per
+//!   slot, the target's own size at the slot's origin plus the offset; in a `repeated_anchor`
+//!   layout at the anchor's match plus the offset, scaled as the match is, which only a frame
+//!   shows, so no fixed rectangle, whether or not the layout declares a shared read. An
 //!   OCR target a candidate layout reads as a feature is a select's quantity column when a feature
 //!   reads it as an integer (`ocr_integer`), else a select's name region. A check (`all_of`,
 //!   `any_of`), a value test and a click-only target read nothing of their own.
@@ -57,7 +59,8 @@ pub enum PackReadKind {
     Ocr,
     /// An NN target's region.
     Nn,
-    /// A candidate layout's shared OCR read, `shared_ocr.region`; its target is the layout's id.
+    /// A candidate layout's shared OCR read, `shared_ocr.region` (a `fixed_slots` or a
+    /// `repeated_anchor` layout's); its target is the layout's id.
     SharedOcr,
     /// An OCR target a candidate layout reads as a feature, and none as an integer: a select's
     /// name region.

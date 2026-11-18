@@ -566,10 +566,11 @@ fn detected_page(detector: &PageDetector, game: &str, page: &str) -> LabResult<S
 /// them). A check (`all_of`, `any_of`), a value test and a click-only target read nothing of their
 /// own: a check's members and a value test's sides are targets of the package themselves. What a
 /// candidate layout reads itself (the list's regions with a `layout`: its shared OCR read, a
-/// feature it reads at an offset) is not pasted: no recording generates one, and a scene never
-/// pasted it. A region that is no fixed rectangle inside the recording's frame (`size`) cannot be
-/// pasted where it is read, and is the check's error; as before the list moved, a target's regions
-/// are all found fixed before the first of them is placed.
+/// feature it reads at an offset) is not pasted, as a scene never pasted it: a recording generates
+/// no feature read at an offset, and a select's shared read (#463 SEL-2L-a) only beside the slot
+/// targets the scene pastes. A region that is no fixed rectangle inside the recording's frame
+/// (`size`) cannot be pasted where it is read, and is the check's error; as before the list moved,
+/// a target's regions are all found fixed before the first of them is placed.
 pub(crate) fn read_regions(
     pack: &RecognitionPack,
     size: RecordSize,
