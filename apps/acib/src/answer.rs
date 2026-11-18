@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The one JSON line `acib` prints for each command (board #479, ACIB-0 and ACIB-1).
+//! The one JSON line `acib` prints for each command (board #479, ACIB-0, ACIB-1 and ACIB-2).
 //!
 //! These types are the whole of what the program shows. None of them has a member for a
 //! device's serial number, UDID, name or address, or for anything of a pairing record: the
 //! line cannot carry them. A library error is shown through [`crate::redact`], which cuts a
 //! text that could carry such a value to the error's kind. Of a picture of the screen the line
 //! holds its format, its width and its height as its header gives them and its length, never
-//! a byte of its content: the picture goes to the file `--out` names and nowhere else.
+//! a byte of its content: the picture goes to the file or the standard output `--out` names and
+//! nowhere else. A device's key is a [`DeviceKey`], a salted digest made by the key function
+//! alone: no member holds a salt or the identifier a key was made from.
 
+use crate::key::DeviceKey;
 use crate::redact;
 use serde::{Serialize, Serializer};
 use std::time::Duration;
@@ -23,6 +26,7 @@ pub enum CommandName {
     Images,
     Apps,
     Screenshot,
+    Orientation,
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
@@ -30,13 +34,22 @@ pub enum CommandName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
-    /// The command line is not one of the six commands with their options.
+    /// The command line is not one of the seven commands with their options.
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
     /// The command did not finish within `--timeout-ms`; a screenshot's line names the `stage`
-    /// it was waiting in.
+    /// it was waiting in. Of `orientation`, a reader that had not answered by then answers it,
+    /// and so does each reader after it, which is not asked.
     DeadlinePassed,
+    /// The environment variable `--key-salt-env` names is unset, not UTF-8, or holds fewer than
+    /// 16 bytes (an empty one included) or more than 1024: refused before usbmuxd is asked.
+    KeySaltUnusable,
+    /// The same of the variable `--binding-salt-env` names.
+    BindingSaltUnusable,
+    /// No device usbmuxd lists has the key `--device-key` names under the salt of
+    /// `--key-salt-env`.
+    DeviceKeyUnknown,
     /// No connection to usbmuxd.
     UsbmuxdUnreachable,
     /// usbmuxd did not answer the device list.
@@ -97,6 +110,9 @@ pub enum Problem {
     /// The picture does not start with a header this program reads (PNG or JPEG); the file holds
     /// it as the service gave it.
     PictureHeaderUnknown,
+    /// The SpringBoard service took the connection but did not answer the request of the
+    /// interface orientation with one.
+    OrientationFailed,
 }
 
 /// A refusal or failure: the word, and the library's error text where the library gave one.
@@ -140,11 +156,17 @@ pub enum Link {
     Unknown,
 }
 
-/// One device of `acib devices`: its usbmuxd session number and its connection, nothing else.
+/// One device of `acib devices`: its usbmuxd session number and its connection; with
+/// `--key-salt-env`, its key under that salt (`device_key`), and with `--binding-salt-env` too,
+/// its key under the second salt (`binding_key`); nothing else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeviceEntry {
     pub device: u32,
     pub connection: Link,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_key: Option<DeviceKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_key: Option<DeviceKey>,
 }
 
 /// A lockdown value read in a session: the value, or the word the device refused it with.
@@ -514,11 +536,12 @@ pub enum Stage {
     PictureRequest,
 }
 
-/// `acib screenshot --device <n> --out <file> [--via <way>]`: the way used, the picture's
+/// `acib screenshot --device <n> --out <file|-> [--via <way>]`: the way used, the picture's
 /// format, width and height as its header gives them, its length in bytes, the two durations
-/// and the file it was written to. A picture whose header cannot be read keeps its length and
-/// its file, names no format or size and answers its header's word (status 1). Nothing of the
-/// picture's content is a member.
+/// and the file it was written to, or `-` when its `bytes` bytes follow this line on the
+/// standard output. A picture whose header cannot be read keeps its length and its file (or its
+/// bytes after the line), names no format or size and answers its header's word (status 1).
+/// Nothing of the picture's content is a member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Screenshot {
     pub command: CommandName,
@@ -564,6 +587,103 @@ impl Screenshot {
     }
 }
 
+/// A way of `acib orientation` to read the interface orientation, by this program's own word
+/// (`--via`): the library's SpringBoard services client and its one read of the orientation
+/// (`getInterfaceOrientation`), reached in two ways. The library's other orientation service,
+/// CoreDevice's `com.apple.coredevice.devicecontrol`, only rotates the device and answers the
+/// orientation after the turn: it is not built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reader {
+    /// The lockdown service `com.apple.springboardservices`, started in a session with this
+    /// host's pairing record; no tunnel.
+    Springboard,
+    /// The same service's remote shim `com.apple.springboardservices.shim.remote`, inside the
+    /// tunnel of iOS 17.4 and later, as the remote service discovery handshake lists it.
+    SpringboardShim,
+}
+
+impl Reader {
+    /// Every reader, in the order `orientation` asks them without `--via`.
+    pub const ALL: [Self; 2] = [Self::Springboard, Self::SpringboardShim];
+
+    /// The reader's word, as `--via` takes it and the line names it.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Springboard => "springboard",
+            Self::SpringboardShim => "springboard_shim",
+        }
+    }
+
+    /// The reader `word` names, if it names one (exactly, case included).
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reader| reader.word() == word)
+    }
+}
+
+/// The interface orientation as the phone reports it, by this program's own words: one for
+/// each value of the library's `InterfaceOrientation`, as the library documents it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    /// The phone answered 0, or a value the library does not name: "unknown or cannot be
+    /// determined".
+    Unknown,
+    /// 1: portrait, the normal vertical way.
+    Portrait,
+    /// 2: portrait upside down.
+    PortraitUpsideDown,
+    /// 3: landscape with the home button on the right (the notch to the left).
+    LandscapeRight,
+    /// 4: landscape with the home button on the left (the notch to the right).
+    LandscapeLeft,
+}
+
+/// What one reader of `acib orientation` answered: the orientation, or its problem word and,
+/// where the library gave one, its error text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Candidate {
+    pub via: Reader,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Candidate {
+    /// The reader `via` read `orientation`.
+    pub fn answered(via: Reader, orientation: Orientation) -> Self {
+        Self {
+            via,
+            orientation: Some(orientation),
+            problem: None,
+            error: None,
+        }
+    }
+
+    /// The reader `via` did not read the orientation, for `failure`.
+    pub fn failed(via: Reader, failure: Failure) -> Self {
+        Self {
+            via,
+            orientation: None,
+            problem: Some(failure.problem),
+            error: failure.error,
+        }
+    }
+}
+
+/// `acib orientation --device <n> [--via <reader>]`: what each reader asked answered, in the
+/// order they were asked (the one `--via` names, or each of [`Reader::ALL`] in turn). The command
+/// is answered (status 0) only when every reader asked answered an orientation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Orientations {
+    pub command: CommandName,
+    pub device: u32,
+    pub candidates: Vec<Candidate>,
+}
+
 /// A refused or failed command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refused {
@@ -596,6 +716,7 @@ pub enum Line {
     Images(Images),
     Apps(Apps),
     Screenshot(Screenshot),
+    Orientations(Orientations),
     Refused(Refused),
 }
 
@@ -668,6 +789,10 @@ impl Line {
             Self::Info(info) => info.problem.is_none(),
             Self::Apps(apps) => apps.problem.is_none(),
             Self::Screenshot(screenshot) => screenshot.problem.is_none(),
+            Self::Orientations(orientations) => orientations
+                .candidates
+                .iter()
+                .all(|candidate| candidate.orientation.is_some()),
             Self::Devices(_) | Self::Services(_) | Self::Images(_) => true,
         }
     }
@@ -676,6 +801,7 @@ impl Line {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
     use crate::picture::tests::png_file;
     use std::collections::BTreeSet;
 
@@ -715,6 +841,39 @@ mod tests {
         })
     }
 
+    /// The second salt of the key tests (32 bytes).
+    const BINDING_SALT: &str = "acib-binding-test-salt-000000001";
+    /// The identifier of a second fake device.
+    const SECOND_IDENTIFIER: &str = "TESTSERIAL0002";
+
+    /// `devices` with both salts: a USB row of the test vector's identifier and a network row
+    /// of a second one, each with its key under the test vector's salt and under
+    /// [`BINDING_SALT`].
+    fn keyed_devices() -> Line {
+        let (key_salt, binding_salt) = (salt(VECTOR_SALT), salt(BINDING_SALT));
+        let entry = |device, connection, identifier| DeviceEntry {
+            device,
+            connection,
+            device_key: Some(DeviceKey::of(&key_salt, identifier)),
+            binding_key: Some(DeviceKey::of(&binding_salt, identifier)),
+        };
+        Line::Devices(Devices {
+            command: CommandName::Devices,
+            devices: vec![
+                entry(3, Link::Usb, VECTOR_IDENTIFIER),
+                entry(7, Link::Network, SECOND_IDENTIFIER),
+            ],
+        })
+    }
+
+    fn orientations(candidates: Vec<Candidate>) -> Line {
+        Line::Orientations(Orientations {
+            command: CommandName::Orientation,
+            device: 3,
+            candidates,
+        })
+    }
+
     /// One line of every shape the program prints.
     fn every_shape() -> Vec<(Line, &'static str, bool)> {
         let paired = Info {
@@ -744,18 +903,29 @@ mod tests {
                         DeviceEntry {
                             device: 3,
                             connection: Link::Usb,
+                            device_key: None,
+                            binding_key: None,
                         },
                         DeviceEntry {
                             device: 7,
                             connection: Link::Network,
+                            device_key: None,
+                            binding_key: None,
                         },
                         DeviceEntry {
                             device: 9,
                             connection: Link::Unknown,
+                            device_key: None,
+                            binding_key: None,
                         },
                     ],
                 }),
                 r#"{"command":"devices","devices":[{"device":3,"connection":"usb"},{"device":7,"connection":"network"},{"device":9,"connection":"unknown"}]}"#,
+                true,
+            ),
+            (
+                keyed_devices(),
+                r#"{"command":"devices","devices":[{"device":3,"connection":"usb","device_key":"sha256:b74e1be265fea5ee2fd1b1b2243df7dcb16530f24a6b1bef41b050f8b2f427bf","binding_key":"sha256:306ba3303daa68214650000b184a95f32686fac009c80df1c0e2c8b67c94197c"},{"device":7,"connection":"network","device_key":"sha256:810c53f97f0349b864b3ad240c700f3fbc5db87ffe1577274d071eebb5fbc603","binding_key":"sha256:2a6bc1c2cbdc1b253d4d2150ff92a9b11765ee3a07c6a2904b36f6e346f18352"}]}"#,
                 true,
             ),
             (
@@ -1005,6 +1175,102 @@ mod tests {
                 false,
             ),
             (
+                Line::Screenshot(Screenshot::of(
+                    3,
+                    Way::ScreenCapture,
+                    &png_file(750, 1334, b"\0\0\0\x04IDATxxxx"),
+                    Elapsed {
+                        request: 401,
+                        command: 977,
+                    },
+                    "-",
+                )),
+                r#"{"command":"screenshot","device":3,"via":"screen_capture","format":"png","width":750,"height":1334,"bytes":45,"elapsed_ms":{"request":401,"command":977},"out":"-"}"#,
+                true,
+            ),
+            (
+                orientations(vec![
+                    Candidate::answered(Reader::Springboard, Orientation::LandscapeLeft),
+                    Candidate::answered(Reader::SpringboardShim, Orientation::LandscapeLeft),
+                ]),
+                r#"{"command":"orientation","device":3,"candidates":[{"via":"springboard","orientation":"landscape_left"},{"via":"springboard_shim","orientation":"landscape_left"}]}"#,
+                true,
+            ),
+            (
+                orientations(vec![Candidate::answered(
+                    Reader::SpringboardShim,
+                    Orientation::Unknown,
+                )]),
+                r#"{"command":"orientation","device":3,"candidates":[{"via":"springboard_shim","orientation":"unknown"}]}"#,
+                true,
+            ),
+            (
+                orientations(vec![
+                    Candidate::answered(Reader::Springboard, Orientation::Portrait),
+                    Candidate::failed(
+                        Reader::SpringboardShim,
+                        Failure::own(Problem::ServiceNotListed),
+                    ),
+                ]),
+                r#"{"command":"orientation","device":3,"candidates":[{"via":"springboard","orientation":"portrait"},{"via":"springboard_shim","problem":"service_not_listed"}]}"#,
+                false,
+            ),
+            (
+                orientations(vec![
+                    Candidate::failed(
+                        Reader::Springboard,
+                        Failure {
+                            problem: Problem::OrientationFailed,
+                            error: Some(
+                                "unexpected response from device: missing interfaceOrientation in response".to_owned(),
+                            ),
+                        },
+                    ),
+                    Candidate::failed(
+                        Reader::SpringboardShim,
+                        Failure::own(Problem::DeadlinePassed),
+                    ),
+                ]),
+                r#"{"command":"orientation","device":3,"candidates":[{"via":"springboard","problem":"orientation_failed","error":"unexpected response from device: missing interfaceOrientation in response"},{"via":"springboard_shim","problem":"deadline_passed"}]}"#,
+                false,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Orientation),
+                    Some(3),
+                    Failure::own(Problem::NotPaired),
+                ),
+                r#"{"command":"orientation","device":3,"problem":"not_paired"}"#,
+                false,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Devices),
+                    None,
+                    Failure::own(Problem::KeySaltUnusable),
+                ),
+                r#"{"command":"devices","problem":"key_salt_unusable"}"#,
+                false,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Devices),
+                    None,
+                    Failure::own(Problem::BindingSaltUnusable),
+                ),
+                r#"{"command":"devices","problem":"binding_salt_unusable"}"#,
+                false,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Info),
+                    None,
+                    Failure::own(Problem::DeviceKeyUnknown),
+                ),
+                r#"{"command":"info","problem":"device_key_unknown"}"#,
+                false,
+            ),
+            (
                 Line::refused(None, None, Failure::own(Problem::CommandLineInvalid)),
                 r#"{"problem":"command_line_invalid"}"#,
                 false,
@@ -1023,14 +1289,18 @@ mod tests {
     }
 
     /// The answer types have no member for a serial number, a UDID, a name, an address or a
-    /// pairing record, nor (ACIB-1) for a picture's content: every member any line holds is one
-    /// of these (a screenshot's `stage` is a word of [`Stage`], its `out_left` a boolean).
+    /// pairing record, nor (ACIB-1) for a picture's content, nor (ACIB-2) for a salt: every
+    /// member any line holds is one of these (a screenshot's `stage` is a word of [`Stage`], its
+    /// `out_left` a boolean; a row's `device_key` and `binding_key` are [`DeviceKey`]s, salted
+    /// digests; an orientation is a word of [`Orientation`]).
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
             "answer",
+            "binding_key",
             "build_version",
             "bytes",
+            "candidates",
             "command",
             "connection",
             "contains",
@@ -1038,6 +1308,7 @@ mod tests {
             "developer_mode",
             "device",
             "device_class",
+            "device_key",
             "devices",
             "elapsed_ms",
             "entitlement",
@@ -1052,6 +1323,7 @@ mod tests {
             "members",
             "mounted",
             "name",
+            "orientation",
             "out",
             "out_left",
             "paired",
@@ -1130,6 +1402,10 @@ mod tests {
             (Problem::ScreenshotFailed, "screenshot_failed"),
             (Problem::PictureHeaderTruncated, "picture_header_truncated"),
             (Problem::PictureHeaderUnknown, "picture_header_unknown"),
+            (Problem::KeySaltUnusable, "key_salt_unusable"),
+            (Problem::BindingSaltUnusable, "binding_salt_unusable"),
+            (Problem::DeviceKeyUnknown, "device_key_unknown"),
+            (Problem::OrientationFailed, "orientation_failed"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -1492,5 +1768,123 @@ mod tests {
             );
             assert!(seen.insert(word), "{word} is one word for one stage");
         }
+    }
+
+    /// A row of `devices` holds its keys, salted digests, and neither salt nor the identifier
+    /// either key was made from; without the salts' flags it holds the device and the
+    /// connection alone, as before; with the first salt alone, `device_key` and no
+    /// `binding_key`.
+    #[test]
+    fn a_device_row_holds_its_keys_and_neither_a_salt_nor_an_identifier() {
+        fn rows(line: &Line) -> Vec<BTreeSet<String>> {
+            let value = serde_json::to_value(line).expect("a line serializes");
+            value["devices"]
+                .as_array()
+                .expect("the rows")
+                .iter()
+                .map(|row| row.as_object().expect("a row").keys().cloned().collect())
+                .collect()
+        }
+        let members = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let keyed = keyed_devices();
+        let text = json(&keyed);
+        for withheld in [
+            VECTOR_SALT,
+            BINDING_SALT,
+            VECTOR_IDENTIFIER,
+            SECOND_IDENTIFIER,
+            "TESTSERIAL",
+            "test-salt",
+        ] {
+            assert!(!text.contains(withheld), "{withheld} in {text}");
+        }
+        assert!(text.contains(VECTOR_KEY), "{text}");
+        let both = members(&["binding_key", "connection", "device", "device_key"]);
+        assert_eq!(rows(&keyed), vec![both.clone(), both]);
+
+        let entry = |device_key| DeviceEntry {
+            device: 3,
+            connection: Link::Usb,
+            device_key,
+            binding_key: None,
+        };
+        let line = |row| {
+            Line::Devices(Devices {
+                command: CommandName::Devices,
+                devices: vec![row],
+            })
+        };
+        let plain = line(entry(None));
+        assert_eq!(
+            json(&plain),
+            r#"{"command":"devices","devices":[{"device":3,"connection":"usb"}]}"#
+        );
+        assert_eq!(rows(&plain), vec![members(&["connection", "device"])]);
+        let first_only = line(entry(Some(DeviceKey::of(
+            &salt(VECTOR_SALT),
+            VECTOR_IDENTIFIER,
+        ))));
+        assert_eq!(
+            json(&first_only),
+            format!(
+                r#"{{"command":"devices","devices":[{{"device":3,"connection":"usb","device_key":"{VECTOR_KEY}"}}]}}"#
+            )
+        );
+        assert!(first_only.answered());
+    }
+
+    /// Each reader of `orientation` has a word of its own, the one `--via` takes and the line
+    /// names, and so does each orientation the library names; no other text names a reader.
+    #[test]
+    fn every_reader_and_every_orientation_has_a_word_of_its_own() {
+        let mut seen = BTreeSet::new();
+        for reader in Reader::ALL {
+            assert_eq!(
+                serde_json::to_value(reader).expect("a reader serializes"),
+                serde_json::Value::String(reader.word().to_owned())
+            );
+            assert_eq!(Reader::from_word(reader.word()), Some(reader));
+            assert!(seen.insert(reader.word()), "{} is one word", reader.word());
+        }
+        assert_eq!(seen, BTreeSet::from(["springboard", "springboard_shim"]));
+        for word in [
+            "",
+            "SPRINGBOARD",
+            "springboardservices",
+            "springboard-shim",
+            "devicecontrol",
+            "screen_capture",
+        ] {
+            assert_eq!(Reader::from_word(word), None, "{word}");
+        }
+        let words: BTreeSet<String> = [
+            Orientation::Unknown,
+            Orientation::Portrait,
+            Orientation::PortraitUpsideDown,
+            Orientation::LandscapeRight,
+            Orientation::LandscapeLeft,
+        ]
+        .into_iter()
+        .map(|orientation| {
+            serde_json::to_value(orientation)
+                .expect("an orientation serializes")
+                .as_str()
+                .expect("an orientation is a word")
+                .to_owned()
+        })
+        .collect();
+        let expected: BTreeSet<String> = [
+            "landscape_left",
+            "landscape_right",
+            "portrait",
+            "portrait_upside_down",
+            "unknown",
+        ]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+        assert_eq!(words, expected);
     }
 }

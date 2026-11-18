@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The six commands against the device, through the `idevice` library (board #479, ACIB-0 and
-//! ACIB-1).
+//! The seven commands against the device, through the `idevice` library (board #479, ACIB-0,
+//! ACIB-1 and ACIB-2).
 //!
 //! Everything here only reads. usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
 //! pairing record usbmuxd holds is asked for, kept in memory for the command and never shown.
 //! The tunnel of iOS 17.4 and later is the lockdown service CoreDeviceProxy with the library's
 //! own TCP stack inside this process: no network adapter is created. No library type is ever
-//! printed with its `Debug` form: only the values the answer types name leave this module. A
-//! picture of the screen is written, as the service gave it, to the file `--out` names (see
-//! `out_file.rs`) and is kept nowhere else.
+//! printed with its `Debug` form: only the values the answer types name leave this module. The
+//! identifier usbmuxd lists a device with (the library's `UsbmuxdDevice::udid`, usbmuxd's
+//! `SerialNumber`) never leaves it either: a device is named by its number or by its key
+//! (`key.rs`). A picture of the screen is written, as the service gave it, to the file `--out`
+//! names (see `out_file.rs`) or after the line on the standard output (`framing.rs`), and is
+//! kept nowhere else.
 
 use crate::answer::{
-    Apps, CommandName, DeviceEntry, Devices, Elapsed, Failure, ImageQuery, ImageQueryName, Images,
-    Info, Line, Link, ListedImage, Mounted, Problem, Reading, Screenshot, ServiceEntry, Services,
-    Stage, Way,
+    Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, Failure, ImageQuery,
+    ImageQueryName, Images, Info, Line, Link, ListedImage, Mounted, Orientation, Orientations,
+    Problem, Reader, Reading, Screenshot, ServiceEntry, Services, Stage, Way,
 };
-use crate::args::Request;
+use crate::args::{KeyVariables, Out, Request, Target};
+use crate::framing::Printed;
+use crate::key::{DeviceKey, Salt};
 use crate::out_file::{self, NotWritten};
 use crate::redact;
 use idevice::pairing_file::PairingFile;
@@ -30,6 +35,7 @@ use idevice::services::installation_proxy::InstallationProxyClient;
 use idevice::services::lockdown::LockdownClient;
 use idevice::services::mobile_image_mounter::ImageMounter;
 use idevice::services::rsd::RsdHandshake;
+use idevice::services::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
 use idevice::tcp::handle::AdapterHandle;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
 use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService};
@@ -48,41 +54,92 @@ const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
 /// The application type the installation proxy is asked for: the user's own applications.
 const USER_APPLICATIONS: &str = "User";
 
-/// Runs one request, of a command that started at `started`, and gives its line. A screenshot
-/// keeps in `stage` the stage it is in, for the line of a deadline that passes in it; no other
-/// command sets it.
-pub async fn answer(request: Request, started: Instant, stage: &Cell<Option<Stage>>) -> Line {
-    let (command, device, via) = (request.name(), request.device(), request.via());
-    let answered = match request {
-        Request::Devices => devices().await,
-        Request::Info(number) => info(number).await,
-        Request::Services(number) => services(number).await,
-        Request::Images(number) => images(number).await,
-        Request::Apps {
-            device: number,
-            contains,
-            max_matching,
-        } => apps(number, &contains, max_matching).await,
-        Request::Screenshot {
-            device: number,
-            out,
-            via: way,
-        } => screenshot(number, &out, way, started, stage).await,
-    };
-    answered.unwrap_or_else(|failure| Line::refused_on(Some(command), device, via, failure))
+/// What a command keeps while it runs, for the line of a deadline that passes in it: the
+/// command's deadline, the stage a screenshot is in (no other command sets it) and the number of
+/// the device once it is found (a device named by its key has none before).
+pub struct Context {
+    /// When the command's deadline passes (`None`: further than the clock reaches).
+    pub deadline: Option<tokio::time::Instant>,
+    pub stage: Cell<Option<Stage>>,
+    pub device: Cell<Option<u32>>,
 }
 
-async fn devices() -> Result<Line, Failure> {
+impl Context {
+    /// The context of a command whose deadline passes at `deadline`.
+    pub fn new(deadline: Option<tokio::time::Instant>) -> Self {
+        Self {
+            deadline,
+            stage: Cell::new(None),
+            device: Cell::new(None),
+        }
+    }
+}
+
+/// Runs one request, of a command that started at `started`, and gives what it prints.
+pub async fn answer(request: Request, started: Instant, context: &Context) -> Printed {
+    let (command, given, via) = (request.name(), request.device(), request.via());
+    let answered = match request {
+        Request::Devices(variables) => devices(variables.as_ref()).await.map(Printed::line),
+        Request::Info(target) => info(&target, context).await.map(Printed::line),
+        Request::Services(target) => services(&target, context).await.map(Printed::line),
+        Request::Images(target) => images(&target, context).await.map(Printed::line),
+        Request::Apps {
+            device: target,
+            contains,
+            max_matching,
+        } => apps(&target, &contains, max_matching, context)
+            .await
+            .map(Printed::line),
+        Request::Screenshot {
+            device: target,
+            out,
+            via: way,
+        } => screenshot(&target, &out, way, started, context).await,
+        Request::Orientation {
+            device: target,
+            via: reader,
+        } => orientation(&target, reader, context)
+            .await
+            .map(Printed::line),
+    };
+    answered.unwrap_or_else(|failure| {
+        let device = given.or(context.device.get());
+        Printed::line(Line::refused_on(Some(command), device, via, failure))
+    })
+}
+
+/// The devices usbmuxd lists now; with the variables of the salts, each with its key under
+/// each salt. The salts are read before usbmuxd is asked.
+async fn devices(variables: Option<&KeyVariables>) -> Result<Line, Failure> {
+    let salts = match variables {
+        None => None,
+        Some(KeyVariables { key, binding }) => {
+            let key_salt = salt_of(key, Problem::KeySaltUnusable)?;
+            let binding_salt = match binding {
+                None => None,
+                Some(variable) => Some(salt_of(variable, Problem::BindingSaltUnusable)?),
+            };
+            Some((key_salt, binding_salt))
+        }
+    };
     let listed = list().await?;
     let devices: Vec<DeviceEntry> = listed
         .iter()
-        .map(|device| DeviceEntry {
-            device: device.device_id,
-            connection: match device.connection_type {
-                Connection::Usb => Link::Usb,
-                Connection::Network(_) => Link::Network,
-                _ => Link::Unknown,
-            },
+        .map(|device| {
+            let key_under = |salt: &Salt| DeviceKey::of(salt, &device.udid);
+            DeviceEntry {
+                device: device.device_id,
+                connection: match device.connection_type {
+                    Connection::Usb => Link::Usb,
+                    Connection::Network(_) => Link::Network,
+                    _ => Link::Unknown,
+                },
+                device_key: salts.as_ref().map(|(key_salt, _)| key_under(key_salt)),
+                binding_key: salts
+                    .as_ref()
+                    .and_then(|(_, binding_salt)| binding_salt.as_ref())
+                    .map(key_under),
+            }
         })
         .collect();
     Ok(Line::Devices(Devices {
@@ -91,8 +148,9 @@ async fn devices() -> Result<Line, Failure> {
     }))
 }
 
-async fn info(number: u32) -> Result<Line, Failure> {
-    let device = find(number).await?;
+async fn info(target: &Target, context: &Context) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
     let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
     let mut lockdown = <LockdownClient as IdeviceService>::connect(&provider)
         .await
@@ -134,8 +192,9 @@ async fn info(number: u32) -> Result<Line, Failure> {
     Ok(Line::Info(answer))
 }
 
-async fn services(number: u32) -> Result<Line, Failure> {
-    let device = find(number).await?;
+async fn services(target: &Target, context: &Context) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
     let record = paired_record(&device).await?;
     let proxy = proxy_service(&device, &record).await?;
     let (_tunnel, handshake) = open_tunnel(proxy).await?;
@@ -159,8 +218,9 @@ async fn services(number: u32) -> Result<Line, Failure> {
     }))
 }
 
-async fn images(number: u32) -> Result<Line, Failure> {
-    let device = find(number).await?;
+async fn images(target: &Target, context: &Context) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
     let record = paired_record(&device).await?;
     let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
     let connection = open_service(
@@ -203,8 +263,14 @@ async fn images(number: u32) -> Result<Line, Failure> {
     }))
 }
 
-async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, Failure> {
-    let device = find(number).await?;
+async fn apps(
+    target: &Target,
+    contains: &str,
+    max_matching: usize,
+    context: &Context,
+) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
     let record = paired_record(&device).await?;
     let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
     let connection = open_service(
@@ -228,22 +294,27 @@ async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, 
     )))
 }
 
-/// One picture of the screen, the way `way` takes it, written as the service gave it to `out`,
-/// which must name nothing that exists, in a directory that exists: both are checked before the
-/// device is asked. A way the device refuses writes no file; a picture that cannot be written
-/// whole has its file removed again (`out_write_failed`). The stage the command is in is kept
-/// in `stage` from the first step that waits on the device.
+/// One picture of the screen, the way `way` takes it, as the service gave it: written to the
+/// file `out` names, which must name nothing that exists, in a directory that exists (both are
+/// checked before the device is asked), or given after the line on the standard output
+/// (`--out -`, no file). A way the device refuses writes no file and gives no byte; a picture
+/// that cannot be written whole into its file has the file removed again (`out_write_failed`).
+/// The stage the command is in is kept in the context from the first step that waits on the
+/// device.
 async fn screenshot(
-    number: u32,
-    out: &str,
+    target: &Target,
+    out: &Out,
     way: Way,
     started: Instant,
-    stage: &Cell<Option<Stage>>,
-) -> Result<Line, Failure> {
-    let path = Path::new(out);
-    out_file::check(path)?;
+    context: &Context,
+) -> Result<Printed, Failure> {
+    if let Out::File(path) = out {
+        out_file::check(Path::new(path))?;
+    }
+    let stage = &context.stage;
     stage.set(Some(Stage::Session));
-    let device = find(number).await?;
+    let device = locate(target, context).await?;
+    let number = device.device_id;
     let record = paired_record(&device).await?;
     let proxy = proxy_service(&device, &record).await?;
     stage.set(Some(Stage::Tunnel));
@@ -252,17 +323,126 @@ async fn screenshot(
         Way::ScreenCapture => screen_capture(&mut tunnel, &handshake, stage).await?,
         Way::Instruments => instruments(&mut tunnel, &handshake, stage).await?,
     };
-    match out_file::write_new(path, &picture) {
+    let path = match out {
+        Out::File(path) => path,
+        Out::Stdout => {
+            let elapsed = Elapsed::of(request, started.elapsed());
+            return Ok(Printed::picture_on_stdout(number, way, picture, elapsed));
+        }
+    };
+    match out_file::write_new(Path::new(path), &picture) {
         Ok(()) => {}
         Err(NotWritten::NotMade(failure)) => return Err(failure),
         Err(NotWritten::Cut { error, left }) => {
-            return Ok(Line::out_write_failed(number, way, &error, left));
+            let line = Line::out_write_failed(number, way, &error, left);
+            return Ok(Printed::line(line));
         }
     }
     let elapsed = Elapsed::of(request, started.elapsed());
-    Ok(Line::Screenshot(Screenshot::of(
-        number, way, &picture, elapsed, out,
-    )))
+    Ok(Printed::line(Line::Screenshot(Screenshot::of(
+        number, way, &picture, elapsed, path,
+    ))))
+}
+
+/// The interface orientation, as each reader asked reads it: the one `via` names, or each of
+/// [`Reader::ALL`] in turn. The device and its pairing record are found once, before any reader
+/// is asked (`not_paired` refuses the whole command). Each reader is asked within the command's
+/// deadline: one that has not answered when it passes answers `deadline_passed`, and so does
+/// each reader after it, which is not asked; the readers that answered before keep their
+/// answers.
+async fn orientation(
+    target: &Target,
+    via: Option<Reader>,
+    context: &Context,
+) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let record = paired_record(&device).await?;
+    let readers = match via {
+        Some(reader) => vec![reader],
+        None => Reader::ALL.to_vec(),
+    };
+    let mut candidates = Vec::with_capacity(readers.len());
+    for reader in readers {
+        let deadline_passed = || Err(Failure::own(Problem::DeadlinePassed));
+        let read = match context.deadline {
+            Some(deadline) if tokio::time::Instant::now() >= deadline => deadline_passed(),
+            Some(deadline) => {
+                tokio::time::timeout_at(deadline, read_orientation(&device, &record, reader))
+                    .await
+                    .unwrap_or_else(|_| deadline_passed())
+            }
+            None => read_orientation(&device, &record, reader).await,
+        };
+        candidates.push(match read {
+            Ok(orientation) => Candidate::answered(reader, orientation),
+            Err(failure) => Candidate::failed(reader, failure),
+        });
+    }
+    Ok(Line::Orientations(Orientations {
+        command: CommandName::Orientation,
+        device: device.device_id,
+        candidates,
+    }))
+}
+
+/// The interface orientation the SpringBoard service reports, reached the way `reader` names:
+/// its lockdown service in a session with this host's record, or its remote shim inside the
+/// tunnel. Only the read is sent (`getInterfaceOrientation`); nothing sets, locks or turns an
+/// orientation.
+async fn read_orientation(
+    device: &UsbmuxdDevice,
+    record: &PairingFile,
+    reader: Reader,
+) -> Result<Orientation, Failure> {
+    match reader {
+        Reader::Springboard => {
+            let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+            let connection = open_service(
+                &provider,
+                record,
+                <SpringBoardServicesClient as IdeviceService>::service_name(),
+            )
+            .await?;
+            interface_orientation(SpringBoardServicesClient::new(connection)).await
+        }
+        Reader::SpringboardShim => {
+            let proxy = proxy_service(device, record).await?;
+            // The tunnel stays open until the orientation is read through it.
+            let (mut tunnel, handshake) = open_tunnel(proxy).await?;
+            let stream = remote_service(
+                &mut tunnel,
+                &handshake,
+                &<SpringBoardServicesClient as RsdService>::rsd_service_name(),
+            )
+            .await?;
+            let client = <SpringBoardServicesClient as RsdService>::from_stream(stream)
+                .await
+                .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+            interface_orientation(client).await
+        }
+    }
+}
+
+/// The orientation `client` reads, by this program's word.
+async fn interface_orientation(
+    mut client: SpringBoardServicesClient,
+) -> Result<Orientation, Failure> {
+    client
+        .get_interface_orientation()
+        .await
+        .map(reported)
+        .map_err(|error| Failure::library(Problem::OrientationFailed, &error))
+}
+
+/// This program's word for an orientation the library reports.
+fn reported(orientation: InterfaceOrientation) -> Orientation {
+    match orientation {
+        InterfaceOrientation::Unknown => Orientation::Unknown,
+        InterfaceOrientation::Portrait => Orientation::Portrait,
+        InterfaceOrientation::PortraitUpsideDown => Orientation::PortraitUpsideDown,
+        InterfaceOrientation::LandscapeRight => Orientation::LandscapeRight,
+        InterfaceOrientation::LandscapeLeft => Orientation::LandscapeLeft,
+    }
 }
 
 /// The picture of CoreDevice's screen capture service, asked for as PNG, of the main display;
@@ -400,6 +580,42 @@ async fn find(number: u32) -> Result<UsbmuxdDevice, Failure> {
         .ok_or(Failure::own(Problem::DeviceNotListed))
 }
 
+/// The device `target` names: the listed device with its number (`device_not_listed`), or the
+/// row [`keyed`] takes of the listed devices whose key under the salt of its variable is the key
+/// named (`key_salt_unusable` before usbmuxd is asked, `device_key_unknown`). The device's
+/// number is kept in the context once it is found.
+async fn locate(target: &Target, context: &Context) -> Result<UsbmuxdDevice, Failure> {
+    let device = match target {
+        Target::Number(number) => find(*number).await?,
+        Target::Key { key, salt_variable } => {
+            let salt = salt_of(salt_variable, Problem::KeySaltUnusable)?;
+            keyed(list().await?, &salt, key).ok_or(Failure::own(Problem::DeviceKeyUnknown))?
+        }
+    };
+    context.device.set(Some(device.device_id));
+    Ok(device)
+}
+
+/// Of the rows usbmuxd lists, the one the phone whose key under `salt` is `key` is reached
+/// through. The rows with that key are rows of one phone (a key is made of the identifier usbmuxd
+/// lists the phone with): of a phone listed both over USB and over the network its USB row is
+/// taken, whichever of them usbmuxd lists first; of a phone not listed over USB, the first of its
+/// rows. `None` when no row has that key.
+fn keyed(listed: Vec<UsbmuxdDevice>, salt: &Salt, key: &str) -> Option<UsbmuxdDevice> {
+    listed
+        .into_iter()
+        .filter(|device| DeviceKey::of(salt, &device.udid).matches(key))
+        // Of rows with equal values `min_by_key` takes the first: a USB row (`false`) before any
+        // other, and otherwise the first row.
+        .min_by_key(|device| device.connection_type != Connection::Usb)
+}
+
+/// The salt of the environment variable `variable` of this process, or `unusable`.
+fn salt_of(variable: &str, unusable: Problem) -> Result<Salt, Failure> {
+    Salt::from_environment(variable, &|name: &str| std::env::var_os(name))
+        .ok_or(Failure::own(unusable))
+}
+
 /// The pairing record usbmuxd holds of this host for the device, `None` when it holds none.
 /// usbmuxd's answer without a record is the library's `UnexpectedResponse`.
 async fn pairing(device: &UsbmuxdDevice) -> Result<Option<PairingFile>, Failure> {
@@ -489,5 +705,98 @@ fn refused_with(error: &IdeviceError) -> Option<String> {
         | IdeviceError::InvalidHostID => Some(redact::kind_of(&format!("{error:?}"))),
         IdeviceError::UnknownErrorType(text) => Some(redact::refusal_word(text)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// The identifier of another phone than the test vector's.
+    const OTHER_IDENTIFIER: &str = "TESTSERIAL0002";
+
+    /// A row of usbmuxd's list: the device `number`, listed with `identifier` over `connection`.
+    fn row(number: u32, connection: Connection, identifier: &str) -> UsbmuxdDevice {
+        UsbmuxdDevice {
+            connection_type: connection,
+            udid: identifier.to_owned(),
+            device_id: number,
+        }
+    }
+
+    /// A network connection (of no address in particular).
+    fn network() -> Connection {
+        Connection::Network(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+    }
+
+    /// The number of the row the phone of the test vector's key is reached through.
+    fn taken(listed: Vec<UsbmuxdDevice>) -> Option<u32> {
+        keyed(listed, &salt(VECTOR_SALT), VECTOR_KEY).map(|device| device.device_id)
+    }
+
+    /// A phone usbmuxd lists over USB and then over the network is reached through its USB row,
+    /// and another phone's USB row listed before both is not taken.
+    #[test]
+    fn a_phone_listed_over_usb_then_the_network_is_reached_through_its_usb_row() {
+        let listed = vec![
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(3, Connection::Usb, VECTOR_IDENTIFIER),
+            row(7, network(), VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(3));
+    }
+
+    /// A phone usbmuxd lists over the network and then over USB is reached through its USB row
+    /// too: which row is listed first does not decide, and another phone's USB row listed between
+    /// them is not taken.
+    #[test]
+    fn a_phone_listed_over_the_network_then_usb_is_reached_through_its_usb_row() {
+        let listed = vec![
+            row(7, network(), VECTOR_IDENTIFIER),
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(3, Connection::Usb, VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(3));
+    }
+
+    /// A phone usbmuxd lists only over the network is found by its network row, and another
+    /// phone's USB row listed before it is not taken in its place.
+    #[test]
+    fn a_phone_listed_only_over_the_network_is_found_by_its_network_row() {
+        let listed = vec![
+            row(2, Connection::Usb, OTHER_IDENTIFIER),
+            row(7, network(), VECTOR_IDENTIFIER),
+        ];
+        assert_eq!(taken(listed), Some(7));
+    }
+
+    /// Each value of the library's `InterfaceOrientation` has its word of [`Orientation`], one
+    /// word for each value.
+    #[test]
+    fn each_orientation_the_library_reports_has_its_word() {
+        let cases = [
+            (InterfaceOrientation::Unknown, Orientation::Unknown),
+            (InterfaceOrientation::Portrait, Orientation::Portrait),
+            (
+                InterfaceOrientation::PortraitUpsideDown,
+                Orientation::PortraitUpsideDown,
+            ),
+            (
+                InterfaceOrientation::LandscapeRight,
+                Orientation::LandscapeRight,
+            ),
+            (
+                InterfaceOrientation::LandscapeLeft,
+                Orientation::LandscapeLeft,
+            ),
+        ];
+        let mut words = std::collections::BTreeSet::new();
+        for (library, word) in cases {
+            assert_eq!(reported(library), word, "{library:?}");
+            assert!(words.insert(format!("{word:?}")), "{word:?} is one word");
+        }
+        assert_eq!(words.len(), 5);
     }
 }
