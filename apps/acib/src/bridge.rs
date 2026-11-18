@@ -31,6 +31,7 @@ use crate::key::{DeviceKey, Salt};
 use crate::matching::{self, Application, Installation, Pids, Process};
 use crate::out_file::{self, NotWritten};
 use crate::redact;
+use crate::stages::Steps;
 use crate::stopping::{self, LOOK_INTERVAL, Next};
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
@@ -49,7 +50,7 @@ use idevice::tcp::handle::AdapterHandle;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
 use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService};
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -74,29 +75,49 @@ type AppService = AppServiceClient<Box<dyn ReadWrite>>;
 type AppConnection = (u32, AdapterHandle, Result<AppService, ErrorKind>);
 
 /// What a command keeps while it runs, for the line of a deadline that passes in it: the
-/// command's deadline, the stage a screenshot is in (no other command sets it) and the number of
-/// the device once it is found (a device named by its key has none before).
+/// command's deadline and start, the stage a screenshot is in (no other command sets it), the
+/// stages of a command of the application service (`stages.rs`; no other command enters one)
+/// and the number of the device once it is found (a device named by its key has none before).
 pub struct Context {
     /// When the command's deadline passes (`None`: further than the clock reaches).
     pub deadline: Option<tokio::time::Instant>,
+    /// When the command started.
+    pub started: Instant,
     pub stage: Cell<Option<Stage>>,
+    pub steps: RefCell<Steps>,
     pub device: Cell<Option<u32>>,
 }
 
 impl Context {
-    /// The context of a command whose deadline passes at `deadline`.
-    pub fn new(deadline: Option<tokio::time::Instant>) -> Self {
+    /// The context of a command that started at `started` and whose deadline passes at
+    /// `deadline`.
+    pub fn new(deadline: Option<tokio::time::Instant>, started: Instant) -> Self {
         Self {
             deadline,
+            started,
             stage: Cell::new(None),
+            steps: RefCell::new(Steps::default()),
             device: Cell::new(None),
         }
     }
+
+    /// (ACIB-3b) A command of the application service enters `stage` now.
+    fn enter(&self, stage: Stage) {
+        self.steps.borrow_mut().enter(stage, self.started.elapsed());
+    }
+
+    /// (ACIB-3b) The line of a command of the application service that ends now, with how long
+    /// each of its stages took.
+    fn timed(&self, line: Line) -> Line {
+        let times = self.steps.borrow_mut().end(self.started.elapsed());
+        line.timed(times)
+    }
 }
 
-/// Runs one request, of a command that started at `started`, and gives what it prints.
-pub async fn answer(request: Request, started: Instant, context: &Context) -> Printed {
+/// Runs one request and gives what it prints.
+pub async fn answer(request: Request, context: &Context) -> Printed {
     let (command, given, via) = (request.name(), request.device(), request.via());
+    let started = context.started;
     let answered = match request {
         Request::Devices(variables) => devices(variables.as_ref()).await.map(Printed::line),
         Request::Info(target) => info(&target, context).await.map(Printed::line),
@@ -123,18 +144,22 @@ pub async fn answer(request: Request, started: Instant, context: &Context) -> Pr
         Request::Running {
             device: target,
             bundle,
-        } => running(&target, &bundle, context).await.map(Printed::line),
+        } => running(&target, &bundle, context)
+            .await
+            .map(|line| Printed::line(context.timed(line))),
         Request::Launch {
             device: target,
             bundle,
             relaunch,
         } => launch(&target, &bundle, relaunch, context)
             .await
-            .map(Printed::line),
+            .map(|line| Printed::line(context.timed(line))),
         Request::Stop {
             device: target,
             bundle,
-        } => stop(&target, &bundle, context).await.map(Printed::line),
+        } => stop(&target, &bundle, context)
+            .await
+            .map(|line| Printed::line(context.timed(line))),
     };
     answered.unwrap_or_else(|failure| {
         let device = given.or(context.device.get());
@@ -231,7 +256,7 @@ async fn services(target: &Target, context: &Context) -> Result<Line, Failure> {
     let number = device.device_id;
     let record = paired_record(&device).await?;
     let proxy = proxy_service(&device, &record).await?;
-    let (_tunnel, handshake) = open_tunnel(proxy).await?;
+    let (_tunnel, handshake) = open_tunnel(proxy, || {}).await?;
     // Of each service the handshake describes, its port and the entitlement it names are
     // shown; its other members are not.
     let mut services: Vec<ServiceEntry> = handshake
@@ -352,7 +377,7 @@ async fn screenshot(
     let record = paired_record(&device).await?;
     let proxy = proxy_service(&device, &record).await?;
     stage.set(Some(Stage::Tunnel));
-    let (mut tunnel, handshake) = open_tunnel(proxy).await?;
+    let (mut tunnel, handshake) = open_tunnel(proxy, || {}).await?;
     let (picture, request) = match way {
         Way::ScreenCapture => screen_capture(&mut tunnel, &handshake, stage).await?,
         Way::Instruments => instruments(&mut tunnel, &handshake, stage).await?,
@@ -442,7 +467,7 @@ async fn read_orientation(
         Reader::SpringboardShim => {
             let proxy = proxy_service(device, record).await?;
             // The tunnel stays open until the orientation is read through it.
-            let (mut tunnel, handshake) = open_tunnel(proxy).await?;
+            let (mut tunnel, handshake) = open_tunnel(proxy, || {}).await?;
             let stream = remote_service(
                 &mut tunnel,
                 &handshake,
@@ -493,6 +518,7 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
             return Ok(Line::Running(failed));
         }
     };
+    context.enter(Stage::ApplicationList);
     let answer = match installation(&mut client, bundle).await {
         Err(kind) => asked.failed(Problem::ApplicationListFailed, Some(kind)),
         Ok(Installation::NotInstalled) => asked.not_installed(),
@@ -500,6 +526,7 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
             .installed()
             .failed(Problem::BundlePathUnreadable, None),
         Ok(Installation::Installed(directories)) => {
+            context.enter(Stage::ProcessList);
             match pids_of(&mut client, &directories).await {
                 Ok(pids) => asked.found(pids),
                 Err(kind) => asked
@@ -535,6 +562,7 @@ async fn launch(
         }
     };
     // Where the bundle lies is not needed to launch it: a path read as no place is installed.
+    context.enter(Stage::ApplicationList);
     let asked = match installation(&mut client, bundle).await {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
@@ -543,6 +571,7 @@ async fn launch(
         Ok(Installation::NotInstalled) => return Ok(Line::Launch(asked.not_installed())),
         Ok(Installation::PathUnreadable | Installation::Installed(_)) => asked.installed(),
     };
+    context.enter(Stage::LaunchRequest);
     let launched = client
         .launch_application(bundle, &[], relaunch, false, None, None, None)
         .await;
@@ -572,6 +601,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
             return Ok(Line::Stop(failed));
         }
     };
+    context.enter(Stage::ApplicationList);
     let directories = match installation(&mut client, bundle).await {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
@@ -588,6 +618,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         }
         Ok(Installation::Installed(directories)) => directories,
     };
+    context.enter(Stage::ProcessList);
     let first = match pids_of(&mut client, &directories).await {
         Ok(pids) => pids,
         Err(kind) => {
@@ -600,6 +631,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
     if first.application.is_empty() {
         return Ok(Line::Stop(asked.nothing_ran(true, first.extensions)));
     }
+    context.enter(Stage::KillSignals);
     let mut errors = Vec::new();
     for &pid in &first.application {
         if let Err(error) = client.send_signal(pid, KILL).await {
@@ -613,6 +645,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         signalled: first.application,
         errors,
     };
+    context.enter(Stage::LooksAfterSignals);
     let mut last = match pids_of(&mut client, &directories).await {
         Ok(pids) => pids,
         Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
@@ -656,18 +689,25 @@ async fn look_within(
 /// (`com.apple.coredevice.appservice`) inside the tunnel of iOS 17.4 and later, with the tunnel,
 /// which stays open while it is held. A step before the service's own handshake fails as every
 /// command's does (its problem word, the library's text cut as `redact.rs` cuts it); the
-/// service's handshake failing is its [`ErrorKind`] alone.
+/// service's handshake failing is its [`ErrorKind`] alone. (ACIB-3b) Each step enters its
+/// stage first: `session`, `proxy_tunnel`, `discovery_handshake`, `service_connection`,
+/// `service_xpc_handshake`.
 async fn app_service(target: &Target, context: &Context) -> Result<AppConnection, Failure> {
+    context.enter(Stage::Session);
     let device = locate(target, context).await?;
     let record = paired_record(&device).await?;
     let proxy = proxy_service(&device, &record).await?;
-    let (mut tunnel, handshake) = open_tunnel(proxy).await?;
+    context.enter(Stage::ProxyTunnel);
+    let (mut tunnel, handshake) =
+        open_tunnel(proxy, || context.enter(Stage::DiscoveryHandshake)).await?;
+    context.enter(Stage::ServiceConnection);
     let stream = remote_service(
         &mut tunnel,
         &handshake,
         &<AppService as RsdService>::rsd_service_name(),
     )
     .await?;
+    context.enter(Stage::ServiceXpcHandshake);
     let client = <AppService as RsdService>::from_stream(stream)
         .await
         .map_err(|error| service_error_kind(&error));
@@ -821,8 +861,12 @@ async fn proxy_service(device: &UsbmuxdDevice, record: &PairingFile) -> Result<I
 
 /// The tunnel of iOS 17.4 and later through the CoreDeviceProxy `connection` (with the
 /// library's own TCP stack inside this process) and the remote service discovery handshake
-/// through it.
-async fn open_tunnel(connection: Idevice) -> Result<(AdapterHandle, RsdHandshake), Failure> {
+/// through it; `discovery` is called once the connection to the discovery port is made, as the
+/// handshake starts (a command of the application service enters its stage there).
+async fn open_tunnel(
+    connection: Idevice,
+    discovery: impl FnOnce(),
+) -> Result<(AdapterHandle, RsdHandshake), Failure> {
     let proxy = CoreDeviceProxy::new(connection)
         .await
         .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;
@@ -835,6 +879,7 @@ async fn open_tunnel(connection: Idevice) -> Result<(AdapterHandle, RsdHandshake
         .connect(rsd_port)
         .await
         .map_err(|error| Failure::library(Problem::RsdUnreachable, &error))?;
+    discovery();
     let handshake = RsdHandshake::new(stream)
         .await
         .map_err(|error| Failure::library(Problem::RsdHandshakeFailed, &error))?;

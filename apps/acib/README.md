@@ -4,7 +4,7 @@
 program of its own: the Runtime will speak to it as a separate process, as it speaks to adb.
 Nothing of the workspace depends on it.
 
-## This version (ACIB-0, ACIB-1 in 0.12.73, and ACIB-2 and ACIB-3 in 0.12.74)
+## This version (ACIB-0, ACIB-1 in 0.12.73, and ACIB-2, ACIB-3 and ACIB-3b in 0.12.74)
 
 Each run is one command; it prints **one JSON line** on standard output and ends with status 0
 when the command was answered, or 1 when it was refused or failed. A refused or failed line
@@ -103,7 +103,8 @@ key, and a key holds neither the identifier nor the salt, only their digest.
 ## The commands
 
 Every command takes `--timeout-ms <ms>` (default 30000); a command not finished by then answers
-`deadline_passed` (for `screenshot`, with the `stage` it was waiting in, below; for
+`deadline_passed` (for `screenshot`, with the `stage` it was waiting in, below; for `running`,
+`launch` and `stop`, with the `stage` it was waiting in and `elapsed_ms`, below; for
 `orientation`, per reader). `<n>` is the device's usbmuxd session number, as `acib devices`
 lists it; wherever `--device <n>` is written below, `--device-key <key> --key-salt-env <NAME>`
 may stand in its place.
@@ -272,6 +273,54 @@ a category not asked for) alike, as not installed: `running` answers `installed`
 `launch` answers `installed` false with `not_installed`, status 1, and sends nothing. So
 `installed` false, and the word `not_installed`, have one cause: the phone's list, for the
 categories asked, does not hold this bundle.
+
+**Where a command waits (ACIB-3b).** Each of the three goes through stages, in the order its
+code takes the steps, and a line names them by these words:
+
+- `session`: usbmuxd's device list, the pairing record and the lockdown session that starts
+  the tunnel's service, CoreDeviceProxy (the same word, and the same steps, as a screenshot's).
+- `proxy_tunnel`: CoreDeviceProxy's own exchange on that connection (the tunnel's parameters),
+  the TCP stack inside this process over it, and the connection inside the tunnel to the remote
+  service discovery port.
+- `discovery_handshake`: the remote service discovery handshake, which answers the services and
+  their ports.
+- `service_connection`: the connection inside the tunnel to the port the handshake names for
+  `com.apple.coredevice.appservice`.
+- `service_xpc_handshake`: the service's own handshake on that connection (the library's
+  RemoteXPC handshake, over HTTP/2).
+- `application_list`: the request of the list of applications and its answer.
+- `process_list`: the request of the list of processes and its answer (for `stop`, the first
+  look, before any signal).
+- `launch_request`: the launch request and its answer.
+- `kill_signals`: the kill signals, one request per process of the application, and their
+  answers.
+- `looks_after_signals`: the looks at the list of processes after the signals, and the waits of
+  200 ms between them.
+
+`running` goes through `session`, `proxy_tunnel`, `discovery_handshake`, `service_connection`,
+`service_xpc_handshake`, `application_list`, `process_list`. `launch` goes through `session`,
+`proxy_tunnel`, `discovery_handshake`, `service_connection`, `service_xpc_handshake`,
+`application_list`, `launch_request`. `stop` goes through `session`, `proxy_tunnel`,
+`discovery_handshake`, `service_connection`, `service_xpc_handshake`, `application_list`,
+`process_list`, `kill_signals`, `looks_after_signals`. A command that stops early (a bundle the
+list does not hold, an application that does not run, a problem) goes through the first of
+them only. A screenshot's `tunnel` covers what `proxy_tunnel` and `discovery_handshake` split,
+and its `service_handshake` what `service_connection` and `service_xpc_handshake` split: the
+screenshot keeps its words, and these commands use theirs, so that one word has one meaning.
+
+Every line of the three (one that answers and one stopped by a problem of the service alike)
+names in `elapsed_ms` how long each stage it went through took, in whole milliseconds, by the
+stage's word, in the order taken: for example `"elapsed_ms":{"session":812,"proxy_tunnel":95,
+"discovery_handshake":40,"service_connection":3,"service_xpc_handshake":20,
+"application_list":410,"process_list":120}`. A deadline that passes answers `deadline_passed`
+with the `stage` the command was waiting in and, in `elapsed_ms`, the stages that finished
+before it (not the one it was waiting in): `{"command":"running","device":3,
+"problem":"deadline_passed","stage":"service_xpc_handshake","elapsed_ms":{"session":812,
+"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3}}`. A step the library gives
+no way to interrupt is named as its stage all the same: the deadline cuts the command there.
+Nothing but a stage's word and a number is in either: no identifier of the phone or of any
+application. A refusal of a step before the service (`not_paired`, `tunnel_failed`,
+`service_not_listed` and the like) is answered as before, with no `elapsed_ms`.
 
 The library reads each entry of the list into a record of its own (the entry's identifier,
 name, path and flags); one entry it cannot read fails the whole list, for every bundle:

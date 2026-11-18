@@ -50,8 +50,10 @@ pub enum Problem {
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
     /// The command did not finish within `--timeout-ms`; a screenshot's line names the `stage`
-    /// it was waiting in. Of `orientation`, a reader that had not answered by then answers it,
-    /// and so does each reader after it, which is not asked.
+    /// it was waiting in, and (ACIB-3b) a line of `running`, `launch` and `stop` the `stage` it
+    /// was waiting in and `elapsed_ms`, the time of each stage that finished before it. Of
+    /// `orientation`, a reader that had not answered by then answers it, and so does each
+    /// reader after it, which is not asked.
     DeadlinePassed,
     /// The environment variable `--key-salt-env` names is unset, not UTF-8, or holds fewer than
     /// 16 bytes (an empty one included) or more than 1024: refused before usbmuxd is asked.
@@ -567,9 +569,17 @@ fn whole_milliseconds(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The step a screenshot was waiting in when its deadline passed (`stage` beside
-/// `deadline_passed`), by this program's own words, in the order a screenshot goes through
-/// them. The file is written after the last of them, and no deadline passes while it is.
+/// The step a command was waiting in when its deadline passed (`stage` beside
+/// `deadline_passed`), by this program's own words. A screenshot goes through the first five,
+/// in their order (the file is written after the last of them, and no deadline passes while it
+/// is). (ACIB-3b) `running`, `launch` and `stop`, the commands of the application service, go
+/// through `session` and then the ones after the first five, in the order the code takes them
+/// (`running`: up to `process_list`; `launch`: up to `application_list`, then `launch_request`;
+/// `stop`: up to `process_list`, then `kill_signals` and `looks_after_signals`), and name the
+/// time of each that finished in `elapsed_ms` ([`StageTimes`]). A stage the library gives no way
+/// to interrupt is named as that stage. Where one of the first five covers what two of the
+/// others split (`tunnel`, `service_handshake`), the screenshot keeps its word and the
+/// application service's commands use theirs, so that one word has one meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
@@ -588,6 +598,61 @@ pub enum Stage {
     /// The picture's request; for `instruments`, the request of its screenshot channel and then
     /// of the picture.
     PictureRequest,
+    /// The application service's commands: CoreDeviceProxy's own exchange on its lockdown
+    /// connection (the tunnel's parameters), the TCP stack inside this process over it, and the
+    /// connection inside the tunnel to the remote service discovery port.
+    ProxyTunnel,
+    /// The application service's commands: the remote service discovery handshake, which
+    /// answers the services and their ports.
+    DiscoveryHandshake,
+    /// The application service's commands: the connection inside the tunnel to the port the
+    /// handshake names for `com.apple.coredevice.appservice`.
+    ServiceConnection,
+    /// The application service's commands: the service's own handshake on that connection
+    /// (the library's RemoteXPC handshake, over HTTP/2).
+    ServiceXpcHandshake,
+    /// The application service's commands: the request of the list of applications and its
+    /// answer.
+    ApplicationList,
+    /// `running` and `stop`: the request of the list of processes and its answer (for `stop`,
+    /// the first look, before any signal).
+    ProcessList,
+    /// `launch`: the launch request and its answer.
+    LaunchRequest,
+    /// `stop`: the kill signals, one request per process of the application, and their answers.
+    KillSignals,
+    /// `stop`: the looks at the list of processes after the signals, and the waits between them.
+    LooksAfterSignals,
+}
+
+/// How long each finished stage of a command of the application service took, in whole
+/// milliseconds, by its stage's word, in the order the command took them (`elapsed_ms` of
+/// `running`, `launch` and `stop`, and beside their `deadline_passed`, where the stage it was
+/// waiting in is not among them). Nothing but a stage's word and a number is in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StageTimes(Vec<(Stage, u64)>);
+
+impl StageTimes {
+    /// The times of `finished`, each stage with how long it took.
+    pub fn of(finished: &[(Stage, Duration)]) -> Self {
+        Self(
+            finished
+                .iter()
+                .map(|(stage, took)| (*stage, whole_milliseconds(*took)))
+                .collect(),
+        )
+    }
+}
+
+impl Serialize for StageTimes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (stage, milliseconds) in &self.0 {
+            map.serialize_entry(stage, milliseconds)?;
+        }
+        map.end()
+    }
 }
 
 /// `acib screenshot --device <n> --out <file|-> [--via <way>]`: the way used, the picture's
@@ -762,6 +827,9 @@ pub struct Running {
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
+    /// (ACIB-3b) How long each stage took ([`StageTimes`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<StageTimes>,
 }
 
 impl Running {
@@ -777,6 +845,7 @@ impl Running {
             extension_pids: None,
             problem: None,
             error_kind: None,
+            elapsed_ms: None,
         }
     }
 
@@ -841,6 +910,9 @@ pub struct Launch {
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
+    /// (ACIB-3b) How long each stage took ([`StageTimes`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<StageTimes>,
 }
 
 impl Launch {
@@ -855,6 +927,7 @@ impl Launch {
             pid: None,
             problem: None,
             error_kind: None,
+            elapsed_ms: None,
         }
     }
 
@@ -944,6 +1017,9 @@ pub struct Stop {
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
+    /// (ACIB-3b) How long each stage took ([`StageTimes`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<StageTimes>,
 }
 
 impl Stop {
@@ -962,6 +1038,7 @@ impl Stop {
             extension_pids: None,
             problem: None,
             error_kind: None,
+            elapsed_ms: None,
         }
     }
 
@@ -1044,9 +1121,14 @@ pub struct Refused {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<Way>,
     pub problem: Problem,
-    /// Beside `deadline_passed` of a screenshot: the stage it was waiting in.
+    /// Beside `deadline_passed` of a screenshot, and (ACIB-3b) of `running`, `launch` and
+    /// `stop`: the stage it was waiting in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage: Option<Stage>,
+    /// (ACIB-3b) Beside `deadline_passed` of `running`, `launch` and `stop`: how long each stage
+    /// that finished before it took (not the one it was waiting in).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<StageTimes>,
     /// Beside `out_write_failed`: whether a file is left at `--out`, `true` only when the file
     /// this program made could not be removed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1091,18 +1173,22 @@ impl Line {
             via,
             problem: failure.problem,
             stage: None,
+            elapsed_ms: None,
             out_left: None,
             error: failure.error,
         })
     }
 
     /// `deadline_passed` of `command` on `device`; a screenshot's line names the stage it was
-    /// waiting in (`stage`, which no other command sets).
+    /// waiting in (`stage`), and so does (ACIB-3b) a line of `running`, `launch` and `stop`,
+    /// with how long each stage that finished before it took (`elapsed_ms`); no other command
+    /// sets either.
     pub fn deadline_passed(
         command: CommandName,
         device: Option<u32>,
         via: Option<Way>,
         stage: Option<Stage>,
+        elapsed_ms: Option<StageTimes>,
     ) -> Self {
         Self::Refused(Refused {
             command: Some(command),
@@ -1110,9 +1196,30 @@ impl Line {
             via,
             problem: Problem::DeadlinePassed,
             stage,
+            elapsed_ms,
             out_left: None,
             error: None,
         })
+    }
+
+    /// (ACIB-3b) The line of `running`, `launch` or `stop` with how long each of its stages took;
+    /// every other line as it is.
+    pub fn timed(self, times: StageTimes) -> Self {
+        match self {
+            Self::Running(running) => Self::Running(Running {
+                elapsed_ms: Some(times),
+                ..running
+            }),
+            Self::Launch(launch) => Self::Launch(Launch {
+                elapsed_ms: Some(times),
+                ..launch
+            }),
+            Self::Stop(stop) => Self::Stop(Stop {
+                elapsed_ms: Some(times),
+                ..stop
+            }),
+            other => other,
+        }
     }
 
     /// `out_write_failed` of a screenshot on `device` the way `via`: the picture could not be
@@ -1129,6 +1236,7 @@ impl Line {
             via: Some(via),
             problem: failure.problem,
             stage: None,
+            elapsed_ms: None,
             out_left: Some(out_left),
             error: failure.error,
         })
@@ -1520,12 +1628,13 @@ mod tests {
                     Some(3),
                     Some(Way::Instruments),
                     Some(Stage::ServerFirstMessage),
+                    None,
                 ),
                 r#"{"command":"screenshot","device":3,"via":"instruments","problem":"deadline_passed","stage":"server_first_message"}"#,
                 false,
             ),
             (
-                Line::deadline_passed(CommandName::Devices, None, None, None),
+                Line::deadline_passed(CommandName::Devices, None, None, None, None),
                 r#"{"command":"devices","problem":"deadline_passed"}"#,
                 false,
             ),
@@ -1796,7 +1905,110 @@ mod tests {
                 r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_list_failed","error_kind":"xpc_failed"}"#,
                 false,
             ),
+            // ACIB-3b: each line with how long each stage took, and the deadline of each
+            // command with the stage it was waiting in.
+            (
+                Line::Running(running().found(pids(&[412], &[]))).timed(times(&[
+                    (Stage::Session, 812),
+                    (Stage::ProxyTunnel, 95),
+                    (Stage::DiscoveryHandshake, 40),
+                    (Stage::ServiceConnection, 3),
+                    (Stage::ServiceXpcHandshake, 20),
+                    (Stage::ApplicationList, 410),
+                    (Stage::ProcessList, 120),
+                ])),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"elapsed_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3,"service_xpc_handshake":20,"application_list":410,"process_list":120}}"#,
+                true,
+            ),
+            (
+                Line::Launch(launch(false).installed().launched(412)).timed(times(&[
+                    (Stage::Session, 700),
+                    (Stage::ProxyTunnel, 90),
+                    (Stage::DiscoveryHandshake, 41),
+                    (Stage::ServiceConnection, 2),
+                    (Stage::ServiceXpcHandshake, 19),
+                    (Stage::ApplicationList, 380),
+                    (Stage::LaunchRequest, 1_250),
+                ])),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"pid":412,"elapsed_ms":{"session":700,"proxy_tunnel":90,"discovery_handshake":41,"service_connection":2,"service_xpc_handshake":19,"application_list":380,"launch_request":1250}}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().looked(signals(&[412], &[]), pids(&[], &[]), Verdict::Stopped))
+                    .timed(times(&[
+                        (Stage::Session, 690),
+                        (Stage::ProxyTunnel, 88),
+                        (Stage::DiscoveryHandshake, 39),
+                        (Stage::ServiceConnection, 2),
+                        (Stage::ServiceXpcHandshake, 18),
+                        (Stage::ApplicationList, 377),
+                        (Stage::ProcessList, 110),
+                        (Stage::KillSignals, 30),
+                        (Stage::LooksAfterSignals, 415),
+                    ])),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"remaining":[],"running":false,"extension_pids":[],"elapsed_ms":{"session":690,"proxy_tunnel":88,"discovery_handshake":39,"service_connection":2,"service_xpc_handshake":18,"application_list":377,"process_list":110,"kill_signals":30,"looks_after_signals":415}}"#,
+                true,
+            ),
+            (
+                Line::Running(running().failed(
+                    Problem::ApplicationListFailed,
+                    Some(ErrorKind::AnswerUnreadable),
+                ))
+                .timed(times(&[(Stage::Session, 812), (Stage::ApplicationList, 7)])),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","problem":"application_list_failed","error_kind":"answer_unreadable","elapsed_ms":{"session":812,"application_list":7}}"#,
+                false,
+            ),
+            (
+                Line::deadline_passed(
+                    CommandName::Running,
+                    Some(3),
+                    None,
+                    Some(Stage::ServiceXpcHandshake),
+                    Some(times(&[
+                        (Stage::Session, 812),
+                        (Stage::ProxyTunnel, 95),
+                        (Stage::DiscoveryHandshake, 40),
+                        (Stage::ServiceConnection, 3),
+                    ])),
+                ),
+                r#"{"command":"running","device":3,"problem":"deadline_passed","stage":"service_xpc_handshake","elapsed_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3}}"#,
+                false,
+            ),
+            (
+                Line::deadline_passed(
+                    CommandName::Launch,
+                    Some(3),
+                    None,
+                    Some(Stage::LaunchRequest),
+                    Some(times(&[
+                        (Stage::Session, 700),
+                        (Stage::ApplicationList, 380),
+                    ])),
+                ),
+                r#"{"command":"launch","device":3,"problem":"deadline_passed","stage":"launch_request","elapsed_ms":{"session":700,"application_list":380}}"#,
+                false,
+            ),
+            (
+                Line::deadline_passed(
+                    CommandName::Stop,
+                    None,
+                    None,
+                    Some(Stage::Session),
+                    Some(StageTimes::default()),
+                ),
+                r#"{"command":"stop","problem":"deadline_passed","stage":"session","elapsed_ms":{}}"#,
+                false,
+            ),
         ]
+    }
+
+    /// The times of `stages`, each with its milliseconds.
+    fn times(stages: &[(Stage, u64)]) -> StageTimes {
+        let finished: Vec<(Stage, Duration)> = stages
+            .iter()
+            .map(|(stage, milliseconds)| (*stage, Duration::from_millis(*milliseconds)))
+            .collect();
+        StageTimes::of(&finished)
     }
 
     #[test]
@@ -1818,6 +2030,7 @@ mod tests {
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
             "answer",
+            "application_list",
             "binding_key",
             "build_version",
             "bundle",
@@ -1832,6 +2045,7 @@ mod tests {
             "device_class",
             "device_key",
             "devices",
+            "discovery_handshake",
             "elapsed_ms",
             "entitlement",
             "error",
@@ -1841,7 +2055,10 @@ mod tests {
             "height",
             "image_type",
             "installed",
+            "kill_signals",
+            "launch_request",
             "listed",
+            "looks_after_signals",
             "matching",
             "matching_count",
             "members",
@@ -1856,8 +2073,10 @@ mod tests {
             "pids",
             "port",
             "problem",
+            "process_list",
             "product_type",
             "product_version",
+            "proxy_tunnel",
             "queries",
             "query",
             "refused",
@@ -1865,7 +2084,10 @@ mod tests {
             "remaining",
             "request",
             "running",
+            "service_connection",
+            "service_xpc_handshake",
             "services",
+            "session",
             "signal_errors",
             "signalled",
             "stage",
@@ -2473,10 +2695,25 @@ mod tests {
     /// or a pid of the bundle's own processes.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
+        // ACIB-3b: `elapsed_ms`, whose members are the stages' words, and `stage` beside a
+        // deadline, whose text is one of them.
+        const STAGES: [Stage; 10] = [
+            Stage::Session,
+            Stage::ProxyTunnel,
+            Stage::DiscoveryHandshake,
+            Stage::ServiceConnection,
+            Stage::ServiceXpcHandshake,
+            Stage::ApplicationList,
+            Stage::ProcessList,
+            Stage::LaunchRequest,
+            Stage::KillSignals,
+            Stage::LooksAfterSignals,
+        ];
         const MEMBERS: &[&str] = &[
             "bundle",
             "command",
             "device",
+            "elapsed_ms",
             "error_kind",
             "extension_pids",
             "installed",
@@ -2488,6 +2725,7 @@ mod tests {
             "running",
             "signal_errors",
             "signalled",
+            "stage",
             "was_running",
         ];
         let mut words: BTreeSet<String> = [BUNDLE.to_owned()].into();
@@ -2505,10 +2743,12 @@ mod tests {
                 Problem::LaunchFailed,
                 Problem::StillRunning,
                 Problem::NotInstalled,
+                Problem::DeadlinePassed,
             ]
             .into_iter()
             .map(word),
         );
+        words.extend(STAGES.into_iter().map(word));
         words.extend(
             [
                 ErrorKind::DeviceRefused,
@@ -2528,7 +2768,9 @@ mod tests {
                 assert!(words.contains(&shown), "{shown} in {text}");
             }
         }
-        let allowed: BTreeSet<String> = MEMBERS.iter().map(|member| (*member).to_owned()).collect();
+        let mut allowed: BTreeSet<String> =
+            MEMBERS.iter().map(|member| (*member).to_owned()).collect();
+        allowed.extend(STAGES.into_iter().map(word));
         assert_eq!(found, allowed);
     }
 
