@@ -31,6 +31,8 @@ mod gate_411_b3;
 #[cfg(test)]
 mod gate_cfl2;
 mod ocr_preprocess;
+// #463 PRIV-1: the one list of a pack's read regions.
+mod read_regions;
 mod target_consensus;
 // Workflow #396 REC-7.
 mod template_mask;
@@ -51,6 +53,9 @@ mod gate_411_bt_b1;
 pub use ocr_preprocess::{
     OcrPreprocess, OcrPreprocessEvidence, OcrPreprocessScope, OcrSharedReadEvidence,
     PreprocessRefusal, shared_otsu_refusal,
+};
+pub use read_regions::{
+    PackReadArea, PackReadKind, PackReadRegion, PackReadingDeclarations, PackReads,
 };
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};

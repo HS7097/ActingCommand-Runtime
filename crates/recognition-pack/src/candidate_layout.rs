@@ -1899,7 +1899,7 @@ impl CandidateLayout {
 /// layout's read covers its readable band (`validate_shared_ocr`) and the frame's read serves
 /// every call of an OCR target it gives text to on an instance inside the band
 /// (`SceneEvaluation::layout_shared_text`), so every such call is served.
-fn shared_calls<'t>(
+pub(crate) fn shared_calls<'t>(
     layout: &CandidateLayout,
     default_metric: crate::RecognitionMatchMetric,
     coordinate_space: Option<PackCoordinateSpace>,

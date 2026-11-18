@@ -447,6 +447,18 @@ pub struct SchedulingPauseAnswer {
     pub outcome: Outcome,
 }
 
+/// #480 PG-2d (register §1.481; no wire change, `runtime-client` stays 12): what
+/// `resume_scheduling_as` and `resume_scheduling_expected_as` answer, in the shape of
+/// [`SchedulingPauseAnswer`]: the `SchedulingResumed` result and its completed receipt's outcome,
+/// unchanged. A resume of a person's pause that was not quiet yet carries
+/// `scheduling_resume_without_reconnect` as the success code's cause (no reconnect ran), so the
+/// caller can say "resumed; not reconnected" without another read; an ordinary resume carries none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulingResumeAnswer {
+    pub result: RuntimeResult,
+    pub outcome: Outcome,
+}
+
 /// The result of `instance_fact_snapshot_by_prefix` (Workflow #428 S168-LB1a): the view, the
 /// read's state source, and the instance's records before the request's key prefix kept some of
 /// them (`None` for a read without one).
@@ -1874,23 +1886,57 @@ impl RuntimeClient {
     /// device, so its receipt wait is `CONNECTION_PREPARATION_WAIT_MS` (Workflow #191 h2) plus
     /// the reconnect claim's wait in the instance's queue, `CONNECTION_PREPARATION_CLAIM_WAIT_MS`
     /// (Workflow #369 W-3), plus the IO margin: 33 000 ms + IO; a global resume keeps the IO
-    /// timeout.
+    /// timeout. #480 PG-2d: [`Self::resume_scheduling_as`] returns the receipt's outcome too.
     pub fn resume_scheduling(
         &self,
         scope: SchedulingPauseScope,
     ) -> RuntimeClientResult<RuntimeResult> {
-        let result = self.execute(
+        self.resume_scheduling_as(scope).map(|answer| answer.result)
+    }
+
+    /// #480 PG-2d (register §1.481): [`Self::resume_scheduling`], the same request and receipt
+    /// wait, returning the `RuntimeResult::SchedulingResumed` result with its receipt's outcome
+    /// ([`SchedulingResumeAnswer`], the shape of [`Self::pause_scheduling_as`]): the success code,
+    /// with `scheduling_resume_without_reconnect` as its cause when the Runtime lifted a person's
+    /// pause that was not quiet yet and ran no reconnect.
+    pub fn resume_scheduling_as(
+        &self,
+        scope: SchedulingPauseScope,
+    ) -> RuntimeClientResult<SchedulingResumeAnswer> {
+        let receipt = self.execute_receipt(
             ContractLocation::ResumeScheduling.location(),
             RuntimeOperation::ResumeScheduling {
                 scope: scope.clone(),
                 expected: None,
             },
+            None,
         )?;
-        match &result {
-            RuntimeResult::SchedulingResumed { scope: resumed, .. } if *resumed == scope => {
-                Ok(result)
+        self.resumed_answer(
+            &receipt,
+            &scope,
+            ContractLocation::ResumeScheduling.location(),
+        )
+    }
+
+    /// #480 PG-2d: the answer of a resume of `scope` from its completed `receipt`: its
+    /// `SchedulingResumed` result of that scope and its outcome; any other result is unexpected at
+    /// `operation`.
+    fn resumed_answer(
+        &self,
+        receipt: &RuntimeReceipt,
+        scope: &SchedulingPauseScope,
+        operation: Location,
+    ) -> RuntimeClientResult<SchedulingResumeAnswer> {
+        match receipt.result() {
+            Some(result @ RuntimeResult::SchedulingResumed { scope: resumed, .. })
+                if resumed == scope =>
+            {
+                Ok(SchedulingResumeAnswer {
+                    result: result.clone(),
+                    outcome: receipt.outcome().clone(),
+                })
             }
-            _ => Err(self.unexpected_result(ContractLocation::ResumeScheduling.location())),
+            _ => Err(self.unexpected_result(operation)),
         }
     }
 
@@ -1904,22 +1950,37 @@ impl RuntimeClient {
     /// (nothing was lifted); anything else is the uncertain
     /// `runtime_scheduling_resume_unconfirmed`. Every other failure, a connection already failed
     /// before this call or a receipt that timed out included, is returned unchanged. It never
-    /// falls back to an unconditional resume.
+    /// falls back to an unconditional resume. #480 PG-2d: [`Self::resume_scheduling_expected_as`]
+    /// returns the receipt's outcome too.
     pub fn resume_scheduling_expected(
         &self,
         scope: SchedulingPauseScope,
         expected: SchedulingPauseExpectation,
     ) -> RuntimeClientResult<RuntimeResult> {
+        self.resume_scheduling_expected_as(scope, expected)
+            .map(|answer| answer.result)
+    }
+
+    /// #480 PG-2d (register §1.481): [`Self::resume_scheduling_expected`], the same request, the
+    /// same reading after a dropped connection and the same failures, returning the
+    /// `RuntimeResult::SchedulingResumed` result with its receipt's outcome
+    /// ([`SchedulingResumeAnswer`]): `scheduling_resume_without_reconnect` as the success code's
+    /// cause when no reconnect ran.
+    pub fn resume_scheduling_expected_as(
+        &self,
+        scope: SchedulingPauseScope,
+        expected: SchedulingPauseExpectation,
+    ) -> RuntimeClientResult<SchedulingResumeAnswer> {
         const OPERATION: Location = ContractLocation::ResumeScheduling.location();
-        let result = match self.send_or_dropped(
+        let receipt = match self.send_or_dropped_receipt(
             OPERATION,
             RuntimeOperation::ResumeScheduling {
                 scope: scope.clone(),
                 expected: Some(expected),
             },
         )? {
-            SentOutcome::Answered(result) => *result,
-            SentOutcome::Dropped(error) => {
+            SentReceipt::Answered(receipt) => receipt,
+            SentReceipt::Dropped(error) => {
                 let status = match self
                     .reconnect_in_owner_epoch(OPERATION)
                     .and_then(|()| self.status())
@@ -1956,12 +2017,7 @@ impl RuntimeClient {
                 .with_related(error));
             }
         };
-        match &result {
-            RuntimeResult::SchedulingResumed { scope: resumed, .. } if *resumed == scope => {
-                Ok(result)
-            }
-            _ => Err(self.unexpected_result(OPERATION)),
-        }
+        self.resumed_answer(&receipt, &scope, OPERATION)
     }
 
     /// Reads what one instance can target and the resource target policy it holds now
@@ -2011,6 +2067,23 @@ impl RuntimeClient {
         operation_name: Location,
         operation: RuntimeOperation,
     ) -> RuntimeClientResult<SentOutcome> {
+        match self.send_or_dropped_receipt(operation_name, operation)? {
+            SentReceipt::Answered(receipt) => match receipt.result().cloned() {
+                Some(result) => Ok(SentOutcome::Answered(Box::new(result))),
+                None => Err(self.unexpected_result(operation_name)),
+            },
+            SentReceipt::Dropped(error) => Ok(SentOutcome::Dropped(error)),
+        }
+    }
+
+    /// #480 PG-2d: [`Self::send_or_dropped`] that keeps the Runtime's whole receipt, its outcome
+    /// included, for a caller that answers that outcome too; the connection is let go before it
+    /// returns.
+    fn send_or_dropped_receipt(
+        &self,
+        operation_name: Location,
+        operation: RuntimeOperation,
+    ) -> RuntimeClientResult<SentReceipt> {
         let mut connection = self.connection(operation_name)?;
         let request = connection.request(operation_name, operation.clone(), self.correlation)?;
         let request_id = request.request_id();
@@ -2023,15 +2096,12 @@ impl RuntimeClient {
         ) {
             Ok(receipt) => receipt,
             Err(error) if dropped_before_receipt(&error, request_id) => {
-                return Ok(SentOutcome::Dropped(error));
+                return Ok(SentReceipt::Dropped(error));
             }
             Err(error) => return Err(error),
         };
         drop(connection);
-        match receipt.result().cloned() {
-            Some(result) => Ok(SentOutcome::Answered(Box::new(result))),
-            None => Err(self.unexpected_result(operation_name)),
-        }
+        Ok(SentReceipt::Answered(Box::new(receipt)))
     }
 
     /// Replaces this handle's connection after a send whose receipt never arrived and checks
@@ -6912,6 +6982,13 @@ fn run_instance_task_deadline_ms(response_deadline_ms: Option<u64>) -> u64 {
 /// receipt of the frame this call wrote.
 enum SentOutcome {
     Answered(Box<RuntimeResult>),
+    Dropped(RuntimeClientError),
+}
+
+/// #480 PG-2d: the result of `send_or_dropped_receipt`: the Runtime's receipt, or the connection
+/// ending before the receipt of the frame this call wrote.
+enum SentReceipt {
+    Answered(Box<RuntimeReceipt>),
     Dropped(RuntimeClientError),
 }
 

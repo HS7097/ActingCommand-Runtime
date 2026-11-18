@@ -107,8 +107,8 @@ const WORD: Initiator = Initiator::LabRescue;
 const GAME: &str = "neutral-game";
 const SERVER: &str = "neutral-server";
 const HOST_ID: &str = "neutral.host";
-/// The alias the tests add.
-const ADDED: &str = "neutral.added";
+/// The alias the tests add (#480 PG-2d: `gate_480_pg2d` adds it too).
+pub(super) const ADDED: &str = "neutral.added";
 const ID_A: &str = "instance_0000000000000000000000000000000a";
 const ID_B: &str = "instance_0000000000000000000000000000000b";
 /// Workflow #452: the application id the game root declares for [`SERVER`] (`applications.json`).
@@ -213,7 +213,7 @@ fn location(root: &Path) -> actingcommand_lab_ops::locate::Location {
 
 /// `instance add <alias>` of [`GAME`] on [`SERVER`] at the emulator index `index`, as [`WORD`];
 /// its one line and exit code.
-fn add(host: &FakeHost, root: &Path, alias: &str, index: u64) -> (Value, u8) {
+pub(super) fn add(host: &FakeHost, root: &Path, alias: &str, index: u64) -> (Value, u8) {
     let location = location(root);
     let context = Context {
         host,
@@ -237,11 +237,11 @@ fn add(host: &FakeHost, root: &Path, alias: &str, index: u64) -> (Value, u8) {
     }
 }
 
-fn top_code(line: &Value) -> &str {
+pub(super) fn top_code(line: &Value) -> &str {
     line["outcome"]["code"].as_str().unwrap_or_default()
 }
 
-fn top_value<'a>(line: &'a Value, key: &str) -> &'a Value {
+pub(super) fn top_value<'a>(line: &'a Value, key: &str) -> &'a Value {
     &line["outcome"]["values"][key]
 }
 
@@ -275,7 +275,7 @@ fn new_journals(root: &Path, before: &[(String, Value)]) -> Vec<(String, Value)>
         .collect()
 }
 
-fn calls(host: &FakeHost) -> Vec<String> {
+pub(super) fn calls(host: &FakeHost) -> Vec<String> {
     host.runtime.calls.borrow().clone()
 }
 
@@ -314,7 +314,7 @@ fn member_of<'a>(config: &'a Value, pointer: &str, member: &str, value: &str) ->
 
 /// A root with the Runtime running `neutral.a` and `neutral.b`, whose next start registers the
 /// added instance as a start with the new configuration does.
-fn running(base: &Path, name: &str, host: &FakeHost) -> PathBuf {
+pub(super) fn running(base: &Path, name: &str, host: &FakeHost) -> PathBuf {
     let root = installed(base, name, host);
     host.runtime.boot(&["neutral.a", "neutral.b"]);
     host.runtime

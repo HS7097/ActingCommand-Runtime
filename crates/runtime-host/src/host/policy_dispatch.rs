@@ -15,7 +15,7 @@ use crate::fact_store::LeftOutRecordLists;
 use crate::policy_host::{AvailabilityWithdrawals, DeviceQueue, InstanceOccupancy};
 use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
     PauseObstacle, PolicyRandomDelay, SchedulingDrainSummary, SchedulingPauseExpectation,
@@ -390,6 +390,22 @@ impl HostShared {
         Ok(())
     }
 
+    /// #480 PG-2d fix round 1, test builds: runs, once, the hook a test set for an instance pause's
+    /// request whose stages ended standing or kept at a shutdown, before it takes the persist gate
+    /// to record that moment (`record_held_pause_moment`).
+    #[cfg(test)]
+    fn before_held_pause_record_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.held_pause_record_hook_for_test,
+            HostLocation::PauseInstanceScheduling,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
     /// #480 PG-2c fix round 2 (item 4), test builds: runs, once, the hook a test set for a `stand`
     /// pause's request that finds its instance's admission guard taken.
     #[cfg(test)]
@@ -712,6 +728,11 @@ pub(super) struct SchedulingPauseTable {
     /// stages found in its way, in memory only (the status does not answer it in this build), and
     /// the failure codes already said in the daemon's log for this pause. Ends with the pause.
     stage_checks: BTreeMap<String, StageCheck>,
+    /// #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): per instance
+    /// alias, the links of the request that set its pause, in memory only, so that a record of the
+    /// pause's life written by another request (a person's resume) carries them. A restored pause
+    /// and a pause a start holds have none. Ends with the pause (`lift_instance`).
+    pause_links: BTreeMap<String, EventLinksDraft>,
 }
 
 /// #480 PG-2c fix round 1 (`contracts/scheduling-pause.md`, "Resume"): where the hand-back's close
@@ -738,7 +759,8 @@ enum CloseStep {
     ResumeLifting,
 }
 
-/// #480 PG-2c fix round 1: a `stand` pause's last check, in memory only.
+/// #480 PG-2c fix round 1: a `stand` pause's last check, in memory only (#480 PG-2d: a
+/// `quiet_or_lift` pause's too, for the record of its lift).
 #[derive(Debug, Clone, Default)]
 struct StageCheck {
     /// What was in the way at that check, each word once in the vocabulary's order.
@@ -746,6 +768,12 @@ struct StageCheck {
     /// The codes of the failures of its checks already said in the daemon's log: one line per
     /// pause and code, not one per try.
     said: BTreeSet<&'static str>,
+    /// #480 PG-2d: a tool's hold (`quiet_or_lift`) whose stages failed because something was
+    /// still in the way at the end of its caller's time (`in_the_way` says what), so that its lift
+    /// writes `scheduling_pause_lifted_not_quiet`; set where that failure arises, never read off its
+    /// code. Fix round 1: also a hold whose hand-back met a refusing queued entry or whose close
+    /// lease was refused: every hold that fails without its instance having become quiet.
+    not_quiet: bool,
 }
 
 impl SchedulingPauseTable {
@@ -975,6 +1003,7 @@ impl SchedulingPauseTable {
         self.modes.remove(instance_alias);
         self.hand_backs.remove(instance_alias);
         self.stage_checks.remove(instance_alias);
+        self.pause_links.remove(instance_alias);
         next_scheduling_pause_revision(
             self.instance_revisions
                 .entry(instance_alias.to_owned())
@@ -1049,6 +1078,7 @@ impl SchedulingPauseTable {
 
     /// #480 PG-2c fix round 1: what the last check of the `stand` pause of `instance_alias` at
     /// `revision` found in its way, kept in memory; nothing for a pause no longer held there.
+    /// #480 PG-2d: a `quiet_or_lift` pause's too, which the record of its lift reads.
     fn note_in_the_way(&mut self, instance_alias: &str, revision: u64, words: Vec<PauseObstacle>) {
         if self.holds_instance_at(instance_alias, revision) {
             self.stage_checks
@@ -1065,6 +1095,39 @@ impl SchedulingPauseTable {
             .get(instance_alias)
             .map(|check| check.in_the_way.clone())
             .unwrap_or_default()
+    }
+
+    /// #480 PG-2d: the `quiet_or_lift` pause of `instance_alias` at `revision` was not quiet by the
+    /// end of its caller's time (fix round 1: or fails otherwise without its instance having become
+    /// quiet, a refusing queued entry or a refused close lease): what was in the way then
+    /// (`in_the_way`; `None`: what its last check noted), kept for its lift
+    /// ([`Self::not_quiet_in_the_way`]); nothing for a pause no longer held there.
+    fn mark_not_quiet(
+        &mut self,
+        instance_alias: &str,
+        revision: u64,
+        in_the_way: Option<Vec<PauseObstacle>>,
+    ) {
+        if !self.holds_instance_at(instance_alias, revision) {
+            return;
+        }
+        let check = self
+            .stage_checks
+            .entry(instance_alias.to_owned())
+            .or_default();
+        if let Some(words) = in_the_way {
+            check.in_the_way = words;
+        }
+        check.not_quiet = true;
+    }
+
+    /// #480 PG-2d: what was in the way of the pause of `instance_alias` when it failed before it was
+    /// quiet ([`Self::mark_not_quiet`]); `None` when it failed otherwise.
+    fn not_quiet_in_the_way(&self, instance_alias: &str) -> Option<Vec<PauseObstacle>> {
+        self.stage_checks
+            .get(instance_alias)
+            .filter(|check| check.not_quiet)
+            .map(|check| check.in_the_way.clone())
     }
 
     /// #480 PG-2c fix round 1: whether the failure spelled `spelling` of a check of the pause of
@@ -3708,7 +3771,7 @@ impl HostShared {
         // Workflow #361 B1: the persist gate orders the record of the pauses a change leads to
         // before the change itself; a failed record leaves the gate as it was.
         let origin = PauseOrigin::set_in(self.owner_epoch)?;
-        let (instance_alias, instance_id, revision, deadlines) = match scope {
+        let (instance_alias, instance_id, revision, deadlines, links) = match scope {
             SchedulingPauseScope::Global => {
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
@@ -3779,6 +3842,9 @@ impl HostShared {
                 };
                 prospective.set_instance(instance_alias, state.clone(), origin.clone());
                 self.persist_scheduling_pauses(&prospective)?;
+                let links = self
+                    .events
+                    .request_links(request, Some(instance_id), None, None);
                 let mut table = lock(
                     &self.scheduling_pause,
                     HostLocation::PauseInstanceScheduling,
@@ -3786,13 +3852,15 @@ impl HostShared {
                 table.set_instance(instance_alias, state, origin);
                 // #480 PG-2c: the mode lives in memory only; a restored pause is `released`.
                 table.modes.insert(instance_alias.clone(), pause_mode);
+                // #480 PG-2d: and so do this request's links, which every record of the pause's
+                // life carries, one a person's resume writes included.
+                table
+                    .pause_links
+                    .insert(instance_alias.clone(), links.clone());
                 drop(table);
-                (instance_alias, instance_id, revision, deadlines)
+                (instance_alias, instance_id, revision, deadlines, links)
             }
         };
-        let links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
         let staged = self.run_instance_pause_stages(
             PausedInstance {
                 alias: instance_alias,
@@ -3808,9 +3876,35 @@ impl HostShared {
             (Ok(end), _) => end,
             // No half-open pause: a failed stage of a tool's hold lifts the gate it closed, and the
             // persisted pause with it (Workflow #361 B1); a failed record poisons the request.
+            // #480 PG-2d: a hold whose caller's time ended before its instance was quiet (marked
+            // where that failure arose, `mark_not_quiet`) writes, once lifted, the record
+            // `scheduling_pause_lifted_not_quiet`, read before the lift ends the pause's state. A
+            // read of the table that fails here fails the lift too, which then poisons the request.
+            // Fix round 1 (the coordinator's ruling: every lift of a hold without quiet is
+            // recorded): so does a hold whose hand-back met a refusing queued entry or whose close
+            // lease was refused, marked there too. One record per lift: a hold's stages run on this
+            // request's thread alone (no continuation carries a hold on), each place that marks it
+            // returns its failure at once, the mark is read here once, and the lift ends it with
+            // the pause's state (`lift_instance`).
             (Err(failure), SchedulingPauseMode::QuietOrLift) => {
+                let not_quiet = lock(
+                    &self.scheduling_pause,
+                    HostLocation::LiftFailedInstancePause,
+                )
+                .map(|table| table.not_quiet_in_the_way(instance_alias));
                 return match self.lift_failed_instance_pause(instance_alias) {
-                    Ok(()) => Err(failure),
+                    Ok(()) => {
+                        if let Ok(Some(in_the_way)) = not_quiet {
+                            self.record_pause_moment(
+                                Ok(links),
+                                Outcome::new(HostCode::SchedulingPauseLiftedNotQuiet)
+                                    .pause_reason(pause_reason.as_str())
+                                    .in_the_way(in_the_way)
+                                    .caused_by(failure.error.outcome()),
+                            );
+                        }
+                        Err(failure)
+                    }
                     Err(error) => Err(failure.replace_with_poison(error)),
                 };
             }
@@ -3857,6 +3951,25 @@ impl HostShared {
             | StagesEnd::Standing { drained, .. }
             | StagesEnd::Resumed { drained, .. } => *drained,
         };
+        let cause = stages_cause(&end);
+        // #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): the caller's
+        // time ended with something in the way (`scheduling_pause_standing`), or a shutdown kept the
+        // pause (`scheduling_pause_kept_at_shutdown`): one record of the receipt's own cause, written
+        // before the continuation starts. A pause quiet within the caller's time writes none, and a
+        // resume's lift is the resume's. Fix round 1 (the review of #1834, its first remark): a
+        // person's resume can lift the pause after these stages ended and before this record; the
+        // record is therefore decided under the persist gate, which orders it against the resume's
+        // record, and written only while the pause still holds (`record_held_pause_moment`).
+        if matches!(
+            end,
+            StagesEnd::Standing { .. } | StagesEnd::KeptAtShutdown { .. }
+        ) && let Some(cause) = &cause
+        {
+            // Tests: the stages ended, before the persist gate.
+            #[cfg(test)]
+            self.before_held_pause_record_for_test()?;
+            self.record_held_pause_moment(instance_alias, revision, links.clone(), cause.clone());
+        }
         if let StagesEnd::Standing {
             stage,
             carry_on: true,
@@ -3882,8 +3995,94 @@ impl HostShared {
                 revision,
                 drained: Some(drained),
             },
-            failure_outcome: stages_cause(&end),
+            failure_outcome: cause,
         })
+    }
+
+    /// #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): one record of a
+    /// moment of an instance pause's life: a `runtime.lifecycle_observed` `device_state_observed`
+    /// record carrying `outcome` under `links` (the pause request's, which name the instance), its
+    /// severity the outcome's category. A record that cannot be written (`links` not built, or the
+    /// append failed) changes nothing the pause does: the failure is said in the daemon's log
+    /// (`FatalState::report_skipped`, the line a skipped background step gets), the record it could
+    /// not write linked to it; a write the ledger gave up on stops the Runtime by its own path, as
+    /// for every append.
+    fn record_pause_moment(&self, links: RuntimeHostResult<EventLinksDraft>, outcome: Outcome) {
+        let appended = links.and_then(|links| {
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                RuntimePayloadDraft::lifecycle_observed(
+                    self.owner_epoch,
+                    RuntimeLifecyclePhase::DeviceStateObserved {
+                        outcome: outcome.clone(),
+                    },
+                    AuditInput::new(),
+                ),
+            )
+        });
+        if let Err(error) = appended {
+            self.fatal
+                .report_skipped(&error.outcome().link(CauseRelation::Related, outcome));
+        }
+    }
+
+    /// #480 PG-2d fix round 1 (the review of #1834, its first remark): the record of a moment that
+    /// says the instance pause of `instance_alias` at `revision` still holds, written by its own
+    /// request (`scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`). The persist gate
+    /// orders it against the record of a person's resume, which the resume writes with its lift
+    /// under the same gate (`resume_unquiet_instance_pause`): under it, the pause still held at its
+    /// revision is recorded ([`Self::record_pause_moment`]), and a pause a resume lifted first (or
+    /// held again, at another revision) writes nothing, the resume's records saying what happened.
+    /// The gate is taken with nothing else held, then the pause table's lock inside it, the order
+    /// every pause and resume takes them in; nothing the pause does depends on the record, and a
+    /// gate or a table that cannot be read is a record that cannot be written (said in the daemon's
+    /// log by `record_pause_moment`).
+    fn record_held_pause_moment(
+        &self,
+        instance_alias: &str,
+        revision: u64,
+        links: EventLinksDraft,
+        outcome: Outcome,
+    ) {
+        let held = lock(
+            &self.scheduling_pause_persist_gate,
+            HostLocation::PersistInstanceSchedulingPause,
+        )
+        .and_then(|persist| {
+            let held = lock(
+                &self.scheduling_pause,
+                HostLocation::PauseInstanceScheduling,
+            )?
+            .holds_instance_at(instance_alias, revision);
+            Ok((persist, held))
+        });
+        match held {
+            Ok((_persist, true)) => self.record_pause_moment(Ok(links), outcome),
+            // Lifted first: the resume's records say what happened.
+            Ok((_persist, false)) => {}
+            Err(error) => self.record_pause_moment(Err(error), outcome),
+        }
+    }
+
+    /// #480 PG-2d: the links of a record of the pause of `instance_id` written by another request
+    /// than the pause's: the pause request's, kept with the pause (`kept`); else (no pause a
+    /// resume lifts before it is quiet lacks them) the instance under fresh system links, as the
+    /// emulator watch links its records.
+    fn pause_record_links(
+        &self,
+        kept: Option<EventLinksDraft>,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<EventLinksDraft> {
+        match kept {
+            Some(links) => Ok(links),
+            None => self.events.system_links().map(|links| {
+                links.with_instance_id(self.events.issuer().issue_registered_instance(instance_id))
+            }),
+        }
     }
 
     /// #480 PG-2c: the stages of the instance pause `paused`, from `from` (`draining`, or `paused`
@@ -3932,7 +4131,11 @@ impl HostShared {
                         drained: summary,
                     });
                 }
-                PauseDrainEnd::PastGrace(_) => return Err(pause_drain_incomplete()),
+                PauseDrainEnd::PastGrace(_) => {
+                    // #480 PG-2d: a tool's hold not quiet in its caller's time.
+                    self.mark_not_quiet(paused, Some(vec![PauseObstacle::ContainedRun]))?;
+                    return Err(pause_drain_incomplete());
+                }
                 PauseDrainEnd::Lifted(summary) => {
                     return Ok(StagesEnd::Resumed {
                         stage: InstancePauseStage::Draining,
@@ -4089,7 +4292,22 @@ impl HostShared {
             self.run_instance_pause_stages(paused, stage, links.clone(), StagesBound::Unbounded)
         }));
         let failure = match staged {
-            Ok(Ok(_)) => return Ok(()),
+            // #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): the
+            // standing pause became quiet by itself (`scheduling_pause_settled`), or a shutdown kept
+            // it (`scheduling_pause_kept_at_shutdown`, as its request would have answered): one
+            // record each, under the request's links. A person's resume wrote its own; an
+            // unconfirmed close stands with the fence's own records.
+            Ok(Ok(end)) => {
+                let moment = match &end {
+                    StagesEnd::Released(_) => Some(Outcome::new(HostCode::SchedulingPauseSettled)),
+                    StagesEnd::KeptAtShutdown { .. } => stages_cause(&end),
+                    StagesEnd::Standing { .. } | StagesEnd::Resumed { .. } => None,
+                };
+                if let Some(outcome) = moment {
+                    self.record_pause_moment(Ok(links), outcome);
+                }
+                return Ok(());
+            }
             Ok(Err(failure)) => failure,
             Err(_) => {
                 let error = RuntimeHostError::fatal(
@@ -4198,19 +4416,41 @@ impl HostShared {
     }
 
     /// #480 PG-2c fix round 1: what the last check of the `stand` pause `paused` found in its way,
-    /// kept in memory with the pause (`SchedulingPauseTable::note_in_the_way`).
+    /// kept in memory with the pause (`SchedulingPauseTable::note_in_the_way`). #480 PG-2d: of a
+    /// `quiet_or_lift` pause too, which the record of its lift reads when its caller's time ends
+    /// before it is quiet ([`Self::mark_not_quiet`]); it decides nothing for that pause.
     fn note_in_the_way(
         &self,
         paused: PausedInstance<'_>,
         in_the_way: &[PauseObstacle],
     ) -> Result<(), RequestFailure> {
-        if paused.mode == SchedulingPauseMode::Stand {
-            lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?.note_in_the_way(
-                paused.alias,
-                paused.revision,
-                in_the_way.to_vec(),
-            );
-        }
+        lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?.note_in_the_way(
+            paused.alias,
+            paused.revision,
+            in_the_way.to_vec(),
+        );
+        Ok(())
+    }
+
+    /// #480 PG-2d: the `quiet_or_lift` pause `paused` was not quiet by the end of its caller's
+    /// time and fails for it: what was in the way (`in_the_way`; `None`: what its last check
+    /// noted) is kept, marked, for the record its lift writes (`scheduling_pause_lifted_not_quiet`,
+    /// `pause_scheduling`). Called where that failure arises, so its record is decided by where
+    /// the hold failed, never by the failure's code. Fix round 1 (the coordinator's ruling: every
+    /// lift of a hold without quiet is recorded): also where a refusing queued entry or a refused
+    /// close lease fails it (`hand_back_check`); a hold that fails for anything else (an
+    /// unconfirmed or otherwise failed close, a failed check, a shutdown, a fatal error) is not
+    /// marked.
+    fn mark_not_quiet(
+        &self,
+        paused: PausedInstance<'_>,
+        in_the_way: Option<Vec<PauseObstacle>>,
+    ) -> Result<(), RequestFailure> {
+        lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?.mark_not_quiet(
+            paused.alias,
+            paused.revision,
+            in_the_way,
+        );
         Ok(())
     }
 
@@ -4301,8 +4541,12 @@ impl HostShared {
     /// lock (`begin_hand_back_close`, `SchedulingPauseTable::begin_resume_lift`), so a resumed
     /// instance keeps its session or gets it back from the resume's reconnect; a `stand` pause's
     /// check that fails with a failure `tried_again` takes is tried again (`check_failed`), as a
-    /// refused close lease is, at most once per `SCHEDULING_PAUSE_RETRY_INTERVAL`, while the
-    /// loop's other checks (fatal, lifted, shutdown, what is in the way) keep the poll.
+    /// refused close lease is, at most once per `SCHEDULING_PAUSE_RETRY_INTERVAL`. #480 PG-2d (the
+    /// review of PG-2c's last round): after a failed check the whole check (`hand_back_check`)
+    /// rests until `check_again_at`, so what is in the way is not read meanwhile; only the loop's
+    /// top checks (fatal, lifted, shutdown) and the end of the caller's time keep the
+    /// `SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL` poll. A refused close rests only the close
+    /// (`close_again_at`): the check still runs at every poll and reads what is in the way.
     fn release_paused_instance(
         &self,
         paused: PausedInstance<'_>,
@@ -4379,6 +4623,9 @@ impl HostShared {
                         failure,
                     });
                 }
+                // #480 PG-2d: a tool's hold not quiet in its caller's time; what its last check
+                // noted was in the way.
+                self.mark_not_quiet(paused, None)?;
                 return Err(scheduling_pause_release_busy());
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
@@ -4487,7 +4734,16 @@ impl HostShared {
                         failure: None,
                     }))
                 }
-                StagesBound::Caller(_) => Err(scheduling_pause_release_busy()),
+                // #480 PG-2d: a tool's hold whose admission guard another party still holds at
+                // its grace is not quiet in its time; what is in the way is read outside the guard,
+                // as a person's pause reads it there.
+                StagesBound::Caller(_) => {
+                    let in_the_way = self
+                        .release_obstacles(paused.alias, instance_id)?
+                        .in_the_way(false);
+                    self.mark_not_quiet(paused, Some(in_the_way))?;
+                    Err(scheduling_pause_release_busy())
+                }
             };
         };
         let obstacles = self.release_obstacles(paused.alias, instance_id)?;
@@ -4495,6 +4751,9 @@ impl HostShared {
         // `TransferNotSafe`), applied before any wait: a queued client waits for the device.
         // #480 PG-2c: a person's pause waits for that client instead.
         if obstacles.queue_waiting && !stand {
+            // #480 PG-2d fix round 1: a tool's hold lifted without its instance quiet; what this
+            // check read was in the way (the refusing entry, `queued_entry`, among it).
+            self.mark_not_quiet(paused, Some(obstacles.in_the_way(false)))?;
             return Err(scheduling_pause_release_failure(
                 RuntimeHostError::scheduler(
                     HostLocation::PrepareResourceCloseLease,
@@ -4567,9 +4826,13 @@ impl HostShared {
                     self.note_in_the_way(paused, &obstacles.in_the_way(true))?;
                     return Ok(HandBackCheck::CloseRefused);
                 }
-                Ok(RetainedClose::LeaseRefused(error)) | Err(error) => {
+                // #480 PG-2d fix round 1: a tool's hold whose close lease was refused (it closed
+                // nothing) is lifted without its instance quiet; `close_refused` was in the way.
+                Ok(RetainedClose::LeaseRefused(error)) => {
+                    self.mark_not_quiet(paused, Some(obstacles.in_the_way(true)))?;
                     return Err(scheduling_pause_release_failure(error));
                 }
+                Err(error) => return Err(scheduling_pause_release_failure(error)),
             }
         }
         drop(admission);
@@ -4598,7 +4861,12 @@ impl HostShared {
                         failure: None,
                     }));
                 }
-                PauseDrainEnd::PastGrace(_) => return Err(pause_drain_incomplete()),
+                PauseDrainEnd::PastGrace(_) => {
+                    // #480 PG-2d: a tool's hold not quiet in its caller's time; what this check
+                    // noted (the run drained again among it) was in the way.
+                    self.mark_not_quiet(paused, None)?;
+                    return Err(pause_drain_incomplete());
+                }
                 PauseDrainEnd::Lifted(_) => return Ok(HandBackCheck::End(ReleaseEnd::Lifted)),
             };
             let overflow = || {
@@ -4958,13 +5226,15 @@ impl HostShared {
             &self.scheduling_pause_persist_gate,
             HostLocation::PersistInstanceSchedulingResume,
         )?;
-        let mut prospective = {
+        let (mut prospective, pause_links) = {
             let mut table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
             check_resumable(&table, instance_alias, expected, false, self.owner_epoch)?;
             if !table.begin_resume_lift(instance_alias) {
                 return Ok(None);
             }
-            table.clone()
+            // #480 PG-2d: the pause request's links, for the record of this lift.
+            let pause_links = table.pause_links.get(instance_alias).cloned();
+            (table.clone(), pause_links)
         };
         // Tests (fix round 2, item 5): the lift is marked (`Lifting`) and not done yet.
         #[cfg(test)]
@@ -4996,6 +5266,18 @@ impl HostShared {
             // console shows as one): no reconnect ran, so both sides are `ok: false` with no
             // values and no `failure_code`, and the receipt's outcome says why, the informing
             // `scheduling_resume_without_reconnect` as the success code's cause.
+            let cause = Outcome::new(HostCode::SchedulingResumeWithoutReconnect);
+            // #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): the
+            // pause was lifted before it was quiet: one record of the receipt's own cause, under
+            // the pause request's links (kept with the pause from its request; were they missing,
+            // the instance's own). Fix round 1: written here, inside the persist gate with the
+            // lift, on purpose: the gate is what orders it against the pause request's own record
+            // (`record_held_pause_moment`, which writes under the same gate only while the pause
+            // still holds), so no record that the pause stands comes after this one.
+            self.record_pause_moment(
+                self.pause_record_links(pause_links, instance_id),
+                cause.clone(),
+            );
             Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
@@ -5004,7 +5286,7 @@ impl HostShared {
                     revision,
                     selfcheck: Some(scheduling_resume_selfcheck(&[], None)),
                 },
-                failure_outcome: Some(Outcome::new(HostCode::SchedulingResumeWithoutReconnect)),
+                failure_outcome: Some(cause),
             })
         })();
         match lifted {

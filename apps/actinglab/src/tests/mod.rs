@@ -205,6 +205,9 @@ mod gate_463_s17;
 // a recording's hold sends `quiet_or_lift`.
 #[path = "gate_480_pg2c.rs"]
 mod gate_480_pg2c;
+// #480 PG-2d: the Lab's `resume` row answers the receipt's cause; its parameters are unchanged.
+#[path = "gate_480_pg2d.rs"]
+mod gate_480_pg2d;
 // #463 S1-8: without the variable, an installed actinglab reaches its installation's state root,
 // and `record start` holds its instance there.
 #[path = "gate_463_s18.rs"]

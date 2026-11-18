@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0, ACIB-1 and ACIB-2): the project's
-//! own bridge to iOS devices, a program the Runtime will speak to as a separate process, as it
-//! speaks to adb.
+//! `acib`, the ActingCommand iOS Bridge (board #479, ACIB-0 to ACIB-3): the project's own bridge
+//! to iOS devices, a program the Runtime will speak to as a separate process, as it speaks to
+//! adb.
 //!
-//! This version only reads, one command per run (`acib devices`, `info`, `services`, `images`,
-//! `apps`, `screenshot`, `orientation`; see `args.rs` and `README.md`). Each run prints one JSON
-//! line on standard output and ends with status 0 when the command was answered, 1 when it was
-//! refused or failed, the line then naming this program's `problem` word and, where the library
-//! gave one, its error text. After the line of a picture asked for with `--out -`, the picture's
-//! bytes follow on the standard output (`framing.rs`). The one file it writes is the picture
-//! `screenshot` takes, to the path `--out` names, and it removes that file again when the
-//! picture could not be written whole into it; it installs no logger, so nothing the library
-//! traces is shown.
+//! One command per run (`acib devices`, `info`, `services`, `images`, `apps`, `screenshot`,
+//! `orientation` and `running`, which only read; `launch` and `stop`, which start and end one
+//! application on the phone; see `args.rs` and `README.md`). Each run prints one JSON line on
+//! standard output and ends with status 0 when the command was answered, 1 when it was refused
+//! or failed, the line then naming this program's `problem` word and, where the library gave
+//! one, its error text (of the application service, only the error's kind). After the line of a
+//! picture asked for with `--out -`, the picture's bytes follow on the standard output
+//! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
+//! names, and it removes that file again when the picture could not be written whole into it;
+//! it installs no log subscriber and no logger, so nothing the library traces is shown (see
+//! `main`).
 
 #![forbid(unsafe_code)]
 
@@ -21,9 +23,11 @@ mod args;
 mod bridge;
 mod framing;
 mod key;
+mod matching;
 mod out_file;
 mod picture;
 mod redact;
+mod stopping;
 
 use answer::{Failure, Line, Problem};
 use args::Invocation;
@@ -36,6 +40,13 @@ use std::time::{Duration, Instant};
 const UNWRITABLE: &str = r#"{"problem":"answer_unwritable"}"#;
 
 fn main() -> ExitCode {
+    // No log subscriber (and no `log` logger) is installed here, and none may ever be without
+    // redaction (the coordinator's ruling on board #479): the library traces at warning level
+    // the whole error dictionary a phone answers a CoreDevice request with (idevice 0.1.68,
+    // `services/core_device/mod.rs`, "XPC response did not have an output"), which can name
+    // other applications, their paths and pids, and other texts of the phone's answers beside
+    // it. With no subscriber those events go nowhere. A new dependency, through which one could
+    // be installed, fails the test below (a tripwire against adding one unnoticed, not a proof).
     let started = Instant::now();
     let arguments: Option<Vec<String>> = std::env::args_os()
         .skip(1)
@@ -101,5 +112,65 @@ fn emit(printed: &Printed) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The keys of the table `[dependencies]` of the manifest `manifest`, in its order: every
+    /// line of it that holds `=` and is no comment, read without the blanks around it and around
+    /// its `=` (so a line indented, or written without spaces around `=`, is read too). A line
+    /// inside a value that spans lines (a list of features) is read only when it holds `=`, which
+    /// no such line of `acib`'s manifest does; one more key read only fails the test. Every other
+    /// table of dependencies (development, build or a target's) is refused, its header read
+    /// without the blanks around it.
+    fn dependencies(manifest: &str) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut in_dependencies = false;
+        for line in manifest.lines().map(str::trim) {
+            if line.starts_with('[') {
+                assert!(
+                    !line.contains("dependencies") || line == "[dependencies]",
+                    "a table of dependencies of its own: {line}"
+                );
+                in_dependencies = line == "[dependencies]";
+                continue;
+            }
+            if !in_dependencies || line.starts_with('#') {
+                continue;
+            }
+            if let Some((name, _)) = line.split_once('=') {
+                names.push(name.trim_end());
+            }
+        }
+        names
+    }
+
+    /// A tripwire against adding a dependency unnoticed, not a proof that no log subscriber is
+    /// installed. A program installs a subscriber or a logger through a crate that offers one
+    /// (`tracing-subscriber`, `tracing` itself, `log` and its loggers); any new line of `acib`'s
+    /// dependencies, in any of the forms read below, fails this test, and is then to be held
+    /// against the ruling that nothing the library traces is ever shown without redaction (the
+    /// comment in `main`). What the crates `acib` depends on do, or let it name, is not checked
+    /// here, and whether a subscriber is installed while the program runs cannot be asked
+    /// without the `tracing` crate itself.
+    #[test]
+    fn acib_depends_on_no_crate_that_could_install_a_log_subscriber() {
+        // The forms a new dependency could be written in are read: indented, without spaces
+        // around `=`, with a dotted key; a value that spans lines is read as its one key.
+        let added = "[dependencies]\n\
+                     serde = { workspace = true, features = [\n    \"derive\",\n] }\n\
+                     \x20 log = \"0.4\"\n\
+                     tracing=\"0.1\"\n\
+                     \ttracing-subscriber.workspace = true\n\
+                     # comment = \"no dependency\"\n";
+        assert_eq!(
+            dependencies(added),
+            ["serde", "log", "tracing", "tracing-subscriber.workspace"]
+        );
+        assert_eq!(
+            dependencies(include_str!("../Cargo.toml")),
+            ["idevice", "serde", "serde_json", "sha2", "tokio"]
+        );
     }
 }
