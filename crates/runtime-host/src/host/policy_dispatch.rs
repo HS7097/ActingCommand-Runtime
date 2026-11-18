@@ -884,12 +884,25 @@ enum PauseRelease {
     /// Nothing uses the instance's device any more: the stage goes on to `released` (fix round
     /// 3: also when a shutdown finds it so, inside the multi-Nemu gate).
     Released,
-    /// R4″: a shutdown came while the hand-back waited for the Runtime's own automatic emulator
-    /// start alone, or (fix round 3) found nothing in the way any more on an instance outside
-    /// the multi-Nemu gate, whose session the hand-back would still close. The pause is kept
-    /// (stage `paused`, its fact unchanged) and the request fails with
-    /// `scheduling_pause_kept_at_shutdown`; the next start restores it.
+    /// R4″: a shutdown came while the hand-back waited for the Runtime's own work alone (its
+    /// automatic emulator start, or since #480 PG-2b its stuck-recovery ladder), or (fix round
+    /// 3) found nothing in the way any more on an instance outside the multi-Nemu gate, whose
+    /// session the hand-back would still close. The pause is kept (stage `paused`, its fact
+    /// unchanged) and the request fails with `scheduling_pause_kept_at_shutdown`; the next start
+    /// restores it.
     KeptAtShutdown,
+}
+
+/// #480 PG-1 (R4′) and PG-2b: whether a lease of `kind` is the Runtime's own work on its
+/// instance, which an instance pause's hand-back waits for with no bound of its own: an automatic
+/// emulator start's claim (`Autostart`, whatever asked for it) and the stuck-recovery ladder's
+/// (`Ladder`; `LadderContinuation` too, the kind its continuation is queued with, as
+/// `SeedScheduler::ladder_active` reads the two).
+const fn runtime_own_claim(kind: ClaimKind) -> bool {
+    matches!(
+        kind,
+        ClaimKind::Autostart | ClaimKind::Ladder | ClaimKind::LadderContinuation
+    )
 }
 
 /// #480 PG-1 (fix rounds 1 and 2): what is in the way of an instance pause's hand-back
@@ -898,9 +911,9 @@ enum PauseRelease {
 struct ReleaseObstacles {
     /// A lease whose token names the instance.
     lease_held: bool,
-    /// R4′: that lease is an automatic emulator start's (`ClaimKind::Autostart`, whatever asked
-    /// for it).
-    automatic_holds: bool,
+    /// R4′: that lease is the Runtime's own work (`runtime_own_claim`): an automatic emulator
+    /// start's, or (#480 PG-2b) its stuck-recovery ladder's.
+    runtime_own_holds: bool,
     /// A queued entry that refuses the hand-back (`TransferNotSafe`); the instance's own queued
     /// autostart claim is none (`AutostartEndsAtGrant`).
     queue_waiting: bool,
@@ -913,9 +926,10 @@ struct ReleaseObstacles {
 }
 
 impl ReleaseObstacles {
-    /// R4′: the Runtime's own automatic emulator start alone is in the way.
-    const fn automatic_alone(self) -> bool {
-        self.automatic_holds
+    /// R4′: the Runtime's own work alone is in the way: its automatic emulator start, or (#480
+    /// PG-2b) its stuck-recovery ladder, which ends at its next holding check.
+    const fn runtime_own_alone(self) -> bool {
+        self.runtime_own_holds
             && !self.queue_waiting
             && !self.run_in_flight
             && !self.reset_awaited
@@ -3376,7 +3390,11 @@ impl HostShared {
     /// an automatic emulator start (`ClaimKind::Autostart`, whatever asked for it) that alone holds
     /// the instance (no owed reset, no policy run on the worker) is waited for as long as it is
     /// there, with no bound of the pause's own: until the claim ends, by its own deadlines or when
-    /// the lease sweep takes a lapsed key back. The instance's own queued autostart claim refuses
+    /// the lease sweep takes a lapsed key back. #480 PG-2b (R4′ extended by the coordinator): so is
+    /// the Runtime's own stuck-recovery ladder that holds the instance (`runtime_own_claim`): it
+    /// ends at its next holding check, which comes before every step of a rung that would act on
+    /// the game; its claim still queued is a routine entry the pause holds back, which refuses
+    /// nothing. The instance's own queued autostart claim refuses
     /// nothing (`AutostartEndsAtGrant`: granted under the pause, it ends at its first tick without
     /// a Start), here and at every grant of a dedicated instance lease. A shutdown ends the
     /// hand-back as `PauseRelease::KeptAtShutdown` (R4″) when what is in the way at that moment
@@ -3391,7 +3409,10 @@ impl HostShared {
     /// instance outside the multi-Nemu gate (`keeps_device_session`) closes it, through
     /// `close_retained_instance_while_guarded` without reusing a lease: the dedicated close
     /// lease is released with `LeaseReleaseReason::InstancePaused`; with no device session open
-    /// it closes nothing.
+    /// it closes nothing. #480 PG-2b: that close lease is granted past the instance's own entries
+    /// this pause holds back (its routine entries: a startup package, a ladder's claim), which
+    /// cannot be granted while the pause holds and are granted in their place after the resume
+    /// (`grant_dedicated_instance_lease`, `actingcommand_scheduler::PauseHandBack`).
     fn release_paused_instance(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -3418,14 +3439,14 @@ impl HostShared {
                 return Err(RequestFailure::poison_without_terminal(error));
             }
             if self.fatal.is_shutdown_requested() {
-                // R4″: a shutdown that interrupts a wait for the Runtime's own automatic claim
-                // alone lifts nothing; the caller keeps the pause. Fix round 2 (the review's
-                // first point): judged on what is in the way now, read again here (no round's
-                // reading of before, which a change of holder since would turn round, and right
-                // before the first round too); outside the admission guard, which a Start holds
-                // through its readiness wait.
+                // R4″: a shutdown that interrupts a wait for the Runtime's own work alone (its
+                // automatic claim; #480 PG-2b: its ladder) lifts nothing; the caller keeps the
+                // pause. Fix round 2 (the review's first point): judged on what is in the way
+                // now, read again here (no round's reading of before, which a change of holder
+                // since would turn round, and right before the first round too); outside the
+                // admission guard, which a Start holds through its readiness wait.
                 let obstacles = self.release_obstacles(instance_alias, instance_id)?;
-                if obstacles.automatic_alone() {
+                if obstacles.runtime_own_alone() {
                     return Ok(PauseRelease::KeptAtShutdown);
                 }
                 // Fix round 3 (R4″ completed, the third review's point: the claim can let go
@@ -3518,10 +3539,11 @@ impl HostShared {
             if obstacles.lane_working {
                 self.pause_waits_for_lane_for_test()?;
             }
-            // R4′: the Runtime's own automatic claim alone (no run to drain again, no owed reset,
-            // no policy run on the worker) is waited for with no bound of the pause's own; the
-            // grace is for everything else, which fails the pause here as before.
-            if !obstacles.automatic_alone() && Instant::now() >= deadlines.grace {
+            // R4′: the Runtime's own work alone (its automatic claim; #480 PG-2b: its ladder, which
+            // ends at its next holding check; no run to drain again, no owed reset, no policy run
+            // on the worker) is waited for with no bound of the pause's own; the grace is for
+            // everything else, which fails the pause here as before.
+            if !obstacles.runtime_own_alone() && Instant::now() >= deadlines.grace {
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(
                     HostCode::SchedulingPauseReleaseBusy,
                     HostLocation::ReleasePausedInstance,
@@ -3541,7 +3563,8 @@ impl HostShared {
     /// are its lease and its queue, as before. Fix round 1 (item 3): the instance's own queued
     /// autostart claim is no such work: under this pause it ends at its first tick, touching
     /// nothing; and (R4′) whether that lease is an automatic emulator start's (the autostart
-    /// claim, whatever asked for it).
+    /// claim, whatever asked for it) or (#480 PG-2b) the stuck-recovery ladder's: the Runtime's
+    /// own work (`runtime_own_claim`).
     fn release_obstacles(
         &self,
         instance_alias: &str,
@@ -3551,7 +3574,7 @@ impl HostShared {
         let now_monotonic_ms = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (lease_held, queue_waiting, automatic_holds) = {
+        let (lease_held, queue_waiting, runtime_own_holds) = {
             let scheduler = lock(&self.scheduler, HostLocation::ReadReleasedInstanceLease)?;
             let lease = scheduler
                 .active_lease(instance_id)
@@ -3566,7 +3589,7 @@ impl HostShared {
                     },
                     now_monotonic_ms,
                 ) > 0,
-                lease.is_some_and(|lease| lease.kind() == ClaimKind::Autostart),
+                lease.is_some_and(|lease| runtime_own_claim(lease.kind())),
             )
         };
         let run_in_flight = lock(&self.contained_runs, HostLocation::ReadReleasedInstanceRuns)?
@@ -3584,7 +3607,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(ReleaseObstacles {
             lease_held,
-            automatic_holds,
+            runtime_own_holds,
             queue_waiting,
             run_in_flight,
             reset_awaited,

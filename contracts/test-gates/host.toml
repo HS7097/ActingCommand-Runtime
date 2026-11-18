@@ -4332,3 +4332,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix3_a_global_pause_while_the_recognition_waits_for_the_guard_binds_nothing",
 ]
 incident = ["#480", "PG-1"]
+
+# #480 PG-2b (0.12.73; register §1.471; brief rd-1118/brief-480-pg2b-ladder-and-close.md; board #480, the owner's requirement that a pause a person asked for stands and the Runtime never takes it back for work of its own; the design rd-1118/design-480-pg2, its L1, L4 and L10): the ladder, holding its key after rung 1's failed run, about to stop the assigned application (the test-only hook run_before_ladder_step_check_for_test) meets a person's pause of the instance: no stop and no startup run (no startup_package_scheduled, no task.requested), the application rung failed with recovery_admission_denied, the ladder finished exhausted at Warning with recovery_ladder_interrupted, the pause success and released (1); rung 3 of a discovery-bound instance stopped and started the emulator and passed its readiness preparation (recovery_environment_ready), and "pause all" is pressed just before its startup package's run: no package run, rung 3 failed with recovery_admission_denied, the ladder interrupted, the emulator asked only for that Stop and that Start (2); an instance pause with its grace already past meets the ladder's key check after check: the stage stays paused, the ladder holds the instance, the one record of host.scheduling_pause names the instance; once the rung goes on its holding check ends the ladder and the pause answers success, released, the record still naming the instance (3); a stop requested during that wait answers scheduling_pause_kept_at_shutdown, the pause still paused and its one record naming the instance, and the next start restores it released (4); a client's lease holds the instance with a device drill's ladder claim queued behind it: the pause with its grace past fails with scheduling_pause_release_busy and is lifted, the client's lease and the ladder's claim as they were (5); outside the multi-Nemu gate, the first instance's startup package queued behind its pause while the hand-back waits for the admission guard: the close lease is granted past it, the session closed, the pause success and released with nothing lifted and no run requested, the package still queued, and after the resume it runs and completes (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_1_a_pause_before_the_application_rungs_stop_stops_nothing_and_runs_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_2_a_pause_after_the_emulator_rungs_preparation_runs_no_package",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_3_an_instance_pause_waits_for_a_rung_past_its_grace_and_stands",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_4_a_shutdown_while_the_pause_waits_for_a_rung_keeps_the_pause",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_5_a_clients_lease_with_the_ladder_waiting_still_fails_and_lifts_the_pause",
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_6_outside_the_multi_nemu_gate_the_close_lease_passes_the_startup_package_the_pause_holds",
+]
+incident = ["#480", "PG-2b"]

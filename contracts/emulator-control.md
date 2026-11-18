@@ -1135,8 +1135,10 @@ the ladder's own preparation never does; shutdown and an install drain refuse a 
 a climb; a lost key ends a climb; a capacity refusal and a scheduling pause refuse a trigger and
 end a climb; an interrupted climb ends `exhausted` at warning and one whose rungs failed on their
 own at error. Once a ladder holds the key (Workflow #369 H-3, ruling Q8), every rung boundary,
-every control step, every readiness poll, every busy-hold poll (#411 B37) and the settle gate's
-probe (#411 A35) checks that it
+every control step, every readiness poll, every busy-hold poll (#411 B37), the settle gate's
+probe (#411 A35) and (#480 PG-2b, since 0.12.73; [scheduling-pause.md](scheduling-pause.md),
+"The dispatch gate") the application rung's stop of the assigned application and each rung's
+startup package run, just before them, checks that it
 still holds the key and that no
 scheduling pause or capacity refusal (`recovery_admission_denied`) or shutdown
 (`recovery_ladder_shutdown_requested`; one accepted while the check runs is

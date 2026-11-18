@@ -2711,6 +2711,47 @@ impl HostShared {
         Ok(ladder_invariants(&facts).map(LadderInvariant::interruption))
     }
 
+    /// #480 PG-2b (`contracts/scheduling-pause.md`, "The dispatch gate"; board #480: a pause a
+    /// person asked for stands, and the Runtime starts nothing after it): the holding check
+    /// (`ladder_hold_interrupted`) a rung makes just before a step that would act on the game
+    /// where no check came right before it: the application rung's stop of the assigned
+    /// application, and each rung's startup package run (before its `startup_package_scheduled`).
+    /// An interruption ends the rung as an interrupted Stop or Start of the emulator rung ends it:
+    /// `RungAttempt::Failed` with the interruption's reason and no run, which the climb records as
+    /// the rung failed with `recovery_ladder_interrupted` and then ends at its next holding check
+    /// (`finish_interrupted_ladder`), no error point. Nothing is recorded here, so a ladder that
+    /// nothing interrupts records what it recorded before.
+    fn rung_step_interrupted(
+        &self,
+        pending: &PendingRecoveryLadder,
+        key: &HostKey,
+    ) -> RuntimeHostResult<Option<RungAttempt>> {
+        #[cfg(test)]
+        self.before_rung_step_check_for_test()?;
+        Ok(self
+            .ladder_hold_interrupted(pending, key)?
+            .map(|reason| RungAttempt::Failed {
+                run_id: None,
+                reason,
+            }))
+    }
+
+    /// #480 PG-2b, test builds: runs, once, the hook a test set for the next holding check a rung
+    /// makes before its application stop or its startup package run (`rung_step_interrupted`), on
+    /// the ladder's worker, which holds the ladder's key.
+    #[cfg(test)]
+    fn before_rung_step_check_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.rung_step_check_hook_for_test,
+            HostLocation::GateRecoveryPause,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
     /// Workflow #369 H-3 (ruling Q8; review L-7): an interrupted climb records the current rung
     /// (if one was about to start) `failed` with the interruption, then
     /// `recovery_ladder_finished` `exhausted` at Warning: no error point (§2.2b A8). The key is
@@ -3418,7 +3459,10 @@ impl HostShared {
     /// The application restart rung after its entry and, on a member of a device group of
     /// several, after the member in front was stopped ([`Self::recovery_application_restart`]):
     /// with `stops`, the assigned application stopped on the key and a fenced instance prepared
-    /// again (each step renewed to `hold_ms`), then the startup package's run.
+    /// again (each step renewed to `hold_ms`), then the startup package's run. #480 PG-2b: the
+    /// holding check comes just before the stop and just before the startup package's run
+    /// (`rung_step_interrupted`); an interruption ends the rung there, before anything more is
+    /// done to the game.
     fn restart_assigned_application(
         &self,
         pending: &PendingRecoveryLadder,
@@ -3427,11 +3471,16 @@ impl HostShared {
         hold_ms: u64,
         key: &mut HostKey,
     ) -> RuntimeHostResult<RungAttempt> {
-        if stops && let Err(reason) = self.stop_assigned_application(pending, resolved, key)? {
-            return Ok(RungAttempt::Failed {
-                run_id: None,
-                reason,
-            });
+        if stops {
+            if let Some(interrupted) = self.rung_step_interrupted(pending, key)? {
+                return Ok(interrupted);
+            }
+            if let Err(reason) = self.stop_assigned_application(pending, resolved, key)? {
+                return Ok(RungAttempt::Failed {
+                    run_id: None,
+                    reason,
+                });
+            }
         }
         // Workflow #403: after the stop, a fenced instance is prepared again on the key; only a
         // passing self-check proves the close (the preparation lifts the fence) and lets the rung
@@ -3453,6 +3502,9 @@ impl HostShared {
                     reason: HostCode::RecoveryEnvironmentNotReady.as_str(),
                 });
             }
+        }
+        if let Some(interrupted) = self.rung_step_interrupted(pending, key)? {
+            return Ok(interrupted);
         }
         let mut startup = self
             .prepare_startup_package(resolved, pending.links.clone(), pending.request_id)
@@ -3655,7 +3707,8 @@ impl HostShared {
     /// configured bound and the margin (review L-3; Workflow #387 D1c); the readiness wait
     /// renews to its window's end. Workflow #369-1: the rung then waits for a usable environment
     /// (`await_recovery_readiness`), records `recovery_environment_ready`, and runs the
-    /// instance's startup package on the key; only that run's success recovers the rung.
+    /// instance's startup package on the key; only that run's success recovers the rung. #480
+    /// PG-2b: the holding check comes again just before that run (`rung_step_interrupted`).
     fn recovery_emulator_restart(
         &self,
         pending: &PendingRecoveryLadder,
@@ -3789,6 +3842,14 @@ impl HostShared {
                     },
                 ),
             )?;
+            // #480 PG-2b: the holding check before the startup package's run, as before the Stop
+            // and the Start; an instance without a startup package runs nothing here and ends
+            // `environment_ready` as before.
+            if self.startup_packages()?.contains_key(&pending.instance_id)
+                && let Some(interrupted) = self.rung_step_interrupted(pending, key)?
+            {
+                return Ok(interrupted);
+            }
             let startup = self
                 .prepare_startup_package(&current, pending.links.clone(), pending.request_id)
                 .map_err(|failure| *failure.error)?;

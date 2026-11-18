@@ -38037,15 +38037,19 @@ observed; main `98c1c0f1`, with §1.464 and §1.466, merged in). The coordinator
   round 2's place, the last thing before the provider's Start), then the start's
   `command.received` (`append_configured_start_intent`) and the Start with all that follows it
   (`perform_control_phase`). Held at that ask, the claim ends as held on its key: under its request
-  `lease.granted`, `lease.renewed` and `lease.released`, and no `command.*` or `runtime.failed`
-  record; under the instance its skip (`device_state_observed`, `emulator_autostart_skipped` with
+  `lease.granted`, the renewal's records (`scheduler.admitted`, the lease intent
+  `lease.transition_intent`, `lease.renewed`), the records of an old session's close when one was
+  still open, and `lease.released`, and no `command.*` or `runtime.failed` record (corrected by
+  §1.471, the fourth review's first point); under the instance its skip (`device_state_observed`, `emulator_autostart_skipped` with
   `skip_reason`, once per revision and start) and the daemon's report line; the watch's request
   given back, an idle wake left owed. A failure before the ask (the fence's refusal, a failed
   close, a refused renewal) comes back unrecorded (`ControlMode::Configured` with
   `intent_recorded` false; `control_failed`) and is recorded after its intent, `command.received`,
   `command.rejected`, `runtime.failed`, as `refuse_configured_start` records a start refused before
-  anything was driven; the one difference a reader can see there is that the close of an old
-  session, when one is still open, now comes before the start's `command.received`. A person's, an
+  anything was driven. The one difference a reader can see, there and for a start that is made
+  alike, is that the renewal's records (`scheduler.admitted`, `lease.transition_intent`,
+  `lease.renewed`) and the close of an old session, when one is still open, now come before the
+  start's `command.received` (corrected by §1.471). A person's, an
   agent's or the Lab's explicit emulator control (`drive_emulator_control`, `ControlMode::Operator`),
   an operator's restart and the ladder's rung drive `drive_control_phase` as before, both parts in
   one go: their records and their order are unchanged. The shared path gave the automatic claim
@@ -38087,6 +38091,190 @@ time); "pause all" pressed
 while it waits: nothing bound (the endpoint pending, no `runtime.instance_bound`), no emulator
 control, no `command.*` or `runtime.failed` under the claim, its key released, one skip
 `recognize` `global_paused`. No test adapted or retired; no golden changes.
+
+### 1.471 Slice #480 PG-2b (0.12.73): a recovery rung starts nothing after a pause; the pause waits for the Runtime's own recovery ladder; the close lease passes what the pause itself holds back (Workflow #480; the owner's requirement on board #480: a pause a person asked for closes the gate at once and stands, and the Runtime never takes it back for work of its own; the rules below are the coordinator's rulings in the work order, among them R4′ extended to the ladder, not the owner's words; coordinator work order `rd-1118/brief-480-pg2b-ladder-and-close.md`, after the design `rd-1118/design-480-pg2.md`, its slice 2 with its L1 and without its commit mark; on main `9188671a`)
+
+This section takes 1.471. It ships in 0.12.73.
+[scheduling-pause.md](scheduling-pause.md) ("The dispatch gate", "Instance pause: three stages",
+"Persistence, no expiry") is the contract; [emulator-control.md](emulator-control.md) (the rules
+that stay in code) names the new checks.
+
+**Why** (the design's inventory, read from the code, not observed on production). After PG-1
+(§1.468) three places were left where the Runtime's own recovery or its own queue took a pause
+back or started something after it:
+- *L10.* A rung in progress launched the game after the pause. The emulator rung made its holding
+  check (`ladder_hold_interrupted`) before its Stop and its Start and at every readiness try, but
+  ran the startup package right after a passing preparation without one; the application rung
+  force-stopped the assigned application and ran the startup package with no check after the
+  rung boundary.
+- *L1.* A ladder's lease was in the way of an instance pause's hand-back like a client's: past the
+  caller's grace the pause failed with `scheduling_pause_release_busy` and was lifted, and the
+  ladder's next holding check then passed and it climbed on, to the emulator restart.
+- *L4.* Outside the multi-Nemu gate the hand-back's dedicated close lease read the queue with
+  every member's gate open (`DedicatedLeaseGate`), so the startup package this very pause held
+  back was "ahead": `lease_queue_ahead`, the pause lifted, and the package passed the opened gate
+  and launched the game.
+
+**The rule.**
+- *Item 1, a rung asks before every step that starts something.* `rung_step_interrupted`
+  (`host/recovery_ladder.rs`) makes the holding check just before the application rung's
+  force-stop of the assigned application (`restart_assigned_application`, before
+  `stop_assigned_application`), just before that rung's startup package run, and just before the
+  emulator rung's startup package run (after `recovery_environment_ready`; on an instance with a
+  startup package only, so one without still ends `environment_ready`); each comes before the
+  package's `startup_package_scheduled`. An interruption ends the rung as an interrupted Stop or
+  Start ends it: `RungAttempt::Failed` with the interruption and no run, which the climb records as
+  the rung failed with `recovery_ladder_interrupted` caused by it, and the ladder ends `exhausted`
+  at warning at its next holding check (`finish_interrupted_ladder`), no error point, one release.
+  A rung that already stopped a device group's other members forgets the member in front, as
+  before. The check records nothing, so a ladder that nothing interrupts records what it recorded
+  before; it is the whole holding check, so it also ends the rung there for its other reasons
+  (shutdown, an install drain, a capacity refusal, a lost key, a handset that left `device`), as
+  every holding check does.
+- *Item 2, the hand-back waits for the Runtime's own ladder* (R4′ extended by the coordinator).
+  `release_obstacles` (`host/policy_dispatch.rs`) reads whether the instance's lease is the
+  Runtime's own work (`runtime_own_claim`: `ClaimKind::Autostart` as in PG-1, and now
+  `ClaimKind::Ladder` and `ClaimKind::LadderContinuation`, as `SeedScheduler::ladder_active` reads
+  a ladder); `ReleaseObstacles::runtime_own_alone` (PG-1's `automatic_alone`, renamed with its
+  field) lets the hand-back wait past the grace with no bound of its own while that work alone is
+  in the way, the gate closed throughout; the ladder ends at its next holding check, which item 1
+  puts before every step of a rung that starts something. A shutdown during that wait keeps the
+  pause (`PauseRelease::KeptAtShutdown`, `scheduling_pause_kept_at_shutdown`, R4″), judged on the
+  moment of the shutdown as in PG-1. Another party's work (a person's or a client's run or lease,
+  an operator's entry, an owed reset, a policy run on the worker) fails the pause past the grace
+  and lifts it as before. Every requester of an instance pause meets the same rule: a person's,
+  and a tool's hold (a rescue operation's, the recording's), which waits for the ladder as it
+  waits for the automatic start since 0.12.72.
+- *What a ladder's start does under a pause* (read from the code). A ladder is admitted only while
+  its instance is not paused (`recovery_admitted`: `recovery_ladder_suppressed` `admission_denied`
+  otherwise). A ladder claim still queued when a pause comes is a routine entry
+  (`ClaimKind::Ladder`, `gated_by_pause`): the pause holds it in the queue, so it refuses no
+  hand-back (as before) and, by item 3, is not ahead of the close lease; the hand-back does not
+  wait for it. A claim granted under the pause (handed the key just before it) meets the pause at
+  `climb_recovery_ladder`'s first check (`recovery_admitted`): suppressed, it starts nothing and
+  releases its key, which the hand-back meanwhile waits for as for any ladder.
+- *Item 3, the close lease passes what the pause itself holds back.* `MemberGates` gains
+  `pause_hands_back` (none by default) and the scheduler a word for it, `PauseHandBack { gates,
+  member }` (`crates/scheduler/src/lib.rs`), which also answers PG-1's `autostart_ends_at_grant`
+  for `member` (that pause holds the member's automatic starts). `DedicatedLeaseGate` now knows
+  the member it grants for: for that member, when the caller gives the word, it reads the queue as
+  `ClaimGate::RoutineHeld` reads it (its routine entries: a startup package, a ladder's claim, are
+  not ahead), for every other member as an open gate, as before; the refusal count
+  (`TransferNotSafe`) reads the caller's own gates, as before. The host gives the word only for the
+  close lease of an instance pause's hand-back: `close_retained_instance_while_guarded` with the
+  release reason `LeaseReleaseReason::InstancePaused` calls `grant_dedicated_instance_lease` with
+  `hand_back`, which passes `PauseHandBack` while a pause holds the instance (every other caller
+  passes `false`). When that lease reads the queue the paused instance's routine gate is closed by
+  its own pause, in stage `paused` (`routine_gate`: `RoutineHeld`, `Silenced` with `routine_held`
+  under a blackout). Passing those entries is sound: none of them can be granted while the pause
+  holds (the pump and every grant judge an entry by its member's routine gate), the close lease is
+  a new lease that takes no entry out of the queue and is released `InstancePaused`, which hands
+  nothing on, and after the resume they are granted as queued (the resume's reconnect first). The
+  arm's two other lifts are left (not this slice): a device in its takeover cooldown
+  (`lease_cooldown`), and a close that leaves a fence.
+
+**Every step of a rung that stops or launches an application, stops or starts an emulator, or
+begins a package run** (item 1):
+
+| Rung | Step | Holding check just before it |
+|---|---|---|
+| every rung | the rung boundary (`climb_recovery_ladder`) | yes, as before |
+| return home | the return-home package's run (`recovery_return_home`) | yes: the rung boundary, with nothing between |
+| return home | its rerun after a busy hold (`climb_busy_end`) | yes: the hold's last check (`ladder_hold_until`) |
+| return home | its rerun from the settle gate (`climb_screen_gate`: settled on a recheck, or an entry page shown) | before the hold and its probe, not between the probe and the rerun; unchanged |
+| application restart | on a member of a device group of several, the stop of the member in front or of every other member (`stop_others_before_start`) | the rung boundary only, before the entry's ADB probe; unchanged |
+| application restart | the force-stop of the assigned application (`stop_assigned_application`) | yes, new |
+| application restart | the startup package run (`prepare_startup_package`, `run_recovery_rung_package`), with or without the stop | yes, new |
+| emulator restart | the Stop and the Start (`drive_emulator_control_while_guarded`) | yes, as before |
+| emulator restart | each readiness attempt and every poll of its retry wait | yes, as before |
+| emulator restart | the startup package run | yes, new |
+
+The fenced instance's preparation after the application rung's stop and the readiness
+preparation open backends and start nothing.
+
+**After a rung interrupted between its stop and its startup run** (read from the code). The
+application stays stopped: the interrupted rung scheduled no startup package, the resume
+reconnects only (`reconnect_resumed_instance`, no startup claim), and nothing else queues one by
+itself for that instance. It comes back only when its startup package is started again: the
+application rung of a later ladder (a run that then fails on the instance can start one by its
+triggers), a person's or a client's emulator start or restart, or an idle wake.
+
+**Codes and words.** None added. `scheduling_pause_kept_at_shutdown` (§1.468) now also stands for a
+shutdown during a wait for the Runtime's own ladder: the same cause (the Runtime's own work alone
+in the way at the shutdown) and the same consequence (the pause kept, its fact unchanged), so no
+new code.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The new holding checks | `host/recovery_ladder.rs` `rung_step_interrupted` (`restart_assigned_application`, `recovery_emulator_restart`) |
+| The hand-back's wait for the ladder | `host/policy_dispatch.rs` `runtime_own_claim`, `ReleaseObstacles::runtime_own_holds` and `runtime_own_alone`, `release_obstacles`, `release_paused_instance` |
+| The close lease | `crates/scheduler/src/lib.rs` `MemberGates::pause_hands_back`, `PauseHandBack`, `DedicatedLeaseGate` (`prepare_dedicated_lease`); `host/resource_close.rs` `grant_dedicated_instance_lease` (`hand_back`), `close_retained_instance_while_guarded` |
+| Test hook (test builds only) | `RuntimeHost::run_before_ladder_step_check_for_test` (`host.rs`, `host/recovery_ladder.rs`) |
+| Texts | the two contracts above; §1.468's third fix round (item 4 below) |
+
+**§1.468 corrected** (item 4; the fourth review of PG-1, its first "may change"). Where its third
+fix round says what precedes an automatic claim's `command.received`, the renewal's records
+(`scheduler.admitted`, `lease.transition_intent`, `lease.renewed`) precede it as the old
+session's close does, for a start that is made too, and a held claim's request shows them. Those
+sentences only.
+
+**Tests** (`crates/runtime-host/src/tests/gate_480_pg2b.rs`, host gate map row "#480 PG-2b"; the
+ladder fixture of `instance_workers` built in the gate file with its configuration's test
+deadlines, the drill, and PG-1's two Nemu instances; one new test-only hook; no clock read in the
+gate file):
+`pg2b_1_a_pause_before_the_application_rungs_stop_stops_nothing_and_runs_nothing`: the ladder,
+holding its key after rung 1's failed run, is about to stop the assigned application, and a
+person pauses the instance; no stop or launch, no `startup_package_scheduled` and no
+`task.requested`, the application rung failed with `recovery_admission_denied`, the ladder
+interrupted, the pause success, `released`.
+`pg2b_2_a_pause_after_the_emulator_rungs_preparation_runs_no_package`: rung 3 stopped and
+started the emulator and passed its preparation (`recovery_environment_ready`); "pause all" just
+before its startup run; no package run, rung 3 failed with `recovery_admission_denied`, the
+ladder interrupted, the emulator asked only for that Stop and that Start.
+`pg2b_3_an_instance_pause_waits_for_a_rung_past_its_grace_and_stands`: the pause's grace already
+past (`with_scheduling_pause_deadlines_for_test`), its hand-back meets the ladder's key check after
+check, the stage stays `paused`, the ladder holds the instance and the one record of
+`host.scheduling_pause` names it; once the rung goes on its check ends the ladder, and the pause
+answers success, `released`, the record still naming the instance.
+`pg2b_4_a_shutdown_while_the_pause_waits_for_a_rung_keeps_the_pause`: a stop requested during
+that wait; `scheduling_pause_kept_at_shutdown`, the pause `paused`, its one record naming the
+instance, and the next start restores it `released`.
+`pg2b_5_a_clients_lease_with_the_ladder_waiting_still_fails_and_lifts_the_pause`: a client's lease
+holds the instance and a device drill's ladder claim waits behind it; the pause, its grace past,
+fails with `scheduling_pause_release_busy` and is lifted (the record that set it and the record
+without it); the lease and the queued claim are as they were.
+`pg2b_6_outside_the_multi_nemu_gate_the_close_lease_passes_the_startup_package_the_pause_holds`:
+the first of two Nemu instances, its session open; its startup package is queued behind its pause
+while the hand-back waits for the admission guard the test holds; the close lease is granted past
+it, the session closed, the pause success, `released`, nothing lifted and no run requested; the
+package still queued; after the resume it runs and completes.
+The scheduler (`crates/scheduler/src/tests/gate_480_pg2b.rs`, gate map
+`contracts/test-gates/policy.toml`, the row "#480 PG-2b"):
+`pg2b_the_close_lease_of_a_pause_passes_the_entries_its_pause_holds_back` (the member's own
+startup package and ladder claim are ahead of its close lease without a word, under
+`AutostartEndsAtGrant` alone and under `PauseHandBack` naming the other member; under
+`PauseHandBack` naming it the lease is granted and the entry keeps its place) and
+`pg2b_every_other_queued_entry_counts_as_before_under_the_pause_hand_back` (the other member's
+startup package and ladder claim still ahead, the member's start preparation and emulator control
+still refuse it, its autostart claim passed over as in PG-1). No existing test's assertion
+changed; none retired; no golden changes.
+
+**What is not changed.** An explicit emulator control by a person, an agent or the Lab; the
+global pause; what PG-1 built (its gate files unchanged); a ladder with no pause in effect, in its
+records; the request, the receipt and the status of a pause (no member added); the close arm's
+other two lifts; the design's L2, L3, L5 to L9 and L11, and its commit mark, which are later
+slices'.
+
+**Ledger and interface.** The ledger's revision does not move: nothing new is recorded. No
+interface revision moves; no code, word, key or vocabulary is added.
+
+**At deploy.** Nothing to configure. A person's pause pressed while a ladder climbs on the instance
+stands: the ladder ends at its next step that would stop or launch the application or stop or
+start the emulator, and the pause answers once it has ended, whatever the caller's own wait; a
+stop of the Runtime meanwhile keeps the pause for the next start. Outside the multi-Nemu gate a
+startup package queued behind the pause no longer fails it.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

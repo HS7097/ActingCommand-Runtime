@@ -1121,14 +1121,22 @@ impl HostShared {
     /// round 2: so for every caller, the resource-close lease of
     /// `close_retained_instance_while_guarded` (a pause's hand-back outside the multi-Nemu gate
     /// among them) and the daemon start's preparation of a physical instance
-    /// (`ClaimKind::DaemonStartPreparation`, `prepare_physical_instance_on_start`). The
-    /// caller holds the instance admission guard. Returns the token, its connection and the
-    /// grant's request id.
+    /// (`ClaimKind::DaemonStartPreparation`, `prepare_physical_instance_on_start`). #480 PG-2b:
+    /// with `hand_back`, the lease is the close lease of the instance's own pause handing its
+    /// device back (`close_retained_instance_while_guarded` to be released
+    /// `LeaseReleaseReason::InstancePaused`, `release_paused_instance`); while that pause holds the
+    /// instance, the entries of the instance it holds back (its routine entries: a startup package,
+    /// a ladder's claim) are not ahead of the lease either (`PauseHandBack`): none of them can be
+    /// granted while the pause holds, they keep their place, and after the resume they are granted
+    /// as queued. Every other member's entries and every other entry of the instance count as
+    /// before; every other caller passes `false`. The caller holds the instance admission guard.
+    /// Returns the token, its connection and the grant's request id.
     pub(super) fn grant_dedicated_instance_lease(
         &self,
         instance_id: InstanceId,
         connection_value: u64,
         kind: ClaimKind,
+        hand_back: bool,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
         self.grant_runtime_lease(
             instance_id,
@@ -1141,7 +1149,22 @@ impl HostShared {
                 )?;
                 let mut scheduler = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?;
                 let now_monotonic_ms = self.monotonic_ms()?;
-                let prepared = if autostart_ends {
+                // A pause's hand-back closes only under that pause, which holds the instance's
+                // automatic starts too (`autostart_ends`).
+                let prepared = if hand_back && autostart_ends {
+                    scheduler.prepare_dedicated_lease(
+                        request_id,
+                        instance_id,
+                        holder_id,
+                        connection_id,
+                        kind,
+                        actingcommand_scheduler::PauseHandBack {
+                            gates: gate,
+                            member: instance_id,
+                        },
+                        now_monotonic_ms,
+                    )
+                } else if autostart_ends {
                     scheduler.prepare_dedicated_lease(
                         request_id,
                         instance_id,
@@ -1301,10 +1324,13 @@ impl HostShared {
                 })?;
             (token, connection_id, false)
         } else {
+            // #480 PG-2b: the close lease an instance pause's hand-back takes is the one released
+            // `InstancePaused` (`release_paused_instance`).
             let (token, connection_id, _) = self.grant_dedicated_instance_lease(
                 instance_id,
                 RESOURCE_CLOSE_CONNECTION_VALUE,
                 ClaimKind::ResourceClose,
+                release_reason == LeaseReleaseReason::InstancePaused,
             )?;
             (token, connection_id, true)
         };
@@ -2279,6 +2305,7 @@ impl HostShared {
                         instance_id,
                         CONNECTION_PREPARATION_CONNECTION_VALUE,
                         kind,
+                        false,
                     )
                     .map(|(token, connection_id, _)| (token, connection_id)),
             },
