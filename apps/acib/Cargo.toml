@@ -4,9 +4,9 @@
 # its own that the Runtime will speak to as a separate process, as it speaks to adb. It only
 # reads: the devices usbmuxd lists, a device's lockdown values, the remote services of the
 # iOS 17.4 tunnel, what the image mounter answers about mounted images, whether a user
-# application whose bundle identifier holds a given text is installed, and (ACIB-1) one picture
-# of the screen. Nothing of the workspace depends on it, and it depends on no crate of the
-# workspace.
+# application whose bundle identifier holds a given text is installed, (ACIB-1) one picture
+# of the screen and (ACIB-2) the interface orientation. Nothing of the workspace depends on it,
+# and it depends on no crate of the workspace.
 
 [package]
 name = "actingcommand-ios-bridge"
@@ -27,7 +27,9 @@ path = "src/main.rs"
 # handshake, the image mounter's queries and the installation proxy's application lookup; TLS
 # on rustls with the ring provider. ACIB-1: the two ways to take one picture of the screen inside
 # the tunnel, CoreDevice's screen capture service (`core_device`) and the instruments server's
-# screenshot channel (`dvt`).
+# screenshot channel (`dvt`). ACIB-2: the SpringBoard services client, whose one read of the
+# interface orientation `orientation` asks (`springboardservices`, a feature that brings in no
+# crate).
 idevice = { version = "=0.1.68", default-features = false, features = [
     "core_device",
     "core_device_proxy",
@@ -36,10 +38,14 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "mobile_image_mounter",
     "ring",
     "rsd",
+    "springboardservices",
     "tunnel_tcp_stack",
     "usbmuxd",
 ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# ACIB-2: the SHA-256 of a device's key, the same `sha2` 0.10 the library already brings in (its
+# `mobile_image_mounter` feature) and the ledger's fingerprinter uses: no crate is added.
+sha2 = { workspace = true }
 # The async runtime lives in this crate only: one current-thread runtime per command.
 tokio = { version = "1", default-features = false, features = ["net", "rt", "time"] }
