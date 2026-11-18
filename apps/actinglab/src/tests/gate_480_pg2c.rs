@@ -103,6 +103,17 @@ fn pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause() {
         json!("scheduling_pause_standing"),
         "{line}"
     );
+    // Fix round 1 (item 10): the cause's values as the Runtime gave them.
+    assert_eq!(
+        line["outcome"]["causes"][0]["causes"][0]["values"]["pause_stage"],
+        json!("paused"),
+        "{line}"
+    );
+    assert_eq!(
+        line["outcome"]["causes"][0]["causes"][0]["values"]["in_the_way"],
+        json!(["lease"]),
+        "{line}"
+    );
     assert_eq!(exit.code, 0, "{line}");
     let record = runtime.finish();
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
@@ -148,4 +159,72 @@ fn pg2c_a_recordings_hold_sends_quiet_or_lift() {
         pause_mode_asked(connection),
         SchedulingPauseMode::QuietOrLift
     );
+}
+
+// Fix round 1 (item 9): a recording's hold reads its receipt's outcome. Its pause answered Completed
+// with `scheduling_pause_standing` under the success code (as a Runtime answers a person's pause
+// that is not yet quiet, and never a tool's hold) did not get its instance quiet: the hold takes it
+// as its failure, `runtime_result_unexpected`, with the receipt's outcome in its details; a pause
+// answered without a cause is taken as quiet.
+#[test]
+fn pg2c_fix1_a_recordings_hold_answered_with_a_cause_is_its_failure() {
+    let temp = TempDir::new().unwrap();
+    let runtime = ScriptedRuntime::start(temp.path(), |_| {
+        vec![ScriptedConnection::new().request(|request| paused_with_cause(request, standing()))]
+    });
+    let client = RuntimeClient::connect(lab_client_config_via(temp.path(), None)).expect("connect");
+
+    let answer = actingcommand_lab_ops::scheduling::pause_for_recording(
+        &client,
+        "neutral.a",
+        SchedulingPauseReason::new("lab-record-1").expect("the hold's reason"),
+    )
+    .expect("the hold's pause");
+    drop(client);
+
+    assert!(actingcommand_lab_ops::scheduling::answered_unquiet(&answer));
+    let error = crate::commands::record_hold::answered_unquiet_error(&answer);
+    assert_eq!(error.code, "runtime_result_unexpected", "{error:?}");
+    let details = error.details.expect("the receipt's outcome");
+    assert_eq!(
+        details["receipt_outcome"]["causes"][0]["code"],
+        json!("scheduling_pause_standing"),
+        "{details}"
+    );
+    let record = runtime.finish();
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
+}
+
+#[test]
+fn pg2c_fix1_a_recordings_hold_answered_without_a_cause_is_quiet() {
+    let temp = TempDir::new().unwrap();
+    let runtime = ScriptedRuntime::start(temp.path(), |_| {
+        vec![ScriptedConnection::new().request(|request| {
+            ScriptedAnswer::completed(
+                request,
+                RuntimeResult::SchedulingPaused {
+                    scope: SchedulingPauseScope::Instance {
+                        instance_alias: "neutral.a".to_owned(),
+                    },
+                    revision: 1,
+                    drained: None,
+                },
+            )
+        })]
+    });
+    let client = RuntimeClient::connect(lab_client_config_via(temp.path(), None)).expect("connect");
+
+    let answer = actingcommand_lab_ops::scheduling::pause_for_recording(
+        &client,
+        "neutral.a",
+        SchedulingPauseReason::new("lab-record-1").expect("the hold's reason"),
+    )
+    .expect("the hold's pause");
+    drop(client);
+
+    assert!(!actingcommand_lab_ops::scheduling::answered_unquiet(
+        &answer
+    ));
+    let record = runtime.finish();
+    assert!(record.unscripted.is_empty(), "a connection beyond the one");
 }

@@ -216,20 +216,42 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     (the runs counted so far) and `scheduling_pause_standing` (info, exit 0) as the success code's
     cause, its members `pause_stage` (`draining` or `paused`) and `in_the_way` (the closed list
     `pause_obstacle`, each word once: `contained_run`, `policy_run`, `lease`, `automatic_start`,
-    `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`), read
-    from the host's state at that moment. One code whatever is in the way: the consequence is the
-    same. A thread of the host then carries the rest of the stages on, in memory only (no state
-    file, no ledger record): runs still in flight were asked to stop at their next checkpoint and
-    are waited for with no bound; the stage becomes `paused`; the hand-back waits for everything in
-    the way with no bound and becomes `released` once nothing uses the device (outside the
-    multi-Nemu gate, after its session close). It ends at `released`, at a person's resume, or at
-    the Runtime's shutdown, which joins it after the connections and keeps the pause (restored at
-    the next start as stage `released`);
-  - outside the multi-Nemu gate a refused close lease (another member's entry ahead, the takeover
-    cooldown of `lease_cooldown`, a holder) keeps the pause in stage `paused` and is tried again at
-    the next check, every `20` ms (`close_refused`); a close that could not be confirmed fenced the
-    instance (Workflow #403) and is not tried again: the pause stays `paused` with
-    `close_unconfirmed` until a person's resume, which reconnects the fenced instance as before;
+    `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`,
+    `check_failed`), read from the host's state at that moment and kept with the pause in the
+    Runtime's memory (the status does not answer it in this release: "Status" below). One code
+    whatever is in the way: the consequence is the same. When the caller's time ends while another
+    party holds the instance's admission guard, what is in the way is read outside the guard: an
+    empty or absent list in a stage before `released` means that nothing was in the way at that read
+    and the hand-back had not finished. A thread of the host then carries the rest of the stages on,
+    in memory only (no state file, no ledger record): runs still in flight were asked to stop at
+    their next checkpoint and are waited for with no bound; the stage becomes `paused`; the
+    hand-back waits for everything in the way with no bound and becomes `released` once nothing uses
+    the device (outside the multi-Nemu gate, after its session close). It ends at `released`, at a
+    person's resume, or at the Runtime's shutdown, which joins it after the connections and keeps
+    the pause (restored at the next start as stage `released`). Fix round 1: **no wait of its stages
+    is blind**: the thread takes the instance's admission guard only when it is free, and between
+    tries it reads, every `20` ms, whether the Runtime latched, whether a person's resume lifted the
+    pause (its revision) and whether the Runtime is stopping; a thread that has ended is joined when
+    the next one starts;
+  - outside the multi-Nemu gate a close lease the scheduler refuses (another member's entry ahead,
+    the takeover cooldown of `lease_cooldown`, a holder; nothing else is `close_refused`) closes
+    nothing and writes nothing to the ledger: the pause stays in stage `paused` with
+    `close_refused`, and the close is tried again at most once in `10` s
+    (`SCHEDULING_PAUSE_RETRY_INTERVAL`, a constant, no configuration) while what is in the way is
+    still read every `20` ms; a close that could not be confirmed fenced the instance (Workflow
+    #403) and is not tried again: the pause stays `paused` with `close_unconfirmed` until a person's
+    resume of the fenced instance, which takes the reconnect's path once the close lease that close
+    keeps has ended;
+  - **a check of the stages that fails with a failure that is not fatal** (one the one decision
+    point would end only the operation with: neither latching the Runtime nor fencing the instance;
+    any other failure of the session close is one) fails nothing and lifts nothing: what is in the
+    way is `check_failed` ("the last check of the pause's stages failed with a failure that is not
+    fatal; it is tried again"), the check is tried again at most once in `10` s, and the daemon's
+    log says the failure once per pause and code, as a skipped background step is said; when the
+    caller's time ends first, `scheduling_pause_standing` answers `check_failed` with that failure as
+    its own cause. Everything that can refuse the request for its own input (its instance, a pause
+    already held, its deadlines) is checked before its row is recorded, so a request refused for its
+    input never became a pause, in either mode;
   - **a shutdown** while the pause is not yet `released`, within its caller's time: the request
     answers **Completed** with `scheduling_pause_kept_at_shutdown` (info, exit 0; `pause_stage`)
     as the cause, whatever is in the way; the gate stays closed until the Runtime stops, the
@@ -238,17 +260,20 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     with no cause (PG-1 fix round 3);
   - **a person's resume** while its own request still runs its stages: the request answers
     Completed with `scheduling_pause_lifted_by_resume` (info; `pause_stage`) as the cause;
-  - **a fatal error of a stage** (a poisoned lock, a latched condition): the request answers that
-    failure, as the door contains it (the Runtime latches, or the instance is fenced), and lifts
-    nothing: the gate stays closed and the persisted row still names the instance, so the next start
-    restores it; there is no stage to carry on, and on a Runtime that latched nothing does.
+  - **a fatal error of a stage** (a poisoned lock, a latched condition), or a failure the decision
+    point turns into a fence: the request answers that failure, as the door contains it (the Runtime
+    latches, or the instance is fenced), and lifts nothing: the gate stays closed and the persisted
+    row still names the instance, so the next start restores it; there is no stage to carry on, and
+    on a Runtime that latched nothing does.
 - **`quiet_or_lift`** (a tool's hold: the rescue module's holds before a deploy, a rollback, a
   `down`, a placement and an instance's addition, and the recording's hold; set in code, never a
   parameter): the instance quiet within the caller's time, or nothing, as before 0.12.72, for every
   obstacle, the Runtime's own included: anything in the way past the grace fails it
-  (`scheduling_pause_release_busy`, `scheduling_pause_drain_incomplete`), a refusing queued entry
-  at once (`lease_transfer_not_safe`), a refused or an unconfirmed close too, and a shutdown during
-  the drain or the hand-back (`scheduling_pause_drain_interrupted`,
+  (`scheduling_pause_release_busy`, `scheduling_pause_drain_incomplete`), the instance's admission
+  guard still taken by another party at the grace too (`scheduling_pause_release_busy`; fix round
+  1: before it, the wait for the guard had no bound), a refusing queued entry at once
+  (`lease_transfer_not_safe`), a refused or an unconfirmed close too, any failure of a check, and a
+  shutdown during the drain or the hand-back (`scheduling_pause_drain_interrupted`,
   `scheduling_pause_release_interrupted`); each failure lifts it ("If a stage fails" below). The
   waits with no bound of the pause's own that #480 PG-1 (the automatic start) and PG-2b (the
   recovery ladder) gave every requester are a `stand` pause's since 0.12.73, and
@@ -276,7 +301,9 @@ returns.
 | a refusing queued entry | waited for (as above) | Failed, `lease_transfer_not_safe`; lifted |
 | a shutdown before `released` | Completed, `scheduling_pause_kept_at_shutdown`; kept | Failed, `..._drain_interrupted` or `..._release_interrupted`; lifted |
 | a person's resume meanwhile | Completed, `scheduling_pause_lifted_by_resume` | refused (`scheduling_pause_draining`, `scheduling_pause_releasing`) |
-| a fatal error of a stage | the failure; nothing lifted | the failure; lifted |
+| a check that fails without being fatal | tried again (`check_failed`); at the end of the caller's time `scheduling_pause_standing` | Failed, its code; lifted |
+| a refused close lease | tried again (`close_refused`) | Failed, its code (`lease_busy`, `lease_cooldown`); lifted |
+| a fatal error of a stage, or a failure that fences the instance | the failure; nothing lifted | the failure; lifted |
 
 ## Instance pause: three stages
 
@@ -483,12 +510,29 @@ first; Workflow #453 S2 fix 1's hold of an unapplied `start_paused` entry applie
 no reconnect claim (something still uses the instance) and no reconnect: it answers
 `SchedulingResumed { scope, revision, selfcheck: absent }`. What still uses the instance goes on
 (a run already asked to stop at its next checkpoint still stops there; a lease is released by its
-holder); outside the multi-Nemu gate the session the hand-back had not yet closed stays open for the
+holder); outside the multi-Nemu gate the session the hand-back has not closed stays open for the
 next lease; the pause's own request, or the thread that carries its stages on, ends at its next
 check (`scheduling_pause_lifted_by_resume` on the request). A fenced instance (Workflow #403)
 resumes through the reconnect below in every stage, the resume being a person's re-proof of its
 close. A tool's hold (`quiet_or_lift`) keeps the refusals below. A pause in stage `released` is
 resumed as follows, in either mode.
+
+Fix round 1 (#480 PG-2c; outside the multi-Nemu gate, where the hand-back closes the session; inside
+it nothing is closed and nothing changes): **the hand-back's close and a person's resume decide
+under one lock**, the pause table's. Just before its close, with the instance's admission guard in
+hand, the hand-back asks whether its pause is still held at its revision and, in the same step,
+marks in memory that its close has begun; a pause no longer held closes nothing and its hand-back
+ends. The resume of a `stand` pause in stage `draining` or `paused` reads, under its persist gate
+and the same lock, where the hand-back is: its close begun, or the stage `released` reached since
+the resume read it, the resume lifts nothing without a reconnect and takes the path of a `released`
+pause's resume below (the reconnect claim, the reconnect, `selfcheck` answered); otherwise it marks
+in the same step that it lifts without a reconnect, which a hand-back about to close meets (it
+closes nothing and looks again at its next check), and a lift that fails ends that mark. A close
+lease that was refused closed nothing and ends the close's mark. So, **after a `stand` pause's
+resume is answered `Completed`, the instance has the session it would have without the pause**
+(never closed by it, or closed and reconnected by the resume), **and nothing of the lifted pause
+acts on the instance afterwards**: every check of its stages asks first whether its pause is still
+held at its revision, and a pause asked again has another revision.
 
 An instance resume (ps2) accepts a pause in stage `released` only; a resume refused for its
 stage or its expectation takes no claim. Since Workflow #369 S5 the resume then waits for its

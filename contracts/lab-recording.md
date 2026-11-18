@@ -2778,8 +2778,12 @@ Runtime is asked to pause):
   `pause_mode` `quiet_or_lift` (`lab_ops::scheduling::pause_for_recording`, set in code), which no
   shutdown keeps and which answers `scheduling_pause_kept_at_shutdown` never; a pause of it that
   still shows its reason after a `Failed` receipt is one a poisoned lift left
-  ([scheduling-pause.md](scheduling-pause.md), "Two modes"). So `record start` reads the status
-  once more, on the same connection:
+  ([scheduling-pause.md](scheduling-pause.md), "Two modes"). Fix round 1: the hold reads its
+  receipt's outcome, and a pause answered `Completed` with a cause under its success code (one of
+  the informing causes only a person's pause is given) did not get a quiet instance: the start
+  fails `runtime_result_unexpected`, the receipt's outcome in its details (`receipt_outcome`),
+  after the same status read as below (the details' `pause_found` `hold_shown` when it shows the
+  hold's reason). So `record start` reads the status once more, on the same connection:
   - it shows no pause of the instance, or another party's (the common case: a drain that did not
     finish within its time): as a refused pause, the header put back and nothing started;
   - it shows the hold's own reason, or the read fails or gets no answer: the header stays as

@@ -2695,6 +2695,9 @@ pub(crate) mod test_spellings {
             // its steps, as a process that died there would.
             HandOverCrashedForTest => "hand_over_crashed_for_test": error / none,
             LeaseCleanupFailed => "lease_cleanup_failed": error / none,
+            // #480 PG-2c fix round 1: a check of a pause's hand-back made to fail as a failure of
+            // the Runtime that is not fatal and concerns only the operation does.
+            PauseCheckFailedForTest => "pause_check_failed_for_test": error / none,
             PolicyOutcomeProjectionInjectedFailure => "policy_outcome_projection_injected_failure": error / none,
             PolicyOutcomeTransitionTestHookAlreadyInstalled => "policy_outcome_transition_test_hook_already_installed": error / none,
             QueueOperationTestHookAlreadyInstalled => "queue_operation_test_hook_already_installed": error / none,

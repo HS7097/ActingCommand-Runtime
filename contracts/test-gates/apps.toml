@@ -2764,3 +2764,13 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_480_pg2c::pg2c_every_pause_of_the_rescue_modules_hold_is_quiet_or_lift",
 ]
 incident = ["#480", "PG-2c"]
+
+# #480 PG-2c fix round 1 (0.12.73; register §1.472; brief rd-1118/brief-480-pg2c-fix1.md, items 9 and 10): a hold reads its receipt's outcome; a pause answered Completed with an informing cause under its success code (scheduling_pause_standing here, which a Runtime never gives a quiet_or_lift hold) did not get its instance quiet: the rescue module's hold's pause fails runtime_result_unexpected with the receipt's outcome behind it (scheduling_pause_standing among its codes), the recording's hold takes it as its failure, runtime_result_unexpected with the receipt's outcome in its details, and a pause answered without a cause is quiet; the Lab's pause row answers the cause's values pause_stage paused and in_the_way [lease] as the Runtime gave them (in pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_480_pg2c::pg2c_fix1_a_holds_pause_answered_with_a_cause_fails",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_480_pg2c::pg2c_fix1_a_recordings_hold_answered_with_a_cause_is_its_failure",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_480_pg2c::pg2c_fix1_a_recordings_hold_answered_without_a_cause_is_quiet",
+]
+incident = ["#480", "PG-2c"]

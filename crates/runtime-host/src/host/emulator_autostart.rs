@@ -1056,7 +1056,8 @@ impl HostShared {
         alias: &str,
         at: impl Into<Location>,
     ) -> RuntimeHostResult<Option<AutomaticStartHold>> {
-        Ok(hold_of(&lock(&self.scheduling_pause, at)?, alias))
+        let pauses = lock(&self.scheduling_pause, at)?;
+        Ok(hold_of(&pauses, alias))
     }
 
     /// #480 PG-2c (the commit mark, PG-1's leftover; `contracts/scheduling-pause.md`, "Two

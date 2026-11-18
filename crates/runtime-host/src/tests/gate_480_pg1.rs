@@ -45,7 +45,7 @@ use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_scheduler::ClaimKind;
 use serde_json::json;
 
-const FIRST: &str = "pg1.first";
+pub(super) const FIRST: &str = "pg1.first";
 const SECOND: &str = "pg1.second";
 /// R2: the default polling interval of the emulator watch (`emulator_control.watch_interval_ms`).
 const WATCH_INTERVAL_MS: u64 = 60_000;
@@ -1588,6 +1588,31 @@ fn pg1_fix2_r4b_a_client_that_took_the_key_from_the_automatic_claim_lifts_the_pa
 // as the cause (`pause_stage` `paused`); a person's pause is kept whatever is in the way.
 #[test]
 fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pause_at_shutdown() {
+    let (_root, host, before, kept, _) =
+        automatic_claim_takes_the_key_then_shutdown(SchedulingPauseMode::Stand);
+
+    completed(&kept);
+    assert_cause(&kept, "scheduling_pause_kept_at_shutdown", "paused", None);
+    assert_eq!(
+        pause_stage(&host, FIRST),
+        Some(InstancePauseStage::Paused),
+        "the pause is not lifted"
+    );
+    let records = pause_records_after(&host, before);
+    let [record] = &records[..] else {
+        panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
+    };
+    assert!(names_instance(record, FIRST), "{record:?}");
+    host.close().expect("close the stopping host");
+}
+
+// The scenario of the test above for a pause asked with `mode` (#480 PG-2c fix round 1:
+// `gate_480_pg2c` runs it with `quiet_or_lift`, a shutdown with only the Runtime's own work in the
+// way): the tempdir, the stopping host, the ledger's head before the pause, the pause's receipt and
+// its request.
+pub(super) fn automatic_claim_takes_the_key_then_shutdown(
+    mode: SchedulingPauseMode,
+) -> (TempDir, RuntimeHost, u64, RuntimeReceipt, RuntimeRequest) {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
@@ -1643,9 +1668,9 @@ fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pau
     }))
     .expect("the hand-back's hook");
     let before = head(&host);
-    let pause_request = instance_pause(FIRST);
+    let pause_request = instance_pause_as(FIRST, mode);
 
-    let kept = thread::scope(|scope| {
+    let answered = thread::scope(|scope| {
         let pausing = scope.spawn(|| {
             host.process_request_for_test(
                 &pause_request,
@@ -1673,20 +1698,7 @@ fn pg1_fix2_r4b_an_automatic_claim_that_took_the_key_from_a_client_keeps_the_pau
             .expect("the pause's receipt")
     });
     answered_tx.send(()).expect("the claim goes on");
-
-    completed(&kept);
-    assert_cause(&kept, "scheduling_pause_kept_at_shutdown", "paused", None);
-    assert_eq!(
-        pause_stage(&host, FIRST),
-        Some(InstancePauseStage::Paused),
-        "the pause is not lifted"
-    );
-    let records = pause_records_after(&host, before);
-    let [record] = &records[..] else {
-        panic!("the pause's one record of the held pauses, nothing lifted: {records:?}");
-    };
-    assert!(names_instance(record, FIRST), "{record:?}");
-    host.close().expect("close the stopping host");
+    (root, host, before, answered, pause_request)
 }
 
 // Fix round 3, R4″ completed (the third review's sequence: the claim lets go after the check

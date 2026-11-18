@@ -33,6 +33,11 @@ const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 /// How often an instance pause re-reads its instance's in-flight contained runs (and, in stage
 /// (c), its lease and owed client resets).
 pub(super) const SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// #480 PG-2c fix round 1: how long a person's (`stand`) instance pause waits before it tries again
+/// a session close whose lease was refused (`close_refused`) or a check of its stages that failed
+/// without being fatal (`check_failed`); its other checks (lifted, shutdown, what is in the way)
+/// keep [`SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL`].
+pub(super) const SCHEDULING_PAUSE_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str =
     SharedCode::ContainedTaskPostAdmissionOcrFailed.as_str();
 const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =

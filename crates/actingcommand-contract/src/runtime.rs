@@ -2338,6 +2338,9 @@ pub enum PauseObstacle {
     /// Outside the multi-Nemu gate, the session close could not be confirmed and fenced the
     /// instance; it is not tried again: a person's resume reconnects the instance.
     CloseUnconfirmed,
+    /// #480 PG-2c fix round 1: the last check of the pause's stages failed with a failure that is
+    /// not fatal; it is tried again.
+    CheckFailed,
 }
 
 impl PauseObstacle {
@@ -2353,6 +2356,7 @@ impl PauseObstacle {
             Self::ClientReset => "client_reset",
             Self::CloseRefused => "close_refused",
             Self::CloseUnconfirmed => "close_unconfirmed",
+            Self::CheckFailed => "check_failed",
         }
     }
 }

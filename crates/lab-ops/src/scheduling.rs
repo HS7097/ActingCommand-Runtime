@@ -128,20 +128,29 @@ pub fn instance_pause_reason(
 /// drain; the client waits for the receipt the drain, the pause's checkpoint grace and its IO
 /// timeout). The Runtime's result. #480 PG-2c: a tool's hold, so `quiet_or_lift`, set here and
 /// never a parameter: the instance quiet within that time, or the pause fails and is lifted (a
-/// shutdown too), so `scheduling_pause_kept_at_shutdown` never answers it.
+/// shutdown too), so `scheduling_pause_kept_at_shutdown` never answers it. Fix round 1 (item 9):
+/// the result with its receipt's outcome, which the hold reads ([`answered_unquiet`]).
 pub fn pause_for_recording(
     client: &RuntimeClient,
     alias: &str,
     hold: SchedulingPauseReason,
-) -> Result<RuntimeResult, RuntimeClientError> {
-    client
-        .pause_scheduling_as(
-            pause_scope(Some(alias.to_owned())),
-            hold,
-            LAB_PAUSE_DRAIN_TIMEOUT_MS,
-            SchedulingPauseMode::QuietOrLift,
-        )
-        .map(|answer| answer.result)
+) -> Result<SchedulingPauseAnswer, RuntimeClientError> {
+    client.pause_scheduling_as(
+        pause_scope(Some(alias.to_owned())),
+        hold,
+        LAB_PAUSE_DRAIN_TIMEOUT_MS,
+        SchedulingPauseMode::QuietOrLift,
+    )
+}
+
+/// #480 PG-2c fix round 1 (item 9): whether a tool's hold's pause, answered Completed, did not get
+/// its instance quiet: its receipt's outcome has a cause under its success code (one of the
+/// informing causes `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`,
+/// `scheduling_pause_lifted_by_resume`, which only a person's pause, `stand`, is given). With
+/// `quiet_or_lift` a Runtime never answers so; a hold that meets it fails as its other failures of
+/// its pause do. Decided by the presence of a cause, never by its code.
+pub fn answered_unquiet(answer: &SchedulingPauseAnswer) -> bool {
+    !answer.outcome.causes().is_empty()
 }
 
 /// #480 PG-2a: what the failure of a pause says about the pause, by the Runtime's own receipt of

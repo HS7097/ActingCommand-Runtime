@@ -624,6 +624,10 @@ pub struct RuntimeHostConfig {
     /// deadlines both come, in place of the request's drain timeout and the grace after it.
     #[cfg(test)]
     scheduling_pause_deadlines_for_test: Option<Duration>,
+    /// #480 PG-2c fix round 1, test only: how long a standing pause waits before it tries a
+    /// refused session close or a failed check again, in place of its 10 s.
+    #[cfg(test)]
+    scheduling_pause_retry_for_test: Option<Duration>,
     /// Workflow #386 SR-3, test only: holds the task package admission after start until the
     /// test releases it.
     #[cfg(test)]
@@ -739,6 +743,8 @@ impl RuntimeHostConfig {
             adb_baseline_wait_for_test: None,
             #[cfg(test)]
             scheduling_pause_deadlines_for_test: None,
+            #[cfg(test)]
+            scheduling_pause_retry_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
             #[cfg(test)]
@@ -934,6 +940,14 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_scheduling_pause_deadlines_for_test(mut self, after: Duration) -> Self {
         self.scheduling_pause_deadlines_for_test = Some(after);
+        self
+    }
+
+    /// #480 PG-2c fix round 1, test only: a standing pause tries a refused session close or a
+    /// failed check again `interval` after it, instead of 10 s after it.
+    #[cfg(test)]
+    pub(crate) fn with_scheduling_pause_retry_for_test(mut self, interval: Duration) -> Self {
+        self.scheduling_pause_retry_for_test = Some(interval);
         self
     }
 
@@ -2256,11 +2270,23 @@ impl RuntimeHost {
             #[cfg(test)]
             scheduling_pause_deadlines_for_test: config.scheduling_pause_deadlines_for_test,
             #[cfg(test)]
+            scheduling_pause_retry_for_test: config.scheduling_pause_retry_for_test,
+            #[cfg(test)]
             configured_start_driven_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             pause_release_lease_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             pause_release_lease_meetings_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            pause_guard_taken_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            pause_check_failed_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            pause_check_failures_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            unquiet_resume_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            hand_back_close_refusals_for_test: Mutex::new(VecDeque::new()),
             #[cfg(test)]
             autostart_claim_request_hook_for_test: Mutex::new(None),
             #[cfg(test)]
@@ -4462,6 +4488,132 @@ impl RuntimeHost {
         .iter()
         .filter(|thread| !thread.is_finished())
         .count())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs `hook` once, on the continuation's thread, the
+    /// first time a standing pause's continuation finds its instance's admission guard taken.
+    #[cfg(test)]
+    pub(crate) fn run_when_pause_continuation_meets_a_taken_guard_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.pause_guard_taken_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs `hook` once, on the pause's thread, after the
+    /// next failed check of a standing pause noted `check_failed`.
+    #[cfg(test)]
+    pub(crate) fn run_after_pause_check_failed_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.pause_check_failed_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: the next `count` checks of pauses' hand-backs fail as
+    /// a failure of the Runtime that is not fatal and concerns only the operation does.
+    #[cfg(test)]
+    pub(crate) fn fail_next_pause_checks_for_test(&self, count: u64) -> RuntimeHostResult<()> {
+        self.shared_ref(HostLocation::ReleasePausedInstance)?
+            .pause_check_failures_for_test
+            .store(count, Ordering::Release);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs `hook` once, on the resume's thread, when a
+    /// person's resume of a pause not yet `released` has read its stage and has not yet taken the
+    /// persist gate.
+    #[cfg(test)]
+    pub(crate) fn run_before_unquiet_resume_gate_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.unquiet_resume_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: the next close leases of pauses' hand-backs meet
+    /// `refusals`, one each, in the scheduler's place, as its preparation refuses them.
+    #[cfg(test)]
+    pub(crate) fn refuse_hand_back_closes_for_test(
+        &self,
+        refusals: Vec<SchedulerError>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        lock(
+            &shared.hand_back_close_refusals_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .extend(refusals);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: what the last check of the pause `instance_alias`
+    /// holds found in its way, as kept in memory with the pause.
+    #[cfg(test)]
+    pub(crate) fn pause_in_the_way_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Vec<actingcommand_contract::PauseObstacle>> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        let table = lock(
+            &shared.scheduling_pause,
+            HostLocation::ReleasePausedInstance,
+        )?;
+        Ok(table.noted_in_the_way(instance_alias))
+    }
+
+    /// #480 PG-2c fix round 1, test builds: how many contained runs of `instance_alias` are in
+    /// the run table now.
+    #[cfg(test)]
+    pub(crate) fn contained_runs_on_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<usize> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let runs = lock(&shared.contained_runs, HostLocation::ReleasePausedInstance)?;
+        Ok(runs
+            .values()
+            .filter(|control| control.instance_id == instance_id)
+            .count())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: whether the execution kernel holds a device session (or
+    /// other resources) of `instance_alias` now.
+    #[cfg(test)]
+    pub(crate) fn holds_device_session_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<bool> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared
+            .execution()?
+            .has_owned_resources(instance_id)
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })
     }
 
     /// #480 PG-2c (the commit mark), test builds: whether an automatic emulator start of
@@ -6746,6 +6898,30 @@ struct HostShared {
     /// their instance's key held.
     #[cfg(test)]
     pause_release_lease_meetings_for_test: AtomicU64,
+    /// #480 PG-2c fix round 1, test only: see
+    /// [`RuntimeHostConfig::with_scheduling_pause_retry_for_test`].
+    #[cfg(test)]
+    scheduling_pause_retry_for_test: Option<Duration>,
+    /// #480 PG-2c fix round 1, test only: the hook a standing pause's continuation runs once when
+    /// it finds its instance's admission guard taken.
+    #[cfg(test)]
+    pause_guard_taken_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2c fix round 1, test only: the hook a standing pause runs once after a check of its
+    /// failed and its `check_failed` was noted.
+    #[cfg(test)]
+    pause_check_failed_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2c fix round 1, test only: how many of the next checks of pauses' hand-backs fail
+    /// as a failure that is not fatal does.
+    #[cfg(test)]
+    pause_check_failures_for_test: AtomicU64,
+    /// #480 PG-2c fix round 1, test only: the hook a person's resume of a pause not yet `released`
+    /// runs once between its read of the stage and its persist gate.
+    #[cfg(test)]
+    unquiet_resume_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2c fix round 1, test only: the refusals the next close leases of pauses'
+    /// hand-backs meet in the scheduler's place, one each, in order.
+    #[cfg(test)]
+    hand_back_close_refusals_for_test: Mutex<VecDeque<SchedulerError>>,
     /// #480 PG-1 fix round 1, test only: the hook an autostart claim runs once just before it is
     /// requested.
     #[cfg(test)]

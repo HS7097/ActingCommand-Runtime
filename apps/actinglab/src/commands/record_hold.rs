@@ -253,6 +253,44 @@ enum Unsettled {
     /// connection on such a receipt and sends no request on it after it, so the status read was
     /// not sent.
     ReadNotSent,
+    /// #480 PG-2c fix round 1 (item 9): the Runtime answered the pause before the instance was
+    /// quiet (a cause under its success code, which a `quiet_or_lift` hold is never given), and the
+    /// status read after it shows the instance paused with the hold's reason.
+    AnsweredUnquiet,
+}
+
+/// #480 PG-2a: what the status read after a pause that did not leave its instance quiet says
+/// (a failed stage; fix round 1: or a pause answered before its instance was quiet): `None` when
+/// the instance shows no pause with the hold's reason `reason` (another party's, or none), else
+/// why a pause with that reason may stand.
+fn status_after_failed_pause(
+    client: &RuntimeClient,
+    instance: &str,
+    reason: &str,
+) -> Option<Unsettled> {
+    match scheduling::instance_pause_reason(client, instance) {
+        Ok(Some(standing)) if standing.as_str() == reason => Some(Unsettled::Stands),
+        Ok(_) => None,
+        Err(read) => Some(Unsettled::Unread(read)),
+    }
+}
+
+/// #480 PG-2c fix round 1 (item 9): the failure of a recording's hold whose pause the Runtime
+/// answered Completed before its instance was quiet (`scheduling::answered_unquiet`): the hold did
+/// not get a quiet instance. `runtime_result_unexpected`, the code of a result its caller does not
+/// take; the receipt's outcome in its details (`receipt_outcome`). With the hold's
+/// `quiet_or_lift` a Runtime never answers so: it is refused loudly if it does.
+pub(crate) fn answered_unquiet_error(
+    paused: &actingcommand_runtime_client::SchedulingPauseAnswer,
+) -> CliError {
+    CliError::new(
+        crate::ErrorKind::RuntimeUnavailable,
+        actingcommand_runtime_client::ClientCode::RuntimeResultUnexpected.as_str(),
+        "the Runtime answered the recording's hold before the instance was quiet, which a hold \
+         that is quiet or nothing is never answered",
+        &[],
+    )
+    .with_details(json!({"receipt_outcome": paused.outcome}))
 }
 
 /// #480 PG-2a fix round 1: the member of the details of a start that failed once the pause was
@@ -305,6 +343,12 @@ fn pause_unsettled(
              recording's own reason stands is not known"
                 .to_owned(),
         ),
+        Unsettled::AnsweredUnquiet => (
+            PAUSE_FOUND_HOLD_SHOWN,
+            "the Runtime answered it before the instance was quiet, and the status read after it \
+             shows the instance paused with the recording's own reason"
+                .to_owned(),
+        ),
     };
     error.message = format!(
         "record start sent the pause of {instance} and {after}: {}; the session header stays and \
@@ -338,7 +382,10 @@ fn pause_unsettled(
 ///   when it shows that reason, when it fails, and on any other failure of the pause (no receipt)
 ///   the header stays and the start fails with the hold in its details ([`pause_unsettled`]). PG-2a
 ///   fix round 1: a failed receipt that is fatal to the connection is followed by no status read,
-///   since the client sends nothing on that connection after it: the header stays so too.
+///   since the client sends nothing on that connection after it: the header stays so too. #480
+///   PG-2c fix round 1: a pause answered Completed before its instance was quiet (a cause under
+///   its success code, which the hold's `quiet_or_lift` is never given) is the hold's failure
+///   (`runtime_result_unexpected`, [`answered_unquiet_error`]), followed by the same status read.
 ///
 /// A header that cannot be written fails the start with the hold in its details.
 ///
@@ -417,8 +464,31 @@ pub(super) fn take(
     let mut answer = start_answer(record.hold.as_ref(), replaced);
     write_header(path, record)?;
     let pause_error = match scheduling::pause_for_recording(&client, &instance, own) {
+        // #480 PG-2c fix round 1 (item 9): the hold reads its receipt's outcome. A pause answered
+        // before its instance was quiet (a cause under the success code) cannot happen with the
+        // hold's `quiet_or_lift`; met, it is the hold's failure, handled as a failed stage is.
+        Ok(paused) if scheduling::answered_unquiet(&paused) => {
+            let error = answered_unquiet_error(&paused);
+            let unsettled = match status_after_failed_pause(&client, &instance, &reason) {
+                Some(Unsettled::Stands) => Some(Unsettled::AnsweredUnquiet),
+                unsettled => unsettled,
+            };
+            return Err(match unsettled {
+                None => nothing_paused(
+                    path,
+                    before,
+                    record.hold.as_ref(),
+                    &instance,
+                    &reason,
+                    error,
+                ),
+                Some(unsettled) => {
+                    pause_unsettled(&instance, record.hold.as_ref(), unsettled, error)
+                }
+            });
+        }
         Ok(paused) => {
-            answer["paused"] = json!(paused);
+            answer["paused"] = json!(paused.result);
             return Ok((answer, display_last_observed));
         }
         Err(pause_error) => pause_error,
@@ -431,11 +501,7 @@ pub(super) fn take(
         // PG-2a fix round 1: a receipt fatal to the connection latches it, and the client sends
         // nothing on it after that; the status read is not sent, and the header stays.
         FailedPause::Failed if pause_error.is_fatal() => Some(Unsettled::ReadNotSent),
-        FailedPause::Failed => match scheduling::instance_pause_reason(&client, &instance) {
-            Ok(Some(standing)) if standing.as_str() == reason.as_str() => Some(Unsettled::Stands),
-            Ok(_) => None,
-            Err(read) => Some(Unsettled::Unread(read)),
-        },
+        FailedPause::Failed => status_after_failed_pause(&client, &instance, &reason),
         FailedPause::Unanswered => Some(Unsettled::Unanswered),
     };
     let error = crate::runtime_slice_cli::map_runtime_error(pause_error);

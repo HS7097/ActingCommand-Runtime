@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::contained_task::{
-    PauseDrainEnd, SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPauseDeadlines,
-    pause_drain_incomplete, pause_drain_interrupted,
+    PauseDrainEnd, SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SCHEDULING_PAUSE_RETRY_INTERVAL,
+    SchedulingPauseDeadlines, pause_drain_incomplete, pause_drain_interrupted,
 };
 use super::failure_scope::Contained;
+use super::resource_close::RetainedClose;
 use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
 use crate::codes::HostCode;
@@ -280,6 +281,76 @@ impl HostShared {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let hook = lock(
             &self.pause_release_lease_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs, once, the hook a test set for a continuation of
+    /// a standing pause that finds its instance's admission guard taken.
+    #[cfg(test)]
+    fn pause_meets_taken_guard_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_guard_taken_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs, once, the hook a test set for a check of a
+    /// standing pause that failed and whose `check_failed` is noted.
+    #[cfg(test)]
+    fn pause_check_failed_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_check_failed_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: while the test's count of them lasts, a check of a
+    /// pause's hand-back fails as a failure of the Runtime that is not fatal and concerns only
+    /// the operation does (`pause_check_failed_for_test`).
+    #[cfg(test)]
+    fn injected_pause_check_failure_for_test(&self) -> Result<(), RequestFailure> {
+        let injected = self
+            .pause_check_failures_for_test
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok();
+        if injected {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    crate::codes::test_spellings::TestCode::PauseCheckFailedForTest,
+                    HostLocation::ReleasePausedInstance,
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1, test builds: runs, once, the hook a test set for a person's resume
+    /// of a pause not yet `released`, between its read of the stage and its persist gate.
+    #[cfg(test)]
+    fn before_unquiet_resume_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.unquiet_resume_hook_for_test,
             HostLocation::ReleasePausedInstance,
         )?
         .take();
@@ -594,6 +665,48 @@ pub(super) struct SchedulingPauseTable {
     /// are one step under this table's lock, as is the pause's own record of its row, so a pause
     /// recorded after it finds the mark and lists the automatic start in its way.
     committed_starts: BTreeSet<String>,
+    /// #480 PG-2c fix round 1 (`contracts/scheduling-pause.md`, "Resume"): per instance alias,
+    /// where the hand-back's session close of its `stand` pause and a person's resume of it met,
+    /// each side's step taken under this table's lock. Ends with the pause (`lift_instance`).
+    hand_backs: BTreeMap<String, HandBack>,
+    /// #480 PG-2c fix round 1: per instance alias, what the last check of its `stand` pause's
+    /// stages found in its way, in memory only (the status does not answer it in this build), and
+    /// the failure codes already said in the daemon's log for this pause. Ends with the pause.
+    stage_checks: BTreeMap<String, StageCheck>,
+}
+
+/// #480 PG-2c fix round 1 (`contracts/scheduling-pause.md`, "Resume"): where the hand-back's close
+/// of a `stand` pause and a person's resume of it met, each decided under the pause table's lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandBack {
+    /// The hand-back asked whether its pause was still held and began its close in one step: a
+    /// resume from then on reconnects the instance (the path a `released` pause's resume takes).
+    Closing,
+    /// A resume found no close begun and lifts the pause without a reconnect: the hand-back closes
+    /// nothing; once the resume lifted the pause it ends, and a resume that failed ends the mark.
+    Lifting,
+}
+
+/// #480 PG-2c fix round 1: what a hand-back that is about to close its instance's session learns
+/// under the pause table's lock ([`SchedulingPauseTable::begin_hand_back_close`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseStep {
+    /// Its pause is held at its revision and no resume is lifting it: the close has begun.
+    Begun,
+    /// A resume lifted its pause (or a later pause holds the instance): it closes nothing.
+    Lifted,
+    /// A resume is lifting its pause: it closes nothing now and looks again at its next check.
+    ResumeLifting,
+}
+
+/// #480 PG-2c fix round 1: a `stand` pause's last check, in memory only.
+#[derive(Debug, Clone, Default)]
+struct StageCheck {
+    /// What was in the way at that check, each word once in the vocabulary's order.
+    in_the_way: Vec<PauseObstacle>,
+    /// The codes of the failures of its checks already said in the daemon's log: one line per
+    /// pause and code, not one per try.
+    said: BTreeSet<&'static str>,
 }
 
 impl SchedulingPauseTable {
@@ -821,6 +934,8 @@ impl SchedulingPauseTable {
         self.instances.remove(instance_alias);
         self.origins.remove(&Some(instance_alias.to_owned()));
         self.modes.remove(instance_alias);
+        self.hand_backs.remove(instance_alias);
+        self.stage_checks.remove(instance_alias);
         next_scheduling_pause_revision(
             self.instance_revisions
                 .entry(instance_alias.to_owned())
@@ -855,6 +970,89 @@ impl SchedulingPauseTable {
         } else {
             self.committed_starts.remove(instance_alias);
         }
+    }
+
+    /// #480 PG-2c fix round 1 (b): the hand-back of the `stand` pause of `instance_alias` at
+    /// `revision`, its instance's admission guard in hand, just before it closes the session:
+    /// whether its pause is still held at its revision and, in the same step, the mark that its
+    /// close has begun ([`CloseStep`]).
+    fn begin_hand_back_close(&mut self, instance_alias: &str, revision: u64) -> CloseStep {
+        if !self.holds_instance_at(instance_alias, revision) {
+            return CloseStep::Lifted;
+        }
+        if self.hand_backs.get(instance_alias) == Some(&HandBack::Lifting) {
+            return CloseStep::ResumeLifting;
+        }
+        self.hand_backs
+            .insert(instance_alias.to_owned(), HandBack::Closing);
+        CloseStep::Begun
+    }
+
+    /// #480 PG-2c fix round 1: the close the hand-back of the pause at `revision` began closed
+    /// nothing (its lease was refused): a resume from now on lifts without a reconnect again.
+    fn end_hand_back_close(&mut self, instance_alias: &str, revision: u64) {
+        if self.holds_instance_at(instance_alias, revision)
+            && self.hand_backs.get(instance_alias) == Some(&HandBack::Closing)
+        {
+            self.hand_backs.remove(instance_alias);
+        }
+    }
+
+    /// #480 PG-2c fix round 1 (b): a person's resume of the `stand` pause of `instance_alias`
+    /// still `draining` or `paused`, under the persist gate: `false` when the hand-back's close has
+    /// begun or the stage reached `released` meanwhile (the resume takes the reconnect path);
+    /// otherwise the mark that it lifts the pause without a reconnect, and `true`.
+    fn begin_resume_lift(&mut self, instance_alias: &str) -> bool {
+        let quiet = self
+            .instances
+            .get(instance_alias)
+            .is_none_or(|state| state.stage == InstancePauseStage::Released);
+        if quiet || self.hand_backs.get(instance_alias) == Some(&HandBack::Closing) {
+            return false;
+        }
+        self.hand_backs
+            .insert(instance_alias.to_owned(), HandBack::Lifting);
+        true
+    }
+
+    /// #480 PG-2c fix round 1: a resume that marked its lift failed before the lift: the mark
+    /// ends, and the hand-back goes on.
+    fn end_resume_lift(&mut self, instance_alias: &str) {
+        if self.hand_backs.get(instance_alias) == Some(&HandBack::Lifting) {
+            self.hand_backs.remove(instance_alias);
+        }
+    }
+
+    /// #480 PG-2c fix round 1: what the last check of the `stand` pause of `instance_alias` at
+    /// `revision` found in its way, kept in memory; nothing for a pause no longer held there.
+    fn note_in_the_way(&mut self, instance_alias: &str, revision: u64, words: Vec<PauseObstacle>) {
+        if self.holds_instance_at(instance_alias, revision) {
+            self.stage_checks
+                .entry(instance_alias.to_owned())
+                .or_default()
+                .in_the_way = words;
+        }
+    }
+
+    /// #480 PG-2c fix round 1: what the last check of the pause of `instance_alias` found in its
+    /// way (empty when no check noted anything).
+    pub(super) fn noted_in_the_way(&self, instance_alias: &str) -> Vec<PauseObstacle> {
+        self.stage_checks
+            .get(instance_alias)
+            .map(|check| check.in_the_way.clone())
+            .unwrap_or_default()
+    }
+
+    /// #480 PG-2c fix round 1: whether the failure `code` of a check of the pause of
+    /// `instance_alias` at `revision` is said now: the first time for this pause, never again.
+    fn first_saying(&mut self, instance_alias: &str, revision: u64, code: &'static str) -> bool {
+        self.holds_instance_at(instance_alias, revision)
+            && self
+                .stage_checks
+                .entry(instance_alias.to_owned())
+                .or_default()
+                .said
+                .insert(code)
     }
 }
 
@@ -923,6 +1121,46 @@ fn check_scheduling_pause_expectation(
     Ok(())
 }
 
+/// The refusals of an instance resume, read on `table`, the pause table its caller has locked:
+/// the expectation (Workflow #338 R4) holds and the instance's pause is `Released`, or (Workflow
+/// #403) the instance is `fenced` and not paused; otherwise `scheduling_not_paused`,
+/// `scheduling_pause_draining` or `scheduling_pause_releasing`. #480 PG-2c: a person's pause
+/// (`stand`) is resumable in every stage; a tool's hold (`quiet_or_lift`) keeps those refusals.
+fn check_resumable(
+    table: &SchedulingPauseTable,
+    instance_alias: &str,
+    expected: Option<&SchedulingPauseExpectation>,
+    fenced: bool,
+    owner_epoch: OwnerEpoch,
+) -> Result<(), RequestFailure> {
+    check_scheduling_pause_expectation(
+        expected,
+        owner_epoch,
+        table
+            .instance_revisions
+            .get(instance_alias)
+            .copied()
+            .unwrap_or(0),
+    )?;
+    let stand = table.mode_of(instance_alias) == SchedulingPauseMode::Stand;
+    match table.instances.get(instance_alias).map(|state| state.stage) {
+        None if fenced => Ok(()),
+        None => Err(scheduling_pause_denied(
+            HostCode::SchedulingNotPaused,
+            ContractLocation::ResumeScheduling,
+        )),
+        Some(InstancePauseStage::Draining) if !stand => Err(scheduling_pause_denied(
+            HostCode::SchedulingPauseDraining,
+            ContractLocation::ResumeScheduling,
+        )),
+        Some(InstancePauseStage::Paused) if !stand => Err(scheduling_pause_denied(
+            HostCode::SchedulingPauseReleasing,
+            ContractLocation::ResumeScheduling,
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
 /// #480 PG-2c: the instance pause whose stages run: its instance, the revision its request set
 /// and the mode it was asked with.
 #[derive(Clone, Copy)]
@@ -978,11 +1216,14 @@ enum StagesEnd {
     },
     /// The caller's time ended first with something still in the way
     /// (`scheduling_pause_standing`): the host carries the rest of the stages on, unless only an
-    /// unconfirmed close stands in the way (`carry_on` false: it is not tried again).
+    /// unconfirmed close stands in the way (`carry_on` false: it is not tried again). Fix round 1:
+    /// `failure`, when the last check failed (`check_failed`), is that failure's outcome, the
+    /// cause of `scheduling_pause_standing`.
     Standing {
         stage: InstancePauseStage,
         in_the_way: Vec<PauseObstacle>,
         carry_on: bool,
+        failure: Option<Outcome>,
         drained: SchedulingDrainSummary,
     },
     /// A person's resume lifted the pause while its stages ran
@@ -1000,13 +1241,30 @@ enum ReleaseEnd {
     Released,
     /// A `stand` pause met a shutdown before it was released.
     KeptAtShutdown,
-    /// A `stand` pause's caller's time ended with something still in the way.
+    /// A `stand` pause's caller's time ended with something still in the way (fix round 1: with
+    /// the outcome of its last check's failure, when that check failed).
     Standing {
         in_the_way: Vec<PauseObstacle>,
         carry_on: bool,
+        failure: Option<Outcome>,
     },
     /// A person's resume lifted a `stand` pause meanwhile.
     Lifted,
+}
+
+/// #480 PG-2c fix round 1: what one check of a pause's hand-back (`hand_back_check`) found.
+enum HandBackCheck {
+    /// The hand-back ended.
+    End(ReleaseEnd),
+    /// The check looks again at once (a run was drained again, or a shutdown came while the
+    /// request waited for the admission guard).
+    Again,
+    /// Something is still in the way, or a resume is lifting the pause: the next check comes after
+    /// one poll.
+    Wait,
+    /// The session close's lease was refused: nothing was closed, and the close is tried again
+    /// after `SCHEDULING_PAUSE_RETRY_INTERVAL`.
+    CloseRefused,
 }
 
 /// #480 PG-2c: the word of what a lease of `kind` that holds the paused instance is: the
@@ -1088,12 +1346,20 @@ fn stages_cause(end: &StagesEnd) -> Option<Outcome> {
             Some(Outcome::new(HostCode::SchedulingPauseKeptAtShutdown).pause_stage(*stage))
         }
         StagesEnd::Standing {
-            stage, in_the_way, ..
-        } => Some(
-            Outcome::new(HostCode::SchedulingPauseStanding)
+            stage,
+            in_the_way,
+            failure,
+            ..
+        } => {
+            let standing = Outcome::new(HostCode::SchedulingPauseStanding)
                 .pause_stage(*stage)
-                .in_the_way(in_the_way.iter().copied()),
-        ),
+                .in_the_way(in_the_way.iter().copied());
+            // Fix round 1: a failed last check (`check_failed`) has its failure as the cause.
+            Some(match failure {
+                Some(failure) => standing.caused_by(failure.clone()),
+                None => standing,
+            })
+        }
         StagesEnd::Resumed { stage, .. } => {
             Some(Outcome::new(HostCode::SchedulingPauseLiftedByResume).pause_stage(*stage))
         }
@@ -1108,6 +1374,26 @@ fn scheduling_pause_release_failure(error: RuntimeHostError) -> RequestFailure {
     } else {
         RequestFailure::request(error, RuntimeReceiptState::Failed, None)
     }
+}
+
+/// A tool's hold whose hand-back still met something in the way at its grace (Workflow #191 ps2;
+/// #480 PG-2c fix round 1: the instance's admission guard still taken then too).
+fn scheduling_pause_release_busy() -> RequestFailure {
+    scheduling_pause_release_failure(RuntimeHostError::request(
+        HostCode::SchedulingPauseReleaseBusy,
+        HostLocation::ReleasePausedInstance,
+        RuntimeErrorCode::LeaseBusy,
+    ))
+}
+
+/// #480 PG-2c fix round 1 (the coordinator's ruling 4; #419: one instance's trouble does not take
+/// the Runtime down): whether a failure of a check of a `stand` pause's stages is tried again: one
+/// the one decision point (`contain_failure`) would end only the operation with, neither latching
+/// the Runtime nor fencing the instance. Decided by the failure's scope, never by its code; a
+/// fatal failure, and one that fences the instance, stay as they are.
+fn tried_again(failure: &RequestFailure, instance_id: InstanceId) -> bool {
+    !failure.poison_runtime
+        && failure.error.scope_at(Some(instance_id)) == crate::FailureScope::Operation
 }
 
 /// Workflow #191 ps2: the self-check of an instance resume, projected from the open reports of
@@ -3373,6 +3659,14 @@ impl HostShared {
     /// `scheduling_pause_kept_at_shutdown`, a person's resume meanwhile
     /// `scheduling_pause_lifted_by_resume`, both informing; a fatal failure of a stage answers the
     /// failure and lifts nothing either. The global pause has no stages: the mode changes nothing.
+    ///
+    /// #480 PG-2c fix round 1 (the coordinator's ruling 4; #419: one instance's trouble does not
+    /// take the Runtime down): everything that can refuse the request for its own input (its
+    /// instance, its pause already held, its deadlines) is checked before the row is recorded, so a
+    /// refused request never became a pause. After the row is recorded a `stand` pause's check that
+    /// fails with a failure the decision point would neither latch nor fence is tried again
+    /// (`release_paused_instance`, `check_failed`), and only a fatal failure or one that fences the
+    /// instance reaches this request's answer.
     pub(super) fn pause_scheduling(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -3388,7 +3682,7 @@ impl HostShared {
         // Workflow #361 B1: the persist gate orders the record of the pauses a change leads to
         // before the change itself; a failed record leaves the gate as it was.
         let origin = PauseOrigin::set_in(self.owner_epoch)?;
-        let (instance_alias, instance_id, revision) = match scope {
+        let (instance_alias, instance_id, revision, deadlines) = match scope {
             SchedulingPauseScope::Global => {
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
@@ -3425,6 +3719,9 @@ impl HostShared {
             }
             SchedulingPauseScope::Instance { instance_alias } => {
                 let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+                // #480 PG-2c fix round 1: what can refuse the request for its own input is checked
+                // before its row is recorded; its deadlines too.
+                let deadlines = self.scheduling_pause_deadlines(drain_timeout_ms)?;
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
                     HostLocation::PersistInstanceSchedulingPause,
@@ -3464,27 +3761,23 @@ impl HostShared {
                 // #480 PG-2c: the mode lives in memory only; a restored pause is `released`.
                 table.modes.insert(instance_alias.clone(), pause_mode);
                 drop(table);
-                (instance_alias, instance_id, revision)
+                (instance_alias, instance_id, revision, deadlines)
             }
         };
         let links = self
             .events
             .request_links(request, Some(instance_id), None, None);
-        let staged = self
-            .scheduling_pause_deadlines(drain_timeout_ms)
-            .and_then(|deadlines| {
-                self.run_instance_pause_stages(
-                    PausedInstance {
-                        alias: instance_alias,
-                        instance_id,
-                        revision,
-                        mode: pause_mode,
-                    },
-                    InstancePauseStage::Draining,
-                    links.clone(),
-                    StagesBound::Caller(deadlines),
-                )
-            });
+        let staged = self.run_instance_pause_stages(
+            PausedInstance {
+                alias: instance_alias,
+                instance_id,
+                revision,
+                mode: pause_mode,
+            },
+            InstancePauseStage::Draining,
+            links.clone(),
+            StagesBound::Caller(deadlines),
+        );
         let end = match (staged, pause_mode) {
             (Ok(end), _) => end,
             // No half-open pause: a failed stage of a tool's hold lifts the gate it closed, and the
@@ -3498,7 +3791,9 @@ impl HostShared {
             // #480 PG-2c: a person's pause is never lifted by the Runtime, an error of its own
             // included. What is left of a stage the Runtime could not run (a fatal failure, which
             // latches the Runtime or fences the instance) is the answer; the gate stays closed and
-            // the persisted pause names the instance, so the next start restores it.
+            // the persisted pause names the instance, so the next start restores it. Fix round 1:
+            // a failure that would only fail the operation never comes here: the hand-back tries
+            // its check again (`check_failed`), and the drain and the stage moves fail only fatally.
             (Err(failure), SchedulingPauseMode::Stand) => return Err(failure),
         };
         let drained = match &end {
@@ -3572,10 +3867,13 @@ impl HostShared {
                 }
                 PauseDrainEnd::Interrupted(_) => return Err(pause_drain_interrupted()),
                 PauseDrainEnd::PastGrace(summary) if stand => {
+                    let in_the_way = vec![PauseObstacle::ContainedRun];
+                    self.note_in_the_way(paused, &in_the_way)?;
                     return Ok(StagesEnd::Standing {
                         stage: InstancePauseStage::Draining,
-                        in_the_way: vec![PauseObstacle::ContainedRun],
+                        in_the_way,
                         carry_on: true,
+                        failure: None,
                         drained: summary,
                     });
                 }
@@ -3619,10 +3917,12 @@ impl HostShared {
             ReleaseEnd::Standing {
                 in_the_way,
                 carry_on,
+                failure,
             } => Ok(StagesEnd::Standing {
                 stage: InstancePauseStage::Paused,
                 in_the_way,
                 carry_on,
+                failure,
                 drained,
             }),
             ReleaseEnd::Lifted => Ok(StagesEnd::Resumed {
@@ -3677,13 +3977,16 @@ impl HostShared {
     /// shutdown, which joins it (`join_pause_carry_ons`) and keeps the pause. A failure of the
     /// Runtime there goes to the one decision point as a request's does (`contain_failure`): it
     /// fences the instance or latches the Runtime, and lifts nothing. A thread that cannot be
-    /// started is fatal (`scheduling_pause_carry_on_spawn_failed`).
+    /// started is fatal (`scheduling_pause_carry_on_spawn_failed`). Fix round 1 (item 5): the
+    /// continuations that have ended are joined first (`reap_pause_carry_ons`), so the list holds
+    /// only the running ones.
     fn carry_pause_on(
         &self,
         paused: PausedInstance<'_>,
         stage: InstancePauseStage,
         links: EventLinksDraft,
     ) -> Result<(), RequestFailure> {
+        self.reap_pause_carry_ons()?;
         let spawn_failed = || {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::SchedulingPauseCarryOnSpawnFailed,
@@ -3732,13 +4035,48 @@ impl HostShared {
         match self.contain_failure(*failure.error, Some(paused.instance_id), links)? {
             Contained::Fenced(_) => Ok(()),
             Contained::Latched(error) => Err(error),
-            // Nothing answers it: an operation's failure is latched, never left unseen.
+            // Fix round 1 (the coordinator's ruling 4): a failure the decision point would end
+            // only the operation with is the one `tried_again` takes, and the hand-back tries its
+            // check again instead of returning it (`check_failed`); the drain and the stage moves
+            // fail only fatally. One that still came here would be a broken rule of this module:
+            // nothing answers it, so it is latched, never left unseen.
             Contained::Failed(error) => {
                 let error = error.into_fatal();
                 self.fatal.mark(error.clone())?;
                 Err(error)
             }
         }
+    }
+
+    /// #480 PG-2c fix round 1 (item 5): joins the continuations that have ended, before the next
+    /// one starts. A continuation's own failure was handled where it arose (fenced, or latched:
+    /// `carry_on_instance_pause`), so its result is latched again only as the Runtime keeps its
+    /// first condition; a panic is `runtime_thread_panicked`, fatal, as every Runtime thread's is
+    /// at its join (the host's long-lived threads, its sweep and its monitor among them, show a
+    /// panic only at their join: `join_runtime_thread`). Either fails this request.
+    fn reap_pause_carry_ons(&self) -> Result<(), RequestFailure> {
+        let ended = {
+            let mut threads = lock(&self.pause_carry_ons, HostLocation::ReleasePausedInstance)?;
+            let (ended, running): (Vec<_>, Vec<_>) = std::mem::take(&mut *threads)
+                .into_iter()
+                .partition(JoinHandle::is_finished);
+            *threads = running;
+            ended
+        };
+        let mut failure = None;
+        for thread in ended {
+            if let Err(error) =
+                join_runtime_thread(Some(thread), HostLocation::ReleasePausedInstance)
+                && failure.is_none()
+            {
+                failure = Some(error);
+            }
+        }
+        let Some(error) = failure else {
+            return Ok(());
+        };
+        self.fatal.mark(error.clone())?;
+        Err(RequestFailure::poison_without_terminal(error))
     }
 
     /// #480 PG-2c: joins the threads that carry standing pauses on; each ends with the shutdown
@@ -3778,6 +4116,75 @@ impl HostShared {
         SchedulingPauseDeadlines::after(drain_timeout_ms)
     }
 
+    /// #480 PG-2c fix round 1: how long a `stand` pause waits before it tries a refused session
+    /// close or a failed check again (`SCHEDULING_PAUSE_RETRY_INTERVAL`); test builds: the
+    /// interval a test set (`scheduling_pause_retry_for_test`).
+    fn scheduling_pause_retry_interval(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(interval) = self.scheduling_pause_retry_for_test {
+            return interval;
+        }
+        SCHEDULING_PAUSE_RETRY_INTERVAL
+    }
+
+    /// #480 PG-2c fix round 1: what the last check of the `stand` pause `paused` found in its way,
+    /// kept in memory with the pause (`SchedulingPauseTable::note_in_the_way`).
+    fn note_in_the_way(
+        &self,
+        paused: PausedInstance<'_>,
+        in_the_way: &[PauseObstacle],
+    ) -> Result<(), RequestFailure> {
+        if paused.mode == SchedulingPauseMode::Stand {
+            lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?.note_in_the_way(
+                paused.alias,
+                paused.revision,
+                in_the_way.to_vec(),
+            );
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1 (the coordinator's ruling 4): a check of the `stand` pause `paused`
+    /// failed with `error`, a failure `tried_again` takes: what is in the way is `check_failed`
+    /// (kept in memory with the pause), and the daemon's log says the failure once per pause and
+    /// code, as a skipped background step is said, not at every try. No ledger record.
+    fn note_check_failed(
+        &self,
+        paused: PausedInstance<'_>,
+        error: &RuntimeHostError,
+    ) -> Result<(), RequestFailure> {
+        let say = {
+            let mut table = lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?;
+            table.note_in_the_way(
+                paused.alias,
+                paused.revision,
+                vec![PauseObstacle::CheckFailed],
+            );
+            table.first_saying(paused.alias, paused.revision, error.code())
+        };
+        if say {
+            self.fatal.report_skipped(&error.outcome());
+        }
+        // Tests: the check failed and its word is noted.
+        #[cfg(test)]
+        self.pause_check_failed_for_test()?;
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 1 (b): the hand-back of the `stand` pause `paused`, its admission
+    /// guard in hand, about to close the session: under the pause table's lock, whether the pause
+    /// is still held at its revision, and the mark that its close has begun
+    /// (`SchedulingPauseTable::begin_hand_back_close`).
+    fn begin_hand_back_close(
+        &self,
+        paused: PausedInstance<'_>,
+    ) -> Result<CloseStep, RequestFailure> {
+        Ok(
+            lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?
+                .begin_hand_back_close(paused.alias, paused.revision),
+        )
+    }
+
     /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
     /// instance admission guard it re-checks that nothing still uses the device: a queued entry
     /// the pause does not hold back fails at once (`TransferNotSafe`; Workflow #369 §5.1, review
@@ -3811,13 +4218,21 @@ impl HostShared {
     /// grace fails it (`scheduling_pause_release_busy`), a shutdown fails it
     /// (`scheduling_pause_release_interrupted`), and so do a refused or an unconfirmed close; each
     /// failure lifts it. A `stand` pause (a person's) fails for none of these: a refusing queued
-    /// entry is waited for as a lease is; a refused close lease (`close_refused`) is tried again
-    /// at the next check; an unconfirmed close fenced the instance (`close_unconfirmed`) and is not
-    /// tried again; on its request's thread the wait for the instance's admission guard and every
-    /// other wait end with the caller's time (`ReleaseEnd::Standing`, what is in the way read
-    /// then), and its continuation waits for everything with no bound; a shutdown keeps it
-    /// (`KeptAtShutdown`) unless nothing is in the way of an instance inside the multi-Nemu gate,
-    /// which ends as released (PG-1 fix round 3); a person's resume ends it (`Lifted`).
+    /// entry is waited for as a lease is; a refused close lease (`close_refused`) is tried again;
+    /// an unconfirmed close fenced the instance (`close_unconfirmed`) and is not tried again; on
+    /// its request's thread the wait for the instance's admission guard and every other wait end
+    /// with the caller's time (`ReleaseEnd::Standing`, what is in the way read then), and its
+    /// continuation waits for everything with no bound; a shutdown keeps it (`KeptAtShutdown`)
+    /// unless nothing is in the way of an instance inside the multi-Nemu gate, which ends as
+    /// released (PG-1 fix round 3); a person's resume ends it (`Lifted`).
+    ///
+    /// #480 PG-2c fix round 1 (`hand_back_check`): no wait for the admission guard is blind, a
+    /// continuation's included; the close and a person's resume decide under the pause table's
+    /// lock (`begin_hand_back_close`, `SchedulingPauseTable::begin_resume_lift`), so a resumed
+    /// instance keeps its session or gets it back from the resume's reconnect; a `stand` pause's
+    /// check that fails with a failure `tried_again` takes is tried again (`check_failed`), as a
+    /// refused close lease is, at most once per `SCHEDULING_PAUSE_RETRY_INTERVAL`, while the
+    /// loop's other checks (fatal, lifted, shutdown, what is in the way) keep the poll.
     fn release_paused_instance(
         &self,
         paused: PausedInstance<'_>,
@@ -3826,15 +4241,18 @@ impl HostShared {
         drained: &mut SchedulingDrainSummary,
     ) -> Result<ReleaseEnd, RequestFailure> {
         let stand = paused.mode == SchedulingPauseMode::Stand;
-        let instance_id = paused.instance_id;
         // A policy admission that read the gate before (a) holds this gate until its lease is
         // granted or refused; passing it once makes that lease visible to the check below.
         drop(lock(
             &self.governance_write_gate,
             HostLocation::AwaitPolicyAdmissionsForPause,
         )?);
-        // #480 PG-2c: whether the last check's close lease was refused (a `stand` pause's).
-        let mut close_refused = false;
+        // #480 PG-2c fix round 1 (the coordinator's ruling 4): not before when a refused session
+        // close, and a check that failed, are tried again (a `stand` pause's), and the outcome of
+        // that failure while it stands, which the request's answer carries as its cause.
+        let mut close_again_at: Option<Instant> = None;
+        let mut check_again_at: Option<Instant> = None;
+        let mut failure: Option<Outcome> = None;
         loop {
             if let Some(error) = self
                 .fatal
@@ -3851,151 +4269,34 @@ impl HostShared {
                 return Ok(ReleaseEnd::Lifted);
             }
             if self.fatal.is_shutdown_requested() {
-                if !stand {
-                    return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                        HostCode::SchedulingPauseReleaseInterrupted,
-                        HostLocation::ReleasePausedInstance,
-                        RuntimeErrorCode::RuntimeUnavailable,
-                    )));
-                }
-                // A person's pause is kept, judged on what is in the way at the shutdown, read
-                // again here outside the admission guard (PG-1 fix rounds 2 and 3): with nothing
-                // in the way and no refusing queued entry the hand-back ends as it would have,
-                // `released`, or, outside the multi-Nemu gate, where it would still close the
-                // instance's session, kept.
-                let obstacles = self.release_obstacles(paused.alias, instance_id)?;
-                if !obstacles.queue_waiting
-                    && obstacles.none_left()
-                    && self.keeps_device_session(instance_id)?
-                {
-                    return Ok(ReleaseEnd::Released);
-                }
-                return Ok(ReleaseEnd::KeptAtShutdown);
+                return self.release_at_shutdown(paused);
             }
-            let instance_guard = self.instance_guard(instance_id)?;
-            let admission = match bound {
-                // #480 PG-2c: a person's pause answers at the end of its caller's time, also
-                // while something (a Start through its readiness wait) holds the guard.
-                StagesBound::Caller(deadlines) if stand => {
-                    match self.admission_within(&instance_guard, deadlines.grace)? {
-                        Some(admission) => admission,
-                        None if self.fatal.is_shutdown_requested() => continue,
-                        None => {
-                            let obstacles = self.release_obstacles(paused.alias, instance_id)?;
-                            return Ok(ReleaseEnd::Standing {
-                                in_the_way: obstacles.in_the_way(close_refused),
-                                carry_on: true,
-                            });
-                        }
+            if check_again_at.is_none_or(|at| Instant::now() >= at) {
+                match self.hand_back_check(paused, &links, bound, drained, close_again_at) {
+                    Ok(HandBackCheck::End(end)) => return Ok(end),
+                    Ok(HandBackCheck::Again) => {
+                        check_again_at = None;
+                        failure = None;
+                        continue;
                     }
-                }
-                _ => lock(&instance_guard, HostLocation::LockInstanceAdmission)?,
-            };
-            let obstacles = self.release_obstacles(paused.alias, instance_id)?;
-            // The close path's own rule (`prepare_resource_close`: a non-empty queue is
-            // `TransferNotSafe`), applied before any wait: a queued client waits for the device.
-            // #480 PG-2c: a person's pause waits for that client instead.
-            if obstacles.queue_waiting && !stand {
-                return Err(scheduling_pause_release_failure(
-                    RuntimeHostError::scheduler(
-                        HostLocation::PrepareResourceCloseLease,
-                        &SchedulerError::TransferNotSafe,
-                    ),
-                ));
-            }
-            close_refused = false;
-            if !obstacles.queue_waiting && obstacles.none_left() {
-                // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
-                // instance outside the multi-Nemu gate closes its session here.
-                if self.keeps_device_session(instance_id)? {
-                    return Ok(ReleaseEnd::Released);
-                }
-                // #480 PG-2b fix round 1: this close is the pause's hand-back, and says so
-                // (`hand_back`), so its close lease passes what this pause holds back.
-                match self.close_retained_instance_with(
-                    instance_id,
-                    links.clone(),
-                    false,
-                    LeaseReleaseReason::InstancePaused,
-                    true,
-                    &admission,
-                ) {
-                    Ok(Ok(())) => return Ok(ReleaseEnd::Released),
-                    // ISO-2 (#419, ISO-M rows D54, C32): a close whose resources were confirmed
-                    // is gone and its failure recorded; the pause holds. Workflow #403: an
-                    // unconfirmed close fenced the instance; a tool's hold fails with the fence's
-                    // non-fatal failure, a person's pause stays `paused` (#480 PG-2c), the close
-                    // not tried again: a person's resume reconnects the fenced instance.
-                    Ok(Err(close_error)) => {
-                        return match self.settle_retained_close_failure(
-                            HostLocation::ClosePausedInstanceSession,
-                            instance_id,
-                            &close_error,
-                        )? {
-                            None => Ok(ReleaseEnd::Released),
-                            Some(_) if stand => Ok(ReleaseEnd::Standing {
-                                in_the_way: vec![PauseObstacle::CloseUnconfirmed],
-                                carry_on: false,
-                            }),
-                            Some(error) => Err(scheduling_pause_release_failure(error)),
-                        };
+                    Ok(HandBackCheck::Wait) => {
+                        check_again_at = None;
+                        failure = None;
                     }
-                    // #480 PG-2c: a refused close lease (another member's entry ahead, the
-                    // takeover cooldown, a holder) closed nothing; a person's pause tries again
-                    // at its next check.
-                    Err(error) if stand && !error.is_fatal() => close_refused = true,
-                    Err(error) => return Err(scheduling_pause_release_failure(error)),
+                    Ok(HandBackCheck::CloseRefused) => {
+                        check_again_at = None;
+                        failure = None;
+                        close_again_at =
+                            Some(Instant::now() + self.scheduling_pause_retry_interval());
+                    }
+                    Err(failed) if stand && tried_again(&failed, paused.instance_id) => {
+                        self.note_check_failed(paused, &failed.error)?;
+                        failure = Some(failed.error.outcome());
+                        check_again_at =
+                            Some(Instant::now() + self.scheduling_pause_retry_interval());
+                    }
+                    Err(failed) => return Err(failed),
                 }
-            }
-            drop(admission);
-            // #480 PG-1, tests: the hand-back found its instance's key held.
-            #[cfg(test)]
-            if obstacles.lease_held {
-                self.pause_release_meets_lease_for_test()?;
-            }
-            if obstacles.run_in_flight {
-                let watched = stand.then_some((paused.alias, paused.revision));
-                let again = match self.drain_contained_runs_for_pause(
-                    instance_id,
-                    bound.stop_runs_at(),
-                    bound.grace(),
-                    watched,
-                )? {
-                    PauseDrainEnd::Drained(again) => again,
-                    PauseDrainEnd::Interrupted(_) if stand => {
-                        return Ok(ReleaseEnd::KeptAtShutdown);
-                    }
-                    PauseDrainEnd::Interrupted(_) => return Err(pause_drain_interrupted()),
-                    PauseDrainEnd::PastGrace(_) if stand => {
-                        return Ok(ReleaseEnd::Standing {
-                            in_the_way: obstacles.in_the_way(false),
-                            carry_on: true,
-                        });
-                    }
-                    PauseDrainEnd::PastGrace(_) => return Err(pause_drain_incomplete()),
-                    PauseDrainEnd::Lifted(_) => return Ok(ReleaseEnd::Lifted),
-                };
-                let overflow = || {
-                    RuntimeHostError::fatal(
-                        HostCode::SchedulingPauseDrainCountOverflow,
-                        HostLocation::ReleasePausedInstance,
-                        RuntimeErrorCode::RuntimeHalted,
-                    )
-                };
-                drained.finished = drained
-                    .finished
-                    .checked_add(again.finished)
-                    .ok_or_else(overflow)?;
-                drained.cancelled = drained
-                    .cancelled
-                    .checked_add(again.cancelled)
-                    .ok_or_else(overflow)?;
-                continue;
-            }
-            // Workflow #427-A fix 1, tests: the release waits here for a lane's run.
-            #[cfg(any(test, feature = "test-hooks"))]
-            if obstacles.lane_working {
-                self.pause_waits_for_lane_for_test()?;
             }
             // #480 PG-2c: the end of the caller's time; a continuation has none.
             if let Some(grace) = bound.grace()
@@ -4003,23 +4304,261 @@ impl HostShared {
             {
                 if stand {
                     return Ok(ReleaseEnd::Standing {
-                        in_the_way: obstacles.in_the_way(close_refused),
+                        in_the_way: self.noted_in_the_way(paused)?,
                         carry_on: true,
+                        failure,
                     });
                 }
-                return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                    HostCode::SchedulingPauseReleaseBusy,
-                    HostLocation::ReleasePausedInstance,
-                    RuntimeErrorCode::LeaseBusy,
-                )));
+                return Err(scheduling_pause_release_busy());
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
         }
     }
 
-    /// #480 PG-2c: the instance's admission guard for a `stand` pause's request, waited for only
-    /// until `until`, the end of its caller's time, or a shutdown: `None` then, with the guard
-    /// still taken (a Start holds it through its readiness wait). A poisoned guard is fatal.
+    /// #480 PG-2c (PG-1 fix rounds 2 and 3): the hand-back of the pause `paused` at a shutdown. A
+    /// tool's hold fails (`scheduling_pause_release_interrupted`) and is lifted. A person's pause
+    /// is kept, judged on what is in the way at the shutdown, read again here outside the
+    /// admission guard: with nothing in the way and no refusing queued entry the hand-back ends as
+    /// it would have, `released`, or, outside the multi-Nemu gate, where it would still close the
+    /// instance's session, kept. Fix round 1: a read that fails with a failure `tried_again`
+    /// takes keeps it too.
+    fn release_at_shutdown(
+        &self,
+        paused: PausedInstance<'_>,
+    ) -> Result<ReleaseEnd, RequestFailure> {
+        if paused.mode != SchedulingPauseMode::Stand {
+            return Err(scheduling_pause_release_failure(RuntimeHostError::request(
+                HostCode::SchedulingPauseReleaseInterrupted,
+                HostLocation::ReleasePausedInstance,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )));
+        }
+        let quiet = (|| -> Result<bool, RequestFailure> {
+            let obstacles = self.release_obstacles(paused.alias, paused.instance_id)?;
+            Ok(!obstacles.queue_waiting
+                && obstacles.none_left()
+                && self.keeps_device_session(paused.instance_id)?)
+        })();
+        match quiet {
+            Ok(true) => Ok(ReleaseEnd::Released),
+            Ok(false) => Ok(ReleaseEnd::KeptAtShutdown),
+            Err(failed) if tried_again(&failed, paused.instance_id) => {
+                Ok(ReleaseEnd::KeptAtShutdown)
+            }
+            Err(failed) => Err(failed),
+        }
+    }
+
+    /// #480 PG-2c fix round 1: one check of the hand-back of the pause `paused`
+    /// (`release_paused_instance`, which calls it at every poll but while a failed check waits to
+    /// be tried again). (a) No wait for the instance's admission guard is blind: the request of a
+    /// `stand` pause waits for it until the end of its caller's time, then answers what is in the
+    /// way read outside the guard (it may be empty: nothing was in the way at that read, and the
+    /// hand-back had not finished); the request of a `quiet_or_lift` pause waits for it until its
+    /// grace, then fails `scheduling_pause_release_busy` (ruling 3: every obstacle within the
+    /// caller's time), or at a shutdown `scheduling_pause_release_interrupted` (the loop's top
+    /// check); a continuation takes it only if it is free, and else goes round the loop's top
+    /// checks (fatal, lifted, shutdown) after one poll. With the guard in hand: what is in the way
+    /// (kept in memory, with `close_refused` while a refused close waits to be tried again); a
+    /// refusing queued entry fails a tool's hold at once (`TransferNotSafe`); with nothing left,
+    /// inside the multi-Nemu gate `released`, outside it the session close, which a `stand` pause
+    /// begins only after (b) asking under the pause table's lock whether it is still held at its
+    /// revision, the mark that its close has begun set in the same step (a resume lifting it
+    /// meanwhile: nothing closed). A close lease the scheduler refused closed nothing:
+    /// `close_refused` for a `stand` pause, tried again after `SCHEDULING_PAUSE_RETRY_INTERVAL`;
+    /// any other failure of the close is the check's failure (`check_failed` when `tried_again`
+    /// takes it). Then, outside the guard, a run in flight is drained again.
+    fn hand_back_check(
+        &self,
+        paused: PausedInstance<'_>,
+        links: &EventLinksDraft,
+        bound: StagesBound,
+        drained: &mut SchedulingDrainSummary,
+        close_again_at: Option<Instant>,
+    ) -> Result<HandBackCheck, RequestFailure> {
+        let stand = paused.mode == SchedulingPauseMode::Stand;
+        let instance_id = paused.instance_id;
+        // Tests: a check that fails as a failure of the Runtime that is not fatal would.
+        #[cfg(test)]
+        self.injected_pause_check_failure_for_test()?;
+        let instance_guard = self.instance_guard(instance_id)?;
+        let until = match bound {
+            StagesBound::Caller(deadlines) => deadlines.grace,
+            StagesBound::Unbounded => Instant::now(),
+        };
+        let Some(admission) = self.admission_within(&instance_guard, until)? else {
+            return match bound {
+                // The loop's top check keeps or lifts the pause as its mode says.
+                _ if self.fatal.is_shutdown_requested() => Ok(HandBackCheck::Again),
+                StagesBound::Unbounded => {
+                    // Tests: a continuation found the guard taken.
+                    #[cfg(test)]
+                    self.pause_meets_taken_guard_for_test()?;
+                    Ok(HandBackCheck::Wait)
+                }
+                StagesBound::Caller(_) if stand => {
+                    let in_the_way = self
+                        .release_obstacles(paused.alias, instance_id)?
+                        .in_the_way(false);
+                    self.note_in_the_way(paused, &in_the_way)?;
+                    Ok(HandBackCheck::End(ReleaseEnd::Standing {
+                        in_the_way,
+                        carry_on: true,
+                        failure: None,
+                    }))
+                }
+                StagesBound::Caller(_) => Err(scheduling_pause_release_busy()),
+            };
+        };
+        let obstacles = self.release_obstacles(paused.alias, instance_id)?;
+        // The close path's own rule (`prepare_resource_close`: a non-empty queue is
+        // `TransferNotSafe`), applied before any wait: a queued client waits for the device.
+        // #480 PG-2c: a person's pause waits for that client instead.
+        if obstacles.queue_waiting && !stand {
+            return Err(scheduling_pause_release_failure(
+                RuntimeHostError::scheduler(
+                    HostLocation::PrepareResourceCloseLease,
+                    &SchedulerError::TransferNotSafe,
+                ),
+            ));
+        }
+        let quiet = !obstacles.queue_waiting && obstacles.none_left();
+        let close_waits = close_again_at.is_some_and(|at| Instant::now() < at);
+        self.note_in_the_way(paused, &obstacles.in_the_way(quiet && close_waits))?;
+        if quiet && !close_waits {
+            // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
+            // instance outside the multi-Nemu gate closes its session here.
+            if self.keeps_device_session(instance_id)? {
+                return Ok(HandBackCheck::End(ReleaseEnd::Released));
+            }
+            if stand {
+                match self.begin_hand_back_close(paused)? {
+                    CloseStep::Begun => {}
+                    CloseStep::Lifted => return Ok(HandBackCheck::End(ReleaseEnd::Lifted)),
+                    CloseStep::ResumeLifting => return Ok(HandBackCheck::Wait),
+                }
+            }
+            // #480 PG-2b fix round 1: this close is the pause's hand-back, and says so
+            // (`hand_back`), so its close lease passes what this pause holds back.
+            match self.close_retained_instance_with(
+                instance_id,
+                links.clone(),
+                false,
+                LeaseReleaseReason::InstancePaused,
+                true,
+                &admission,
+            ) {
+                Ok(RetainedClose::Ran(Ok(()))) => {
+                    return Ok(HandBackCheck::End(ReleaseEnd::Released));
+                }
+                // ISO-2 (#419, ISO-M rows D54, C32): a close whose resources were confirmed is
+                // gone and its failure recorded; the pause holds. Workflow #403: an unconfirmed
+                // close fenced the instance; a tool's hold fails with the fence's non-fatal
+                // failure, a person's pause stays `paused` (#480 PG-2c), the close not tried
+                // again: a person's resume reconnects the fenced instance.
+                Ok(RetainedClose::Ran(Err(close_error))) => {
+                    return match self.settle_retained_close_failure(
+                        HostLocation::ClosePausedInstanceSession,
+                        instance_id,
+                        &close_error,
+                    )? {
+                        None => Ok(HandBackCheck::End(ReleaseEnd::Released)),
+                        Some(_) if stand => {
+                            let in_the_way = vec![PauseObstacle::CloseUnconfirmed];
+                            self.note_in_the_way(paused, &in_the_way)?;
+                            Ok(HandBackCheck::End(ReleaseEnd::Standing {
+                                in_the_way,
+                                carry_on: false,
+                                failure: None,
+                            }))
+                        }
+                        Some(error) => Err(scheduling_pause_release_failure(error)),
+                    };
+                }
+                // #480 PG-2c fix round 1: a close lease the scheduler refused (another member's
+                // entry ahead, the takeover cooldown, a holder) closed nothing: a person's pause
+                // ends its mark and tries again after the retry interval.
+                Ok(RetainedClose::LeaseRefused(_)) if stand => {
+                    lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?
+                        .end_hand_back_close(paused.alias, paused.revision);
+                    self.note_in_the_way(paused, &obstacles.in_the_way(true))?;
+                    return Ok(HandBackCheck::CloseRefused);
+                }
+                Ok(RetainedClose::LeaseRefused(error)) | Err(error) => {
+                    return Err(scheduling_pause_release_failure(error));
+                }
+            }
+        }
+        drop(admission);
+        // #480 PG-1, tests: the hand-back found its instance's key held.
+        #[cfg(test)]
+        if obstacles.lease_held {
+            self.pause_release_meets_lease_for_test()?;
+        }
+        if obstacles.run_in_flight {
+            let watched = stand.then_some((paused.alias, paused.revision));
+            let again = match self.drain_contained_runs_for_pause(
+                instance_id,
+                bound.stop_runs_at(),
+                bound.grace(),
+                watched,
+            )? {
+                PauseDrainEnd::Drained(again) => again,
+                PauseDrainEnd::Interrupted(_) if stand => {
+                    return Ok(HandBackCheck::End(ReleaseEnd::KeptAtShutdown));
+                }
+                PauseDrainEnd::Interrupted(_) => return Err(pause_drain_interrupted()),
+                PauseDrainEnd::PastGrace(_) if stand => {
+                    return Ok(HandBackCheck::End(ReleaseEnd::Standing {
+                        in_the_way: self.noted_in_the_way(paused)?,
+                        carry_on: true,
+                        failure: None,
+                    }));
+                }
+                PauseDrainEnd::PastGrace(_) => return Err(pause_drain_incomplete()),
+                PauseDrainEnd::Lifted(_) => return Ok(HandBackCheck::End(ReleaseEnd::Lifted)),
+            };
+            let overflow = || {
+                RuntimeHostError::fatal(
+                    HostCode::SchedulingPauseDrainCountOverflow,
+                    HostLocation::ReleasePausedInstance,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            };
+            drained.finished = drained
+                .finished
+                .checked_add(again.finished)
+                .ok_or_else(overflow)?;
+            drained.cancelled = drained
+                .cancelled
+                .checked_add(again.cancelled)
+                .ok_or_else(overflow)?;
+            return Ok(HandBackCheck::Again);
+        }
+        // Workflow #427-A fix 1, tests: the release waits here for a lane's run.
+        #[cfg(any(test, feature = "test-hooks"))]
+        if obstacles.lane_working {
+            self.pause_waits_for_lane_for_test()?;
+        }
+        Ok(HandBackCheck::Wait)
+    }
+
+    /// #480 PG-2c fix round 1: what the last check of the pause `paused` found in its way, as kept
+    /// in memory with the pause.
+    fn noted_in_the_way(
+        &self,
+        paused: PausedInstance<'_>,
+    ) -> Result<Vec<PauseObstacle>, RequestFailure> {
+        Ok(
+            lock(&self.scheduling_pause, HostLocation::ReleasePausedInstance)?
+                .noted_in_the_way(paused.alias),
+        )
+    }
+
+    /// #480 PG-2c: the instance's admission guard for a pause's hand-back, waited for only until
+    /// `until` (the end of its request's time; now, for a continuation, which tries it once) or a
+    /// shutdown: `None` then, with the guard still taken (a Start holds it through its readiness
+    /// wait). A poisoned guard is fatal.
     fn admission_within<'a>(
         &self,
         guard: &'a Mutex<()>,
@@ -4182,14 +4721,18 @@ impl HostShared {
             .is_some_and(|state| state.stage != InstancePauseStage::Released);
         // #480 PG-2c: a person's pause still draining or handing its device back is lifted at once,
         // with no reconnect claim (something still uses the instance) and no reconnect, unless the
-        // instance is fenced, whose resume is a person's re-proof of its close as before.
+        // instance is fenced, whose resume is a person's re-proof of its close as before. Fix round
+        // 1 (b): unless, under the persist gate, its hand-back's close has begun or its stage has
+        // reached `released` meanwhile: then it takes the path below, a `released` pause's.
         if unquiet && !fenced {
-            return self.resume_unquiet_instance_pause(
-                scope,
-                instance_alias,
-                instance_id,
-                expected,
-            );
+            // Tests: between the stage read and the persist gate.
+            #[cfg(test)]
+            self.before_unquiet_resume_for_test()?;
+            if let Some(resumed) =
+                self.resume_unquiet_instance_pause(scope, instance_alias, instance_id, expected)?
+            {
+                return Ok(resumed);
+            }
         }
         let token = self.await_preparation_claim(
             original,
@@ -4293,87 +4836,92 @@ impl HostShared {
         fenced: bool,
     ) -> Result<SchedulingPauseTable, RequestFailure> {
         let table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
-        check_scheduling_pause_expectation(
-            expected,
-            self.owner_epoch,
-            table
-                .instance_revisions
-                .get(instance_alias)
-                .copied()
-                .unwrap_or(0),
-        )?;
-        let stand = table.mode_of(instance_alias) == SchedulingPauseMode::Stand;
-        match table.instances.get(instance_alias).map(|state| state.stage) {
-            None if fenced => Ok(table.clone()),
-            None => Err(scheduling_pause_denied(
-                HostCode::SchedulingNotPaused,
-                ContractLocation::ResumeScheduling,
-            )),
-            Some(InstancePauseStage::Draining) if !stand => Err(scheduling_pause_denied(
-                HostCode::SchedulingPauseDraining,
-                ContractLocation::ResumeScheduling,
-            )),
-            Some(InstancePauseStage::Paused) if !stand => Err(scheduling_pause_denied(
-                HostCode::SchedulingPauseReleasing,
-                ContractLocation::ResumeScheduling,
-            )),
-            Some(_) => Ok(table.clone()),
-        }
+        check_resumable(&table, instance_alias, expected, fenced, self.owner_epoch)?;
+        Ok(table.clone())
     }
 
     /// #480 PG-2c (`contracts/scheduling-pause.md`, "Resume"): the resume of a person's pause
     /// (`stand`) still in stage `draining` or `paused` on an instance that is not fenced. Under the
-    /// persist gate, the refusals checked again (a stage of `released` reached meanwhile is lifted
-    /// the same way), the pause is lifted (its rows recorded first) or, Workflow #453 S2 fix 1,
-    /// held again with `instance.added`. No reconnect claim is waited for and no reconnect runs:
-    /// what still uses the instance goes on (a run asked to stop at its next checkpoint still
-    /// stops there), the session the hand-back had not yet closed outside the multi-Nemu gate
-    /// stays open, and the pause's own request, or the thread that carries its stages on, ends
-    /// at its next check (`scheduling_pause_lifted_by_resume` on the request). Answers
-    /// `SchedulingResumed` with the scope's new revision and no `selfcheck`.
+    /// persist gate, the refusals checked again, the pause is lifted (its rows recorded first) or,
+    /// Workflow #453 S2 fix 1, held again with `instance.added`. No reconnect claim is waited for
+    /// and no reconnect runs: what still uses the instance goes on (a run asked to stop at its next
+    /// checkpoint still stops there), the session the hand-back has not closed outside the
+    /// multi-Nemu gate stays open, and the pause's own request, or the thread that carries its
+    /// stages on, ends at its next check (`scheduling_pause_lifted_by_resume` on the request).
+    /// Answers `SchedulingResumed` with the scope's new revision and no `selfcheck`.
+    ///
+    /// #480 PG-2c fix round 1 (b): with the refusals, under the pause table's lock, it reads where
+    /// the hand-back is (`SchedulingPauseTable::begin_resume_lift`): its close begun, or the stage
+    /// `released` reached meanwhile, it lifts nothing here and answers `None`, and the resume takes
+    /// the path a `released` pause's resume takes (the reconnect claim, the reconnect, `selfcheck`
+    /// answered); otherwise it marks in the same step that it lifts without a reconnect, which a
+    /// hand-back about to close meets (`begin_hand_back_close`: it closes nothing). A lift that
+    /// then fails ends the mark.
     fn resume_unquiet_instance_pause(
         &self,
         scope: &SchedulingPauseScope,
         instance_alias: &str,
         instance_id: InstanceId,
         expected: Option<&SchedulingPauseExpectation>,
-    ) -> Result<OperationSuccess, RequestFailure> {
+    ) -> Result<Option<OperationSuccess>, RequestFailure> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
             HostLocation::PersistInstanceSchedulingResume,
         )?;
-        let mut prospective = self.resumable_instance_pauses(instance_alias, expected, false)?;
-        if let Some(revision) =
-            self.hold_start_pause_at_release(instance_alias, instance_id, &mut prospective)?
-        {
-            return Ok(OperationSuccess {
+        let mut prospective = {
+            let mut table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
+            check_resumable(&table, instance_alias, expected, false, self.owner_epoch)?;
+            if !table.begin_resume_lift(instance_alias) {
+                return Ok(None);
+            }
+            table.clone()
+        };
+        let lifted = (|| -> Result<OperationSuccess, RequestFailure> {
+            if let Some(revision) =
+                self.hold_start_pause_at_release(instance_alias, instance_id, &mut prospective)?
+            {
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::SchedulingResumed {
+                        scope: scope.clone(),
+                        revision,
+                        selfcheck: Some(scheduling_resume_selfcheck(
+                            &[],
+                            Some(HostCode::DispatchPausedInstance.as_str()),
+                        )),
+                    },
+                    failure_outcome: None,
+                });
+            }
+            prospective.lift_instance(instance_alias)?;
+            self.persist_scheduling_pauses(&prospective)?;
+            let revision = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
+                .lift_instance(instance_alias)?;
+            Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
                 result: RuntimeResult::SchedulingResumed {
                     scope: scope.clone(),
                     revision,
-                    selfcheck: Some(scheduling_resume_selfcheck(
-                        &[],
-                        Some(HostCode::DispatchPausedInstance.as_str()),
-                    )),
+                    selfcheck: None,
                 },
                 failure_outcome: None,
-            });
+            })
+        })();
+        match lifted {
+            Ok(resumed) => Ok(Some(resumed)),
+            // The lift did not happen: the mark ends, and the hand-back goes on.
+            Err(failure) => Err(
+                match lock(&self.scheduling_pause, ContractLocation::ResumeScheduling) {
+                    Ok(mut table) => {
+                        table.end_resume_lift(instance_alias);
+                        failure
+                    }
+                    Err(error) => failure.replace_with_poison(error),
+                },
+            ),
         }
-        prospective.lift_instance(instance_alias)?;
-        self.persist_scheduling_pauses(&prospective)?;
-        let revision = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
-            .lift_instance(instance_alias)?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::SchedulingResumed {
-                scope: scope.clone(),
-                revision,
-                selfcheck: None,
-            },
-            failure_outcome: None,
-        })
     }
 
     /// Workflow #191 ps2: the reconnect of an instance resume, since Workflow #317 sc3 (c) the

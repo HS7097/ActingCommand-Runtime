@@ -792,11 +792,12 @@ naming this file.
   answers success with the receipt's outcome as its cause: `scheduling_pause_standing`, its
   `pause_stage` and what is `in_the_way` (`contained_run`, `policy_run`, `lease`,
   `automatic_start`, `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`,
-  `close_unconfirmed`); the Runtime carries the rest on by itself, and `ac_status` shows the stage
-  becoming `released`. Do not pause again (`scheduling_already_paused`); `ac_resume` lifts it in
-  every stage. A shutdown before `released` answers `scheduling_pause_kept_at_shutdown`: the pause
-  is restored at the next start. A tool's hold (a rescue row's, a recording's) is `quiet_or_lift`:
-  quiet within its time, or it fails and is lifted.
+  `close_unconfirmed`, `check_failed`); the Runtime carries the rest on by itself, and `ac_status`
+  shows the stage becoming `released`. A second pause of a paused instance answers
+  `scheduling_already_paused`; `ac_resume` lifts the pause in every stage. A shutdown before
+  `released` answers `scheduling_pause_kept_at_shutdown`: the pause is restored at the next start. A
+  tool's hold (a rescue row's, a recording's) is `quiet_or_lift`: quiet within its time, or it fails
+  and is lifted.
 
 ## 9 Deploy and rollback
 

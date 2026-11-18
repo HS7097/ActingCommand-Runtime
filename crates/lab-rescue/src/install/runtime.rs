@@ -20,7 +20,7 @@ use actingcommand_contract::{
     SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_lab_ops::initiator::Initiator;
-use actingcommand_runtime_client::RuntimeClient;
+use actingcommand_runtime_client::{RuntimeClient, SchedulingPauseAnswer};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -34,6 +34,23 @@ use std::time::Duration;
 /// quiet or nothing within its drain and the grace (a pause that meets anything still in the way
 /// past them fails and is lifted, and a shutdown lifts it), set in code and never a parameter.
 pub(crate) const HOLD_PAUSE_MODE: SchedulingPauseMode = SchedulingPauseMode::QuietOrLift;
+
+/// #480 PG-2c fix round 1 (item 9): the result of a hold's pause, read with its receipt's outcome. A
+/// pause answered Completed whose outcome has a cause (`scheduling_pause_standing`,
+/// `scheduling_pause_kept_at_shutdown`, `scheduling_pause_lifted_by_resume`:
+/// `actingcommand_lab_ops::scheduling::answered_unquiet`) did not get its instance quiet. That
+/// cannot happen with `quiet_or_lift`, which a Runtime answers all or nothing, and is refused loudly
+/// if it does: `runtime_result_unexpected`, the receipt's outcome as its cause, the failure of the
+/// hold's pause as every other one is (the step's `runtime_stop_failed`).
+fn quiet_hold(answer: SchedulingPauseAnswer) -> Result<RuntimeResult, Outcome> {
+    if actingcommand_lab_ops::scheduling::answered_unquiet(&answer) {
+        return Err(Outcome::new(
+            actingcommand_runtime_client::ClientCode::RuntimeResultUnexpected,
+        )
+        .caused_by(answer.outcome));
+    }
+    Ok(answer.result)
+}
 
 /// One scheduling pause as a status read shows it: its reason (a pause reason name, never a
 /// code) and its revision.
@@ -467,18 +484,18 @@ impl RuntimeLink for SystemRuntime {
         drain_timeout_ms: u64,
     ) -> Result<Drained, Outcome> {
         let client = connect(state_root, self.initiator)?;
-        match client
-            .pause_scheduling_as(
-                SchedulingPauseScope::Instance {
-                    instance_alias: alias.to_owned(),
-                },
-                reason.clone(),
-                drain_timeout_ms,
-                HOLD_PAUSE_MODE,
-            )
-            .map_err(|error| error.outcome())?
-            .result
-        {
+        match quiet_hold(
+            client
+                .pause_scheduling_as(
+                    SchedulingPauseScope::Instance {
+                        instance_alias: alias.to_owned(),
+                    },
+                    reason.clone(),
+                    drain_timeout_ms,
+                    HOLD_PAUSE_MODE,
+                )
+                .map_err(|error| error.outcome())?,
+        )? {
             RuntimeResult::SchedulingPaused { drained, .. } => {
                 Ok(drained.map_or_else(Drained::default, |summary| Drained {
                     finished: summary.finished,
@@ -515,15 +532,16 @@ impl RuntimeLink for SystemRuntime {
         drain_timeout_ms: u64,
     ) -> Result<u64, Outcome> {
         let client = connect(state_root, self.initiator)?;
-        let paused = client
-            .pause_scheduling_as(
-                SchedulingPauseScope::Global,
-                reason.clone(),
-                drain_timeout_ms,
-                HOLD_PAUSE_MODE,
-            )
-            .map_err(|error| error.outcome())?
-            .result;
+        let paused = quiet_hold(
+            client
+                .pause_scheduling_as(
+                    SchedulingPauseScope::Global,
+                    reason.clone(),
+                    drain_timeout_ms,
+                    HOLD_PAUSE_MODE,
+                )
+                .map_err(|error| error.outcome())?,
+        )?;
         // The client answers only the `SchedulingPaused` of the scope it asked for.
         let RuntimeResult::SchedulingPaused { revision, .. } = paused else {
             return Err(Outcome::new(
