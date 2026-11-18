@@ -388,8 +388,17 @@ naming this file.
   instance's running task has ended**: up to the pause's drain (300 s), its checkpoint grace (30 s)
   and the IO timeout (5 s), 335 s in all; a caller with a shorter time limit must give it that time.
   Should the start end before the pause answers,
-  the session header already names the hold and `ac_record_stop` releases it. `ac_record_archive`
-  and `ac_record_stop` resume only the recording's own pause, found by its reason. A release that
+  the session header already names the hold and `ac_record_stop` releases it. #480 PG-2a (0.12.73):
+  so it is when the pause fails in a stage and the status read after it shows the recording's own
+  reason (since 0.12.72 a shutdown can keep a failed pause) or cannot be read: the start fails with
+  the hold in its details and `ac_record_stop` releases it; a pause the Runtime refuses, or one that
+  failed and left no pause with that reason, puts the header back and starts nothing. Fix round 1:
+  a start that keeps the header after it sent the pause names in its details `instance`, `hold`
+  and `pause_found`, `hold_shown` (the status shows the recording's own reason) or `pause_unread`
+  (the pause not read: the read failed or could not be sent after a receipt that says the Runtime
+  halted, or the pause got no answer); read that member, not the message.
+  `ac_record_archive` and `ac_record_stop` resume only the recording's own pause, found by its
+  reason. A release that
   fails keeps the hold: the archive or the stop stands, and the answer is the failure with
   `hold.kept` and `next.release`, the call that tries the release again (`record stop` again, or
   `record archive` with `record_id`), never an unconditional resume. A press with `record` on an
