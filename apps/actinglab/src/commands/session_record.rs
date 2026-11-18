@@ -16,14 +16,16 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ArchiveCopyFrames, BoxSpec, BoxUse, ClickRetry, ClickSpec, EndingSpec,
     InstalledIdentity, InstalledRow, KeyRequest, KeySpec, LAB_RECORD_MARK_SCHEMA, MarkFamily,
-    MarkRequest, MarkSpec, OptionalAfterSpec, PreviewRuler, RecordArchiveOptions,
-    RecordFramesRequest, RecordPoint, RecordRect, RecordReopenOptions, RecordReviewRequest,
-    RecordStartOptions, RecordStopOptions, RecordingHold, RecordingLock, StepAction,
-    StepActionKind, TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive,
-    record_archive_copy, record_archive_warnings, record_frames, record_hold_status,
-    record_instance_check, record_mark, record_ready, record_reopen, record_review, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    MarkRequest, MarkSpec, OptionalAfterSpec, RecordArchiveOptions, RecordFramesRequest,
+    RecordPoint, RecordRect, RecordReopenOptions, RecordReviewRequest, RecordStartOptions,
+    RecordStopOptions, RecordingHold, RecordingLock, StepAction, StepActionKind,
+    TemplateScalesSpec, TransitionSpec, parse_mark_request, record_archive, record_archive_copy,
+    record_archive_warnings, record_frames, record_hold_status, record_instance_check, record_mark,
+    record_ready, record_reopen, record_review, record_start, record_start_defaults, record_status,
+    record_stop, record_stop_close,
 };
+// #463 S1-R: the ruler of `record review`'s previews.
+use actingcommand_lab::PreviewRuler;
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use serde::{Deserialize, Serialize};
@@ -3528,26 +3530,6 @@ fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> C
         .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
 }
 
-/// #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): the
-/// ruler `--ruler` (MCP `ruler`) asks for on `record review`'s previews, `None` without the flag.
-/// The command line hands the flag on as written, so its word is checked here against the closed
-/// list the operation table gives it (`PreviewRuler::WORDS`), and another word is answered as
-/// `record mark` answers another word of its closed list `--transition` on this line:
-/// `validation_failed`, its text naming the words and the word given; a flag given twice or without
-/// a value is refused as every value of these commands is.
-fn ruler_flag(flags: &FlagArgs) -> CliOutcome<Option<PreviewRuler>> {
-    record_flag_value(flags, "--ruler")?
-        .map(|word| {
-            PreviewRuler::from_word(&word).ok_or_else(|| {
-                CliError::usage(format!(
-                    "--ruler must be {}, got {word}",
-                    PreviewRuler::WORDS.join(" or ")
-                ))
-            })
-        })
-        .transpose()
-}
-
 /// #463 S2-13: the whole number `flag` gives (`argument` its MCP name), `None` when it is not
 /// given. #463 stage two, train 1, fix round: as the parent's flags (`after_capture_ms`), the last
 /// value when the flag is given more than once, and a value that is no such number
@@ -3623,6 +3605,26 @@ fn run_record_review(
     )?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record review output: {error}")))
+}
+
+/// #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): the
+/// ruler `--ruler` (MCP `ruler`) asks for on `record review`'s previews, `None` without the flag.
+/// The command line hands the flag on as written, so its word is checked here against the closed
+/// list the operation table gives it (`PreviewRuler::WORDS`), and another word is answered as
+/// `record mark` answers another word of its closed list `--transition` on this line:
+/// `validation_failed`, its text naming the words and the word given; a flag given twice or without
+/// a value is refused as every value of these commands is.
+fn ruler_flag(flags: &FlagArgs) -> CliOutcome<Option<PreviewRuler>> {
+    record_flag_value(flags, "--ruler")?
+        .map(|word| {
+            PreviewRuler::from_word(&word).ok_or_else(|| {
+                CliError::usage(format!(
+                    "--ruler must be {}, got {word}",
+                    PreviewRuler::WORDS.join(" or ")
+                ))
+            })
+        })
+        .transpose()
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

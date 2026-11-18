@@ -680,8 +680,7 @@ naming this file.
   with `no_preview`: `validation_failed`), and the answer adds `ruler` (`kind`, `space`
   `frame_pixels`, `tick_px`, `long_tick_px`, `number_px`, `top_numbers`, `left_numbers`, `line_px`
   on `grid`). Read the numbers; give a stored frame's `path`, never a preview, where a frame is
-  taken. Without `ruler` every preview and the answer are as before. `ac_record_frames` takes no
-  ruler and is as above.
+  taken. Without `ruler` every preview and the answer are as before.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
