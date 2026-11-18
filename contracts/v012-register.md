@@ -40257,11 +40257,13 @@ found again).
   writes no range.
 - *The refusal goes.* `select_problem` `blocks_with_rows` is no longer produced. It is removed from
   `SelectProblem`, from the catalogue's vocabulary (the catalogue's rule: guard G7 holds a
-  vocabulary enum and its catalogue vocabulary equal, and a word a released snapshot holds stays
-  unused there; no released snapshot holds this one, its `since` 0.12.74 being unreleased, so it is
-  removed), from `record_select_invalid`'s texts in `lab.json` (the index regenerated: current,
-  unchanged), from the operation table and from lab-recording.md. A refusal writes nothing, so no
-  recording on disk holds the word, and every recording loads as before.
+  vocabulary enum and its catalogue vocabulary equal, word for word, so the two lose it together;
+  a release file under `contracts/outcome-codes/released/` holds only codes and locations, the
+  signatures guard G9 binds, and no vocabulary, so no release binds a word of one; 0.12.74 has no
+  release file yet either; so it is removed), from `record_select_invalid`'s texts in `lab.json`
+  (the index regenerated: current, unchanged), from the operation table and from
+  lab-recording.md. A refusal writes nothing, so no recording on disk holds the word, and every
+  recording loads as before.
 - *The self-checks* need no new code (above): a screen captured while the list still moved reads
   its names poorly and is refused there, `select_name_unread`, one refusal for each row the band
   holds whole, the message counting the select once (§1.479).

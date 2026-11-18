@@ -117,8 +117,10 @@ const SCAN_WITHOUT_END_REVISION: u64 = 18;
 const SCAN: &str = "scan";
 const END: &str = "end";
 /// Revision 20: a `repeated_anchor` layout's shared read (Workflow #463 SEL-2L), and the members
-/// it reads: a task file's `candidate_layouts`, a layout's `kind` and its `shared_ocr`; revision
-/// 7's masked anchor ([`layout_anchor_masked`]) reads the first three by the same names.
+/// it reads: a task file's `candidate_layouts`, a layout's `kind` with the value
+/// `repeated_anchor`, and its `shared_ocr`; revision 7's masked anchor ([`layout_anchor_masked`])
+/// reads `candidate_layouts`, `kind` and the value `repeated_anchor` by the same constants, and
+/// not `shared_ocr`.
 const ANCHORED_SHARED_READ_REVISION: u64 = 20;
 const CANDIDATE_LAYOUTS: &str = "candidate_layouts";
 const KIND: &str = "kind";

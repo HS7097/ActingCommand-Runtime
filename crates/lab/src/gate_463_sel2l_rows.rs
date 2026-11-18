@@ -221,7 +221,7 @@ enum Names {
 // Whether card `k` shows its name on two lines in the grid of `Names::Mixed`: its row and column
 // add up to an even number.
 fn two_lines(k: u32) -> bool {
-    (k / 2 + k % 2) % 2 == 0
+    (k / 2 + k % 2).is_multiple_of(2)
 }
 
 // The marker gray of the pixel at the card's row `dy` of card `k`'s name, on a line of it.
@@ -1049,10 +1049,8 @@ fn sel2l_rows_a_screen_still_moving_is_unread_there_and_counts_once() {
 // admission (`load_content_entries`: the declaration gate, the derivation and the recognition
 // pack's admission) admits it in memory, and record stop's self-checks, which ran the kernel's
 // offline entry on that package, read through its shared read and decide `hotel`, a two-line name
-// no read of its name box whole reads. The package needs `package` 20: this build's range [3, 20]
-// holds a bundle of [20, 20], and an installer whose range ends at 19 refuses it at its edge, where
-// a Runtime before 20 would answer the member unknown (`UnknownField` at
-// /candidate_layouts/0/shared_ocr) at every run.
+// no read of its name box whole reads. The range half proves less than the package's revision: see
+// its comment below.
 #[test]
 fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below() {
     let bench = demonstrated(Names::Mixed, false);
@@ -1082,6 +1080,16 @@ fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below(
         )
     });
 
+    // What this half proves: the build's own declared `package` range is [3, 20], it holds a
+    // bundle of [20, 20], and a range that ends at 19 does not (`package_edge_holds`, the rule of
+    // the installer's `place` and of ready's I2). What it does not prove: that this generated
+    // package needs 20. The pair [20, 20] is written by hand, after the contract's row 20
+    // (contracts/component-interfaces.md). The function that computes a bundle's revision from
+    // its content, `content_revision` (apps/actinglab/src/resource_verify/revision.rs, which
+    // counts a `repeated_anchor` layout with `shared_ocr` as 20, `anchored_shared_read`), lives in
+    // the actinglab binary, which has no library target and itself depends on this crate, so this
+    // crate cannot call it; its row 20 is pinned in apps/actinglab/src/tests/gate_464_p2.rs, on a
+    // layout written there, not on this package.
     let declared: Value = serde_json::from_str(include_str!(
         "../../../distribution/windows/component-interfaces.json"
     ))
