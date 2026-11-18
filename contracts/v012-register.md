@@ -39962,28 +39962,34 @@ code, never whether it is registered), and §1.468's `global_paused` and WATCH-P
   instance carrying the links of the pause's own request (its request and correlation
   identifiers, the instance), its severity the outcome's category, never per poll or try:
   `scheduling_pause_standing` (the receipt's own cause, written by the request before it answers and
-  before the continuation starts, so a pause's records come in the order of its life; also for an
-  unconfirmed close, which ends the caller's time at once); `scheduling_pause_settled` (new, info:
+  before the continuation starts; also for an unconfirmed close, which ends the caller's time at
+  once; fix round 1, below: under the persist gate, only while the pause still holds);
+  `scheduling_pause_settled` (new, info:
   the continuation reached `released`); `scheduling_resume_without_reconnect` (the resume's own
   cause, written by the resume after the lift under the pause's links, which the pause table keeps
   in memory from the pause's request until the lift, `SchedulingPauseTable::pause_links`);
   `scheduling_pause_kept_at_shutdown` (the request's answer within its caller's time, else the
   continuation's at the shutdown); `scheduling_pause_lifted_not_quiet` (new, warning: a
-  `quiet_or_lift` hold not quiet by the end of its caller's time and lifted, with `pause_reason` the
-  hold's reason, `in_the_way` what was in the way and the Runtime's own code of that failure,
-  `scheduling_pause_drain_incomplete` or `scheduling_pause_release_busy`, as its cause, written
-  after the lift).
+  `quiet_or_lift` hold lifted without its instance having become quiet, with `pause_reason` the
+  hold's reason, `in_the_way` what was in the way and the Runtime's own code of that failure as its
+  cause, written after the lift; in all four cases fix round 1 below gives: its caller's time ended
+  first, `scheduling_pause_drain_incomplete` or `scheduling_pause_release_busy`; a queued entry
+  refused its hand-back, `lease_transfer_not_safe`; the scheduler refused its close lease, that
+  refusal).
 - *What decides.* Where the stages end (`StagesEnd::Standing`, `KeptAtShutdown`, `Released` on a
-  continuation), never a code; a hold's lift is recorded only when the place that failed it for
-  time marked it (`HostShared::mark_not_quiet`, `StageCheck::not_quiet`, at the four places a hold's
+  continuation), never a code; a hold's lift is recorded only when the place that failed it without
+  quiet marked it (`HostShared::mark_not_quiet`, `StageCheck::not_quiet`, at the four places a hold's
   time ends: the drain past its grace, the hand-back past it, the guard still taken then, a run
-  drained again past it). For that record a hold's checks now keep what is in the way in memory
-  too (`note_in_the_way` for both modes); it decides nothing for the hold.
+  drained again past it; since fix round 1 also the two places of `hand_back_check` where a
+  refusing queued entry or a refused close lease fails it). For that record a hold's checks now
+  keep what is in the way in memory too (`note_in_the_way` for both modes); it decides nothing for
+  the hold.
 - *None for*: a pause quiet within its caller's time, a check tried again, a resume of a pause
   already `released` or of a fenced instance or one whose close had begun (the reconnect's records),
   a resume while the request still runs (the request's receipt answers it; the resume writes the
   lift), an unconfirmed close the continuation meets (the fence's records), a hold that failed for
-  anything but its time, a restored pause, the global pause.
+  anything but the four of fix round 1 (an unconfirmed or otherwise failed close, a failed check, a
+  shutdown, a fatal error), a restored pause, the global pause.
 - *A record that cannot be written* changes nothing the pause does or answers
   (`HostShared::record_pause_moment`): the failure is said in the daemon's log
   (`FatalState::report_skipped`) with the record it could not write as a related link; a write the
@@ -40030,7 +40036,7 @@ while the console drew from the status alone.
 | Word | What it stands for | Refuses, warns or informs | Severity | Where it shows |
 |---|---|---|---|---|
 | `scheduling_pause_settled` (new code of the `runtime-host` fragment; `HostCode::SchedulingPauseSettled`) | a person's pause that answered `scheduling_pause_standing` reached `released` by itself | informs | info | one `device_state_observed` record under the instance; never an answer |
-| `scheduling_pause_lifted_not_quiet` (new code; `HostCode::SchedulingPauseLiftedNotQuiet`; `pause_reason`, `in_the_way` required) | a tool's hold (`quiet_or_lift`) was not quiet by the end of its caller's time and was lifted | warns | warning | one `device_state_observed` record under the instance, the failure (`scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`) as its cause; the request's receipt answers that failure as before |
+| `scheduling_pause_lifted_not_quiet` (new code; `HostCode::SchedulingPauseLiftedNotQuiet`; `pause_reason`, `in_the_way` required) | a tool's hold (`quiet_or_lift`) was lifted without its instance having become quiet (fix round 1: whatever kept it from being quiet) | warns | warning | one `device_state_observed` record under the instance, the failure (`scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`, `lease_transfer_not_safe`, a close lease's refusal such as `lease_busy` or `lease_cooldown`) as its cause; the request's receipt answers that failure as before |
 
 Changed texts only: `scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown` and
 `scheduling_resume_without_reconnect` say they are also one record each; the key `in_the_way` says it
@@ -40040,9 +40046,9 @@ also carries the hold's words. The index is regenerated.
 
 | Part | Where |
 |---|---|
-| The records | `host/policy_dispatch.rs`: `HostShared::record_pause_moment`, `pause_record_links`; `pause_scheduling` (standing, kept, lifted not quiet), `carry_on_instance_pause` (settled, kept), `resume_unquiet_instance_pause` (the lift) |
+| The records | `host/policy_dispatch.rs`: `HostShared::record_pause_moment`, `record_held_pause_moment` (fix round 1), `pause_record_links`; `pause_scheduling` (standing, kept, lifted not quiet), `carry_on_instance_pause` (settled, kept), `resume_unquiet_instance_pause` (the lift) |
 | The pause's links | `SchedulingPauseTable::pause_links` (set by `pause_scheduling`, ended by `lift_instance`) |
-| A hold not quiet in time | `SchedulingPauseTable::mark_not_quiet`, `not_quiet_in_the_way`, `StageCheck::not_quiet`; `HostShared::mark_not_quiet` at `run_instance_pause_stages`, `release_paused_instance` and `hand_back_check`; `HostShared::note_in_the_way` for both modes |
+| A hold lifted without quiet | `SchedulingPauseTable::mark_not_quiet`, `not_quiet_in_the_way`, `StageCheck::not_quiet`; `HostShared::mark_not_quiet` at `run_instance_pause_stages`, `release_paused_instance` and `hand_back_check` (fix round 1: also at its refusing queued entry and its refused close lease); `HostShared::note_in_the_way` for both modes |
 | The client | `crates/runtime-client/src/client.rs`: `SchedulingResumeAnswer`, `resume_scheduling_as`, `resume_scheduling_expected_as`, `resumed_answer`, `send_or_dropped_receipt`, `SentReceipt` |
 | The Lab | `crates/lab-ops/src/scheduling.rs`: `resume_as`, `resume_expected_as`; `crates/lab-ops/src/core_ops.rs`: the `resume` row, `reported_with_cause` |
 | Texts | the outcome catalog (`runtime-host.json`: the two codes and three descriptions; `catalog.json`: the key `in_the_way`), its regenerated index; [scheduling-pause.md](scheduling-pause.md); the operation table's row `resume` (`help`, `notes`) |
@@ -40076,6 +40082,51 @@ reads (above); `runtime-outcomes` stays 1, new codes in the catalog only; `runti
 console or a Lab of 0.12.71 to 0.12.73 reads them as records of codes it does not know. The Lab's
 `resume` answers the cause against a Runtime of 0.12.73 or later (the first that gives it); against an
 older one it answers no cause, as for an ordinary resume.
+
+**Fix round 1** (coordinator work order `rd-1119/brief-480-pg2d-fix1.md`, after the independent
+review of #1834 and the coordinator's disposition of its three remarks). Nothing a pause or a resume
+does changes: no decision, wait, lock order or lift differs.
+- *The request's record is true when it is written* (the review's first remark). Between the
+  request thread's decision that a `stand` pause stands and its record, a person's resume could lift
+  the pause and write its own record first, the standing record then the pause's last and wrong
+  word. The request now decides its record under the persist gate (`record_held_pause_moment`): it
+  takes the gate with nothing else held, reads under the pause table's lock whether its pause still
+  holds at its revision, releases that lock and writes the record under the gate only then; a pause
+  lifted first (or held again with `instance.added`, another revision) writes none, the resume's
+  records saying what happened. The order of the locks is every pause's and resume's (the gate,
+  then the table; the resume appends under the gate too); the continuation still starts after the
+  record. The request's other record, `scheduling_pause_kept_at_shutdown` within its caller's time,
+  had the same gap (a resume already running when a shutdown comes is not refused and lifts the
+  pause) and is decided the same way. The continuation's own records (`scheduling_pause_settled`,
+  its `scheduling_pause_kept_at_shutdown`) are unchanged: its path never takes the persist gate, so
+  the contract's sentence on the order of records is narrowed to what the code guarantees
+  ([scheduling-pause.md](scheduling-pause.md), "A pause's life in the ledger", "The order of a
+  pause's records").
+- *The resume's record stays inside the persist gate* (the review's third remark is not taken): its
+  place there, with the lift, is what orders it against the request's record; a comment at that
+  line says so.
+- *Every lift of a hold without quiet is recorded* (the coordinator's ruling, widening the slice's
+  "only the two timeouts"). The code's one cause is a hold lifted without its instance having become
+  quiet; why it was not quiet is its chained cause, the Runtime's own failure for that path. Besides
+  the two timeouts, `hand_back_check` marks the hold (`mark_not_quiet`) where a refusing queued entry
+  fails it (`lease_transfer_not_safe`; `in_the_way` what that check read, `queued_entry` among it)
+  and where the scheduler refuses its session close lease (the refusal's code, such as `lease_busy`
+  or `lease_cooldown`; `in_the_way` `close_refused`). One record per lift, as for the timeouts: a
+  hold's stages run on its request's thread alone (no continuation carries a hold on), every place
+  that marks it returns its failure at once, `pause_scheduling` reads the mark once before the lift,
+  and the lift ends it with the pause's state (`lift_instance`). An unconfirmed or otherwise failed
+  close, a failed check, a shutdown and a fatal error still write none.
+- *Texts.* `scheduling_pause_lifted_not_quiet`'s description and common causes and the key
+  `in_the_way` (the index regenerated); `HostCode::SchedulingPauseLiftedNotQuiet`'s comment; the
+  contract's table of moments, its list of what writes none, its paragraph on a failed stage and its
+  sentence on the order of records.
+- *Tests* (`crates/runtime-host/src/tests/gate_480_pg2d.rs`, host gate map "#480 PG-2d"): a person's
+  resume between the request's standing stages and its record (the request held by its hook before
+  the persist gate, `run_before_held_pause_record_for_test`) leaves the resume's record as the
+  pause's one record, no standing record after it, both receipts as before; a hold a queued client
+  entry refuses and, outside the multi-Nemu gate, a hold whose close lease is refused each write one
+  `scheduling_pause_lifted_not_quiet` with their words and cause. `gate_480_pg2c`'s `nemu_host` and
+  `NEMU` are made visible to that gate (`pub(super)`), unchanged; no existing test is adapted.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

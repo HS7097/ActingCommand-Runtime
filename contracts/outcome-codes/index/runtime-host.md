@@ -1103,7 +1103,7 @@ hand. The [summary](README.md) says what each column means. 1172 codes.
 | `scheduling_pause_fact_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause fact invalid. |
 | `scheduling_pause_kept_at_shutdown` | info | none | 0.12.72 | active | pending | written | A person's instance pause (PauseScheduling of one instance, pause_mode stand) had not reached stage released when the Runtime was asked to stop within its… |
 | `scheduling_pause_lifted_by_resume` | info | none | 0.12.73 | active | pending | written | A person's instance pause (pause_mode stand) was still running its stages within its caller's time when a resume of the instance lifted it, which a stand pause… |
-| `scheduling_pause_lifted_not_quiet` | warning | none | 0.12.74 | active | pending | written | A tool's hold (an instance pause with pause_mode quiet_or_lift: a rescue operation's hold, a recording's hold) was not quiet by the end of its caller's time and… |
+| `scheduling_pause_lifted_not_quiet` | warning | none | 0.12.74 | active | pending | written | A tool's hold (an instance pause with pause_mode quiet_or_lift: a rescue operation's hold, a recording's hold) was lifted, all or nothing, without its instance… |
 | `scheduling_pause_origin_missing` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause origin missing. |
 | `scheduling_pause_owner_epoch_mismatch` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause owner epoch mismatch. |
 | `scheduling_pause_persist_failed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports scheduling pause persist failed. |

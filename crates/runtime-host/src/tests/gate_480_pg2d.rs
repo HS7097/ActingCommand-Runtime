@@ -18,16 +18,26 @@
 // where the thread runs and latches the Runtime at once, before any join. On the fake device of
 // `gate_480_pg2c`'s client fixture, built here; every wait returns as soon as what it waits for
 // is seen, `GATE_WAIT` only bounds a broken run; no clock is read.
+//
+// Fix round 1 (coordinator work order `rd-1119/brief-480-pg2d-fix1.md`): point 1, a person's
+// resume that lifts a standing pause after its request's stages ended and before its record leaves
+// the resume's record and no standing record after it (the two steps in that order, by the
+// request's hook before its persist gate); point 2 (the coordinator's ruling: every lift of a hold
+// without quiet is recorded), a tool's hold refused by a queued entry and one whose close lease is
+// refused (outside the multi-Nemu gate, `gate_480_pg2c`'s two Nemu instances) each write one
+// `scheduling_pause_lifted_not_quiet` after their lift.
 
 use super::gate_369_s6c::{head, instance_scope, resume, send};
 use super::gate_480_pg2b::{assert_cause, instance_pause_as, pause_stage};
+use super::gate_480_pg2c::{NEMU, nemu_host};
 use super::instance_workers::{all_events, phases, wait_until};
 use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     InstancePauseStage, RequestId, RuntimeLifecyclePhase, SchedulingPauseMode,
 };
-use serde_json::json;
+use actingcommand_scheduler::{ClaimKind, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS, SchedulerError};
+use serde_json::{Value, json};
 
 /// Test plan v2.2 §2.1 guard 3: the one bound of a cross-thread wait in this file.
 const GATE_WAIT: Duration = Duration::from_secs(120);
@@ -509,4 +519,187 @@ fn pg2d_a_panic_of_the_continuation_is_caught_where_it_runs_and_latches_at_once(
         "the pause is not lifted"
     );
     assert!(host.close().is_err(), "the Runtime latched");
+}
+
+// Fix round 1, point 1 (the review of #1834, its first remark): a person's pause stands behind a
+// client's lease. Its request, its stages ended standing, is held by the hook before it takes the
+// persist gate to write its record, and a person's resume lifts the pause then, without a
+// reconnect, writing its own record. The request goes on and finds under the persist gate that its
+// pause no longer holds: no standing record, so the pause's one record, its last word, is the
+// resume's (under the pause request's links). What each answers is as before: the request
+// `scheduling_pause_standing` (`paused`, `lease`), the resume `scheduling_resume_without_reconnect`;
+// the continuation the request starts ends at its first check and writes nothing.
+#[test]
+fn pg2d_fix1_a_resume_before_the_standing_record_leaves_no_standing_record_after_its_own() {
+    let root = TempDir::new().expect("tempdir");
+    let host = client_host(&root, true);
+    let token = acquire(&host, 4081);
+    let (decided_tx, decided_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_before_held_pause_record_for_test(Box::new(move || {
+        let _ = decided_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the request's hook");
+    let before = head(&host);
+    let request = instance_pause_as(CLIENT, STAND);
+
+    let (paused, resumed) = thread::scope(|scope| {
+        let pausing = scope.spawn(|| process(&host, &request, 4082));
+        decided_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the request's stages ended standing");
+        let resumed = resume(&host, instance_scope(CLIENT), 4083);
+        go_tx.send(()).expect("the request goes on");
+        (pausing.join().expect("the pause's thread"), resumed)
+    });
+
+    completed(&paused);
+    assert_cause(
+        &paused,
+        "scheduling_pause_standing",
+        "paused",
+        Some(&["lease"]),
+    );
+    completed(&resumed);
+    let [cause] = resumed.outcome().causes() else {
+        panic!("one cause of the resume: {resumed:?}");
+    };
+    assert_eq!(
+        cause.outcome().code().as_str(),
+        "scheduling_resume_without_reconnect"
+    );
+    wait_for_no_continuation(&host);
+    let records = pause_life_after(&host, before);
+    assert_eq!(codes(&records), ["scheduling_resume_without_reconnect"]);
+    assert_pause_links(&records[0], &request);
+    assert_eq!(pause_stage(&host, CLIENT), None, "the pause is lifted");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    release(&host, token, 4081);
+    host.close().expect("close host");
+}
+
+/// Fix round 1: the connection of the client entry queued behind the lease.
+const QUEUED_CONNECTION: u64 = 4092;
+
+// Fix round 1, point 2: the tool's hold `request` failed (`receipt`, Failed) with `code`, and its
+// lift wrote one record of its life after `before`: `scheduling_pause_lifted_not_quiet`, a warning,
+// the hold's reason, `in_the_way`, that failure's code as its one cause, the hold request's links.
+#[track_caller]
+fn assert_one_lift_not_quiet(
+    host: &RuntimeHost,
+    before: u64,
+    receipt: &RuntimeReceipt,
+    request: &RuntimeRequest,
+    in_the_way: &Value,
+    code: &str,
+) {
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
+    let failure = host
+        .failure_outcome_for_test(request.request_id())
+        .expect("the refused requests")
+        .expect("the hold's failure");
+    assert_eq!(failure.code().as_str(), code, "{failure:?}");
+    let records = pause_life_after(host, before);
+    let [lifted] = &records[..] else {
+        panic!("the lifted hold's one record: {records:?}");
+    };
+    assert_eq!(
+        lifted.outcome.code().as_str(),
+        "scheduling_pause_lifted_not_quiet"
+    );
+    assert_eq!(lifted.severity, EventSeverity::Warning);
+    assert_eq!(
+        lifted.outcome.value("pause_reason"),
+        Some(&json!("pg2b_pause"))
+    );
+    assert_eq!(lifted.outcome.value("in_the_way"), Some(in_the_way));
+    let [cause] = lifted.outcome.causes() else {
+        panic!("the failure as its cause: {lifted:?}");
+    };
+    assert_eq!(cause.outcome().code().as_str(), code);
+    assert_pause_links(lifted, request);
+}
+
+// Fix round 1, point 2 (the coordinator's ruling: every lift of a hold without quiet is recorded):
+// a client's lease holds the instance and another client's entry is queued behind it, for the
+// longest the scheduler takes (`gate_480_pg2c`'s L3); a tool's hold of the instance fails at its
+// hand-back's first check, the queued entry refusing it (`lease_transfer_not_safe`), and is lifted,
+// as before. One record after the lift, `scheduling_pause_lifted_not_quiet`: what that check read in
+// the way (`lease`, `queued_entry`), the refusal as its cause.
+#[test]
+fn pg2d_fix1_a_tools_hold_a_queued_entry_refuses_records_its_lift() {
+    let root = TempDir::new().expect("tempdir");
+    let host = client_host(&root, true);
+    let token = acquire(&host, 4091);
+    let holder = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_holder_id()
+        .expect("holder id");
+    let queued = send(
+        &host,
+        RuntimeOperation::queue_lease(
+            CLIENT,
+            holder,
+            LeaseQueuePolicy::new(LeasePriority::Normal, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS)
+                .expect("queue policy"),
+        ),
+        QUEUED_CONNECTION,
+    );
+    assert_eq!(queued.state(), RuntimeReceiptState::Queued, "{queued:?}");
+    let before = head(&host);
+    let request = instance_pause_as(CLIENT, HOLD);
+
+    let failed = process(&host, &request, 4093);
+
+    assert_one_lift_not_quiet(
+        &host,
+        before,
+        &failed,
+        &request,
+        &json!(["lease", "queued_entry"]),
+        "lease_transfer_not_safe",
+    );
+    assert_eq!(pause_stage(&host, CLIENT), None, "the hold is lifted");
+    host.end_connection_for_test(ConnectionId::new(QUEUED_CONNECTION).expect("connection"))
+        .expect("the queued entry's connection ends");
+    release(&host, token, 4091);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Fix round 1, point 2: outside the multi-Nemu gate (`gate_480_pg2c`'s two Nemu instances, the
+// session an observation left open) a tool's hold with nothing in the way, its grace past, whose
+// hand-back's close lease the scheduler refuses once (another member's entry ahead) closes nothing,
+// fails with the refusal's code (`lease_busy`) and is lifted, as before. One record after the lift,
+// `scheduling_pause_lifted_not_quiet`: `close_refused` in the way, the refusal as its cause.
+#[test]
+fn pg2d_fix1_a_tools_hold_whose_close_lease_is_refused_records_its_lift() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state) = nemu_host(&root, |config| {
+        config
+            .with_scheduling_pause_deadlines_for_test(Duration::ZERO)
+            .with_scheduling_pause_retry_for_test(Duration::ZERO)
+    });
+    host.refuse_hand_back_closes_for_test(vec![SchedulerError::QueueAhead {
+        kind: ClaimKind::ClientLease,
+        position: 1,
+    }])
+    .expect("the refused close lease");
+    let before = head(&host);
+    let request = instance_pause_as(NEMU, HOLD);
+
+    let failed = process(&host, &request, 4101);
+
+    assert_one_lift_not_quiet(
+        &host,
+        before,
+        &failed,
+        &request,
+        &json!(["close_refused"]),
+        "lease_busy",
+    );
+    assert_eq!(pause_stage(&host, NEMU), None, "the hold is lifted");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
 }

@@ -390,6 +390,22 @@ impl HostShared {
         Ok(())
     }
 
+    /// #480 PG-2d fix round 1, test builds: runs, once, the hook a test set for an instance pause's
+    /// request whose stages ended standing or kept at a shutdown, before it takes the persist gate
+    /// to record that moment (`record_held_pause_moment`).
+    #[cfg(test)]
+    fn before_held_pause_record_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.held_pause_record_hook_for_test,
+            HostLocation::PauseInstanceScheduling,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
     /// #480 PG-2c fix round 2 (item 4), test builds: runs, once, the hook a test set for a `stand`
     /// pause's request that finds its instance's admission guard taken.
     #[cfg(test)]
@@ -755,7 +771,8 @@ struct StageCheck {
     /// #480 PG-2d: a tool's hold (`quiet_or_lift`) whose stages failed because something was
     /// still in the way at the end of its caller's time (`in_the_way` says what), so that its lift
     /// writes `scheduling_pause_lifted_not_quiet`; set where that failure arises, never read off its
-    /// code.
+    /// code. Fix round 1: also a hold whose hand-back met a refusing queued entry or whose close
+    /// lease was refused: every hold that fails without its instance having become quiet.
     not_quiet: bool,
 }
 
@@ -1081,9 +1098,10 @@ impl SchedulingPauseTable {
     }
 
     /// #480 PG-2d: the `quiet_or_lift` pause of `instance_alias` at `revision` was not quiet by the
-    /// end of its caller's time: what was in the way then (`in_the_way`; `None`: what its last
-    /// check noted), kept for its lift ([`Self::not_quiet_in_the_way`]); nothing for a pause no
-    /// longer held there.
+    /// end of its caller's time (fix round 1: or fails otherwise without its instance having become
+    /// quiet, a refusing queued entry or a refused close lease): what was in the way then
+    /// (`in_the_way`; `None`: what its last check noted), kept for its lift
+    /// ([`Self::not_quiet_in_the_way`]); nothing for a pause no longer held there.
     fn mark_not_quiet(
         &mut self,
         instance_alias: &str,
@@ -1103,8 +1121,8 @@ impl SchedulingPauseTable {
         check.not_quiet = true;
     }
 
-    /// #480 PG-2d: what was in the way of the pause of `instance_alias` when its caller's time
-    /// ended before it was quiet ([`Self::mark_not_quiet`]); `None` when it failed otherwise.
+    /// #480 PG-2d: what was in the way of the pause of `instance_alias` when it failed before it was
+    /// quiet ([`Self::mark_not_quiet`]); `None` when it failed otherwise.
     fn not_quiet_in_the_way(&self, instance_alias: &str) -> Option<Vec<PauseObstacle>> {
         self.stage_checks
             .get(instance_alias)
@@ -3862,6 +3880,12 @@ impl HostShared {
             // where that failure arose, `mark_not_quiet`) writes, once lifted, the record
             // `scheduling_pause_lifted_not_quiet`, read before the lift ends the pause's state. A
             // read of the table that fails here fails the lift too, which then poisons the request.
+            // Fix round 1 (the coordinator's ruling: every lift of a hold without quiet is
+            // recorded): so does a hold whose hand-back met a refusing queued entry or whose close
+            // lease was refused, marked there too. One record per lift: a hold's stages run on this
+            // request's thread alone (no continuation carries a hold on), each place that marks it
+            // returns its failure at once, the mark is read here once, and the lift ends it with
+            // the pause's state (`lift_instance`).
             (Err(failure), SchedulingPauseMode::QuietOrLift) => {
                 let not_quiet = lock(
                     &self.scheduling_pause,
@@ -3931,14 +3955,20 @@ impl HostShared {
         // #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): the caller's
         // time ended with something in the way (`scheduling_pause_standing`), or a shutdown kept the
         // pause (`scheduling_pause_kept_at_shutdown`): one record of the receipt's own cause, written
-        // before the continuation starts, so the pause's records come in the order of its life. A
-        // pause quiet within the caller's time writes none, and a resume's lift is the resume's.
+        // before the continuation starts. A pause quiet within the caller's time writes none, and a
+        // resume's lift is the resume's. Fix round 1 (the review of #1834, its first remark): a
+        // person's resume can lift the pause after these stages ended and before this record; the
+        // record is therefore decided under the persist gate, which orders it against the resume's
+        // record, and written only while the pause still holds (`record_held_pause_moment`).
         if matches!(
             end,
             StagesEnd::Standing { .. } | StagesEnd::KeptAtShutdown { .. }
         ) && let Some(cause) = &cause
         {
-            self.record_pause_moment(Ok(links.clone()), cause.clone());
+            // Tests: the stages ended, before the persist gate.
+            #[cfg(test)]
+            self.before_held_pause_record_for_test()?;
+            self.record_held_pause_moment(instance_alias, revision, links.clone(), cause.clone());
         }
         if let StagesEnd::Standing {
             stage,
@@ -3997,6 +4027,44 @@ impl HostShared {
         if let Err(error) = appended {
             self.fatal
                 .report_skipped(&error.outcome().link(CauseRelation::Related, outcome));
+        }
+    }
+
+    /// #480 PG-2d fix round 1 (the review of #1834, its first remark): the record of a moment that
+    /// says the instance pause of `instance_alias` at `revision` still holds, written by its own
+    /// request (`scheduling_pause_standing`, `scheduling_pause_kept_at_shutdown`). The persist gate
+    /// orders it against the record of a person's resume, which the resume writes with its lift
+    /// under the same gate (`resume_unquiet_instance_pause`): under it, the pause still held at its
+    /// revision is recorded ([`Self::record_pause_moment`]), and a pause a resume lifted first (or
+    /// held again, at another revision) writes nothing, the resume's records saying what happened.
+    /// The gate is taken with nothing else held, then the pause table's lock inside it, the order
+    /// every pause and resume takes them in; nothing the pause does depends on the record, and a
+    /// gate or a table that cannot be read is a record that cannot be written (said in the daemon's
+    /// log by `record_pause_moment`).
+    fn record_held_pause_moment(
+        &self,
+        instance_alias: &str,
+        revision: u64,
+        links: EventLinksDraft,
+        outcome: Outcome,
+    ) {
+        let held = lock(
+            &self.scheduling_pause_persist_gate,
+            HostLocation::PersistInstanceSchedulingPause,
+        )
+        .and_then(|persist| {
+            let held = lock(
+                &self.scheduling_pause,
+                HostLocation::PauseInstanceScheduling,
+            )?
+            .holds_instance_at(instance_alias, revision);
+            Ok((persist, held))
+        });
+        match held {
+            Ok((_persist, true)) => self.record_pause_moment(Ok(links), outcome),
+            // Lifted first: the resume's records say what happened.
+            Ok((_persist, false)) => {}
+            Err(error) => self.record_pause_moment(Err(error), outcome),
         }
     }
 
@@ -4368,7 +4436,11 @@ impl HostShared {
     /// time and fails for it: what was in the way (`in_the_way`; `None`: what its last check
     /// noted) is kept, marked, for the record its lift writes (`scheduling_pause_lifted_not_quiet`,
     /// `pause_scheduling`). Called where that failure arises, so its record is decided by where
-    /// the hold failed, never by the failure's code.
+    /// the hold failed, never by the failure's code. Fix round 1 (the coordinator's ruling: every
+    /// lift of a hold without quiet is recorded): also where a refusing queued entry or a refused
+    /// close lease fails it (`hand_back_check`); a hold that fails for anything else (an
+    /// unconfirmed or otherwise failed close, a failed check, a shutdown, a fatal error) is not
+    /// marked.
     fn mark_not_quiet(
         &self,
         paused: PausedInstance<'_>,
@@ -4679,6 +4751,9 @@ impl HostShared {
         // `TransferNotSafe`), applied before any wait: a queued client waits for the device.
         // #480 PG-2c: a person's pause waits for that client instead.
         if obstacles.queue_waiting && !stand {
+            // #480 PG-2d fix round 1: a tool's hold lifted without its instance quiet; what this
+            // check read was in the way (the refusing entry, `queued_entry`, among it).
+            self.mark_not_quiet(paused, Some(obstacles.in_the_way(false)))?;
             return Err(scheduling_pause_release_failure(
                 RuntimeHostError::scheduler(
                     HostLocation::PrepareResourceCloseLease,
@@ -4751,9 +4826,13 @@ impl HostShared {
                     self.note_in_the_way(paused, &obstacles.in_the_way(true))?;
                     return Ok(HandBackCheck::CloseRefused);
                 }
-                Ok(RetainedClose::LeaseRefused(error)) | Err(error) => {
+                // #480 PG-2d fix round 1: a tool's hold whose close lease was refused (it closed
+                // nothing) is lifted without its instance quiet; `close_refused` was in the way.
+                Ok(RetainedClose::LeaseRefused(error)) => {
+                    self.mark_not_quiet(paused, Some(obstacles.in_the_way(true)))?;
                     return Err(scheduling_pause_release_failure(error));
                 }
+                Err(error) => return Err(scheduling_pause_release_failure(error)),
             }
         }
         drop(admission);
@@ -5191,7 +5270,10 @@ impl HostShared {
             // #480 PG-2d (`contracts/scheduling-pause.md`, "A pause's life in the ledger"): the
             // pause was lifted before it was quiet: one record of the receipt's own cause, under
             // the pause request's links (kept with the pause from its request; were they missing,
-            // the instance's own).
+            // the instance's own). Fix round 1: written here, inside the persist gate with the
+            // lift, on purpose: the gate is what orders it against the pause request's own record
+            // (`record_held_pause_moment`, which writes under the same gate only while the pause
+            // still holds), so no record that the pause stands comes after this one.
             self.record_pause_moment(
                 self.pause_record_links(pause_links, instance_id),
                 cause.clone(),

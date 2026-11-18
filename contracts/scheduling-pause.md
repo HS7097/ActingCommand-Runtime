@@ -502,10 +502,11 @@ it was recorded, and the next start restores it as every persisted pause is rest
 no expiry" below; stage `released`). A failed pause writes no ledger event of its own: its code
 is in the request's receipt only, and the ledger shows the two records of `host.scheduling_pause`,
 the one that set the pause and the one that lifted it (none for a kept one). #480 PG-2d (since
-0.12.74): but a tool's hold that was not quiet by the end of its caller's time
-(`scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`) writes after its lift one
-record, `scheduling_pause_lifted_not_quiet`, and a kept `stand` pause one
-`scheduling_pause_kept_at_shutdown` ("A pause's life in the ledger"). A failed device close
+0.12.74): but a tool's hold lifted without its instance having become quiet (its caller's time
+ended first, `scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`; since its fix
+round 1 also a refusing queued entry, `lease_transfer_not_safe`, and a refused close lease, the
+scheduler's refusal) writes after its lift one record, `scheduling_pause_lifted_not_quiet`, and a
+kept `stand` pause one `scheduling_pause_kept_at_shutdown` ("A pause's life in the ledger"). A failed device close
 (an instance outside the multi-Nemu gate) fails the request with the close's own error; an
 unconfirmed close stays fatal as on every close path. The
 client's receipt wait is the drain timeout plus that grace plus its IO timeout. Since 0.12.72 the
@@ -705,11 +706,11 @@ try:
 
 | Moment | Outcome (severity) | Written by |
 |---|---|---|
-| a `stand` pause's caller's time ended with something in the way (also an unconfirmed close, which ends it at once) | `scheduling_pause_standing` (info): the receipt's own cause, the same code with `pause_stage`, `in_the_way` and, for `check_failed`, the failure as its cause | the request, before it answers and before its continuation starts |
+| a `stand` pause's caller's time ended with something in the way (also an unconfirmed close, which ends it at once) | `scheduling_pause_standing` (info): the receipt's own cause, the same code with `pause_stage`, `in_the_way` and, for `check_failed`, the failure as its cause | the request, before it answers and before its continuation starts; under the persist gate, only while the pause still holds (fix round 1) |
 | that pause later became quiet by itself (stage `released`) | `scheduling_pause_settled` (info, no member) | the continuation |
-| a person's resume lifted a `stand` pause in `draining` or `paused` without a reconnect | `scheduling_resume_without_reconnect` (info): the resume's receipt's own cause | the resume, after the lift |
-| a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time, else the continuation |
-| a `quiet_or_lift` hold was not quiet by the end of its caller's time (its drain past the checkpoint grace, `scheduling_pause_drain_incomplete`; its hand-back past the grace, `scheduling_pause_release_busy`, the admission guard still taken by another party included) and was lifted | `scheduling_pause_lifted_not_quiet` (warning): `pause_reason` the hold's reason, `in_the_way` what was in the way (what its last check read, or what is read outside the guard another party holds, which may be empty), that failure as its cause | the request, after the lift |
+| a person's resume lifted a `stand` pause in `draining` or `paused` without a reconnect | `scheduling_resume_without_reconnect` (info): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it |
+| a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time (as it writes the standing record: under the persist gate, only while the pause still holds), else the continuation |
+| a `quiet_or_lift` hold was lifted without its instance having become quiet: its caller's time ended first (its drain past the checkpoint grace, `scheduling_pause_drain_incomplete`; its hand-back past the grace, `scheduling_pause_release_busy`, the admission guard still taken by another party included) or, since fix round 1 (the coordinator's ruling: every lift of a hold without quiet is recorded), a queued entry refused its hand-back (`lease_transfer_not_safe`) or the scheduler refused its close lease (another member's entry ahead, the takeover cooldown, a holder: `lease_busy`, `lease_cooldown`) | `scheduling_pause_lifted_not_quiet` (warning): `pause_reason` the hold's reason, `in_the_way` what was in the way (what its last check read, or what is read outside the guard another party holds, which may be empty; for a refusing entry what that check read, `queued_entry` among it; for a refused close lease `close_refused`), that failure as its cause | the request, after the lift |
 
 Nothing else of a pause writes one: a pause quiet within its caller's time (its receipt and its stage
 say all); a check that fails and is tried again (the daemon's log says it once per pause and code,
@@ -718,11 +719,25 @@ of a pause already `released`, of a fenced instance, or of a pause whose hand-ba
 (the reconnect's own records; that receipt has no cause); a person's resume during the request's
 own stages (`scheduling_pause_lifted_by_resume` on that request's receipt; the resume writes the
 lift's record); an unconfirmed close the continuation meets (the pause stands, the fence's own
-records say it); a tool's hold that failed for anything else (a refusing queued entry, a refused or an
-unconfirmed close, a failed check, a shutdown, a fatal error: the receipt and the fact records say
-it); a restored pause, at the restart or later (the restore's fact record and stdout line). The
-global pause has no stages and writes none. The order of a pause's records is the order of its
-life: the standing record is written before the thread that carries the stages on starts.
+records say it); a tool's hold that failed for anything else (an unconfirmed or an otherwise failed
+close, a failed check, a shutdown, a fatal error: the receipt and the fact records say it); a
+restored pause, at the restart or later (the restore's fact record and stdout line). The global
+pause has no stages and writes none.
+
+**The order of a pause's records** (fix round 1; what the code guarantees, no more). The request's
+own record of a pause that still holds (`scheduling_pause_standing`, or
+`scheduling_pause_kept_at_shutdown` within its caller's time) is decided and written under the
+persist gate, only while the pause is still held at its revision; every lift takes that gate, and
+the resume's `scheduling_resume_without_reconnect` is written under it with its lift. So the
+request's record never comes after the record of the resume that lifted its pause: a pause lifted
+(or held again with `instance.added`) before the request took the gate writes none, and the
+resume's records say what happened. The standing record is written before the thread that carries
+the stages on starts, so it comes before every record of that thread. That thread's records
+(`scheduling_pause_settled`, `scheduling_pause_kept_at_shutdown`) are written after their moment and
+outside the gate, so a resume can come in between: a resume of the pause once `released` (the
+reconnect's path) can put its lift's fact record and the reconnect's records before the settled
+record, and a resume already running when a shutdown came can put its own record before the kept
+record. A hold's `scheduling_pause_lifted_not_quiet` comes after its lift's fact record.
 
 The links of a pause's request are kept with the pause in the Runtime's memory until it is lifted,
 so the record a person's resume writes carries them too; a pause no request set (a restored pause, a

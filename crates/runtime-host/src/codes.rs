@@ -1704,10 +1704,12 @@ actingcommand_contract::outcome_codes! {
         /// reached stage `released` by itself, its stages carried on by the host: written once,
         /// as a `device_state_observed` record under the instance with its request's links.
         SchedulingPauseSettled => "scheduling_pause_settled": info / none,
-        /// Warning. A tool's hold (`quiet_or_lift`) was not quiet by the end of its caller's time
-        /// and was lifted: written once, as a `device_state_observed` record under the instance
-        /// with its request's links (keys `pause_reason` the hold's reason, `in_the_way` what was
-        /// in the way; the Runtime's own code of that failure is its cause).
+        /// Warning. A tool's hold (`quiet_or_lift`) was lifted without its instance having become
+        /// quiet (its caller's time ended first; fix round 1: or a queued entry refused its
+        /// hand-back, or its close lease was refused): written once, as a `device_state_observed`
+        /// record under the instance with its request's links (keys `pause_reason` the hold's
+        /// reason, `in_the_way` what was in the way; the Runtime's own code of that failure is its
+        /// cause).
         SchedulingPauseLiftedNotQuiet => "scheduling_pause_lifted_not_quiet": warning / none,
         // ---- #480 PG-2d: end
     }
