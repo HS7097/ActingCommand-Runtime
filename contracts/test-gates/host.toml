@@ -4354,3 +4354,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_8_a_rung_paused_after_its_stop_hands_its_startup_run_off_and_it_runs_once_after_the_resume",
 ]
 incident = ["#480", "PG-2b"]
+
+# #480 PG-2b fix round 2 (0.12.73; register §1.471, its fix round 2; brief rd-1118/brief-480-pg2b-fix2.md after the second review rd-1118/review-1821-fix1.md, its first "may change"): on Workflow #437 ORD-1c's grouped fixture built in the gate file (A and B one device group of several, C alone, the neutral startup package, a manual Runtime clock), a launch of A puts A in front and B's device answers A's application in front until its own first command; a person's device drill of B's ladder comes to the application rung, whose first holding check, just before the switch that stops the member in front (the test-only hook run_before_ladder_step_check_for_test), meets a person's pause of B: A receives no stop and B none, the device still has A in front, no startup_package_scheduled and no task.requested, the application rung failed with recovery_admission_denied, the ladder finished exhausted at Warning with recovery_ladder_interrupted, the pause success and released (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_9_a_pause_at_a_group_members_application_rung_stops_no_other_member",
+]
+incident = ["#480", "PG-2b"]

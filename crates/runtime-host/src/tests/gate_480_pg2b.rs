@@ -15,8 +15,10 @@
 // order `rd-1118/brief-480-pg2b-fix1.md`): (7) the settle gate's rerun of the return-home package
 // asks first, on #411 A35's settle fixture built here (a manual Runtime clock, a moving screen);
 // (8) a rung that a pause interrupts after its stop hands its startup run off, and the run goes
-// after the resume, once. Every wait returns as soon as what it waits for is seen; `GATE_WAIT`
-// only bounds a broken run.
+// after the resume, once. Fix round 2 (coordinator work order `rd-1118/brief-480-pg2b-fix2.md`):
+// (9) in a device group of several, a pause recorded at the application rung's boundary stops no
+// other member, on Workflow #437 ORD-1c's grouped fixture built here. Every wait returns as soon
+// as what it waits for is seen; `GATE_WAIT` only bounds a broken run.
 
 use super::gate_369_s6c::{head, instance_scope, pause, resume, send};
 use super::gate_387_d1c::ladder_manifest;
@@ -27,12 +29,17 @@ use super::instance_workers::{
 use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::{
-    EmulatorInstanceAction, FactScalar, FactValue, InstancePauseStage, RecoveryDrillMode,
-    RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulingPauseReason, SchedulingPauseScope, StartupPackageDisposition,
+    ConfigParameter, ConfigParameterSource, EmulatorInstanceAction, FactScalar, FactValue,
+    InstancePauseStage, RecoveryDrillMode, RecoveryLadderOutcome, RecoveryRung,
+    RecoveryRungOutcome, RuntimeConfigManifest, RuntimeLifecyclePhase, RuntimePayload,
+    SchedulingPauseReason, SchedulingPauseScope, StartupPackageDisposition,
+};
+use actingcommand_runtime_config::scheduling::{
+    DEVICE_GROUP_MAX_QUEUE_WAIT_MS, DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS,
+    EXPECTED_RUNTIME_ENABLED,
 };
 use actingcommand_scheduler::ClaimKind;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Test plan v2.2 §2.1 guard 3: the one bound of a cross-thread wait in this file; it bounds a
 /// broken run's wait for the ladder (its first rung's run and settle gate come first).
@@ -1052,4 +1059,421 @@ fn pg2b_8_a_rung_paused_after_its_stop_hands_its_startup_run_off_and_it_runs_onc
     );
     assert!(climb.host.fatal_error().expect("runtime health").is_none());
     climb.host.close().expect("close host");
+}
+
+// ---- Fix round 2 (item 4): Workflow #437 ORD-1c's grouped fixture (`gate_ord1c`, its `GROUPED`
+// host and its device drill, as its t12 uses them), built here as (7) builds #411 A35's settle
+// fixture. A and B are one device group of several and C is alone on its own device, each with its
+// own application and the neutral startup package, whose one step restarts the application; the
+// host is handed the member → device key map and the group's name as the assembly builds them, on
+// a manual Runtime clock, the fixture catalog's generic task active once on A and once on B.
+
+const GROUP_A: &str = POLICY_INSTANCE_ALIAS;
+const GROUP_B: &str = POLICY_INSTANCE_ALIAS_B;
+/// An instance alone on its own device, beside the group.
+const GROUP_C: &str = "fixture-instance-c";
+const GROUP_NAME: &str = "device.one";
+const GROUP_APP_A: &str = "neutral.member.a";
+const GROUP_APP_B: &str = "neutral.member.b";
+const GROUP_APP_C: &str = "neutral.member.c";
+/// The fake device's first pixel before any input: the startup package's home.
+const GROUP_HOME: [u8; 3] = [255, 0, 0];
+const GROUP_PACKAGE_ID: &str = "neutral.test.startup";
+/// The response deadline of the startup package.
+const GROUP_STARTUP_DEADLINE_MS: u64 = 60_000;
+/// Every task's declared expected duration, and the switch cooldown the fixture's file sets.
+const GROUP_MINUTE_MS: u64 = 60_000;
+/// `scheduling.device_group.max_queue_wait_ms`'s default.
+const GROUP_DEFAULT_LIMIT_MS: u64 = 1_800_000;
+
+/// One task `id` of `instance` with `priority`, due at every evaluation (a local interval clock of
+/// 1 ms), from the fixture catalog's generic task, declaring `GROUP_MINUTE_MS` (ORD-1c's
+/// `member_task`, with no wait limit of its own).
+fn group_task(base: &Value, id: &str, instance: &str, priority: u32) -> Value {
+    let mut spec = base.clone();
+    spec["id"] = json!(id);
+    spec["scope"] = json!({"kind": "instance", "instance_id": instance});
+    spec["priority"] = json!(priority);
+    spec["trigger"] = json!({
+        "kind": "clock",
+        "schedule": {"kind": "interval", "clock_source": {"kind": "local"},
+                     "every_ms": 1, "anchor_ms": 0}
+    });
+    spec["cooldown_ms"] = json!(0);
+    spec["expected_duration_ms"] = json!(GROUP_MINUTE_MS);
+    spec["instance_overrides"] = json!([]);
+    spec["produces"] = json!([]);
+    spec["on_failure"]["escalation_threshold"] = json!(1000);
+    spec["loop_budget"] = json!({
+        "daily_limit": 48,
+        "window_iteration_limit": 48,
+        "max_runtime_ms": 1_800_000
+    });
+    spec
+}
+
+/// ORD-1c's catalog (`sources` of `one_task_each`): the fixture catalog declared V2 (each timeline
+/// event with its explicit unbounded validity), one task on A (priority 300) and one on B (200),
+/// under its game-wide activity profile with no interval between dispatches.
+fn group_sources() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: Value = serde_json::from_slice(&source.bytes).expect("fixture document");
+        document["schema_version"] = json!(actingcommand_policy::SCHEDULING_SCHEMA_VERSION_V2);
+        if let Some(events) = document.get_mut("events").and_then(Value::as_array_mut) {
+            for event in events {
+                event["validity"] = json!({"from_unix_ms": 0, "until_unix_ms": null});
+            }
+        }
+        source.bytes = serde_json::to_vec_pretty(&document).expect("V2 fixture bytes");
+    }
+    let mut document: Value = serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks");
+    let base = document["tasks"][0].clone();
+    document["tasks"] = Value::Array(vec![
+        group_task(&base, "fixture.member-a", GROUP_A, 300),
+        group_task(&base, "fixture.member-b", GROUP_B, 200),
+    ]);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&document).expect("task bytes");
+    let mut activity: Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("fixture activity");
+    let mut profile = activity["profiles"][1].clone();
+    profile["daily_budget"] = json!(48);
+    profile["max_window_iterations"] = json!(48);
+    profile["minimum_interval_ms"] = json!(1);
+    profile["maximum_interval_ms"] = json!(1);
+    activity["profiles"] = json!([profile]);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
+    sources
+}
+
+/// ORD-1c's neutral startup package (an application entry): from any screen its one step restarts
+/// the instance's application, to `home`, which its recognition pack knows by pixel 0.
+fn group_startup_package(root: &TempDir) -> PathBuf {
+    let space = json!({"width": 16, "height": 9});
+    let control = json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": GROUP_PACKAGE_ID,
+        "execution_mode": "navigable_route",
+        "game": "neutral",
+        "server": "test",
+        "resolution": space.clone(),
+        "entry_task_id": "task",
+        "capture_interval_ms": 10,
+        "step_timeout_ms": 600,
+        "timeout_ms": 8000,
+        "max_steps": 2
+    });
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": space.clone(),
+        "entry_page": "any",
+        "target_page": "home",
+        "operations": [
+            {"id": "start", "from": "any", "to": "home", "application": {"action": "restart"}}
+        ]
+    });
+    let pack = json!({
+        "schema_version": "0.7",
+        "game": "neutral",
+        "server": "test",
+        "coordinate_space": space,
+        "defaults": {"color_max_distance": 0.0},
+        "targets": [{"type": "color", "id": "page/home",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": GROUP_HOME}]
+    });
+    let pages = json!({"schema_version": "0.3", "pages": [
+        {"id": "neutral/home", "required": ["page/home"], "optional": [], "forbidden": []}
+    ]});
+    let files: [(&str, Value); 6] = [
+        ("control.json", control),
+        (
+            "resources/manifest.json",
+            json!({"schema_version": "0.3", "entry_task_id": "task"}),
+        ),
+        ("resources/operations/task/task.json", task),
+        ("resources/recognition/neutral.test.pack.json", pack),
+        ("resources/recognition/neutral.test.pages.json", pages),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            json!({"navigation": []}),
+        ),
+    ];
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, value) in files {
+        zip.start_file(path, options).expect("zip entry");
+        zip.write_all(&serde_json::to_vec(&value).expect("package JSON"))
+            .expect("zip content");
+    }
+    let path = root.path().join("startup.zip");
+    fs::write(&path, zip.finish().expect("finish zip").into_inner())
+        .expect("write the startup package");
+    path
+}
+
+/// One parameter of the fixture's configuration file.
+fn group_parameter(key: &str, value: FactScalar, source: ConfigParameterSource) -> ConfigParameter {
+    ConfigParameter {
+        key: key.to_owned(),
+        value,
+        source,
+        settable: false,
+    }
+}
+
+/// ORD-1c's configuration in effect for `GROUPED`: the expected runtime off, the switch cooldown
+/// a minute, and `scheduling.device_group.max_queue_wait_ms` at its default.
+fn group_manifest() -> RuntimeConfigManifest {
+    let mut parameters = vec![
+        group_parameter(
+            EXPECTED_RUNTIME_ENABLED,
+            FactScalar::Boolean(false),
+            ConfigParameterSource::Explicit,
+        ),
+        group_parameter(
+            DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS,
+            FactScalar::DurationMs(GROUP_MINUTE_MS),
+            ConfigParameterSource::Explicit,
+        ),
+        group_parameter(
+            DEVICE_GROUP_MAX_QUEUE_WAIT_MS,
+            FactScalar::DurationMs(GROUP_DEFAULT_LIMIT_MS),
+            ConfigParameterSource::Default,
+        ),
+    ];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// ORD-1c's `GROUPED` host, and each instance's fake device.
+struct Group {
+    _root: TempDir,
+    host: RuntimeHost,
+    states: BTreeMap<&'static str, Arc<FakeState>>,
+}
+
+/// The started host of A, B and C, A and B one device group of several, each with its own
+/// application and the startup package, on the manual Runtime clock, the catalog active
+/// (ORD-1c's `Bench::start(GROUPED)`).
+fn start_group() -> Group {
+    let root = TempDir::new().expect("tempdir");
+    let package = group_startup_package(&root);
+    let ids = [GROUP_A, GROUP_B, GROUP_C]
+        .into_iter()
+        .map(|alias| (alias, instance_id()))
+        .collect::<BTreeMap<_, _>>();
+    let states = [
+        (GROUP_A, GROUP_APP_A),
+        (GROUP_B, GROUP_APP_B),
+        (GROUP_C, GROUP_APP_C),
+    ]
+    .into_iter()
+    .map(|(alias, application)| {
+        let state = Arc::new(FakeState::default());
+        state.observed_open.store(true, Ordering::Release);
+        state.physical_task_geometry.store(true, Ordering::Release);
+        *state.application_id.lock().expect("fake application id") = Some(application.to_owned());
+        (alias, state)
+    })
+    .collect::<BTreeMap<_, _>>();
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    for (alias, server, host) in [
+        (GROUP_B, "fixture-server-b", "fixture-host-b"),
+        (GROUP_C, "fixture-server-c", "fixture-host-c"),
+    ] {
+        facts.instances.push(InstanceSnapshot {
+            instance_id: alias.to_owned(),
+            server_id: server.to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: host.to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        });
+    }
+    let mut resources = pending_policy_resources();
+    let mut host_c = resources.hosts[0].clone();
+    host_c.host_id = "fixture-host-c".to_owned();
+    resources.hosts.push(host_c);
+    let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(GROUP_STARTUP_DEADLINE_MS))
+        .expect("startup package request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let device = ids[GROUP_A].min(ids[GROUP_B]);
+    let host_config = config(&root)
+        .with_policy_inputs(PolicyInputSnapshot::new(facts, resources))
+        .with_runtime_clock(clock)
+        .with_startup_packages(
+            [GROUP_A, GROUP_B, GROUP_C]
+                .into_iter()
+                .map(|alias| (alias.to_owned(), startup.clone()))
+                .collect(),
+        )
+        .with_config_manifest(group_manifest())
+        .with_device_keys(BTreeMap::from([
+            (ids[GROUP_A], device),
+            (ids[GROUP_B], device),
+        ]))
+        .with_device_group_names(BTreeMap::from([
+            (GROUP_A.to_owned(), GROUP_NAME.to_owned()),
+            (GROUP_B.to_owned(), GROUP_NAME.to_owned()),
+        ]));
+    let entries = [GROUP_A, GROUP_B, GROUP_C]
+        .into_iter()
+        .map(|alias| (alias.to_owned(), ids[alias], Arc::clone(&states[alias])))
+        .collect::<Vec<_>>();
+    let host = RuntimeHost::start(host_config, Arc::new(FakeProvider::from_entries(entries)))
+        .expect("start the fixture host");
+    host.activate_policy_catalog(&group_sources())
+        .expect("activate the catalog");
+    Group {
+        _root: root,
+        host,
+        states,
+    }
+}
+
+impl Group {
+    /// Every application command that reached `alias`'s device.
+    fn actions(&self, alias: &str) -> Vec<ApplicationLifecycleAction> {
+        self.states[alias]
+            .application_actions
+            .lock()
+            .expect("fake application actions")
+            .clone()
+    }
+
+    /// The member the host holds in front of the group's device.
+    fn front(&self) -> Option<String> {
+        self.host
+            .device_front_for_test(GROUP_B)
+            .expect("the member in front")
+    }
+}
+
+// (9) Fix round 2, item 4 (the second review's first "may change"): in a device group of several,
+// a pause recorded at the application rung's boundary stops no other member. On ORD-1c's grouped
+// fixture, a `launch` of A puts A in front of the device, and B's device answers A's application
+// in front until its own first application command (as ORD-1c's t12 sets it, where the rung, not
+// paused, stops A first). A person's device drill of B's ladder comes to the application rung,
+// whose first holding check (fix round 1, item 3: just before the switch that stops the member in
+// front) the test hook holds, and a person pauses B. The check sees the pause: A receives no stop
+// and B none either, the device still has A in front (nothing was stopped, so nothing is
+// forgotten), no startup run is handed off or run (no `startup_package_scheduled`, no
+// `task.requested`), the rung failed with `recovery_admission_denied`, and the ladder finished
+// interrupted (`exhausted`, Warning); the pause answers success, `released`.
+#[test]
+fn pg2b_9_a_pause_at_a_group_members_application_rung_stops_no_other_member() {
+    let group = start_group();
+    let holder = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_holder_id()
+        .expect("holder id");
+    completed(&send(
+        &group.host,
+        RuntimeOperation::ApplicationLifecycle {
+            instance_alias: GROUP_A.to_owned(),
+            holder_id: *holder.transport(),
+            action: ApplicationLifecycleAction::Launch,
+        },
+        1091,
+    ));
+    assert_eq!(
+        group.front().as_deref(),
+        Some(GROUP_A),
+        "A's launch put A in front"
+    );
+    *group.states[GROUP_B]
+        .foreground_script
+        .lock()
+        .expect("foreground script") = Some(Arc::new(|_: usize, commands: usize| {
+        let front = if commands == 0 {
+            GROUP_APP_A
+        } else {
+            GROUP_APP_B
+        };
+        Some(front.to_owned())
+    }));
+    group.states[GROUP_B]
+        .unknown_capture
+        .store(true, Ordering::Release);
+    let a_before = group.actions(GROUP_A);
+    let b_before = group.actions(GROUP_B);
+    let (at, go) = hold_next_rung_step(&group.host);
+    completed(&send(
+        &group.host,
+        RuntimeOperation::DrillRecoveryLadder {
+            instance_alias: GROUP_B.to_owned(),
+            mode: RecoveryDrillMode::Device,
+        },
+        1092,
+    ));
+    at.recv_timeout(GATE_WAIT)
+        .expect("B's application rung is about to stop the member in front");
+    let before = head(&group.host);
+    let pause_request = instance_pause(GROUP_B);
+
+    let paused = thread::scope(|scope| {
+        let pausing = scope.spawn(|| {
+            group.host.process_request_for_test(
+                &pause_request,
+                ConnectionId::new(1093).expect("connection"),
+            )
+        });
+        wait_until("the pause holds B", || {
+            pause_stage(&group.host, GROUP_B).is_some()
+        });
+        go.send(()).expect("the rung goes on");
+        pausing
+            .join()
+            .expect("the pause's thread")
+            .expect("the pause's receipt")
+    });
+
+    completed(&paused);
+    wait_for_ladder_end(&group.host, GROUP_B);
+    assert_eq!(
+        group.actions(GROUP_A),
+        a_before,
+        "the other member received no stop"
+    );
+    assert_eq!(group.actions(GROUP_B), b_before, "the rung stopped nothing");
+    assert_eq!(
+        group.front().as_deref(),
+        Some(GROUP_A),
+        "the member in front is not forgotten"
+    );
+    assert_eq!(
+        package_runs_after(&group.host, before),
+        (0, 0),
+        "no startup run handed off or run"
+    );
+    assert_eq!(
+        rung_outcome(&group.host, RecoveryRung::ApplicationRestart),
+        Some((
+            RecoveryRungOutcome::Failed,
+            Some(ADMISSION_DENIED.to_owned())
+        ))
+    );
+    assert_ladder_interrupted(&group.host);
+    assert_eq!(
+        pause_stage(&group.host, GROUP_B),
+        Some(InstancePauseStage::Released),
+        "the pause stands"
+    );
+    assert!(group.host.fatal_error().expect("runtime health").is_none());
+    group.host.close().expect("close host");
 }

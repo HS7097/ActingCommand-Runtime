@@ -38543,7 +38543,9 @@ back or started something after it:
   close lease of an instance pause's hand-back: `close_retained_instance_while_guarded` with the
   release reason `LeaseReleaseReason::InstancePaused` calls `grant_dedicated_instance_lease` with
   `hand_back`, which passes `PauseHandBack` while a pause holds the instance (every other caller
-  passes `false`). When that lease reads the queue the paused instance's routine gate is closed by
+  passes `false`; fix round 1, item 5: the word is said by its one caller, `release_paused_instance`,
+  through `close_retained_instance_with`, no longer read from the release reason). When that lease
+  reads the queue the paused instance's routine gate is closed by
   its own pause, in stage `paused` (`routine_gate`: `RoutineHeld`, `Silenced` with `routine_held`
   under a blackout). Passing those entries is sound: none of them can be granted while the pause
   holds (the pump and every grant judge an entry by its member's routine gate), the close lease is
@@ -38560,9 +38562,9 @@ begins a package run** (item 1):
 | every rung | the rung boundary (`climb_recovery_ladder`) | yes, as before |
 | return home | the return-home package's run (`recovery_return_home`) | yes: the rung boundary, with nothing between |
 | return home | its rerun after a busy hold (`climb_busy_end`) | yes: the hold's last check (`ladder_hold_until`) |
-| return home | its rerun from the settle gate (`climb_screen_gate`: settled on a recheck, or an entry page shown) | before the hold and its probe, not between the probe and the rerun; unchanged |
-| application restart | on a member of a device group of several, the stop of the member in front or of every other member (`stop_others_before_start`) | the rung boundary only, before the entry's ADB probe; unchanged |
-| application restart | the force-stop of the assigned application (`stop_assigned_application`) | yes, new |
+| return home | its rerun from the settle gate (`climb_screen_gate`: settled on a recheck, or an entry page shown) | before the hold and its probe, not between the probe and the rerun; unchanged (fix round 1: also right before the rerun, `settle_rerun_interrupted`) |
+| application restart | on a member of a device group of several, the stop of the member in front or of every other member (`stop_others_before_start`) | the rung boundary only, before the entry's ADB probe; unchanged (fix round 1, item 3: the check of the next row moves right before this stop; fix round 2 tests it) |
+| application restart | the force-stop of the assigned application (`stop_assigned_application`) | yes, new (fix round 1: on a member of a device group of several it comes before the row above instead) |
 | application restart | the startup package run (`prepare_startup_package`, `run_recovery_rung_package`), with or without the stop | yes, new |
 | emulator restart | the Stop and the Start (`drive_emulator_control_while_guarded`) | yes, as before |
 | emulator restart | each readiness attempt and every poll of its retry wait | yes, as before |
@@ -38576,7 +38578,10 @@ application stays stopped: the interrupted rung scheduled no startup package, th
 reconnects only (`reconnect_resumed_instance`, no startup claim), and nothing else queues one by
 itself for that instance. It comes back only when its startup package is started again: the
 application rung of a later ladder (a run that then fails on the instance can start one by its
-triggers), a person's or a client's emulator start or restart, or an idle wake.
+triggers), a person's or a client's emulator start or restart, or an idle wake. (Fix round 1,
+item 4, changes this: a rung a pause interrupts after its stop, or after its emulator Start, hands
+its startup run off, which runs after the resume. Fix round 2 says what becomes of an emulator
+stopped between the rung's Stop and its Start.)
 
 **Codes and words.** None added. `scheduling_pause_kept_at_shutdown` (§1.468) now also stands for a
 shutdown during a wait for the Runtime's own ladder: the same cause (the Runtime's own work alone
@@ -38674,7 +38679,8 @@ review `rd-1118/review-1821.md`; items 3 to 7 are the coordinator's rulings).
   before the switch that stops the other members (`recovery_application_restart`, ahead of
   `stop_others_before_start`); for an instance alone on its device that is the same place.
   Interrupted there the rung stopped nothing, so the member in front is no longer forgotten for it.
-  No test: the gate file's fixtures have no device group of several.
+  No test: the gate file's fixtures have no device group of several (fix round 2 adds one, on
+  ORD-1c's grouped fixture rebuilt in the gate file: `pg2b_9`).
 - *An interrupted rung owes the startup run, by the existing way* (item 4). `rung_hold_interrupted`
   reads the holding check's rule (`ladder_hold_invariant`, which `ladder_hold_interrupted` now
   spells) and, where the rung owes its startup run, hands that run off on `LadderInvariant::Paused`
@@ -38705,11 +38711,14 @@ review `rd-1118/review-1821.md`; items 3 to 7 are the coordinator's rulings).
 - *Texts* (items 6 and 7). [scheduling-pause.md](scheduling-pause.md): "The dispatch gate" (the
   settle gate's rerun, the device group's switch, the owed startup run and what becomes of it);
   "Instance pause: three stages" (c): how long a hand-back waits for a ladder by the code's bounds
-  (one emulator control step at most, `start_bound_ms` 220 000 ms or `stop_bound_ms` 210 000 ms
-  plus `hold.margin_ms` 5 000 ms by default, on the admission guard, no poll; every other step
-  shorter) and that, after the caller's own wait has ended, a pause that waited for the ladder can
-  still be lifted, later than before, by another party's entry queued meanwhile, a package run the
-  ladder had begun (the drain again past the grace) or an owed reset.
+  (corrected in fix round 2: the emulator rung's Stop at most, on the admission guard, no poll:
+  the Stop's fixed 210 000 ms, then the wait for the old VM, `emulator_control.restart_exit_wait_ms`
+  60 000 ms by default, and its last status read 10 000 ms, so 220 000 ms plus that key, 280 000 ms
+  by default; the Start's fixed 220 000 ms is never longer; every other step shorter; this item
+  first said one Stop's or Start's configured bound plus `hold.margin_ms`, 225 000 ms, without the
+  wait for the old VM) and that, after the caller's own wait has ended, a pause that waited for
+  the ladder can still be lifted, later than before, by another party's entry queued meanwhile, a
+  package run the ladder had begun (the drain again past the grace) or an owed reset.
   [emulator-control.md](emulator-control.md): the checkpoint list and the owed startup run. §1.468's
   two corrected sentences put the old session's close before the renewal's records, as
   `ready_control_phase` does (the close, then the renewal before the provider step).
@@ -38732,6 +38741,54 @@ review `rd-1118/review-1821.md`; items 3 to 7 are the coordinator's rulings).
 - No code, word, key or vocabulary added; the ledger's revision does not move (the hand-off writes
   the records an emulator start under a pause writes). A ladder with no pause in effect records
   what it recorded before: the moved and the new checks record nothing, and only a pause hands off.
+
+**Fix round 2** (coordinator work order `rd-1118/brief-480-pg2b-fix2.md`, after the second review
+`rd-1118/review-1821-fix1.md`, which found no code that must change). Texts, one test and the merge
+of main; no behaviour changes.
+- *The longest wait, from the code* (the review's must-fix). Fix round 1's bound (one Stop's or
+  Start's configured bound plus `hold.margin_ms`, 225 000 ms) left out that the ladder drives the
+  emulator as a phase of a restart (`ControlMode::Ladder`, `restarts`, #411 A50): a Stop whose wait
+  ran out (`emulator_control_wait_timeout`) then waits under the admission guard for the old VM to
+  exit (`await_previous_instance_exit`). The step between the holding check before the Stop and the
+  one before the Start is now counted term by term: the Stop's own bound, fixed in the code at
+  210 000 ms (the control dispatch 60 000, the stopped state's wait 120 000, the last status read
+  10 000, the last process listing 10 000, the status read after a failure 10 000;
+  `recovery_ladder.rungs[emulator_restart].stop_bound_ms`, default 210 000, renews the key to it
+  plus `hold.margin_ms` and is at least the device's 200 000, but bounds no step); the wait for
+  the old VM, up to `emulator_control.restart_exit_wait_ms` (default 60 000, range 1 000 to
+  300 000); and that wait's last status read, 10 000. So the longest wait is 220 000 ms plus
+  `restart_exit_wait_ms`: 280 000 ms with the defaults, 520 000 ms at that key's largest value. The
+  Start's step (the dispatch, the running state's wait, the last status read, the ADB baseline
+  30 000: 220 000 ms fixed; `start_bound_ms` renews the key to it) is never longer. Corrected in
+  [scheduling-pause.md](scheduling-pause.md), "Instance pause: three stages" (c), and in fix round
+  1's *Texts* item above.
+- *An emulator stopped by an interrupted rung* ([scheduling-pause.md](scheduling-pause.md), "The
+  dispatch gate", read from the code). Interrupted between its Stop and its Start, the emulator
+  stays stopped while the pause holds (no automatic start under a pause: the watch's restart, the
+  daemon start's configured start and IDLE-1's wake are held, and no ladder is admitted); after the
+  resume the emulator watch restarts it at its next poll as every configured instance found
+  stopped (`watch_emulator`, `watch_may_request`; an instance resume's reconnect first reads it
+  stopped, `instance_not_running`, which no shipped trigger item names, so no ladder), and that
+  configured start queues the startup package and hands the key to it (`perform_control_phase`,
+  `drive_configured_start`); an instance without `start_emulator` stays stopped until a person or
+  a client starts it, as before this slice.
+- *Notes* in this section's first-round text where the fix rounds changed it: the table of checks,
+  the paragraph "After a rung interrupted between its stop and its startup run", and item 3 of the
+  rule.
+- *Test of fix round 2* (gate map `contracts/test-gates/host.toml`, the row "#480 PG-2b fix round
+  2"; the same gate file, with Workflow #437 ORD-1c's grouped fixture built in it: A and B one
+  device group of several, C alone, the neutral startup package, a manual Runtime clock, the
+  catalog's generic task on A and on B).
+  `pg2b_9_a_pause_at_a_group_members_application_rung_stops_no_other_member`: a launch of A puts
+  A in front, and B's device answers A's application in front until its own first command; a
+  person's device drill of B's ladder comes to the application rung, whose first holding check,
+  just before the switch that stops the member in front, the test hook holds while a person pauses
+  B; A receives no stop and B none, the device still has A in front, no `startup_package_scheduled`
+  and no `task.requested`, the application rung failed with `recovery_admission_denied`, the
+  ladder interrupted, the pause success, `released`. No test adapted or retired; no golden changes.
+- *Main merged* (`d63bf016`, with §1.470 of #1820, PG-2a): §1.468 to §1.471 each once, in number
+  order, §1.470 as main has it.
+- No code, word, key or vocabulary added; the ledger's revision does not move.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -165,6 +165,19 @@ and queued no startup package, so the application stayed stopped until its start
 started again (the application rung of a later ladder, a person's or a client's emulator start
 or restart, an idle wake), and the instance's first task met it stopped.
 
+An emulator that a rung interrupted between its Stop and its Start (said since fix round 2) stays
+stopped while the pause holds: none of the Runtime's automatic starts starts it under a pause (the
+watch's restart, the daemon start's configured start and IDLE-1's wake are held, above, and no
+ladder is admitted); only a person's or a client's emulator control, which runs under any pause,
+does. After the resume the emulator watch restarts it at its next poll, as it restarts every
+configured instance it finds stopped (`start_emulator` on, `emulator_control.watch_enabled` on,
+within `restart_attempts` in `restart_window_ms`, not held stopped by IDLE-1; an instance
+resume's reconnect first finds the emulator stopped, `instance_not_running`, which no shipped
+trigger item names, so it admits no ladder and releases the key), and that start owes the startup
+run: as every configured start, it queues the instance's startup package and hands the key to it.
+An instance whose configuration names no automatic start (`start_emulator` off) stays stopped
+until a person or a client starts it, as before this slice.
+
 ## Global pause
 
 `PauseScheduling { scope: global }` closes the gate for every instance and answers at once:
@@ -249,15 +262,28 @@ own wait ends first finds the pause standing (the end of this section).
    person's (the console, `actingctl`, the Lab's `pause` and MCP) and a tool's hold (a rescue
    operation's, the recording's) alike: a tool's hold waits for the ladder as, since 0.12.72, it
    waits for the automatic start. How long, by the code's own bounds (since the slice's fix round
-   1 in this text): the ladder ends at its next holding check, so the hand-back waits for the step
-   the ladder is in. The longest is one emulator control step of the emulator rung, which holds the
-   instance's admission guard from before its Stop through its first readiness attempt: a Stop up
-   to `recovery_ladder.rungs[emulator_restart].stop_bound_ms` (default `210_000` ms) or a Start up
-   to its `start_bound_ms` (default `220_000` ms), on a key renewed to that bound plus
-   `recovery_ladder.hold.margin_ms` (default `5_000` ms), so at most `225_000` ms with the
-   defaults; meanwhile the hand-back waits on that guard and does not poll, and a shutdown is seen
-   once the guard is let go. Every other step between two holding checks is shorter: the
-   application stop (one ADB command, `60_000` ms at most), the application rung's entry probe
+   1 in this text; the bound corrected in fix round 2): the ladder ends at its next holding check,
+   so the hand-back waits for the step the ladder is in. The longest is the emulator rung's Stop,
+   which holds the instance's admission guard from the holding check before it to the one before
+   its Start: the Stop itself, at most `210_000` ms fixed in the code (the control dispatch
+   `60_000`, the wait for the stopped state `120_000`, the last status read `10_000`, the last
+   process listing `10_000`, and the status read after a failure `10_000`; the rung's
+   `recovery_ladder.rungs[emulator_restart].stop_bound_ms`, default `210_000` ms, renews the
+   ladder's key to its value plus `recovery_ladder.hold.margin_ms`, default `5_000` ms, and may not
+   be shorter than the device's part, `200_000` ms, but does not bound the step); then, since the
+   rung's Stop is a phase of a restart (#411 A50), a Stop whose wait ran out
+   (`emulator_control_wait_timeout`) waits, still under the guard, for the old VM to exit: up to
+   `emulator_control.restart_exit_wait_ms` (default `60_000` ms; `1_000` to `300_000`), plus its
+   last status read, which may end up to `10_000` ms after it. So the bound depends on the
+   configuration: `220_000` ms plus `restart_exit_wait_ms`, that is `280_000` ms with the defaults
+   (`520_000` ms at that key's largest value). The Start that follows holds the guard up to its own
+   fixed bound, `220_000` ms (the control dispatch, the wait for the running state, the last status
+   read, the ADB baseline `30_000`; `start_bound_ms`, default `220_000` ms, renews the key to it),
+   before the first readiness attempt's check, so never longer than the Stop. Meanwhile the
+   hand-back waits on that guard and does not poll, and a shutdown is seen once the guard is let
+   go. Before fix round 2 this text gave one Stop's or Start's configured bound plus the margin,
+   `225_000` ms, and left out the wait for the old VM. Every other step between two holding checks
+   is shorter: the application stop (one ADB command, `60_000` ms at most), the application rung's entry probe
    (`adb_probe_ms`, default `30_000` ms), a readiness attempt's preparation (the backend opens,
    `30_000` ms), the settle gate's probe (`(probe_frames - 1) * probe_interval_ms`, default
    `4_000` ms), a poll of a hold or of a readiness wait (`busy.poll_ms`, `readiness_poll_ms`,
