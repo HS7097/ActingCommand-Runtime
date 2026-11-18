@@ -480,8 +480,10 @@ fn ready_of(
     // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
     // self-checks, so none of them runs.
     let not_base = recording_not_base(recording);
-    // #463 PRIV-3: what a public recording's scenes withhold, once `cases` made them.
+    // #463 PRIV-3: what a public recording's scenes withhold, once `cases` made them, and
+    // (amendment 1) the targets its cases leave out because they need a withheld reading.
     let mut withheld = None;
+    let mut readings_left_out = Vec::new();
     let (missing, checks, checks_after) = match survey(recording, &settings)? {
         Survey::Lacking(lacks) => (
             lack_items(recording, &lacks)?,
@@ -521,6 +523,7 @@ fn ready_of(
                 // names it.
                 warnings.extend(generator_warnings(checked.cases.ambiguity_warnings())?);
                 withheld = checked.cases.withheld().map(<[RecordWithheld]>::to_vec);
+                readings_left_out = checked.cases.readings_left_out().to_vec();
                 (Vec::new(), every_check_complete(), Vec::new())
             }
             Err(failed) => {
@@ -549,6 +552,7 @@ fn ready_of(
                 );
                 warnings.extend(generator_warnings(&failed.warnings)?);
                 withheld = failed.withheld.clone();
+                readings_left_out = failed.readings_left_out.clone();
                 (
                     check_items(recording, &failed.ran),
                     check_runs(&failed.ran),
@@ -567,6 +571,7 @@ fn ready_of(
         sources,
     );
     outcome.withheld = withheld;
+    outcome.readings_left_out = readings_left_out;
     Ok(outcome)
 }
 
@@ -1005,9 +1010,17 @@ fn generate_and_write(
         cases.answer(absolute_display(&cases_path), cases_status, cases_kept),
     );
     // #463 PRIV-3: beside the cases, the rectangles withheld from a public recording's scenes and
-    // the reading targets they belong to, as facts (rectangles and ids, never a value or a pixel).
+    // the reading targets they belong to, as facts (rectangles and ids, never a value or a pixel);
+    // amendment 1: and the targets its cases leave out because they need a withheld reading (ids
+    // only); each only when there is one.
     if let Some(withheld) = cases.withheld() {
         lab.insert("withheld".to_string(), json!(withheld));
+    }
+    if !cases.readings_left_out().is_empty() {
+        lab.insert(
+            "readings_left_out".to_string(),
+            json!(cases.readings_left_out()),
+        );
     }
     insert_binding(
         &mut lab,
@@ -1074,6 +1087,9 @@ struct SelfCheckFailures {
     /// #463 PRIV-3: of a public recording whose check `cases` ran to its end and met a failure,
     /// the rectangles withheld from its scenes; `record ready` answers them.
     withheld: Option<Vec<RecordWithheld>>,
+    /// #463 PRIV-3 amendment 1: under the same condition, the cases' targets left out because they
+    /// need a withheld reading; `record ready` answers them.
+    readings_left_out: Vec<Value>,
 }
 
 impl SelfCheckFailures {
@@ -1190,6 +1206,7 @@ impl Runner {
             near_threshold: Vec::new(),
             after_press: Vec::new(),
             withheld: None,
+            readings_left_out: Vec::new(),
         }
     }
 }
@@ -1244,6 +1261,7 @@ fn self_checks(
         failed.near_threshold = package.near_threshold;
         failed.after_press = package.selects.after_press;
         failed.withheld = cases.withheld().map(<[RecordWithheld]>::to_vec);
+        failed.readings_left_out = cases.readings_left_out().to_vec();
         return Err(failed);
     }
     Ok(Checked { package, cases })

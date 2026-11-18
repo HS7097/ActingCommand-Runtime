@@ -40635,15 +40635,37 @@ list of a package's read regions it uses is [privacy-zones.md](privacy-zones.md)
   reading: a fixed rectangle by its `reach`, a confined one by its `bound`, a layout's shared read
   that is a reading as a whole; each withheld rectangle is filled with the canvas colour after
   every patch is pasted. A reading nothing confines, or whose bound covers the frame, refuses the
-  self-check `cases` with `record_case_reading_unbounded`; a failed case whose failed check's
-  target reads inside a withheld rectangle is `record_case_reading_withheld`; every other failure
-  stays `record_case_failed`. `scene_construction` lists only what is pasted and gains no member.
-  `record stop` (`lab.withheld`) and `record ready` (`withheld`) answer the withheld rectangles
-  with their reading targets, and the forbidden targets that read inside them. A local
-  recording's scenes, and a public recording's that reads no value, are byte for byte as before.
+  self-check `cases` with `record_case_reading_unbounded`. `scene_construction` lists only what is
+  pasted and gains no member. A local recording's scenes, and a public recording's that reads no
+  value, are byte for byte as before.
+- *A value read in a page or a guard* (amendment 1, `rd-1119/brief-463-priv3-amend1.md`; the owner:
+  a package may read a quantity at run time, only its pixels may not be stored). A target needs a
+  withheld reading by declaration when it is a reading target of the list, a value test with such
+  a side or a check with such a member, transitively (`needing_readings`); a public recording's
+  case leaves it out of `expect.recognize`, required or forbidden. A page that requires one has its
+  case made without the page judgement, as a page recognised beside another has; a page with
+  nothing else to pin gives no case and the warning `record_case_reading_not_written`.
+  `record_case_reading_withheld` stays a refusal for one cause: a failed check's target that needs
+  no reading and whose own region (or a member's) reads inside a withheld rectangle, a box drawn
+  over a reading. `record stop` (`lab.withheld`, `lab.readings_left_out`) and `record ready`
+  (`withheld`, `readings_left_out`) answer the withheld rectangles with their reading targets and
+  the forbidden targets that read inside them, and each case's targets left out (`{case, page,
+  targets, page_judged}`), each member only when it holds something: a public recording without a
+  reading answers as before but for `destination`.
 - *Codes* (Lab fragment, the index regenerated): `record_case_reading_unbounded` and
   `record_case_reading_withheld`, each an error that refuses `record stop` (exit 3) and is an item
-  of `record ready`'s `cases`.
+  of `record ready`'s `cases`; `record_case_reading_not_written`, a warning (exit 0) among
+  `lab.cases.warnings` and `record ready`'s warnings.
+- *Tests* (`crates/lab/src/gate_463_priv3.rs`, exec gate map "#463 PRIV-3"): the brief's nine and
+  amendment 1's two, the latter folded into tests 3, 4 and 7: a recording without the member is
+  public and serialises unchanged, local is stored and answered, another word is none (1); public
+  without a reading generates what local does but for the mark (2); public with a value test its
+  page requires generates, the value test left out and named, its side withheld (3); the same local
+  is today's with the one mark (4); a select's quantity column and a shared read that serves it
+  (5); a banded row, an unbanded one refused, a reach filled (6); a box over a reading refuses and
+  the same recording stopped local generates (7); another destination at stop generates again, the
+  same does nothing (8); the operation table's two rows (9). Adapted: none. `gate_lab_b9`'s tests
+  are main's, public by default, unchanged.
 - *The ruler slice's leftover* (#1830): the places that said a ruled preview is written beside
   the plain one now say that a call with `ruler` writes only the ruled previews, and the plain ones
   only a call without it (the contract twice, the operation table's `ruler`, the MCP manual's

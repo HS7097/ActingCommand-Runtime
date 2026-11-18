@@ -695,12 +695,18 @@ naming this file.
   `provenance.destination: "local"`, a public one's no mark. The scenes of a public recording's
   regression cases hold no pixel of a value reading: such a region is not pasted and its reach (or
   the band a row is confined to, or a shared read whole) is filled with the canvas colour; the
-  answer's `lab.withheld` (and `ac_record_ready`'s `withheld`) names each rectangle with its reading
-  targets and the targets a page forbids that read inside it, never a value. A reading nothing
-  confines refuses the stop, `record_case_reading_unbounded` (bound it, or record locally); a case
-  that misses because a target its page needs reads inside a withheld rectangle refuses it,
-  `record_case_reading_withheld` (anchor the page elsewhere, narrow that target, or record locally).
-  The refusal of a local package in a public repository is a later step.
+  answer's `lab.withheld` (and `ac_record_ready`'s `withheld`), present only when something is
+  withheld, names each rectangle with its reading targets and the targets a page forbids that read
+  inside it, never a value. A public package may still read a value in a page or as a guard: a
+  target that needs a withheld reading (a value mark, a value test, a check over one) is left out
+  of its case, named in `lab.readings_left_out` (`ac_record_ready`: `readings_left_out`; only when
+  one is), and a page that requires one has its case made without the page judgement; a page with
+  nothing else to pin gives no case, the warning `record_case_reading_not_written`. A reading
+  nothing confines refuses the stop, `record_case_reading_unbounded` (bound it, or record
+  locally); a case that misses on a box drawn over a reading (a target that reads no value itself
+  whose region meets a withheld rectangle) refuses it, `record_case_reading_withheld` (separate
+  the boxes, or record locally). The refusal of a local package in a public repository is a later
+  step.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and

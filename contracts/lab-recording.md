@@ -5316,22 +5316,43 @@ the package it came with.
     before any case is made; the author bounds the reading, or records with `--destination local`.
 
   `scene_construction` lists only what is pasted, as before, and gains no member: the case contract
-  and its readers do not change. A case is made and run as before, on the scene as it is stored. A
-  case that fails where the target of a failed check reads inside a withheld rectangle is
-  `record_case_reading_withheld` (3, `details` as `record_case_failed`'s and `withheld`, one
-  `{target, withheld: [{x, y, width, height}]}` for each such target): a page of a public recording
-  is recognised by a target whose region holds a value reading; the author anchors the page
-  elsewhere, narrows that target's region off the reading, or records locally. Every other failure
-  is `record_case_failed`. A target a page forbids that reads inside a withheld rectangle reads the
+  and its readers do not change. A case is made and run on the scene as it is stored.
+
+  **A public recording may read a value in a page or as a guard** (amendment 1, the owner's ruling:
+  a package may read a quantity at run time; what it may not do is keep its pixels in a
+  repository). A target **needs a withheld reading by declaration** when it is one of the list's
+  reading targets, a value test one of whose sides is one, or a check (`all_of`, `any_of`) one of
+  whose members needs one, transitively. No scene can evaluate such a target, so a case leaves it
+  out of `expect.recognize`, whether its page requires or forbids it, and proves the rest:
+  - a page that requires such a target is not recognised on the stored scene without it, so its
+    case is made without the page judgement, as for a page recognised beside another: every other
+    target the page requires, `passed: true`, and every other target it forbids that a scene can
+    evaluate, `passed: false`;
+  - a page left with nothing to pin gives no case: the warning `record_case_reading_not_written`
+    (`{code, case, page, targets, written: false, message}`, `targets` the targets left out; exit
+    0) names it, in `lab.cases.warnings` and among `record ready`'s warnings; the package is
+    generated and still reads the value at run time;
+  - the answer names, for each written case that leaves a target out, `{case, page, targets,
+    page_judged}` in `lab.readings_left_out` (`record ready`: `readings_left_out`): ids only, never
+    a value.
+
+  A case that fails where the target of a failed check needs **no** reading by declaration and its
+  own region (or a member's) reads inside a withheld rectangle is `record_case_reading_withheld`
+  (3, `details` as `record_case_failed`'s and `withheld`, one `{target, withheld: [{x, y, width,
+  height}]}` for each such target): a recognition box drawn over a value reading; the author
+  separates the boxes (narrows that target's region off the reading, or anchors the page
+  elsewhere) or records with `--destination local`. Every other failure is `record_case_failed`.
+  A target a page forbids that needs no reading and reads inside a withheld rectangle reads the
   canvas there, so a case that expects it not to pass proves only that it does not pass on the
   scene as stored; the answer names it (`forbidden`, below). `record stop` and `record ready`
-  answer, of a public recording, `lab.withheld` (`record ready`: `withheld`), the rectangles
-  withheld from its scenes, each `{x, y, width, height, targets, forbidden?}`, `targets` the
-  reading targets it holds (a shared read by its layout's id), `forbidden` the targets a page
-  forbids that read inside it: facts beside the cases, never a value and never a pixel, and no
-  warning, since withholding is what a public recording does. A public recording that reads no
-  value withholds nothing (`withheld` is empty) and its scenes are byte for byte as before; a local
-  recording's scenes are built as before, byte for byte, and its answer has no `withheld`.
+  answer, of a public recording that withholds a rectangle, `lab.withheld` (`record ready`:
+  `withheld`), each `{x, y, width, height, targets, forbidden?}`, `targets` the reading targets it
+  holds (a shared read by its layout's id), `forbidden` the targets a page forbids that need no
+  reading and read inside it: facts beside the cases, never a value and never a pixel, and no
+  warning, since withholding is what a public recording does. `withheld` and `readings_left_out`
+  are present only when they hold something: a public recording that reads no value answers as
+  before but for `destination`, and its scenes are byte for byte as before; a local recording's
+  scenes are built as before, byte for byte, and its answer has neither.
 - **The run before the write.** Each case is run by `run_regression_case_on_bundle` on the final
   package, admitted in memory from the very files `record stop` writes: no file is read for it and
   nothing is evaluated a second way. Its verdict decides: `failed`, the case is not written and is
@@ -5423,7 +5444,9 @@ the package it came with.
   first, once, `record_cases_ocr_unavailable` (`{code, message}`) when no page was judged, then
   each case's in the order of the cases, `record_case_page_ambiguous` (`{code, case, page,
   other_pages, written, forbidden_left_out?, message}`) or `record_case_ambiguous_not_written`
-  (`{code, case, page, other_pages, written, message}`), then `record_case_bare_canvas` (`{code,
+  (`{code, case, page, other_pages, written, message}`), or (#463 PRIV-3 amendment 1)
+  `record_case_reading_not_written` (`{code, case, page, targets, written, message}`), then
+  `record_case_bare_canvas` (`{code,
   case, page, message}`), then `record_case_whole_frame` (`{code, case, page, targets, message}`);
   every one warns and refuses nothing (exit 0); `status` is `written` or `replaced` (`to_write` or `to_replace` under `--dry-run`);
   `kept` the directory an earlier set was set aside as; `ids` the cases in the order the recording

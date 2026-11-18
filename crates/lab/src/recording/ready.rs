@@ -233,9 +233,15 @@ pub struct RecordReadyOutcome {
     pub sources: ReadySources,
     /// #463 PRIV-3: on a public recording whose self-check `cases` made its scenes, the rectangles
     /// withheld from them and the reading targets they belong to, as `record stop` answers them;
-    /// absent otherwise (a local recording, a packaged one, or `cases` not run that far).
+    /// absent otherwise (a local recording, a public one that withholds nothing, a packaged one, or
+    /// `cases` not run that far).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withheld: Option<Vec<RecordWithheld>>,
+    /// #463 PRIV-3 amendment 1: under the same condition, each case that leaves out targets
+    /// needing a withheld reading, `{case, page, targets, page_judged}`, as `record stop` answers
+    /// them; absent when none does.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub readings_left_out: Vec<Value>,
 }
 
 /// #463 S2-1b: where each part of the package's identity `record ready` took came from, a word of
@@ -640,5 +646,6 @@ pub(crate) fn ready_outcome(
             .collect(),
         sources,
         withheld: None,
+        readings_left_out: Vec::new(),
     }
 }

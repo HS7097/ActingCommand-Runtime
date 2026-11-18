@@ -177,12 +177,20 @@ actingcommand_contract::outcome_codes! {
         /// `record stop`'s self-check `cases`, one for each such target; no case is made and
         /// nothing is written (exit 3; actinglab details `target`).
         RecordCaseReadingUnbounded => "record_case_reading_unbounded": error / none,
-        /// Error. #463 PRIV-3: a regression case of a public recording misses on its package, and
-        /// the target of a failed check reads inside a rectangle withheld from its scene: a page of
-        /// a public recording is recognised by a target whose region holds a value reading. The
-        /// case is not written and `record stop` refuses as at any self-check's failure, nothing
-        /// written (exit 3; actinglab details as `record_case_failed`'s, and `withheld`).
+        /// Error. #463 PRIV-3 (amendment 1, one cause): a regression case of a public recording
+        /// misses on its package, and the target of a failed check needs no reading by declaration
+        /// and reads inside a rectangle withheld from its scene: a recognition box drawn over a
+        /// value reading. The case is not written and `record stop` refuses as at any self-check's
+        /// failure, nothing written (exit 3; actinglab details as `record_case_failed`'s, and
+        /// `withheld`).
         RecordCaseReadingWithheld => "record_case_reading_withheld": error / none,
+        /// Warning. #463 PRIV-3 amendment 1: the page of a regression case of a public recording
+        /// requires a target that needs a withheld reading by declaration, so its case is made
+        /// without the page judgement, and nothing else of the page can be pinned (no other target
+        /// it requires, none it forbids that a scene can evaluate): nothing of the page can be
+        /// proven on a scene without a value reading, and the case is not written. It refuses
+        /// nothing (exit 0).
+        RecordCaseReadingNotWritten => "record_case_reading_not_written": warning / none,
     }
 }
 

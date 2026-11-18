@@ -19,8 +19,8 @@ use crate::recording::crosscheck::admit;
 use crate::recording::store::{old_record_path, recording_path};
 use crate::{
     ClickSpec, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkOutcome, MarkRequest, MarkSpec,
-    RecordDestination, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
-    SelfTestStatus, record_mark, record_start, record_status, record_stop,
+    RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, SelfTestStatus, record_mark,
+    record_start, record_status, record_stop,
 };
 use actingcommand_contract::{InputAction, LabError};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
@@ -366,11 +366,6 @@ impl Recording {
                 game: Some("neutral".to_owned()),
                 server: Some("test".to_owned()),
                 locale: Some("en-US".to_owned()),
-                // #463 PRIV-3: a value test's sides are readings, which a public recording's
-                // scenes withhold, so a page that requires the value test refuses its case
-                // (`record_case_reading_withheld`); these tests pin what record stop generates of
-                // a value test, which a local recording keeps as before.
-                destination: RecordDestination::Local,
                 ..RecordStartOptions::default()
             },
         )
