@@ -60,7 +60,7 @@ fn linger(release: &Path) {
 
 /// #398 DB-3: starts `program --linger <release>` with null standard handles, without a window;
 /// its pid, or why it could not start.
-fn start_lingerer(program: &str, release: &str) -> Result<u32, String> {
+fn start_lingerer(program: &str, release: &str) -> io::Result<u32> {
     let mut command = Command::new(program);
     command
         .args(["--linger", release])
@@ -73,10 +73,7 @@ fn start_lingerer(program: &str, release: &str) -> Result<u32, String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command
-        .spawn()
-        .map(|child| child.id())
-        .map_err(|error| error.to_string())
+    command.spawn().map(|child| child.id())
 }
 
 /// The root of the program: the folder above the `runtime\` or `tools\` it runs from.
@@ -173,7 +170,7 @@ fn serve(arguments: &[String]) {
                 if let (Some(program), Some(release)) = (program, release) {
                     served["lingerer"] = match start_lingerer(program, release) {
                         Ok(pid) => json!(pid),
-                        Err(error) => json!({"spawn_error": error}),
+                        Err(error) => json!({"spawn_error": error.to_string()}),
                     };
                 }
                 json!({"content": [{"type": "text", "text": served.to_string()}]})
