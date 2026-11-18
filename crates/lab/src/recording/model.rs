@@ -1436,7 +1436,11 @@ impl SelectSlotSpec {
     }
 }
 
-/// #463 R1: the OCR members of the slots' name reads.
+/// #463 R1: the OCR members of the slots' name reads. #463 SEL-2L-a (`contracts/lab-recording.md`,
+/// "Reading names by detecting blocks"): `blocks` and `line_merge`, together or neither, in the
+/// words of a layout's shared read: a select of fixed slots reads its names by detecting their
+/// blocks, in one read of its slots' name boxes per frame. Absent, they are not written, so a
+/// select without them is byte for byte what an earlier build wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectReadSpec {
@@ -1445,6 +1449,42 @@ pub struct SelectReadSpec {
     pub minimum_confidence_milli: u16,
     pub model_ref: String,
     pub model_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<SelectReadBlocks>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_merge: Option<SelectLineMerge>,
+}
+
+/// #463 SEL-2L-a: how a select's names are cut into blocks, the word of a layout's
+/// `shared_ocr.blocks`: `detect`, the text detector over the slots' name boxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectReadBlocks {
+    Detect,
+}
+
+/// #463 SEL-2L-a: how the detected boxes of a select's names are merged into lines, the words of
+/// a layout's `shared_ocr.line_merge`: `"none"` or `{"gap_factor": n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SelectLineMerge {
+    Keyword(SelectLineMergeKeyword),
+    Factor(SelectGapFactor),
+}
+
+/// #463 SEL-2L-a: `"none"`: no two boxes merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectLineMergeKeyword {
+    #[serde(rename = "none")]
+    Never,
+}
+
+/// #463 SEL-2L-a: the model folder's line merge with this factor in place of its own (its bound is
+/// the kernel's, which refuses another at the probe's admission).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectGapFactor {
+    pub gap_factor: u32,
 }
 
 /// #463 R1: one name of the identity domain: its id and the texts it is read as.

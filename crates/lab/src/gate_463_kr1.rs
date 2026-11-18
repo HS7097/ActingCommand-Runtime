@@ -1125,6 +1125,7 @@ fn kr1_record_review_answers_the_key_and_the_press_it_replaced_without_drawing_a
                 record_id: None,
                 step: Some(step),
                 no_preview: false,
+                ruler: None,
             },
             &RecordStopOptions::default(),
             &bench.ocr,

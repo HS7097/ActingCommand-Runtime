@@ -12,11 +12,21 @@
 //! press: a cross and a ring at a tap's point, an arrow from a swipe's start to its end, a ring at
 //! a long press's point. The ring's radius is a fortieth of the frame's shorter side, at least six
 //! pixels ([`press_radius`]).
+//!
+//! #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): a
+//! copy may carry a ruler ([`PreviewRuler`]), drawn first, under the boxes and the press, in the
+//! stored frame's own pixels, the space `record mark` takes a box's corners in. `edges`: along the
+//! top edge and the left edge a tick every 50 pixels, a longer one every 100, and beside each
+//! longer one its number in a built-in bitmap font ([`DIGITS`]); `grid`: the same over a line one
+//! pixel thin across the frame at every 100 pixels, both ways. Each mark is dark over a light halo
+//! (a line's dashes alternate the two), so that it reads on a light and on a dark frame. The ruler
+//! measures nothing and proposes nothing; without it the copy is drawn as before, byte for byte.
 
 use super::model::{RecordPoint, RecordRect};
 use super::store::invalid;
 use actingcommand_contract::LabResult;
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use serde::Serialize;
 use std::f64::consts::FRAC_PI_6;
 
 /// A colour, red, green and blue.
@@ -37,6 +47,122 @@ const MIN_RADIUS: i32 = 6;
 const RADIUS_PARTS: u32 = 40;
 /// How many pixels thick a ring, a box's outline and a press's line are.
 const THICKNESS: i64 = 2;
+
+/// #463 S1-R: the ruler's dark tone, each mark's core.
+pub(crate) const RULER_DARK: Colour = [0, 0, 0];
+/// #463 S1-R: the ruler's light tone, the halo around each mark's core.
+pub(crate) const RULER_LIGHT: Colour = [255, 255, 255];
+/// #463 S1-R: a tick along the top and the left edge every this many pixels.
+pub(crate) const RULER_TICK_PX: i64 = 50;
+/// #463 S1-R: a longer tick every this many pixels, and beside it its number.
+pub(crate) const RULER_LONG_TICK_PX: i64 = 100;
+/// #463 S1-R: `grid`'s lines across the frame, both ways, every this many pixels.
+pub(crate) const RULER_LINE_PX: i64 = 100;
+/// #463 S1-R: how long a tick is, from its edge into the frame, and a longer one.
+pub(crate) const RULER_TICK_LENGTH: i64 = 6;
+pub(crate) const RULER_LONG_TICK_LENGTH: i64 = 12;
+/// #463 S1-R: a number's first pixel, along its edge, this far past its tick, and this far from
+/// its edge.
+pub(crate) const RULER_NUMBER_OFFSET: i64 = 4;
+pub(crate) const RULER_NUMBER_INSET: i64 = 2;
+/// #463 S1-R: a cell of the font is this many pixels square; a digit is three cells wide and five
+/// high, and one empty cell parts two digits.
+pub(crate) const RULER_FONT_SCALE: i64 = 2;
+/// #463 S1-R: a line's dashes, dark and light in turn, are this many pixels long.
+pub(crate) const RULER_DASH_PX: i64 = 4;
+/// #463 S1-R: the ruler's coordinate space, as the answer names it: the stored frame's own pixels,
+/// in which `record mark` takes a box's corners and the step table holds a press's point.
+pub(crate) const RULER_SPACE: &str = "frame_pixels";
+/// #463 S1-R: the built-in digits, `0` to `9`, each five rows of three cells, `#` drawn.
+pub(crate) const DIGITS: [[&str; 5]; 10] = [
+    ["###", "#.#", "#.#", "#.#", "###"],
+    [".#.", "##.", ".#.", ".#.", "###"],
+    ["###", "..#", "###", "#..", "###"],
+    ["###", "..#", "###", "..#", "###"],
+    ["#.#", "#.#", "###", "..#", "..#"],
+    ["###", "#..", "###", "..#", "###"],
+    ["###", "#..", "###", "#.#", "###"],
+    ["###", "..#", "..#", "..#", "..#"],
+    ["###", "#.#", "###", "#.#", "###"],
+    ["###", "#.#", "###", "..#", "###"],
+];
+/// #463 S1-R: a digit's cells across and down.
+const GLYPH_COLUMNS: i64 = 3;
+const GLYPH_ROWS: i64 = 5;
+
+/// #463 S1-R: the ruler a preview carries, the parameter `ruler` of `record review` alone (a closed
+/// list; absent: no ruler).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewRuler {
+    /// Ticks and numbers along the top edge and the left edge.
+    Edges,
+    /// The same, over a thin line across the frame at every 100 pixels, both ways.
+    Grid,
+}
+
+impl PreviewRuler {
+    /// The words the parameter takes, as the operation table lists them.
+    pub const WORDS: [&'static str; 2] = ["edges", "grid"];
+
+    /// The ruler `word` names; `None` for every other word.
+    pub fn from_word(word: &str) -> Option<Self> {
+        match word {
+            "edges" => Some(Self::Edges),
+            "grid" => Some(Self::Grid),
+            _ => None,
+        }
+    }
+
+    /// Its word, as a ruled copy's name carries it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Edges => "edges",
+            Self::Grid => "grid",
+        }
+    }
+
+    /// What the answer says of it ([`RulerView`]).
+    pub fn view(self) -> RulerView {
+        RulerView {
+            kind: self,
+            space: RULER_SPACE,
+            tick_px: RULER_TICK_PX,
+            long_tick_px: RULER_LONG_TICK_PX,
+            number_px: RULER_LONG_TICK_PX,
+            top_numbers: "x",
+            left_numbers: "y",
+            line_px: (self == Self::Grid).then_some(RULER_LINE_PX),
+        }
+    }
+}
+
+/// #463 S1-R: what the ruler on an answer's copies is, as the answer says it: its word, the
+/// coordinate space of its numbers, its spacing, what its numbers name, and `grid`'s lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RulerView {
+    /// `edges` or `grid`, the word given.
+    pub kind: PreviewRuler,
+    /// `frame_pixels`: the stored frame's own pixels, the space `record mark` takes a box's
+    /// corners in; a copy is of its frame's size.
+    pub space: &'static str,
+    /// A tick along the top and the left edge at every multiple of this many pixels.
+    pub tick_px: i64,
+    /// A longer tick at every multiple of this many pixels.
+    pub long_tick_px: i64,
+    /// At every multiple of this many pixels, the number itself beside its longer tick: to the
+    /// right of the tick on the top edge, below it on the left edge (one that would not fit wholly
+    /// in the frame is left out).
+    pub number_px: i64,
+    /// What the numbers along the top edge are: `x`.
+    pub top_numbers: &'static str,
+    /// What the numbers along the left edge are: `y`.
+    pub left_numbers: &'static str,
+    /// `grid`: a line across the frame at every multiple of this many pixels, both ways; absent on
+    /// `edges`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_px: Option<i64>,
+}
 
 /// What is drawn of a press, at the points the step table holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +193,14 @@ pub(crate) fn press_radius(width: u32, height: u32) -> i32 {
 /// The PNG of the stored frame `png` (its bytes, already checked against its sha256) with
 /// `overlay` drawn on a copy of its pixels; `label` names the frame in a failure. A frame that does
 /// not decode, and a copy that does not encode, are `record_frame_unreadable`, as a crop's are.
-pub(crate) fn render(png: Vec<u8>, overlay: &Overlay, label: &str) -> LabResult<Vec<u8>> {
+/// #463 S1-R: with `ruler`, the ruler is drawn on the copy first, under the overlay; without it
+/// nothing else is drawn.
+pub(crate) fn render(
+    png: Vec<u8>,
+    overlay: &Overlay,
+    ruler: Option<PreviewRuler>,
+    label: &str,
+) -> LabResult<Vec<u8>> {
     let frame = Frame::from_png(png, CaptureBackendName::AdbScreencap).map_err(|error| {
         invalid(
             "record_frame_unreadable",
@@ -85,6 +218,9 @@ pub(crate) fn render(png: Vec<u8>, overlay: &Overlay, label: &str) -> LabResult<
         channels,
         pixels: frame.pixels,
     };
+    if let Some(ruler) = ruler {
+        canvas.ruler(ruler);
+    }
     for (rect, colour) in &overlay.boxes {
         canvas.outline(*rect, *colour);
     }
@@ -274,5 +410,120 @@ impl Canvas {
             );
             self.thick_line(end, tip, colour);
         }
+    }
+
+    /// #463 S1-R: the ruler `ruler`: `grid`'s lines first, then along the top edge a tick down from
+    /// it at every multiple of [`RULER_TICK_PX`] and along the left edge one across from it, a
+    /// multiple of [`RULER_LONG_TICK_PX`] longer and with its number beside it. A mark that falls
+    /// outside the frame is left out, so a frame under 100 pixels, or under 50, takes what fits.
+    fn ruler(&mut self, ruler: PreviewRuler) {
+        let width = i64::try_from(self.width).unwrap_or(i64::MAX);
+        let height = i64::try_from(self.height).unwrap_or(i64::MAX);
+        if ruler == PreviewRuler::Grid {
+            for x in multiples(RULER_LINE_PX, width) {
+                for y in 0..height {
+                    self.set(x, y, dash(y));
+                }
+            }
+            for y in multiples(RULER_LINE_PX, height) {
+                for x in 0..width {
+                    self.set(x, y, dash(x));
+                }
+            }
+        }
+        for x in multiples(RULER_TICK_PX, width) {
+            let core = (0..tick_length(x)).map(|y| (x, y)).collect::<Vec<_>>();
+            self.two_tone(&core);
+        }
+        for y in multiples(RULER_TICK_PX, height) {
+            let core = (0..tick_length(y)).map(|x| (x, y)).collect::<Vec<_>>();
+            self.two_tone(&core);
+        }
+        for x in multiples(RULER_LONG_TICK_PX, width) {
+            self.number(x, (x + RULER_NUMBER_OFFSET, RULER_NUMBER_INSET));
+        }
+        for y in multiples(RULER_LONG_TICK_PX, height) {
+            self.number(y, (RULER_NUMBER_INSET, y + RULER_NUMBER_OFFSET));
+        }
+    }
+
+    /// #463 S1-R: the pixels `core` in the ruler's dark tone over a halo of its light tone, every
+    /// pixel next to one of them (diagonals too) light first, so that the mark reads on a light and
+    /// on a dark frame.
+    fn two_tone(&mut self, core: &[(i64, i64)]) {
+        for &(x, y) in core {
+            for down in -1..=1 {
+                for right in -1..=1 {
+                    self.set(x + right, y + down, RULER_LIGHT);
+                }
+            }
+        }
+        for &(x, y) in core {
+            self.set(x, y, RULER_DARK);
+        }
+    }
+
+    /// #463 S1-R: the decimal digits of `value` in the font ([`DIGITS`]), two tones, the top-left
+    /// pixel of the first at `at`; a number that would not lie wholly inside the frame is left out,
+    /// so that no cut number is read.
+    fn number(&mut self, value: i64, at: (i64, i64)) {
+        let glyphs = value
+            .to_string()
+            .bytes()
+            .filter_map(|byte| DIGITS.get(usize::from(byte.wrapping_sub(b'0'))))
+            .collect::<Vec<_>>();
+        let advance = (GLYPH_COLUMNS + 1) * RULER_FONT_SCALE;
+        let count = i64::try_from(glyphs.len()).unwrap_or(i64::MAX);
+        let right = at.0 + count * advance - RULER_FONT_SCALE;
+        let bottom = at.1 + GLYPH_ROWS * RULER_FONT_SCALE;
+        let inside = at.0 >= 0
+            && at.1 >= 0
+            && usize::try_from(right).is_ok_and(|end| end <= self.width)
+            && usize::try_from(bottom).is_ok_and(|end| end <= self.height);
+        if !inside {
+            return;
+        }
+        let mut core = Vec::new();
+        for (left, glyph) in (0..).map(|place| at.0 + place * advance).zip(glyphs) {
+            for (top, row) in (0..).map(|line| at.1 + line * RULER_FONT_SCALE).zip(glyph) {
+                for (cell, _) in (0..)
+                    .map(|column| left + column * RULER_FONT_SCALE)
+                    .zip(row.bytes())
+                    .filter(|(_, drawn)| *drawn == b'#')
+                {
+                    for down in 0..RULER_FONT_SCALE {
+                        for across in 0..RULER_FONT_SCALE {
+                            core.push((cell + across, top + down));
+                        }
+                    }
+                }
+            }
+        }
+        self.two_tone(&core);
+    }
+}
+
+/// #463 S1-R: the multiples of `step` from `step` on, below `limit`.
+fn multiples(step: i64, limit: i64) -> impl Iterator<Item = i64> {
+    (step..limit).step_by(usize::try_from(step).unwrap_or(usize::MAX))
+}
+
+/// #463 S1-R: how long the tick at `at` pixels along its edge is: longer at a multiple of
+/// [`RULER_LONG_TICK_PX`].
+fn tick_length(at: i64) -> i64 {
+    if at % RULER_LONG_TICK_PX == 0 {
+        RULER_LONG_TICK_LENGTH
+    } else {
+        RULER_TICK_LENGTH
+    }
+}
+
+/// #463 S1-R: the tone of a line's pixel `along` pixels from its start: dashes of
+/// [`RULER_DASH_PX`] pixels, dark first, then light, in turn.
+pub(crate) fn dash(along: i64) -> Colour {
+    if (along / RULER_DASH_PX) % 2 == 0 {
+        RULER_DARK
+    } else {
+        RULER_LIGHT
     }
 }

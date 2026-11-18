@@ -533,6 +533,7 @@ impl Recording {
                 record_id: None,
                 step: None,
                 no_preview: true,
+                ruler: None,
             },
             &stop_options(false, bound),
             &self.ocr,
