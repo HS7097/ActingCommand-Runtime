@@ -5,7 +5,7 @@
 //! ```text
 //! acib devices     [--key-salt-env <NAME> [--binding-salt-env <NAME2>]] [--timeout-ms <ms>]
 //! acib info        <device>                                [--timeout-ms <ms>]
-//! acib services    <device>                                [--timeout-ms <ms>]
+//! acib services    <device> [--service <name>]             [--timeout-ms <ms>]
 //! acib images      <device>                                [--timeout-ms <ms>]
 //! acib apps        <device> --contains <text> [--max-matching <m>] [--timeout-ms <ms>]
 //! acib screenshot  <device> --out <file|-> [--via <way>]   [--timeout-ms <ms>]
@@ -13,7 +13,12 @@
 //! acib running     <device> --bundle <id>                  [--timeout-ms <ms>]
 //! acib launch      <device> --bundle <id> [--relaunch]     [--timeout-ms <ms>]
 //! acib stop        <device> --bundle <id>                  [--timeout-ms <ms>]
+//! acib probe       <device> [--wait-ms <ms>]               [--timeout-ms <ms>]
 //! ```
+//!
+//! (ACIB-3b, second round) `<name>` is one remote service's name as the discovery handshake
+//! lists it (ASCII letters and digits, `.`, `-` and `_`); `--wait-ms` is how long `probe` waits
+//! for each of its ways (1 to [`MAX_WAIT_MS`], default [`DEFAULT_WAIT_MS`]).
 //!
 //! `<device>` is `--device <n>`, the device's usbmuxd session number as `acib devices` lists
 //! it, or, in its place, `--device-key <key> --key-salt-env <NAME>`: the listed device whose
@@ -53,6 +58,12 @@ pub const DEFAULT_WAY: Way = Way::ScreenCapture;
 pub const STANDARD_OUTPUT: &str = "-";
 /// The flag of `launch` that ends the application first; it takes no value.
 const RELAUNCH: &str = "--relaunch";
+/// How long `probe` waits for each way when `--wait-ms` does not say.
+pub const DEFAULT_WAIT_MS: u64 = 4_000;
+/// The longest wait `--wait-ms` takes.
+pub const MAX_WAIT_MS: u64 = 120_000;
+/// The longest service name `--service` takes.
+const LONGEST_SERVICE_NAME: usize = 240;
 
 /// The device a command asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +131,16 @@ pub enum Request {
         device: Target,
         bundle: String,
     },
+    /// `services --service <name>`: what the discovery handshake says of one service.
+    ServiceByName {
+        device: Target,
+        name: String,
+    },
+    /// `probe`: the ways of asking the application service, each waited for `wait_ms`.
+    Probe {
+        device: Target,
+        wait_ms: u64,
+    },
 }
 
 impl Request {
@@ -136,6 +157,8 @@ impl Request {
             Self::Running { .. } => CommandName::Running,
             Self::Launch { .. } => CommandName::Launch,
             Self::Stop { .. } => CommandName::Stop,
+            Self::ServiceByName { .. } => CommandName::Services,
+            Self::Probe { .. } => CommandName::Probe,
         }
     }
 
@@ -160,7 +183,9 @@ impl Request {
             | Self::Orientation { device, .. }
             | Self::Running { device, .. }
             | Self::Launch { device, .. }
-            | Self::Stop { device, .. } => Some(device),
+            | Self::Stop { device, .. }
+            | Self::ServiceByName { device, .. }
+            | Self::Probe { device, .. } => Some(device),
         }
     }
 
@@ -176,7 +201,9 @@ impl Request {
             | Self::Orientation { .. }
             | Self::Running { .. }
             | Self::Launch { .. }
-            | Self::Stop { .. } => None,
+            | Self::Stop { .. }
+            | Self::ServiceByName { .. }
+            | Self::Probe { .. } => None,
         }
     }
 }
@@ -203,17 +230,21 @@ struct Options {
     via: Option<String>,
     bundle: Option<String>,
     relaunch: bool,
+    service: Option<String>,
+    wait_ms: Option<u64>,
 }
 
-/// The command line after the program's name; `None` when it is not one of the ten commands
+/// The command line after the program's name; `None` when it is not one of the eleven commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
 /// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`], an empty `--out`, a way or a
 /// reader that is not one of its command's words, a key that is not written as a key, a
 /// variable name that is empty or holds `=` or NUL, a bundle identifier that is not written as
 /// one, `--device` beside `--device-key`, one of `--device-key` and `--key-salt-env` without
 /// the other, `--binding-salt-env` without `--key-salt-env` or on another command than
-/// `devices`, `--relaunch` on another command than `launch`). Every option but `--relaunch`
-/// takes the argument after it as its value, whatever it is.
+/// `devices`, `--relaunch` on another command than `launch`, `--service` on another command than
+/// `services` or not written as a service's name, `--wait-ms` on another command than `probe` or
+/// outside 1 to [`MAX_WAIT_MS`]). Every option but `--relaunch` takes the argument after it as
+/// its value, whatever it is.
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, given) = arguments.split_first()?;
     let mut options = Options::default();
@@ -253,6 +284,13 @@ pub fn parse(arguments: &[String]) -> Option<Invocation> {
             "--out" if options.out.is_none() => options.out = Some(out(value)?),
             "--via" if options.via.is_none() => options.via = Some(value.clone()),
             "--bundle" if options.bundle.is_none() => options.bundle = Some(bundle(value)?),
+            "--service" if options.service.is_none() => {
+                options.service = Some(service_name(value)?);
+            }
+            "--wait-ms" if options.wait_ms.is_none() => {
+                options.wait_ms =
+                    Some(number::<u64>(value).filter(|ms| (1..=MAX_WAIT_MS).contains(ms))?);
+            }
             _ => return None,
         }
     }
@@ -282,6 +320,8 @@ fn devices(options: Options) -> Option<Request> {
         via: None,
         bundle: None,
         relaunch: false,
+        service: None,
+        wait_ms: None,
     } = options
     else {
         return None;
@@ -308,6 +348,8 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
         via,
         bundle,
         relaunch,
+        service,
+        wait_ms,
     } = options
     else {
         return None;
@@ -317,42 +359,73 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
         (None, Some(key), Some(salt_variable)) => Target::Key { key, salt_variable },
         _ => return None,
     };
-    let request = match (command, contains, max_matching, out, via, bundle, relaunch) {
-        ("info", None, None, None, None, None, false) => Request::Info(target),
-        ("services", None, None, None, None, None, false) => Request::Services(target),
-        ("images", None, None, None, None, None, false) => Request::Images(target),
-        ("apps", Some(contains), max_matching, None, None, None, false) => Request::Apps {
-            device: target,
-            contains,
-            max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
-        },
-        ("screenshot", None, None, Some(out), via, None, false) => Request::Screenshot {
-            device: target,
-            out,
-            via: match via {
-                None => DEFAULT_WAY,
-                Some(word) => Way::from_word(&word)?,
-            },
-        },
-        ("orientation", None, None, None, via, None, false) => Request::Orientation {
+    // The options only `services` (`--service`) and `probe` (`--wait-ms`) take, and the others.
+    let own = (service, wait_ms);
+    let request = match (
+        command,
+        contains,
+        max_matching,
+        out,
+        via,
+        bundle,
+        relaunch,
+        own,
+    ) {
+        ("info", None, None, None, None, None, false, (None, None)) => Request::Info(target),
+        ("services", None, None, None, None, None, false, (None, None)) => {
+            Request::Services(target)
+        }
+        ("services", None, None, None, None, None, false, (Some(name), None)) => {
+            Request::ServiceByName {
+                device: target,
+                name,
+            }
+        }
+        ("images", None, None, None, None, None, false, (None, None)) => Request::Images(target),
+        ("apps", Some(contains), max_matching, None, None, None, false, (None, None)) => {
+            Request::Apps {
+                device: target,
+                contains,
+                max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
+            }
+        }
+        ("screenshot", None, None, Some(out), via, None, false, (None, None)) => {
+            Request::Screenshot {
+                device: target,
+                out,
+                via: match via {
+                    None => DEFAULT_WAY,
+                    Some(word) => Way::from_word(&word)?,
+                },
+            }
+        }
+        ("orientation", None, None, None, via, None, false, (None, None)) => Request::Orientation {
             device: target,
             via: match via {
                 None => None,
                 Some(word) => Some(Reader::from_word(&word)?),
             },
         },
-        ("running", None, None, None, None, Some(bundle), false) => Request::Running {
+        ("running", None, None, None, None, Some(bundle), false, (None, None)) => {
+            Request::Running {
+                device: target,
+                bundle,
+            }
+        }
+        ("launch", None, None, None, None, Some(bundle), relaunch, (None, None)) => {
+            Request::Launch {
+                device: target,
+                bundle,
+                relaunch,
+            }
+        }
+        ("stop", None, None, None, None, Some(bundle), false, (None, None)) => Request::Stop {
             device: target,
             bundle,
         },
-        ("launch", None, None, None, None, Some(bundle), relaunch) => Request::Launch {
+        ("probe", None, None, None, None, None, false, (None, wait_ms)) => Request::Probe {
             device: target,
-            bundle,
-            relaunch,
-        },
-        ("stop", None, None, None, None, Some(bundle), false) => Request::Stop {
-            device: target,
-            bundle,
+            wait_ms: wait_ms.unwrap_or(DEFAULT_WAIT_MS),
         },
         _ => return None,
     };
@@ -389,6 +462,16 @@ fn out(value: &str) -> Option<Out> {
 /// The bundle identifier of `--bundle`, when it is written as one is.
 fn bundle(value: &str) -> Option<String> {
     redact::is_bundle_identifier(value).then(|| value.to_owned())
+}
+
+/// The remote service's name of `--service`, when it is written as one is: not empty, not too
+/// long, made only of ASCII letters and digits, `.`, `-` and `_`.
+fn service_name(value: &str) -> Option<String> {
+    let own_characters = value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+    (!value.is_empty() && value.len() <= LONGEST_SERVICE_NAME && own_characters)
+        .then(|| value.to_owned())
 }
 
 /// The key of `--device-key`, when it is written as a key is.
@@ -1377,6 +1460,132 @@ mod tests {
             ],
         ];
         for line in lines {
+            assert_eq!(parsed(&line), None, "{line:?}");
+        }
+    }
+
+    /// (ACIB-3b, second round) `probe` takes a device (by its number or its key), `--wait-ms`
+    /// of 1 to [`MAX_WAIT_MS`] (default [`DEFAULT_WAIT_MS`]) and `--timeout-ms`; `services`
+    /// takes `--service` with one service's name. No other command takes either, each is taken
+    /// once, and a wait or a name that cannot be one is refused.
+    #[test]
+    fn the_probe_and_a_service_by_name_take_their_options() {
+        assert_eq!(
+            parsed(&["probe", "--device", "3"]),
+            Some(Invocation {
+                request: Request::Probe {
+                    device: Target::Number(3),
+                    wait_ms: DEFAULT_WAIT_MS,
+                },
+                timeout_ms: DEFAULT_TIMEOUT_MS,
+            })
+        );
+        assert_eq!(
+            parsed(&[
+                "probe",
+                "--timeout-ms",
+                "60000",
+                "--wait-ms",
+                "120000",
+                "--device-key",
+                VECTOR_KEY,
+                "--key-salt-env",
+                SALT_VARIABLE,
+            ]),
+            Some(Invocation {
+                request: Request::Probe {
+                    device: key_target(),
+                    wait_ms: MAX_WAIT_MS,
+                },
+                timeout_ms: 60_000,
+            })
+        );
+        let by_name = request(&[
+            "services",
+            "--service",
+            "com.apple.coredevice.appservice",
+            "--device",
+            "4",
+        ]);
+        assert_eq!(
+            by_name,
+            Some(Request::ServiceByName {
+                device: Target::Number(4),
+                name: "com.apple.coredevice.appservice".to_owned(),
+            })
+        );
+        let underscored = "com.example.insecure_proxy.shim-remote";
+        assert_eq!(
+            request(&["services", "--device", "4", "--service", underscored]),
+            Some(Request::ServiceByName {
+                device: Target::Number(4),
+                name: underscored.to_owned(),
+            })
+        );
+        let probe = Request::Probe {
+            device: Target::Number(5),
+            wait_ms: 1,
+        };
+        assert_eq!(probe.name(), CommandName::Probe);
+        assert_eq!(probe.device(), Some(5));
+        assert_eq!(probe.via(), None);
+        let named = Request::ServiceByName {
+            device: Target::Number(6),
+            name: "com.example.one".to_owned(),
+        };
+        assert_eq!(named.name(), CommandName::Services);
+        assert_eq!(named.device(), Some(6));
+        assert_eq!(named.via(), None);
+
+        let long = "a".repeat(LONGEST_SERVICE_NAME + 1);
+        let refused: Vec<Vec<&str>> = vec![
+            vec!["probe"],
+            vec!["probe", "--device", "3", "--wait-ms", "0"],
+            vec!["probe", "--device", "3", "--wait-ms", "120001"],
+            vec!["probe", "--device", "3", "--wait-ms", "-1"],
+            vec!["probe", "--device", "3", "--wait-ms", ""],
+            vec![
+                "probe",
+                "--device",
+                "3",
+                "--wait-ms",
+                "10",
+                "--wait-ms",
+                "10",
+            ],
+            vec!["probe", "--device", "3", "--bundle", "com.example.app"],
+            vec!["probe", "--device", "3", "--service", "com.example.one"],
+            vec!["probe", "--device", "3", "--via", "screen_capture"],
+            vec!["PROBE", "--device", "3"],
+            vec!["services", "--device", "3", "--service", ""],
+            vec!["services", "--device", "3", "--service", "com.example one"],
+            vec!["services", "--device", "3", "--service", "com/example"],
+            vec!["services", "--device", "3", "--service", long.as_str()],
+            vec![
+                "services",
+                "--device",
+                "3",
+                "--service",
+                "com.example.one",
+                "--service",
+                "com.example.one",
+            ],
+            vec!["services", "--device", "3", "--wait-ms", "10"],
+            vec!["services", "--service", "com.example.one"],
+            vec!["info", "--device", "3", "--service", "com.example.one"],
+            vec![
+                "running",
+                "--device",
+                "3",
+                "--bundle",
+                "com.example.app",
+                "--wait-ms",
+                "10",
+            ],
+            vec!["devices", "--service", "com.example.one"],
+            vec!["devices", "--wait-ms", "10"],
+        ];
+        for line in refused {
             assert_eq!(parsed(&line), None, "{line:?}");
         }
     }
