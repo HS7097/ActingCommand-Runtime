@@ -31,7 +31,9 @@ use actingcommand_contract::{
     RuntimeResult, SanitizationError, SchedulingPauseExpectation, SchedulingPauseMode,
     SchedulingPauseReason, SchedulingPauseScope,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, SchedulingPauseAnswer};
+use actingcommand_runtime_client::{
+    RuntimeClient, RuntimeClientError, SchedulingPauseAnswer, SchedulingResumeAnswer,
+};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -107,6 +109,26 @@ pub fn resume_expected(
     expected: SchedulingPauseExpectation,
 ) -> Result<RuntimeResult, RuntimeClientError> {
     client.resume_scheduling_expected(scope, expected)
+}
+
+/// #480 PG-2d (register §1.481; `contracts/scheduling-pause.md`, "Resume"): the Lab's `resume` row
+/// (its command line and `ac_resume`): [`resume`] with the receipt's outcome, whose cause says when
+/// the Runtime lifted a person's pause that was not quiet yet and ran no reconnect
+/// (`scheduling_resume_without_reconnect`).
+pub fn resume_as(
+    client: &RuntimeClient,
+    scope: SchedulingPauseScope,
+) -> Result<SchedulingResumeAnswer, RuntimeClientError> {
+    client.resume_scheduling_as(scope)
+}
+
+/// #480 PG-2d: [`resume_expected`] with the receipt's outcome, for the Lab's `resume` row.
+pub fn resume_expected_as(
+    client: &RuntimeClient,
+    scope: SchedulingPauseScope,
+    expected: SchedulingPauseExpectation,
+) -> Result<SchedulingResumeAnswer, RuntimeClientError> {
+    client.resume_scheduling_expected_as(scope, expected)
 }
 
 /// MCP's answer of a resume: `{resumed}`.
