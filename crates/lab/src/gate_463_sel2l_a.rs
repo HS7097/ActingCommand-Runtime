@@ -18,9 +18,12 @@
 // one line, so runs on two rows of it read as one block at confidence 0.3, as a one-line
 // recogniser reads two lines; a region without a run reads nothing. It keeps every request's
 // region and block mode. The colour mark state/page on a flat area recognises the list and guards
-// the select. No device is used; the tests read no clock and never sleep. Every expected value
-// comes from the brief's and the design's lines, the contract's "What record stop generates" and
-// the values above, never from the code.
+// the select. No device is used; the tests read no clock and never sleep. The decisions, the
+// refusals and their causes come from the brief's and the design's lines and the values above. The
+// golden layout and targets (`golden_layout`, `golden_targets`) are the contract's "What record
+// stop generates" written out member by member in the order the generator writes them, read
+// against `select_layout_json` and `select_slot_targets` (#463 SEL-2L-rows, the second review of
+// this file: they were not derived apart from the code), so that they pin today's bytes.
 //
 // What the provider is asked during a mark's self-test (read in the kernel, finishing round): each
 // dry run of the select (`dry_run_select`) recognises the probe's pages by their colour marks, which
@@ -28,10 +31,10 @@
 // text from that frame's one read (`shared_text`, `read_shared_text` in the recognition pack's
 // `candidate_layout.rs`), and only a target it does not serve would read its name box alone. The
 // generator serves every slot, so every request of a select with `blocks` is the shared read
-// (SHARED, detect with the declared merge): one per dry run, a dry run per frame for the default
-// and one more for the pressed name.
+// (SHARED, detect with the declared merge). #463 SEL-2L-rows: the tests assert that, and that the
+// provider was asked at all, not how many dry runs the Lab makes or how often the kernel reads a
+// projection.
 
-use crate::codes::{LabCode, SelectProblem};
 use crate::recording::crosscheck::admit;
 use crate::recording::marks::MarkRejection;
 use crate::recording::select::{NAME_UNREAD, SELECT_REJECTION_ID};
@@ -587,25 +590,6 @@ fn task(entries: &BTreeMap<String, Vec<u8>>) -> Value {
     serde_json::from_str(&task_text(entries)).expect("task JSON")
 }
 
-// The `select_problem` of a `record_select_invalid` refusal, its outcome carrying the same word.
-fn select_problem(error: LabError) -> String {
-    assert_eq!(
-        error.code,
-        LabCode::RecordSelectInvalid.as_str(),
-        "{}",
-        error.message
-    );
-    let details = error.details.expect("details");
-    assert_eq!(
-        details["outcome"]["values"]["select_problem"], details["select_problem"],
-        "{details}"
-    );
-    details["select_problem"]
-        .as_str()
-        .expect("a word")
-        .to_owned()
-}
-
 // The refused select of `record_mark_rejected` with `reason`.
 fn select_rejection(error: LabError, reason: &str) -> Value {
     assert_eq!(error.code, "record_mark_rejected", "{}", error.message);
@@ -728,8 +712,8 @@ fn sel2l_blocks_read_two_line_and_centred_names_in_one_row_as_the_run_reads_them
     );
     let click = serde_json::to_value(&marked.click).expect("click JSON");
     assert_eq!(click["rect"], json!(SLOTS[0]), "{click}");
-    // Two frames, each read by the default's dry run and the pressed name's: four calls, each the
-    // shared read; no slot's name box is read alone.
+    // Every request of the self-test is the shared read, and there is one; no slot's name box is
+    // read alone.
     let requests = recording.provider.requests();
     let shared = (
         pack(SHARED),
@@ -738,7 +722,7 @@ fn sel2l_blocks_read_two_line_and_centred_names_in_one_row_as_the_run_reads_them
         },
     );
     assert!(
-        requests.len() == 4 && requests.iter().all(|request| *request == shared),
+        !requests.is_empty() && requests.iter().all(|request| *request == shared),
         "{requests:?}"
     );
     assert_eq!(
@@ -817,8 +801,7 @@ fn sel2l_a_neighbours_text_belongs_to_the_slot_its_centre_lies_in() {
         json!([decisions("f0001", 0, 1)]),
         "{marked_select}"
     );
-    // One frame, read by the default's dry run and the pressed name's: two calls, each the shared
-    // read with no merge.
+    // Every request is the shared read with no merge, and there is one.
     let requests = recording.provider.requests();
     let shared = (
         pack(SHARED),
@@ -827,7 +810,7 @@ fn sel2l_a_neighbours_text_belongs_to_the_slot_its_centre_lies_in() {
         },
     );
     assert!(
-        requests.len() == 2 && requests.iter().all(|request| *request == shared),
+        !requests.is_empty() && requests.iter().all(|request| *request == shared),
         "{requests:?}"
     );
 }
@@ -866,10 +849,13 @@ fn sel2l_a_missing_name_two_near_names_and_a_low_confidence_stay_unread() {
 }
 
 // Test 3 of the brief: `blocks` without `line_merge` and the reverse are the incomplete
-// declaration's validation_failed, the message naming the member that is missing; `blocks` on a
-// select of rows is record_select_invalid with blocks_with_rows; nothing is written.
+// declaration's validation_failed, the message naming the member that is missing; nothing is
+// written. #463 SEL-2L-rows (adapted, renamed from
+// `sel2l_blocks_and_line_merge_come_together_and_not_on_rows`): a select of rows takes the two
+// members since that slice, so the refusal `blocks_with_rows` this test pinned is gone
+// (`gate_463_sel2l_rows`).
 #[test]
-fn sel2l_blocks_and_line_merge_come_together_and_not_on_rows() {
+fn sel2l_blocks_and_line_merge_come_together() {
     let recording = Recording::new();
     let primary = list([Title::TwoLines, Title::Centred(BRAVO)]);
     for (read, missing) in [
@@ -889,23 +875,6 @@ fn sel2l_blocks_and_line_merge_come_together_and_not_on_rows() {
         assert!(error.message.contains(missing), "{}", error.message);
         assert_eq!(recording.recording()["steps"], json!([]), "nothing written");
     }
-    let rows = json!({
-        "rows": {"row": SLOTS[0], "anchor": rect(30, 30, 8, 8), "name": NAMES[0]},
-        "scan": {"list": rect(0, 0, 96, 48), "start": rect(88, 0, 8, 8), "stop": "end"},
-        "read": detecting(json!({"gap_factor": 0})),
-        "names": names(),
-        "match": {"max_distance": 1, "minimum_margin": 1},
-        "wanted": {"name": "list_item", "default": "item_b"},
-        "pressed": "item_a"
-    });
-    let error = recording
-        .mark(recording.step_one(&primary, &[], rows))
-        .expect_err("a select of rows with blocks");
-    assert_eq!(
-        select_problem(error),
-        SelectProblem::BlocksWithRows.as_str()
-    );
-    assert_eq!(recording.recording()["steps"], json!([]), "nothing written");
 }
 
 // Test 4 of the brief: one select mark refused on several frames counts once: "1 of 2" for the

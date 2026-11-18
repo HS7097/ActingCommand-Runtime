@@ -37,6 +37,7 @@ use super::fold::scan_invalid;
 use super::frames::{LoadedFrame, crop_png, read_stored_frame, rect_contains, rect_inside};
 use super::generate::{
     Plan, PlanStep, SELECT_FEATURE, render, select_policy_document, select_probe_plan,
+    select_shared_read,
 };
 use super::marks::MarkRejection;
 use super::model::{
@@ -303,15 +304,6 @@ pub(crate) fn validate_scan_shape(step: Option<u32>, select: &SelectSpec) -> Lab
              on a fresh frame after its return to the chosen row; leave confirm out",
         ));
     }
-    // #463 SEL-2L-a: the rows' side of reading names by detecting their blocks is not built yet.
-    if select.rows.is_some() && select.read.blocks.is_some() {
-        return Err(refuse(
-            SelectProblem::BlocksWithRows,
-            "the request declares read.blocks beside rows: reading the names of a scrolling list by \
-             detecting their blocks is not built yet, only a select of fixed slots takes it; leave \
-             blocks and line_merge out of a select with rows",
-        ));
-    }
     let (rows, scan) = rows_and_scan(select)
         .map_err(|_| shape("declares rows and scan together, or neither".to_owned()))?;
     if scan.stop.is_none() {
@@ -462,6 +454,10 @@ fn when_absent(task_id: &str, spec: &SelectSpec, scan: &SelectScanSpec) -> Optio
 /// template, every rectangle relative to the anchor's top-left corner on the first screen (the
 /// row as `instance_rect`, the click box, the name read at its offset), the list as the readable
 /// band, rows ordered along the fold's axis, and the one identity feature `name` over the names.
+/// #463 SEL-2L-rows (`contracts/lab-recording.md`, "Reading names by detecting blocks"): a select
+/// whose `read` declares `blocks` and `line_merge` adds, last, the layout's shared read over the
+/// list, its readable band, by the one writer a select of fixed slots uses
+/// ([`select_shared_read`]), which refuses to generate a name target the read would not serve.
 pub(crate) fn layout_json(
     plan: &Plan,
     step: &PlanStep,
@@ -475,7 +471,7 @@ pub(crate) fn layout_json(
         .iter()
         .map(|name| json!({"id": name.id, "aliases": name.aliases}))
         .collect::<Vec<_>>();
-    Ok(json!({
+    let mut layout = json!({
         "id": plan.select_layout_id(step),
         "page_id": page,
         "kind": "repeated_anchor",
@@ -503,7 +499,13 @@ pub(crate) fn layout_json(
                 }
             }
         }]
-    }))
+    });
+    // #463 SEL-2L-rows: present only when the select's read declares `blocks`.
+    let band = || Some(scan.list);
+    if let Some(shared) = select_shared_read(step, spec, band, &[name_target(plan, step, spec)?])? {
+        layout["shared_ocr"] = shared;
+    }
+    Ok(layout)
 }
 
 /// `rect` relative to the top-left corner of the anchor of `rows`.

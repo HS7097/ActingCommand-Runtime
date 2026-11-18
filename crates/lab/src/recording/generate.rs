@@ -2430,26 +2430,36 @@ fn select_layout_json(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> LabR
         "slots": slots
     });
     // #463 SEL-2L-a: present only when the select's read declares `blocks`.
-    if let Some(shared) = select_shared_read(plan, step, select)? {
+    let region = || bounding_rect(select.slots.iter().map(|slot| slot.name));
+    if let Some(shared) = select_shared_read(
+        step,
+        select,
+        region,
+        &select_slot_targets(plan, step, select),
+    )? {
         layout["shared_ocr"] = shared;
     }
     Ok(layout)
 }
 
 /// #463 SEL-2L-a (`contracts/lab-recording.md`, "Reading names by detecting blocks"): the one
-/// shared read (`shared_ocr`) of a select of fixed slots whose `read` declares `blocks` and
-/// `line_merge`, `None` for one that declares neither. Its region is the bounding rectangle of the
-/// slots' name boxes and its members are the read's (`languages`, `timeout_ms`, `model_ref`,
-/// `model_sha256`, `blocks`, `line_merge`; no `preprocess`), the ones its slot targets
-/// ([`select_slot_targets`]) are made of, so the kernel gives each slot target its text from the
-/// read: the detected blocks whose centre lies in the slot's name box, in `(y, x)` order joined by
-/// line feeds, at the lowest of their confidences, from one provider call per frame. A slot target
-/// the read would not serve (it would read its name box alone, as a single block) refuses the
-/// generation instead of being generated so.
-fn select_shared_read(
-    plan: &Plan,
+/// shared read (`shared_ocr`) of a select whose `read` declares `blocks` and `line_merge`, `None`
+/// for one that declares neither. Its region is `region`'s and its members are the read's
+/// (`languages`, `timeout_ms`, `model_ref`, `model_sha256`, `blocks`, `line_merge`; no
+/// `preprocess`), the ones the select's name targets `targets` are made of, so the kernel gives
+/// each of them its text from the read: the detected blocks whose centre lies in the target's
+/// region where it is read, in `(y, x)` order joined by line feeds, at the lowest of their
+/// confidences, from one provider call per frame. A target the read would not serve (it would read
+/// its name box alone, as a single block) refuses the generation instead of being generated so.
+/// Of a select of fixed slots, the region is the bounding rectangle of the slots' name boxes and
+/// the targets are the slots' ([`select_slot_targets`]); #463 SEL-2L-rows, of a scrolling select,
+/// the region is the list, the layout's readable band, and the target is the row's name
+/// (`scan::layout_json`).
+pub(crate) fn select_shared_read(
     step: &PlanStep,
     select: &SelectSpec,
+    region: impl FnOnce() -> Option<RecordRect>,
+    targets: &[Value],
 ) -> LabResult<Option<Value>> {
     let (blocks, line_merge) = match (select.read.blocks, select.read.line_merge) {
         (None, None) => return Ok(None),
@@ -2465,11 +2475,11 @@ fn select_shared_read(
             ));
         }
     };
-    let region = bounding_rect(select.slots.iter().map(|slot| slot.name)).ok_or_else(|| {
+    let region = region().ok_or_else(|| {
         invalid(
             "validation_failed",
             format!(
-                "the select of step {} has no slot whose name box a shared read could hold",
+                "the select of step {} has no name box a shared read could hold",
                 step.step.index
             ),
         )
@@ -2483,13 +2493,15 @@ fn select_shared_read(
         "blocks": blocks,
         "line_merge": line_merge
     });
-    for (slot, target) in select_slot_targets(plan, step, select).iter().enumerate() {
+    for target in targets {
         if !shared_read_serves(&shared, region, target) {
             return Err(invalid(
                 "validation_failed",
                 format!(
-                    "slot {slot} of the select of step {} would not take its name from the \
-                     select's shared read and would read its name box alone; nothing was written",
+                    "the name target '{}' of the select of step {} would not take its name from \
+                     the select's shared read and would read its name box alone; nothing was \
+                     written",
+                    target["id"].as_str().unwrap_or_default(),
                     step.step.index
                 ),
             ));
@@ -2524,7 +2536,10 @@ fn bounding_rect(rects: impl IntoIterator<Item = RecordRect>) -> Option<RecordRe
 /// text, as the kernel decides it (the recognition pack's `CandidateSharedOcr::reads_text_of` and
 /// its count of the calls a shared read serves): a target without `locate` whose `languages`,
 /// `model_ref`, `model_sha256` and `preprocess` are the read's, whose region is a rectangle that
-/// lies inside the read's.
+/// lies inside the read's. #463 SEL-2L-rows: on a `repeated_anchor` layout the kernel's test is the
+/// members alone (its read covers the readable band, and only a row inside the band is read, its
+/// name region inside the row); a scrolling select's name target, at the name region of the
+/// list's first screen, lies inside the list too, so the one test holds for both kinds.
 fn shared_read_serves(shared: &Value, region: RecordRect, target: &Value) -> bool {
     let inside = target["region"]["mode"] == "rect"
         && serde_json::from_value::<RecordRect>(target["region"]["rect"].clone())

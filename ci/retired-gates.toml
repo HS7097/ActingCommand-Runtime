@@ -1437,3 +1437,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_9_an_automatic
 ruling = "#480 PG-1 fix round 1 (0.12.72; register §1.468, Fix round 1; the coordinator's work order rd-1118/brief-480-pg1-fix1.md, R4′: a person's pause is never lifted because of the Runtime's own automatic claim; no upper bound of the pause's own)"
 reason = "Replaced: the test pinned the first round's bound on an instance pause's wait for an automatic emulator start (the claim's key lapse plus 30 s), past which the pause failed with scheduling_pause_release_busy and holder_kind autostart and was lifted. R4′ removes that bound and the holder_kind: the hand-back waits for the claim as long as it is there."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_480_pg1::pg1_fix1_r4_an_instance_pause_waits_for_an_automatic_start_past_every_bound, in the host.toml row of #480 PG-1 fix round 1: with the clock ten minutes past that bound and the sweep held, the pause stays paused with nothing lifted, and answers success once the claim ends."
+
+# exec.toml, the row of #463 SEL-2L-a, test (5).
+[[retired]]
+fragment = "exec"
+test = "actingcommand-lab::lib::gate_463_sel2l_a::sel2l_blocks_and_line_merge_come_together_and_not_on_rows"
+ruling = "#463 SEL-2L-rows (0.12.74; register §1.484; the coordinator's work order rd-1119/brief-463-sel2l-rows-generator.md, item 3: the refusal blocks_with_rows goes, a scrolling select's read takes blocks and line_merge)"
+reason = "Renamed and narrowed: the test pinned that blocks on a select with rows is refused record_select_invalid blocks_with_rows, which is no longer produced; its other part, blocks and line_merge together or neither, stays under the new name."
+covered_by = "actingcommand-lab::lib::gate_463_sel2l_a::sel2l_blocks_and_line_merge_come_together, in the exec.toml row of #463 SEL-2L-a (one member without the other is validation_failed naming the missing one); actingcommand-lab::lib::gate_463_sel2l_rows::sel2l_rows_every_card_the_band_holds_is_read_through_the_shared_read_and_a_cut_card_is_not and sel2l_rows_blocks_with_rows_is_gone_from_the_vocabulary, in the exec.toml row of #463 SEL-2L-rows (a select with rows and blocks is marked and generated; the word is gone)."
