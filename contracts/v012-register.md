@@ -40632,8 +40632,9 @@ program the Runtime did not know. An iOS handset is now an instance: configured
 (`device.system` `ios`), listed and bound by the Lab through `acib`, registered and recorded by the
 Runtime by its key, shown by status, never available to policy, never attempted by a party that
 acts without a person asking, and refused every capture, input and application operation at the
-front of the host's admission (fix round 2: and a person's self-check, resume and ladder drill at
-their entry). Nothing is captured and nothing is pressed: capture is the next
+front of the host's admission (fix round 2: and a person's self-check and ladder drill at their
+entry; its pause is quiet at once and its resume lifts the pause with no reconnect). Nothing is
+captured and nothing is pressed: capture is the next
 slice (F-3). `apps/acib` is not changed.
 
 **The configuration** (`actingd-config` revision 34; the last slice that added configuration
@@ -40723,18 +40724,40 @@ iOS handset first, bound or not, with the stage `device_system_unsupported` and 
 mark `device_system_unsupported` (`crates/device/src/error.rs`), which the kernel's failure context
 carries (`ExecutionFailureContext::device_system_unsupported`) and `RuntimeHostError::execution`
 turns into the same cause; the ADB baseline probe and the foreground query answer that mark, and no
-party asks them of an iOS handset without a person asking. Fix round 2: the three paths a person
+party asks them of an iOS handset without a person asking. Fix round 2: the paths a person
 starts that still reached the stand-in registration are refused at their entry the same way
 (`DeviceOperation::Preparation`, `DeviceOperation::Drill`): a self-check (`self_check_instance`,
-before its claim) and an instance resume's reconnect (`resume_scheduling`, before the reconnect's
-claim, after the pause's own refusals and the lift without a reconnect of a pause still draining
-or handing back) `input_backend_open_failed`, the code their preparation ends with at its first
-open, the input's, denied, nothing recorded, the resumed pause left as it was; a ladder drill
-(`drill_recovery_ladder`, plan or device, after its command's intent) the new
-`recovery_ladder_drill_unsupported` through `refuse_drill` (its `command.rejected`), before any
-ladder is admitted, so neither a rung nor the readiness's baseline probe and foreground query
-(`recovery_ladder.rs`, `recovery_android_booted`, `recovery_adb_unanswered`) meets it; each caused
-by `device_system_backend_missing`. None needed more than a few lines at its entry. Fix round 1:
+before its claim) `input_backend_open_failed`, the code its preparation ends with at its first
+open, the input's, denied, nothing recorded; a ladder drill (`drill_recovery_ladder`, plan or
+device, after its command's intent) the new `recovery_ladder_drill_unsupported` through
+`refuse_drill` (its `command.rejected`), before any ladder is admitted, so neither a rung nor the
+readiness's baseline probe and foreground query (`recovery_ladder.rs`, `recovery_android_booted`,
+`recovery_adb_unanswered`) meets it; each caused by `device_system_backend_missing`. Fix round 2,
+the coordinator's follow-up (replacing, for the resume, the refusal of its reconnect, which left an
+iOS handset's pause unliftable): its pause and its resume are never refused, since tools pause and
+resume every instance at once (the rescue module's hold before a deploy, a `down`, a placement,
+an instance's addition) and one instance never keeps the others from being paused, held,
+resumed, placed or deployed. The pause's stages, traced for such an instance
+(`run_instance_pause_stages`): (a) the gate's close and record touch no device; (b) the drain
+waits for its in-flight runs; (c) the hand-back takes its admission guard, waits for its lease,
+its queued entries, a client's owed reset and a policy run, fails a tool's hold at once on a
+refusing queued entry or past its grace, and closes its session outside the multi-Nemu gate
+(`close_retained_instance_with`, nothing when it owns no resource). None of these opens or sends
+anything on an iOS handset, but (b) and (c) can wait, and fail a tool's hold, for a lease, an
+entry or a run that cannot reach its device (a client's lease on it is granted, and a direct run
+on it fails at its first capture). Now `run_instance_pause_stages` moves such an instance's pause
+from its stage to `released` at once (`without_device_backend`), in both modes and in a
+continuation: nothing drained, waited for, handed back or closed, so no stage fails and a hold over
+several instances that includes it is quiet as it would be without it. Its resume
+(`resume_scheduling`, after the pause's refusals and the lift without a reconnect of a pause still
+draining or handing back, as for every instance) goes to `resume_without_device_backend`: under
+the persist gate the pause is lifted (or held again with `instance.added`, Workflow #453 S2 fix 1)
+and no reconnect is attempted, as the start's preparation attempts none (no claim, no preparation,
+no open); the answer is `SchedulingResumed` with a self-check of both sides `ok: false`, no values
+and no `failure_code`, its success code caused by the new informing
+`scheduling_resume_without_backend`, and one `device_state_observed` record of it under the
+pause's links (`record_pause_moment`), the form of `scheduling_resume_without_reconnect`'s lift,
+whose one cause (a pause not yet quiet) is another. Fix round 1:
 it is inert: the start's
 preparation (`prepare_physical_instances_on_start`) withholds its availability and attempts nothing
 more, and the idle planner (`check_idle`, `restore_idle_state`) passes it over, so no failure,
@@ -40769,7 +40792,10 @@ which status carries, names no backend: every row unsupported and unavailable, i
 `device_binding_problem`); fix round 2: `recovery_ladder_drill_unsupported` (runtime-host, error,
 ladder class `none`: refuses a person's drill of an iOS handset's ladder, denied, actingctl and the
 Lab exit 1; no existing drill refusal says it: `recovery_ladder_drill_disabled` is stuck recovery
-switched off); the key and vocabulary `ios_list_problem` (`not_installed`,
+switched off) and, in the coordinator's follow-up, `scheduling_resume_without_backend`
+(runtime-host, info, ladder class `none`: the cause of a resume's success code, no refusal, exit 0;
+`scheduling_resume_without_reconnect` is a pause not yet quiet); the key and vocabulary
+`ios_list_problem` (`not_installed`,
 `not_started`, `answer_unreadable`, `acib`'s seven words for `devices`, fix round 1's
 `no_answer_in_time`, `answer_too_long` and `not_ended`, and fix round 2's `state_unreadable`); the
 words `system_unsupported` and (fix
@@ -40790,10 +40816,19 @@ mismatched row that unbinds its handset alone, the adb members of an iOS handset
 deadline, wait and cap on a scripted child, and a version-1 row with a `null` `system`; its
 `business_step` is test-only (`#[cfg(test)]`), as `gate_419_w2e`'s is, so the architecture guard
 `fenced_close_requires_scheduler_witness` meets no production reference to the issuing bridge.
-Fix round 2 adds the host's `f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry`
-(a self-check, the resume of a released pause and a drill in each mode on a bound iOS handset, each
-denied with its code and the cause, the pause left, nothing asked of the fake, its foreground
-failure never taken, no preparation or ladder record), and extends F-2's own tests: `f2_t7` (a
+Fix round 2 adds the host's `f2_fix2_a_self_check_and_a_drill_are_refused_at_their_entry` (a
+self-check and a drill in each mode on a bound iOS handset, each denied with its code and the
+cause, nothing asked of the fake, its foreground failure never taken, no failure, preparation or
+ladder record), and, in the coordinator's follow-up,
+`f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_reconnects_nothing` (a
+`stand` pause Completed with no cause at `released`; its resume Completed, the self-check of no
+reconnect, the one cause `scheduling_resume_without_backend`, the pause gone, one record of it, no
+lease granted on the handset) and
+`f2_fix2_a_tools_hold_over_an_emulator_and_an_ios_handset_is_quiet_and_both_resume` (two
+`quiet_or_lift` pauses with every grace already past while a client's lease holds the handset:
+both Completed with no cause at `released`, both resumed, the handset's with no reconnect), each
+with nothing of the stand-in consulted and no failure record naming the handset; and extends F-2's
+own tests: `f2_t7` (a
 child whose state cannot be read is ended, `StateUnread`, and `NotEnded` only when ending it then
 fails; the listing's `state_unreadable`) and `f2_fix1_a_start_attempts_no_ios_handset…` (its
 handsets are the fixture's two policy instances; the first start writes each one's one withdrawal

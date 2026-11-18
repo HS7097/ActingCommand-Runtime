@@ -518,17 +518,28 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   system; nothing is recorded or changed. Behind it the registry refuses the same way (the stage
   `device_system_unsupported`, the same codes and cause), the ADB baseline probe and the
   foreground query included, before anything is opened or run. Only that instance's operation
-  fails. Fix round 2: the three paths a person starts that would otherwise reach its stand-in
+  fails. Fix round 2: the paths a person starts that would otherwise reach its stand-in
   registration are refused at their entry the same way, denied, each with its own failure code
   caused by `device_system_backend_missing`: a self-check (`SelfCheckInstance`), before its claim
   and its preparation, `input_backend_open_failed` (the code a preparation ends with at its first
-  open, the input's); an instance resume (`ResumeScheduling`) of a pause that has reached
-  `released`, whose reconnect is refused before its claim, the lift and any open, the same code,
-  so the pause stays (a pause still draining or handing back is lifted without a reconnect, as for
-  any instance); a drill of its recovery ladder (`DrillRecoveryLadder`, plan or device),
+  open, the input's); a drill of its recovery ladder (`DrillRecoveryLadder`, plan or device),
   `recovery_ladder_drill_unsupported` (error, exit 1), after the command's `command.rejected` and
   before any ladder is admitted, so neither a rung nor the readiness's baseline probe and
-  foreground query meets the stand-in. It is inert (fix round 1): the start's preparation, the
+  foreground query meets the stand-in. Its pause and its resume are never refused, since one
+  instance never keeps the others from being paused, held, resumed, placed or deployed (tools
+  pause and resume every instance at once). An instance pause of it, a person's (`stand`) or a
+  tool's hold (`quiet_or_lift`), is quiet at once: the gate closes and the stages move to
+  `released` with nothing drained, waited for (a lease, a queued entry, a run or the admission
+  guard: none can reach its device) or handed back and closed, so no stage fails and a hold over
+  several instances that includes it is quiet as it would be without it and never lifted because
+  of it. Its resume (`ResumeScheduling`), a person's or a tool's, succeeds: the pause's refusals
+  are those of every instance; the pause is lifted (or held again by a `start_paused` not yet
+  applied, as for every instance) and no reconnect is attempted, as the start's preparation
+  attempts none: no claim, no preparation, no open. The answer is `SchedulingResumed` with a
+  self-check of both sides `ok: false`, no values and no `failure_code`, the receipt's success
+  code caused by `scheduling_resume_without_backend` (info), and the ledger holds one
+  `device_state_observed` record of it under the pause's links; nothing is answered or recorded
+  as a failure. It is inert (fix round 1): the start's preparation, the
   idle planner and every other party that acts on an instance without a person asking skip it, so
   nothing is attempted, and no failure, ladder or stability count arises from it. What the ledger
   says of it is the availability withdrawal above, information and no failure, and the program

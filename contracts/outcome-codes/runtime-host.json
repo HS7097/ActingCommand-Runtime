@@ -23859,8 +23859,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "A capture, input or application operation on an iOS handset, bound or not, was refused before anything was opened or run: this build has no backend for that operation on that device system (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\"). Fix round 1: the host refuses it at the front of its admission, before any key table, foreground gate, ADB baseline or backend of the handset's stand-in registration is looked at, denied and recorded nowhere; the device registry refuses the same way behind it (its stage device_system_unsupported). It is the caused_by link of the operation's own failure (input_backend_open_failed, capture_backend_open_failed, application_backend_operation_failed), whichever operation it was; only that instance's operation fails, and the instance is never available to policy (availability_source device_system) nor attempted by any party that acts without a person asking. Fix round 2: the three paths a person starts that would reach the stand-in registration otherwise are refused at their entry the same way, each with its own failure code: a self-check (SelfCheckInstance) and an instance resume's reconnect (ResumeScheduling of a pause that reached released) input_backend_open_failed, the code their preparation ends with at its first open, before any claim, lift or open (the pause stays); a drill of the recovery ladder (DrillRecoveryLadder, either mode) recovery_ladder_drill_unsupported, after its command.rejected and before any ladder is admitted.",
-      "common_causes": "A configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it; a person's request or direct run that asked it for a capture, an input or an application action, a self-check, a resume or a drill.",
+      "description": "A capture, input or application operation on an iOS handset, bound or not, was refused before anything was opened or run: this build has no backend for that operation on that device system (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\"). Fix round 1: the host refuses it at the front of its admission, before any key table, foreground gate, ADB baseline or backend of the handset's stand-in registration is looked at, denied and recorded nowhere; the device registry refuses the same way behind it (its stage device_system_unsupported). It is the caused_by link of the operation's own failure (input_backend_open_failed, capture_backend_open_failed, application_backend_operation_failed), whichever operation it was; only that instance's operation fails, and the instance is never available to policy (availability_source device_system) nor attempted by any party that acts without a person asking. Fix round 2: the paths a person starts that would reach the stand-in registration otherwise are refused at their entry the same way, each with its own failure code: a self-check (SelfCheckInstance) input_backend_open_failed, the code its preparation ends with at its first open, before any claim or open; a drill of the recovery ladder (DrillRecoveryLadder, either mode) recovery_ladder_drill_unsupported, after its command.rejected and before any ladder is admitted. A pause and a resume are not refused: the pause is quiet at once and the resume lifts it with no reconnect (scheduling_resume_without_backend).",
+      "common_causes": "A configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it; a person's request or direct run that asked it for a capture, an input or an application action, a self-check or a drill.",
       "handling": "Nothing was opened and nothing was pressed. An iOS handset is listed and bound in this build (actinglab devices, devices bind) and shown by status, and nothing runs on it until its capture backend ships."
     },
     "recovery_ladder_drill_unsupported": {
@@ -23882,6 +23882,20 @@
       "description": "A drill of an instance's recovery ladder (DrillRecoveryLadder, plan or device) was refused at its entry: this build has no backend for the instance's device system (an iOS handset, bound or not), so no rung could act on it (Workflow #479 F-2 fix round 2, contracts/device-binding.md \"An iOS handset\"). The command's command.rejected and the denied receipt carry it, caused by device_system_backend_missing; no ladder is admitted, and no baseline probe, foreground query or backend of the handset's stand-in registration is asked.",
       "common_causes": "A person's drill (DrillRecoveryLadder: actingctl ladder-drill, MCP, the Lab) of a configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it.",
       "handling": "Nothing was started. Drill an instance whose device system the Runtime has a backend for; an iOS handset has no ladder to drill until its capture backend ships."
+    },
+    "scheduling_resume_without_backend": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "A resume of an instance whose device system has no backend in this build (an iOS handset, bound or not) lifted its pause and attempted no reconnect: there is nothing to reconnect, as the start's preparation attempts none, and nothing was opened or sent (Workflow #479 F-2 fix round 2, contracts/device-binding.md \"An iOS handset\"). It is the cause of the resume's success code and one device_state_observed record under the pause's links; the answer's self-check has both sides ok false, no values and no failure_code. Nothing failed: a person's resume and a tool's (a hold's release before a deploy, a placement, an instance's addition) succeed on such an instance.",
+      "common_causes": "A person or a tool resumed a configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it.",
+      "handling": "None."
     },
     "run_variable_undeclared": {
       "category": "error",

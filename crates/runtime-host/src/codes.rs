@@ -1663,8 +1663,8 @@ actingcommand_contract::outcome_codes! {
         /// refused by the device registry before anything was opened or run: this build has no
         /// backend for that operation on that device system (the stage
         /// `device_system_unsupported`). The `caused_by` of the operation's own failure; only that
-        /// instance's operation fails. Fix round 2: also of a person's self-check, instance
-        /// resume's reconnect and ladder drill on it, each refused at its entry.
+        /// instance's operation fails. Fix round 2: also of a person's self-check and ladder drill
+        /// on it, each refused at its entry (its pause and its resume are not refused).
         DeviceSystemBackendMissing => "device_system_backend_missing": error / declaration_error,
         /// Error. Workflow #479 F-2 fix round 2: a person's drill of the recovery ladder of an
         /// instance whose device system has no backend in this build (an iOS handset, bound or
@@ -1672,6 +1672,13 @@ actingcommand_contract::outcome_codes! {
         /// instance's stand-in registration was asked: no rung can act on it (the command's
         /// `command.rejected` and the receipt, caused by `device_system_backend_missing`).
         RecoveryLadderDrillUnsupported => "recovery_ladder_drill_unsupported": error / none,
+        /// Info. Workflow #479 F-2 fix round 2, the coordinator's follow-up: a resume (a person's
+        /// or a tool's) of an instance whose device system has no backend in this build (an iOS
+        /// handset, bound or not) lifted its pause and attempted no reconnect: there is nothing to
+        /// reconnect, and nothing was opened or sent. The cause of the resume's success code, and
+        /// one `device_state_observed` record under the pause's links; its self-check has both
+        /// sides `ok: false`, no values and no `failure_code`. Nothing failed.
+        SchedulingResumeWithoutBackend => "scheduling_resume_without_backend": info / none,
         // ---- Workflow #479 F-2: end
         // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
         // contained run"): begin. Each refuses a direct run in its preparation, before any record,

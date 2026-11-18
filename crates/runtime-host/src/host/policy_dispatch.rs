@@ -4105,6 +4105,38 @@ impl HostShared {
             finished: 0,
             cancelled: 0,
         };
+        // Workflow #479 F-2 fix round 2, the coordinator's follow-up (`contracts/device-binding.md`,
+        // "An iOS handset"): an instance whose device system has no backend in this build is inert:
+        // nothing can run, press, capture or hold a session on it, so there is nothing to drain,
+        // to wait for (a lease, a queued entry, a run in flight or its admission guard: none can
+        // reach its device) or to hand back and close. Its pause is quiet at once, in both modes,
+        // its stages moved to `released` here; no stage can fail for it, so a tool's hold over
+        // several instances is never lifted because of it.
+        if self.without_device_backend(paused.instance_id)? {
+            if from == InstancePauseStage::Draining
+                && !self.advance_instance_pause(
+                    paused,
+                    InstancePauseStage::Draining,
+                    InstancePauseStage::Paused,
+                )?
+            {
+                return Ok(StagesEnd::Resumed {
+                    stage: InstancePauseStage::Draining,
+                    drained,
+                });
+            }
+            if !self.advance_instance_pause(
+                paused,
+                InstancePauseStage::Paused,
+                InstancePauseStage::Released,
+            )? {
+                return Ok(StagesEnd::Resumed {
+                    stage: InstancePauseStage::Paused,
+                    drained,
+                });
+            }
+            return Ok(StagesEnd::Released(drained));
+        }
         if from == InstancePauseStage::Draining {
             match self.drain_contained_runs_for_pause(
                 paused.instance_id,
@@ -5089,16 +5121,20 @@ impl HostShared {
                 return Ok(resumed);
             }
         }
-        // Workflow #479 F-2 fix round 2 (`contracts/device-binding.md`, "An iOS handset"): the
-        // reconnect of an instance whose device system has no backend in this build is refused
-        // here, before its claim, the lift or any open of its stand-in registration:
-        // `input_backend_open_failed` (its preparation's first open) caused by
-        // `device_system_backend_missing`, denied; nothing has changed, so the pause stays.
-        self.refuse_device_system_without_backend(
-            instance_alias,
-            super::lease::DeviceOperation::Preparation,
-            HostLocation::PrepareInstanceConnection,
-        )?;
+        // Workflow #479 F-2 fix round 2, the coordinator's follow-up (`contracts/device-binding.md`,
+        // "An iOS handset"): an instance whose device system has no backend in this build has
+        // nothing to reconnect, as the start's preparation skips it: its pause is lifted and no
+        // reconnect is attempted (no claim, no preparation, no open), and the answer and the ledger
+        // say so (`scheduling_resume_without_backend`); nothing failed.
+        if self.without_device_backend(instance_id)? {
+            return self.resume_without_device_backend(
+                scope,
+                instance_alias,
+                instance_id,
+                expected,
+                fenced,
+            );
+        }
         let token = self.await_preparation_claim(
             original,
             instance_alias,
@@ -5312,6 +5348,86 @@ impl HostShared {
                 },
             ),
         }
+    }
+
+    /// Workflow #479 F-2 fix round 2, the coordinator's follow-up: whether `instance_id` is a
+    /// registered instance whose device system has no backend in this build (an iOS handset,
+    /// bound or not), which is inert.
+    fn without_device_backend(&self, instance_id: InstanceId) -> Result<bool, RequestFailure> {
+        Ok(lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceRegistry,
+        )?
+        .get(&instance_id)
+        .is_some_and(|instance| instance.device_system_without_backend().is_some()))
+    }
+
+    /// Workflow #479 F-2 fix round 2, the coordinator's follow-up (`contracts/device-binding.md`,
+    /// "An iOS handset"): the resume of an instance whose device system has no backend in this
+    /// build, a person's or a tool's. Under the persist gate, the pause's refusals checked again
+    /// (`resumable_instance_pauses`), it is lifted (its rows recorded first) or, Workflow #453 S2
+    /// fix 1, held again with `instance.added`, as every instance resume's is; then no reconnect
+    /// is attempted, as the start's preparation attempts none: no claim, no preparation, no open,
+    /// nothing sent. Answers `SchedulingResumed` with the scope's new revision and a self-check of
+    /// both sides `ok: false`, no values and no `failure_code` (no reconnect ran, so none is
+    /// reported), the receipt's outcome carrying the informing `scheduling_resume_without_backend`
+    /// as its success code's cause, and the ledger one record of it under the pause request's links
+    /// (`record_pause_moment`), as `scheduling_resume_without_reconnect`'s lift writes its own.
+    /// Nothing failed and nothing is recorded as a failure.
+    fn resume_without_device_backend(
+        &self,
+        scope: &SchedulingPauseScope,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        expected: Option<&SchedulingPauseExpectation>,
+        fenced: bool,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let _persist = lock(
+            &self.scheduling_pause_persist_gate,
+            HostLocation::PersistInstanceSchedulingResume,
+        )?;
+        let mut prospective = self.resumable_instance_pauses(instance_alias, expected, fenced)?;
+        if let Some(revision) =
+            self.hold_start_pause_at_release(instance_alias, instance_id, &mut prospective)?
+        {
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: None,
+                result: RuntimeResult::SchedulingResumed {
+                    scope: scope.clone(),
+                    revision,
+                    selfcheck: Some(scheduling_resume_selfcheck(
+                        &[],
+                        Some(HostCode::DispatchPausedInstance.as_str()),
+                    )),
+                },
+                failure_outcome: None,
+            });
+        }
+        // The pause request's links, for the record of this lift, read before the lift ends them.
+        let pause_links = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
+            .pause_links
+            .get(instance_alias)
+            .cloned();
+        prospective.lift_instance(instance_alias)?;
+        self.persist_scheduling_pauses(&prospective)?;
+        let revision = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
+            .lift_instance(instance_alias)?;
+        let cause = Outcome::new(HostCode::SchedulingResumeWithoutBackend);
+        self.record_pause_moment(
+            self.pause_record_links(pause_links, instance_id),
+            cause.clone(),
+        );
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::SchedulingResumed {
+                scope: scope.clone(),
+                revision,
+                selfcheck: Some(scheduling_resume_selfcheck(&[], None)),
+            },
+            failure_outcome: Some(cause),
+        })
     }
 
     /// Workflow #191 ps2: the reconnect of an instance resume, since Workflow #317 sc3 (c) the

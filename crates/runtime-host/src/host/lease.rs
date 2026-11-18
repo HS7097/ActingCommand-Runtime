@@ -4637,8 +4637,9 @@ pub(super) enum DeviceOperation {
     /// An application command (`application_backend_operation_failed`).
     Application,
     /// Fix round 2: a connection preparation a person asks for, a self-check
-    /// (`SelfCheckInstance`) or an instance resume's reconnect (`input_backend_open_failed`, the
-    /// code such a preparation ends with at its first open, the input's).
+    /// (`SelfCheckInstance`; `input_backend_open_failed`, the code such a preparation ends with
+    /// at its first open, the input's). An instance resume's reconnect is not refused: such an
+    /// instance's resume lifts its pause and attempts no reconnect.
     Preparation,
     /// Fix round 2: a person's drill of the instance's recovery ladder
     /// (`recovery_ladder_drill_unsupported`).
@@ -4667,8 +4668,8 @@ impl DeviceOperation {
 /// instance, not fatal; `None` for every other instance. It is made at the front of the host's
 /// admission, before anything of the instance's stand-in registration is looked at (a key table,
 /// the foreground gate, the ADB baseline, a backend), and records nothing; fix round 2: also at
-/// the entry of a person's self-check, instance resume's reconnect and ladder drill (whose own
-/// `command.rejected` the drill writes).
+/// the entry of a person's self-check and ladder drill (whose own `command.rejected` the drill
+/// writes).
 pub(super) fn device_system_refusal(
     instance: &RegisteredInstance,
     operation: DeviceOperation,

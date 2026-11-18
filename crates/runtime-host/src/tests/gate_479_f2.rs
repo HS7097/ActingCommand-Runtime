@@ -24,9 +24,11 @@
 // statement, each handset's availability withdrawn under `device_system:ios`, and the status says
 // it in each handset's capability table; the ledger's rule is the other withdrawals' (on change), so
 // a restart over the same ledger writes none, keeps that record in effect and the status still says
-// it. A person's self-check, instance resume (its reconnect) and ladder drill (plan and device) on
-// an iOS handset are each refused at their entry with their own failure code and that cause, before
-// anything of the stand-in is asked.
+// it. A person's self-check and ladder drill (plan and device) on an iOS handset are each refused
+// at their entry with their own failure code and that cause, before anything of the stand-in is
+// asked. The coordinator's follow-up: its pause, a person's and a tool's hold, is quiet at once,
+// and its resume lifts the pause with no reconnect (`scheduling_resume_without_backend`), nothing
+// failed; a tool's hold over it and an emulator is quiet and both resume.
 
 use super::gate_369_s6c::{instance_scope, instance_status, pause, resume, send};
 use super::gate_398_rd1b::{last_availability, resolved_handset};
@@ -761,19 +763,9 @@ fn f2_fix1_a_start_attempts_no_ios_handset_and_the_emulator_beside_them_starts_a
     }
 }
 
-/// Fix round 2, item 3: the three paths a person starts that would otherwise reach a bound iOS
-/// handset's stand-in registration are each refused at their entry with their own failure code
-/// caused by `device_system_backend_missing`: a self-check and an instance resume's reconnect
-/// `input_backend_open_failed` (the code their preparation ends with at its first open), before
-/// their claim (the resumed pause, at `released`, stays); a drill of the ladder, plan or device,
-/// `recovery_ladder_drill_unsupported`, before any ladder is admitted. Nothing reaches the
-/// stand-in: nothing is opened, the foreground query never asks (the fake's one foreground failure
-/// is still there), and no preparation or ladder record names the handset.
-#[test]
-fn f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry() {
-    const ALIAS: &str = "neutral.iphone";
-    let root = TempDir::new().expect("tempdir");
-    let instance_id = instance_id();
+/// The fake behind a bound iOS handset, whose one foreground failure is still there for as long as
+/// nothing asks the foreground of it.
+fn ios_fake() -> Arc<FakeState> {
     let state = Arc::new(FakeState::default());
     *state
         .foreground_error_once
@@ -781,6 +773,114 @@ fn f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry() {
         .expect("the fake's foreground failure") = Some(actingcommand_device::DeviceError::fatal(
         "neutral foreground query failure",
     ));
+    state
+}
+
+/// Nothing of the stand-in behind the handset `instance` on `state` was consulted (nothing
+/// opened, sent, captured or commanded; the foreground never asked), and in `events` no failure,
+/// preparation or ladder record names it.
+#[track_caller]
+fn stand_in_untouched(state: &FakeState, events: &[PersistedEvent], instance: InstanceId) {
+    assert_eq!(asked(state), [0; 5], "nothing reached the stand-in");
+    assert!(
+        state
+            .foreground_error_once
+            .lock()
+            .expect("the fake's foreground failure")
+            .is_some(),
+        "the foreground query never asked"
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.links().instance_id() == Some(&instance))
+            .all(|event| !matches!(
+                event.payload(),
+                EventPayload::Runtime(RuntimePayload::Failed(_))
+            )),
+        "no failure record names the handset"
+    );
+    let attempted = phases(events)
+        .into_iter()
+        .filter(|(event, _)| event.links().instance_id() == Some(&instance))
+        .map(|(_, phase)| phase)
+        .filter(|phase| {
+            matches!(
+                phase,
+                RuntimeLifecyclePhase::InstancePreparationFinished { .. }
+                    | RuntimeLifecyclePhase::RecoveryLadderStarted { .. }
+                    | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(attempted.is_empty(), "{attempted:?}");
+}
+
+/// The stage of the instance pause of `alias`, if one holds.
+fn pause_stage(host: &RuntimeHost, alias: &str) -> Option<InstancePauseStage> {
+    host.scheduling_pauses_for_test()
+        .expect("the pauses")
+        .1
+        .get(alias)
+        .map(|pause| pause.stage)
+}
+
+/// The resume of an iOS handset, as the host answers it: Completed, a self-check whose two sides
+/// are not ok with no failure code (no reconnect ran, so none is reported), and
+/// `scheduling_resume_without_backend` the one cause of the receipt's success code.
+#[track_caller]
+fn resumed_without_backend(resumed: &RuntimeReceipt) {
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    let Some(RuntimeResult::SchedulingResumed {
+        selfcheck: Some(selfcheck),
+        ..
+    }) = resumed.result()
+    else {
+        panic!("a resume with its self-check: {resumed:?}");
+    };
+    assert!(!selfcheck.capture.ok && !selfcheck.touch.ok, "{resumed:?}");
+    assert_eq!(selfcheck.failure_code, None, "{resumed:?}");
+    let [cause] = resumed.outcome().causes() else {
+        panic!("one cause of the resume: {resumed:?}");
+    };
+    assert!(
+        cause.outcome().is(HostCode::SchedulingResumeWithoutBackend),
+        "{resumed:?}"
+    );
+}
+
+/// The `device_state_observed` records of `instance` in `events` whose outcome is `code`.
+fn moments(events: &[PersistedEvent], instance: InstanceId, code: &str) -> usize {
+    phases(events)
+        .into_iter()
+        .filter(|(event, phase)| {
+            event.links().instance_id() == Some(&instance)
+                && matches!(
+                    phase,
+                    RuntimeLifecyclePhase::DeviceStateObserved { outcome }
+                        if outcome.code().as_str() == code
+                )
+        })
+        .count()
+}
+
+/// Fix round 2, item 3: the paths a person starts that would otherwise reach a bound iOS handset's
+/// stand-in registration are each refused at their entry with their own failure code caused by
+/// `device_system_backend_missing`: a self-check `input_backend_open_failed` (the code its
+/// preparation ends with at its first open), before its claim; a drill of the ladder, plan or
+/// device, `recovery_ladder_drill_unsupported`, before any ladder is admitted. Nothing reaches the
+/// stand-in: nothing is opened, the foreground query never asks (the fake's one foreground failure
+/// is still there), and no preparation or ladder record names the handset.
+#[test]
+fn f2_fix2_a_self_check_and_a_drill_are_refused_at_their_entry() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = ios_fake();
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(
@@ -789,7 +889,6 @@ fn f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry() {
         ),
     )
     .expect("runtime host");
-    let preparation = DeviceSelfCheckFailure::InputBackendOpenFailed.code();
 
     // A self-check.
     let checked = send(
@@ -799,7 +898,12 @@ fn f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry() {
         },
         4792,
     );
-    refused_by_device_system(&checked, preparation.as_str());
+    refused_by_device_system(
+        &checked,
+        DeviceSelfCheckFailure::InputBackendOpenFailed
+            .code()
+            .as_str(),
+    );
 
     // A drill of the ladder, in either mode.
     for mode in [RecoveryDrillMode::Plan, RecoveryDrillMode::Device] {
@@ -814,50 +918,149 @@ fn f2_fix2_a_self_check_a_resume_and_a_drill_are_refused_at_their_entry() {
         refused_by_device_system(&drilled, HostCode::RecoveryLadderDrillUnsupported.as_str());
     }
 
-    // A resume of the handset's pause, which has reached `released`: its reconnect is refused and
-    // the pause stays.
-    let stage = |host: &RuntimeHost| {
-        host.scheduling_pauses_for_test()
-            .expect("the pauses")
-            .1
-            .get(ALIAS)
-            .map(|pause| pause.stage)
-    };
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let events = all_events(&host);
+    host.close().expect("close host");
+    stand_in_untouched(&state, &events, instance_id);
+}
+
+/// Fix round 2, the coordinator's follow-up: a person's `stand` pause of a bound iOS handset is
+/// quiet at once (Completed with no standing cause, stage `released`), and its resume succeeds: the
+/// pause is lifted and no reconnect is attempted (no claim: no lease is granted on the handset; no
+/// preparation, no open), the answer's self-check reports none, the receipt's cause and one record
+/// of the ledger say `scheduling_resume_without_backend`, and no failure is answered or recorded.
+#[test]
+fn f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_reconnects_nothing() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = ios_fake();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(
+            FakeProvider::one(ALIAS, instance_id, Arc::clone(&state))
+                .with_resolved_for(ALIAS, resolved_handset(ALIAS, instance_id, bound_ios())),
+        ),
+    )
+    .expect("runtime host");
+
     let paused = pause(&host, instance_scope(ALIAS), 4794);
     assert_eq!(paused.state(), RuntimeReceiptState::Completed, "{paused:?}");
-    assert_eq!(stage(&host), Some(InstancePauseStage::Released));
-    let resumed = resume(&host, instance_scope(ALIAS), 4795);
-    refused_by_device_system(&resumed, preparation.as_str());
+    assert!(paused.outcome().causes().is_empty(), "quiet: {paused:?}");
     assert_eq!(
-        stage(&host),
-        Some(InstancePauseStage::Released),
-        "the pause stays"
+        pause_stage(&host, ALIAS),
+        Some(InstancePauseStage::Released)
+    );
+    let resumed = resume(&host, instance_scope(ALIAS), 4795);
+    resumed_without_backend(&resumed);
+    assert_eq!(pause_stage(&host, ALIAS), None, "the pause is lifted");
+
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let events = all_events(&host);
+    host.close().expect("close host");
+    stand_in_untouched(&state, &events, instance_id);
+    assert_eq!(
+        moments(
+            &events,
+            instance_id,
+            HostCode::SchedulingResumeWithoutBackend.as_str()
+        ),
+        1,
+        "the ledger says the resume reconnected nothing"
+    );
+    assert!(
+        !events.iter().any(|event| {
+            event.event_type() == EventType::LeaseGranted
+                && event.links().instance_id() == Some(&instance_id)
+        }),
+        "no claim was granted on the handset"
+    );
+}
+
+/// Fix round 2, the coordinator's follow-up: a tool's hold (`quiet_or_lift`, one pause per instance
+/// as the rescue module sends them) over an emulator and a bound iOS handset, every pause's grace
+/// already past, while a client holds a lease on the handset (which, on any other instance, the
+/// hold would meet as a lease still in the way and be lifted for): both pauses are quiet at once
+/// (Completed, no cause, stage `released`), then both are resumed: the emulator's resume reconnects
+/// it, the handset's lifts its pause with no reconnect (`scheduling_resume_without_backend`). No
+/// failure record names the handset and nothing of its stand-in is consulted.
+#[test]
+fn f2_fix2_a_tools_hold_over_an_emulator_and_an_ios_handset_is_quiet_and_both_resume() {
+    const IPHONE: &str = "neutral.iphone";
+    const EMULATOR: &str = "neutral.emulator";
+    let root = TempDir::new().expect("tempdir");
+    let (handset, emulator) = (instance_id(), instance_id());
+    let state = ios_fake();
+    let emulator_state = Arc::new(FakeState::default());
+    emulator_state.observed_open.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_scheduling_pause_deadlines_for_test(Duration::ZERO),
+        Arc::new(
+            FakeProvider::from_entries([
+                (IPHONE.to_owned(), handset, Arc::clone(&state)),
+                (EMULATOR.to_owned(), emulator, emulator_state),
+            ])
+            .with_resolved_for(IPHONE, resolved_handset(IPHONE, handset, bound_ios())),
+        ),
+    )
+    .expect("runtime host");
+    let holder = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_holder_id()
+        .expect("holder id");
+    let leased = send(&host, RuntimeOperation::acquire_lease(IPHONE, holder), 4796);
+    let Some(RuntimeResult::LeaseGranted { token }) = leased.result() else {
+        panic!("a client's lease on the handset: {leased:?}");
+    };
+    let token = token.clone();
+
+    let hold = |alias: &str, connection: u64| {
+        send(
+            &host,
+            RuntimeOperation::PauseScheduling {
+                scope: instance_scope(alias),
+                pause_reason: actingcommand_contract::SchedulingPauseReason::new("f2_hold")
+                    .expect("pause reason"),
+                drain_timeout_ms: 1_000,
+                pause_mode: actingcommand_contract::SchedulingPauseMode::QuietOrLift,
+            },
+            connection,
+        )
+    };
+    for (alias, connection) in [(IPHONE, 4797), (EMULATOR, 4798)] {
+        let held = hold(alias, connection);
+        assert_eq!(
+            held.state(),
+            RuntimeReceiptState::Completed,
+            "{alias}: {held:?}"
+        );
+        assert!(held.outcome().causes().is_empty(), "{alias}: {held:?}");
+        assert_eq!(
+            pause_stage(&host, alias),
+            Some(InstancePauseStage::Released),
+            "{alias}: quiet"
+        );
+    }
+
+    let resumed = resume(&host, instance_scope(EMULATOR), 4799);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    resumed_without_backend(&resume(&host, instance_scope(IPHONE), 4800));
+    for alias in [IPHONE, EMULATOR] {
+        assert_eq!(pause_stage(&host, alias), None, "{alias}: resumed");
+    }
+    let released = send(&host, RuntimeOperation::ReleaseLease { token }, 4796);
+    assert_eq!(
+        released.state(),
+        RuntimeReceiptState::Completed,
+        "{released:?}"
     );
 
     assert!(host.fatal_error().expect("runtime health").is_none());
     let events = all_events(&host);
     host.close().expect("close host");
-    assert_eq!(asked(&state), [0; 5], "nothing reached the stand-in");
-    assert!(
-        state
-            .foreground_error_once
-            .lock()
-            .expect("the fake's foreground failure")
-            .is_some(),
-        "the foreground query never asked"
-    );
-    let attempted = phases(&events)
-        .into_iter()
-        .filter(|(event, _)| event.links().instance_id() == Some(&instance_id))
-        .map(|(_, phase)| phase)
-        .filter(|phase| {
-            matches!(
-                phase,
-                RuntimeLifecyclePhase::InstancePreparationFinished { .. }
-                    | RuntimeLifecyclePhase::RecoveryLadderStarted { .. }
-                    | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(attempted.is_empty(), "{attempted:?}");
+    stand_in_untouched(&state, &events, handset);
 }
