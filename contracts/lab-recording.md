@@ -2976,6 +2976,40 @@ the instance at the start and releases it at the stop or the archive. An author-
 holding and releasing its own recording's instance is intended (the coordinator's ruling); no
 behaviour of that server changes.
 
+## A recording's destination
+
+#463 PRIV-3 (0.12.74; the owner's rulings of 11-18; the rules below are the coordinator's). Where
+the package a recording makes goes is chosen by the person who records, in one of two words:
+
+- **`public`**: whatever goes to GitHub (a private repository too) or is handed to anybody else.
+  Its privacy is checked and restricted: the scenes of its regression cases hold no pixel of a
+  value reading ("Regression cases written with the package"). Quantities of what the account
+  holds, shown on a screen, are private: the package may read them at run time (the value goes only
+  into the user's own ledger), but their pixels are never stored in a repository.
+- **`local`**: used on this machine only. Nothing of privacy is handled: its scenes are built as
+  before.
+
+`record start --destination <local|public>` (MCP `destination`, a closed pair; another word is
+`validation_failed`, naming the two words and the word given) chooses it; absent means `public`. It
+is stored on the recording as the optional member `destination`, which a public recording does not
+write: a recording made before this section loads as public and is written byte for byte as it
+was. `record start`, `record status` and `record stop` answer it in its word (`destination`;
+`record stop` in `lab.destination`).
+
+`record stop --destination <local|public>` changes it, on a recording that is open and on one
+already stopped: a word other than the stored one changes the stored destination, and a stopped
+recording generates its package and its cases again, exactly as a mark after the stop does
+("Marking after stop"); the same word, or none, changes nothing and generates nothing again. A
+refused stop writes nothing, the recording keeping its destination. `record ready` and `record
+review` read the recording's own.
+
+In the package, `record stop` writes `provenance.destination: "local"` into the entry task of a
+local recording, and nothing for a public one: no mark means public, as
+[privacy-zones.md](privacy-zones.md) reads a package. Admission asks of `provenance` only that it
+is an object, so no package revision moves; a local recording's files are byte for byte what a
+recording made before this section generates, but for that one member. Refusing a local package in a public repository,
+at adoption and in a repository's CI, is built by a later slice.
+
 ## A recording's size
 
 Workflow #392 DA-5cd (0.12.67; register §1.437; [display-adapter.md](display-adapter.md) section
@@ -3671,7 +3705,9 @@ today's server (`actingctl mcp-serve`) has no such tool.
   `lab/preview/s<nn>-<before|after>-ruled-<edges|grid>.png`, never over
   `s<nn>-<before|after>.png`, so that a ruled preview is never taken for the plain preview of the
   same step and a preview without the ruler keeps its name and its bytes; the answer adds `ruler`
-  and nothing else ("A ruler on the pictures a recording hands back"). `--ruler` beside
+  and nothing else ("A ruler on the pictures a recording hands back"). #463 PRIV-3: a call with
+  `--ruler` writes only the ruled previews; the plain previews are written only by a call without
+  `ruler`. `--ruler` beside
   `--no-preview`, which draws no copy, is `validation_failed` (`details{argument: "ruler", reason:
   "previews_only"}`) before anything is read.
 - **Through MCP and `--dry-run`.** A long recording's answer may outgrow the MCP server's budget:
@@ -3750,7 +3786,9 @@ only: the tool measures nothing for the author and proposes no box.
   over the plain preview of the same step, `s<nn>-<before|after>.png`, so that it is never taken
   for that preview and a review without the ruler keeps its names and its bytes; it is written as
   every preview is (every frame read and its sha256 checked before any preview is written, atomic
-  writes, written anew by every call, removed by none). Under actinglab's `--dry-run` a ruled
+  writes, written anew by every call, removed by none). #463 PRIV-3: a call with `ruler` writes
+  only the ruled previews, never a plain one; the plain previews are written only by a call
+  without `ruler`. Under actinglab's `--dry-run` a ruled
   review is a review with previews, refused `dry_run_unsupported` as such.
 - **What the answer says.** With a ruler, `record review`'s answer adds `ruler`, and its previews'
   paths are the ruled names, and nothing else: `{kind, space, tick_px, long_tick_px, number_px,
@@ -5254,6 +5292,46 @@ the package it came with.
   is no fixed rectangle inside the frame (relative to a template, or the keyword `full_frame`; no
   recording generates one) cannot be pasted where it is read, and the check stops there with an
   error.
+- **A public recording's scenes hold no pixel of a value reading** (#463 PRIV-3, 0.12.74; the
+  owner's ruling of 11-18: quantities an account holds, shown on a screen, are private; a package
+  may read them at run time, but their pixels are never stored in a repository; the rules below
+  are the coordinator's). Of a recording whose destination is `public` ("A recording's
+  destination"), the scene builder asks the one list of the package's read regions
+  ([privacy-zones.md](privacy-zones.md), "The read regions of a package") with the reading
+  declarations of the generated entry task, and each region the list marks a reading is withheld:
+  not pasted, and after every other patch is pasted the withheld rectangle is filled with the
+  canvas colour, so that no other target's patch that overlaps it leaves its pixels in the scene.
+  - a reading whose area is a fixed rectangle, its target's own or a layout's read of it: its
+    **reach**, the rectangle that holds it under every shift the package declares for it (what is
+    read jitters, so the area alone can leave an edge);
+  - a reading with no fixed rectangle that the list confines to a rectangle (a feature a
+    `repeated_anchor` layout reads at an offset, confined to its readable band, or to its shared
+    read's rectangle): the whole **bound** (a row cut by the band's edge shows its quantity too);
+  - a layout's shared read that the list marks a reading: its rectangle **as a whole** (a target the
+    shared read serves takes its text from blocks anywhere inside it);
+  - a reading nothing confines (the keyword `full_frame`, a region placed relative to a template, a
+    `repeated_anchor` layout without a band), or whose bound is the whole coordinate space: no scene
+    can be made without its pixels, so the recording cannot be public. The self-check `cases`
+    refuses with `record_case_reading_unbounded` (3, `details{target}`), one for each such target,
+    before any case is made; the author bounds the reading, or records with `--destination local`.
+
+  `scene_construction` lists only what is pasted, as before, and gains no member: the case contract
+  and its readers do not change. A case is made and run as before, on the scene as it is stored. A
+  case that fails where the target of a failed check reads inside a withheld rectangle is
+  `record_case_reading_withheld` (3, `details` as `record_case_failed`'s and `withheld`, one
+  `{target, withheld: [{x, y, width, height}]}` for each such target): a page of a public recording
+  is recognised by a target whose region holds a value reading; the author anchors the page
+  elsewhere, narrows that target's region off the reading, or records locally. Every other failure
+  is `record_case_failed`. A target a page forbids that reads inside a withheld rectangle reads the
+  canvas there, so a case that expects it not to pass proves only that it does not pass on the
+  scene as stored; the answer names it (`forbidden`, below). `record stop` and `record ready`
+  answer, of a public recording, `lab.withheld` (`record ready`: `withheld`), the rectangles
+  withheld from its scenes, each `{x, y, width, height, targets, forbidden?}`, `targets` the
+  reading targets it holds (a shared read by its layout's id), `forbidden` the targets a page
+  forbids that read inside it: facts beside the cases, never a value and never a pixel, and no
+  warning, since withholding is what a public recording does. A public recording that reads no
+  value withholds nothing (`withheld` is empty) and its scenes are byte for byte as before; a local
+  recording's scenes are built as before, byte for byte, and its answer has no `withheld`.
 - **The run before the write.** Each case is run by `run_regression_case_on_bundle` on the final
   package, admitted in memory from the very files `record stop` writes: no file is read for it and
   nothing is evaluated a second way. Its verdict decides: `failed`, the case is not written and is

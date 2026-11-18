@@ -485,6 +485,34 @@
       "description": "#463 SC-1 fix round 1 (contracts/lab-recording.md, Self-checks, item 8; the coordinator's ruling after the review): what the recording shows: on a recorded frame after a select step's press (a later step's own frame, a frame of a later step's page transition, an ending's frame), the select step's page passes, and so does another page of the package. What the Runtime does: a select step's confirmation requires that exactly one page of the package is recognised on the screen it meets (two are contained_task_recognition_conflict); it captures that screen before the select step's press. The warning is {code, step, record_index, page, frames, frame_step?, frame_record_index?, frame_transition?, frame_outcome_key?, other_page, other_step?, other_record_index?, other_transition?, other_outcome_key?, after_press}: step and record_index are the select step's number in the package and serial number, page its page; frames the frames and the frame_ members whose they are (a step's, frame_transition true for the frames of its page transition, or an ending's, frame_outcome_key); the other_ members the other page and whose it is; after_press true, the frames come after the select step's press. Fix round 2 (the coordinator's ruling): one warning for each select step, owner of the frames (a later step's own frames, a later step's page transition's, an ending's) and other page, as arrival_unconfirmed and record_optional_step_ambiguous carry theirs: frames lists every frame of that owner on which the two pages pass, none left out. record stop and its dry run answer it in lab.warnings after the warnings the package's provenance records, record ready among its warnings once every self-check passed (its readiness unchanged; also when every self-check before cases passed and cases failed), record review at the select step (steps[].warnings). It refuses nothing and changes no exit status (exit 0 on actinglab's own line, on the --via line and through MCP); it is not written into the package's provenance, so the package is byte for byte what it is without it. The frames the confirmation can meet, the select step's own and those of the step before it, are judged as refusals instead (record_step_self_mismatch, reason self_test_error with the kernel's select_page_mismatch, or select_page_passes_on_other_frame); the frames of the select step's own page transition are judged neither way.",
       "common_causes": "A screen after the select step's press that keeps the area the select step's page reads: the list itself in another state (a row the business just changed), or a screen opened over or beside the list. The recording does not tell the two apart.",
       "handling": "Nothing is required: the recording is ready as before and the package is generated."
+    },
+    "record_case_reading_unbounded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-3 (contracts/lab-recording.md, Regression cases written with the package; the owner's ruling of 11-18: quantities an account holds, shown on a screen, are private, and their pixels are never stored in a repository): the package of a public recording (record start's or record stop's --destination public, the default) reads a value, a region of the one list of its read regions (contracts/privacy-zones.md) marked a reading, where nothing confines it to a rectangle smaller than the frame: the keyword full_frame, a region placed relative to a template, a feature a repeated_anchor layout reads at an offset without a readable band, or a bound that is the whole coordinate space (a shared read over the full frame). No regression case's scene can be made without its pixels, so the recording cannot be public. It is a failure of record stop's last self-check, cases, one for each such target: no case is made and record stop refuses as at any self-check's failure, nothing written, the recording and the session staying as they were (exit 3; actinglab details target, the reading target, a shared read named by its layout's id). record ready lists it as an item of what cases; it writes nothing. A local recording is never refused so.",
+      "common_causes": "A value mark drawn over the whole screen, a value read relative to a template, or a list whose rows are read at an offset from a repeated anchor without a readable band, in a recording whose destination was left public.",
+      "handling": "Bound the reading to a rectangle (a fixed region of the value mark, a readable band of the list's layout) and run record stop again, or, when the package stays on this machine, run record stop with --destination local."
+    },
+    "record_case_reading_withheld": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "#463 PRIV-3 (contracts/lab-recording.md, Regression cases written with the package): a regression case record stop made from a public recording misses on its package (its verdict failed, as record_case_failed's), and the target of a failed check reads inside a rectangle withheld from the case's scene: a page of a public recording is recognised by a target whose region holds a value reading. The scene of a public recording pastes no region that is a reading and fills each withheld rectangle (a fixed reading's reach, a confined reading's bound, a layout's shared read that is a reading as a whole) with the canvas colour after every patch is pasted, so such a target reads the canvas there. It is a failure of record stop's last self-check, cases: the case is not written and record stop refuses as at any self-check's failure, nothing written, the recording and the session staying as they were (exit 3; actinglab details as record_case_failed's, case, page, frame_id, step and artifact_step or outcome_key, verdict and checks, and withheld, one {target, withheld} for each failed check's target that reads inside a withheld rectangle, each rectangle {x, y, width, height}). record ready lists it as an item of what cases; it writes nothing. Every other failed case is record_case_failed.",
+      "common_causes": "A page told from the screen before by a mark drawn over a quantity, or by a template or colour whose region overlaps a value mark's, in a recording whose destination was left public.",
+      "handling": "Anchor the page on another part of its screen, narrow that target's region off the reading, or, when the package stays on this machine, run record stop with --destination local."
     }
   },
   "locations": {

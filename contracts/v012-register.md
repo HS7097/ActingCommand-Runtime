@@ -40612,6 +40612,43 @@ does changes: no decision, wait, lock order or lift differs.
   `scheduling_pause_lifted_not_quiet` with their words and cause. `gate_480_pg2c`'s `nemu_host` and
   `NEMU` are made visible to that gate (`pub(super)`), unchanged; no existing test is adapted.
 
+### 1.483 Slice #463 PRIV-3 (0.12.74): a recording has a destination; a public recording's scenes hold no value reading (board #463, work order #482; the destination's two meanings and the privacy of quantities shown on a screen are the owner's rulings of 11-18, every other rule below is the coordinator's)
+
+This section takes 1.483. It ships in 0.12.74. [lab-recording.md](lab-recording.md) ("A
+recording's destination", "Regression cases written with the package") is the contract; the one
+list of a package's read regions it uses is [privacy-zones.md](privacy-zones.md)'s (§1.478).
+
+- *The destination.* `record start --destination <local|public>` (MCP `destination`, the closed
+  list `enum:local|public` of the operation table; absent `public`) is stored on the recording as
+  the optional member `destination`, which a public recording does not write
+  (`skip_serializing_if`): a recording made before this slice loads as public and serialises byte
+  for byte. `record start`, `record status` and `record stop` (`lab.destination`) answer it in its
+  word. `record stop --destination`, on an open or a stopped recording, changes it when its word
+  differs and generates again, as an amendment after the stop does (`amended_at_unix_ms`); the
+  same word, or none, changes nothing. A refused stop writes nothing.
+- *In the package.* A local recording's entry task carries `provenance.destination: "local"`; a
+  public one's carries no mark (no mark means public). Admission asks of `provenance` only that it
+  is an object or null (`crates/pack-containment/src/source/declarations.rs`, the bundle's
+  `provenance`), so no `package` revision moves.
+- *The scenes.* Of a public recording, `cases::scene_regions` asks the one list with the generated
+  entry task's reading declarations (`PackReadingDeclarations::of_task`) and withholds each
+  reading: a fixed rectangle by its `reach`, a confined one by its `bound`, a layout's shared read
+  that is a reading as a whole; each withheld rectangle is filled with the canvas colour after
+  every patch is pasted. A reading nothing confines, or whose bound covers the frame, refuses the
+  self-check `cases` with `record_case_reading_unbounded`; a failed case whose failed check's
+  target reads inside a withheld rectangle is `record_case_reading_withheld`; every other failure
+  stays `record_case_failed`. `scene_construction` lists only what is pasted and gains no member.
+  `record stop` (`lab.withheld`) and `record ready` (`withheld`) answer the withheld rectangles
+  with their reading targets, and the forbidden targets that read inside them. A local
+  recording's scenes, and a public recording's that reads no value, are byte for byte as before.
+- *Codes* (Lab fragment, the index regenerated): `record_case_reading_unbounded` and
+  `record_case_reading_withheld`, each an error that refuses `record stop` (exit 3) and is an item
+  of `record ready`'s `cases`.
+- *The ruler slice's leftover* (#1830): the places that said a ruled preview is written beside
+  the plain one now say that a call with `ruler` writes only the ruled previews, and the plain ones
+  only a call without it (the contract twice, the operation table's `ruler`, the MCP manual's
+  `ac_record_review`, a comment of `review.rs`).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

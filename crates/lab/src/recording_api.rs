@@ -37,9 +37,9 @@ use crate::recording::model::{
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
     PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest, RecordSize,
     RecordStartOptions, RecordStepOutcome, RecordStepRequest, RecordStopOptions, RecordStopOutcome,
-    RecordWithheld, RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults, RecordingStep,
-    SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition, StepView,
-    TransitionSpec, TransitionView,
+    RecordWithheld, RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults,
+    RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition,
+    StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::near::{TemplateNearThreshold, template_margin_bound};
 use crate::recording::ready::{
@@ -837,10 +837,7 @@ fn generate_and_write(
     lab.insert("package_id".to_string(), json!(plan.package_id));
     lab.insert("task_id".to_string(), json!(plan.task_id));
     // #463 PRIV-3: the destination the package was generated for, in its word.
-    lab.insert(
-        "destination".to_string(),
-        json!(plan.destination.word()),
-    );
+    lab.insert("destination".to_string(), json!(plan.destination.word()));
     lab.insert("path".to_string(), json!(absolute_display(&copy_path)));
     lab.insert(
         "lab_dir_path".to_string(),

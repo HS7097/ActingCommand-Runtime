@@ -13,9 +13,8 @@ use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordDestination, RecordRect,
     RecordSize, RecordedFrame, RecordedKey, RecordedMark, RecordingDefaults, RecordingEnding,
-    RecordingStep, ScanNumber,
-    SelectConfirmSpec, SelectSpec, SelfTest, SelfTestMargin, SelfTestStatus, StepClick,
-    StepOptional, StepSelect, StepTransition,
+    RecordingStep, ScanNumber, SelectConfirmSpec, SelectSpec, SelfTest, SelfTestMargin,
+    SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
 };
 use super::select::{empty_end_key, on_empty_key, select_invalid};
 use super::steps::path_order;
@@ -3329,10 +3328,7 @@ pub(crate) fn render(
     // package says so; a public one's carries no mark, and no mark means public. Admission asks of
     // `provenance` only that it is an object.
     if plan.destination == RecordDestination::Local {
-        provenance.insert(
-            "destination".into(),
-            json!(RecordDestination::Local.word()),
-        );
+        provenance.insert("destination".into(), json!(RecordDestination::Local.word()));
     }
 
     let mut task = Map::new();

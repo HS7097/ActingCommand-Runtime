@@ -627,7 +627,10 @@ pub(crate) fn read_regions(
 ) -> LabResult<BTreeMap<Patch, Vec<String>>> {
     let reads = pack.reads(&PackReadingDeclarations::default());
     pasted_regions(
-        reads.regions.iter().filter(|region| region.layout.is_none()),
+        reads
+            .regions
+            .iter()
+            .filter(|region| region.layout.is_none()),
         size,
     )
 }
@@ -724,9 +727,9 @@ impl SceneRegions {
                     forbidden: forbidden
                         .iter()
                         .filter(|target| {
-                            self.reads.get(target.as_str()).is_some_and(|rects| {
-                                rects.iter().any(|rect| meets(*rect, *patch))
-                            })
+                            self.reads
+                                .get(target.as_str())
+                                .is_some_and(|rects| rects.iter().any(|rect| meets(*rect, *patch)))
                         })
                         .map(|target| (*target).clone())
                         .collect(),
@@ -779,9 +782,9 @@ pub(crate) fn scene_regions(
     for region in list.regions.iter().filter(|region| region.reading) {
         let rect = match region.area {
             PackReadArea::Rect(area) => Some(region.reach.unwrap_or(area)),
-            PackReadArea::FullFrame | PackReadArea::Unbounded => region
-                .bound
-                .filter(|bound| !covers_frame(*bound, size)),
+            PackReadArea::FullFrame | PackReadArea::Unbounded => {
+                region.bound.filter(|bound| !covers_frame(*bound, size))
+            }
         };
         match rect {
             Some(rect) => {

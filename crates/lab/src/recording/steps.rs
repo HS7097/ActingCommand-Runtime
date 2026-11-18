@@ -32,9 +32,8 @@ use super::model::{
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
     LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec,
     RecordDestination, RecordPoint, RecordRect, RecordSize, RecordedFrame, RecordedMark,
-    RecordingDefaults, RecordingEnding,
-    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepSelect,
-    StepTransition, ValueTestRight, value_test_side_id,
+    RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus, StepApplication, StepClick,
+    StepOptional, StepSelect, StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, PAGE_PASSES_ON_OTHER_FRAME, SELECT_REJECTION_ID, SELF_TEST_ERROR,
