@@ -9,7 +9,8 @@
 //! end one application on the phone; see `args.rs` and `README.md`). Each run prints one JSON
 //! line on standard output and ends with status 0 when the command was answered, 1 when it was
 //! refused or failed, the line then naming this program's `problem` word and, where the library
-//! gave one, its error text (of the application service, only the error's kind). After the line of a
+//! gave one, its error text (of `probe`'s ways and, from the installation proxy's lookup on, of
+//! `running`, `launch` and `stop`, only the error's kind). After the line of a
 //! picture asked for with `--out -`, the picture's bytes follow on the standard output
 //! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
 //! names, and it removes that file again when the picture could not be written whole into it;
@@ -47,7 +48,9 @@ fn main() -> ExitCode {
     // the whole error dictionary a phone answers a CoreDevice request with (idevice 0.1.68,
     // `services/core_device/mod.rs`, "XPC response did not have an output"), which can name
     // other applications, their paths and pids, and other texts of the phone's answers beside
-    // it. With no subscriber those events go nowhere. A new dependency, through which one could
+    // it; (ACIB-3c) its instruments client traces at debug level every message it sends and
+    // reads (`services/dvt/remote_server.rs` 727, 865), the phone's list of running processes
+    // among them. With no subscriber those events go nowhere. A new dependency, through which one could
     // be installed, fails the test below (a tripwire against adding one unnoticed, not a proof).
     let started = Instant::now();
     let arguments: Option<Vec<String>> = std::env::args_os()
@@ -67,7 +70,7 @@ fn main() -> ExitCode {
 
 /// Runs the command, which started at `started`, on a current-thread runtime of its own,
 /// within its deadline; a screenshot whose deadline passes names the stage it was waiting in,
-/// (ACIB-3b) a command of the application service the stage it was waiting in and how long each
+/// (ACIB-3b) `running`, `launch` and `stop` the stage they were waiting in and how long each
 /// stage before it took, and a command whose device was found by its key the device's number.
 fn run(invocation: Invocation, started: Instant) -> Printed {
     let Invocation {
@@ -93,8 +96,8 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
         tokio::time::timeout(deadline, bridge::answer(request, &context))
             .await
             .unwrap_or_else(|_| {
-                // A screenshot keeps its stage in `stage`, a command of the application service
-                // in `steps`; no command sets both.
+                // A screenshot keeps its stage in `stage`, `running`, `launch` and `stop` in
+                // `steps`; no command sets both.
                 let steps = context.steps.borrow();
                 Printed::line(Line::deadline_passed(
                     command,

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Which processes of the phone are of one application (board #479, ACIB-3): the pure matching
-//! of `running` and `stop`, on the application service's two lists.
+//! of `running` and `stop`. (ACIB-3c) The bundle's record comes from the installation proxy's
+//! lookup of that one bundle, and the processes from the instruments server's list of running
+//! processes ([`listed_processes`]).
 //!
-//! The list of applications gives each application its bundle identifier and the path of its
-//! bundle, a directory; the list of processes gives each process its pid and the location of its
-//! executable, and no bundle identifier. A process is **of the bundle** when its executable lies
+//! The installation proxy's record gives the application its bundle identifier and the path of
+//! its bundle, a directory (its `Path`); the instruments server's list gives each process its pid
+//! and, in `realAppName`, what is read here as the location of its executable, and no bundle
+//! identifier. A process is **of the bundle** when its executable lies
 //! inside the bundle's directory (Apple's documentation, "Placing content in a bundle": on iOS
 //! the main executable is at the root of the bundle and app extensions in `PlugIns/`), and the
 //! two kinds are answered apart (the coordinator's ruling on board #479, fix round 1 of ACIB-3):
@@ -25,6 +28,18 @@
 //!
 //! Nothing here keeps or gives anything of another application: the functions answer whether
 //! the bundle asked for is installed and the pids of its own processes, by kind.
+
+use idevice::services::dvt::message::Message;
+
+/// The members of an entry of the instruments server's list of running processes that this
+/// program reads: its pid, and `realAppName`, read as the location of its executable. The
+/// library's own reader of that list (`DeviceInfoClient::running_processes`, idevice 0.1.68,
+/// `services/dvt/device_info.rs` 41-92, under a feature `acib` does not turn on) reads these two
+/// beside `name`, `isApplication` and `startPageCount`, which are not read here; it documents
+/// none of them, so that `realAppName` is the path of the executable is read from no description
+/// and is to be seen on a phone.
+const PID: &str = "pid";
+const REAL_APP_NAME: &str = "realAppName";
 
 /// The scheme of a file URL.
 const FILE_SCHEME: &str = "file://";
@@ -133,6 +148,28 @@ pub fn pids_inside<'a>(
     pids
 }
 
+/// (ACIB-3c) The processes of the instruments server's answer `reply` to `runningProcesses`, as
+/// [`pids_inside`] reads them: of each entry its pid and, as the location of its executable, its
+/// `realAppName` when that is a text (an entry without one is of no application). `None` when the
+/// answer is no list, or one of its entries is no dictionary or has no pid that is a whole number
+/// from 0 to `u32::MAX`: a process whose pid cannot be read could be the bundle's, so the whole
+/// list is unreadable. Nothing of an entry but these two is read, and what is returned borrows
+/// from `reply`, which stays with the command.
+pub fn listed_processes(reply: &Message) -> Option<Vec<Process<'_>>> {
+    let entries = reply.data.as_ref()?.as_array()?;
+    entries
+        .iter()
+        .map(|entry| {
+            let members = entry.as_dictionary()?;
+            let pid = u32::try_from(members.get(PID)?.as_unsigned_integer()?).ok()?;
+            let executable = members
+                .get(REAL_APP_NAME)
+                .and_then(|location| location.as_string());
+            Some(Process { pid, executable })
+        })
+        .collect()
+}
+
 /// Where `path` lies in `directory`, when it lies inside it: below it, at a component's
 /// boundary (`place` leaves no empty component and no slash at the end).
 fn depth_in(directory: &str, path: &str) -> Option<Depth> {
@@ -202,6 +239,8 @@ fn hex_digit(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use idevice::services::dvt::message::{MessageHeader, PayloadHeader};
+    use idevice::xpc::{Dictionary, XPCObject};
 
     /// The bundle the tests ask for, and its directory as the list of applications gives it.
     const BUNDLE: &str = "com.example.app";
@@ -468,6 +507,214 @@ mod tests {
             "/var/a/../b/Example.app",
         ] {
             assert_eq!(place(location), None, "{location:?}");
+        }
+    }
+
+    /// (ACIB-3c) The bundle's directory as the installation proxy's record gives it, a plain path.
+    const RECORD_PATH: &str =
+        "/private/var/containers/Bundle/Application/TESTUUID-0001/Example.app";
+    /// Where the tests' applications lie, in the shape of the instruments server's `realAppName`.
+    const BUNDLES: &str = "/private/var/containers/Bundle/Application";
+
+    /// An entry of the instruments server's list of running processes, as the library's reader
+    /// knows one: `pid`, `realAppName` when given, and the members that are not read, its `name`
+    /// the bundle's executable's in every entry (a name is not read, so it makes no process the
+    /// bundle's).
+    fn listed(pid: XPCObject, real_app_name: Option<XPCObject>) -> XPCObject {
+        let mut members = Dictionary::new();
+        members.insert("pid".to_owned(), pid);
+        members.insert("name".to_owned(), XPCObject::String("Example".to_owned()));
+        if let Some(location) = real_app_name {
+            members.insert("realAppName".to_owned(), location);
+        }
+        members.insert("isApplication".to_owned(), XPCObject::Bool(true));
+        members.insert("startPageCount".to_owned(), XPCObject::UInt64(0));
+        XPCObject::Dictionary(members)
+    }
+
+    /// The entry of the process `pid` whose `realAppName` is `location`.
+    fn at(pid: u64, location: &str) -> XPCObject {
+        listed(
+            XPCObject::UInt64(pid),
+            Some(XPCObject::String(location.to_owned())),
+        )
+    }
+
+    /// The instruments server's answer holding `data` (as the library's reader decodes it, a
+    /// property list value), on a channel of its own.
+    fn reply(data: Option<XPCObject>) -> Message {
+        Message::new(
+            MessageHeader::new(0, 1, 7, 1, 1, false),
+            PayloadHeader::method_invocation(),
+            None,
+            data.map(|value| value.to_plist()),
+        )
+    }
+
+    /// The answer listing `entries`.
+    fn answer(entries: Vec<XPCObject>) -> Message {
+        reply(Some(XPCObject::Array(entries)))
+    }
+
+    /// The pids of [`BUNDLE`]'s processes in the answer `reply`, its directory the installation
+    /// proxy's record's [`RECORD_PATH`], by kind.
+    fn in_reply(reply: &Message) -> Pids {
+        let record = [Application {
+            bundle_identifier: BUNDLE,
+            path: RECORD_PATH,
+        }];
+        match installation(BUNDLE, record) {
+            Installation::Installed(directories) => {
+                pids_inside(&directories, listed_processes(reply).expect("a list"))
+            }
+            other => panic!("the bundle is installed: {other:?}"),
+        }
+    }
+
+    /// (ACIB-3c) The cases above, on the shape of the new sources: the installation proxy's
+    /// record gives the directory as a plain path, the instruments server's list each process's
+    /// `realAppName`. No process of the bundle (the system's, another application's, one without
+    /// a location, an empty list); one; the application and its extensions (each list ascending,
+    /// each pid once, another application's extension neither); only an extension alive; paths
+    /// that merely start alike; a path compared exactly, case included, `/var` and `/private/var`
+    /// alike and a file URL read as its path. Every entry's `name` is the bundle's executable's,
+    /// and none of them is the bundle's by it.
+    #[test]
+    fn the_instruments_list_gives_the_bundles_pids_by_kind() {
+        let inside = |rest: &str| format!("{BUNDLES}/TESTUUID-0001/Example.app/{rest}");
+        let other = format!("{BUNDLES}/TESTUUID-0002/Other.app/Other");
+
+        let none = answer(vec![
+            at(1, "/sbin/launchd"),
+            at(201, &other),
+            listed(XPCObject::UInt64(202), None),
+        ]);
+        assert_eq!(in_reply(&none), Pids::default());
+        assert_eq!(in_reply(&answer(Vec::new())), Pids::default());
+
+        let one = answer(vec![at(201, &other), at(412, &inside("Example"))]);
+        assert_eq!(in_reply(&one), application(&[412]));
+
+        let with_extensions = answer(vec![
+            at(530, &inside("PlugIns/Widget.appex/Widget")),
+            at(412, &inside("Example")),
+            at(
+                201,
+                &format!("{BUNDLES}/TESTUUID-0002/Other.app/PlugIns/Share.appex/Share"),
+            ),
+            at(415, &inside("PlugIns/Notify.appex/Notify")),
+            at(
+                640,
+                &inside("Frameworks/Helper.framework/Helper.app/Helper"),
+            ),
+            at(412, &inside("Example")),
+        ]);
+        assert_eq!(
+            in_reply(&with_extensions),
+            Pids {
+                application: vec![412],
+                extensions: vec![415, 530, 640],
+            }
+        );
+
+        let only_an_extension = answer(vec![
+            at(201, &other),
+            at(530, &inside("PlugIns/Widget.appex/Widget")),
+        ]);
+        assert_eq!(
+            in_reply(&only_an_extension),
+            Pids {
+                application: Vec::new(),
+                extensions: vec![530],
+            }
+        );
+
+        let alike = answer(vec![
+            at(
+                601,
+                &format!("{BUNDLES}/TESTUUID-0001/Example.appendix/Example"),
+            ),
+            at(
+                602,
+                &format!("{BUNDLES}/TESTUUID-0001/Example.app2/Example"),
+            ),
+            at(
+                603,
+                &format!("{BUNDLES}/TESTUUID-00011/Example.app/Example"),
+            ),
+            at(604, RECORD_PATH),
+            at(605, &inside("../Other.app/Other")),
+        ]);
+        assert_eq!(in_reply(&alike), Pids::default());
+
+        let cased = answer(vec![
+            at(701, &format!("{BUNDLES}/TESTUUID-0001/example.app/Example")),
+            at(702, &format!("{BUNDLES}/testuuid-0001/Example.app/Example")),
+            at(
+                703,
+                "/PRIVATE/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
+            ),
+            at(
+                704,
+                "/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
+            ),
+            at(705, &format!("file://{}", inside("Example"))),
+        ]);
+        assert_eq!(in_reply(&cased), application(&[704, 705]));
+    }
+
+    /// (ACIB-3c) Of the instruments server's answer only each entry's pid and `realAppName` are
+    /// read, a `realAppName` that is no text read as no location; the pids 0 and `u32::MAX` are
+    /// pids. The answer is unreadable (`None`) when it holds no data, is no list, or one entry is
+    /// no dictionary, has no pid, or a pid that is negative, larger than `u32::MAX` or a text.
+    #[test]
+    fn the_instruments_list_is_read_whole_or_not_at_all() {
+        let read = answer(vec![
+            at(412, "/var/a/Example.app/Example"),
+            listed(XPCObject::UInt64(530), None),
+            listed(XPCObject::UInt64(531), Some(XPCObject::UInt64(9))),
+            at(0, "/sbin/launchd"),
+            at(u64::from(u32::MAX), "/var/b/Other.app/Other"),
+        ]);
+        let processes: Vec<(u32, Option<&str>)> = listed_processes(&read)
+            .expect("a list")
+            .iter()
+            .map(|process| (process.pid, process.executable))
+            .collect();
+        assert_eq!(
+            processes,
+            [
+                (412, Some("/var/a/Example.app/Example")),
+                (530, None),
+                (531, None),
+                (0, Some("/sbin/launchd")),
+                (u32::MAX, Some("/var/b/Other.app/Other")),
+            ]
+        );
+
+        let mut without_pid = Dictionary::new();
+        without_pid.insert(
+            "realAppName".to_owned(),
+            XPCObject::String("/var/a/Example.app/Example".to_owned()),
+        );
+        let unreadable = [
+            reply(None),
+            reply(Some(XPCObject::Dictionary(Dictionary::new()))),
+            reply(Some(XPCObject::String("runningProcesses".to_owned()))),
+            answer(vec![
+                at(412, "/var/a/Example.app/Example"),
+                XPCObject::String("412".to_owned()),
+            ]),
+            answer(vec![XPCObject::Dictionary(without_pid)]),
+            answer(vec![listed(XPCObject::Int64(-1), None)]),
+            answer(vec![listed(
+                XPCObject::UInt64(u64::from(u32::MAX) + 1),
+                None,
+            )]),
+            answer(vec![listed(XPCObject::String("412".to_owned()), None)]),
+        ];
+        for (case, message) in unreadable.iter().enumerate() {
+            assert!(listed_processes(message).is_none(), "case {case}");
         }
     }
 
