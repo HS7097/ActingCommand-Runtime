@@ -39006,7 +39006,8 @@ added (an entry with a handler there, `interrupt_shown`; the update page without
 the fact and then the end), the scheduled part of the first test binds its procedure at its
 package's directory, and `gate_373_nav6`'s `ALIAS` is private again (nothing used it). No code,
 word, key, record or interface revision is added or moves: the hook is the kernel's seam inside the
-workspace, not a component interface.
+workspace, not a component interface. Main merged again (`aa39f698`, #1822, #479 ACIB-1, which adds
+no register section): the apps gate map keeps main's rows and this slice's.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
