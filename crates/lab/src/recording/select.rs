@@ -288,6 +288,20 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
                 .to_string(),
         ));
     }
+    // #463 SEL-2L-a: `blocks` and `line_merge` come together or not at all, as `rows` and `scan`
+    // do: a name read by detecting its blocks says how their lines are merged.
+    let missing = match (&read.blocks, &read.line_merge) {
+        (Some(_), None) => Some("blocks without line_merge"),
+        (None, Some(_)) => Some("line_merge without blocks"),
+        _ => None,
+    };
+    if let Some(missing) = missing {
+        return Err(shape(format!(
+            "read declares {missing}: names read by detecting their blocks need both, \
+             \"blocks\": \"detect\" and \"line_merge\" ({{\"gap_factor\": n}} or \"none\"); give \
+             both or neither"
+        )));
+    }
     let mut ids = BTreeSet::new();
     for name in &select.names {
         if !name_id_valid(&name.id) {

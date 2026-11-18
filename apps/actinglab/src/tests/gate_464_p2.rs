@@ -825,13 +825,14 @@ fn interrupt(entry: &Value) -> Entry {
     )
 }
 
-/// Entries whose content needs exactly `revision`, 3 to 11, 13, 14, 15, 17 or 18: nothing for 3,
-/// else one member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files the
-/// rows name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
+/// Entries whose content needs exactly `revision`, 3 to 11, 13, 14, 15, 17, 18 or 19: nothing for
+/// 3, else one member of a row of that revision in [`BASE_PACK`] (11 and 10 by root and pack files
+/// the rows name; 13 by a select step of a `linear_steps` pack; 14, Workflow #464 P2b, by a control's
 /// `variables`, for row 15; 15, Workflow #463 KP-1 fix round 1, by an ending page of a
 /// `linear_steps` pack, for row 17; 17, Workflow #463 S2-9b, by a key step of a `linear_steps`
-/// pack, for row 18; 18, Workflow #463 INT-1, by a select step's scan without an end, for row 19).
-/// No content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
+/// pack, for row 18; 18, Workflow #463 INT-1, by a select step's scan without an end, for row 19;
+/// 19, Workflow #463 SEL-2L, by an `interrupts.json` entry without handlers, for row 20). No
+/// content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -887,6 +888,15 @@ fn base(revision: u64) -> Vec<Entry> {
             "id": "choose",
             "select": {"scan": {"early_stop": "upper_bound"}}
         }]}))],
+        19 => vec![json_entry(
+            "interrupts.json".to_owned(),
+            &json!({"interrupts": [{
+                "page": "notice",
+                "handlers": [],
+                "then": "end_run",
+                "max_per_run": 1
+            }]}),
+        )],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -1891,5 +1901,49 @@ fn p2_revision_19_an_interrupt_entry_without_handlers_or_resetting_the_environme
         revision_of(3, &[ends(handler(), Some("application_update_required"))]),
         6,
         "an entry with a result of before, as before"
+    );
+}
+
+// Row 20 (Workflow #463 SEL-2L, register §1.480; contracts/component-interfaces.md, the `package`
+// row 20): a task file's candidate layout of the kind `repeated_anchor` that declares `shared_ocr`
+// needs 20 over entries that need 19 (an `interrupts.json` entry without handlers), in a pack of
+// either execution mode; the same layout without it, and a `fixed_slots` layout with it, stay at
+// 19, and over entries that need nothing a `fixed_slots` layout's shared read is computed as
+// before: 3. So `standard-pack build` declares [20, 20] for a bundle whose pack holds such a layout,
+// which the `package` edge of an installer whose range ends below 20 refuses.
+#[test]
+fn p2_revision_20_a_shared_read_of_a_repeated_anchor_layout() {
+    let layout = |kind: &str, shared: bool| {
+        let mut layout = json!({"id": "layout/cards", "kind": kind});
+        if shared {
+            layout["shared_ocr"] = json!({"blocks": "detect", "line_merge": {"gap_factor": 0}});
+        }
+        task(&json!({"candidate_layouts": [layout]}))
+    };
+    assert_row(
+        20,
+        &[layout("repeated_anchor", true)],
+        &[layout("repeated_anchor", false)],
+    );
+    assert_eq!(
+        revision_of(19, &[layout("fixed_slots", true)]),
+        19,
+        "a fixed_slots layout's shared read"
+    );
+    assert_eq!(
+        revision_of(
+            19,
+            &[
+                control(&json!({"execution_mode": "linear_steps"})),
+                layout("repeated_anchor", true)
+            ]
+        ),
+        20,
+        "the same layout in a linear_steps pack"
+    );
+    assert_eq!(
+        revision_of(3, &[layout("fixed_slots", true)]),
+        3,
+        "a fixed_slots layout's shared read, as before"
     );
 }

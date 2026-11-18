@@ -413,7 +413,12 @@ Rules:
   unknown flags and positional arguments are refused (`validation_failed`, exit 2).
 - Order: locate the step, the frame, remove, add, reuse, samples, click, self-test. All
   marks pass or nothing is written (`record_mark_rejected`, exit 3, `details.marks[]` with
-  one `{id, reason, …}` per refused mark). `--dry-run` runs everything and writes nothing
+  one `{id, reason, …}` per refusal: one per refused mark, and a select's one per frame, or per
+  screen and row of a scrolling select, all with the id `select`). #463 SEL-2L-a (since 0.12.74):
+  its message, `N of M marks failed; nothing recorded`, counts marks on both sides: `N` the
+  distinct ids `details.marks[]` names, `M` the marks the command judged, as before (a select
+  counted as one); a select refused on 23 screens of 16 rows is `1 of M`, no longer `368 of M`.
+  `details` is unchanged. `--dry-run` runs everything and writes nothing
   (`marks_validated`).
 - Mark ids: 1–128 bytes without surrounding whitespace or control characters, not starting
   with `page/` or (#463 R1, the ids of a select's generated targets) `select/`
@@ -861,7 +866,9 @@ variable of the package" below), so the mark decides nothing in the package.
   the default); `on_empty_key`, the key of the run's normal end when the wanted name is on no slot
   (`^[a-z0-9][a-z0-9_]{0,127}$`, default `<task_id>_not_found`, so a second select of the recording
   gives its own: the default would be the first one's, `on_empty_key_taken`); `confirm`,
-  `candidate_set` (the kernel's default) or `decision`.
+  `candidate_set` (the kernel's default) or `decision`. #463 SEL-2L-a (since 0.12.74): `read` may
+  also carry `blocks` and `line_merge`, together, so that the names are read by detecting their
+  blocks ("Reading names by detecting blocks" below).
 - **What the Lab reads, and what only the kernel admits** (fix 1). The Lab's own reading of the
   request refuses `validation_failed` (exit 2): an unknown member or a wrong type; a slot count
   outside 1 to 16; a rectangle without width or height; an empty `languages` or a blank language, a
@@ -937,6 +944,7 @@ stop` generates the package:
 | `no_choice` | #463 S2-6 fix round 1: the request's `choice: false` names a step that is not marked as holding a choice, so there is nothing to take off ("Marking a choice first") |
 | `drop_of_choice` | #463 stage two, train, fix round: `drop_step` names a step that holds a choice, marked as holding one or refined by a select, the last step too; withdraw the choice first ("Steps, frames and remediation") |
 | `transition_of_choice` | #463 stage two, train, fix round: `to_transition` names a step that holds a choice; a page transition holds none, so the conversion would lose it; withdraw the choice first ("Steps, frames and remediation") |
+| `blocks_with_rows` | #463 SEL-2L-a: a select with `rows` whose `read` declares `blocks`: only a select of fixed slots reads its names by detecting their blocks yet ("Reading names by detecting blocks"); checked at the request, before anything is read |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -1099,6 +1107,55 @@ an earlier Runtime refuses such a package at admission (`contained_task_linear_i
 select step, above), so a bundle that holds it declares `package` 14
 ([package-variables.md](package-variables.md), "Interface"), which the revision table of
 `standard-pack build` counts; `standard-pack adopt` copies `control.json` as it is.
+
+### Reading names by detecting blocks
+
+#463 SEL-2L-a (since 0.12.74, [v012-register.md](v012-register.md) §1.479; the rules here are the
+coordinator's). A select reads each slot's name box as one block, the single-line read of an OCR
+target without `locate` on a region smaller than the frame, so a name drawn on two lines in one
+title box reads poorly on every frame (`select_name_unread`, `low_confidence`). A layout of fixed
+slots has the read that fits: its shared read ([selection-graph.md](selection-graph.md), "Shared OCR
+read"), which runs the text detector over one region once per frame and gives each slot the blocks
+detected in its box. A select's `read` asks for it with two members, in that read's own words:
+
+```json
+"read":{"languages":["en"],"timeout_ms":1000,"minimum_confidence_milli":800,
+        "model_ref":"model","model_sha256":"<64 hex>",
+        "blocks":"detect","line_merge":{"gap_factor":0}}
+```
+
+- **The members.** `blocks`: `"detect"`, the one word, the text detector over the read's region.
+  `line_merge`: `{"gap_factor": n}`, the model folder's merge of the detected boxes into lines with
+  the factor `n` in place of its own, or `"none"`, no two boxes merged. The two come together or
+  not at all: one without the other is the Lab's own reading, `validation_failed` (exit 2), its
+  message naming the member that is missing; another word or shape does not decode
+  (`validation_failed`). The bound of `n` (0 to 16) is the kernel's, which the Lab does not copy:
+  another is refused by the kernel's admission of the probe at the self-test, `record_select_invalid`
+  with `kernel_refused`. Absent, the select reads as before, and the recording, the mark's answer
+  and the package are byte for byte what they were: the members are not written when absent.
+- **What `record stop` generates** for a select of fixed slots that declares them: the layout of
+  "What `record stop` generates" above with, after its `slots`, `"shared_ocr": {"region": {"mode":
+  "rect", "rect": R}, "languages", "timeout_ms", "model_ref", "model_sha256", "blocks",
+  "line_merge"}`, `R` the bounding rectangle of the slots' `name` boxes and every other member the
+  read's (no `preprocess`); the slot targets are unchanged. Every slot target is so one the shared
+  read serves (an OCR target without `locate` whose model, digest, languages and chain are the
+  read's, its region inside the read's): on each frame the kernel calls the OCR provider once over
+  `R`, and a slot's text is the blocks whose centre lies in its name box, in `(y, x)` order joined
+  by line feeds, at the lowest of their confidences. A block whose centre lies in a neighbour's name
+  box is the neighbour's; one in no name box is nobody's; a slot without a block reads no text
+  (`low_confidence`, as an empty read today); two names within the margin are `ambiguous` and a low
+  confidence `low_confidence`, as before. A slot target the read would not serve would read its name
+  box alone; the generator refuses to generate it (`validation_failed`, nothing written) rather
+  than read it so in silence. No interface revision moves: a layout of fixed slots with
+  `shared_ocr` is in the task schema the Lab writes.
+- **The self-tests read as the run reads.** The mark-time self-test, `record ready` and `record
+  stop`'s self-checks judge such a select through the same generated probe package, the kernel's dry
+  run of the step: on each of its dry runs the OCR provider is asked for the shared read alone.
+- **Not for a scrolling select yet.** A select with `rows` whose `read` declares `blocks` is refused
+  at the request, `record_select_invalid` with `blocks_with_rows` (exit 3), nothing written.
+- **The regression cases** ("Regression cases written with the package") paste into their scenes the
+  regions the package's targets read: the slots' name boxes, not the whole of `R`. Text that lies
+  between two name boxes is not in a case's scene.
 
 ### Marking a choice first
 
@@ -1346,7 +1403,9 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   frame), `scan_region_outside_list` (the row outside the list), `scan_region_outside_row` (the
   anchor, the name region or the click box outside the row), `scan_number_not_measured` (a number
   the demonstration does not hold what it is measured from, a swipe recorded without its after
-  loop's record, and the request does not give it; `details.number`). `rows` without `scan` or the
+  loop's record, and the request does not give it; `details.number`); #463 SEL-2L-a:
+  `blocks_with_rows` (the `read` declares `blocks`, which only a select of fixed slots takes yet,
+  "Reading names by detecting blocks"). `rows` without `scan` or the
   other way round, a rectangle without width or height, a number `numbers` does not know or a given
   0 are the Lab's own reading, `validation_failed` (exit 2).
 - **Where each image comes from.** The screens are the fold's, in order: the first screen (the

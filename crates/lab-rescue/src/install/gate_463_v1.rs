@@ -11,7 +11,7 @@
 //   contract crate's `VARIABLES_PACKAGE_REVISION`, 14 (Workflow #463 K2, register §1.380: to 15
 //   since, the same release, 14 still read; Workflow #477 PC-1 fix round 1, §1.438: to 16;
 //   Workflow #463 KP-1, register §1.448: to 17; Workflow #463 K-c, register §1.454: to 18;
-//   Workflow #463 INT-1, register §1.473: to 19);
+//   Workflow #463 INT-1, register §1.473: to 19; Workflow #463 SEL-2L, register §1.480: to 20);
 // - `v1_a_bundle_at_revision_14_is_planned_here_and_refused_by_an_earlier_installer`: on an
 //   installer of [3, 14] (this build's [3, 15] since Workflow #463 K2, 14 within it) the bundle
 //   that declares [14, 14] is planned (its pack and `bundle.json`
@@ -85,9 +85,10 @@ fn v1_the_build_declares_package_through_revision_14() {
     let speaks = parse_declaration(&declared).expect("the build's declaration follows the rules");
     // Workflow #463 K2 (register §1.380) raises `max` to 15 in the same release, Workflow #477
     // PC-1 fix round 1 (register §1.438, 0.12.68) to 16, Workflow #463 KP-1 (register §1.448) to
-    // 17, Workflow #463 K-c (register §1.454, 0.12.70) to 18 and Workflow #463 INT-1 (register
-    // §1.473, 0.12.73) to 19; the revision this test is about, 14, stays read.
-    assert_eq!(speaks.get("package"), Some(&[3, 19]));
+    // 17, Workflow #463 K-c (register §1.454, 0.12.70) to 18, Workflow #463 INT-1 (register
+    // §1.473, 0.12.73) to 19 and Workflow #463 SEL-2L (register §1.480, 0.12.74) to 20; the
+    // revision this test is about, 14, stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 20]));
     assert!(
         speaks
             .get("package")

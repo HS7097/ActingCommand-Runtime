@@ -39911,6 +39911,282 @@ nothing in the checkout.
 **At deploy.** Nothing to configure. An adoption's answer is longer by its `timings`, some 600
 bytes.
 
+### 1.479 Slice #463 SEL-2L-a (0.12.74): a select's names may be read by detecting blocks (fixed slots), and the refusal counts marks (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: the cards of a shop carry names of one or two lines in one title box, which a select read as one block each; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sel2l-a-fixed-blocks.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slices S-count and S-fixed, on main `a8d0aa43`; finished after a stop at a safe point under `rd-1118/brief-463-sel2l-a-finish.md`, merged with main `5d0c8c3e`)
+
+This section takes 1.479 (1.476 to 1.478 and 1.480 are other slices'). It ships in 0.12.74. It
+changes the Lab alone: nothing of the recognition pack, the package containment or the execution
+kernel; the rows' side is another slice's.
+
+**Why.** A select reads each slot's name box with the OCR target the Lab generates for it, an OCR
+target without `locate` on a region smaller than the frame, which the kernel reads as one block
+(`text_locate.rs`, `OcrProviderBlocks::Implicit`). A name of two lines in one title box went to the
+single-line recogniser whole and read poorly on every row: a select of rows was refused
+`select_name_unread` with `low_confidence` on every screen and row, and the refusal's message said
+"368 of 4 marks failed", counting the select's refusals (one per screen and row) against the marks.
+Asked with `"blocks": "detect"` in `read`, the mark was refused `validation_failed`: the request's
+`read` did not take the member. A package written by hand reads the same cards on production with a
+layout of fixed slots and its shared read (`shared_ocr`, `blocks` `detect`, `line_merge`
+`{"gap_factor": 0}`), which the Lab's generator did not write.
+
+**What it rests on** (read in the code).
+- *The shared read* (`crates/recognition-pack/src/candidate_layout.rs`, `CandidateSharedOcr`,
+  task schema 0.9, [selection-graph.md](selection-graph.md), "Shared OCR read"): a layout of fixed
+  slots may declare one detection read over a rectangle; it serves an OCR target without `locate`
+  whose model, digest, languages and chain are its own (`reads_text_of`) and whose region lies
+  inside its own; such a target takes the blocks whose centre lies in its region, `(y, x)` order,
+  joined by line feeds, at the lowest confidence (`shared_text`); every other target is read alone.
+  The frame's read is one provider call (`read_shared_text`, a `Detect` request with the declared
+  merge). A `repeated_anchor` layout refuses it, so a select of rows cannot take it yet.
+- *The self-test's dry run* (`dry_run_select`, `crates/execution-kernel/src/contained_task/selection.rs`):
+  the page set is evaluated first (the probe's pages are colour marks, which call no provider), then
+  the layout is projected (`project_candidates_placed_with_samples`), where each slot's target asks
+  `shared_text` and only a target the read does not serve is read alone (`evaluate_target`). With
+  every slot served, each dry run asks the provider for the shared read once and nothing else. The
+  Lab's self-test runs a dry run per live frame for the default and one more for the pressed name
+  when it differs.
+
+**The rule.**
+- *The author's words.* `select.read` takes two optional members in the shared read's vocabulary:
+  `blocks` (`"detect"`, the one word) and `line_merge` (`{"gap_factor": n}` or `"none"`), together
+  or not at all. One without the other is the Lab's own reading of an incomplete declaration, as
+  `rows` without `scan` is: `validation_failed` (exit 2), its message naming the member that is
+  missing; another word or shape does not decode (`validation_failed`); the bound of `n` is the
+  kernel's (0 to 16), refused by its admission of the probe, `kernel_refused`. Absent, the members
+  are not written (`skip_serializing_if`), so every recording, mark answer, request and package
+  without them is byte for byte what it was.
+- *The generator.* For a select of fixed slots that declares them, the layout gains, after its
+  `slots`, `shared_ocr` `{region: {mode: rect, rect: the bounding rectangle of the slots' name
+  boxes}, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge}`, every member but the
+  region the read's (no `preprocess`), the members the slot targets are made of; the slot targets
+  are unchanged. The generator checks each slot target against the kernel's rule (no `locate`, the
+  same languages, model, digest and chain, a rectangle inside the region) and, should one not be
+  served, refuses to generate (`validation_failed`, nothing written) rather than let it read its
+  name box alone; as generated, every slot is served.
+- *A select of rows with `blocks`* is refused at the request, before anything is read:
+  `record_select_invalid` (exit 3) with the new `select_problem` `blocks_with_rows`, the word of a
+  member a kind does not take yet, as `confirm_with_rows` is; nothing is written. The rows' side
+  needs the kernel's slice.
+- *The self-checks read as the run will.* `record mark`, `record ready` and `record stop` judge such
+  a select through the same generated probe package as before; no second reader is added.
+- *The count.* `record_mark_rejected`'s message counts marks on both sides: the refused ones by
+  their distinct ids, so that a select refused on several frames, or screens and rows, counts once
+  ("1 of 4", where it said "368 of 4"); the total is as before; `details.marks` keeps every refusal.
+
+**Finishing round** (`rd-1118/brief-463-sel2l-a-finish.md`). The work stopped at a safe point as
+one local commit, never compiled or run. Read again as a reviewer: the check's bounding box and the
+shared read's region are one function (`bounding_rect`, which `bounding_box` now calls, its answers
+as before); the test's assertion about the provider was established from the kernel (above) and now
+says it exactly: with `blocks`, every request of a mark's self-test is the shared read, four for
+two frames and two for one, each frame read by the default's dry run and the pressed name's.
+Formatting checked; the contract, the catalogue, the operation table, this section and the gate
+map written; main merged.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The members | `crates/lab/src/recording/model.rs`: `SelectReadSpec::blocks` and `line_merge`, `SelectReadBlocks`, `SelectLineMerge`, `SelectLineMergeKeyword`, `SelectGapFactor` |
+| Together or neither | `crates/lab/src/recording/select.rs`: `validate_select_shape` |
+| Not with rows | `crates/lab/src/recording/scan.rs`: `validate_scan_shape`; `crates/lab/src/codes.rs`: `SelectProblem::BlocksWithRows` |
+| The generator | `crates/lab/src/recording/generate.rs`: `select_layout_json`, `select_shared_read`, `bounding_rect` (shared with `bounding_box`), `shared_read_serves` |
+| The count | `crates/lab/src/recording/steps.rs`: `rejected` |
+| Texts | [lab-recording.md](lab-recording.md) ("record mark", its rules; "Selecting in a list", the members and the table; "Reading names by detecting blocks", new; "A scrolling choice: reading the list to its end", the refusals); `contracts/outcome-codes/catalog.json` (`select_problem` `blocks_with_rows`) and `lab.json` (`record_select_invalid`), the index regenerated; `contracts/lab-operations.json` (`record mark`, the request's note and the notes) |
+
+**Codes and words.** One word, no code:
+
+| Word | Its one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `select_problem` `blocks_with_rows` | the request's select declares `rows` and a `read` with `blocks` | refuses (`record_select_invalid`) | 3 |
+
+`blocks` without `line_merge` and the reverse are `validation_failed` (exit 2), the Lab's own
+reading of a request, its message naming the missing member. No decision reads a code or a word.
+
+**Tests** (`crates/lab/src/gate_463_sel2l_a.rs`, exec gate map "#463 SEL-2L-a"; recordings made
+with `record mark` on synthetic 96x64 gray frames with two slots, a scripted OCR provider that
+detects each run of one marker gray on one row as one block, reads a region asked whole as one line
+(two rows of runs one poor block) and keeps every request; no clock): without the members, every
+request a name box read whole, the mark's answer, the recording and the generated layout and targets
+the golden, byte for byte (1); a two-line name, a one-line name across the middle and both in one
+row, refused when read whole and passed with `blocks`, the provider asked for the shared read alone,
+the layout the golden with `shared_ocr`, and the admitted package tapping the default's slot (2); a
+neighbour's text reaching into a slot's box goes to the slot its centre lies in (3); a slot with no
+name, two names within the margin and a low confidence stay `select_name_unread` with their causes
+(4); one member without the other `validation_failed`, `blocks` on rows `blocks_with_rows` (5); the
+count, "1 of 2" for one select refused on three frames, "1 of 4" for 368 refusals of one select and
+"2 of 4" with another mark beside it (6). No existing test changed; none leaves a gate map; no golden
+changes.
+
+**What is not changed.** A select without the two members, in the recording, the answer and the
+package; the Runtime; the regression cases' scenes (`cases.rs`, `read_regions`, which another slice
+moves), which paste the regions the targets read: for a select with `blocks` the slots' name boxes,
+not the whole shared region, so text between two name boxes is not in a case's scene; every other
+self-check's answer; `details` of `record_mark_rejected`.
+
+**At deploy.** Nothing to configure. A select of fixed slots may declare `"blocks": "detect"` and a
+`line_merge`; a package generated so needs no newer Runtime: the layout's shared read is in the task
+schema it already admits.
+
+### 1.480 Slice #463 SEL-2L-b (0.12.74): a repeated anchor's rows may be read by one shared detection (Workflow #463; met on 11-18 by the channel that keeps the resource repositories: a scrolling grid of shop cards whose names take one or two lines in one title box; the rules below are the coordinator's rulings in the work orders and in its ruling on the order of blocks after the first implementer stopped at a safe point, not the owner's words; coordinator work orders `rd-1118/brief-463-sel2l-b-anchor-shared-ocr.md` and `rd-1118/brief-463-sel2l-b-finish.md`, design `rd-1118/design-463-sel2l.md`, on main `a8d0aa43`)
+
+This section takes 1.480, the number the work order gives (1.476 to 1.479 are other slices'). It
+ships in 0.12.74. [selection-graph.md](selection-graph.md) ("Source declaration", "Shared OCR
+read", "A `repeated_anchor` layout's shared read", "Rules") is the contract, with
+[candidate-projection.md](candidate-projection.md) ("Budgets") and
+[component-interfaces.md](component-interfaces.md) (the `package` row 20).
+
+**Why.** A `repeated_anchor` row's name is read as one block by the single-line recogniser, so a
+name of two lines in one title box reads `low_confidence`. A `fixed_slots` layout can declare
+`shared_ocr` (Workflow #396 REC-8: one detection over a region, its lines merged, each block given
+to the target whose region holds its center); on a `repeated_anchor` layout the member was refused
+(`resource_declaration_invalid`, `UnknownField` at `/candidate_layouts/<i>/shared_ocr`). A
+recording of such a shop is archived and waits for this slice and the Lab's (`crates/lab`, other
+slices; nothing of it changes here).
+
+**What a shared read did before, checked before building** (the work order's item 1). On each
+frame it serves, one provider call over its region, the detector with the declared line merge; it
+gives its text to each OCR target without `locate` whose model, languages and chain are its own and
+whose region, moved to the slot plus the feature's offset and shifted by the sample's jitter, lies
+inside the read's region (any other target reads on its own); a target takes the blocks whose
+center lies in its region, ordered by `(y, x, height, width, text)` (`validate_ocr_result`), joined
+with `\n`, with the lowest of their confidences; a target with no block reads empty text. On a
+`repeated_anchor` layout it was refused or ignored in five places: the recognition pack's field
+list (`REPEATED_ANCHOR_FIELDS`, unknown at load), its rules (`validate_shared_ocr`: "only a
+fixed_slots layout declares it"), the count (`shared_calls`, which served `fixed_slots` only: an
+instance's place is known only on the frame), the source's declaration gate (`shared_ocr` a field of
+the other kind, `UnknownField`) and the derivation (no shared read written for an anchored layout).
+The design's file and line citations held on main `a8d0aa43`, but for `models.rs`, which is
+`crates/vision-ffi/src/models.rs`.
+
+**The rule.**
+- *The declaration* (SEL2L-1). A `repeated_anchor` layout may declare `shared_ocr`, in the source
+  from task schema `0.9` on (`UnconsumedField` before it, as for `fixed_slots`). Its region covers
+  the layout's `readable_band`, or the whole frame where the layout declares none: `full_frame`, or
+  a rectangle that holds it. Otherwise the existing word for an invalid member at the member's
+  pointer: the source gate's `resource_declaration_invalid`, `InvalidValue` at
+  `/candidate_layouts/<i>/shared_ocr/region` (`Declaration::shared_read_covers_band`), and the
+  recognition pack's rule, its message led by the same pointer (`CandidateSharedOcr::covers_band`).
+  The derivation writes the member last, as a `fixed_slots` layout's (`derived_shared_ocr`, the one
+  writer of both).
+- *The read* (SEL2L-2). On each frame of a projection the detection runs once over the region.
+  Every OCR target the read gives text to that an actionable instance's feature reads takes its text
+  from it, its region placed at the instance: a block belongs to the instance whose region holds its
+  center (one across two instances' regions to the one that holds its center), a block in no
+  instance's region is dropped, an instance whose region holds no block reads empty text, and an
+  instance the band cuts is not actionable and not read, as before. Every actionable instance is
+  served by the shared read: none falls back to a read of its own (the band holds every actionable
+  instance and the read covers the band; a region placed at a scaled match may reach past the band,
+  where the read holds no block).
+- *One implementation* (SEL2L-3). `SceneEvaluation::layout_shared_text` is the one reader of both
+  kinds: the giving of blocks to regions (`center_is_within`), their order (the provider result's
+  sort in `validate_ocr_result`), their joining and their confidence are the code `fixed_slots` used
+  (`shared_text`, which stays for its tests, is that function of a `fixed_slots` layout); a
+  `repeated_anchor` layout only skips the test "the region lies inside the read", which its cover
+  rule makes hold for every actionable instance. No second copy.
+- *The count* (SEL2L-4). `provider_evaluations` answers its two parts apart
+  (`ProviderEvaluations`: `own`, one instance's own evaluations, and `shared`, one for each frame
+  the read serves); `shared_calls` serves every call of a target the read gives text to on a
+  `repeated_anchor` layout. One projection needs `own × actionable instances + shared`: in the
+  producer's check after the anchor's enumeration (`project_candidates_placed_with_samples`) and,
+  for one instance, in the pack's rule and the producer's first check. Admission's bound of
+  provider time (`CandidateLayout::maximum_provider_and_wait_ms`) takes the read's timeout once for
+  each frame it serves, and the instances' own time for `min(max_instances, (16 − shared) div own)`
+  instances. Neither part is zero where it is called, and the shared read is never multiplied by the
+  instances.
+- *The order of blocks* (SEL2L-5, the coordinator's ruling). Blocks are ordered by top, then left,
+  for both kinds, as before: two blocks of one line whose tops differ by a pixel come higher first,
+  also where the higher stands to the right. A hand-written package on production reads by this
+  order, and this slice does not change it. The contract says so in plain words, and that an author
+  who sees one line come back as two blocks raises `line_merge`'s gap factor, so that the provider
+  joins them before the order is applied.
+
+**Codes and words.** None added. The refusal of a region short of the band is
+`resource_declaration_invalid` with the existing reason `invalid_value` (source) and the pack's
+rule (recognition pack); a detection over the provider's bound fails as before,
+`candidate_feature_failed` caused by `text_read_blocks_truncated` (stage `text_read_shared`).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The pack's field list, rule and reader | `crates/recognition-pack/src/candidate_layout.rs`: `REPEATED_ANCHOR_FIELDS`, `CandidateSharedOcr::covers_band`, `validate_shared_ocr`, `SceneEvaluation::layout_shared_text` (and `shared_text`, test-only), `shared_calls` |
+| The count | the same file: `ProviderEvaluations`, `provider_evaluations`, the producer's checks, `validate_candidate_layouts`, `CandidateLayout::maximum_provider_and_wait_ms` |
+| The source | `crates/pack-containment/src/source/declarations.rs`: `Declaration::candidate_layouts` (the member no longer of the other kind), `Declaration::shared_read_covers_band`; `crates/pack-containment/src/source/mod.rs`: `derived_shared_ocr`, written for both kinds |
+| The revision | `distribution/windows/component-interfaces.json` `package` [3, 20]; `apps/actinglab/src/resource_verify/revision.rs`: `anchored_shared_read`, 20 |
+| Texts | [selection-graph.md](selection-graph.md), [candidate-projection.md](candidate-projection.md) ("Budgets"), [component-interfaces.md](component-interfaces.md) (the `package` row 20), [resource-verify.md](resource-verify.md) (row 20) |
+
+**The `package` revision.** A task file whose `repeated_anchor` layout declares `shared_ocr` is
+refused by every Runtime before this one at its declaration gate (`UnknownField` at
+`/candidate_layouts/<i>/shared_ocr`), at every run of its package, so it joins revision 20: this
+build declares [3, 20] (it was [3, 19]); `standard-pack build` computes 20 for a zip whose pack
+holds such a layout, in a pack of either execution mode, and as before for one without (a
+`fixed_slots` layout's shared read needs nothing new). `place`: row 19's precedent (revisions 13,
+15, 17, 18 and 19): nothing checks it when a bundle is placed, so this build's `place` places a zip
+that holds such a layout and declares less as it declares; an installer whose range ends below 20
+refuses a zip that declares 20 at its `package` edge. No other interface range moves: `ledger`
+[3, 9], `runtime-client` [3, 12], `actingd-config` [5, 33], `runtime-outcomes` [1, 1]; the
+projection keeps its shape and its records.
+
+**Tests** (`crates/recognition-pack/src/gate_463_sel2l.rs`, declared beside the crate's other
+candidate-layout tests in `candidate_layout.rs`; two tests appended to
+`crates/pack-containment/src/source/tests.rs`; one row test appended to
+`apps/actinglab/src/tests/gate_464_p2.rs`, whose `base` gains the entries that need 19; the exec
+gate map row "#463 SEL-2L"; no clock is read).
+`sel2l_two_line_and_one_line_names_in_one_grid_row_are_each_read_whole`: on a 320 x 240 frame of
+nine anchor icons in three rows of three cards, the band ending above the third row, two-line names
+and one-line names centred across the middle, both kinds in each row of the grid, read whole and
+give their whole identities, with one detection over the band; the third row is not actionable and
+carries no features.
+`sel2l_each_block_goes_to_the_card_that_holds_its_centre_and_a_cut_row_is_not_read`: a neighbour's
+block nine pixels away goes to the neighbour, a block across two cards' regions to the one that
+holds its center, a block between the rows and one over the cut row's name to no card, and a card
+without a block reads empty text (its identity Unknown).
+`sel2l_two_blocks_of_one_line_a_pixel_apart_are_ordered_by_top_then_left`: as ruled, `RIGHT\nLEFT`
+where the right block is a pixel higher, `LEFT\nRIGHT` where the left one is.
+`sel2l_the_shared_read_is_one_evaluation_a_frame_whatever_the_cards`: three OCR features on six
+actionable cards are refused on their own before any read (`provider_evaluations`, count 18, limit
+16; admission's bound 15 000 ms) and served by the shared read with one call (bound 5 000 ms, the
+read's timeout once).
+`sel2l_a_region_short_of_the_band_is_refused_and_a_truncated_read_fails`: the pack's rule at
+`/candidate_layouts/0/shared_ocr/region`; `full_frame` and a rectangle holding the frame admitted;
+`text_read_blocks_truncated` after one call.
+`sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`: Workflow #308
+L1's fixture keeps its candidates and the candidate-set hash its own test pins; the build's range
+holds a bundle of [20, 20], which a range ending at 19 refuses.
+`sel2l_a_repeated_anchor_layout_declares_a_shared_read_that_covers_its_band` and
+`sel2l_the_shared_read_of_a_repeated_anchor_layout_derives_last`: the source gate's admissions and
+refusals (`InvalidValue` at the region; `UnconsumedField` under task schema `0.6`), and the derived
+bytes with the member last and, without it, as before.
+`p2_revision_20_a_shared_read_of_a_repeated_anchor_layout`: 20 over 19; without the member, and a
+`fixed_slots` layout's, stay; over nothing 3. Adapted, the requirement moving the shipped range:
+`gate_463_v1::v1_the_build_declares_package_through_revision_14` ([3, 20]),
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 3`) and `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`
+(`package` [3, 20]); their gate rows' comments and incidents name SEL-2L. No test leaves a gate
+map; no golden changes.
+
+**What is not changed.** A `fixed_slots` layout's reading, with or without `shared_ocr`; a
+`repeated_anchor` layout without the member (its derived bytes, projection, count and answers); a
+located target's own rule (`text_locate`, which still refuses a feature target's `locate`); the
+scan's settle and window rules; a detection that finds nothing (it stays what it is); any code of
+`crates/lab`.
+
+**Left for a later slice.** Grouping a target's blocks into lines before they are ordered would
+change the reading of both kinds, so it would take a new revision: not this slice. The Lab's side
+(an author's words for blocks, the rows' generator) is other slices'.
+
+**At deploy.** Nothing to configure. A package that declares `shared_ocr` on a `repeated_anchor`
+layout needs a Runtime of 0.12.74 or later, and its bundle declares `package` [20, 20]: a Runtime
+before 0.12.74 answers unknown field at its declaration gate (`resource_declaration_invalid`,
+`UnknownField` at `/candidate_layouts/<i>/shared_ocr`), at every run of that package, and an
+installer whose range ends below 20 refuses such a bundle at its `package` edge. The Lab's installer
+range moves with the build ([3, 20], read from `distribution/windows/component-interfaces.json`),
+and a deploy kit that pins the shipped `package` range pins [3, 20].
+
+**Main merged** (`5d0c8c3e`, with §1.477 of #1829, #463 S2b-1, and #1827, #479 ACIB-2, which adds
+no register section): §1.477 and this section each once, in number order; the exec gate map keeps
+main's rows and then this slice's, and the apps gate map main's rows beside this slice's edits of
+the row "#463 V1".
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
