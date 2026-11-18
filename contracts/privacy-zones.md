@@ -45,7 +45,7 @@ A repository root holds one game (its `applications.json`, [resource-verify.md](
 | `zones` | a list of 0 to 256 zones; an empty list says this size has no zone | absent `MissingField`, no list `InvalidType`, longer `InvalidValue`, at `/bases/<i>/zones` |
 | a zone | `{id, kind?, rect}`, no other member | no object `InvalidType`; another member `UnknownField`, at `/bases/<i>/zones/<j>`… |
 | `id` | 1 to 128 bytes of ASCII letters, digits and `_-./:`, unique within its base | absent `MissingField`, no text `InvalidType`, another form or a second zone of that id `InvalidValue`, at `…/id` |
-| `kind` | `identity` (who the account is: a nickname, an account number, a server name; nothing may read there) or `value` (a quantity the account holds: only a resource reading may read there, and no scene may hold its pixels); absent means `identity` | no text `InvalidType`, another text `InvalidValue`, at `…/kind` |
+| `kind` | `identity` (who the account is: a nickname, an account number, a server name; nothing may read there) or `value` (a quantity the account holds: only a reading ("A reading" below) may read there, and no scene may hold its pixels); absent means `identity` | no text `InvalidType`, another text `InvalidValue`, at `…/kind` |
 | `rect` | `{x, y, width, height}`, no other member, integers: `x` and `y` from 0, `width` and `height` from 1, inside its base (`x + width` at most the base's width, `y + height` at most its height) | a member as for a base's side at `…/rect/<member>`; outside its base `InvalidValue` at `…/rect` |
 | `exempt` (public, optional) | the transition list: at most 1024 entries `{package_id, content}`, no other member; `package_id` one path segment of at most 256 bytes that no game root reserves, each package once; `content` a content prefix, 12 lowercase hexadecimal digits, as adoption and a trial name a content ([standard-pack-trial.md](standard-pack-trial.md)) | no list `InvalidType` or longer `InvalidValue` at `/exempt`; an entry's member absent `MissingField`, no text `InvalidType`, another form or a package listed again `InvalidValue`, at `/exempt/<i>/<member>` |
 
@@ -54,11 +54,16 @@ field_path, schema_version, reason}`, as `declaration-exclusions.json`'s are
 ([resource-declarations.md](resource-declarations.md)). A file larger than 1 MiB is
 `InvalidValue` at `""`; a file that cannot be read is a usage error naming it.
 
-**Three states.** The reader (`PrivacyDeclaration`, `crates/resource-tooling`) answers a public
-root with its zones by base size and its transition list, a local root, or **absent** when the
-root holds no `privacy-zones.json`. A root is public only when its declaration says so: an absent
-declaration is neither public nor local, and nothing of this contract takes it for public (the
-later slices check nothing there and say so, `privacy_undeclared`).
+**Three states.** The member `repository` is the root's own statement, `public` or `local`. The
+reader (`PrivacyDeclaration`, `crates/resource-tooling`) answers its three states, a public root
+with its zones by base size and its transition list, a local root, or **absent** when the root
+holds no `privacy-zones.json`, and decides nothing from them.
+
+**Who says a root is public.** Whether a root is public is the caller's to establish, in the slices
+that call the comparison (the adoption and the repository's check): a root is public when its
+declaration says so, and the owner's criterion, a repository that goes to GitHub, will be applied
+there. A root with no declaration file refuses nothing by this reader and is no error; nobody has
+to write a file to be left alone.
 
 **Zones hold on every page.** Nothing knows which page of the root a frame shows: a case's scene
 pastes every read region of the package, from every case's frame, and a scene's page is only the
@@ -78,15 +83,20 @@ process, read a selected `privacy-zones.json` at the repository root by this rea
 with family `privacy_zones`; its removal needs no other document
 ([resource-declarations.md](resource-declarations.md)). `resource verify`'s root selection without
 `--base` and its clean check's root inputs do not name the file yet: the slice of its privacy step
-adds it.
+adds it. What this registration changes for a repository that has the file: before this version
+`resource validate`, and `resource verify` where its diff against `--base` selects the file,
+refused it as an unmapped file; now a valid one passes, and a malformed one is refused as
+`resource_declaration_invalid` with its pointer. A repository without the file sees no change.
 
 ## The read regions of a package
 
 `RecognitionPack::reads` (`crates/recognition-pack`, `read_regions.rs`) is the one list of the
-regions a package's recognition targets read. The Lab's scene of a regression case pastes them
-(`record stop`, [resource-regression-case.md](resource-regression-case.md)) and the comparison
-compares them; neither makes a list of its own. In the pack's order, each target's own regions,
-then each layout's shared read:
+regions a package's recognition targets read. The Lab's scene of a regression case pastes the
+regions its targets declare themselves (`record stop`,
+[resource-regression-case.md](resource-regression-case.md)) and the comparison compares every
+region of it; neither makes a list of its own. In the pack's order, each target's own regions,
+then, layout by layout, what a candidate layout reads itself: its shared read, then each feature
+it reads at an offset:
 
 | Kind (`privacy_rect_kind`) | Region | Target |
 | --- | --- | --- |
@@ -95,7 +105,8 @@ then each layout's shared read:
 | `color` | a colour probe's region | the probe |
 | `color_digest` | a colour digest's region | the digest |
 | `ocr` | an OCR target's region | the target |
-| `select_name` | an OCR target a candidate layout reads as a feature (a `fixed_slots` slot's `targets`, a feature's `target`): a select's name region | the target |
+| `select_name` | an OCR target a candidate layout reads as a feature (a `fixed_slots` slot's `targets`, a feature's `target`), and none as an integer: a select's name region | the target |
+| `select_quantity` | an OCR target a candidate layout reads as an integer feature (`ocr_integer`): a select's quantity column, the integer column a `read_list` step publishes into its list; it is a reading | the target |
 | `nn` | an NN target's region | the target |
 | `shared_ocr` | a `fixed_slots` layout's shared read, `shared_ocr.region` | the layout's id |
 
@@ -104,20 +115,51 @@ then each layout's shared read:
   `click`. Pressing reads nothing.
 - **Where a region lies**: a fixed rectangle of the base; `full_frame`, the whole frame; or no fixed
   rectangle (`template_relative`, placed where a template was found, or another keyword).
-- **A reading**: a region whose target a resource reading of the package names is marked a
-  reading. A package's readings are the entry task's `resource_readings`, a top-level member of its
-  `resources/operations/<task_id>/task.json`, each naming an OCR target of the task by `target_id`
-  ([resource-readings.md](resource-readings.md)); every other region is not a reading.
-- **The scene** pastes every region of the list but a layout's shared read, which no recording
-  generates and which a scene never pasted, so that every scene the Lab builds is byte for byte
-  what it was before this list moved into the recognition pack.
+- **A feature read at an offset** (a feature with `target` and `offset`) is read by the kernel at
+  its instance's origin plus the offset, with the target's own size, not at the target's own
+  rectangle. The list gives it as the layout's read, of the target's kind (`template_search`,
+  `color`, `color_digest`, `select_name` or `select_quantity`), beside the target's own region: in
+  a `fixed_slots` layout one region per slot, at the slot's origin (its rectangle's top-left
+  corner) plus the offset, the rectangle the kernel reads; in a `repeated_anchor` layout one region
+  with no fixed rectangle, since the anchor's match, which places it and scales its offset, is
+  known only on a frame. A template read so takes a colour check relative to its match, which its
+  own region already gives as no fixed rectangle. A sample's jitter (a feature's `consensus`, at
+  most 8 pixels) is not in the list, of any region.
+- **Each region names the layout** whose read it is (its shared read, a feature it reads at an
+  offset); a region its target declares itself names none.
+- **The scene** pastes the regions a target declares itself, those that name no layout, and nothing
+  a layout reads itself, which no recording generates and a scene never pasted: every scene the Lab
+  builds is byte for byte what it was before this list moved into the recognition pack. The scene
+  asks for no reading.
+
+### A reading
+
+A **reading** is a region whose recognised value the package publishes as, or into, a fact of the
+account: a resource reading, an adjustment's amount, a list's value fields. One function
+(`RecognitionPack::reading_targets`) collects the reading targets from every place the kernel
+honours, from the members of the package's entry task
+(`resources/operations/<task_id>/task.json`, `PackReadingDeclarations::of_task`) and the pack's
+candidate layouts ([resource-readings.md](resource-readings.md)):
+
+| Place | Reading target |
+| --- | --- |
+| `resource_readings[]` (a mark) | its `target_id`; the mark's `capacity_fact_key` reads the same target |
+| `resource_adjustments[].amount` | its `target_id`; an adjustment without `amount` reads its key through a mark, whose target is the mark's |
+| a candidate layout's integer feature (`ocr_integer`) | the target it reads (a feature's own `target`, or a `fixed_slots` slot's target of the feature): the integer column a `read_list` step publishes into its list (an integer column is such a feature), and a select's quantity column |
+| `field_lists[].columns[]` | the `target_id` of the field it names in the list's `group` of `post_admission_ocr`, when that field is an `unsigned_integer` (an integer column) |
+
+A list's key (a `read_list`'s `key_feature`, a field list's `key_field`) and its string and boolean
+columns name or test a position: they are no reading. The list marks every region whose target is a
+reading target, the region a target declares itself and a layout's read of it alike; every other
+region is not a reading. The mark decides nothing: the later callers rule that a reading in a
+`value` zone may read there at run time.
 
 ## The comparison
 
 `compare_privacy_zones(package_id, reads, cases, base, zones)` (`crates/resource-tooling`,
 `privacy_zones.rs`) takes the package's read regions (`reads`), the regression cases of the package
 as its caller read them (`cases`: a case of `actingcommand.resource-regression-case.v1` with its id
-and its `scene_construction.rects`, each with its `content`, or a case of another schema; empty when
+and the `rect` of each of its `scene_construction.rects`, or a case of another schema; empty when
 the caller has none), the package's base size (`base`, its `coordinate_space`) and a public
 declaration (`zones`). It answers `{package_id, findings, unseen}`:
 
@@ -126,12 +168,14 @@ declaration (`zones`). It answers `{package_id, findings, unseen}`:
 - Then each region of the list in its order, then each case's rectangles, case by case:
   - **`zone_met`**, once per zone a region's or rectangle's rectangle meets: their intersection's
     area is above zero (rectangles that only touch at an edge do not meet). It carries the place (a
-    region: its target, its kind, whether it is a reading; a scene's rectangle: the case, the
-    rectangle's index in `scene_construction.rects` and its `content`; a scene's rectangle is never
-    a reading), both rectangles, and the zone's id and kind;
+    region: its target, its kind, whether it is a reading and the layout whose read it is, if any;
+    a scene's rectangle: the case's id and the rectangle's index in `scene_construction.rects`,
+    nothing free-form the case writes, and never a reading), both rectangles, and the zone's id and
+    kind;
   - **`whole_frame`**, a region or rectangle that covers the whole base, or a region `full_frame`:
     it meets every zone, and is named once, not once per zone;
-  - **`region_unbounded`**, a region that is no fixed rectangle.
+  - **`region_unbounded`**, a region that is no fixed rectangle (a feature a `repeated_anchor`
+    layout reads at an offset among them).
 - It names no pixel and no expected text, blacks nothing out, proposes no other place and decides
   nothing. Which finding refuses is its callers' rule (later slices): a reading in a `value` zone
   is allowed at run time; a scene's rectangle in any zone is refused; the transition list is
@@ -140,7 +184,8 @@ declaration (`zones`). It answers `{package_id, findings, unseen}`:
 ## What a rectangle cannot see
 
 Beside its findings the comparison counts, by kind (`privacy_unseen_kind`), what a rectangle check
-cannot see, for the later "a person looks" note (`privacy_unseen`), never as a pass:
+cannot see, for the later "a person looks" note (the warning `privacy_unseen`, its value
+`privacy_unseen_counts`), never as a pass:
 `expected_text`, the texts the package's OCR targets expect; `alias`, the aliases its layouts'
 identity entries are read as; `case_other_schema`, its regression cases of another schema, or of
 none, whose scenes were not compared.
@@ -158,9 +203,9 @@ resource-tooling, ladder class `none`.
 | `privacy_whole_frame` | a region or a scene's rectangle covers the whole base | refuses | `package_id`, `privacy_rect_kind`; `target_id`?, `path`?, `json_pointer`? |
 | `privacy_region_unbounded` | a region is no fixed rectangle | refuses | `package_id`, `privacy_rect_kind`, `target_id`; `path`?, `json_pointer`? |
 | `privacy_base_undeclared` | the package's base size is not declared | refuses | `package_id`, `base_width`, `base_height` |
-| `privacy_destination_local` | a package marked local in a root that is not local | refuses | `package_id`; `path`? |
+| `privacy_destination_local` | a package marked for local use only is in a root that is public (who says a root is public: "Who says a root is public" above) | refuses | `package_id`; `path`? |
 | `privacy_undeclared` | the root holds no declaration | warns | `path`? |
-| `privacy_unseen` | what a rectangle check of the package cannot see | warns | `package_id`, `privacy_unseen` (records of `privacy_unseen_kind` and `count`) |
+| `privacy_unseen` | what a rectangle check of the package cannot see | warns | `package_id`, `privacy_unseen_counts` (records of `privacy_unseen_kind` and `count`) |
 | `privacy_exempt` | a finding of a package the transition list names with its content | warns | `package_id`, `failure_code`; `path`?, `json_pointer`? |
 
 A declaration that does not read is the existing `resource_declaration_invalid` (the contract
@@ -169,7 +214,9 @@ crate's), with the declaration's issue as its details.
 ## What this version does not do
 
 - No command calls the comparison, and no step refuses for privacy: `resource verify`,
-  `standard-pack build` and `standard-pack adopt` answer what they answered before; no recording,
-  scene or package changes; Runtime admission and every interface revision are as before.
+  `standard-pack build` and `standard-pack adopt` answer what they answered before, but for a
+  repository's own `privacy-zones.json`, now read instead of refused as unmapped ("Validated where
+  the root's files are" above); no recording, scene or package changes; Runtime admission and
+  every interface revision are as before.
 - It writes no destination on a recording and reads none from a package.
 - It reads no page of a zone (`pages`, a later version).

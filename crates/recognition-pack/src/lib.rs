@@ -54,7 +54,9 @@ pub use ocr_preprocess::{
     OcrPreprocess, OcrPreprocessEvidence, OcrPreprocessScope, OcrSharedReadEvidence,
     PreprocessRefusal, shared_otsu_refusal,
 };
-pub use read_regions::{PackReadArea, PackReadKind, PackReadRegion, PackReads};
+pub use read_regions::{
+    PackReadArea, PackReadKind, PackReadRegion, PackReadingDeclarations, PackReads,
+};
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};

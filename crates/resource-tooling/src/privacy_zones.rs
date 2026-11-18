@@ -3,21 +3,26 @@
 //! #463 PRIV-1 (`contracts/privacy-zones.md`): a repository root's sensitive-zone declaration
 //! `privacy-zones.json`, and the comparison of a package's read regions with it.
 //!
-//! - **The declaration** says whether the root is public or local, and for a public root, by base
-//!   size, the places of its screens that hold private information (each a zone of a kind:
-//!   `identity` or `value`, the owner's ruling of 11-18) and the transition list of packages that
-//!   were there before it. [`PrivacyDeclaration::read`] answers three states: public with its
-//!   zones, local, or absent when the root holds no such file. Nothing here takes an absent
-//!   declaration for a public one. A declaration that cannot be read as written is
-//!   `resource_declaration_invalid` with its JSON pointer, as `declaration-exclusions.json` is.
+//! - **The declaration**: its member `repository` is the root's own statement, `public` or
+//!   `local`, and for a public root, by base size, the places of its screens that hold private
+//!   information (each a zone of a kind: `identity` or `value`, the owner's ruling of 11-18) and
+//!   the transition list of packages that were there before it. [`PrivacyDeclaration::read`]
+//!   answers its three states, public with its zones, local, or absent when the root holds no such
+//!   file, and decides nothing from them. Whether a root is public is established by the slices
+//!   that call the comparison (the adoption, the repository's check): a root is public when its
+//!   declaration says so, and the owner's criterion, a repository that goes to GitHub, is applied
+//!   there. A root without the file refuses nothing by this reader and is no error. A declaration
+//!   that cannot be read as written is `resource_declaration_invalid` with its JSON pointer, as
+//!   `declaration-exclusions.json` is.
 //! - **The comparison** ([`compare_privacy_zones`]) takes the one list of a package's read regions
 //!   (`RecognitionPack::reads`), the rectangles of its regression cases' scenes when the caller has
 //!   them, the package's base size and a public declaration, and answers what it found as facts:
 //!   each region or rectangle that meets a zone (their intersection's area is above zero), a
 //!   whole-frame one, a region that is no fixed rectangle, a base size the declaration does not
-//!   list; and counts what a rectangle cannot show. It names no pixel and no expected text,
-//!   blacks nothing out, proposes no other place and decides nothing: which finding refuses is
-//!   its caller's (later slices), and so is the transition list.
+//!   list; and counts what a rectangle cannot show. A finding names a case by its id, never by
+//!   anything the case writes. It names no pixel and no expected text, blacks nothing out,
+//!   proposes no other place and decides nothing: which finding refuses is its caller's (later
+//!   slices), and so is the transition list.
 
 use crate::codes::{PrivacyRectKind, PrivacyUnseenKind, PrivacyZoneKind};
 use crate::standard_pack_trial::content_prefix;
@@ -58,16 +63,17 @@ const ZONE_MEMBERS: [&str; 3] = ["id", "kind", "rect"];
 const RECT_MEMBERS: [&str; 4] = ["x", "y", "width", "height"];
 const EXEMPT_MEMBERS: [&str; 2] = ["package_id", "content"];
 
-/// What a repository root declares of its privacy.
+/// What a repository root declares of its privacy, as its file says it; this reader decides
+/// nothing from it (the module text: whether a root is public is its callers').
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrivacyDeclaration {
-    /// `"repository": "public"`: what goes there is published; its zones by base size and its
+    /// `"repository": "public"`: the root declares itself public; its zones by base size and its
     /// transition list.
     Public(PublicPrivacyZones),
-    /// `"repository": "local"`: a root used only on this machine; nothing is checked there.
+    /// `"repository": "local"`: the root declares itself local.
     Local,
-    /// The root holds no `privacy-zones.json`: neither public nor local. A later slice checks
-    /// nothing there and says so.
+    /// The root holds no `privacy-zones.json`: it declares nothing, and refuses nothing by this
+    /// reader; it is no error.
     Absent,
 }
 
@@ -457,24 +463,13 @@ fn invalid(pointer: &str, schema: Option<&str>, reason: ResourceDeclarationReaso
     .with_details(serde_json::json!(issue))
 }
 
-/// A rectangle of a regression case's scene, as its `scene_construction.rects` gives it, in the
-/// package's base pixels.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrivacySceneRect {
-    pub rect: PackRect,
-    /// Its `content` as the case gives it (a case the Lab writes names the targets that read it).
-    pub content: Option<String>,
-}
-
 /// A regression case of the package, as its caller read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrivacyCase {
-    /// A case of `actingcommand.resource-regression-case.v1`: its id and its scene's rectangles,
-    /// in their order.
-    V1 {
-        case: String,
-        rects: Vec<PrivacySceneRect>,
-    },
+    /// A case of `actingcommand.resource-regression-case.v1`: its id and its scene's rectangles
+    /// (`scene_construction.rects`, each its `rect`), in their order, in the package's base
+    /// pixels.
+    V1 { case: String, rects: Vec<PackRect> },
     /// A case of another schema, or of none: nothing of its scene is compared, and it is counted.
     OtherSchema { case: String },
 }
@@ -483,20 +478,18 @@ pub enum PrivacyCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrivacyPlace {
     /// A region of the one list of the package's read regions: its target (a shared read's
-    /// layout), its kind, and whether a resource reading of the package names its target.
+    /// layout), its kind, whether it is a reading (`PackReadRegion::reading`) and (fix round 1)
+    /// the candidate layout whose read it is, none for a region its target declares itself.
     Region {
         target: String,
         rect_kind: PrivacyRectKind,
         reading: bool,
+        layout: Option<String>,
     },
-    /// A rectangle of a regression case's scene: the case's id, the rectangle's index in its
-    /// `scene_construction.rects` and its `content`. A scene holds the pixels it pastes, so its
-    /// rectangle is never a reading.
-    Scene {
-        case: String,
-        index: usize,
-        content: Option<String>,
-    },
+    /// A rectangle of a regression case's scene: the case's id and the rectangle's index in its
+    /// `scene_construction.rects`, nothing the case writes besides. A scene holds the pixels it
+    /// pastes, so its rectangle is never a reading.
+    Scene { case: String, index: usize },
 }
 
 impl PrivacyPlace {
@@ -508,7 +501,7 @@ impl PrivacyPlace {
         }
     }
 
-    /// Whether the place is a region a resource reading of the package names.
+    /// Whether the place is a region that is a reading.
     pub fn reading(&self) -> bool {
         matches!(self, Self::Region { reading: true, .. })
     }
@@ -530,8 +523,9 @@ pub enum PrivacyFinding {
     /// A region or a scene's rectangle covers the whole base (a region `full_frame` too): it meets
     /// every zone there is, and is named once, as this, not once per zone.
     WholeFrame { place: PrivacyPlace },
-    /// A region that is no fixed rectangle (placed relative to a match, or a keyword other than
-    /// `full_frame`): where it reads is not known before a run.
+    /// A region that is no fixed rectangle (placed relative to a match, a feature a
+    /// `repeated_anchor` layout reads at an offset from its anchor's match, or a keyword other
+    /// than `full_frame`): where it reads is not known before a run.
     RegionUnbounded { place: PrivacyPlace },
     /// The package's base size is no base of the declaration: no zone is compared.
     BaseUndeclared { width: u32, height: u32 },
@@ -599,6 +593,7 @@ pub fn compare_privacy_zones(
             target: region.target.clone(),
             rect_kind: rect_kind(region.kind),
             reading: region.reading,
+            layout: region.layout.clone(),
         };
         match region.area {
             PackReadArea::Rect(rect) => compare(place, rect, base, base_zones, &mut findings),
@@ -610,13 +605,12 @@ pub fn compare_privacy_zones(
     for entry in cases {
         match entry {
             PrivacyCase::V1 { case, rects } => {
-                for (index, scene) in rects.iter().enumerate() {
+                for (index, rect) in rects.iter().enumerate() {
                     let place = PrivacyPlace::Scene {
                         case: case.clone(),
                         index,
-                        content: scene.content.clone(),
                     };
-                    compare(place, scene.rect, base, base_zones, &mut findings);
+                    compare(place, *rect, base, base_zones, &mut findings);
                 }
             }
             PrivacyCase::OtherSchema { .. } => cases_other_schema += 1,
@@ -685,5 +679,6 @@ fn rect_kind(kind: PackReadKind) -> PrivacyRectKind {
         PackReadKind::Nn => PrivacyRectKind::Nn,
         PackReadKind::SharedOcr => PrivacyRectKind::SharedOcr,
         PackReadKind::SelectName => PrivacyRectKind::SelectName,
+        PackReadKind::SelectQuantity => PrivacyRectKind::SelectQuantity,
     }
 }

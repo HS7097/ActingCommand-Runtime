@@ -252,8 +252,8 @@ pub use package_variables::package_variables;
 pub use codes::{PrivacyRectKind, PrivacyUnseenKind, PrivacyZoneKind};
 pub use privacy_zones::{
     PRIVACY_ZONES_FILE, PRIVACY_ZONES_SCHEMA, PrivacyBase, PrivacyCase, PrivacyComparison,
-    PrivacyDeclaration, PrivacyExemption, PrivacyFinding, PrivacyPlace, PrivacySceneRect,
-    PrivacyUnseen, PrivacyZone, PublicPrivacyZones, compare_privacy_zones,
+    PrivacyDeclaration, PrivacyExemption, PrivacyFinding, PrivacyPlace, PrivacyUnseen, PrivacyZone,
+    PublicPrivacyZones, compare_privacy_zones,
 };
 pub use resource_convert::{
     Bundle, OperationParser, ParseOutputs, ResolvedResourceRoot, canonical_game, canonical_locale,

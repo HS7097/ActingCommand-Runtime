@@ -2926,17 +2926,17 @@
     },
     "privacy_zone_kind": {
       "type": "vocab:privacy_zone_kind",
-      "description": "What a sensitive zone holds, its kind in privacy-zones.json: identity (nothing may read there) or value (only a resource reading may read there, and no scene may hold its pixels) (#463 PRIV-1 amendment 1, the owner's ruling of 11-18, since 0.12.74)."
+      "description": "What a sensitive zone holds, its kind in privacy-zones.json: identity (nothing may read there) or value (only a reading may read there, and no scene may hold its pixels) (#463 PRIV-1 amendment 1, the owner's ruling of 11-18, since 0.12.74)."
     },
     "privacy_reading": {
       "type": "boolean",
-      "description": "Whether the region of a privacy finding is one a resource reading of the package names (its target_id); a rectangle of a case's scene is never one (#463 PRIV-1 amendment 1, since 0.12.74)."
+      "description": "Whether the region of a privacy finding is a reading: a region whose recognised value the package publishes as, or into, a fact of the account (a resource reading's target, an adjustment's amount, a list's value fields: a field list's integer fields and a candidate layout's integer features, ocr_integer, a select's quantity column among them); a rectangle of a case's scene is never one (#463 PRIV-1 amendment 1 and fix round 1, contracts/privacy-zones.md \"A reading\", since 0.12.74)."
     },
     "privacy_unseen_kind": {
       "type": "vocab:privacy_unseen_kind",
       "description": "What a rectangle check of a package cannot see: a text an OCR target expects, an alias a candidate layout's identity entry is read as, a regression case of another schema (#463 PRIV-1, since 0.12.74)."
     },
-    "privacy_unseen": {
+    "privacy_unseen_counts": {
       "type": "records",
       "fields": {
         "privacy_unseen_kind": "required",
@@ -11538,7 +11538,10 @@
           "description": "A fixed_slots layout's shared OCR read, shared_ocr.region; the finding's target is the layout's id."
         },
         "select_name": {
-          "description": "An OCR target a candidate layout reads as a feature (a fixed_slots slot's targets, a feature's target): a select's name region."
+          "description": "An OCR target a candidate layout reads as a feature (a fixed_slots slot's targets, a feature's target), and none as an integer: a select's name region."
+        },
+        "select_quantity": {
+          "description": "An OCR target a candidate layout reads as an integer feature (ocr_integer): a select's quantity column, the integer column a read_list step publishes into its list; such a region is a reading (fix round 1)."
         },
         "scene_rect": {
           "description": "A rectangle of a regression case's scene, scene_construction.rects."
@@ -11557,12 +11560,12 @@
           "description": "Who the account is (a nickname, an account number, a server name): nothing may read there. A zone that declares no kind is of this kind."
         },
         "value": {
-          "description": "A quantity the account holds: only a resource reading may read there (its value goes only into the user's own ledger), and no scene may hold its pixels."
+          "description": "A quantity the account holds: only a reading may read there (its value goes only into the user's own ledger), and no scene may hold its pixels."
         }
       }
     },
     "privacy_unseen_kind": {
-      "description": "What a rectangle check of a package cannot see, the kinds of the value privacy_unseen of privacy_unseen (#463 PRIV-1, since 0.12.74).",
+      "description": "What a rectangle check of a package cannot see, the kinds of the value privacy_unseen_counts of privacy_unseen (#463 PRIV-1, since 0.12.74).",
       "review": "pending",
       "source": {
         "file": "crates/resource-tooling/src/codes.rs",

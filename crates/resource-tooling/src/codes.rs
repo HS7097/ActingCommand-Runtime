@@ -260,14 +260,14 @@ actingcommand_contract::outcome_codes! {
         /// #463 PRIV-1, declared ahead: the package's base size is no base of the root's
         /// declaration (keys `package_id`, `base_width`, `base_height`).
         PrivacyBaseUndeclared => "privacy_base_undeclared": error / none,
-        /// #463 PRIV-1, declared ahead: a package marked for local use only is in a root whose
-        /// declaration is not `local` (key `package_id`; optional `path`).
+        /// #463 PRIV-1, declared ahead: a package marked for local use only is in a root that is
+        /// public, as the caller establishes it (key `package_id`; optional `path`).
         PrivacyDestinationLocal => "privacy_destination_local": error / none,
-        /// Warning (#463 PRIV-1, declared ahead): the root holds no `privacy-zones.json`, so
-        /// nothing of its privacy is checked (optional `path`).
+        /// Warning (#463 PRIV-1, declared ahead): the root holds no `privacy-zones.json`, so no
+        /// zone of it is compared (optional `path`).
         PrivacyUndeclared => "privacy_undeclared": warning / none,
         /// Warning (#463 PRIV-1, declared ahead): what a rectangle check of the package cannot
-        /// see, by kind and count (keys `package_id`, `privacy_unseen`); never a pass.
+        /// see, by kind and count (keys `package_id`, `privacy_unseen_counts`); never a pass.
         PrivacyUnseen => "privacy_unseen": warning / none,
         /// Warning (#463 PRIV-1, declared ahead): a finding of a package the transition list names
         /// with its present content (keys `package_id`, `failure_code`, the finding's code;
@@ -295,8 +295,12 @@ actingcommand_contract::outcome_vocabulary! {
         Nn => "nn",
         /// A candidate layout's shared OCR read.
         SharedOcr => "shared_ocr",
-        /// An OCR target a candidate layout reads as a feature: a select's name region.
+        /// An OCR target a candidate layout reads as a feature, and none as an integer: a
+        /// select's name region.
         SelectName => "select_name",
+        /// Fix round 1: an OCR target a candidate layout reads as an integer feature
+        /// (`ocr_integer`): a select's quantity column, a list's integer column.
+        SelectQuantity => "select_quantity",
         /// A rectangle of a regression case's scene.
         SceneRect => "scene_rect",
     }

@@ -1642,7 +1642,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the privacy step of a package whose destination is public (resource verify and standard-pack build, standard-pack adopt; later slices of #463 PRIV) answers it from a finding of the one comparison. A region a recognition target of the package package_id reads (privacy_rect_kind its kind, target_id its target), or a rectangle of one of its regression cases' scenes (privacy_rect_kind scene_rect), meets the sensitive zone privacy_zone_id of the root's privacy-zones.json at the package's base size: their intersection's area is above zero. privacy_zone_kind is the zone's kind, privacy_reading whether a resource reading of the package names the region's target (never for a scene's rectangle); path and json_pointer name where the region or the rectangle is declared. Which of these refuses is the caller's rule (a reading in a value zone may read there at run time, a scene's rectangle in any zone may not be stored); the comparison only reports them.",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the privacy step of a package whose destination is public (resource verify and standard-pack build, standard-pack adopt; later slices of #463 PRIV) answers it from a finding of the one comparison. A region a recognition target of the package package_id reads (privacy_rect_kind its kind, target_id its target), or a rectangle of one of its regression cases' scenes (privacy_rect_kind scene_rect), meets the sensitive zone privacy_zone_id of the root's privacy-zones.json at the package's base size: their intersection's area is above zero. privacy_zone_kind is the zone's kind, privacy_reading whether the region is a reading, one whose recognised value the package publishes as, or into, a fact of the account (contracts/privacy-zones.md, \"A reading\"; never a scene's rectangle); path and json_pointer name where the region or the rectangle is declared. Which of these refuses is the caller's rule (a reading in a value zone may read there at run time, a scene's rectangle in any zone may not be stored); the comparison only reports them.",
       "common_causes": "A recognition region or a template's search area drawn over a nickname, an account number, a server name or a quantity the account holds; a case's scene that pastes the region of another page, cut from this page's frame, where this page shows such information.",
       "handling": "Move the region the target reads, or its search area, off the zone (recognise the page by a place that holds no account information), or declare the reading as a resource reading over a value zone; regenerate the package and its cases."
     },
@@ -1682,9 +1682,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). A region the target target_id of the package package_id reads is no fixed rectangle: it is placed relative to where a template was found (template_relative) or is a keyword other than full_frame, so where it reads is not known before a run and no rectangle of it can be compared with the zones.",
-      "common_causes": "A hand-made package with a relative OCR region or a relative colour check; record stop never generates one.",
-      "handling": "Give the target a fixed region inside its base."
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). A region the target target_id of the package package_id reads is no fixed rectangle: it is placed relative to where a template was found (template_relative, or a feature a repeated_anchor layout reads at an offset from its anchor's match) or is a keyword other than full_frame, so where it reads is not known before a run and no rectangle of it can be compared with the zones.",
+      "common_causes": "A hand-made package with a relative OCR region or a relative colour check, or a list read through a repeated_anchor layout; record stop never generates one.",
+      "handling": "Give the target a fixed region inside its base; where a repeated_anchor layout places it, look at the frames it is read on for the zones."
     },
     "privacy_base_undeclared": {
       "category": "error",
@@ -1717,9 +1717,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the slice that marks a recording's destination and the later privacy step answer it. The package package_id is marked for local use only, and the root it is to enter does not declare itself local (its privacy-zones.json says public, or it holds none); path names the package's entry task.",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74; the slice that marks a recording's destination and the later privacy step answer it. The package package_id is marked for local use only, and the root it is to enter is public; path names the package's entry task. Whether a root is public is established by the callers of the comparison (the adoption and the repository's check): a root is public when its privacy-zones.json says so, and the owner's criterion, a repository that goes to GitHub, is applied there. A root with no declaration file refuses nothing by the declaration's reader and is no error.",
       "common_causes": "A package recorded for local use, adopted into or committed to a repository that is published.",
-      "handling": "Keep the package in a local root (one whose privacy-zones.json says local), or record it again for a public destination."
+      "handling": "Keep the package in a root that is not public, or record it again for a public destination."
     },
     "privacy_undeclared": {
       "category": "warning",
@@ -1733,9 +1733,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). The repository root holds no privacy-zones.json (path where it is looked for): the root is neither public nor local, nothing of its packages' privacy is checked, and nothing is refused for it.",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"Codes\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it). The repository root holds no privacy-zones.json (path where it is looked for): it declares no zone, so nothing of its packages is compared with one, and the declaration's reader refuses nothing for it. Whether the root is public is established by the caller (privacy_destination_local).",
       "common_causes": "A repository whose declaration is not written yet.",
-      "handling": "Write the root's privacy-zones.json: public with its zones by base size, or local."
+      "handling": "A root that is public (a repository that goes to GitHub) writes its privacy-zones.json, public with its zones by base size; a root used only locally needs no file."
     },
     "privacy_unseen": {
       "category": "warning",
@@ -1745,12 +1745,12 @@
       "uncertain": false,
       "values": {
         "package_id": "required",
-        "privacy_unseen": "required"
+        "privacy_unseen_counts": "required"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"What a rectangle cannot see\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it, once per package). What a rectangle check of the package package_id cannot see, each kind with its count (privacy_unseen): the texts its OCR targets expect, the aliases its layouts' identity entries are read as, its regression cases of another schema. It never says the package passed: a person looks at what it counts.",
+      "description": "#463 PRIV-1 (contracts/privacy-zones.md, \"What a rectangle cannot see\"), declared ahead of its first answer: no command answers it in 0.12.74 (the later privacy step answers it, once per package). What a rectangle check of the package package_id cannot see, each kind with its count (privacy_unseen_counts): the texts its OCR targets expect, the aliases its layouts' identity entries are read as, its regression cases of another schema. It never says the package passed: a person looks at what it counts.",
       "common_causes": "A package that reads texts by OCR or a select's names, or a case written by a repository's own script.",
       "handling": "Look at the texts and aliases the package carries, and at the scenes of the cases counted, for private information."
     },
