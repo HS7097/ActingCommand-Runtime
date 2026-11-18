@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The seven commands against the device, through the `idevice` library (board #479, ACIB-0,
-//! ACIB-1 and ACIB-2).
+//! The ten commands against the device, through the `idevice` library (board #479, ACIB-0 to
+//! ACIB-3).
 //!
-//! Everything here only reads. usbmuxd is reached where the library finds it on this platform
+//! Everything here only reads, but for `launch`, which launches one application, and `stop`,
+//! which ends one application's own processes (ACIB-3). Of the application service's lists of
+//! applications and processes nothing leaves this module but whether the one bundle asked for
+//! is installed and the pids of its own processes, the application's and its extensions'
+//! (`matching.rs`), and of its errors only their kind ([`service_error_kind`]). usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
 //! pairing record usbmuxd holds is asked for, kept in memory for the command and never shown.
 //! The tunnel of iOS 17.4 and later is the lockdown service CoreDeviceProxy with the library's
@@ -16,18 +20,23 @@
 //! kept nowhere else.
 
 use crate::answer::{
-    Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, Failure, ImageQuery,
-    ImageQueryName, Images, Info, Line, Link, ListedImage, Mounted, Orientation, Orientations,
-    Problem, Reader, Reading, Screenshot, ServiceEntry, Services, Stage, Way,
+    Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind, Failure, ImageQuery,
+    ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted, Orientation,
+    Orientations, Problem, Reader, Reading, Running, Screenshot, ServiceEntry, Services,
+    SignalError, Signals, Stage, Stop, Way,
 };
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
 use crate::key::{DeviceKey, Salt};
+use crate::matching::{self, Application, Installation, Pids, Process};
 use crate::out_file::{self, NotWritten};
 use crate::redact;
+use crate::stopping::{self, LOOK_INTERVAL, Next};
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
-use idevice::services::core_device::{ImageFormat, ScreenCaptureServiceClient};
+use idevice::services::core_device::{
+    AppServiceClient, CoreDeviceError, ImageFormat, ScreenCaptureServiceClient,
+};
 use idevice::services::core_device_proxy::CoreDeviceProxy;
 use idevice::services::dvt::remote_server::RemoteServerClient;
 use idevice::services::dvt::screenshot::ScreenshotClient;
@@ -53,6 +62,16 @@ const AMFI_DOMAIN: &str = "com.apple.security.mac.amfi";
 const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
 /// The application type the installation proxy is asked for: the user's own applications.
 const USER_APPLICATIONS: &str = "User";
+/// The signal `stop` sends each process of the application: SIGKILL, which a process can neither
+/// catch nor ignore (SIGTERM, 15, can be caught and ignored), so the look after it tells whether
+/// the processes ended and not whether the application chose to.
+const KILL: u32 = 9;
+
+/// The client of CoreDevice's application service inside the tunnel.
+type AppService = AppServiceClient<Box<dyn ReadWrite>>;
+/// A device's number, the tunnel to it, and its application service's client, or the kind of
+/// the error the service's handshake failed with.
+type AppConnection = (u32, AdapterHandle, Result<AppService, ErrorKind>);
 
 /// What a command keeps while it runs, for the line of a deadline that passes in it: the
 /// command's deadline, the stage a screenshot is in (no other command sets it) and the number of
@@ -101,6 +120,21 @@ pub async fn answer(request: Request, started: Instant, context: &Context) -> Pr
         } => orientation(&target, reader, context)
             .await
             .map(Printed::line),
+        Request::Running {
+            device: target,
+            bundle,
+        } => running(&target, &bundle, context).await.map(Printed::line),
+        Request::Launch {
+            device: target,
+            bundle,
+            relaunch,
+        } => launch(&target, &bundle, relaunch, context)
+            .await
+            .map(Printed::line),
+        Request::Stop {
+            device: target,
+            bundle,
+        } => stop(&target, &bundle, context).await.map(Printed::line),
     };
     answered.unwrap_or_else(|failure| {
         let device = given.or(context.device.get());
@@ -442,6 +476,270 @@ fn reported(orientation: InterfaceOrientation) -> Orientation {
         InterfaceOrientation::PortraitUpsideDown => Orientation::PortraitUpsideDown,
         InterfaceOrientation::LandscapeRight => Orientation::LandscapeRight,
         InterfaceOrientation::LandscapeLeft => Orientation::LandscapeLeft,
+    }
+}
+
+/// `running`, read-only: whether `bundle` is installed, whether the application itself runs,
+/// and the pids of its processes and, apart, of its extensions'. The application service is
+/// asked for its list of applications and, when the bundle is in it, its list of processes;
+/// nothing is changed on the phone.
+async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
+    let (number, _tunnel, service) = app_service(target, context).await?;
+    let asked = Running::asked(number, bundle);
+    let mut client = match service {
+        Ok(client) => client,
+        Err(kind) => {
+            let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
+            return Ok(Line::Running(failed));
+        }
+    };
+    let answer = match installation(&mut client, bundle).await {
+        Err(kind) => asked.failed(Problem::ApplicationListFailed, Some(kind)),
+        Ok(Installation::NotInstalled) => asked.not_installed(),
+        Ok(Installation::PathUnreadable) => asked
+            .installed()
+            .failed(Problem::BundlePathUnreadable, None),
+        Ok(Installation::Installed(directories)) => {
+            match pids_of(&mut client, &directories).await {
+                Ok(pids) => asked.found(pids),
+                Err(kind) => asked
+                    .installed()
+                    .failed(Problem::ProcessListFailed, Some(kind)),
+            }
+        }
+    };
+    Ok(Line::Running(answer))
+}
+
+/// `launch`: the application service's list of applications is asked first, as `running` and
+/// `stop` ask it; a bundle it does not hold answers `not_installed` and no launch is sent. Then
+/// the service launches `bundle` and answers the pid of its process. Without `relaunch` an
+/// application that runs is not ended first (`terminateExisting` false; what the phone then does
+/// the library does not say); with it, it is ended and started anew. Of the request's members
+/// `acib` chooses these: the application is not stopped at its start, with no argument, no
+/// environment, no platform option and no standard input, output or error of its own; the
+/// library fixes the rest (the active user, pseudo-terminals for standard I/O; README).
+async fn launch(
+    target: &Target,
+    bundle: &str,
+    relaunch: bool,
+    context: &Context,
+) -> Result<Line, Failure> {
+    let (number, _tunnel, service) = app_service(target, context).await?;
+    let asked = Launch::asked(number, bundle, relaunch);
+    let mut client = match service {
+        Ok(client) => client,
+        Err(kind) => {
+            let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
+            return Ok(Line::Launch(failed));
+        }
+    };
+    // Where the bundle lies is not needed to launch it: a path read as no place is installed.
+    let asked = match installation(&mut client, bundle).await {
+        Err(kind) => {
+            let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
+            return Ok(Line::Launch(failed));
+        }
+        Ok(Installation::NotInstalled) => return Ok(Line::Launch(asked.not_installed())),
+        Ok(Installation::PathUnreadable | Installation::Installed(_)) => asked.installed(),
+    };
+    let launched = client
+        .launch_application(bundle, &[], relaunch, false, None, None, None)
+        .await;
+    Ok(Line::Launch(match launched {
+        Ok(process) => asked.launched(process.pid),
+        Err(error) => asked.failed(Problem::LaunchFailed, Some(service_error_kind(&error))),
+    }))
+}
+
+/// `stop`: the application's own processes the first look lists (its executable directly in
+/// the bundle's directory, `matching.rs`) are each sent [`KILL`] through the application
+/// service's `send_signal`, one after the other; its extensions' processes are sent nothing.
+/// Then the list of processes is read at once, and again every [`LOOK_INTERVAL`] while it lists
+/// a process the command signalled and the next look starts before the command's deadline
+/// (`stopping.rs` decides; a look the deadline cuts leaves the verdict of the one before it).
+/// The verdict comes from the looks whatever the signals answered: a signal's error is carried
+/// beside it by its kind. An application that does not run, or is not installed, is answered
+/// at the first look and sent nothing. A deadline that passes before the first look after the
+/// signals has answered is the command's `deadline_passed`, as for every command.
+async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
+    let (number, _tunnel, service) = app_service(target, context).await?;
+    let asked = Stop::asked(number, bundle);
+    let mut client = match service {
+        Ok(client) => client,
+        Err(kind) => {
+            let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
+            return Ok(Line::Stop(failed));
+        }
+    };
+    let directories = match installation(&mut client, bundle).await {
+        Err(kind) => {
+            let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
+            return Ok(Line::Stop(failed));
+        }
+        Ok(Installation::NotInstalled) => {
+            return Ok(Line::Stop(asked.nothing_ran(false, Vec::new())));
+        }
+        Ok(Installation::PathUnreadable) => {
+            let failed = asked
+                .installed()
+                .failed(Problem::BundlePathUnreadable, None);
+            return Ok(Line::Stop(failed));
+        }
+        Ok(Installation::Installed(directories)) => directories,
+    };
+    let first = match pids_of(&mut client, &directories).await {
+        Ok(pids) => pids,
+        Err(kind) => {
+            let failed = asked
+                .installed()
+                .failed(Problem::ProcessListFailed, Some(kind));
+            return Ok(Line::Stop(failed));
+        }
+    };
+    if first.application.is_empty() {
+        return Ok(Line::Stop(asked.nothing_ran(true, first.extensions)));
+    }
+    let mut errors = Vec::new();
+    for &pid in &first.application {
+        if let Err(error) = client.send_signal(pid, KILL).await {
+            errors.push(SignalError {
+                pid,
+                error_kind: service_error_kind(&error),
+            });
+        }
+    }
+    let signals = Signals {
+        signalled: first.application,
+        errors,
+    };
+    let mut last = match pids_of(&mut client, &directories).await {
+        Ok(pids) => pids,
+        Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
+    };
+    let verdict = loop {
+        let time_left = context
+            .deadline
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
+        if let Next::Done(verdict) =
+            stopping::after_look(&signals.signalled, &last.application, time_left)
+        {
+            break verdict;
+        }
+        tokio::time::sleep(LOOK_INTERVAL).await;
+        match look_within(&mut client, &directories, context.deadline).await {
+            Some(Ok(pids)) => last = pids,
+            Some(Err(kind)) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
+            // The deadline passed during the look: the last look inside it is `last`.
+            None => break stopping::verdict(&signals.signalled, &last.application),
+        }
+    };
+    Ok(Line::Stop(asked.looked(signals, last, verdict)))
+}
+
+/// A look at the processes of `directories` that ends by `deadline`: `None` when the deadline
+/// passes before the service answers it.
+async fn look_within(
+    client: &mut AppService,
+    directories: &[String],
+    deadline: Option<tokio::time::Instant>,
+) -> Option<Result<Pids, ErrorKind>> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, pids_of(client, directories))
+            .await
+            .ok(),
+        None => Some(pids_of(client, directories).await),
+    }
+}
+
+/// The device `target` names and a connection to its application service
+/// (`com.apple.coredevice.appservice`) inside the tunnel of iOS 17.4 and later, with the tunnel,
+/// which stays open while it is held. A step before the service's own handshake fails as every
+/// command's does (its problem word, the library's text cut as `redact.rs` cuts it); the
+/// service's handshake failing is its [`ErrorKind`] alone.
+async fn app_service(target: &Target, context: &Context) -> Result<AppConnection, Failure> {
+    let device = locate(target, context).await?;
+    let record = paired_record(&device).await?;
+    let proxy = proxy_service(&device, &record).await?;
+    let (mut tunnel, handshake) = open_tunnel(proxy).await?;
+    let stream = remote_service(
+        &mut tunnel,
+        &handshake,
+        &<AppService as RsdService>::rsd_service_name(),
+    )
+    .await?;
+    let client = <AppService as RsdService>::from_stream(stream)
+        .await
+        .map_err(|error| service_error_kind(&error));
+    Ok((device.device_id, tunnel, client))
+}
+
+/// What the application service's list of applications says of `bundle`. The list stays in
+/// this function. The list is asked for by five flags, one per category of application: the
+/// library's `list_apps` names them by the request's keys (`includeAppClips`,
+/// `includeRemovableApps`, `includeHiddenApps`, `includeInternalApps`, `includeDefaultApps`) and
+/// documents none of them, so what each category holds is read here from the key's name alone,
+/// not from any description. Three are asked for (the coordinator's rulings on board #479): the
+/// removable and the default ones, by their names the applications a person can remove, as one
+/// they installed, and those the phone comes with; and the hidden ones, so that an application
+/// a person installed and then hid is not left out should the phone list it only when they are
+/// asked for. App Clips and internal applications are not asked for (ask the phone for less).
+/// A bundle the list does not hold, for the categories asked, is [`Installation::NotInstalled`],
+/// whether or not the phone has it under another category: `running` and `stop` answer it
+/// `installed` false and `stop` sends it nothing, `launch` answers `not_installed` and sends
+/// nothing. An entry the library cannot read fails the whole list (`answer_unreadable`): the
+/// library's behaviour.
+async fn installation(client: &mut AppService, bundle: &str) -> Result<Installation, ErrorKind> {
+    // The library's order of the flags: App Clips, removable, hidden, internal, default.
+    let applications = client
+        .list_apps(false, true, true, false, true)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    Ok(matching::installation(
+        bundle,
+        applications.iter().map(|application| Application {
+            bundle_identifier: &application.bundle_identifier,
+            path: &application.path,
+        }),
+    ))
+}
+
+/// The pids of the processes the application service lists whose executable lies inside one
+/// of `directories`, the application's and its extensions' apart. The list stays in this
+/// function.
+async fn pids_of(client: &mut AppService, directories: &[String]) -> Result<Pids, ErrorKind> {
+    let processes = client
+        .list_processes()
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    Ok(matching::pids_inside(
+        directories,
+        processes.iter().map(|process| Process {
+            pid: process.pid,
+            executable: process
+                .executable_url
+                .as_ref()
+                .map(|location| location.relative.as_str()),
+        }),
+    ))
+}
+
+/// The kind of an error of the application service: what the library's error tells apart, and
+/// [`ErrorKind::Other`] for the rest. Its text is never read: the service's own refusal
+/// (`CoreDevice(DeviceError)`) carries the debug text of the phone's error dictionary, which
+/// can name other applications. The library maps no refusal to a locked phone, so there is no
+/// kind for one.
+fn service_error_kind(error: &IdeviceError) -> ErrorKind {
+    match error {
+        IdeviceError::CoreDevice(CoreDeviceError::DeviceError(_)) => ErrorKind::DeviceRefused,
+        IdeviceError::CoreDevice(
+            CoreDeviceError::MissingField(_) | CoreDeviceError::MalformedField(_),
+        )
+        | IdeviceError::UnexpectedResponse(_)
+        | IdeviceError::Plist(_) => ErrorKind::AnswerUnreadable,
+        IdeviceError::Socket(_) => ErrorKind::ConnectionFailed,
+        IdeviceError::Xpc(_) => ErrorKind::XpcFailed,
+        _ => ErrorKind::Other,
     }
 }
 
@@ -798,5 +1096,113 @@ mod tests {
             assert!(words.insert(format!("{word:?}")), "{word:?} is one word");
         }
         assert_eq!(words.len(), 5);
+    }
+
+    /// What the phone's refusal could carry, as the library hands it: the debug text of the
+    /// error dictionary, here naming another application, its path and a pid of it.
+    const REFUSAL_TEXT: &str = r#"Dictionary({"NSLocalizedDescription": String("com.example.otherapp at /private/var/containers/Bundle/Application/TESTUUID-0002/OtherApp.app is running as pid 4242")})"#;
+    /// Pieces of [`REFUSAL_TEXT`] no answer may hold.
+    const REFUSAL_PIECES: [&str; 5] = [
+        "otherapp",
+        "OtherApp",
+        "TESTUUID",
+        "4242",
+        "NSLocalizedDescription",
+    ];
+
+    /// Each error of the application service the library tells apart maps to its kind, and
+    /// every other to `other`: the service's own refusal, its answer in a shape the library
+    /// does not read, the connection, the XPC layer.
+    #[test]
+    fn each_error_of_the_application_service_maps_to_its_kind() {
+        use idevice::xpc::errors::XpcError;
+        let cases = [
+            (
+                IdeviceError::CoreDevice(CoreDeviceError::DeviceError(REFUSAL_TEXT.to_owned())),
+                ErrorKind::DeviceRefused,
+            ),
+            (
+                IdeviceError::CoreDevice(CoreDeviceError::MissingField("CoreDevice.output")),
+                ErrorKind::AnswerUnreadable,
+            ),
+            (
+                IdeviceError::CoreDevice(CoreDeviceError::MalformedField("(root)")),
+                ErrorKind::AnswerUnreadable,
+            ),
+            (
+                IdeviceError::UnexpectedResponse(
+                    "missing or unparsable processToken in launch response".to_owned(),
+                ),
+                ErrorKind::AnswerUnreadable,
+            ),
+            (
+                IdeviceError::Socket(std::io::Error::other("connection reset")),
+                ErrorKind::ConnectionFailed,
+            ),
+            (
+                IdeviceError::Xpc(XpcError::HttpStreamReset),
+                ErrorKind::XpcFailed,
+            ),
+            (
+                IdeviceError::Xpc(XpcError::HttpGoAway(REFUSAL_TEXT.to_owned())),
+                ErrorKind::XpcFailed,
+            ),
+            (
+                IdeviceError::CoreDevice(CoreDeviceError::Negotiation(REFUSAL_TEXT.to_owned())),
+                ErrorKind::Other,
+            ),
+            (IdeviceError::DeviceLocked, ErrorKind::Other),
+            (IdeviceError::NotFound, ErrorKind::Other),
+            (IdeviceError::Timeout, ErrorKind::Other),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(service_error_kind(&error), kind, "{error:?}");
+        }
+    }
+
+    /// The service's refusal carries the phone's text (the library's own text of the error
+    /// holds it), and no answer of `running`, `launch` or `stop` built from that error holds
+    /// any of it: only the kind.
+    #[test]
+    fn the_text_of_a_service_error_is_in_no_answer() {
+        let error = IdeviceError::CoreDevice(CoreDeviceError::DeviceError(REFUSAL_TEXT.to_owned()));
+        let shown_by_the_library = format!("{error} {error:?}");
+        for piece in REFUSAL_PIECES {
+            assert!(shown_by_the_library.contains(piece), "{piece}");
+        }
+        let kind = service_error_kind(&error);
+        let lines = [
+            Line::Running(
+                Running::asked(3, "com.example.app")
+                    .failed(Problem::ApplicationListFailed, Some(kind)),
+            ),
+            Line::Running(
+                Running::asked(3, "com.example.app")
+                    .installed()
+                    .failed(Problem::ProcessListFailed, Some(kind)),
+            ),
+            Line::Launch(
+                Launch::asked(3, "com.example.app", true)
+                    .installed()
+                    .failed(Problem::LaunchFailed, Some(kind)),
+            ),
+            Line::Stop(Stop::asked(3, "com.example.app").look_failed(
+                Signals {
+                    signalled: vec![412],
+                    errors: vec![SignalError {
+                        pid: 412,
+                        error_kind: kind,
+                    }],
+                },
+                kind,
+            )),
+        ];
+        for line in lines {
+            let text = serde_json::to_string(&line).expect("a line serializes");
+            assert!(text.contains(r#""error_kind":"device_refused""#), "{text}");
+            for piece in REFUSAL_PIECES {
+                assert!(!text.contains(piece), "{piece} in {text}");
+            }
+        }
     }
 }

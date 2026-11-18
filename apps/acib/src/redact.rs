@@ -75,14 +75,20 @@ pub fn shown_name(name: &str) -> String {
 /// A bundle identifier as it is shown: as it is when it is made only of the characters Apple
 /// allows in one (ASCII letters and digits, `-` and `.`) and is not too long, else a fixed word.
 pub fn shown_bundle_identifier(identifier: &str) -> String {
-    let own_characters = identifier
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
-    if !identifier.is_empty() && identifier.len() <= LONGEST_TEXT && own_characters {
+    if is_bundle_identifier(identifier) {
         identifier.to_owned()
     } else {
         WITHHELD_NAME.to_owned()
     }
+}
+
+/// Whether `text` is written as a bundle identifier is: not empty, not too long, and made only
+/// of the characters Apple allows in one (ASCII letters and digits, `-` and `.`).
+pub fn is_bundle_identifier(text: &str) -> bool {
+    let own_characters = text
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+    !text.is_empty() && text.len() <= LONGEST_TEXT && own_characters
 }
 
 /// Whether `text` can be shown: printable ASCII on one line, not too long, and holding nothing
