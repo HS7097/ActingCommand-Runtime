@@ -2275,14 +2275,14 @@ impl HostShared {
         self.before_recognition_admission_for_test()?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.lock_admission(&instance_guard, instance_id)?;
-        // #480 PG-2c (the commit mark): the last question and the mark in one step, until the
-        // preparation returned.
-        let committed = match self
-            .commit_automatic_start(instance_alias, HostLocation::RunEmulatorAutostart)?
+        // #480 PG-2c fix round 2: the last question, the admission guard in hand until the
+        // preparation returned; a pause recorded from here on finds this claim's lease and lists
+        // `automatic_start` (`automatic_start_hold`, which names the lines this rests on).
+        if let Some(hold) =
+            self.automatic_start_hold(instance_alias, HostLocation::RunEmulatorAutostart)?
         {
-            Ok(committed) => committed,
-            Err(hold) => return Ok(RecognitionPreparation::Held(hold)),
-        };
+            return Ok(RecognitionPreparation::Held(hold));
+        }
         let prepared = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
@@ -2295,7 +2295,6 @@ impl HostShared {
             },
             EmulatorStatusRead::First,
         );
-        drop(committed);
         drop(admission);
         let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
         Ok(RecognitionPreparation::Ran(prepared.ladder.map(Box::new)))

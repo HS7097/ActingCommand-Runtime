@@ -966,3 +966,11 @@ tests = [
     "actingcommand-contract::lib::runtime::tests::pg2c_status_pause_members_round_trip_and_are_strict",
 ]
 incident = ["#480", "PG-2c"]
+
+# #480 PG-2c fix round 2 (0.12.73; register §1.472; the coordinator's message on the fix round's CI, A; runtime-client 12): a completed instance resume that ran no reconnect carries no selfcheck and its receipt is valid, as one that reconnected carries its selfcheck; a global resume carries none, and a global resume with a selfcheck is refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck",
+]
+incident = ["#480", "PG-2c"]

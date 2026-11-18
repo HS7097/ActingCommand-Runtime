@@ -419,6 +419,9 @@ outcome_keys! {
     // what was still in the way of its stages then.
     pause_stage: vocab(instance_pause_stage),
     in_the_way: list(vocab(pause_obstacle)),
+    // #480 PG-2c fix round 2 (0.12.73): the informing code a pause's completed receipt carried as
+    // its cause, as a tool's hold that did not get a quiet instance relays it.
+    pause_cause: code,
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
     duplicate_count: integer,
     dump_sealed: boolean,

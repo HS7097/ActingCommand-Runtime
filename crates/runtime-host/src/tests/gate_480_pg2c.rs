@@ -42,7 +42,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::{InstancePauseStage, PauseObstacle, SchedulingPauseMode};
 use actingcommand_host_metrics::NetworkConnectivity;
-use actingcommand_scheduler::{ClaimKind, SchedulerError};
+use actingcommand_scheduler::{ClaimKind, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS, SchedulerError};
 use serde_json::{Value, json};
 
 /// Test plan v2.2 §2.1 guard 3: the one bound of a cross-thread wait in this file.
@@ -422,9 +422,11 @@ fn pg2c_l2_a_tools_hold_meeting_a_host_package_past_its_checkpoint_fails_and_is_
 // The connection of the queued entry of `lease_with_a_queued_entry`.
 const QUEUED_CONNECTION: u64 = 2052;
 
-// A client's lease of `CLIENT` and, behind it, another client's lease queued for at most ten
-// minutes (fix round 1: the entry ends only when its connection ends, `end_connection_for_test`,
-// so neither half of L3 depends on its expiry).
+// A client's lease of `CLIENT` and, behind it, another client's lease queued for the longest the
+// scheduler takes, a minute (`DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS`; fix round 2: fix round 1's ten
+// minutes were past that bound, `lease_queue_timeout_invalid`). Fix round 1: the entry ends only
+// when its connection ends (`end_connection_for_test`), so neither half of L3 depends on its
+// expiry.
 fn lease_with_a_queued_entry(host: &RuntimeHost) -> LeaseToken {
     let token = acquire(host, CLIENT, 2051);
     let holder = IdentifierIssuer::new()
@@ -436,7 +438,8 @@ fn lease_with_a_queued_entry(host: &RuntimeHost) -> LeaseToken {
         RuntimeOperation::queue_lease(
             CLIENT,
             holder,
-            LeaseQueuePolicy::new(LeasePriority::Normal, 600_000).expect("queue policy"),
+            LeaseQueuePolicy::new(LeasePriority::Normal, DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS)
+                .expect("queue policy"),
         ),
         QUEUED_CONNECTION,
     );
@@ -851,11 +854,14 @@ fn pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members() {
     host.close().expect("close host");
 }
 
-// Ruling 7, the commit mark: a configured start's last question and its mark are one step; while
-// its Start runs (blocked in the fake) the mark is set, and a person's pause recorded then lists the
-// automatic start in its way (`scheduling_pause_standing`, `automatic_start`). The pause takes no
-// admission guard, and the Start that had begun is finished as before: one provider Start; the
-// mark is gone once the claim has ended, and the pause reaches `released` by itself.
+// Ruling 7 (withdrawn by fix round 2, item 6: the commit mark is gone): a configured start asked its
+// last question and its Start runs (blocked in the fake), holding the instance's admission guard
+// and its claim's lease; a person's pause recorded then finds that lease and lists the automatic
+// start in its way (`scheduling_pause_standing`, `automatic_start`), as the lease alone says it
+// (`HostShared::automatic_start_hold` names the three lines this rests on). The pause takes no
+// admission guard, and the Start that had begun is finished as before: one provider Start; once the
+// claim has ended the pause reaches `released` by itself. Adapted in fix round 2: the mark's two
+// reads are gone.
 #[test]
 fn pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finished() {
     let root = TempDir::new().expect("tempdir");
@@ -873,11 +879,6 @@ fn pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finis
     wait_until("the configured Start", || {
         state.emulator_start_entered.load(Ordering::Acquire)
     });
-    assert!(
-        host.automatic_start_committed_for_test(AUTOSTART)
-            .expect("the mark"),
-        "the Start is committed"
-    );
 
     let paused = process(&host, &instance_pause_as(AUTOSTART, STAND), 2142);
 
@@ -892,12 +893,6 @@ fn pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finis
     wait_until("the claim ends", || {
         host.instance_claims_for_test(AUTOSTART).expect("claims") == (None, vec![])
     });
-    assert!(
-        !host
-            .automatic_start_committed_for_test(AUTOSTART)
-            .expect("the mark"),
-        "the mark ends with the drive"
-    );
     let starts = state
         .emulator
         .calls()
@@ -1677,4 +1672,241 @@ fn pg2c_fix1_a_shutdown_while_a_tools_hold_waits_for_a_rung_lifts_it() {
     );
     assert_lifted(&climb.host, before, POLICY_INSTANCE_ALIAS);
     climb.host.close().expect("close the stopping host");
+}
+
+// Fix round 2 (coordinator work order `rd-1118/brief-480-pg2c-fix2.md`): item 4, a person's resume
+// seen by a request that waits for the admission guard; item 5, the hand-back's question under the
+// pause table's lock pinned against a resume that lifted the pause and one that is lifting it; item
+// 6, the `quiet_or_lift` half of the commit mark's test. Each receipt goes through the host's own
+// receipt builder (`process`).
+
+// Holds the next `stand` pause's request that finds its instance's admission guard taken with time
+// left, until the returned sender is used; the returned receiver hears of it.
+fn hold_next_request_wait(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (met_tx, met_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_when_pause_request_meets_a_taken_guard_for_test(Box::new(move || {
+        let _ = met_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the request's hook");
+    (met_rx, go_tx)
+}
+
+// Holds the next `stand` pause's hand-back that is about to ask whether it may close the session,
+// until the returned sender is used; the returned receiver hears of it.
+fn hold_next_close_question(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (asking_tx, asking_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    host.run_before_hand_back_close_question_for_test(Box::new(move || {
+        let _ = asking_tx.send(());
+        let _ = go_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the hand-back's hook");
+    (asking_rx, go_tx)
+}
+
+// Whether the resume `resumed` lifted its pause without a reconnect (no `selfcheck`).
+fn resumed_without_a_reconnect(resumed: &RuntimeReceipt) -> bool {
+    matches!(
+        resumed.result(),
+        Some(RuntimeResult::SchedulingResumed {
+            selfcheck: None,
+            ..
+        })
+    )
+}
+
+// Item 4: a person's pause, its caller's time not ended, waits for its instance's admission guard,
+// which the test's thread holds; held there by the hook, a person resumes the instance. The wait
+// sees the lift (the pause of its revision gone): the request answers Completed with
+// `scheduling_pause_lifted_by_resume` (`paused`) and starts no continuation. Before this round it
+// waited until its grace and then answered `scheduling_pause_standing` and started one.
+#[test]
+fn pg2c_fix2_4_a_resume_while_the_request_waits_for_the_admission_guard_answers_lifted() {
+    let root = TempDir::new().expect("tempdir");
+    let host = client_host(&root, false);
+    let admission = host
+        .instance_admission_for_test(CLIENT)
+        .expect("the admission guard");
+    let (met, go) = hold_next_request_wait(&host);
+    let before = head(&host);
+    let request = instance_pause_as(CLIENT, STAND);
+    let taken = admission.lock().expect("the admission guard");
+
+    let (paused, resumed) = thread::scope(|scope| {
+        let pausing = scope.spawn(|| process(&host, &request, 3401));
+        met.recv_timeout(GATE_WAIT)
+            .expect("the request finds the guard taken");
+        let resumed = resume(&host, instance_scope(CLIENT), 3402);
+        go.send(()).expect("the request goes on");
+        (pausing.join().expect("the pause's thread"), resumed)
+    });
+    drop(taken);
+
+    completed(&resumed);
+    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    completed(&paused);
+    assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
+    assert_eq!(
+        host.pause_carry_ons_running_for_test()
+            .expect("the continuations"),
+        0,
+        "no continuation was started"
+    );
+    assert_lifted(&host, before, CLIENT);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Item 5, `Lifted`: outside the multi-Nemu gate a person's pause has nothing in the way, and its
+// hand-back, the admission guard in hand and its loop's top check passed, is held by the hook just
+// before it asks under the pause table's lock whether it may close the session. A person resumes
+// the instance then (no close had begun: lifted without a reconnect). The question finds the pause
+// lifted: the hand-back ends and closes nothing; the request answers
+// `scheduling_pause_lifted_by_resume`, and the session is still open. Without the question's
+// re-check the loop's top check would have passed and the session would be closed.
+#[test]
+fn pg2c_fix2_5_a_resume_between_the_top_check_and_the_close_question_closes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, state) = nemu_host(&root, |config| config);
+    let (asking, go) = hold_next_close_question(&host);
+    let closed_before = state.capture_close_count.load(Ordering::Acquire);
+    let before = head(&host);
+    let request = instance_pause_as(NEMU, STAND);
+
+    let (paused, resumed) = thread::scope(|scope| {
+        let pausing = scope.spawn(|| process(&host, &request, 3411));
+        asking
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back is about to ask");
+        let resumed = resume(&host, instance_scope(NEMU), 3412);
+        go.send(()).expect("the hand-back asks");
+        (pausing.join().expect("the pause's thread"), resumed)
+    });
+
+    completed(&resumed);
+    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    completed(&paused);
+    assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
+    assert_eq!(
+        state.capture_close_count.load(Ordering::Acquire),
+        closed_before,
+        "nothing was closed"
+    );
+    assert!(
+        host.holds_device_session_for_test(NEMU)
+            .expect("the session"),
+        "the session is still open"
+    );
+    assert_lifted(&host, before, NEMU);
+    wait_for_no_continuation(&host);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Item 5, `ResumeLifting`: as above, but the resume, held by its own hook, has marked that it lifts
+// the pause without a reconnect (`Lifting`) and not lifted it yet when the hand-back asks. The
+// question finds the mark: the hand-back closes nothing and looks again (the hook meets it a second
+// time, so the first question closed nothing); once the resume lifted the pause the hand-back ends,
+// the request answers `scheduling_pause_lifted_by_resume`, and the session is still open.
+#[test]
+fn pg2c_fix2_5_a_resume_lifting_when_the_hand_back_asks_closes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, state) = nemu_host(&root, |config| config);
+    let (asking, go) = hold_next_close_question(&host);
+    let (marked_tx, marked_rx) = mpsc::channel::<()>();
+    let (lift_tx, lift_rx) = mpsc::channel::<()>();
+    host.run_after_resume_marks_lifting_for_test(Box::new(move || {
+        let _ = marked_tx.send(());
+        let _ = lift_rx.recv_timeout(GATE_WAIT);
+    }))
+    .expect("the resume's hook");
+    let closed_before = state.capture_close_count.load(Ordering::Acquire);
+    let before = head(&host);
+    let request = instance_pause_as(NEMU, STAND);
+
+    let (paused, resumed) = thread::scope(|scope| {
+        let pausing = scope.spawn(|| process(&host, &request, 3421));
+        asking
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back is about to ask");
+        let resuming = scope.spawn(|| resume(&host, instance_scope(NEMU), 3422));
+        marked_rx
+            .recv_timeout(GATE_WAIT)
+            .expect("the resume marked its lift");
+        let (asking_again, go_again) = hold_next_close_question(&host);
+        go.send(()).expect("the hand-back asks");
+        asking_again
+            .recv_timeout(GATE_WAIT)
+            .expect("the hand-back closed nothing and asks again");
+        lift_tx.send(()).expect("the resume lifts");
+        let resumed = resuming.join().expect("the resume's thread");
+        go_again.send(()).expect("the hand-back asks again");
+        (pausing.join().expect("the pause's thread"), resumed)
+    });
+
+    completed(&resumed);
+    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    completed(&paused);
+    assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
+    assert_eq!(
+        state.capture_close_count.load(Ordering::Acquire),
+        closed_before,
+        "nothing was closed"
+    );
+    assert!(
+        host.holds_device_session_for_test(NEMU)
+            .expect("the session"),
+        "the session is still open"
+    );
+    assert_lifted(&host, before, NEMU);
+    wait_for_no_continuation(&host);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Item 6 (the commit mark withdrawn), the `quiet_or_lift` half of
+// `pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finished`: a configured
+// start asked its last question and its Start runs (blocked in the fake, holding the instance's
+// admission guard and its claim's lease); a tool's hold of the instance, its grace already past,
+// fails `scheduling_pause_release_busy` and is lifted, and the Start that had begun is finished as
+// before: one provider Start.
+#[test]
+fn pg2c_fix2_6_a_tools_hold_while_an_automatic_start_runs_fails_past_its_grace_and_is_lifted() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(AUTOSTART, instance, &state)], read, |config| {
+        config.with_scheduling_pause_deadlines_for_test(Duration::ZERO)
+    });
+    stop(&host, AUTOSTART, 3431);
+    // The Start blocks in its readiness wait, which then ends timed out.
+    state.block_emulator_start.store(true, Ordering::Release);
+    state.fail_emulator_start.store(true, Ordering::Release);
+    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
+    wait_until("the configured Start", || {
+        state.emulator_start_entered.load(Ordering::Acquire)
+    });
+    let before = head(&host);
+    let request = instance_pause_as(AUTOSTART, HOLD);
+
+    let failed = process(&host, &request, 3432);
+
+    assert_failed_with(&host, &failed, &request, "scheduling_pause_release_busy");
+    assert_lifted(&host, before, AUTOSTART);
+    state.block_emulator_start.store(false, Ordering::Release);
+    wait_until("the claim ends", || {
+        host.instance_claims_for_test(AUTOSTART).expect("claims") == (None, vec![])
+    });
+    let starts = state
+        .emulator
+        .calls()
+        .into_iter()
+        .filter(|call| *call == EmulatorCall::Control(START))
+        .count();
+    assert_eq!(starts, 1, "the Start that had begun was finished");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
 }

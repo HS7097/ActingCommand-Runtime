@@ -148,42 +148,6 @@ pub(super) struct AutomaticStartHold {
     pub(super) revision: u64,
 }
 
-/// PAUSE-AUTO, #480 PG-1: what holds an automatic emulator start of `alias` in the pause table
-/// `pauses`: the instance's own pause first (one stable word where both hold), else the global one.
-fn hold_of(
-    pauses: &super::policy_dispatch::SchedulingPauseTable,
-    alias: &str,
-) -> Option<AutomaticStartHold> {
-    if let Some(pause) = pauses.instance_state(alias) {
-        return Some(AutomaticStartHold {
-            reason: WatchSkipReason::InstancePaused,
-            revision: pause.revision,
-        });
-    }
-    pauses.global_state().map(|pause| AutomaticStartHold {
-        reason: WatchSkipReason::GlobalPaused,
-        revision: pause.revision,
-    })
-}
-
-/// #480 PG-2c (the commit mark): an automatic emulator start of `alias` committed to its Start or
-/// its bind (`HostShared::commit_automatic_start`); the mark ends when this is dropped. A poisoned
-/// pause table still ends it: the poison fails every other reader of the table loudly.
-pub(super) struct AutomaticStartCommit<'a> {
-    shared: &'a HostShared,
-    alias: String,
-}
-
-impl Drop for AutomaticStartCommit<'_> {
-    fn drop(&mut self) {
-        self.shared
-            .scheduling_pause
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .mark_automatic_start(&self.alias, false);
-    }
-}
-
 /// Workflow #369 S6c: the report lines of the configured emulator starts, as outcomes in the order
 /// they happened. actingd takes them and writes each as a daemon line (Workflow #378 A6a); the
 /// handle stays valid after the host closed, so the lines of a claim that a shutdown ended are
@@ -1051,37 +1015,35 @@ impl HostShared {
     /// the instance's own pause answers (one stable word). #429 R-7b extends this place with the
     /// player hold. An explicit emulator control (a person, an agent, Lab) never asks it. `at`
     /// names the caller's operation for a poisoned lock.
+    ///
+    /// #480 PG-2c fix round 2 (`contracts/scheduling-pause.md`, "Two modes"; the commit mark of
+    /// the slice's ruling 7 is withdrawn): the last question, with the instance's admission guard
+    /// in hand just before the provider's Start (`drive_configured_control`) or the recognition's
+    /// bind (`prepare_recognized_instance`), is asked here as before PG-2c. A pause recorded after
+    /// it finds the automatic start's claim lease and lists `automatic_start` in its way
+    /// (`release_obstacles`, `lease_obstacle`), because that lease is there until the drive ends.
+    /// This rests on three lines: `drive_configured_control` takes the admission guard (`let
+    /// admission = lock(&instance_guard, ..)`) before its last question and keeps it to its end;
+    /// `prepare_recognized_instance` takes it (`let admission = self.lock_admission(..)`) before
+    /// its last question and drops it only after the preparation; and the lease sweep collects an
+    /// expired lease only when the guard is free (`cleanup_expired_if_guard_free`: `let
+    /// Some(admission) = self.try_lock_admission(..) else { return Ok(false) }`). Whoever changes
+    /// one of the three changes what a pause lists in its way.
     pub(super) fn automatic_start_hold(
         &self,
         alias: &str,
         at: impl Into<Location>,
     ) -> RuntimeHostResult<Option<AutomaticStartHold>> {
         let pauses = lock(&self.scheduling_pause, at)?;
-        Ok(hold_of(&pauses, alias))
-    }
-
-    /// #480 PG-2c (the commit mark, PG-1's leftover; `contracts/scheduling-pause.md`, "Two
-    /// modes"): an automatic start's last question with the instance's admission guard in hand,
-    /// just before its Start or its bind, and the mark "this automatic start is committed" are one
-    /// step under the pause table's lock, the lock under which a pause records its row. Held, the
-    /// hold (`Err`), as `automatic_start_hold` answers it; else the mark, which stays until the
-    /// returned commit is dropped (the drive returned). A pause recorded after the mark lists
-    /// `automatic_start` in its way (`release_obstacles`), and the start that had begun is finished
-    /// as before. The pause takes no admission guard: that would keep its gate open until the
-    /// Start ends.
-    pub(super) fn commit_automatic_start(
-        &self,
-        alias: &str,
-        at: impl Into<Location>,
-    ) -> RuntimeHostResult<Result<AutomaticStartCommit<'_>, AutomaticStartHold>> {
-        let mut pauses = lock(&self.scheduling_pause, at)?;
-        if let Some(hold) = hold_of(&pauses, alias) {
-            return Ok(Err(hold));
+        if let Some(pause) = pauses.instance_state(alias) {
+            return Ok(Some(AutomaticStartHold {
+                reason: WatchSkipReason::InstancePaused,
+                revision: pause.revision,
+            }));
         }
-        pauses.mark_automatic_start(alias, true);
-        Ok(Ok(AutomaticStartCommit {
-            shared: self,
-            alias: alias.to_owned(),
+        Ok(pauses.global_state().map(|pause| AutomaticStartHold {
+            reason: WatchSkipReason::GlobalPaused,
+            revision: pause.revision,
         }))
     }
 

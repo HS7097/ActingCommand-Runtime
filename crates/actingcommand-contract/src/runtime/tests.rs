@@ -3305,3 +3305,62 @@ fn pg2c_status_pause_members_round_trip_and_are_strict() {
     );
     standing.validate().expect("a standing pause");
 }
+
+/// #480 PG-2c fix round 2 (`runtime-client` 12; `contracts/scheduling-pause.md`, "Resume"): an
+/// instance resume that ran no reconnect (a person's pause lifted before `released`) carries no
+/// self-check and its completed receipt is valid; an instance resume carries one when it
+/// reconnected; a global resume never does.
+#[test]
+fn pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck() {
+    let instance = SchedulingPauseScope::Instance {
+        instance_alias: "node.a".to_owned(),
+    };
+    let resumed = |scope: &SchedulingPauseScope, selfcheck: Option<SchedulingResumeSelfCheck>| {
+        RuntimeReceipt::success(
+            &request(RuntimeOperation::ResumeScheduling {
+                scope: scope.clone(),
+                expected: None,
+            }),
+            RuntimeReceiptState::Completed,
+            None,
+            RuntimeResult::SchedulingResumed {
+                scope: scope.clone(),
+                revision: 2,
+                selfcheck,
+            },
+        )
+    };
+    let selfcheck = SchedulingResumeSelfCheck {
+        capture: SchedulingResumeCaptureCheck {
+            ok: true,
+            width: Some(1280),
+            height: Some(720),
+            capture_backend: Some("nemu_ipc".to_owned()),
+        },
+        touch: SchedulingResumeTouchCheck {
+            ok: true,
+            backend: Some("adb_shell_input".to_owned()),
+            max_x: Some(1280),
+            max_y: Some(720),
+            invasive: false,
+        },
+        failure_code: None,
+    };
+
+    let without = resumed(&instance, None);
+    assert!(
+        without.is_ok(),
+        "an instance resume without a reconnect: {without:?}"
+    );
+    let reconnected = resumed(&instance, Some(selfcheck.clone()));
+    assert!(
+        reconnected.is_ok(),
+        "an instance resume that reconnected: {reconnected:?}"
+    );
+    let global = resumed(&SchedulingPauseScope::Global, None);
+    assert!(global.is_ok(), "a global resume: {global:?}");
+    assert!(
+        resumed(&SchedulingPauseScope::Global, Some(selfcheck)).is_err(),
+        "a global resume reconnects nothing"
+    );
+}

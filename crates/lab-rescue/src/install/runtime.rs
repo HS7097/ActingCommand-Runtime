@@ -40,16 +40,36 @@ pub(crate) const HOLD_PAUSE_MODE: SchedulingPauseMode = SchedulingPauseMode::Qui
 /// `scheduling_pause_kept_at_shutdown`, `scheduling_pause_lifted_by_resume`:
 /// `actingcommand_lab_ops::scheduling::answered_unquiet`) did not get its instance quiet. That
 /// cannot happen with `quiet_or_lift`, which a Runtime answers all or nothing, and is refused loudly
-/// if it does: `runtime_result_unexpected`, the receipt's outcome as its cause, the failure of the
-/// hold's pause as every other one is (the step's `runtime_stop_failed`).
-fn quiet_hold(answer: SchedulingPauseAnswer) -> Result<RuntimeResult, Outcome> {
-    if actingcommand_lab_ops::scheduling::answered_unquiet(&answer) {
-        return Err(Outcome::new(
-            actingcommand_runtime_client::ClientCode::RuntimeResultUnexpected,
-        )
-        .caused_by(answer.outcome));
+/// if it does. Fix round 2 (item 3, one code, one cause): `scheduling_hold_not_quiet`, its values
+/// what the receipt said (`actingcommand_lab_ops::scheduling::hold_not_quiet`), the failure of the
+/// hold's pause (the step's `runtime_stop_failed`); the pause it answered stands.
+pub(crate) fn quiet_hold(answer: SchedulingPauseAnswer) -> Result<RuntimeResult, Outcome> {
+    match actingcommand_lab_ops::scheduling::hold_not_quiet(&answer) {
+        Some(failure) => Err(failure),
+        None => Ok(answer.result),
     }
-    Ok(answer.result)
+}
+
+/// #480 PG-2c fix round 2 (item 2): why an instance pause of the hold did not leave its instance
+/// paused and quiet, as the pause step must tell them apart: a pause sent again after `Stands`
+/// would meet `scheduling_already_paused`, which would replace the true cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PauseFailed {
+    /// The pause was refused, failed in a stage, or got no answer: the client's or the Runtime's
+    /// own outcome. A quiet-or-lift pause that failed was lifted (a poisoned lift aside).
+    Failed(Outcome),
+    /// The Runtime answered the pause before its instance was quiet ([`quiet_hold`]:
+    /// `scheduling_hold_not_quiet`): the pause it answered stands.
+    Stands(Outcome),
+}
+
+impl PauseFailed {
+    /// The failure's outcome, whichever it is.
+    pub(crate) fn into_outcome(self) -> Outcome {
+        match self {
+            Self::Failed(outcome) | Self::Stands(outcome) => outcome,
+        }
+    }
 }
 
 /// One scheduling pause as a status read shows it: its reason (a pause reason name, never a
@@ -187,14 +207,16 @@ pub(crate) trait RuntimeLink {
     /// The latest policy evaluation's plan, with its due tasks.
     fn plan(&self, state_root: &Path) -> Result<PlanSeen, Outcome>;
     /// Pauses the instance `alias` with `reason`, its in-flight runs drained within
-    /// `drain_timeout_ms` (then asked to stop at their next checkpoint, never killed).
+    /// `drain_timeout_ms` (then asked to stop at their next checkpoint, never killed). #480 PG-2c
+    /// fix round 2: a pause answered before its instance was quiet is told apart
+    /// ([`PauseFailed::Stands`]).
     fn pause(
         &self,
         state_root: &Path,
         alias: &str,
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
-    ) -> Result<Drained, Outcome>;
+    ) -> Result<Drained, PauseFailed>;
     /// INST-2 fix round 1 (review S2 M3): pauses every instance of `aliases` with `reason` at
     /// once, so no instance keeps dispatching while another drains; each answer by alias, in the
     /// order given. The default pauses one after the other (the fake Runtime overrides it to
@@ -205,7 +227,7 @@ pub(crate) trait RuntimeLink {
         aliases: &[String],
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
-    ) -> Vec<(String, Result<Drained, Outcome>)> {
+    ) -> Vec<(String, Result<Drained, PauseFailed>)> {
         aliases
             .iter()
             .map(|alias| {
@@ -453,7 +475,7 @@ impl RuntimeLink for SystemRuntime {
         aliases: &[String],
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
-    ) -> Vec<(String, Result<Drained, Outcome>)> {
+    ) -> Vec<(String, Result<Drained, PauseFailed>)> {
         // One connection and one pause per instance, all at once: each gate closes at once and
         // the drains run side by side. A panic in one is the installer's own defect and is
         // raised again (loud), never turned into a result.
@@ -482,20 +504,19 @@ impl RuntimeLink for SystemRuntime {
         alias: &str,
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
-    ) -> Result<Drained, Outcome> {
-        let client = connect(state_root, self.initiator)?;
-        match quiet_hold(
-            client
-                .pause_scheduling_as(
-                    SchedulingPauseScope::Instance {
-                        instance_alias: alias.to_owned(),
-                    },
-                    reason.clone(),
-                    drain_timeout_ms,
-                    HOLD_PAUSE_MODE,
-                )
-                .map_err(|error| error.outcome())?,
-        )? {
+    ) -> Result<Drained, PauseFailed> {
+        let client = connect(state_root, self.initiator).map_err(PauseFailed::Failed)?;
+        let answer = client
+            .pause_scheduling_as(
+                SchedulingPauseScope::Instance {
+                    instance_alias: alias.to_owned(),
+                },
+                reason.clone(),
+                drain_timeout_ms,
+                HOLD_PAUSE_MODE,
+            )
+            .map_err(|error| PauseFailed::Failed(error.outcome()))?;
+        match quiet_hold(answer).map_err(PauseFailed::Stands)? {
             RuntimeResult::SchedulingPaused { drained, .. } => {
                 Ok(drained.map_or_else(Drained::default, |summary| Drained {
                     finished: summary.finished,

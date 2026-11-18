@@ -5700,7 +5700,9 @@ pub enum RuntimeResult {
         drained: Option<SchedulingDrainSummary>,
     },
     /// The scheduling pause is lifted (`ResumeScheduling`); an instance resume reconnects the
-    /// device at once and carries its self-check.
+    /// device at once and carries its self-check. #480 PG-2c fix round 2 (`runtime-client` 12): an
+    /// instance resume that ran no reconnect (a person's pause lifted in `draining` or `paused` on
+    /// an instance that is not fenced) carries none; a global resume never carries one.
     SchedulingResumed {
         scope: SchedulingPauseScope,
         revision: u64,
@@ -6474,9 +6476,14 @@ impl RuntimeReceipt {
                 selfcheck,
             }) => {
                 scope.validate()?;
+                // #480 PG-2c fix round 2: a global resume reconnects nothing and carries no
+                // self-check; an instance resume carries the self-check of its reconnect, and none
+                // when it ran no reconnect (a person's pause lifted before `released` on an
+                // instance that is not fenced: `resume_unquiet_instance_pause`).
                 if self.state != RuntimeReceiptState::Completed
                     || *revision == 0
-                    || selfcheck.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
+                    || (selfcheck.is_some()
+                        && !matches!(scope, SchedulingPauseScope::Instance { .. }))
                 {
                     return Err(RuntimeContractError::new(
                         RuntimeContractCode::InvalidSchedulingPauseReceipt,

@@ -277,20 +277,25 @@ fn status_after_failed_pause(
 
 /// #480 PG-2c fix round 1 (item 9): the failure of a recording's hold whose pause the Runtime
 /// answered Completed before its instance was quiet (`scheduling::answered_unquiet`): the hold did
-/// not get a quiet instance. `runtime_result_unexpected`, the code of a result its caller does not
-/// take; the receipt's outcome in its details (`receipt_outcome`). With the hold's
-/// `quiet_or_lift` a Runtime never answers so: it is refused loudly if it does.
+/// not get a quiet instance. With the hold's `quiet_or_lift` a Runtime never answers so: it is
+/// refused loudly if it does. Fix round 2 (item 3, one code, one cause):
+/// `scheduling_hold_not_quiet` (`scheduling::hold_not_quiet`), exit 5 as the hold's other
+/// failures; its details hold that code's values, what the receipt said (`pause_cause`,
+/// `pause_stage`, `in_the_way`). `None` for a pause answered quiet.
 pub(crate) fn answered_unquiet_error(
     paused: &actingcommand_runtime_client::SchedulingPauseAnswer,
-) -> CliError {
-    CliError::new(
-        crate::ErrorKind::RuntimeUnavailable,
-        actingcommand_runtime_client::ClientCode::RuntimeResultUnexpected.as_str(),
-        "the Runtime answered the recording's hold before the instance was quiet, which a hold \
-         that is quiet or nothing is never answered",
-        &[],
+) -> Option<CliError> {
+    let failure = scheduling::hold_not_quiet(paused)?;
+    Some(
+        CliError::new(
+            crate::ErrorKind::RuntimeUnavailable,
+            actingcommand_lab_ops::codes::ActingctlCode::SchedulingHoldNotQuiet.as_str(),
+            "the Runtime answered the recording's hold before the instance was quiet, which a \
+             hold that is quiet or nothing is never answered",
+            &[],
+        )
+        .with_details(Value::Object(failure.values().clone())),
     )
-    .with_details(json!({"receipt_outcome": paused.outcome}))
 }
 
 /// #480 PG-2a fix round 1: the member of the details of a start that failed once the pause was
@@ -385,7 +390,8 @@ fn pause_unsettled(
 ///   since the client sends nothing on that connection after it: the header stays so too. #480
 ///   PG-2c fix round 1: a pause answered Completed before its instance was quiet (a cause under
 ///   its success code, which the hold's `quiet_or_lift` is never given) is the hold's failure
-///   (`runtime_result_unexpected`, [`answered_unquiet_error`]), followed by the same status read.
+///   (fix round 2: `scheduling_hold_not_quiet`, [`answered_unquiet_error`]), followed by the same
+///   status read.
 ///
 /// A header that cannot be written fails the start with the hold in its details.
 ///
@@ -466,9 +472,13 @@ pub(super) fn take(
     let pause_error = match scheduling::pause_for_recording(&client, &instance, own) {
         // #480 PG-2c fix round 1 (item 9): the hold reads its receipt's outcome. A pause answered
         // before its instance was quiet (a cause under the success code) cannot happen with the
-        // hold's `quiet_or_lift`; met, it is the hold's failure, handled as a failed stage is.
-        Ok(paused) if scheduling::answered_unquiet(&paused) => {
-            let error = answered_unquiet_error(&paused);
+        // hold's `quiet_or_lift`; met, it is the hold's failure, handled as a failed stage is
+        // (fix round 2: `scheduling_hold_not_quiet`, [`answered_unquiet_error`]).
+        Ok(paused) => {
+            let Some(error) = answered_unquiet_error(&paused) else {
+                answer["paused"] = json!(paused.result);
+                return Ok((answer, display_last_observed));
+            };
             let unsettled = match status_after_failed_pause(&client, &instance, &reason) {
                 Some(Unsettled::Stands) => Some(Unsettled::AnsweredUnquiet),
                 unsettled => unsettled,
@@ -486,10 +496,6 @@ pub(super) fn take(
                     pause_unsettled(&instance, record.hold.as_ref(), unsettled, error)
                 }
             });
-        }
-        Ok(paused) => {
-            answer["paused"] = json!(paused.result);
-            return Ok((answer, display_last_observed));
         }
         Err(pause_error) => pause_error,
     };

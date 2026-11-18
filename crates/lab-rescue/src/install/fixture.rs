@@ -6,8 +6,8 @@
 use super::host::{Host, Installer, NotFinished, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
 use super::runtime::{
-    Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, Resumed, RuntimeLink,
-    RuntimeSeen,
+    Closed, ConfigSeen, Drained, InstanceSeen, PauseFailed, PauseSeen, PlanSeen, Resumed,
+    RuntimeLink, RuntimeSeen,
 };
 use super::{Answer, execute};
 use crate::codes::ActingctlCode;
@@ -964,6 +964,11 @@ pub(super) struct FakeRuntime {
     pub(super) queued_until: RefCell<BTreeMap<String, u64>>,
     pub(super) batches: RefCell<Vec<Vec<String>>>,
     pub(super) refuse_pause: RefCell<Vec<String>>,
+    /// #480 PG-2c fix round 2 (item 2): the aliases whose next pause the Runtime answers Completed
+    /// before the instance is quiet (`scheduling_pause_standing`, `paused`, `lease`), as it answers
+    /// a person's pause: the instance is paused with the reason and stays paused, and the module's
+    /// client takes it as `quiet_hold` does (`scheduling_hold_not_quiet`).
+    pub(super) unquiet_pause: RefCell<Vec<String>>,
     /// The Runtime goes away right after it answered readiness (its process died).
     pub(super) dies_after_ready: Cell<bool>,
     /// The `StartReport` read fails (not as an older build's: the connection failed).
@@ -1027,6 +1032,7 @@ impl FakeRuntime {
             queued_until: RefCell::new(BTreeMap::new()),
             batches: RefCell::new(Vec::new()),
             refuse_pause: RefCell::new(Vec::new()),
+            unquiet_pause: RefCell::new(Vec::new()),
             dies_after_ready: Cell::new(false),
             report_fails: Cell::new(false),
             calls: RefCell::new(Vec::new()),
@@ -1204,6 +1210,31 @@ fn refused() -> Outcome {
         .timeout_ms(std::time::Duration::from_millis(60_000))
 }
 
+/// #480 PG-2c fix round 2 (item 2): the failure the module's own client takes from a pause of
+/// `alias` that a Runtime answered Completed before the instance was quiet, as it answers a
+/// person's pause (the result of a paused instance and `scheduling_pause_standing`, `paused`,
+/// `lease`, under the success code): what `quiet_hold` makes of that answer.
+fn answered_unquiet(alias: &str) -> Outcome {
+    let answer = actingcommand_runtime_client::SchedulingPauseAnswer {
+        result: actingcommand_contract::RuntimeResult::SchedulingPaused {
+            scope: actingcommand_contract::SchedulingPauseScope::Instance {
+                instance_alias: alias.to_owned(),
+            },
+            revision: 1,
+            drained: Some(actingcommand_contract::SchedulingDrainSummary {
+                finished: 0,
+                cancelled: 0,
+            }),
+        },
+        outcome: Outcome::relayed("request_pause_scheduling_completed").caused_by(
+            Outcome::relayed("scheduling_pause_standing")
+                .pause_stage(actingcommand_contract::InstancePauseStage::Paused)
+                .in_the_way([actingcommand_contract::PauseObstacle::Lease]),
+        ),
+    };
+    super::runtime::quiet_hold(answer).expect_err("a pause answered before it was quiet")
+}
+
 impl RuntimeLink for FakeRuntime {
     fn status(&self, _state_root: &Path) -> Result<Option<RuntimeSeen>, Outcome> {
         if !self.running.get() {
@@ -1270,16 +1301,16 @@ impl RuntimeLink for FakeRuntime {
         alias: &str,
         reason: &SchedulingPauseReason,
         _drain_timeout_ms: u64,
-    ) -> Result<Drained, Outcome> {
+    ) -> Result<Drained, PauseFailed> {
         if !self.running.get() {
-            return Err(refused());
+            return Err(PauseFailed::Failed(refused()));
         }
         // A queued request fails the pause at once, as the Runtime's `TransferNotSafe` does.
         if self.queued(alias) {
             self.calls
                 .borrow_mut()
                 .push(format!("pause {alias} {reason} refused"));
-            return Err(refused());
+            return Err(PauseFailed::Failed(refused()));
         }
         let mut refuse = self.refuse_pause.borrow_mut();
         if let Some(index) = refuse.iter().position(|known| known == alias) {
@@ -1287,9 +1318,21 @@ impl RuntimeLink for FakeRuntime {
             self.calls
                 .borrow_mut()
                 .push(format!("pause {alias} {reason} refused"));
-            return Err(refused());
+            return Err(PauseFailed::Failed(refused()));
         }
         drop(refuse);
+        // #480 PG-2c fix round 2 (item 2): answered before the instance was quiet; it stands.
+        let mut unquiet = self.unquiet_pause.borrow_mut();
+        if let Some(index) = unquiet.iter().position(|known| known == alias) {
+            unquiet.remove(index);
+            drop(unquiet);
+            self.calls
+                .borrow_mut()
+                .push(format!("pause {alias} {reason} not quiet"));
+            self.pause_as(alias, reason.as_str());
+            return Err(PauseFailed::Stands(answered_unquiet(alias)));
+        }
+        drop(unquiet);
         self.calls
             .borrow_mut()
             .push(format!("pause {alias} {reason}"));
@@ -1303,7 +1346,7 @@ impl RuntimeLink for FakeRuntime {
         aliases: &[String],
         reason: &SchedulingPauseReason,
         drain_timeout_ms: u64,
-    ) -> Vec<(String, Result<Drained, Outcome>)> {
+    ) -> Vec<(String, Result<Drained, PauseFailed>)> {
         self.batches.borrow_mut().push(aliases.to_vec());
         aliases
             .iter()

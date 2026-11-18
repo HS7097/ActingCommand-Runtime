@@ -232,13 +232,15 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     is blind**: the thread takes the instance's admission guard only when it is free, and between
     tries it reads, every `20` ms, whether the Runtime latched, whether a person's resume lifted the
     pause (its revision) and whether the Runtime is stopping; a thread that has ended is joined when
-    the next one starts;
+    the next one starts. Fix round 2: a panic of the thread is caught where it runs, as an instance
+    worker's is, and latches the Runtime at once (`runtime_thread_panicked`, fatal), not first at
+    its join;
   - outside the multi-Nemu gate a close lease the scheduler refuses (another member's entry ahead,
     the takeover cooldown of `lease_cooldown`, a holder; nothing else is `close_refused`) closes
     nothing and writes nothing to the ledger: the pause stays in stage `paused` with
     `close_refused`, and the close is tried again at most once in `10` s
-    (`SCHEDULING_PAUSE_RETRY_INTERVAL`, a constant, no configuration) while what is in the way is
-    still read every `20` ms; a close that could not be confirmed fenced the instance (Workflow
+    (`SCHEDULING_PAUSE_RETRY_INTERVAL`, a constant, no configuration): only the close rests, and
+    what is in the way is still read every `20` ms; a close that could not be confirmed fenced the instance (Workflow
     #403) and is not tried again: the pause stays `paused` with `close_unconfirmed` until a person's
     resume of the fenced instance, which takes the reconnect's path once the close lease that close
     keeps has ended;
@@ -246,7 +248,13 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     point would end only the operation with: neither latching the Runtime nor fencing the instance;
     any other failure of the session close is one) fails nothing and lifts nothing: what is in the
     way is `check_failed` ("the last check of the pause's stages failed with a failure that is not
-    fatal; it is tried again"), the check is tried again at most once in `10` s, and the daemon's
+    fatal; it is tried again"), the check is tried again at most once in `10` s, and the whole check
+    rests meanwhile: what is in the way is not read again until then, while the checks whether the
+    Runtime latched, whether a resume lifted the pause and whether the Runtime is stopping keep the
+    `20` ms poll. The two rests (the close's and the check's) are timers of the thread that runs
+    the stages: when the request's caller's time ends and a thread of the host carries the stages
+    on, that thread starts with neither, so one try of each follows the handover at once (fix round
+    2, as built). The daemon's
     log says the failure once per pause and code, as a skipped background step is said; when the
     caller's time ends first, `scheduling_pause_standing` answers `check_failed` with that failure as
     its own cause. Everything that can refuse the request for its own input (its instance, a pause
@@ -259,10 +267,15 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     in the way of the hand-back of an instance inside the multi-Nemu gate ends it as `released`,
     with no cause (PG-1 fix round 3);
   - **a person's resume** while its own request still runs its stages: the request answers
-    Completed with `scheduling_pause_lifted_by_resume` (info; `pause_stage`) as the cause;
+    Completed with `scheduling_pause_lifted_by_resume` (info; `pause_stage`) as the cause. Fix round
+    2: also while the request waits for the instance's admission guard, which its wait watches
+    with its pause (lifted at its revision): it then writes nothing into the pause's state and no
+    thread carries the stages on;
   - **a fatal error of a stage** (a poisoned lock, a latched condition), or a failure the decision
     point turns into a fence: the request answers that failure, as the door contains it (the Runtime
-    latches, or the instance is fenced), and lifts nothing: the gate stays closed and the persisted
+    latches, or the instance is fenced), and lifts nothing. Fix round 2: a failure that is not fatal
+    and concerns the instance goes to the one decision point on the request's thread too, as on a
+    continuation's (the instance is fenced, the request answers the fence's failure); the gate stays closed and the persisted
     row still names the instance, so the next start restores it; there is no stage to carry on, and
     on a Runtime that latched nothing does.
 - **`quiet_or_lift`** (a tool's hold: the rescue module's holds before a deploy, a rollback, a
@@ -282,15 +295,26 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
   (`AutostartEndsAtGrant`), and outside the multi-Nemu gate the close lease passes the entries the
   pause holds back (PG-2b).
 
-**The commit mark** (#480 PG-2c, PG-1's leftover). The pause takes no admission guard (that would
-keep its gate open until a Start ends, the Start holding the guard through its readiness wait).
-Instead an automatic start's last question, with the instance's admission guard in hand, just
-before the provider's Start (`drive_configured_control`) or the recognition's bind
-(`prepare_recognized_instance`), and an in-memory mark "this automatic start is committed" are one
-step under the pause table's lock, under which a pause also records its row. A pause recorded
-before that step stops the start there (PG-1); one recorded after it lists `automatic_start` in its
-way, truthfully, and the start that had begun is finished as before. The mark ends when the drive
-returns.
+**An automatic start past its last question** (#480 PG-2c, PG-1's leftover). The pause takes no
+admission guard (that would keep its gate open until a Start ends, the Start holding the guard
+through its readiness wait). An automatic start asks its last question
+(`HostShared::automatic_start_hold`) with the instance's admission guard in hand, just before the
+provider's Start (`drive_configured_control`) or the recognition's bind
+(`prepare_recognized_instance`). A pause recorded before it stops the start there (PG-1); a pause
+recorded after it finds the automatic start's claim lease (`ClaimKind::Autostart`) and lists
+`automatic_start` in its way, truthfully, and the start that had begun is finished as before. Fix
+round 2: the commit mark of the slice's ruling 7 is withdrawn (the coordinator's ruling; it added
+only the word that lease already gives and decided nothing). The lease is there whenever the mark
+was, because of three lines: `drive_configured_control` takes the instance's admission guard
+before its last question and keeps it to the drive's end (`let admission = lock(&instance_guard,
+..)`); `prepare_recognized_instance` takes it before its last question and drops it only after the
+preparation (`let admission = self.lock_admission(..)`); and the lease sweep collects an expired
+lease only when that guard is free (`cleanup_expired_if_guard_free`, `try_lock_admission`). Whoever
+changes one of them changes what a pause recorded then lists. The host's gate
+`pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finished` shows a `stand`
+pause recorded while that Start runs listing `automatic_start`, and
+`pg2c_fix2_6_a_tools_hold_while_an_automatic_start_runs_fails_past_its_grace_and_is_lifted` a
+`quiet_or_lift` pause failing past its grace then and lifted.
 
 **What is answered when**, an instance pause:
 
@@ -508,7 +532,14 @@ reconnects nothing.
 fenced, the resume lifts the gate at once, under the persist gate as every resume (its rows recorded
 first; Workflow #453 S2 fix 1's hold of an unapplied `start_paused` entry applies as below), with
 no reconnect claim (something still uses the instance) and no reconnect: it answers
-`SchedulingResumed { scope, revision, selfcheck: absent }`. What still uses the instance goes on
+`SchedulingResumed { scope, revision, selfcheck: absent }`: no reconnect ran, so there is no
+self-check of one. Fix round 2: the receipt's own check (`RuntimeReceipt::validate`, `runtime-client`
+12) takes an instance resume without `selfcheck` as one that ran no reconnect; before it, it
+refused every instance resume without one (`invalid_scheduling_pause_receipt`), so the Runtime could
+not build this answer's receipt, which is fatal to the Runtime. A client of `runtime-client` 11 or
+lower still refuses such a receipt (`runtime_receipt_invalid`, its connection latched) although the
+pause was lifted: register §1.472, "At deploy". A global resume never carries a `selfcheck`. What
+still uses the instance goes on
 (a run already asked to stop at its next checkpoint still stops there; a lease is released by its
 holder); outside the multi-Nemu gate the session the hand-back has not closed stays open for the
 next lease; the pause's own request, or the thread that carries its stages on, ends at its next

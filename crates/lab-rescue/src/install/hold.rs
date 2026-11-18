@@ -39,7 +39,9 @@
 use super::Flags;
 use super::host::Host;
 use super::journal::S0;
-use super::runtime::{ConfigSeen, Drained, PauseSeen, PlanSeen, Resumed, RuntimeLink, RuntimeSeen};
+use super::runtime::{
+    ConfigSeen, Drained, PauseFailed, PauseSeen, PlanSeen, Resumed, RuntimeLink, RuntimeSeen,
+};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
 use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
@@ -477,7 +479,9 @@ pub(crate) struct PauseRefused {
 /// The pause step: every instance of the intent not yet paused with the hold's reason is paused,
 /// all at once, and drained, how each drain ended recorded (`drained`, the earlier record kept
 /// when the step runs again); a pause refused while its instance had a queued request is tried
-/// again once after its queue cleared within `busy_wait_ms`. Then the status must show the hold
+/// again once after its queue cleared within `busy_wait_ms`; #480 PG-2c fix round 2: a pause
+/// answered before its instance was quiet (`scheduling_hold_not_quiet`) stands and is never sent
+/// again, the step failing at once with it. Then the status must show the hold
 /// on every instance of the intent, and on every other instance the pause S0 had or none; a
 /// global pause refuses, unless `keep_global` (Workflow #434 LAB-3 fix 1: the rescue module keeps
 /// and lists it, contracts/lab-two-entries.md §6). A Runtime that no longer runs keeps its
@@ -551,13 +555,27 @@ fn pause_all(
     );
     // Every drain that ran is recorded before any refused pause is handled (re-review S2 N3).
     let mut refused = Vec::new();
+    let mut stands = None;
     for (alias, answer) in answers {
         match answer {
             Ok(result) => {
                 drained.insert(alias, result);
             }
-            Err(cause) => refused.push((alias, cause)),
+            // #480 PG-2c fix round 2 (item 2): a pause answered before its instance was quiet
+            // still stands, so sent again it would meet `scheduling_already_paused`, which would
+            // replace its cause. It is not sent again: the step fails at once with it, before any
+            // other refused pause is waited for, and its caller hands back what the hold took as
+            // for every other failure of the step.
+            Err(PauseFailed::Stands(cause)) => {
+                if stands.is_none() {
+                    stands = Some((alias, cause));
+                }
+            }
+            Err(PauseFailed::Failed(cause)) => refused.push((alias, cause)),
         }
+    }
+    if let Some((alias, cause)) = stands {
+        return Err(refused_by(&alias, cause));
     }
     for (alias, cause) in refused {
         // A queued operator request makes the Runtime refuse the pause (review S2 M4): wait for
@@ -574,7 +592,7 @@ fn pause_all(
         }
         let result = runtime
             .pause(state_root, &alias, &intent.reason, intent.drain_timeout_ms)
-            .map_err(|again| refused_by(&alias, again))?;
+            .map_err(|again| refused_by(&alias, again.into_outcome()))?;
         drained.insert(alias, result);
     }
     let seen = runtime

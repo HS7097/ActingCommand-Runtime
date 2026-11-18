@@ -2288,6 +2288,12 @@ impl RuntimeHost {
             #[cfg(test)]
             hand_back_close_refusals_for_test: Mutex::new(VecDeque::new()),
             #[cfg(test)]
+            hand_back_question_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            resume_lifting_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            pause_request_guard_taken_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             autostart_claim_request_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             autostart_last_read_hook_for_test: Mutex::new(None),
@@ -4616,20 +4622,52 @@ impl RuntimeHost {
             })
     }
 
-    /// #480 PG-2c (the commit mark), test builds: whether an automatic emulator start of
-    /// `instance_alias` is committed now.
+    /// #480 PG-2c fix round 2 (item 5), test builds: runs `hook` once, on the pause's thread, when
+    /// a `stand` pause's hand-back, the admission guard in hand and nothing left in the way, is
+    /// about to ask under the pause table's lock whether it may close the session
+    /// (`begin_hand_back_close`), after its loop's top check.
     #[cfg(test)]
-    pub(crate) fn automatic_start_committed_for_test(
+    pub(crate) fn run_before_hand_back_close_question_for_test(
         &self,
-        instance_alias: &str,
-    ) -> RuntimeHostResult<bool> {
-        Ok(lock(
-            &self
-                .shared_ref(HostLocation::ReleasePausedInstance)?
-                .scheduling_pause,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.hand_back_question_hook_for_test,
             HostLocation::ReleasePausedInstance,
-        )?
-        .automatic_start_committed(instance_alias))
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 2 (item 5), test builds: runs `hook` once, on the resume's thread, when
+    /// a person's resume of a pause not yet `released` has marked that it lifts it without a
+    /// reconnect (`HandBack::Lifting`) and has not yet lifted it.
+    #[cfg(test)]
+    pub(crate) fn run_after_resume_marks_lifting_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.resume_lifting_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 2 (item 4), test builds: runs `hook` once, on the request's thread,
+    /// when a `stand` pause's request first finds its instance's admission guard taken.
+    #[cfg(test)]
+    pub(crate) fn run_when_pause_request_meets_a_taken_guard_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReleasePausedInstance)?;
+        *lock(
+            &shared.pause_request_guard_taken_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )? = Some(hook);
+        Ok(())
     }
 
     /// #480 PG-1 fix round 1, test builds: runs `hook` once, on the requesting thread, just before
@@ -6922,6 +6960,18 @@ struct HostShared {
     /// hand-backs meet in the scheduler's place, one each, in order.
     #[cfg(test)]
     hand_back_close_refusals_for_test: Mutex<VecDeque<SchedulerError>>,
+    /// #480 PG-2c fix round 2, test only: the hook a `stand` pause's hand-back runs once just
+    /// before it asks whether it may close the session.
+    #[cfg(test)]
+    hand_back_question_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2c fix round 2, test only: the hook a person's resume runs once after it marked its
+    /// lift without a reconnect and before the lift.
+    #[cfg(test)]
+    resume_lifting_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// #480 PG-2c fix round 2, test only: the hook a `stand` pause's request runs once when it
+    /// first finds its instance's admission guard taken.
+    #[cfg(test)]
+    pause_request_guard_taken_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// #480 PG-1 fix round 1, test only: the hook an autostart claim runs once just before it is
     /// requested.
     #[cfg(test)]

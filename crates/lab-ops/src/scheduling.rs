@@ -23,11 +23,13 @@
 //! ([`release_recording_hold`]), and each `--record` press or application operation reads whether
 //! the instance is held ([`instance_scheduling_paused`]).
 
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EventId, FactObservation, FactRecord, FactScope, InstancePauseState, OwnerEpoch,
-    RuntimeControlPlaneStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
-    SanitizationError, SchedulingPauseExpectation, SchedulingPauseMode, SchedulingPauseReason,
-    SchedulingPauseScope,
+    EventId, FactObservation, FactRecord, FactScope, InstancePauseStage, InstancePauseState,
+    OwnerEpoch, PauseObstacle, RuntimeControlPlaneStatus, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeResult, SanitizationError, SchedulingPauseExpectation, SchedulingPauseMode,
+    SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, SchedulingPauseAnswer};
 use serde::Serialize;
@@ -151,6 +153,32 @@ pub fn pause_for_recording(
 /// its pause do. Decided by the presence of a cause, never by its code.
 pub fn answered_unquiet(answer: &SchedulingPauseAnswer) -> bool {
     !answer.outcome.causes().is_empty()
+}
+
+/// #480 PG-2c fix round 2 (item 3; one code, one cause): the failure of a tool's hold whose pause
+/// was answered before its instance was quiet ([`answered_unquiet`]), `None` for a quiet answer:
+/// `scheduling_hold_not_quiet`, an error that refuses the hold, whose values are what the receipt
+/// said and nothing else: `pause_cause` the code of its cause, `pause_stage` and `in_the_way` as
+/// that cause carried them (each left out where the cause carried none this build reads).
+pub fn hold_not_quiet(answer: &SchedulingPauseAnswer) -> Option<Outcome> {
+    let cause = answer.outcome.causes().first()?.outcome();
+    let mut failure = Outcome::new(ActingctlCode::SchedulingHoldNotQuiet);
+    if let Some(code) = cause.code().registered() {
+        failure = failure.pause_cause(code);
+    }
+    if let Some(stage) = cause
+        .value("pause_stage")
+        .and_then(|stage| serde_json::from_value::<InstancePauseStage>(stage.clone()).ok())
+    {
+        failure = failure.pause_stage(stage);
+    }
+    if let Some(in_the_way) = cause
+        .value("in_the_way")
+        .and_then(|words| serde_json::from_value::<Vec<PauseObstacle>>(words.clone()).ok())
+    {
+        failure = failure.in_the_way(in_the_way);
+    }
+    Some(failure)
 }
 
 /// #480 PG-2a: what the failure of a pause says about the pause, by the Runtime's own receipt of

@@ -360,6 +360,51 @@ impl HostShared {
         Ok(())
     }
 
+    /// #480 PG-2c fix round 2 (item 5), test builds: runs, once, the hook a test set for a `stand`
+    /// pause's hand-back just before it asks whether it may close the session.
+    #[cfg(test)]
+    fn before_hand_back_close_question_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.hand_back_question_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 2 (item 5), test builds: runs, once, the hook a test set for a
+    /// person's resume that marked its lift without a reconnect and has not lifted yet.
+    #[cfg(test)]
+    fn after_resume_marks_lifting_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.resume_lifting_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
+    /// #480 PG-2c fix round 2 (item 4), test builds: runs, once, the hook a test set for a `stand`
+    /// pause's request that finds its instance's admission guard taken.
+    #[cfg(test)]
+    fn pause_request_meets_taken_guard_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_request_guard_taken_hook_for_test,
+            HostLocation::ReleasePausedInstance,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+
     /// The admission's own check (the race since the evaluation): a held instance refuses the
     /// dispatch with `dispatch_instance_held`, recorded at Info after its intent. A takeover
     /// cooldown is left to the lease's own refusal.
@@ -659,12 +704,6 @@ pub(super) struct SchedulingPauseTable {
     /// only. A restored pause and a pause a start holds have none: they are `released`, where the
     /// mode changes nothing (`mode_of` answers `stand` for them).
     modes: BTreeMap<String, SchedulingPauseMode>,
-    /// #480 PG-2c (the commit mark, PG-1's leftover): the instances whose automatic emulator start
-    /// asked its last question and is committed to its Start or its bind
-    /// (`HostShared::commit_automatic_start`), until that drive returns. The question and the mark
-    /// are one step under this table's lock, as is the pause's own record of its row, so a pause
-    /// recorded after it finds the mark and lists the automatic start in its way.
-    committed_starts: BTreeSet<String>,
     /// #480 PG-2c fix round 1 (`contracts/scheduling-pause.md`, "Resume"): per instance alias,
     /// where the hand-back's session close of its `stand` pause and a person's resume of it met,
     /// each side's step taken under this table's lock. Ends with the pause (`lift_instance`).
@@ -955,21 +994,6 @@ impl SchedulingPauseTable {
         self.instances
             .get(instance_alias)
             .is_some_and(|state| state.revision == revision)
-    }
-
-    /// #480 PG-2c: whether an automatic emulator start of `instance_alias` is committed.
-    pub(super) fn automatic_start_committed(&self, instance_alias: &str) -> bool {
-        self.committed_starts.contains(instance_alias)
-    }
-
-    /// #480 PG-2c: marks an automatic emulator start of `instance_alias` committed, or ends the
-    /// mark (`committed` false).
-    pub(super) fn mark_automatic_start(&mut self, instance_alias: &str, committed: bool) {
-        if committed {
-            self.committed_starts.insert(instance_alias.to_owned());
-        } else {
-            self.committed_starts.remove(instance_alias);
-        }
     }
 
     /// #480 PG-2c fix round 1 (b): the hand-back of the `stand` pause of `instance_alias` at
@@ -1292,10 +1316,10 @@ const fn lease_obstacle(kind: ClaimKind) -> PauseObstacle {
 struct ReleaseObstacles {
     /// A lease whose token names the instance.
     lease_held: bool,
-    /// #480 PG-2c: the kind of that lease's claim.
+    /// #480 PG-2c: the kind of that lease's claim (an automatic emulator start that asked its last
+    /// question holds its claim's lease until its drive ends: `contracts/scheduling-pause.md`, "Two
+    /// modes", fix round 2).
     lease_kind: Option<ClaimKind>,
-    /// #480 PG-2c (the commit mark): an automatic emulator start of the instance is committed.
-    start_committed: bool,
     /// A queued entry that refuses the hand-back (`TransferNotSafe`); the instance's own queued
     /// autostart claim is none (`AutostartEndsAtGrant`).
     queue_waiting: bool,
@@ -1325,9 +1349,6 @@ impl ReleaseObstacles {
         }
         if let Some(kind) = self.lease_kind {
             words.insert(lease_obstacle(kind));
-        }
-        if self.start_committed {
-            words.insert(PauseObstacle::AutomaticStart);
         }
         if self.queue_waiting {
             words.insert(PauseObstacle::QueuedEntry);
@@ -3799,7 +3820,36 @@ impl HostShared {
             // the persisted pause names the instance, so the next start restores it. Fix round 1:
             // a failure that would only fail the operation never comes here: the hand-back tries
             // its check again (`check_failed`), and the drain and the stage moves fail only fatally.
-            (Err(failure), SchedulingPauseMode::Stand) => return Err(failure),
+            // Fix round 2 (item 7): one way for both threads. A failure that is not fatal and
+            // concerns the instance goes to the one decision point here, as a continuation's does
+            // (`carry_on_instance_pause`): the instance is fenced and the request fails with the
+            // fence's failure, nothing lifted; a fatal one the request door contains as before.
+            (Err(failure), SchedulingPauseMode::Stand) => {
+                if failure.poison_runtime
+                    || !matches!(
+                        failure.error.scope_at(Some(instance_id)),
+                        crate::FailureScope::Instance(_)
+                    )
+                {
+                    return Err(failure);
+                }
+                return Err(
+                    match self.contain_failure(
+                        (*failure.error).clone(),
+                        Some(instance_id),
+                        links,
+                    )? {
+                        Contained::Fenced(fence) | Contained::Failed(fence) => {
+                            failure.fenced(fence)
+                        }
+                        Contained::Latched(error) => RequestFailure {
+                            error: Box::new(error),
+                            poison_runtime: true,
+                            ..failure
+                        },
+                    },
+                );
+            }
         };
         let drained = match &end {
             StagesEnd::Released(drained)
@@ -4025,17 +4075,31 @@ impl HostShared {
         Ok(())
     }
 
-    /// #480 PG-2c: the thread root of `carry_pause_on`.
+    /// #480 PG-2c: the thread root of `carry_pause_on`. Fix round 2 (item 8): a panic of the
+    /// continuation is caught here, where the thread runs, as the instance worker's is
+    /// (`instance_worker_loop`), and seen at once: `runtime_thread_panicked`, fatal, latched now, as
+    /// the worker's unrecovered panic is (before this round it was seen only at the thread's join).
     fn carry_on_instance_pause(
         &self,
         paused: PausedInstance<'_>,
         stage: InstancePauseStage,
         links: EventLinksDraft,
     ) -> RuntimeHostResult<()> {
-        let Err(failure) =
+        let staged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_instance_pause_stages(paused, stage, links.clone(), StagesBound::Unbounded)
-        else {
-            return Ok(());
+        }));
+        let failure = match staged {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(failure)) => failure,
+            Err(_) => {
+                let error = RuntimeHostError::fatal(
+                    HostCode::RuntimeThreadPanicked,
+                    HostLocation::ReleasePausedInstance,
+                    RuntimeErrorCode::RuntimeHalted,
+                );
+                self.fatal.mark(error.clone())?;
+                return Err(error);
+            }
         };
         match self.contain_failure(*failure.error, Some(paused.instance_id), links)? {
             Contained::Fenced(_) => Ok(()),
@@ -4057,8 +4121,9 @@ impl HostShared {
     /// one starts. A continuation's own failure was handled where it arose (fenced, or latched:
     /// `carry_on_instance_pause`), so its result is latched again only as the Runtime keeps its
     /// first condition; a panic is `runtime_thread_panicked`, fatal, as every Runtime thread's is
-    /// at its join (the host's long-lived threads, its sweep and its monitor among them, show a
-    /// panic only at their join: `join_runtime_thread`). Either fails this request.
+    /// at its join (`join_runtime_thread`; fix round 2: a continuation's own stages catch theirs
+    /// where the thread runs and latch it at once, so only a panic outside them is first seen
+    /// here). Either fails this request.
     fn reap_pause_carry_ons(&self) -> Result<(), RequestFailure> {
         let ended = {
             let mut threads = lock(&self.pause_carry_ons, HostLocation::ReleasePausedInstance)?;
@@ -4391,10 +4456,20 @@ impl HostShared {
             StagesBound::Caller(deadlines) => deadlines.grace,
             StagesBound::Unbounded => Instant::now(),
         };
-        let Some(admission) = self.admission_within(&instance_guard, until)? else {
+        // Fix round 2 (item 4): a `stand` pause's wait for the guard watches its pause too.
+        let watched = stand.then_some((paused.alias, paused.revision));
+        let Some(admission) = self.admission_within(&instance_guard, until, watched)? else {
+            // The loop's top check keeps or lifts the pause as its mode says.
+            if self.fatal.is_shutdown_requested() {
+                return Ok(HandBackCheck::Again);
+            }
+            // Fix round 2 (item 4): a person's resume lifted the pause (its revision) while the
+            // request waited for the guard: the request answers `scheduling_pause_lifted_by_resume`,
+            // writes nothing into the pause's state and starts no continuation.
+            if stand && !self.instance_pause_held(paused.alias, paused.revision)? {
+                return Ok(HandBackCheck::End(ReleaseEnd::Lifted));
+            }
             return match bound {
-                // The loop's top check keeps or lifts the pause as its mode says.
-                _ if self.fatal.is_shutdown_requested() => Ok(HandBackCheck::Again),
                 StagesBound::Unbounded => {
                     // Tests: a continuation found the guard taken.
                     #[cfg(test)]
@@ -4437,6 +4512,9 @@ impl HostShared {
                 return Ok(HandBackCheck::End(ReleaseEnd::Released));
             }
             if stand {
+                // Tests (fix round 2, item 5): after the loop's top check, before the question.
+                #[cfg(test)]
+                self.before_hand_back_close_question_for_test()?;
                 match self.begin_hand_back_close(paused)? {
                     CloseStep::Begun => {}
                     CloseStep::Lifted => return Ok(HandBackCheck::End(ReleaseEnd::Lifted)),
@@ -4563,11 +4641,13 @@ impl HostShared {
     /// #480 PG-2c: the instance's admission guard for a pause's hand-back, waited for only until
     /// `until` (the end of its request's time; now, for a continuation, which tries it once) or a
     /// shutdown: `None` then, with the guard still taken (a Start holds it through its readiness
-    /// wait). A poisoned guard is fatal.
+    /// wait). A poisoned guard is fatal. Fix round 2 (item 4): with `watched`, a `stand` pause's
+    /// alias and revision, the wait also ends (`None`) once a person's resume lifted that pause.
     fn admission_within<'a>(
         &self,
         guard: &'a Mutex<()>,
         until: Instant,
+        watched: Option<(&str, u64)>,
     ) -> RuntimeHostResult<Option<MutexGuard<'a, ()>>> {
         loop {
             match guard.try_lock() {
@@ -4579,6 +4659,14 @@ impl HostShared {
             }
             if Instant::now() >= until || self.fatal.is_shutdown_requested() {
                 return Ok(None);
+            }
+            if let Some((alias, revision)) = watched {
+                // Tests: a request with time left found the guard taken.
+                #[cfg(test)]
+                self.pause_request_meets_taken_guard_for_test()?;
+                if !self.instance_pause_held(alias, revision)? {
+                    return Ok(None);
+                }
             }
             thread::sleep(SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL);
         }
@@ -4593,8 +4681,8 @@ impl HostShared {
     /// are its lease and its queue, as before. Fix round 1 (item 3): the instance's own queued
     /// autostart claim is no such work: under this pause it ends at its first tick, touching
     /// nothing; and that lease's kind, the word `in_the_way` gives it (#480 PG-2c,
-    /// `lease_obstacle`). #480 PG-2c (the commit mark): whether an automatic emulator start of the
-    /// instance is committed.
+    /// `lease_obstacle`; fix round 2: an automatic start past its last question is that lease's
+    /// `automatic_start`, the commit mark gone, `HostShared::automatic_start_hold`).
     fn release_obstacles(
         &self,
         instance_alias: &str,
@@ -4624,16 +4712,11 @@ impl HostShared {
         let run_in_flight = lock(&self.contained_runs, HostLocation::ReadReleasedInstanceRuns)?
             .values()
             .any(|control| control.instance_id == instance_id);
-        let (reset_awaited, start_committed) = {
-            let table = lock(
-                &self.scheduling_pause,
-                HostLocation::ReadAwaitedClientResets,
-            )?;
-            (
-                table.awaits_client_reset(instance_alias),
-                table.automatic_start_committed(instance_alias),
-            )
-        };
+        let reset_awaited = lock(
+            &self.scheduling_pause,
+            HostLocation::ReadAwaitedClientResets,
+        )?
+        .awaits_client_reset(instance_alias);
         // Workflow #427-A (C2, C3): a policy run its instance's worker still holds (from its
         // hand-off to its settlement) is waited for, as an active lease is.
         let lane_working = self
@@ -4642,7 +4725,6 @@ impl HostShared {
         Ok(ReleaseObstacles {
             lease_held: lease_kind.is_some(),
             lease_kind,
-            start_committed,
             queue_waiting,
             run_in_flight,
             reset_awaited,
@@ -4881,6 +4963,9 @@ impl HostShared {
             }
             table.clone()
         };
+        // Tests (fix round 2, item 5): the lift is marked (`Lifting`) and not done yet.
+        #[cfg(test)]
+        self.after_resume_marks_lifting_for_test()?;
         let lifted = (|| -> Result<OperationSuccess, RequestFailure> {
             if let Some(revision) =
                 self.hold_start_pause_at_release(instance_alias, instance_id, &mut prospective)?

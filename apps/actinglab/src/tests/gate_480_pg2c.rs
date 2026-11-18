@@ -11,8 +11,8 @@ use super::*;
 use crate::cli_module::{self, words};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, SchedulingPauseMode,
-    SchedulingPauseReason, SchedulingPauseScope,
+    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, SchedulingDrainSummary,
+    SchedulingPauseMode, SchedulingPauseReason, SchedulingPauseScope,
 };
 use actingcommand_lab_ops::core_ops::{self, Caller};
 use actingcommand_lab_ops::front::{Connection, Front};
@@ -34,22 +34,30 @@ fn pause_mode_asked(record: &ScriptedConnectionRecord) -> SchedulingPauseMode {
         .expect("a PauseScheduling")
 }
 
+/// The result a Runtime answers a pause of `scope` with, as the host builds it: an instance pause
+/// carries the runs it drained (none here), a global pause none (fix round 2: the contract refuses a
+/// receipt of an instance pause without them, `invalid_scheduling_pause_receipt`).
+fn paused_result(scope: &SchedulingPauseScope) -> RuntimeResult {
+    RuntimeResult::SchedulingPaused {
+        scope: scope.clone(),
+        revision: 3,
+        drained: matches!(scope, SchedulingPauseScope::Instance { .. }).then_some(
+            SchedulingDrainSummary {
+                finished: 0,
+                cancelled: 0,
+            },
+        ),
+    }
+}
+
 /// A completed pause of `request`'s scope whose receipt carries `cause` under its success code, as
 /// a Runtime of 0.12.73 answers a person's pause that stands.
 fn paused_with_cause(request: &RuntimeRequest, cause: Outcome) -> ScriptedAnswer {
     let RuntimeOperation::PauseScheduling { scope, .. } = request.operation() else {
         panic!("a pause: {:?}", request.operation());
     };
-    let receipt = RuntimeReceipt::scheduling_paused(
-        request,
-        RuntimeResult::SchedulingPaused {
-            scope: scope.clone(),
-            revision: 3,
-            drained: None,
-        },
-        Some(cause),
-    )
-    .expect("the scripted receipt");
+    let receipt = RuntimeReceipt::scheduling_paused(request, paused_result(scope), Some(cause))
+        .expect("the scripted receipt");
     ScriptedAnswer::Receipt(Box::new(receipt))
 }
 
@@ -130,13 +138,9 @@ fn pg2c_a_recordings_hold_sends_quiet_or_lift() {
         vec![ScriptedConnection::new().request(|request| {
             ScriptedAnswer::completed(
                 request,
-                RuntimeResult::SchedulingPaused {
-                    scope: SchedulingPauseScope::Instance {
-                        instance_alias: "neutral.a".to_owned(),
-                    },
-                    revision: 1,
-                    drained: None,
-                },
+                paused_result(&SchedulingPauseScope::Instance {
+                    instance_alias: "neutral.a".to_owned(),
+                }),
             )
         })]
     });
@@ -164,8 +168,9 @@ fn pg2c_a_recordings_hold_sends_quiet_or_lift() {
 // Fix round 1 (item 9): a recording's hold reads its receipt's outcome. Its pause answered Completed
 // with `scheduling_pause_standing` under the success code (as a Runtime answers a person's pause
 // that is not yet quiet, and never a tool's hold) did not get its instance quiet: the hold takes it
-// as its failure, `runtime_result_unexpected`, with the receipt's outcome in its details; a pause
-// answered without a cause is taken as quiet.
+// as its failure; a pause answered without a cause is taken as quiet. Fix round 2 (item 3): that
+// failure is `scheduling_hold_not_quiet`, exit 5, its details what the receipt said (the cause's
+// code, its stage, what was in the way).
 #[test]
 fn pg2c_fix1_a_recordings_hold_answered_with_a_cause_is_its_failure() {
     let temp = TempDir::new().unwrap();
@@ -183,13 +188,18 @@ fn pg2c_fix1_a_recordings_hold_answered_with_a_cause_is_its_failure() {
     drop(client);
 
     assert!(actingcommand_lab_ops::scheduling::answered_unquiet(&answer));
-    let error = crate::commands::record_hold::answered_unquiet_error(&answer);
-    assert_eq!(error.code, "runtime_result_unexpected", "{error:?}");
-    let details = error.details.expect("the receipt's outcome");
+    let error =
+        crate::commands::record_hold::answered_unquiet_error(&answer).expect("the hold's failure");
+    assert_eq!(error.code, "scheduling_hold_not_quiet", "{error:?}");
+    assert_eq!(error.class, crate::ErrorKind::RuntimeUnavailable, "exit 5");
     assert_eq!(
-        details["receipt_outcome"]["causes"][0]["code"],
-        json!("scheduling_pause_standing"),
-        "{details}"
+        error.details,
+        Some(json!({
+            "pause_cause": "scheduling_pause_standing",
+            "pause_stage": "paused",
+            "in_the_way": ["lease"],
+        })),
+        "{error:?}"
     );
     let record = runtime.finish();
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
@@ -202,13 +212,9 @@ fn pg2c_fix1_a_recordings_hold_answered_without_a_cause_is_quiet() {
         vec![ScriptedConnection::new().request(|request| {
             ScriptedAnswer::completed(
                 request,
-                RuntimeResult::SchedulingPaused {
-                    scope: SchedulingPauseScope::Instance {
-                        instance_alias: "neutral.a".to_owned(),
-                    },
-                    revision: 1,
-                    drained: None,
-                },
+                paused_result(&SchedulingPauseScope::Instance {
+                    instance_alias: "neutral.a".to_owned(),
+                }),
             )
         })]
     });
@@ -225,6 +231,7 @@ fn pg2c_fix1_a_recordings_hold_answered_without_a_cause_is_quiet() {
     assert!(!actingcommand_lab_ops::scheduling::answered_unquiet(
         &answer
     ));
+    assert!(crate::commands::record_hold::answered_unquiet_error(&answer).is_none());
     let record = runtime.finish();
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
 }

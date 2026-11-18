@@ -38803,14 +38803,14 @@ answers Completed with `scheduling_pause_kept_at_shutdown`; a person's resume me
 `scheduling_pause_lifted_by_resume`; a fatal error answers the failure and lifts nothing. A
 `quiet_or_lift` pause (a tool's hold: the rescue module's holds, the recording's) is all or
 nothing within its caller's time, for every obstacle, the Runtime's own included, as before
-0.12.72, and a shutdown lifts it. The commit mark of PG-1's leftover. The status members are
-declared and not answered (below).
+0.12.72, and a shutdown lifts it. PG-1's leftover, the commit mark, was built and is withdrawn by
+fix round 2 (below). The status members are declared and not answered (below).
 
 **The inventory, under `stand`** (the design's L1 to L8; each kept, whatever stands in the way):
 
 | | Lifted before 0.12.73 by | Under `stand` now |
 |---|---|---|
-| L1 | a ladder rung or an automatic start past the grace (PG-1 and PG-2b waited for them for every requester) | waited for; at the end of the caller's time `scheduling_pause_standing` (`recovery_ladder`, `automatic_start`), then carried on |
+| L1 | a ladder rung past the grace, and an automatic start past it up to 0.12.71 (PG-1, 0.12.72, and PG-2b waited for them for every requester) | waited for; at the end of the caller's time `scheduling_pause_standing` (`recovery_ladder`, `automatic_start`), then carried on |
 | L2 | a host package not at its checkpoint by the grace (`scheduling_pause_drain_incomplete`) | `scheduling_pause_standing` (`draining`, `contained_run`); the run, asked to stop, is waited for with no bound |
 | L3 | an entry queued during the wait (`lease_transfer_not_safe` at once) | waited for (`queued_entry`) as a lease is |
 | L4 | the close lease outside the multi-Nemu gate refused (another member's entry ahead, `lease_cooldown`), a close that left a fence | refused: kept `paused` with `close_refused`, tried again at most once in 10 s (fix round 1; before it, at every 20 ms check); unconfirmed: kept `paused` with `close_unconfirmed`, not tried again, a person's resume of the fenced instance takes the reconnect's path once the close lease the unconfirmed close keeps has ended |
@@ -38878,30 +38878,95 @@ as a skipped background step; no ledger record). Only a refused close lease is `
 scheduler's refusal of the close lease's preparation that is not fatal, or a holder:
 `RetainedClose::LeaseRefused`); any other failure of the close that is not fatal is
 `check_failed`. A refused close and a failed check are tried again at most once in 10 s
-(`SCHEDULING_PAUSE_RETRY_INTERVAL`, a constant beside the 20 ms poll); the loop's other checks keep
-the poll. One refused close attempt writes nothing to the ledger (the scheduler refuses the
+(`SCHEDULING_PAUSE_RETRY_INTERVAL`, a constant beside the 20 ms poll). As built (fix round 2, item
+12): after a failed check the whole check rests 10 s and what is in the way is not read
+meanwhile, while the latched, lifted and shutdown checks keep the 20 ms poll; a refused close
+rests only the close, what is in the way still read every 20 ms; the two timers belong to the
+thread that runs the stages, so they start anew when a continuation takes over and one try follows
+the handover at once. One refused close attempt writes nothing to the ledger (the scheduler refuses the
 preparation before a grant is recorded), so a refusal that stands for an hour writes nothing either
 (and says nothing in the daemon's log; only a failed check is said there, once). A
 fatal failure, and one that fences the instance, stay as they were; a `quiet_or_lift` pause fails
 and is lifted for any failure. (e) *The continuations.* A finished continuation is joined when the
 next one is started (`reap_pause_carry_ons`): its failure was handled where it arose, its panic is
-`runtime_thread_panicked`, fatal, as every Runtime thread's at its join (the host's long-lived
-threads, its sweep, monitor and accept threads among them, show a panic only at their join). (f) *A
+`runtime_thread_panicked`, fatal, as every Runtime thread's at its join (fix round 2, item 8: a
+continuation's stages catch their panic where the thread runs, as the instance worker's is caught,
+and latch it at once). (f) *A
 hold reads its receipt's outcome.* A rescue hold's pause and the recording's hold answered
 `Completed` with a cause under the success code (`lab_ops::scheduling::answered_unquiet`) did not
-get a quiet instance; with `quiet_or_lift` that cannot happen, and if it does it is refused loudly:
-`runtime_result_unexpected`, the receipt's outcome as its cause (the rescue module: the step's
-`runtime_stop_failed`, as every failure of the hold's pause) or in its details (the recording:
-handled as a failed stage). (g) *An empty list*: when the caller's time ends while another party
+get a quiet instance; with `quiet_or_lift` that cannot happen, and if it does it is refused loudly
+(fix round 2, item 3, one code, one cause: `scheduling_hold_not_quiet`, below; fix round 1 used
+`runtime_result_unexpected`, which already meant two other things, and that code is as it was
+before fix round 1), the cause of the step's `runtime_stop_failed` in the rescue module, as every
+failure of the hold's pause, or the start's failure in the recording (handled as a failed
+stage). (g) *An empty list*: when the caller's time ends while another party
 holds the admission guard, what is in the way is read outside the guard and may be empty: nothing
 was in the way at that read, and the hand-back had not finished.
 
-**The commit mark** (ruling 7; `commit_automatic_start`, `AutomaticStartCommit`). The automatic
-start's last question, with the admission guard in hand, before the provider's Start
-(`drive_configured_control`) and the recognition's bind (`prepare_recognized_instance`), and the
-in-memory mark are one step under the pause table's lock; the mark ends when the drive returns. A
-pause recorded after it lists `automatic_start`; the pause takes no admission guard.
-`automatic_start_hold` and the commit read one rule (`hold_of`).
+**Fix round 2** (coordinator work order `rd-1118/brief-480-pg2c-fix2.md`, and the coordinator's
+message on fix round 1's CI). (a) *The resume without a reconnect.* A person's resume of a `stand`
+pause in `draining` or `paused` answers `SchedulingResumed` without `selfcheck`, which the
+receipt's check (`RuntimeReceipt::validate`) refused for an instance scope, so its receipt could not
+be built (`runtime_receipt_build_failed`, fatal: the whole Runtime latched at a person's resume).
+The check now takes an instance resume without `selfcheck` as one that ran no reconnect, and a
+global resume still carries none ([scheduling-pause.md](scheduling-pause.md), "Resume"; the
+contract crate's `pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck`); a client
+of revision 11 or lower refuses such a receipt ("At deploy"). Each answer this slice added or
+changed goes through the host's receipt builder in a host gate: the paused result with
+`scheduling_pause_standing` (L2, L3, the absent member and others), with
+`scheduling_pause_kept_at_shutdown` and its `pause_stage` (L5, L6), with
+`scheduling_pause_lifted_by_resume` on the request (item 4's and item 5's tests), the resume without
+a reconnect (the resumes in `paused` and `draining` and fix round 1's); `scheduling_hold_not_quiet`
+is no Runtime answer (the Lab and the rescue module make it, their gates build it). (b) *The hold's
+step keeps the true cause* (item 2): the rescue module's client tells a pause answered before its
+instance was quiet apart (`runtime::PauseFailed::Stands`, set where `quiet_hold` made the failure,
+never by its code); the pause step sends it not again (it would meet `scheduling_already_paused`)
+and fails at once, before any other refused pause is waited for, with `runtime_stop_failed`
+caused by `scheduling_hold_not_quiet`; its caller hands back what the hold took as for every other
+failure of the step. An instance's addition met by it says what is so (`pause_added`: `set` and
+`not_quiet` true, the refusal's cause the new code) and names no pause by hand (item 10). (c) *A
+request that waits for the admission guard sees a resume* (item 4): `admission_within` watches a
+`stand` pause (lifted at its revision) too; the request then answers
+`scheduling_pause_lifted_by_resume`, writes nothing into the pause's state and starts no
+continuation. (d) *The hand-back's question is pinned* (item 5) by two host gates that hold the
+hand-back after its loop's top check and before `begin_hand_back_close`: a resume that lifted the
+pause, and one that marked `Lifting`, each close nothing. (e) *One way for both threads* (item 7):
+on the request's thread a failure of a `stand` pause's stages that is not fatal and concerns the
+instance goes to `contain_failure` (fenced, the request failing with the fence's failure), as a
+continuation's does; no code was found that produces such a failure in the stages today (the
+hand-back's own check tries again only a failure of the operation's scope), and the two threads
+agree all the same. (f) The
+continuation's panic (item 8, "The continuation" above). (g) The ten seconds (item 9) are not
+tested with an interval that is not zero: the two rests are measured on `Instant`, as every wait
+of the pause's stages is, not on the Runtime clock a test drives (`ManualRuntimeClock`), so a test
+could only wait real time; left, as the work order allows. (h) The test fixtures (the coordinator's
+message, B to D): the Lab's and the rescue module's scripted pause receipts carry an instance
+pause's drained runs, as the host builds them (the contract refuses an instance pause without them,
+`invalid_scheduling_pause_receipt`); PG-2a's two tests of a failed pause that may stand fail it as
+a shutdown fails a recording's `quiet_or_lift` hold (`scheduling_pause_release_interrupted`), no
+longer with `scheduling_pause_kept_at_shutdown`; L3's queued entry is queued for the scheduler's
+bound, a minute (`DEFAULT_MAXIMUM_QUEUE_TIMEOUT_MS`; fix round 1's ten minutes were refused
+`lease_queue_timeout_invalid`).
+
+**The commit mark** (ruling 7, withdrawn by fix round 2, item 6). Built first as one step under
+the pause table's lock of the automatic start's last question and an in-memory mark, it is removed
+with everything that served only it (`commit_automatic_start`, `AutomaticStartCommit`, the table's
+`committed_starts`, the obstacles' `start_committed`, the test accessor), because it added only the
+word the automatic start's claim lease already gives and decided nothing. The last question stays
+where the commit asked it (`HostShared::automatic_start_hold`, with the instance's admission guard
+in hand just before the provider's Start in `drive_configured_control` and the recognition's bind
+in `prepare_recognized_instance`); a pause recorded after it finds the automatic start's lease and
+lists `automatic_start`; the pause takes no admission guard. The lease is there whenever the mark
+was because of three lines, named in `automatic_start_hold`'s comment so that whoever changes one
+finds the reason: `drive_configured_control` takes the admission guard before its last question
+and keeps it to its end (`let admission = lock(&instance_guard, ..)`); `prepare_recognized_instance`
+takes it before its last question and drops it only after the preparation (`let admission =
+self.lock_admission(..)`); the lease sweep collects an expired lease only when that guard is free
+(`cleanup_expired_if_guard_free`, `try_lock_admission`). The host's gate
+`pg2c_a_pause_after_an_automatic_starts_commit_lists_it_and_the_start_is_finished` shows a `stand`
+pause recorded while the Start runs listing `automatic_start` (adapted: it no longer reads the
+mark), and the new `pg2c_fix2_6_a_tools_hold_while_an_automatic_start_runs_fails_past_its_grace_and_is_lifted`
+a `quiet_or_lift` pause failing past its grace then.
 
 **Codes and words.**
 
@@ -38914,6 +38979,8 @@ pause recorded after it lists `automatic_start`; the pause takes no admission gu
 | key `pause_stage`, vocabulary `instance_pause_stage` (`InstancePauseStage`: `draining`, `paused`, `released`) | the stage reached | | |
 | key `in_the_way`, vocabulary `pause_obstacle` (`PauseObstacle`: `contained_run`, `policy_run`, `lease`, `automatic_start`, `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`, `check_failed`) | what is in the way, each word once | | |
 | word `check_failed` (fix round 1) | the last check of the pause's stages failed with a failure that is not fatal; it is tried again | informs (a word of `scheduling_pause_standing`) | 0 |
+| `scheduling_hold_not_quiet` (new in fix round 2, error, `actingctl`'s fragment, `crates/lab-ops`; the domain `scheduling_` gains the owner `actingctl`) | a tool's hold's pause answered Completed with a cause under its success code: the hold did not get a quiet instance, and the answered pause stands; `pause_cause`, `pause_stage`, `in_the_way`, each as the receipt's cause carried it, nothing else | refuses: in the rescue module the cause of the step's `install_command_refused` (`runtime_stop_failed`); in the Lab's `record start` the start's failure | the rescue module's command 1 as its other refusals; the Lab 5 (`RuntimeUnavailable`), as the hold's other failures |
+| key `pause_cause` (fix round 2, type `code`) | the informing code a pause's completed receipt carried as its cause | | |
 
 `scheduling_pause_kept_at_shutdown` was released in 0.12.72 with `review` `pending`: the outcome
 guard's G9 binds only a `settled` or a `retired` entry's signature (`ci/outcome_release.py`,
@@ -38950,7 +39017,7 @@ recording's hold: `quiet_or_lift` (`pause_for_recording`); both set in code, in 
 L1 `quiet_or_lift` for the ladder and for the automatic start; L2, L3, L5, L6, L7 each mode; L4
 `quiet_or_lift` (PG-2b's (6) for a tool's hold, a shared body); the absent member; a resume in
 `paused` and in `draining`; the status of a standing pause with revision 11's four members only;
-the commit mark. The contract crate's `pg2c_pause_mode_is_stand_when_absent_and_a_closed_pair` and
+the commit mark (withdrawn in fix round 2; the test adapted). The contract crate's `pg2c_pause_mode_is_stand_when_absent_and_a_closed_pair` and
 `pg2c_status_pause_members_round_trip_and_are_strict` (`contract.toml`); the Lab's
 `pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause` and
 `pg2c_a_recordings_hold_sends_quiet_or_lift`, the rescue module's
@@ -38977,18 +39044,42 @@ and of PG-2b's (4); the rescue module's and the recording's hold answered with a
 fixture of a held rung run waits until the rung's run is in the run table; L3's two halves end the
 queued entry by its connection's end, not by its expiry (a ten-minute queue wait); the contract
 crate's `gate_scheduling_pause_reason_travels_as_pause_reason` expects the request written again
-with `pause_mode` `stand` (every client of 12 writes it).
+with `pause_mode` `stand` (every client of 12 writes it). Fix round 2 (`host.toml`, "#480 PG-2c fix
+round 2"; `apps.toml` and `contract.toml`, their fix round 2): the host's
+`pg2c_fix2_4_a_resume_while_the_request_waits_for_the_admission_guard_answers_lifted`, the two
+`pg2c_fix2_5_*` of the hand-back's question, `pg2c_fix2_6_*` of a tool's hold while an automatic
+start runs; the rescue module's `pg2c_fix2_a_pause_answered_unquiet_fails_the_pause_step_at_once_with_its_cause`
+(through `hold::run_pause` on the fake Runtime, which answers such a pause through the module's own
+`quiet_hold`); the contract crate's
+`pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck`. Adapted in fix round 2:
+the two tests of fix round 1's item 9 assert `scheduling_hold_not_quiet` and its values; the
+commit mark's test no longer reads the mark; the Lab's and the rescue module's scripted pause
+receipts carry the drained runs; `gate_463_s17`'s two PG-2a tests of a failed pause that may stand
+use `scheduling_pause_release_interrupted`; L3's queue timeout is the scheduler's bound.
 
 **At deploy.** Nothing to configure. *A console pinned to the release before this one* (v0.12.72,
 or today's v0.12.71, `runtime-client` 11) sends no member, so its pauses are `stand`; it reads every
 status of this Runtime (no new member is answered); its account pause, whose receipt wait is the
 drain and the grace plus its IO, now gets Completed with a cause it does not read where it got a
 Failed `scheduling_pause_release_busy` and a lifted pause, and the pause stays: the status shows
-`paused` until the stage becomes `released` by itself. *Who deploys what* (fix round 1): a deploy
+`paused` until the stage becomes `released` by itself. Fix round 2: when a person resumes that
+pause in `draining` or `paused`, this Runtime answers the resume without a `selfcheck` (no
+reconnect ran; [scheduling-pause.md](scheduling-pause.md), "Resume"), which the receipt check of
+a client of `runtime-client` 11 or lower refuses (`runtime_receipt_invalid`, its connection
+latched) although the pause was lifted; the console sees its resume fail and the status shows the
+pause gone. So the console pins v0.12.73 or later before it resumes a person's pause that has not
+reached `released` on this Runtime. *Who deploys what* (fix round 1): a deploy
 is run by the live build's kept copy ([lab-two-entries.md](lab-two-entries.md) §7, the copy under
 `install\builds\<commit>`). This build is deployed by v0.12.72's copy against the live v0.12.72
-Runtime: neither knows the member, and the hold is the all-or-nothing hold of 0.12.72. The build
-after this one is deployed by this build's copy, which sends `quiet_or_lift` to this Runtime. *A
+Runtime: neither knows the member, and the hold meets what v0.12.72 answers every pause (PG-1,
+§1.468; v0.12.72's `contracts/scheduling-pause.md`): all or nothing within the hold's time for
+everything in the way but the Runtime's own automatic emulator start, which, alone in the way, is
+waited for with no bound of the pause's own (the copy's receipt wait, the drain, the grace and its
+IO, may end first with the client's own timeout while the pause stands and goes on), and a
+shutdown with that start alone in the way, or with nothing left in the way outside the multi-Nemu
+gate, keeps the pause (`scheduling_pause_kept_at_shutdown`, Failed); a ladder past the grace
+fails and lifts the hold there, as before (PG-2b is this release's). The build after this one is
+deployed by this build's copy, which sends `quiet_or_lift` to this Runtime. *A
 rollback* (fix round 1, read in the rescue module): none of its paths sends a pause after the switch
 of builds. The hold's `Pause` step is planned first and runs against the live Runtime before its
 close, for a deploy, a `rollback`, a `down` and a placement alike (`composite_steps`,
@@ -38996,7 +39087,12 @@ close, for a deploy, a `rollback`, a `down` and a placement alike (`composite_st
 `Close`, `ReverseFiles`, `Start`, `PostCheck` and `ReleaseHold`; after the switch only the
 release's resumes are sent, whose request is unchanged. So a v0.12.72 Runtime switched to meets
 no `pause_mode`: it restores the hold's persisted pauses as `released` at its start and takes their
-resumes. *The resource channel's duty*: a pinned offline Lab of v0.12.71 or v0.12.72 that records
+resumes. Two more facts (fix round 2, item 11): an instance's addition (`instance add`) changes the
+configuration and no build, and sends its pause (`pause_added`, `quiet_or_lift`) after the restart
+for the new configuration, to the Runtime of the same build; and a pinned copy already brought to
+this version goes back with a rollback to v0.12.72, because a v0.12.72 Runtime drops at its
+decode, with no receipt, every pause such a copy sends (each names `pause_mode`). *The resource
+channel's duty*: a pinned offline Lab of v0.12.71 or v0.12.72 that records
 against this Runtime sends no member, so its recording's hold is a person's pause here: when the
 instance is not quiet within the hold's time that Lab is answered `Completed`, shows the seat
 nothing and starts to record while something still runs (v0.12.72's `record_hold.rs` takes a

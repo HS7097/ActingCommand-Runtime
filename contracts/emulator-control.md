@@ -1619,9 +1619,9 @@ closed; it keeps the pause ([scheduling-pause.md](scheduling-pause.md), "Instanc
 stages"). #480 PG-2c (since 0.12.73) makes that code informing (a person's pause kept at a
 shutdown, whatever is in the way, answers Completed with it as the cause) and adds
 `scheduling_pause_standing` (info): a person's pause that answered before its instance was quiet,
-the automatic start among what is in the way (`automatic_start`) when its claim holds the key or
-its Start was committed before the pause ([scheduling-pause.md](scheduling-pause.md), "Two
-modes", the commit mark).
+the automatic start among what is in the way (`automatic_start`) when its claim holds the key, its
+Start or bind past its last question included ([scheduling-pause.md](scheduling-pause.md), "Two
+modes", "An automatic start past its last question"; fix round 2 withdrew the commit mark).
 
 ## Client and CLI
 

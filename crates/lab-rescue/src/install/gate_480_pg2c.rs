@@ -7,34 +7,50 @@
 // never `stand` and never a parameter. On the runtime client's scripted Runtime (loopback, a
 // temporary state root), which answers each pause as paused; each pause on a connection of its own.
 
+use super::fixture::FakeHost;
+use super::hold::{self, PauseIntent};
 use super::host::{Host, SystemHost};
+use super::runtime::PauseFailed;
+use crate::codes::InstallLocation;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     InstancePauseStage, PauseObstacle, RuntimeOperation, RuntimeReceipt, RuntimeRequest,
-    RuntimeResult, SchedulingPauseMode, SchedulingPauseReason,
+    RuntimeResult, SchedulingDrainSummary, SchedulingPauseMode, SchedulingPauseReason,
+    SchedulingPauseScope,
 };
 use actingcommand_lab_ops::initiator::Initiator;
 use actingcommand_runtime_client::test_support::{
     ScriptedAnswer, ScriptedConnection, ScriptedRuntime,
 };
+use serde_json::json;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 
 /// The instance the hold pauses.
 const ALIAS: &str = "neutral.a";
+
+/// The result a Runtime answers a pause of `scope` with, as the host builds it: an instance pause
+/// carries the runs it drained (none here), a global pause none (fix round 2: the contract refuses a
+/// receipt of an instance pause without them, `invalid_scheduling_pause_receipt`).
+fn paused_result(scope: &SchedulingPauseScope) -> RuntimeResult {
+    RuntimeResult::SchedulingPaused {
+        scope: scope.clone(),
+        revision: 1,
+        drained: matches!(scope, SchedulingPauseScope::Instance { .. }).then_some(
+            SchedulingDrainSummary {
+                finished: 0,
+                cancelled: 0,
+            },
+        ),
+    }
+}
 
 /// The scripted answer to a pause: paused, the scope it asked for.
 fn paused(request: &RuntimeRequest) -> ScriptedAnswer {
     let RuntimeOperation::PauseScheduling { scope, .. } = request.operation() else {
         panic!("a pause: {:?}", request.operation());
     };
-    ScriptedAnswer::completed(
-        request,
-        RuntimeResult::SchedulingPaused {
-            scope: scope.clone(),
-            revision: 1,
-            drained: None,
-        },
-    )
+    ScriptedAnswer::completed(request, paused_result(scope))
 }
 
 #[test]
@@ -85,11 +101,7 @@ fn standing(request: &RuntimeRequest) -> ScriptedAnswer {
     };
     let receipt = RuntimeReceipt::scheduling_paused(
         request,
-        RuntimeResult::SchedulingPaused {
-            scope: scope.clone(),
-            revision: 1,
-            drained: None,
-        },
+        paused_result(scope),
         Some(
             Outcome::relayed("scheduling_pause_standing")
                 .pause_stage(InstancePauseStage::Paused)
@@ -101,9 +113,10 @@ fn standing(request: &RuntimeRequest) -> ScriptedAnswer {
 }
 
 /// #480 PG-2c fix round 1 (item 9): a hold's instance pause answered Completed with an informing
-/// cause did not get a quiet instance: the hold's pause fails, `runtime_result_unexpected` with the
-/// receipt's outcome (its cause `scheduling_pause_standing`) behind it, as every other failure of
-/// the hold's pause; nothing is taken as drained.
+/// cause did not get a quiet instance: the hold's pause fails, as every other failure of the hold's
+/// pause; nothing is taken as drained. Fix round 2 (item 3): its failure is its own code,
+/// `scheduling_hold_not_quiet`, whose values are what the receipt said (the cause's code, its stage
+/// and what was in the way) and nothing else, and it is told apart as a pause that stands.
 #[test]
 fn pg2c_fix1_a_holds_pause_answered_with_a_cause_fails() {
     let temp = TempDir::new().expect("tempdir");
@@ -118,18 +131,107 @@ fn pg2c_fix1_a_holds_pause_answered_with_a_cause_fails() {
         .pause(temp.path(), ALIAS, &reason, 60_000)
         .expect_err("a pause that did not leave its instance quiet");
 
+    let PauseFailed::Stands(failure) = failure else {
+        panic!("a pause that stands: {failure:?}");
+    };
     assert_eq!(
         failure.code().as_str(),
-        "runtime_result_unexpected",
+        "scheduling_hold_not_quiet",
         "{failure:?}"
     );
-    assert!(
-        failure
-            .codes()
-            .iter()
-            .any(|code| code.as_str() == "scheduling_pause_standing"),
-        "the receipt's cause is behind it: {failure:?}"
+    assert_eq!(
+        serde_json::Value::Object(failure.values().clone()),
+        json!({
+            "pause_cause": "scheduling_pause_standing",
+            "pause_stage": "paused",
+            "in_the_way": ["lease"],
+        }),
+        "{failure:?}"
     );
+    assert!(failure.causes().is_empty(), "{failure:?}");
     let record = runtime.finish();
     assert!(record.unscripted.is_empty(), "a connection beyond the one");
+}
+
+/// #480 PG-2c fix round 2 (item 2), through the hold's pause step (`hold::run_pause`) on the fake
+/// Runtime: of two instances paused at once, the Runtime answers `neutral.a`'s pause before the
+/// instance is quiet (it stands, `fixture::answered_unquiet`) and pauses `neutral.b`. The step fails
+/// at once with the true cause: `runtime_stop_failed` for `neutral.a`, caused by
+/// `scheduling_hold_not_quiet` with what the receipt said; `neutral.a`'s pause is not sent again
+/// (sent again it would meet `scheduling_already_paused`), and `neutral.b`'s drain is recorded.
+#[test]
+fn pg2c_fix2_a_pause_answered_unquiet_fails_the_pause_step_at_once_with_its_cause() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    host.runtime.boot(&["neutral.a", "neutral.b"]);
+    *host.runtime.unquiet_pause.borrow_mut() = vec!["neutral.a".to_owned()];
+    let reason = SchedulingPauseReason::new("lab-down-1").expect("a pause reason");
+    let intent = PauseIntent {
+        reason: reason.clone(),
+        instances: vec!["neutral.a".to_owned(), "neutral.b".to_owned()],
+        known: BTreeMap::new(),
+        drain_timeout_ms: 60_000,
+    };
+
+    let Err(refused) = hold::run_pause(
+        &host,
+        temp.path(),
+        InstallLocation::Stop,
+        &intent,
+        &BTreeMap::new(),
+        BTreeMap::new(),
+        60_000,
+        true,
+    ) else {
+        panic!("the pause step fails");
+    };
+
+    let refusal = &refused.refusal;
+    assert_eq!(
+        refusal.code().as_str(),
+        "install_command_refused",
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.value("install_refusal"),
+        Some(&json!("runtime_stop_failed")),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.value("alias"),
+        Some(&json!("neutral.a")),
+        "{refusal:?}"
+    );
+    let [cause] = refusal.causes() else {
+        panic!("one cause: {refusal:?}");
+    };
+    assert_eq!(
+        cause.outcome().code().as_str(),
+        "scheduling_hold_not_quiet",
+        "{refusal:?}"
+    );
+    assert_eq!(
+        cause.outcome().value("pause_cause"),
+        Some(&json!("scheduling_pause_standing")),
+        "{refusal:?}"
+    );
+    let pauses_of_a = host
+        .runtime
+        .calls
+        .borrow()
+        .iter()
+        .filter(|call| call.starts_with("pause neutral.a "))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pauses_of_a,
+        [format!("pause neutral.a {reason} not quiet")],
+        "not sent again"
+    );
+    assert!(refused.drained.contains_key("neutral.b"), "the drain of b");
+    assert_eq!(
+        host.runtime.pause_of("neutral.a").as_deref(),
+        Some(reason.as_str()),
+        "the pause answered before it was quiet stands"
+    );
 }
