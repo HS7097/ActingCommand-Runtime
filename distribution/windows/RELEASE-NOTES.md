@@ -9,6 +9,195 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.74
+
+本版是 v0.12.73 之后的 11 次合并、11 张 PR，没有列车，一张一张单独合入：#463 S2b-1 #1829、#479 ACIB-2 #1827、#463 S1-R #1830、#463 SEL-2L-a #1832、#463 SEL-2L-b #1833、#480 PG-2d #1834、#463 PRIV-1 #1831、#479 ACIB-3 #1835、#463 SEL-2L-rows #1837、#479 F-2 #1836，最后 #463 PRIV-3 #1839。
+SEL-2L-a 并进了 S1-R 的头、SEL-2L-b 并进了 SEL-2L-a 的头、PRIV-1 叠在 PG-2d 的头上，别的在合入前于本地并过 main；冲突只在登记册、门表、结果码目录和索引、Lab crate 的根文件，两边都整段留下；登记 §1.476 到 §1.484 各一次、按号排（没有 §1.485）。
+内容是在 v0.12.73 上做包第一夜要的东西：**一个标题框里两行的名字能整个读出来**（select 的名字先检测文字块再分给各项，固定槽和滚动的行都行）、预览图上的**标尺**、收编**按阶段报时间**；**录制有了去向**，公开去向的回归用例里不留读数的像素，敏感区的声明、包的读区清单和比对先只给事实；
+**暂停的一生进账本**，恢复的因交到客户端；**iOS 手机成了 Runtime 认识的实例**（配置和绑定，取帧之前是惰性的）；`acib` 多了加盐的键、标准输出上的画面、界面方向，和只管一个应用的 `running`、`launch`、`stop`。
+**生产上跑的是 v0.12.73（2026-11-18 18:04 起，经 Lab 救急模块部署；看板 #421，评论 6974054601）**。从 v0.12.73 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都不用标志，`ledger_verify` 为 false，计划通知的 `rollback_window_bounded` 为 false，`defaults_diff` 没有一行，没有新文件**。
+**两个接口区间动了：`package` [3, 19] → [3, 20]，`actingd-config` [5, 33] → [5, 34]**；`ledger` 仍是 [3, 9]，`runtime-client` [3, 12]；配置键没加（新成员 `device.system` 没有默认值，默认值文件一字没改），结果码加了 19 个、位置加了 1 个，没有标成 `retired` 的。**退回 v0.12.73 开着**（要先做的见「部署和退路」）。
+**使用中的安装最先碰到的是录制的去向：不说 `--destination local` 的录制都是公开的，读数量的公开录制在 `record stop` 上可能被拒**（见下）。
+
+- **为什么有这一版**：主人头一件要的是做包。看板 #482 的工作单列了 v0.12.73 上做包第一夜慢在哪里：一个标题框里两行的卡名被当成一行读，每张卡都是低置信；预览图上没有尺可以读坐标（一包的读取区偏了 9 像素，试跑失败、返工）；收编一趟超过 MCP 的 25 秒调用预算，回答里说不出时间花在哪一段。
+  主人 11-18 对隐私的裁定（看板 #463，评论 6974788843；看板 #482）：包的去向由人选；上 GitHub 的（私有仓也算）就是公开；屏幕上显示的、账号持有的数量算隐私：包在运行时可以读它，它的像素永远不进仓库。
+  另两件：PG-2c（v0.12.73）让人按的暂停立得住，可暂停身上发生了什么，只有发请求的那个客户端从它的回执里知道（看板 #480）；主人 11-18 在看板 #479 定了 iPhone 要像别的实例一样被调度，这一版先让 Runtime 认识它。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码和契约）：
+  - **首先，录制有了去向**（PRIV-3，§1.483；`contracts/lab-recording.md`「A recording's destination」「Regression cases written with the package」）。
+    `record start --destination local|public`（MCP `destination`，操作表的闭词表，不给就是 `public`）存成录制的可选成员 `destination`，公开的不写（`crates/lab/src/recording/model.rs` 124–171 `RecordDestination`，`skip_serializing_if`），所以以前的录制照公开读、写回逐字节不变；`record start`、`record status`、`record stop` 照词回答。
+    `record stop --destination` 在开着或已停的录制上换了词，就照停后再标的路子重新生成；同一个词或不给，什么都不变。本地去向的包在入口任务的 `provenance` 里带 `destination: "local"`（`crates/lab/src/recording/generate.rs` 3342–3346），公开的不带；准入只要求 `provenance` 是对象或 null，包修订不动，v0.12.73 的 Runtime 也照收。
+    - **公开、又读数量的录制**：回归用例的场景图拿包的读区清单（PRIV-1）按生成的入口任务的读数声明扣掉每个读数：固定矩形按它够得到的范围（`reach`），跟着锚走的按它被限定的界（`bound`），是读数的共享读区整块扣；扣法是不贴，等所有补丁贴完再用画布色填掉，别的目标的补丁也带不出这些像素（`crates/lab/src/recording/cases.rs` 28–52、970 `scene_regions`）。
+      **`record stop` 的两个拒**（都是最后一项自检 `cases` 的失败：什么都不写，录制和会话照旧，退出码 3；`record ready` 在 `cases` 项下列出）：
+      `record_case_reading_unbounded`：读数没有东西把它限定在比整帧小的矩形里（`full_frame`、相对模板的区、没有读带的滚动行、盖整帧的共享读），作者给读数画一个固定区、给列表一个读带，或者改 `--destination local`；
+      `record_case_reading_withheld`：一个本身不需要读数的目标在被扣的矩形里读像素或存像素：用例在它上面失败、页禁止的目标在画布色上通过，或者（做用例之前，不管用例过不过）包自己存的图压在读数上（模板的截图、颜色摘要最多 32×32 格的颜色），作者把框挪开、把模板或摘要画到别处，或者改 `--destination local`。
+      **公开用例还证明什么**：需要读数的目标（读数目标本身、一侧是读数的值测试、带这种成员的组合，传递着算，`cases.rs` 1032 `needing_readings`）从用例的期望里拿掉，在回答里点名（`record stop` 的 `lab.withheld`、`lab.readings_left_out`，`record ready` 的 `withheld`、`readings_left_out`，每条 `{case, page, targets, page_judged}`），用例证明其余的；页要靠它来认时不判页；
+      这一页再没有别的可钉，就不写这个用例，给警告 `record_case_reading_not_written`（退出码 0）：包照常生成，运行时照样读这个数量。
+    - **不变的**：不读数量的公开录制，生成的文件逐字节不变，回答里只多 `destination`；本地录制的包、用例、场景图逐字节不变，只多那一个标记。
+  - **select 按文字块读名字**（SEL-2L-a §1.479、SEL-2L-b §1.480、SEL-2L-rows §1.484；`contracts/lab-recording.md`「Reading names by detecting blocks」，`contracts/selection-graph.md`「Shared OCR read」）。
+    作者在 `select.read` 里写 `"blocks": "detect"` 和 `line_merge`（`{"gap_factor": n}` 或 `"none"`），两个一起写或都不写（`model.rs` 1519–1528；只写一个是 `validation_failed`，退出码 2，点名缺的那个；`n` 的界 0 到 16 由内核的准入拒，`kernel_refused`）。不写时录制、请求、生成的包逐字节不变。
+    **固定槽**：生成的布局在 `slots` 后面多一个 `shared_ocr`，读区是各槽名字框的外接矩形；**滚动的行**：`repeated_anchor` 布局在 `features` 后面多一个 `shared_ocr`，读区就是扫描的列表（读带）；其余成员都取自 `read`，两种用同一个写法（`generate.rs` 2463 `select_shared_read`、2548 `shared_read_serves`，`crates/lab/src/recording/scan.rs` 505–506），生成器先查每个名字目标都由共享读服务，不服务就拒绝生成、什么都不写。拒绝词 `blocks_with_rows` 拿掉了（只在本版之内出现过）。
+    运行时每帧只检测一次，块的中心落在哪个槽或可动行的名字框里就归谁，没有块的读成空，被读带边缘切到的行照旧不读：**一行里两行的卡名和居中的一行卡名都整个读出来**。
+    **次序**：块先按上沿、再按左沿排，两种布局一样，本版不改；作者看到一行字回来成了两块，就调大 `line_merge` 的间隙系数，让提供方先合并（`selection-graph.md`）。标记被拒时「N of M marks failed」数的是不同的标记，不再是屏和行的条数。
+    **用了滚动行共享读的包是修订 20**：`record stop` 不写区间，`standard-pack build` 打包时数到 `repeated_anchor` 带 `shared_ocr` 才算 20（`apps/actinglab/src/resource_verify/revision.rs` 674–676、685–692），固定槽的共享读不升修订（v0.12.73 的 Runtime 就认）。
+    **本版之前的 Runtime 加载它时在声明门答这个成员不认识**（`resource_declaration_invalid`，`UnknownField` 在 `/candidate_layouts/<i>/shared_ocr`），那个包每次运行都失败；**而 Lab 自己的自检（mark、ready、stop）跑的是 Lab 进程里的内核，对着哪个版本的 Runtime 都全过**，要到试跑加载时才被拒。所以这种包等本版上线以后才收编进仓。
+  - **暂停的一生进账本**（PG-2d，§1.481；`contracts/scheduling-pause.md`「A pause's life in the ledger」）：每个时刻一条 `runtime.lifecycle_observed`（阶段 `device_state_observed`），记在实例下、带暂停自己那个请求的链接，严重度是码的类别，从不按轮询或重试写（`crates/runtime-host/src/host/policy_dispatch.rs` 4010 `record_pause_moment`、4044 `record_held_pause_moment`）：
+    人按的暂停到了调用方的时限还没静（`scheduling_pause_standing`，就是回执的因，带 `pause_stage`、`in_the_way`）；之后自己静了（新码 `scheduling_pause_settled`，info，4334）；没静就被人恢复（`scheduling_resume_without_reconnect`）；关机时保留（`scheduling_pause_kept_at_shutdown`）；
+    工具的按住没静就被撤（新码 `scheduling_pause_lifted_not_quiet`，warning，带 `pause_reason`、`in_the_way`，因是 Runtime 自己的那次失败：两种超时 `scheduling_pause_drain_incomplete`、`scheduling_pause_release_busy`，排队项拒交还 `lease_transfer_not_safe`，关会话的租约被拒 `lease_busy`、`lease_cooldown` 等）；没有后端的实例被恢复（`scheduling_resume_without_backend`，见下一段）。
+    **不写的**：时限内就静了的暂停、再试的检查、恢复一个已经 `released` 或被隔离的实例（重连自己的记录）、请求还在跑时的恢复、续做线程碰上的确认不了的关会话、因别的原因失败的按住、重启恢复出来的暂停、全局暂停。
+    请求线程的两条（立着、关机保留）在持久化门里看暂停还在才写，不会排在解开它的那次恢复后面；**续做线程的两条（之后静了、关机保留）在门外写，可能排在某次恢复的记录后面**（契约「The order of a pause's records」照实写了）。记录写不成，暂停做的事和答的话都不变，只在守护进程日志里说一次。
+    `runtime-client` 多 `resume_scheduling_as`、`resume_scheduling_expected_as`，回 `SchedulingResumeAnswer { result, outcome }`（`crates/runtime-client/src/client.rs` 459、1906、1973），老的两个调用照旧只回结果，线上格式不变；
+    Lab 的 `resume` 行和 `ac_resume` 在回执带因时把因照答出来，退出码 0（`crates/lab-ops/src/core_ops.rs` 799–817、1537 `reported_with_cause`）；`actingctl resume` 和它的 MCP、录制的放开、救急模块自己的恢复仍只读结果。
+    **状态仍不答 `pause_mode`、`in_the_way`**：宿主建的每个 `InstancePauseState` 都不带（`policy_dispatch.rs` 892–899、3835–3842，`host/scheduling_pause.rs` 341–348）。旁人看暂停的阶段照旧读 `stage`、`activity`、`lease_active`、`queued_request_count`，发生了什么读上面这些记录。
+  - **配置里的 iOS 手机**（F-2，§1.482；`contracts/device-binding.md`「An iOS handset」）：实例的 `device` 多可选成员 `system`：`android`（不写就是它）或 `ios`，只能配在手机上（`apps/actingd/src/config/device_binding.rs` 44–54、133 `check_device`；别的种类或别的词是 `device_config_invalid` `system_unsupported`）；
+    iOS 手机不能指名触控或取帧后端（`backend_kind_unsupported`），也不能写只有经 adb 的设备才有的成员（`adb_member_with_ios`）；清单行 `instance.<实例>.device_system` 只给写了它的条目，没有默认值、运行中不能改（`crates/runtime-config/src/instance.rs` 90–92）。
+    私有绑定文件里的 iOS 行只存别名、系统、一把键（`acib` 在安装自己的密钥下算的指纹）、绑定的时间和方式，手机的任何标识不出 `acib`；有 iOS 行的文件是 `actingcommand.device-bindings.v2`，只有安卓行的照旧写成版本 1、逐字节不变（`crates/actingcommand-contract/src/device_binding.rs` 36–40、415）。
+    私有行和配置的系统对不上时，Runtime 启动只把那一台当没绑定、写一行警告 `device_binding_ignored`，别的照起；`check-config` 照旧拒。
+    Lab 的 `devices` 和 `devices bind` 经安装根的 `tools\acib.exe` 列、绑 iOS 手机（`crates/lab-ops/src/devices.rs` 47–62；盐只进那一个子进程的环境变量；`acib` 自己的期限 10 秒、Lab 最多等 12 秒、每路输出最多读 64 KiB，242–250）；没装 `acib`、也没配 iOS 手机时，列表和以前一样。
+    **`acib` 不在本版的两个压缩包里**，所以配了 iOS 手机的安装，列表答它没装（`ios_devices_unlisted`，`not_installed`）。
+    **取帧那一片之前它是惰性的**：对策略永不可用（可用性在 `device_system:ios` 下撤掉，同一份账本上重启不再写）；启动准备和空闲计划跳过它；取帧、输入、应用操作在宿主准入的最前面就拒，各用自己的失败码，因是 `device_system_backend_missing`（`host/lease.rs` 4673 `device_system_refusal`）；人的自检和恢复阶梯演练在入口拒（演练是新码 `recovery_ladder_drill_unsupported`）；
+    **它的暂停当场静下来，恢复不重连**（`policy_dispatch.rs` 4115、5129、5377 `resume_without_device_backend`；回执的因是新码 `scheduling_resume_without_backend`，info，自检两边 `ok: false`、没有 `failure_code`），所以工具一次暂停、恢复所有实例时不会被它卡住；被隔离的 iOS 手机恢复时暂停撤、隔离留着。
+    **退回时**：绑过 iOS 手机，私有文件就是版本 2，而 v0.12.73 只读版本 1（v0.12.73 标签上 `crates/actingcommand-contract/src/device_binding.rs` 30、218），配着手机时拒绝启动；配置里写了 `device.system`，v0.12.73 解码就拒（同一标签上 `apps/actingd/src/config/device_binding.rs` 39–41 `deny_unknown_fields`，`config_decode_failed`）。
+    所以退回之前先用本版的 Lab 把每台 iOS 手机 `devices unbind`（文件回到版本 1），再把配置里的 iOS 条目拿掉。
+  - **两个接口区间动了**：
+    - **`package` [3, 19] → [3, 20]**（SEL-2L-b）：`repeated_anchor` 布局声明 `shared_ocr`，读区要盖住读带（没有读带就是整帧），本版之前的 Runtime 在声明门拒（上面），不带它的包照旧、投影和派生的字节都不变。
+      `standard-pack build` 只对用了它的包根算出 20（上面两处）；`place` 照修订 19 的先例不查 20，只查包声明的区间落在安装工具自己的区间里（`crates/lab-rescue/src/install/place.rs` 1536–1551 `package_edge_holds`）：区间到不了 20 的安装工具在它的 `package` 边拒声明 20 的包，本版的 `place` 照包自己声明的放。
+    - **`actingd-config` [5, 33] → [5, 34]**（F-2）：只加实例 `device` 的成员 `system`。v0.12.73 的读者对写了它的配置解码就拒（上面）；不写它的配置修订不变、渲染的行不变，所以 v0.12.73 写的配置本版照收。没有配置键、没有默认值，默认值文件的 sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`。
+    - `ledger` [3, 9] 和 `runtime-client` [3, 12] 不变：PG-2d 和 F-2 的新码都是已有的 `device_state_observed` 记录里的结果码（`crates/actingcommand-contract/src/event/payload.rs` 1970），读者只核码的拼写、不核登没登记（`crates/actingcommand-contract/src/outcome.rs` 740–744、1719–1735，本版没改）；恢复的新调用走已有的线上格式，回执从 0.12.73 起就带结果码。
+      `runtime-outcomes` [1, 1]、`install-selection` [1, 1]、`install-control` [0, 0] 也不变（`distribution/windows/component-interfaces.json` 4–10）。
+  - **预览图上的标尺**（S1-R，§1.476）：`record review --ruler edges|grid`（MCP `ruler`）：上边和左边每 50 像素一根 6 像素的刻度，每 100 像素一根 12 像素的并标数字，`grid` 另在每 100 像素横竖各画一条一像素的虚线；黑芯白边，数字是代码自带的点阵，放不下的整个不画；
+    数字就是存储帧自己的像素，`record mark` 写框用的同一个空间（回答多 `ruler`，`space` 是 `frame_pixels`）。只画在副本上，文件名带 `-ruled-<edges|grid>`（`crates/lab/src/recording/review.rs` 660–671）；**带 `--ruler` 的那次调用只写带标尺的预览**，平图只有不带它的调用才写；和 `--no-preview` 一起给就拒（`validation_failed`，`previews_only`）。
+    `record frames` 和 v0.12.73 逐字相同；不带参数时预览、回答、文件都逐字节照旧。工具只画尺，不量、不提议框。
+  - **收编按阶段报时间**（S2b-1，§1.477）：`standard-pack adopt` 的回答多 `timings {stages, total_ms}`，十四个阶段的闭表，从 `repository` 到 `readiness`（`crates/resource-tooling/src/adopt.rs` 815–870），空跑和实跑同一张表；失败时 `details` 带 `timings` 和 `stopped_in`，后面的阶段不出现；回答长约 600 字节。
+    一次收编只查一次包根：检查树那次根检的警告直接交给就绪判定（`crates/resource-tooling/src/standard_pack_ready.rs` 462 `judge_checked_readiness`），`standard-pack ready`、`status`、`build` 照旧自己查。收编拒什么、收什么、写什么都不变。
+  - **隐私的事实，什么都不拒**（PRIV-1，§1.478；`contracts/privacy-zones.md`）：仓根的敏感区声明 `privacy-zones.json`（`actingcommand.privacy-zones.v1`；`repository` 是 `public` 或 `local`，公开的按基准尺寸列区，种类 `identity`（默认）或 `value`）；
+    包的读区清单只有一份，从 Lab 的场景构建挪进识别包（`crates/recognition-pack/src/read_regions.rs`，`RecognitionPack::reads`、`reading_targets`），每个读区带它是不是读数（内核在运行时把它读成数的五处）、它够得到的范围，和没有固定矩形时被限定在哪里；比对 `compare_privacy_zones`（`crates/resource-tooling/src/privacy_zones.rs`）只答事实，还没有任何步骤调用它；场景图逐字节不变。
+    `resource validate`（和进程内的 `resource verify`）用它唯一的读法读仓根选中的 `privacy-zones.json`：合格的过，坏的带指针拒（`resource_declaration_invalid`），以前是当成没登记的文件拒；没有这个文件的仓什么都不变。八个码先登记，还没有发出的地方。
+  - **`acib`**（ACIB-2、ACIB-3，不占登记节，只动 `apps/acib`）：ACIB-2：`devices --key-salt-env`（另有 `--binding-salt-env`）给每部手机一把加盐的键，算法和 Runtime 账本里设备序列号的指纹逐字节相同（两边的测试断言同一个向量）；每条设备命令都能用 `--device-key` 加 `--key-salt-env` 指名手机；
+    `screenshot --out -` 把画面写到标准输出（一行头、一个换行、正好那么多字节）；`orientation` 读界面方向，两条路。ACIB-3：`running`（只读）、`launch [--relaunch]`、`stop`，每条只答指名的那一个应用；`launch` 和 `stop` 会改手机上在跑的东西；别的应用的名字、包名、路径、pid 一概不出。
+    **用本版的代码在主人的测试手机上跑过的**：列设备、设备信息、界面方向和经 `screen_capture` 的截图，11-19 01:03 到 06:05 JST 之间（看板 #479，评论 6984069004、6988820384、6991653716）。加盐的键和标准输出上的画面是 11-18 用这一片更早的状态跑的，收尾一轮（同一部手机 USB 行优先）以后没再跑。**`running`、`launch`、`stop` 在那部手机上答不出**（见「已知的限度」）。
+    **`acib` 照旧不在发版的两个压缩包里**：`.github/workflows/windows-remote-build.yml` 本版没改（395 发版构建排除它，1007–1030 单独编、单独上传，发版那次不编），两个压缩包的文件表里没有它；锁文件只在 `acib` 的依赖表里多了早已锁着的 `sha2` 0.10.9，没有新包（`NOTICE.md` 补了一句）。
+  - **盘上的东西**：本版照读 v0.12.73 留下的一切（账本修订 3 到 9、配置、录制、包、绑定、持久化的暂停），第一次启动不迁移、不要新状态根；账本不加记录种类和成员。新写进账本的是暂停各个时刻的记录，配了 iOS 手机时还有它的两个程序事实 `device.system`、`device.bound` 和那条可用性。
+    本版写的东西里 v0.12.73 读不了的：本地去向的录制和 select 带 `blocks` 的录制（v0.12.73 的 Lab 的 `LabRecording`、`SelectReadSpec` 拒不认识的成员：v0.12.73 标签上 `crates/lab/src/recording/model.rs` 89–91、1440–1442）；版本 2 的私有绑定文件；写了 `device.system` 的配置；修订 20 的包。
+
+- **改了什么**（录制、读名字、隐私、暂停、iOS 手机、收编、`acib`）：
+  - **录制的去向**（PRIV-3，§1.483）：`crates/lab/src/recording/` 的 `model.rs`、`cases.rs`、`generate.rs`、`ready.rs`、`review.rs`、`scan.rs`、`steps.rs`，`recording_api.rs`，`codes.rs` 多三个码；命令行 `apps/actinglab/src/commands/session_record.rs`、`session_contracts.rs`、`lab2_cli.rs`。顺带把标尺那一片的几句说明改准（带 `ruler` 的调用只写带标尺的预览）。
+  - **读名字**（SEL-2L-a、-b、-rows，§1.479、§1.480、§1.484）：Lab 的 `model.rs`、`select.rs`、`scan.rs`、`generate.rs`、`steps.rs`、`codes.rs`（`blocks_with_rows` 加了又拿掉）；识别包 `crates/recognition-pack/src/candidate_layout.rs`（`REPEATED_ANCHOR_FIELDS` 99、`covers_band` 259、`layout_shared_text` 1420、`maximum_provider_and_wait_ms` 1835、`provider_evaluations` 2223）；
+    包容器 `crates/pack-containment/src/source/declarations.rs`（3074 `shared_read_covers_band`）、`source/mod.rs`（`derived_shared_ocr`）；修订表 `revision.rs`；接口表第 20 行。
+  - **隐私的事实**（PRIV-1，§1.478）：识别包 `read_regions.rs`（新）、`candidate_layout.rs`（`shared_calls` 对本 crate 可见）；`crates/resource-tooling/src/privacy_zones.rs`（新）、`codes.rs` 八个码、`standard_pack_trial.rs`（`content_prefix` 对本 crate 可见）；Lab 的 `cases.rs` 改调这份清单；`apps/actinglab/src/resource_declarations.rs` 登记新声明；契约库 `outcome/keys.rs` 六个键。
+  - **暂停的记录**（PG-2d，§1.481）：宿主 `host/policy_dispatch.rs`、`host.rs`、`codes.rs`；客户端库 `client.rs`；`crates/lab-ops/src/core_ops.rs`、`scheduling.rs`；救急模块只加了测试。
+  - **iOS 手机**（F-2，§1.482）：`apps/actingd/src/` 的 `config.rs`、`config/device_binding.rs`、`check_config.rs`、`main.rs`、`codes.rs`；契约库 `device_binding.rs`、`event/payload.rs`（手机绑定的草稿收一把现成的键）、`outcome/keys.rs`、`runtime.rs`（只改注释）；`crates/runtime-config/src/instance.rs`；
+    内核 `provider.rs`（`HandsetEndpoint::Ios`）、`error.rs`；`crates/device/src/error.rs`；宿主（见「配置」里的清单）；`crates/lab-ops/src/` 的 `devices.rs`、`overview.rs`、`codes.rs`、`core_ops.rs`、`scheduling.rs`（后两个只改注释）；`apps/acib` 没动。
+  - **标尺**（S1-R，§1.476）：`crates/lab/src/recording/preview.rs`、`review.rs`，`recording_api.rs`，`session_record.rs`。**收编的时间**（S2b-1，§1.477）：`crates/resource-tooling/src/adopt.rs`、`standard_pack_ready.rs`、`standard_pack_check.rs`（测试用的计数只在单测里编进去）。
+  - **`acib`**（ACIB-2、ACIB-3）：`apps/acib` 的 `args.rs`、`bridge.rs`、`answer.rs`、`main.rs`、`redact.rs`，新模块 `framing.rs`、`key.rs`、`matching.rs`、`stopping.rs`；库多开 `springboardservices` 一个特性；账本只多一条和 `acib` 共用向量的测试。
+  - **这些都不提议区域、不提议挑哪一项、不提议值**：标尺只画尺，隐私的比对只交回事实，公开用例只扣、不挪。
+
+- **部署和退路**：照 v0.12.73 那次的做法，用在线 v0.12.73 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）本版只加了测试（`gate_480_pg2d.rs`、`gate_421_inst5.rs` 的助手可见、`gate_463_v1.rs` 的区间、`mod.rs` 的测试声明），产品代码没改，所以留存的 v0.12.73 副本做的和本版的一样；`plan.rs`、`update.rs`、`status.rs`、`deploy.rs`、`place.rs` 本版也没改。没有账本那一步：两边账本都是 [3, 9]。部署时要知道的，从各登记节的「At deploy」收在一起：
+  - **这一版由 v0.12.73 的留存副本对着在线的 v0.12.73 部署**：计划、按住、交还都是 v0.12.73 的；按住是工具的 `quiet_or_lift`，在时限里没静就失败撤掉。部署前照旧不留开着的录制、不跑试跑。
+    v0.12.73 的计划读新版 `check-config` 的报告：没配 iOS 手机时报告的形状不变（§1.482）；`actingd-config` 在计划里没有区间的边，只有 `installer_knows_keys`（配置不写安装工具不认识的键）和 `next_check_config`（新版的 `check-config` 过不过）两行，都过。
+  - **每一份钉着的离线 Lab 都要等本版上线以后再升到本版**（§1.480、§1.484）：升了的 Lab 生成的滚动行共享读的包是修订 20，它自己的自检全过，在线的 v0.12.73 却在每次运行时拒；`runtime-client` 没动，升早升晚都不会有请求在解码处被丢。
+    升了以后它写的本地去向或带 `blocks` 的录制，旧的 Lab 读不了。
+  - **修订 20 的包和退回 v0.12.73**：资源仓等本版上线以后才收编滚动行带 `blocks` 的包，它的包声明 `package` [20, 20]（`standard-pack build` 算出来的），部署工具包钉的发版 `package` 区间是 [3, 20]（§1.480）；
+    退回 v0.12.73 时门不拦它（`package` 边只是警告，见「升级与退回」），v0.12.73 的 Runtime 对那个包每次运行都拒：先换掉。
+  - **iOS 手机和退回 v0.12.73**（§1.482）：退回之前用本版的 Lab 把每台 iOS 手机 `devices unbind`、把配置里的 iOS 条目拿掉，否则回退门第 4 部分（v0.12.73 的 `check-config` 读在线的配置）不过，私有文件是版本 2 时 v0.12.73 配着手机也不启动。写实例 `device` 的控制台和安装工具要先接受 `actingd-config` 34 才能写 `system`（界面仓的事）；`acib.exe` 不随本版发，放到 `<root>\tools\acib.exe` 之前列表照旧。
+  - **从本版上线起资源仓能做的**：滚动的 select 带 `blocks` 和 `line_merge`（修订 20，见上）；固定槽的这样写，生成的包今天的 Runtime 就收（§1.479）；只在本机用的包 `record start --destination local`，默认的公开录制读数量时可能在 `record stop` 上被拒、照上面改；可以提交 `privacy-zones.json`，`resource validate` 读它，还不拒任何东西（§1.478）。
+  - **暂停的记录**（§1.481）：本版的 Runtime 从启动起就写；v0.12.71 到 v0.12.73 的控制台和 Lab 把它们读成不认识的码的记录；Lab 的 `resume` 对 0.12.73 及以后的 Runtime 答因，对更早的不答。
+  - 跑着的 MCP 服务器在重新启动之前答旧的工具表；`op status` 的 `mcp_servers_on_old_images` 照旧列出还跑在旧映像上的 MCP 服务进程，重开那个客户端的会话才看得到新参数（`ac_record_start`、`ac_record_stop` 的 `destination`，`ac_record_review` 的 `ruler`）。
+  - 部署以后要看的：第一次暂停或放置时账本里有没有暂停的那几条记录；`ac_resume` 的回答；状态里实例的 `pause` 仍只有四个成员；收编的回答带 `timings`。
+
+- **已知的限度**（各片最后一次审查和验收记录列的，逐条核过）：
+  - **`acib running`、`launch`、`stop` 在主人的测试手机上答不出**：手机的应用服务回了握手，对钉着的库给它准备的三种请求形式一个都不回，而截图当场就有回答（看板 #479，评论 6988820384、6989992655、6991653716）；原因还在查（PR #1838，不在本版）。ACIB-3 要上机才知道的几件（进程的可执行位置和应用路径对不对得上、应用已在跑时 `launch` 怎么做、锁屏时答什么、隐藏的应用列不列）因此都还没看到。
+    ACIB-2：同一部手机 USB 行和网络行的标识是不是同一个串没核（不是的话两把键，各找各的行，不会找错手机）；`--out -` 往标准输出写不受截止时间管，读的一方不读它就一直等。
+  - **iOS 手机**（F-2）：配置和绑定从没对着手机跑过，经 `acib` 列设备、绑定只用脚本化的子进程测过；真的子进程在 Windows 上被结束的行为没有测试；被隔离的 iOS 手机恢复时暂停撤、隔离留着；**没绑定的安卓手机被恢复时，随后的重连照旧失败**，和 v0.12.73 一样（这一片没动）。
+  - **隐私**（PRIV-1、PRIV-3）：**这些事实在收编和仓库的 CI 里还不拒任何东西，四个资源仓也还没有一份声明**；锚按多个倍率搜、又没有共享读的那种读其实算得出界，现在报无界（偏严）；比对答在界内时不说界是读带还是共享读区；矩形看不出的（文字内容、手做包的模板从哪截的）只数个数。
+    「划不出范围的读数」那条拒绝没法从录制一路走到（没有录制产生这种读数），测试是在自检那一步驱动的；一个用例同时因为框压在读数上和别的原因失败时，码报前者，全部失败的检查仍在细节里；资源仓里已有的旧图不受影响。
+  - **读名字**（SEL-2L）：**真的两列卡片网格还没在设备上读过**：一屏的框数会不会超过提供方的上限（超了整帧明着报 `text_read_blocks_truncated`）、卡和卡之间约 10 像素的空隙会不会让相邻两张卡的名字并成一个框，要到第一次上机才知道；
+    固定槽的共享读区在两排卡时会盖进第一排的图和价格；锚按倍率匹配时名字框不跟着缩放，可能伸出读区，后果是少读；SEL-2L-rows 的测试只证明到 20 的区间收得下、到 19 的收不下，没有证明这个生成的包算出来是 20。
+  - **暂停的记录**（PG-2d）：**续做线程的两条记录可能排在某次恢复的记录后面**（契约照实写了）；多开闸门里恢复刚标了「正在解除」而交还直接结束时，「之后静了」和恢复的记录先后不定；请求线程写记录前多等一次持久化门；**状态仍不答 `pause_mode` 和 `in_the_way`**；还没在生产上跑过。
+  - 收编的时间（S2b-1）：失败的 `details` 不是对象时 `timings` 会被丢掉（现在还没有这样的错）；列待办那一步读检出仓的时间算在 `write` 段；经 `run show` 读作业时是否原样带出 `timings`，没在代码里追到。
+  - 标尺（S1-R）：不带参数的预览逐字节相同，这一条的测试比的是解码再编码，不是录好的样张。
+  - 写这份说明的时候，本版只有 `acib` 的几条只读命令在手机上跑过，别的都还没在设备上跑过。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：`package` [3, 20]（SEL-2L-b，`contracts/component-interfaces.md` 的 `package` 第 20 行）、`actingd-config` [5, 34]（F-2，第 34 行），别的逐行和 v0.12.73 一样：`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [3, 12]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10）。
+  固定的钉同一提交改了：`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`，`crates/lab-rescue/src/install/gate_463_v1.rs` 的 [3, 20]，`gate_463_kp1` 的一条。
+  没找到该升没升的：账本没有加记录种类、成员或修订（`crates/ledger` 只多一条测试，契约库 `event/payload.rs` 只让手机绑定的草稿收一把现成的键，记录的形状不变）；新码都在已有记录和回执里，`runtime-outcomes` 留 1；恢复的新调用不改线上格式，`runtime-client` 留 12；
+  本地去向的包只在入口任务的 `provenance` 里多一个成员，准入只要求它是对象或 null；`privacy-zones.json` 是资源仓的文件，Runtime 不读；`acib` 在 Runtime 之外。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的 `codes.rs`、`error.rs`、`host.rs`、`provider.rs`，`host/` 下的 `contained_task.rs`、`device_link.rs`、`facts.rs`、`idle.rs`、`input.rs`、`lease.rs`、`lifecycle.rs`、`monitor_control.rs`、`observation.rs`、`policy_dispatch.rs`、`recovery_ladder.rs`、`resource_close.rs`、`runtime_facts.rs`，
+  测试 `tests/gate_480_pg2d.rs`、`tests/gate_479_f2.rs`（新），`gate_480_pg2c.rs` 只让两处对新门可见；`apps/actingd` 的 `config.rs`、`config/device_binding.rs`、`check_config.rs`、`main.rs`、`codes.rs` 和测试 `config/gate_479_f2.rs`；
+  契约库 `device_binding.rs`、`event/payload.rs`、`outcome/keys.rs`、`runtime.rs`（只改注释）；内核 `provider.rs`、`error.rs`；`crates/device/src/error.rs`；识别包 `candidate_layout.rs`、`read_regions.rs`；包容器 `source/declarations.rs`、`source/mod.rs`；`crates/runtime-config/src/instance.rs`、`lib.rs`；客户端库 `client.rs`。
+  `crates/ledger` 只多一条测试；`crates/policy`、`crates/scheduler`、`crates/display-adapter`、`crates/watchdog`、`crates/host-metrics`、`apps/actingctl` 一个文件没改。
+- 配置键：没有加的、没有去掉的；实例的新成员 `device.system` 只在清单里给写了它的条目报一行，没有默认值。`actingd.defaults.json` 一字没改，sha256 仍是 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改（`distribution/` 下只改了本文件和 `component-interfaces.json`）。
+- 结果码：加了 19 个码、1 个位置，没有标成 `retired` 的，没有改类别的。按片：PRIV-1 加 `privacy_zone_met`、`privacy_whole_frame`、`privacy_region_unbounded`、`privacy_base_undeclared`、`privacy_destination_local`（resource-tooling，error）、`privacy_undeclared`、`privacy_unseen`、`privacy_exempt`（warning），
+  键 `privacy_rect_kind`、`privacy_zone_kind`、`privacy_unseen_kind`、`privacy_zone_id`、`privacy_reading`、`privacy_unseen_counts`，词表 `privacy_rect_kind`（十个词）、`privacy_zone_kind`（`identity`、`value`）、`privacy_unseen_kind`（三个词），新域 `privacy_` 归 resource-tooling；
+  PRIV-3 加 `record_case_reading_unbounded`、`record_case_reading_withheld`（lab，error，`record stop` 退出码 3）、`record_case_reading_not_written`（lab，warning，退出码 0）；
+  PG-2d 加 `scheduling_pause_settled`（runtime-host，info）、`scheduling_pause_lifted_not_quiet`（runtime-host，warning，`pause_reason`、`in_the_way` 必填），改了 `scheduling_pause_standing`、`scheduling_pause_kept_at_shutdown`、`scheduling_resume_without_reconnect` 的说明和键 `in_the_way`；
+  F-2 加 `device_system_backend_missing`（runtime-host，error，`declaration_error`，只当因）、`recovery_ladder_drill_unsupported`（runtime-host，error，拒，退出码 1）、`scheduling_resume_without_backend`（runtime-host，info，回执的因，退出码 0）、`device_ios_list_failed`、`device_binding_secret_missing`（actingctl，error，退出码 1）、`device_binding_ignored`（actingd，warning，启动的守护进程行），
+  位置 `device_system_unsupported`（runtime-host），键和词表 `ios_list_problem`（十四个词），`availability_source` 加 `device_system`，`device_binding_problem` 加 `device_key_invalid`、`system_mismatch`，`device_config_problem` 加 `adb_member_with_ios`、`system_unsupported`，`device_row_problem` 加 `system_mismatch`，改了 `device_binding_file_invalid` 的说明；
+  SEL-2L-a 加的 `select_problem` 的词 `blocks_with_rows` 被 SEL-2L-rows 拿掉（没进过发布文件）；S1-R、S2b-1、SEL-2L-b 没加码；ACIB-2、ACIB-3 不用 Runtime 的码。
+  合计 4051 个码（在用 3962，`retired` 89），1775 个位置，31 个片段文件（42 个属主，11 个没有片段文件）；键 700，词表 288，词 2182；在用码按类别 error 3419、warning 181、info 220、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.74.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，改了 11 行，加了 3 个参数：`record start`、`record stop` 的 `destination`（`enum:local|public`，`record start` 默认 `public`），`record review` 的 `ruler`（`enum:edges|grid`）；`resume` 的帮助改成 144 字节、说明写了两种因；
+  `record mark`（请求的说明写了 `blocks`、`line_merge`）、`record status`、`record ready`、`standard-pack adopt`、`devices`、`devices bind` 只改了输出或说明；帮助最长 159 字节。命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。
+  Lab 的 MCP 服务器的工具数不变（Windows 上 167 个，别的平台 128 个），工具由行生成，多的就是上面三个参数；第一代 MCP 服务器仍是 46 个工具，一个没变。
+  README 两种语言把工具表标题改成 v0.12.74，`acib` 那一行改成十条命令（八条只读，`launch`、`stop` 两条会改手机上在跑的东西）。两个压缩包的文件表不变：没有新文件、没有去掉的文件，`acib.exe` 不在里面。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）；`ci/retired-gates.toml` 多一条（SEL-2L-a 本版内加的一条测试改名收窄，旧名记在这里）。看板 #71 另登记了 FLK-17、FLK-18，没有镜像进这张表。
+  本版的片在看板 #71 一件都没登记（它最后一次更新是 11-18 07:53 JST，v0.12.73 那件 `gate_427a`）；各片 CI 红过的都是自己的毛病（F-2 第一版和 PRIV-3 第一轮小修后的架构守卫、PRIV-3 第一版编不过、SEL-2L-rows 的一条 lint），改了再推，验收时读的头都是一次全过、没有重跑。
+
+升级与退回（救急模块部署、退回、撤销那几条路：`plan.rs`、`update.rs`、`status.rs`、`deploy.rs` 本版没改，v0.12.73 说明里引的行号对本版也对）：
+
+- **v0.12.73 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 9]，`previous_max_in_next` 过，`one_way` 不触发（`install/plan.rs` 298–310）；`runtime-outcomes` 的 `next_max_in_installer` 过；
+  `install-control` 三方 [0, 0]；`runtime-client` 的 `installer_meets_previous` 是安装工具 I [3, 12] 对在线 Rp [3, 12]，`installer_meets_next` 是 I [3, 12] 对本版 R* [3, 12]，都过（324–340）；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，照旧是 `pack_declaration_unknown` 警告，不挡，R* 写 [3, 20]（341–364）。
+  `actingd-config` 没有比区间的边：`installer_knows_keys` 只看配置各节的键安装工具认不认识（369–385、515–560，实例条目不在它查的范围里），过；`next_check_config` 照新版 `check-config` 的结果类别判（911–923），过。`defaults_diff` 没有一行；文件计划里没有 `new`；`ledger_verify` 为 false（两边账本范围相同，924）；计划通知的 `rollback_window_bounded` 为 false（只有接受了单向的那一步才是 true，212）。
+- **本版第一次启动多写的**：格式上没有；不迁移、不要新状态根。暂停的记录要等第一次有暂停的那些时刻才写；没配 iOS 手机时不写它的事实。`config.selection` 的默认值哈希不变；v0.12.73 的配置文件照收；`standard-pack check` 对今天的根答法相同（今天没有根用修订 20 的布局）。
+- **退回 v0.12.73：开着。** 回退门（`install/update.rs` 390–515）只放行这次部署替换掉的 v0.12.73。第 1 部分的边：`ledger` 两边 [3, 9]；`runtime-client` 两边 [3, 12]；
+  `package` 每个游戏照旧是警告：登记里不记包根的区间（`install/adopt.rs` 134 只写 `None`，别处不写），`actingd-config` 没有区间的边，所以**动了的 `package` 和 `actingd-config` 区间都不关窗、也不给窗设界**。
+  第 2 部分用 v0.12.73 自己的 `actingledger events` 读部署以来的每一页：本版不写新的记录种类或成员，暂停的新码是已有记录里的码，照拼写读进来；新词是结果里的值、照 JSON 读进来不按词表核。过。
+  第 4 部分（500–513）是 v0.12.73 的 `check-config` 读在线的配置：配置写了 `device.system` 时它解码就拒，私有文件有 iOS 行、又配着手机时它也拒，所以要先照上面解绑、拿掉条目。
+  部署以后 `op status` 的 `rollback_window` 里，留存的 v0.12.73、v0.12.72、v0.12.71 `ledger_edge_passes` 为 true，更早的为 false（`install/status.rs` 286–299，只比账本的边）。
+  - 回去以后用不了的：标尺、收编的时间、select 按文字块读名字（固定槽的包照样能跑，修订 20 的包每次运行都被拒）、敏感区声明的读法（`resource validate` 又把 `privacy-zones.json` 当成没登记的文件拒）、录制的去向和公开用例扣读数（本版写的本地去向或带 `blocks` 的录制，v0.12.73 的 Lab 读不了）、暂停的记录和恢复的因、iOS 手机的配置和绑定。
+  - **账本、持久化的暂停、版本 1 的私有绑定文件和不写 `system` 的配置，v0.12.73 照读**；它读不了、要先换掉或撤掉的有三样：修订 20 的包根、版本 2 的私有绑定文件、写了 `device.system` 的配置（见上）；本地去向或带 `blocks` 的录制只有本版的 Lab 读得了。
+
+配对：
+
+- **控制台 UI**：界面的 v0.12.25（钉 Runtime v0.12.73）在用。**本版没有它读不了的东西**：状态里实例的暂停仍只有四个成员，能力表的行是已有的形状（iOS 手机的行只在配了它时才有，来源是字符串 `device_system:ios`）；回执的因是结果里的码，照拼写读；
+  暂停的记录是已有的 `device_state_observed` 记录、新码照拼写读；新词都是结果里的值，不按词表核；账本库本版只多一条测试，不加记录种类和成员。它不用为本版改钉。
+  它不知道的：它钉的客户端库没有 `resume_scheduling_as`，老的调用只回结果，所以**恢复的因到不了它**；暂停的那几条记录是它没见过的码；实例 `device` 的 `system`（写之前它要先到 `actingd-config` 34）。想显示恢复的因、读暂停的记录，要钉到本版。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks`：`actingd-config` [5, 34]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [3, 12]、`package` [3, 20]、`runtime-outcomes` [1, 1]；默认值文件的哈希不变；
+  `git diff --stat v0.12.73 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；`ledger` 两条边写 Rp [3, 9]、R* [3, 9]，都过；`runtime-client` 的边写 I [3, 12]、Rp [3, 12]、R* [3, 12]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`，R* 写 [3, 20]；`actingd-config` 的两行过。
+  **和 v0.12.73 那次不同的**：两个区间（`package` 和 `actingd-config`，`runtime-client` 这次三方都是 [3, 12]）；救急模块的产品代码没改，按住和计划和上次一样；钉着的离线 Lab 等本版上线以后再升；部署以后能读的新东西见上面「部署以后要看的」。
+  照旧的：`notice.rollback_window_bounded` 为 false、`ledger_verify` 为 false、没有账本那一步、日志的 `one_way` 为 false；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住；`standard-pack check` 不出新的警告码；部署前核没有开着的录制和试跑。
+- **热放置工具包**：`place` 的计划和检查行都没变。**重钉要把 `package` 从 3,19 换成 3,20、`actingd_config` 从 5,33 换成 5,34**；`ledger` 3,9 和默认值哈希不变。
+- **资源频道钉着的工具**（升到本版以后）：多了 `record review --ruler`、`record start`/`record stop --destination`、select 的 `blocks` 和 `line_merge`（固定槽和滚动的行）、收编的 `timings`、`resource validate` 读 `privacy-zones.json`；默认公开的录制读数量时会扣读数、可能被拒。
+- **两个 MCP 服务器**：Lab 的工具数不变，多三个参数（`ac_record_start`、`ac_record_stop` 的 `destination`，`ac_record_review` 的 `ruler`），`ac_resume` 回答带回执的因，`ac_devices` 只在装了 `acib` 时列 iOS 手机。第一代的工具表一个没变。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.73 部署，经 Lab 的 `release stage`、`deploy`、`op status`：两面都不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；`package` 和 `actingd-config` 两个区间动了，退回 v0.12.73 开着（先换掉修订 20 的包根、解绑 iOS 手机）。
+- 录制默认是公开去向：读数量的公开录制，回归用例里不留读数的像素，框压在读数上时 `record stop` 拒；只在本机用的写 `--destination local`。
+- 两行的卡名靠 `select.read` 的 `blocks` 和 `line_merge` 读整；滚动行这样做的包要 `package` 修订 20，等本版上线以后再收编。
+- 暂停身上发生的事一个时刻一条进账本；Lab 的 `resume` 和 `ac_resume` 答恢复的因；状态照旧不答 `pause_mode`、`in_the_way`。
+- 配置里可以有 iOS 手机，取帧之前它对策略永不可用、什么都不取、什么都不按，暂停当场静、恢复不重连；`acib` 仍是单独的程序，不随发版。
+- 预览图可以带标尺，收编按阶段报时间；钉着的离线 Lab 等本版上线以后升到本版。
+
+本版合并的 PR：
+
+- #1839 #463 PRIV-3（登记 §1.483）：exec 门表 `#463 PRIV-3` 12 条（Lab 11、actinglab 命令行 1）。
+- #1836 #479 F-2（§1.482）：host 门表 `#479 F-2` 9 条，apps 门表 10 条（lab-ops 7、actingd 3）；为移动的区间改了 `component_interfaces` 一条，`devices` 的两条单测改成比 `Some(序列号)`。
+- #1837 #463 SEL-2L-rows（§1.484）：exec 门表 `#463 SEL-2L-rows` 5 条；SEL-2L-a 的一条改名收窄，旧名记进 `ci/retired-gates.toml`；SEL-2L-a 两条不再钉提供方的调用次数。
+- #1835 #479 ACIB-3（不占登记节）：apps 门表 `#479 ACIB-3` 18 条（`apps/acib` 自己的测试，不碰设备和网络）。
+- #1831 #463 PRIV-1（§1.478）：exec 门表 `#463 PRIV-1` 12 条。
+- #1834 #480 PG-2d（§1.481）：host 门表 `#480 PG-2d` 11 条，apps 门表 4 条（Lab 2、Lab 的 MCP 1、救急模块 1），contract 门表 2 条（客户端库）；改了 PG-2c 那条 Lab `pause` 行的测试。
+- #1833 #463 SEL-2L-b（§1.480）：exec 门表 `#463 SEL-2L` 9 条（识别包 6、包容器 2、修订表 1）；为移动的区间改了 `gate_463_v1`、`gate_463_kp1` 和 `component_interfaces` 各一条。
+- #1832 #463 SEL-2L-a（§1.479）：exec 门表 `#463 SEL-2L-a` 6 条。
+- #1830 #463 S1-R（§1.476）：exec 门表 `#463 S1-R` 6 条；七个门文件的 `RecordReviewRequest` 只加了 `ruler: None`。
+- #1827 #479 ACIB-2（不占登记节）：apps 门表 `#479 ACIB-2` 18 条，ledger 门表 1 条（和 `acib` 共用的那个向量）。
+- #1829 #463 S2b-1（§1.477）：exec 门表 `#463 S2b-1` 6 条。
+- 合计 129 条新测试；没有测试退出 v0.12.73 的门表。
+
 ## v0.12.73
 
 本版是 v0.12.72 之后的 8 次合并、8 张 PR，没有列车，一张一张单独合入：#463 SC-1 #1818、#480 PG-2a #1820、#480 PG-2b #1821、#479 ACIB-1 #1822、#398 DB-3 #1825、#453 S5b #1824、#463 INT-1 #1823，最后 #480 PG-2c #1826。
@@ -120,6 +309,10 @@ and artifact names bind the complete source SHA.
   - 句柄（DB-3）：测试验的是入口的标准输出，没验标准输入，也没直接走 `actinglab devices` 起 adb 那条路；守护进程自己调 adb 的命令标准输入默认继承（它是看门狗或 WMI 起的，标准输入是空设备）；Lab 给 adb 的环境里仍带着 `--key-salt-env` 那个变量。
   - `acib`（ACIB-1）：「哪个应用在前台」在 iOS 上还答不了；锁屏和真画面分不出；图是位深 16 的 PNG，接进识别前要先转 8 位（下一片）。
   - 写这份说明的时候，本版只有 `acib screenshot` 在手机上跑过（#1822 的构建），别的都还没在设备上跑过。
+    部署以后补记（看板 #421，评论 6974054601）：部署把工具包的三十步都走完了，主人的全局暂停和五台实例各自的暂停都在，救急模块照设计保留了它们；Runtime 启动后 35.6 秒就绪；
+    十分钟以后全局暂停解开，当晚再一台一台放开调度，此后有四台实例在这一版上跑过调度的活。
+    别的游戏的实例正在录制或试跑时做的热放置，只按住被放的那个游戏的实例，别的一台都没打扰（11-19 00:46 到 05:47 JST 之间十一次放置；资源频道的报告）；
+    一条不带处置的标题页中断条目放上去以后又撤了下来：主人说别处登录不用写规则。
 
 配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
 
