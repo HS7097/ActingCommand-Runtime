@@ -2754,3 +2754,11 @@ tests = [
     "actingcommand-ios-bridge::bin:acib::answer::tests::every_stage_of_a_screenshot_has_a_word_of_its_own",
 ]
 incident = ["#479 ACIB-1"]
+
+# #398 DB-3 (0.12.73; register §1.475; brief rd-1118/brief-398-db3-handles.md; crates/host-metrics/src/standard_handles.rs): every program of the workspace that starts a child makes its own stdin, stdout and stderr not inheritable at its start (standard_handles::clear_all_own_inheritance), so a long-lived process one of its children starts holds no pipe of its caller. Windows only: the MCP entry of the second generation, run with its stdin and stdout through pipes, starts its server (the in-tree fake as actinglab-mcp.exe), which on a call starts a grandchild that lingers until released, its standard handles null; once the client closed its input and the entry ended (exit 0), the reader of the entry's stdout sees that pipe's end within the wait, and the grandchild still runs (process probe). Before DB-3 the entry's stdout reached the grandchild through the server and the reader waited for the grandchild's end. No clock read; the waits are the channel's
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry-g2::entry_process::db3_the_entrys_output_ends_with_the_entry_while_a_grandchild_lives",
+]
+incident = ["#398 DB-3"]

@@ -68,5 +68,8 @@ actingcommand_contract::outcome_locations! {
         /// WD-MT: making this process's own standard error handle not inheritable
         /// (`SetHandleInformation`).
         ProcessStderrInheritanceClear => "process_stderr_inheritance_clear",
+        /// #398 DB-3: making this process's own standard input handle not inheritable
+        /// (`SetHandleInformation`).
+        ProcessStdinInheritanceClear => "process_stdin_inheritance_clear",
     }
 }

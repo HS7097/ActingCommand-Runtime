@@ -33,6 +33,9 @@ path = "src/test_child.rs"
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# #398 DB-3: `standard_handles::clear_all_own_inheritance`, this process's own stdin, stdout and
+# stderr made not inheritable at its start, so no long-lived descendant keeps its client's pipes.
+actingcommand-host-metrics = { workspace = true }
 # The operation table, the authoring option's place, the CLI line and the MCP codes of actingctl's
 # registry, which this server answers with as today's does.
 actingcommand-lab-ops = { workspace = true }

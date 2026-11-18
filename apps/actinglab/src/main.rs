@@ -244,6 +244,21 @@ fn main() -> ExitCode {
     if let Some(exit) = cli_completion::callback_line(env::args_os().skip(1)) {
         return exit;
     }
+    // #398 DB-3 (register §1.475): before any child is started and before any thread that could
+    // start one, this process's own stdin, stdout and stderr are made not inheritable, so that no
+    // adb server or other long-lived process one of its children starts keeps its caller's pipes
+    // open. The callback above starts nothing. A refusal is one developer line on stderr and the
+    // command goes on, as actingd's start goes on.
+    for refusal in actingcommand_host_metrics::standard_handles::clear_all_own_inheritance() {
+        eprintln!(
+            "{}",
+            actingcommand_lab_ops::cli_line::developer_text(
+                cli_module::PROGRAM,
+                &refusal,
+                Some(actingcommand_host_metrics::standard_handles::NOT_CLEARED_TEXT),
+            )
+        );
+    }
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
     // connections unbound; the runtime client reports it once, on stderr.

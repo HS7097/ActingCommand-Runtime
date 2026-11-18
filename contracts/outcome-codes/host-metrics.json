@@ -405,7 +405,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.28",
-      "description": "Making the calling process's own standard output handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open."
+      "description": "Making the calling process's own standard output handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open; since 0.12.73 (#398 DB-3) also at the start of every other program of the workspace that starts a child, so no descendant keeps open the pipe its caller reads its output from."
     },
     "process_stderr_inheritance_clear": {
       "owner": "host-metrics",
@@ -413,7 +413,15 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.28",
-      "description": "Making the calling process's own standard error handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open."
+      "description": "Making the calling process's own standard error handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open; since 0.12.73 (#398 DB-3) also at the start of every other program of the workspace that starts a child, so no descendant keeps open the pipe its caller reads its errors from."
+    },
+    "process_stdin_inheritance_clear": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.73",
+      "description": "Making the calling process's own standard input handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (#398 DB-3), at the start of every program of the workspace that starts a child but actingd, so no descendant keeps open the read end of the pipe its caller writes its input into (an MCP server's and an MCP entry's requests)."
     }
   }
 }

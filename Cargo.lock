@@ -25,6 +25,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-host-metrics",
  "actingcommand-lab-ops",
  "actingcommand-lab-rescue",
  "actingcommand-ledger",
@@ -77,6 +78,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-host-metrics",
  "actingcommand-lab",
  "actingcommand-lab-ops",
  "actingcommand-lab-rescue",
@@ -114,6 +116,7 @@ name = "actingcommand-actinglab-mcp"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-host-metrics",
  "actingcommand-lab-ops",
  "actingcommand-lab-rescue",
  "actingcommand-runtime-client",

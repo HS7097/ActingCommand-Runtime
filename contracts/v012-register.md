@@ -38790,6 +38790,140 @@ of main; no behaviour changes.
   order, §1.470 as main has it.
 - No code, word, key or vocabulary added; the ledger's revision does not move.
 
+### 1.475 #398 DB-3 (0.12.73): a long-lived process the Lab's adb call starts holds no pipe of the Lab's caller (Workflow #398; observed on 11-18 by the interface's maintainer on the installer's handset page, the lines read in main by the coordinator; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-398-db3-handles.md`, on main `202fd8bc`)
+
+This section takes 1.475 (1.472 to 1.474 are other slices'). It ships in 0.12.73. The module
+text of `crates/host-metrics/src/standard_handles.rs` is the contract.
+
+**Why.** `actinglab devices` and `devices bind` run `adb devices -l` with `Command::output()`
+(`crates/lab-ops/src/devices.rs`, `run_adb`). Where no adb server runs, that adb client starts one,
+and the server lives on. Windows gives a child a copy of every inheritable handle of its parent,
+and the child hands them on to what it starts; the standard handles a caller gives a program are
+inheritable in it. So the adb client received the Lab's stdout, the pipe the Lab's caller reads
+the Lab's answer from, and the adb server took it from the client and kept it for its whole life:
+the caller waited for that pipe's end. The installer met exactly this: on a computer with no adb
+server running, its first listing of handsets waited its whole 30 s and threw away the answer the
+Lab had written in full, and a binding during installation could report a failure after the
+binding file was written (the interface works around it for these two calls). WD-MT (Workflow
+#421) had cured the same for actingd's log: `standard_handles::clear_own_inheritance` on its own
+stdout and stderr, once, before any child is started; only actingd called it.
+
+**The rule.**
+- *Every program of the workspace that can start a child clears its own standard handles at its
+  start*, with the one function: `clear_own_inheritance`, extended to standard input
+  (`StandardStream::Input`, its refusal's operation `process_stdin_inheritance_clear`), called for
+  stdin, stdout and stderr in that order, each whatever the others answered, by
+  `clear_all_own_inheritance` (its refusals). The call comes before any child is started and before
+  any thread that could start one (the table below says where).
+- *Standard input too.* An MCP server's and an MCP entry's stdin is its transport, the pipe its
+  client writes its requests into (and `actinglab serve --stdio`'s, the MCP server's to its
+  child). A long-lived descendant holding a copy of its read end does not delay the end of input
+  the server reads (that comes when every write end is closed), but it keeps a write into the pipe
+  from failing once the server has ended and, once the pipe's buffer is full, from returning at
+  all: a client that learns of the server's end from its write, or writes more than the buffer
+  holds, waits for that descendant. So stdin is cleared with the two others, by every program that
+  clears them (one rule for all; a stdin that is NUL or a console loses nothing by it). actingd
+  keeps its two (not changed by this slice).
+- *A refused call* is handled as actingd's start handles it: one developer line, and the program
+  goes on (actingd: the warning `host_stdio_inheritance_failed`, and the start goes on). A command
+  line goes on too: what it answers does not depend on the flag, which only keeps a handle out of a
+  long-lived descendant, and failing for it would make the command unusable for want of a
+  protection. The line is the refusal itself, `foreign_os_error` with its `operation`, `os_error`
+  and `raw_text`, at its category's level, beside the text `NOT_CLEARED_TEXT` ("this standard
+  handle stays inheritable, so a long-lived process a child starts may keep it open; the program
+  goes on"), on stderr (actingwatch's tick: its `watchdog.log`); stdout and the exit status are
+  unchanged. No code is added: `host_stdio_inheritance_failed` is actingd's own, and the refusal
+  says the whole cause.
+
+**Every program of the workspace.**
+
+| Program | Starts a child | What this slice does |
+|---|---|---|
+| `actingcommand-actingd` | yes: adb, MuMuManager, PowerShell, a vendor library's own | nothing (not to be changed): its daemon start, `discover` and `vision` already clear its stdout and stderr (WD-MT) |
+| `actinglab` | yes: adb (`devices`, `devices bind`), git (`standard-pack adopt`, `resource verify`), `actingd check-config` (`record draft`), PowerShell and WMI (the rescue module, the detached run); its device commands are the Runtime's | `clear_all_own_inheritance` at the top of `main`, right after the completion scripts' callback, which starts nothing and must write nothing on stderr |
+| `actinglab-mcp` | yes: `actinglab serve --stdio --front mcp` children; in its own process adb (`devices`) and the rescue module's PowerShell and detached run | at the top of `main` |
+| `actingctl` | yes: adb (`devices`), `actingd suspended` (`diagnose`), actinglab (`mcp-serve`'s Lab tools), PowerShell, a System32 tool (the watchdog's task), the Runtime's start through WMI | at the top of `main`, before `agent-channel`, whose hook's stdout is a session's |
+| `actingwatch` | yes: the Runtime (`CreateProcess` or WMI), PowerShell, a System32 tool | at the start of the task's tick (a refusal in `watchdog.log`) and of a subcommand, after it attached to its parent's console |
+| `actingcommand-mcp-entry`, `actingcommand-mcp-entry-g2` | yes: the server child and the plan child | at the top of `main` |
+| `actingledger`, `acib`, `vision-provider-check` (the provider is a library in its own process), `selection-eval`, `outcome-guard` | no | nothing |
+| the test helpers `actinglab-mcp-test-child`, `actingcommand-mcp-entry-fake-child` (never shipped) | no | nothing |
+| the test helper `actingcommand-mcp-entry-g2-fake-child` (never shipped) | its lingering grandchild, for the test below | clears as the server it stands for, before it serves |
+
+**A child given the program's own handles keeps working** (the module text: "A handle a child is
+explicitly given is duplicated for it by its starter"). Rust's `Command` gives a child an
+inheritable handle of its own making for each standard handle: a pipe or NUL it opens for that
+start, a duplicate of a file it is given, or with `Stdio::inherit()` (the default of `spawn` and
+`status`) a duplicate of this process's own handle, made with inheritance whatever this process's
+flag says; the flag cleared here is never read for it.
+
+| Child | Its standard handles, from the code | Why it is not broken |
+|---|---|---|
+| the MCP server's `serve` child (`apps/actinglab-mcp/src/children.rs`, `Child::start`) | stdin, stdout and stderr `Stdio::piped()` | std makes each pipe for that start, the child's end inheritable for it under std's own spawn lock; the server's own handles are not among them |
+| an entry's server child (`apps/mcp-entry*/src/main.rs`, `RealHost::spawn`) | stdin and stdout `Stdio::piped()`, stderr `Stdio::inherit()` | the pipes as above; the stderr is a new inheritable duplicate of the entry's, so the server's developer lines still reach the client's stderr (and the server, which clears its own, keeps it from its own children) |
+| an entry's plan child (`run_plan`) | stdin `Stdio::null()`, stdout and stderr piped | NUL opened and pipes made for it |
+| the installer's detached run with its log file (`crates/lab-rescue/src/install/host.rs`, `detach_with_wmi`) | none of the caller's: WMI `Win32_Process.Create` starts `cmd /d /s /c "… 1>>"<log>" 2>&1"`, whose `cmd` opens the log itself; the PowerShell that asks WMI (`crates/watchdog/src/powershell.rs`) has stdin null, stdout and stderr piped | a process WMI creates never received a handle of its caller; the PowerShell's are std's own |
+| the Runtime the watchdog's tick starts (`crates/watchdog/src/start.rs`, `spawn_breakaway`) | stdin null, stdout and stderr the log file | std duplicates the file handle for it |
+| a recording's and a trial's processes | their presses, frames and runs are the Runtime's, asked for by the Lab (the device crate's adb children run in actingd: `maatouch`, `minitouch` with three pipes, `link_watch` with null, a pipe, null, an adb command, `run_raw_with_boundary`, with stdout and stderr pipes and stdin by default); the Lab's own for a recording is `record draft`'s `actingd check-config` (`lab-ops` `child::run_to_end`: null, a pipe, a pipe) | pipes and NUL made for the child, and in actingd its own handles, which its start clears (WD-MT) |
+| adb for `devices` (`run_adb`, `.output()`) | stdin null, stdout and stderr pipes std makes, which `output()` reads to their end | std's own; the adb client now receives those three and nothing the Lab's caller gave the Lab, so the adb server it starts has nothing of the caller's to keep |
+
+**What a caller of the Lab sees.** Before: on a computer where no adb server ran, `actinglab
+devices` (and `devices bind`) wrote its answer and ended, but the pipe its caller read its stdout
+from stayed open while the adb server it had started ran, so a caller that reads to the end of
+the output waited until its own deadline. After: that pipe ends when actinglab ends. Nothing else
+changes: the same answer, the same exit status, nothing new on stderr. The same holds for every
+program of the table and its callers: an MCP server's and an entry's client, a hook's session.
+
+**Left as it is** (read from the code). A child given this process's own handle by
+`Stdio::inherit()` holds that duplicate as its own standard handle, and a long-lived process it
+starts may take it from it: that is the child's to clear. Every program of the workspace now
+clears its own at its start (an entry's server child clears the stderr the entry gives it); a
+program that is not ours does not. The device crate's adb command (`run_raw_with_boundary`) is
+started with stdin by default, so the adb client of a program that runs it holds a duplicate of
+that program's stdin (actingd's is NUL when the watchdog or WMI starts it), which an adb server
+that client starts may keep; what adb is called with is not changed in this slice.
+
+**Codes and words.** One location, `process_stdin_inheritance_clear` (host-metrics, since 0.12.73):
+the operation of a refused clearing of stdin. No code is added. The descriptions of
+`process_stdout_inheritance_clear` and `process_stderr_inheritance_clear` say they are now made at
+the other programs' start too. The outcome code index is regenerated (its count of locations).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The one function, extended | `crates/host-metrics/src/standard_handles.rs` (`StandardStream::Input`, `ALL_STREAMS`, `clear_all_own_inheritance`, `NOT_CLEARED_TEXT`, the module text), `crates/host-metrics/src/codes.rs` (`ProcessStdinInheritanceClear`) |
+| The calls | `main` of `apps/actinglab`, `apps/actinglab-mcp`, `apps/actingctl`, `apps/mcp-entry` and `apps/mcp-entry-g2`; `apps/actingwatch` (`main`, `tick_in_process`); `actingcommand-host-metrics` is now a dependency of actinglab, actinglab-mcp and actingctl |
+| actingd | its unit test's fake answers the new variant (one match arm); its start and its two cleared handles are as they were |
+| Texts | the module text; `contracts/outcome-codes/host-metrics.json` and the index |
+
+**Tests** (`apps/mcp-entry-g2/tests/entry_process.rs`, the process test of the entry's second
+generation, which the apps job runs on its Windows runner; apps gate map row "#398 DB-3"; Windows
+only; no clock read, the waits are the channel's, bounded by the file's `WAIT`):
+`db3_the_entrys_output_ends_with_the_entry_while_a_grandchild_lives`: the entry, run as a client
+runs it with its stdin and stdout through pipes, starts its server (the in-tree fake as
+`actinglab-mcp.exe`); a call makes the server start a grandchild (the fake, `--linger <file>`)
+with null standard handles, which lingers until the test writes the file, its folder is gone or
+120 s have passed; the client closes its input; the entry exits 0, the reader of its stdout then
+sees the pipe's end within the wait, and the grandchild still runs (`probe_process`). Before this
+slice the entry's stdout was inheritable, the server and then the grandchild received a copy, and
+the reader saw no end until the grandchild ended, past the wait. The fake
+(`apps/mcp-entry-g2/src/fake_child.rs`) gained its `--linger` mode, the call's `linger {program,
+release}` and, as the server it stands for, the clearing before it serves. The runner holds the
+grandchild alive across the assertion as it holds the test's other processes; nothing of it is
+left in the temporary root (it runs from where cargo built the fake). No existing test's assertion
+changed; none retired; no golden changes.
+
+**What is not changed.** What any command answers (stdout and the exit status; stderr gains a
+line only when a clearing is refused); what adb is called with; actingd; the salt of `devices
+--key-salt-env`, which still reaches adb's environment and its server's (judged negligible by the
+interface's reviewers in the work order).
+
+**Ledger and interface.** Nothing: no record, request, receipt, configuration key or interface
+revision changes, and no code is added.
+
+**At deploy.** Nothing to do. A running MCP server or entry of the build before keeps its handles
+until it is started again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
