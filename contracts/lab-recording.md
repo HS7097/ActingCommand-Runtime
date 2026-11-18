@@ -868,7 +868,8 @@ variable of the package" below), so the mark decides nothing in the package.
   gives its own: the default would be the first one's, `on_empty_key_taken`); `confirm`,
   `candidate_set` (the kernel's default) or `decision`. #463 SEL-2L-a (since 0.12.74): `read` may
   also carry `blocks` and `line_merge`, together, so that the names are read by detecting their
-  blocks ("Reading names by detecting blocks" below).
+  blocks ("Reading names by detecting blocks" below); #463 SEL-2L-rows (since 0.12.74): so may a
+  scrolling select's.
 - **What the Lab reads, and what only the kernel admits** (fix 1). The Lab's own reading of the
   request refuses `validation_failed` (exit 2): an unknown member or a wrong type; a slot count
   outside 1 to 16; a rectangle without width or height; an empty `languages` or a blank language, a
@@ -944,7 +945,6 @@ stop` generates the package:
 | `no_choice` | #463 S2-6 fix round 1: the request's `choice: false` names a step that is not marked as holding a choice, so there is nothing to take off ("Marking a choice first") |
 | `drop_of_choice` | #463 stage two, train, fix round: `drop_step` names a step that holds a choice, marked as holding one or refined by a select, the last step too; withdraw the choice first ("Steps, frames and remediation") |
 | `transition_of_choice` | #463 stage two, train, fix round: `to_transition` names a step that holds a choice; a page transition holds none, so the conversion would lose it; withdraw the choice first ("Steps, frames and remediation") |
-| `blocks_with_rows` | #463 SEL-2L-a: a select with `rows` whose `read` declares `blocks`: only a select of fixed slots reads its names by detecting their blocks yet ("Reading names by detecting blocks"); checked at the request, before anything is read |
 
 **The mark-time self-test**, on every live frame of the step, is the kernel's own dry run of the
 select step (`dry_run_select`, called, never copied) on a probe package: the step alone as `record
@@ -1116,7 +1116,10 @@ target without `locate` on a region smaller than the frame, so a name drawn on t
 title box reads poorly on every frame (`select_name_unread`, `low_confidence`). A layout of fixed
 slots has the read that fits: its shared read ([selection-graph.md](selection-graph.md), "Shared OCR
 read"), which runs the text detector over one region once per frame and gives each slot the blocks
-detected in its box. A select's `read` asks for it with two members, in that read's own words:
+detected in its box. #463 SEL-2L-rows (since 0.12.74, register §1.484): so does a scrolling
+select's layout of rows found by their anchor, whose shared read covers its readable band
+([selection-graph.md](selection-graph.md), "A `repeated_anchor` layout's shared read"). A select's
+`read`, of fixed slots or of rows, asks for it with two members, in that read's own words:
 
 ```json
 "read":{"languages":["en"],"timeout_ms":1000,"minimum_confidence_milli":800,
@@ -1148,14 +1151,43 @@ detected in its box. A select's `read` asks for it with two members, in that rea
   box alone; the generator refuses to generate it (`validation_failed`, nothing written) rather
   than read it so in silence. No interface revision moves: a layout of fixed slots with
   `shared_ocr` is in the task schema the Lab writes.
+- **What `record stop` generates for a scrolling select** that declares them (#463 SEL-2L-rows):
+  the `repeated_anchor` layout of "A scrolling choice: reading the list to its end" with, after its
+  `features`, `"shared_ocr": {"region": {"mode": "rect", "rect": L}, "languages", "timeout_ms",
+  "model_ref", "model_sha256", "blocks", "line_merge"}`, `L` the request's `scan.list`, which is the
+  layout's `readable_band` (a scan always declares its list, so a layout the Lab generates always
+  has a band, and the region covers it exactly), every other member the read's, by the one writer
+  a select of fixed slots uses; the name target `select/step_ii/name` and everything else of the
+  package are unchanged. On each frame the kernel calls the OCR provider once over `L`; each row
+  the band holds whole reads the blocks whose centre lies in its name region, placed at the row's
+  anchor, as a slot reads its box; a row the band's edge cuts is not actionable and not read, so a
+  block over its name goes to nobody. **Every row the band holds is served by the read**: the
+  generator refuses (`validation_failed`, nothing written) a name target the read would not give
+  text to (one with another model, digest, languages or chain, or with `locate`, or whose region,
+  the name region on the list's first screen, does not lie inside `L`: the row lies in the list and
+  the name in the row, so it does); on a `repeated_anchor` layout that is the kernel's whole test,
+  since its read covers the band and only a row inside the band is read, its name region inside
+  the row. Such a package needs `package` revision 20
+  ([component-interfaces.md](component-interfaces.md), row 20): `record stop` writes no revision
+  (no `interfaces.json`), and `standard-pack build` counts the layout's `shared_ocr` as 20
+  ([resource-verify.md](resource-verify.md), "The `package` revision"); a Runtime before 0.12.74
+  refuses such a package at every run (`UnknownField` at `/candidate_layouts/<i>/shared_ocr`). A
+  scrolling select without the members generates byte for byte what it generated, so its package
+  keeps its revision.
 - **The self-tests read as the run reads.** The mark-time self-test, `record ready` and `record
   stop`'s self-checks judge such a select through the same generated probe package, the kernel's dry
-  run of the step: on each of its dry runs the OCR provider is asked for the shared read alone.
-- **Not for a scrolling select yet.** A select with `rows` whose `read` declares `blocks` is refused
-  at the request, `record_select_invalid` with `blocks_with_rows` (exit 3), nothing written.
+  run of the step: on each of its dry runs the OCR provider is asked for the shared read alone. Of a
+  scrolling select, every screen of the demonstration, and the kernel's offline entry over its
+  forward screens, read through it; a screen captured while the list still moved, its names
+  smeared, reads them poorly and is refused there as any unread row is (`select_name_unread`, one
+  refusal per row the band holds whole, the select counted once in the message).
 - **The regression cases** ("Regression cases written with the package") paste into their scenes the
-  regions the package's targets read: the slots' name boxes, not the whole of `R`. Text that lies
-  between two name boxes is not in a case's scene.
+  regions the package's targets read: the slots' name boxes (a scrolling select's case, the name
+  region on its first screen), not the whole of `R` (or `L`). A shared read uses pixels of its region
+  outside the name boxes too (the detector's context, its padding), and a case's scene is black
+  there, so a scene does not reproduce the read the recording made, even where every name lies
+  inside its box. That does not matter today only because the case runner evaluates no candidate
+  layout, so no case reads through the shared read.
 
 ### Marking a choice first
 
@@ -1403,11 +1435,11 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   frame), `scan_region_outside_list` (the row outside the list), `scan_region_outside_row` (the
   anchor, the name region or the click box outside the row), `scan_number_not_measured` (a number
   the demonstration does not hold what it is measured from, a swipe recorded without its after
-  loop's record, and the request does not give it; `details.number`); #463 SEL-2L-a:
-  `blocks_with_rows` (the `read` declares `blocks`, which only a select of fixed slots takes yet,
-  "Reading names by detecting blocks"). `rows` without `scan` or the
+  loop's record, and the request does not give it; `details.number`). `rows` without `scan` or the
   other way round, a rectangle without width or height, a number `numbers` does not know or a given
-  0 are the Lab's own reading, `validation_failed` (exit 2).
+  0 are the Lab's own reading, `validation_failed` (exit 2). #463 SEL-2L-rows: the `read` may
+  declare `blocks` and `line_merge`, which the request no longer refuses beside `rows` ("Reading
+  names by detecting blocks").
 - **Where each image comes from.** The screens are the fold's, in order: the first screen (the
   first folded swipe's screen before it), then the screen after each swipe, forward or back. The
   row, its anchor, its name and the start mark are taken from the first screen; the end mark from
@@ -1505,7 +1537,9 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   "select/step_ii/end"}`, `bounds`; no `early_stop`, no `confirm`); the layout `layout/step_ii`,
   `repeated_anchor`, its anchor `select/step_ii/anchor`, `max_instances`, `order` along the axis,
   `instance_rect`, `click` and the name's `offset` relative to the anchor on the first screen, the
-  list as its `readable_band`, the one identity feature `name` over `names`; `ocr_targets[]`
+  list as its `readable_band`, the one identity feature `name` over `names` (#463 SEL-2L-rows: and,
+  last, `shared_ocr` over the list when the `read` declares `blocks`, "Reading names by detecting
+  blocks"); `ocr_targets[]`
   `select/step_ii/name`; `verify_templates[]` `select/step_ii/anchor`, `…/start`, `…/end`, their
   assets under `assets/select/`; the policy document, `variables` and the `on_empty` mapping as a
   fixed-slot select generates them (unchanged: R1 generates `on_empty` for every select, its key
