@@ -4362,3 +4362,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_480_pg2b::pg2b_9_a_pause_at_a_group_members_application_rung_stops_no_other_member",
 ]
 incident = ["#480", "PG-2b"]
+
+# Workflow #453 S5b fix round 1 (0.12.73; register §1.474; brief rd-1118/brief-453-s5b-fix1.md, item 4): on gate_rl1b's workbench bench (composer mode, game A bound to one instance, a manual Runtime clock), game A holding two packages is composed with rule R1 and then with R1 and R2 at a higher catalog version: each time check-config's preview of the same root and instance (catalog version 1) gives the rules digest of the active generation's composition record (policy/catalogs/generations/<hex>/standard-packs.json, by the contract crate's layout constants), the two digests differing; two rules each naming a held package are then added and nothing else: the preview's digest does not move, and the workbench, reading the changed file again, activates no generation (two catalog.activated in all)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rl1b::s5b_the_previews_rules_digest_is_the_one_the_workbench_records",
+]
+incident = ["#453 S5b"]

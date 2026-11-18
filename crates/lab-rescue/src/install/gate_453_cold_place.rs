@@ -465,8 +465,9 @@ fn s5_unbound_composition_passes_at_once() {
 // deliberately changes what the row compares: the live build's check-config previews the rules
 // digest of the placed root ([`S5B_DIGEST_B`]), the generation the check reads first is the one
 // read before the hold, whose digest is another ([`S5B_DIGEST_A`]), and the row passes once the
-// Runtime's generation has the previewed digest, with that digest; the row `check_config` of that
-// run stands before it.
+// Runtime's generation has the previewed digest, with that digest. S5b fix round 1: that run of
+// check-config serves the digest alone, so the rows are `rerun`, `standard_pack_check` and
+// `composition` as before this slice.
 #[test]
 fn s5_a_bound_instance_waits_for_a_new_composition() {
     let temp = TempDir::new().expect("tempdir");
@@ -498,7 +499,11 @@ fn s5_a_bound_instance_waits_for_a_new_composition() {
         json!(["neutral.a"]),
         "{journal}"
     );
-    assert_eq!(check_row(&journal, "check_config")["result"], "pass");
+    let ids = check_rows(&journal)
+        .iter()
+        .map(|row| row["id"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["rerun", "standard_pack_check", "composition"]);
     assert_eq!(
         check_row(&journal, "composition"),
         json!({"id": "composition", "result": "pass", "values": {

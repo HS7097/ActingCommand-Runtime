@@ -1533,21 +1533,23 @@ pub(super) fn authorized(host: &dyn Host, root: &Path, zip: &Path, mut params: V
 /// Workflow #453 S5b: writes below the state root `state_root` the composition record of the
 /// Runtime's composed generation `catalog_hash` (`sha256:` and 64 hex digits) with the rules
 /// digest `rules_digest`, where the Runtime's catalog store keeps it
-/// (`policy\catalogs\generations\<hex>\standard-packs.json`, the schema the workbench writes).
+/// (`policy\catalogs\generations\<hex>\standard-packs.json`, the schema the workbench writes; fix
+/// round 1: by the contract crate's constants of that layout, which the runtime host's catalog
+/// store and the row read by).
 pub(super) fn write_composed_generation(state_root: &Path, catalog_hash: &str, rules_digest: &str) {
     let hex = catalog_hash
         .strip_prefix("sha256:")
         .expect("a catalog hash");
-    let directory = state_root
-        .join("policy")
-        .join("catalogs")
-        .join("generations")
+    let directory = actingcommand_contract::CATALOG_STORE_PATH
+        .iter()
+        .fold(state_root.to_path_buf(), |path, part| path.join(part))
+        .join(actingcommand_contract::CATALOG_GENERATIONS_DIRECTORY)
         .join(hex);
     fs::create_dir_all(&directory).expect("the generation directory");
     write_json(
-        &directory.join("standard-packs.json"),
+        &directory.join(actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_FILE),
         &json!({
-            "schema_version": "actingcommand.standard-pack-composition.v1",
+            "schema_version": actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
             "rules_digest": rules_digest,
             "games": {},
             "procedures": [],

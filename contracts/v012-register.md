@@ -38818,8 +38818,8 @@ own manifest.
 changes (placed, replaced or set aside; ruling 4: the condition stays that file) and the input
 `bound` is not empty, the row compares rules digests, not catalogs.
 - *Expected.* The checks run the live build's check-config of the live configuration with
-  `--install-root <root>`, as the path without a Runtime does; its row `check_config` stands
-  before `composition`, with that row's outcomes (ruling 1, last point). Its preview
+  `--install-root <root>`, as the path without a Runtime does, for the expected digest alone: its
+  result is no row of these checks (fix round 1, below). Its preview
   `standard_pack_schedule` gains `rules_digest`, the composition's `rules_digest()`, which is the
   digest the workbench records as its generation's (`CompositionRecord::of`) and compares with the
   active record's to decide whether a check stages a new generation. It is one function over one
@@ -38839,7 +38839,8 @@ changes (placed, replaced or set aside; ruling 4: the condition stays that file)
   written again (`stage_composed` loads one that exists as it is; nothing deletes one). No request
   type is added. A hash that is not `sha256:` and 64 hex digits, a generation without a record (one
   the workbench did not compose) and a record of another schema give none, as the workbench takes
-  them; a record that cannot be read or parsed is `not_evaluated`.
+  them; a record that cannot be read or parsed is `not_evaluated`. The rescue module reads the
+  daemon's layout (fix round 1, below).
 - *The outcomes.* `expected` is `unchanged` when the expected digest is the one of the generation
   read before the hold (the intent's `catalog_before`), else `new`. The row passes once the
   Runtime's digest is the expected one, reading again every 500 ms within
@@ -38850,9 +38851,7 @@ changes (placed, replaced or set aside; ruling 4: the condition stays that file)
   three digests `rules_digest_before`, `rules_digest_expected` and `rules_digest` (read). The work
   order's "equal at the first read: `unchanged`" is judged against the generation read before the
   hold, so that a composition the workbench activated before the first read is `new` and not called
-  unchanged. A check-config that gives no digest (refused or unanswered, a configuration without
-  `policy`, a composition refused, which the row `check_config` names) fails the row with
-  `catalog_before`, `expected` `unknown` and `rules_digest_expected` `null`.
+  unchanged. A check-config that gives no digest: fix round 1, below.
 - *Unchanged.* With `bound` empty, the file unchanged, without a Runtime (`not_evaluated`,
   `runtime` `stopped`) and in a journal without `bound` (the wait for another catalog), the row is
   as before. The operations whose checks have the row: `place`, and `op resume` and `install
@@ -38872,15 +38871,19 @@ schema is unchanged and no range of `distribution/windows/component-interfaces.j
 
 **Codes and words.** No outcome code or key. The row's `expected` gains the word `unknown`, and
 the row the members `rules_digest`, `rules_digest_before`, `rules_digest_expected` and
-`schedule_changed_rules_unchanged`: members of a check row's `values`, not of an outcome, so the
-catalogue and its index do not change.
+`schedule_changed_rules_unchanged`, and (fix round 1) with no digest `check_config`, `problems`
+and `failure`, and the stopped row's `composition_problems`, `composition_refused`, `collisions`
+and `collision_cause`: members of a check row's `values`, not of an outcome, so the catalogue and
+its index do not change. The contract crate gains four constants of the catalog store's layout
+(fix round 1), no type.
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
 | The preview's digest | `crates/runtime-host/src/host/standard_pack_schedule.rs`, `StandardPackSchedulePreview::rules_digest`, set by `preview_standard_pack_schedule` |
-| The row | `crates/lab-rescue/src/install/place.rs`: `check_step` (the case), `composed_row`, `composition_digest`, `live_check_config` (one run for the rows `check_config` and `composition`), `check_config_row` (from that run), `bound_of`, `check_interval_ms` |
+| The row | `crates/lab-rescue/src/install/place.rs`: `check_step` (the case), `composed_row`, `undigested_row` (fix round 1: no digest), `composition_digest`, `live_check_config` (one run per check: the row `check_config` without a Runtime, the expected digest with one), `check_config_row` (from that run), `GameReport::composition_fails` and `GameReport::record_composition` (fix round 1: the stopped row's judgement of the composition's problems, one implementation for both rows), `bound_of`, `check_interval_ms` |
+| The layout (fix round 1) | `crates/actingcommand-contract/src/standard_pack_schedule.rs`: `CATALOG_STORE_PATH`, `CATALOG_GENERATIONS_DIRECTORY`, `STANDARD_PACK_COMPOSITION_RECORD_FILE`, `STANDARD_PACK_COMPOSITION_RECORD_SCHEMA`; read by `crates/runtime-host/src/policy_host.rs` (`catalog_store_root`, `GENERATIONS_DIR`, `COMPOSITION_RECORD_FILE`), `crates/runtime-host/src/host/standard_pack_schedule.rs` (`COMPOSITION_RECORD_SCHEMA`), `place.rs` (`composition_digest`) and the rescue module's fixture (`write_composed_generation`) |
 | Texts | [install-cli.md](install-cli.md) ("The composition after a placement"), [actingd-check-config.md](actingd-check-config.md) (`standard_pack_schedule`), the notes of the `place` row of `lab-operations.json`, the module texts of `place.rs`; `apps/actinglab-mcp/MANUAL.md` does not describe the row and is not changed |
 
 **Tests** (`crates/lab-rescue/src/install/gate_453_s5b.rs`, the apps gate map row "#453 S5b"; the
@@ -38888,9 +38891,9 @@ fake host, its fake Runtime and fake clock; the composition records written wher
 store keeps them; no clock read). `s5b_rules_naming_held_packages_pass_at_the_first_read`: the
 case observed, `schedule.json` gaining two rules that each name a held package and nothing else
 changing, check-config previewing the digest of the generation read before the hold: the steps
-`pause`, the one `pack_item` of `schedule.json`, `post_check`, `release_hold`; the rows `rerun`,
-`standard_pack_check`, `check_config` (pass, one check-config with `--install-root`) and
-`composition` exactly `pass` with `expected` `unchanged`, the digest and
+`pause`, the one `pack_item` of `schedule.json`, `post_check`, `release_hold`; one check-config
+with `--install-root`; the rows `rerun`, `standard_pack_check` and (fix round 1: no row
+`check_config`) `composition` exactly `pass` with `expected` `unchanged`, the digest and
 `schedule_changed_rules_unchanged` `true`; three catalog reads (no wait); done, the instance
 resumed, `kept` false. `s5b_a_rule_that_enters_waits_for_the_expected_digest_not_a_third`: a rule
 naming a package no rule named, the first read on a third generation, the second on the expected
@@ -38902,17 +38905,83 @@ third generation: `fail` with exactly `catalog_hash`, `expected` `new`, `rules_d
 deliberately changes what they compare: `gate_453_cold_place.rs`
 `s5_a_bound_instance_waits_for_a_new_composition` (its generations named as the Runtime names
 them, with composition records, and check-config previewing the second one's digest; it passes on
-that generation with the digest, the row `check_config` before it) and the scene of
-`gate_463_s318.rs` with a Runtime (its two catalogs such generations, check-config previewing the
-second one's digest, so its placements pass their checks as before; no assertion changed). The
-fixture gains `write_composed_generation` and `preview_rules_digest`. The tests of the file
-unchanged, of `bound` empty, of the path without a Runtime and of a journal without `bound` are
-unchanged. No test retired; no golden changes.
+that generation with the digest; fix round 1: the rows `rerun`, `standard_pack_check` and
+`composition`, as before this slice) and the scene of `gate_463_s318.rs` with a Runtime (its two
+catalogs such generations, check-config previewing the second one's digest, so its placements pass
+their checks as before; no assertion changed). The fixture gains `write_composed_generation` and
+`preview_rules_digest`. The tests of the file unchanged, of `bound` empty, of the path without a
+Runtime and of a journal without `bound` are unchanged. No test retired; no golden changes. Fix
+round 1's tests: below.
+
+**Fix round 1** (the coordinator's fix order after the independent review,
+`rd-1118/brief-453-s5b-fix1.md`; the coordinator's rulings of 11-18, not the owner's words).
+- *check-config serves the digest alone.* The first round pushed the whole row `check_config` into
+  the checks with a Runtime. That row fails on every note of check-config naming the placed game
+  (a table's column past its date by the system clock, a package's declaration that cannot be
+  read), which the running Runtime goes on with, so a placement that passed before would have ended
+  `post_check_failed` with its hold kept. With a Runtime the run now serves the row `composition`
+  alone; the rows are `rerun`, `standard_pack_check` and `composition` as before this slice. The
+  path without a Runtime keeps its row `check_config` as it was.
+- *No expected digest* (`undigested_row`). The row says why: `catalog_before`, `expected`
+  `unknown`, `rules_digest_expected` `null` and the cause, `check_config` (the code of
+  check-config's outcome) and `problems` (its preview's `standard_pack_schedule.problems` as they
+  are, `null` without a preview), or `failure` when check-config did not answer
+  (`check_config_unanswered` of the placement with the child's `pid` and the deadline's key, or its
+  cause). It fails only when the placed game is the cause: check-config's outcome names the game
+  (its value `game`), or the preview's composition is refused and its problems name the game, each
+  problem by its value `game` (`/values/game` of each member of
+  `report.standard_pack_schedule.problems`), judged by the stopped row's own `GameReport`, one
+  implementation: a problem naming the game (`composition_problems`); a problem naming no game, the
+  composition refused as a whole, which composes the placed game too (`composition_refused`; this
+  build's preview names every composed game in such a refusal, so none comes from it); a
+  `rule_id_conflict` recorded on another game, which cannot tell whether the placed bundle caused it
+  (`collisions`, `collision_cause` `not_told`). Anything else is `not_evaluated`, not a failed row,
+  as a catalog that cannot be read is: another game's `schedule.json` refused (the preview as a
+  whole then composes nothing, while the workbench falls back for that game alone and goes on), a
+  check-config refused for a reason that names another game or none, one that did not answer, a
+  configuration without `policy`. The contract no longer says "the row `check_config` says which".
+- *One digest.* A test where the composer's callers live (the runtime host, which the daemon runs)
+  pins that the preview's `rules_digest` is the digest the workbench records for the same rules, at
+  two catalog versions, and that rules naming held packages alone leave it unchanged.
+- *The layout.* The generation's path layout was written three times (the runtime host's catalog
+  store, `place.rs`, the rescue module's fixture). Both crates already depend on the contract
+  crate, which now holds it (`CATALOG_STORE_PATH`, `CATALOG_GENERATIONS_DIRECTORY`,
+  `STANDARD_PACK_COMPOSITION_RECORD_FILE`, `STANDARD_PACK_COMPOSITION_RECORD_SCHEMA`), and the
+  three read it from there; no dependency is added and the layout is byte for byte what it was. The
+  rescue module reads the daemon's layout; a rescue module of another build than the running
+  Runtime, if a layout ever moved on one side only, finds no record where it looks: no digest is
+  read and the row ends `fail` when its wait ends, or `not_evaluated` for a record it cannot read,
+  never a false `pass`.
+- *Tests.* In `gate_453_s5b.rs` (the apps gate map row "#453 S5b"):
+  `s5b_the_placed_games_schedule_refused_fails_with_the_digest_unknown` (the preview refused by the
+  placed game's own `schedule.json`, the problem also a note: `fail` at once with exactly
+  `catalog_before`, `expected` `unknown`, `rules_digest_expected` `null`, `check_config`,
+  `problems` and `composition_problems`, one catalog read, `post_check_failed`, no resume);
+  `s5b_another_games_schedule_refused_is_not_evaluated_and_releases_the_hold` (refused by another
+  game's: `not_evaluated` with exactly `catalog_before`, `expected` `unknown`,
+  `rules_digest_expected` `null`, `check_config` and `problems`, no failed row,
+  `install_command_done`, the instance resumed, `kept` false);
+  `s5b_a_check_config_that_does_not_answer_is_not_evaluated` (check-config still running at its
+  deadline: `not_evaluated` with `failure`, done, resumed);
+  `s5b_the_expected_digest_at_the_first_read_passes_as_new` (the Runtime on the generation of the
+  expected digest at the check's first read, the generation before the hold of another: `pass`
+  with `expected` `new`, three reads, done); `s5b_a_note_naming_the_placed_game_fails_nothing`
+  (that placement with check-config passing with a `standard_pack_table_column_expired` note naming
+  the placed game and its report listing that table's expired column: the same pass, no failed row,
+  done). In `crates/runtime-host/src/tests/gate_rl1b.rs` (the host gate map row "#453 S5b"):
+  `s5b_the_previews_rules_digest_is_the_one_the_workbench_records` (on that file's workbench bench,
+  game A holding two packages composed with one rule and then two at a higher catalog version: each
+  time the preview of the same root and instance equals the active generation's recorded
+  `rules_digest`, the two differing; two rules naming the held packages then added alone: the
+  preview's digest unchanged, the workbench reading the file again and activating no generation).
+  Adapted in this round, because the first round's row `check_config` with a Runtime is gone:
+  `s5b_rules_naming_held_packages_pass_at_the_first_read` and
+  `gate_453_cold_place::s5_a_bound_instance_waits_for_a_new_composition` (their row ids).
 
 **What is not changed.** What a placement writes, holds, waits for and releases; its plan and
-`schedule_changes`; the rows `rerun` and `standard_pack_check`; the row `check_config` and every
-row of the path without a Runtime; the row's answer in every case that passed before but the case
-it now judges by digests.
+`schedule_changes`; the rows `rerun` and `standard_pack_check`; with a Runtime no row
+`check_config` (fix round 1), and the row `check_config` and every row of the path without a
+Runtime; the row's answer in every case that passed before but the case it now judges by digests.
 
 **Ledger and interface.** Nothing is written to the ledger and no request kind or record changes.
 check-config's report gains one member; its schema is unchanged. No interface revision moves.

@@ -89,9 +89,11 @@
 //!   the workbench never reads the game root, so the catalog is expected unchanged; a journal
 //!   without `bound`, which an earlier build began, keeps the wait; Workflow #453 S5b: with
 //!   `bound` not empty, the live build's check-config of the live configuration too, whose
-//!   preview gives the rules digest the placed root composes, and the row passes once the
-//!   generation the Runtime's latest evaluation ran under has that digest, at its first read
-//!   when it is the digest of the generation read before the hold, `expected` `unchanged`), a
+//!   preview gives the rules digest the placed root composes (fix round 1: run for that digest
+//!   alone, its result no row of these checks), and the row passes once the generation the
+//!   Runtime's latest evaluation ran under has that digest, at its first read when it is the
+//!   digest of the generation read before the hold, `expected` `unchanged`; without a digest it
+//!   fails only when check-config names the placed game, else it is `not_evaluated`), a
 //!   failed check ending the command `post_check_failed` with the instances staying paused (the
 //!   items are placed:
 //!   `undo`, then `release-hold`); then the release of the hold (`release_hold`: only the
@@ -130,9 +132,11 @@ use crate::codes::{ArgumentProblem, InstallCaveat, InstallLocation, InstallRefus
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LOADING_PREFIX,
-    LoadingTarget, MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry,
-    NoticeIssue, RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    BundleIndex, BundleMaintenance, BundleRevisionNeed, CATALOG_GENERATIONS_DIRECTORY,
+    CATALOG_STORE_PATH, InterruptThen, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
+    MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry, NoticeIssue,
+    RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_COMPOSITION_RECORD_FILE, STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
@@ -2546,9 +2550,9 @@ pub(crate) fn check_step(
     // with the live build's check-config ([`check_config_row`]: its result, and its notes that
     // name the game) and leaves the composition itself not evaluated. Workflow #453 S5b: one begun
     // with a Runtime, whose game's `schedule.json` changed while instances were bound to the game,
-    // runs that check-config too, whose preview gives the rules digest the placed root composes,
-    // and checks the Runtime's generation against it ([`composed_row`]); any other checks the
-    // composition as before ([`composition_row`]).
+    // runs that check-config too, for the rules digest its preview gives the placed root alone (fix
+    // round 1: its result is no row of these checks), and checks the Runtime's generation against
+    // it ([`composed_row`]); any other checks the composition as before ([`composition_row`]).
     let cold = is_cold(operation);
     let bound = bound_of(operation);
     let composition = if cold {
@@ -2560,10 +2564,9 @@ pub(crate) fn check_step(
             "not_evaluated",
             json!({"runtime": "stopped"}),
         )
-    } else if let Some(bound) = bound.filter(|bound| intent.schedule_changes && !bound.is_empty()) {
+    } else if intent.schedule_changes && bound.is_some_and(|bound| !bound.is_empty()) {
         let checked = live_check_config(host, &paths, loaded);
-        rows.push(check_config_row(&checked, command, &intent.game, &bound));
-        composed_row(host, &paths, loaded, &intent, &checked)
+        composed_row(host, &paths, loaded, &intent, command, &checked)
     } else {
         composition_row(host, &paths, loaded, &intent, unbound)
     };
@@ -2683,21 +2686,17 @@ const PREVIEW_RULES_DIGEST: &str = "/standard_pack_schedule/rules_digest";
 /// changed and the composition did not: the placed root composes the rules of the generation the
 /// Runtime had before the hold.
 const SCHEDULE_ONLY_MEMBER: &str = "schedule_changed_rules_unchanged";
-/// Workflow #453 S5b: the Runtime's catalog store below its state root, where each generation is
-/// a directory named by the hex digits of its catalog hash, published once and never written
-/// again (register RL1B-3; the runtime host's `CatalogStore`, `policy\catalogs\generations`).
-const GENERATIONS_PATH: [&str; 3] = ["policy", "catalogs", "generations"];
-/// Workflow #453 S5b: a composed generation's composition record in its directory, and the schema
-/// the workbench writes it and reads it back with (`CompositionRecord`); its `rules_digest` is the
-/// digest the workbench compares to decide whether a check activates a new generation.
-const COMPOSITION_RECORD_FILE: &str = "standard-packs.json";
-const COMPOSITION_RECORD_SCHEMA: &str = "actingcommand.standard-pack-composition.v1";
 
 /// Workflow #453 S5b: the rules digest of the Runtime's generation `catalog_hash` below
 /// `state_root`, read from its composition record; `None` for a hash that names no generation
 /// directory (not `sha256:` and 64 lowercase hex digits), a generation without a record (one the
 /// workbench did not compose) or a record of another schema, which the workbench takes as none.
-/// A record that exists and cannot be read or parsed is the failure.
+/// A record that exists and cannot be read or parsed is the failure. Fix round 1: the layout is the
+/// one the runtime host's catalog store keeps, by the contract crate's constants (each generation
+/// a directory of [`CATALOG_GENERATIONS_DIRECTORY`] below [`CATALOG_STORE_PATH`], named by the hex
+/// digits of its catalog hash, published once and never written again; register RL1B-3), so a
+/// change of the layout moves both sides; a record not found there gives none, never a digest of
+/// another generation.
 fn composition_digest(state_root: &Path, catalog_hash: &str) -> Result<Option<String>, Outcome> {
     let Some(hex) = catalog_hash
         .strip_prefix("sha256:")
@@ -2705,16 +2704,17 @@ fn composition_digest(state_root: &Path, catalog_hash: &str) -> Result<Option<St
     else {
         return Ok(None);
     };
-    let path = GENERATIONS_PATH
+    let path = CATALOG_STORE_PATH
         .iter()
         .fold(state_root.to_path_buf(), |path, part| path.join(part))
+        .join(CATALOG_GENERATIONS_DIRECTORY)
         .join(hex)
-        .join(COMPOSITION_RECORD_FILE);
+        .join(STANDARD_PACK_COMPOSITION_RECORD_FILE);
     if !path.is_file() {
         return Ok(None);
     }
     let record: Value = files::read_json(&path)?;
-    if record["schema_version"] != COMPOSITION_RECORD_SCHEMA {
+    if record["schema_version"] != STANDARD_PACK_COMPOSITION_RECORD_SCHEMA {
         return Ok(None);
     }
     Ok(record["rules_digest"].as_str().map(str::to_owned))
@@ -2731,14 +2731,15 @@ fn composition_digest(state_root: &Path, catalog_hash: &str) -> Result<Option<St
 /// before the hold ([`SCHEDULE_ONLY_MEMBER`]), else `new`; the row passes once the Runtime's
 /// digest is the expected one, read again every 500 ms within the workbench's check interval and
 /// the hot idle wait, and fails when that wait ends first with the three digests (before the hold,
-/// expected, read). A check-config that gives no digest (refused, unanswered, without a `policy`
-/// section, or a composition refused: the row `check_config` beside it says which) leaves the
-/// expected composition unknown, and the row fails with `expected` `unknown`.
+/// expected, read). Fix round 1: check-config is run for that digest alone, its result no row of
+/// these checks; a check-config that gives no digest leaves the expected composition unknown
+/// ([`undigested_row`]).
 fn composed_row(
     host: &dyn Host,
     paths: &Paths,
     loaded: &Loaded,
     intent: &CheckIntent,
+    command: InstallLocation,
     checked: &Result<programs::Checked, programs::Failure>,
 ) -> Value {
     let state_root = &loaded.state_root;
@@ -2750,15 +2751,7 @@ fn composed_row(
         .and_then(Value::as_str)
         .map(str::to_owned);
     let Some(expected) = expected else {
-        return row(
-            "composition",
-            "fail",
-            json!({
-                "catalog_before": intent.catalog_before,
-                "expected": "unknown",
-                "rules_digest_expected": null,
-            }),
-        );
+        return undigested_row(intent, command, checked);
     };
     let before = match intent
         .catalog_before
@@ -2836,6 +2829,63 @@ fn composed_row(
     }
 }
 
+/// Workflow #453 S5b fix round 1 (the coordinator's ruling 2): the row `composition` of
+/// [`composed_row`] when the live build's check-config `checked` gives no expected digest. It
+/// fails only when the placed game is the cause: check-config's outcome names the game (its value
+/// `game`), or the composition's problems in its report do, each by its value `game`
+/// (`standard_pack_schedule.problems`, judged by [`GameReport`] as the row `check_config` judges
+/// them: those naming the game; one naming no game, the composition refused as a whole, which
+/// composes the placed game too; a collision recorded on another game, which cannot tell whether
+/// the placed bundle caused it); those problems in the members [`GameReport::record_composition`]
+/// writes. Anything else is `not_evaluated`, not a failed row, as a catalog that cannot be read is:
+/// another game's `schedule.json` refused (the preview then composes nothing, while the workbench
+/// falls back for that game alone and goes on), a check-config refused for a reason that names
+/// another game or none, one that did not answer, a configuration without `policy`. Either with
+/// `catalog_before`, `expected` `unknown`, `rules_digest_expected` `null` and the cause:
+/// check-config's outcome code (`check_config`) and the preview's problems as they are
+/// (`problems`, `null` without a preview), or, unanswered, its `failure`.
+fn undigested_row(
+    intent: &CheckIntent,
+    command: InstallLocation,
+    checked: &Result<programs::Checked, programs::Failure>,
+) -> Value {
+    let mut values = json!({
+        "catalog_before": intent.catalog_before,
+        "expected": "unknown",
+        "rules_digest_expected": null,
+    });
+    let names_game = match checked {
+        Ok(checked) => {
+            values["check_config"] = json!(checked.received.code().as_str());
+            values["problems"] = checked
+                .report
+                .pointer("/standard_pack_schedule/problems")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let refused_for_game = checked.received.value("game").and_then(Value::as_str)
+                == Some(intent.game.as_str());
+            let whole = GameReport::of(&checked.report, &intent.game);
+            let composition_of_game = whole.composition_fails();
+            if composition_of_game {
+                whole.record_composition(&mut values);
+            }
+            refused_for_game || composition_of_game
+        }
+        Err(failure) => {
+            values["failure"] = crate::cli_line::warning(&failure.clone().onto(super::refusal(
+                command,
+                InstallRefusal::CheckConfigUnanswered,
+            )));
+            false
+        }
+    };
+    row(
+        "composition",
+        if names_game { "fail" } else { "not_evaluated" },
+        values,
+    )
+}
+
 /// Workflow #453 S6: the row `check_config` of the checks after a placement begun while no
 /// Runtime ran: the live build's check-config of the live configuration with `--install-root
 /// <root>`, as `config replace` checks a file (`super::config_swap::candidate`). A configuration
@@ -2850,9 +2900,10 @@ fn composed_row(
 /// first; the row judges the game from the report, which nothing cuts ([`GameReport`]). An outcome
 /// whose links were cut (`causes_total`) says so (`notes` `cut`, `causes_total`), and fails the
 /// row when the report cannot rule out the one note of the game it does not carry (`game_tables`
-/// `not_judged`). Workflow #453 S5b: the same row, from the same run ([`live_check_config`]),
-/// after a placement with a Runtime whose game's `schedule.json` changed while instances were
-/// bound to the game, where the row `composition` reads that run's preview.
+/// `not_judged`). Workflow #453 S5b fix round 1: a row of the checks without a Runtime alone; with
+/// a Runtime the same run ([`live_check_config`]) serves the row `composition` alone, which fails
+/// on what check-config says of the placed game's composition only when it gives no digest
+/// ([`undigested_row`]).
 fn check_config_row(
     checked: &Result<programs::Checked, programs::Failure>,
     command: InstallLocation,
@@ -2913,7 +2964,8 @@ fn check_config_row(
 /// Workflow #453 S6: the live build's check-config of the live configuration with
 /// `--install-root <root>`, as `config replace` checks a file (`super::config_swap::candidate`),
 /// within `install.child.check_config_timeout_ms`. Workflow #453 S5b: run once per check after a
-/// placement, for the rows `check_config` and `composition` alike.
+/// placement, for the row `check_config` without a Runtime and, fix round 1, for the expected
+/// digest of the row `composition` alone with one.
 fn live_check_config(
     host: &dyn Host,
     paths: &Paths,
@@ -3005,19 +3057,28 @@ impl GameReport {
 
     /// Whether nothing here fails the row.
     fn passes(&self) -> bool {
-        self.root.is_none()
-            && self.named.is_empty()
-            && self.refused.is_empty()
-            && self.collisions.is_empty()
+        self.root.is_none() && !self.composition_fails()
     }
 
-    /// Its members in the row's `values`, each only when it holds something: `game_root`,
-    /// `composition_problems`, `composition_refused`, and `collisions` with `collision_cause`
-    /// `not_told`.
-    fn record(self, values: &mut Value) {
-        if let Some(root) = self.root {
+    /// Workflow #453 S5b fix round 1: whether the composition's problems fail the row: one names
+    /// the game, one names no game, or a collision is recorded on another game.
+    fn composition_fails(&self) -> bool {
+        !self.named.is_empty() || !self.refused.is_empty() || !self.collisions.is_empty()
+    }
+
+    /// Its members in the row's `values`, each only when it holds something: `game_root`, and
+    /// those of [`Self::record_composition`].
+    fn record(mut self, values: &mut Value) {
+        if let Some(root) = self.root.take() {
             values["game_root"] = root;
         }
+        self.record_composition(values);
+    }
+
+    /// The members of the composition's problems in a row's `values`, each only when it holds
+    /// something: `composition_problems`, `composition_refused`, and `collisions` with
+    /// `collision_cause` `not_told`.
+    fn record_composition(self, values: &mut Value) {
         if !self.named.is_empty() {
             values["composition_problems"] = Value::Array(self.named);
         }

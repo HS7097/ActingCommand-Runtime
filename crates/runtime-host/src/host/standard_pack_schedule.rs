@@ -86,8 +86,11 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Read as _};
 use std::time::SystemTime;
 
-/// The composition record's schema, kept in each composed generation's directory.
-const COMPOSITION_RECORD_SCHEMA: &str = "actingcommand.standard-pack-composition.v1";
+/// The composition record's schema, kept in each composed generation's directory (Workflow #453
+/// S5b fix round 1: the contract crate's, which the rescue module's check after a placement reads
+/// the record by too).
+const COMPOSITION_RECORD_SCHEMA: &str =
+    actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_SCHEMA;
 /// RL-1c: how long the task package admission after start waits at a time for the workbench's
 /// first check before it looks at the shutdown request again. It bounds only how soon a stop ends
 /// a wait; the first check itself wakes the admission at once.

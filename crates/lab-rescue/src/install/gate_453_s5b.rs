@@ -13,8 +13,8 @@
 //   0.12.72): the bundle's `schedule.json` gains only two rules, each naming a held package, so
 //   the placed root composes the rules of the generation read before the hold; the row passes at
 //   its first read with `expected` `unchanged`, `schedule_changed_rules_unchanged` true and the
-//   digest, without a wait; the row `check_config` beside it passes; the operation is done and
-//   hands its hold back;
+//   digest, without a wait; check-config runs once and (fix round 1) its result is no row; the
+//   operation is done and hands its hold back;
 // - `s5b_a_rule_that_enters_waits_for_the_expected_digest_not_a_third`: the bundle adds a rule
 //   naming a package no rule named; the generation the check reads first is a third one, whose
 //   digest is neither the one before nor the expected one: the row waits 500 ms and reads again,
@@ -23,14 +23,32 @@
 //   Runtime stays on the third generation: the row fails when its wait ends, with `waited_ms` and
 //   the three digests (before the hold, expected, read); the operation ends `post_check_failed`
 //   with the hold kept.
+// Fix round 1 (the coordinator's fix order `rd-1118/brief-453-s5b-fix1.md`: with a Runtime,
+// check-config is run for the digest alone, and without a digest the row fails only when the
+// placed game is the cause):
+// - `s5b_the_placed_games_schedule_refused_fails_with_the_digest_unknown`: the preview's
+//   composition is refused by the placed game's own `schedule.json`: the row fails at once with
+//   `expected` `unknown` and the problems, the hold kept;
+// - `s5b_another_games_schedule_refused_is_not_evaluated_and_releases_the_hold`: the preview's
+//   composition is refused by another game's `schedule.json`: the row is `not_evaluated` with
+//   `expected` `unknown` and the cause, no failed row; the operation is done and hands its hold back;
+// - `s5b_a_check_config_that_does_not_answer_is_not_evaluated`: check-config is still running at
+//   its deadline: the row is `not_evaluated` with its failure; the operation is done;
+// - `s5b_the_expected_digest_at_the_first_read_passes_as_new`: the Runtime's generation already
+//   has the expected digest at the check's first read, and the one before the hold another: `pass`
+//   with `expected` `new`, without a wait;
+// - `s5b_a_note_naming_the_placed_game_fails_nothing`: that placement again, check-config passing
+//   with a note naming the placed game (a table's column past its date) and the game's table so in
+//   its report, which the row `check_config` fails on without a Runtime: there is no such row, and
+//   the placement passes as it does without this slice.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep, no clock read; every root is a temporary folder with neutral files (made-up ids, no real
 // game). The fixture's check-config answers the digest a test sets; the composition records are
 // written where the Runtime's catalog store keeps them.
 
 use super::fixture::{
-    BuildSpec, C1, FakeHost, REPOSITORY, code, live_root, preview_rules_digest, run, word,
-    write_composed_generation, write_json,
+    BuildSpec, C1, FakeHost, REPOSITORY, STALLED_PID, code, live_root, preview_rules_digest, run,
+    word, write_composed_generation, write_json,
 };
 use crate::agent_channel::Answer as Answered;
 use crate::rescue::{self, Context};
@@ -45,6 +63,8 @@ use tempfile::TempDir;
 const WORD: Initiator = Initiator::LabRescue;
 /// The neutral game, its one server and the instance the fake Runtime binds to it.
 const GAME: &str = "neutral-game";
+/// Fix round 1: another game in use, which the placement does not touch.
+const OTHER_GAME: &str = "neutral-other";
 const SERVER: &str = "neutral-server";
 const INSTANCE: &str = "neutral.a";
 /// The `package` range the installer of these tests declares, and the one every bundle declares.
@@ -420,9 +440,10 @@ fn without_entering_rule() -> Layout {
 // names a held package is not composed, so check-config previews the rules digest of the
 // generation the Runtime had (the fake check-config answers [`DIGEST_BEFORE`]), and the Runtime's
 // latest evaluation runs under that generation. The placement replaces `schedule.json` alone; the
-// rows are `rerun`, `standard_pack_check`, `check_config` (pass: the live build's check-config, run
-// once, with `--install-root`) and `composition`, which passes at its first read with `expected`
-// `unchanged`, `schedule_changed_rules_unchanged` true and the digest: three reads of the catalog
+// live build's check-config runs once, with `--install-root`, and (fix round 1) its result is no
+// row: the rows are `rerun`, `standard_pack_check` and `composition`, which passes at its first
+// read with `expected` `unchanged`, `schedule_changed_rules_unchanged` true and the digest: three
+// reads of the catalog
 // in all (before the hold, the check's one read, the schedule after the release), no wait. The
 // operation is done and its hold handed back (the instance resumed, `kept` false).
 #[test]
@@ -454,17 +475,7 @@ fn s5b_rules_naming_held_packages_pass_at_the_first_read() {
     assert_eq!(journal["inputs"]["bound"], json!([INSTANCE]), "{journal}");
     assert_eq!(
         row_ids(&journal),
-        [
-            "rerun",
-            "standard_pack_check",
-            "check_config",
-            "composition"
-        ],
-        "{journal}"
-    );
-    assert_eq!(
-        check_row(&journal, "check_config")["result"],
-        "pass",
+        ["rerun", "standard_pack_check", "composition"],
         "{journal}"
     );
     assert_eq!(
@@ -608,4 +619,323 @@ fn s5b_a_third_composition_alone_fails_with_the_three_digests() {
         "{:?}",
         scene.host.runtime.calls.borrow()
     );
+}
+
+/// Fix round 1: a placement of a rule that enters ([`ENTERING`]), the Runtime's latest evaluation
+/// running under [`GENERATION_BEFORE`] (its composition record with [`DIGEST_BEFORE`]) when the
+/// operation begins.
+fn entering() -> Scene {
+    let after = without_entering_rule().rule("rule.entering", ENTERING);
+    let scene = staged(&without_entering_rule(), &after);
+    write_composed_generation(&scene.state_root, GENERATION_BEFORE, DIGEST_BEFORE);
+    *scene.host.runtime.catalog.borrow_mut() = Some(GENERATION_BEFORE.to_owned());
+    scene
+}
+
+/// Fix round 1: a problem of the composition in the record form check-config's report lists it
+/// in `standard_pack_schedule.problems`: the `standard_pack_root_invalid` of the `schedule.json` of
+/// `game`, its `standard_pack_problem` `schedule_invalid`.
+fn schedule_refused(game: &str) -> Value {
+    json!({"code": "standard_pack_root_invalid", "category": "error", "values": {
+        "operation": "standard_pack_read",
+        "game": game,
+        "path": format!("s5b-packs/{game}/schedule.json"),
+        "standard_pack_problem": "schedule_invalid",
+        "json_pointer": "/rules/0/id",
+    }})
+}
+
+/// Fix round 1: `record` as check-config joins it to its `check_config_passed`, a wire link
+/// `note`.
+fn as_note(record: &Value) -> Value {
+    let mut note = record.clone();
+    note["relation"] = json!("note");
+    note
+}
+
+/// Fix round 1: every check-config that passes previews a composition refused with `problems`
+/// (its report's `standard_pack_schedule`, `rules_digest` `null`), each also a note of its
+/// `check_config_passed`, as the real one joins them.
+fn preview_refused(host: &FakeHost, problems: &[Value]) {
+    host.programs.check_config_report.borrow_mut().insert(
+        "standard_pack_schedule",
+        json!({"composer_mode": true, "problems": problems, "rules_digest": null}),
+    );
+    host.programs
+        .check_config_notes
+        .borrow_mut()
+        .extend(problems.iter().map(as_note));
+}
+
+// Fix round 1, the coordinator's ruling 2: a rule that enters, and the live build's check-config
+// previews a composition the placed game's own `schedule.json` refuses (its report's
+// `standard_pack_schedule.problems` holds the game's `schedule_invalid`, also a note of its
+// `check_config_passed`; `rules_digest` null): the bundle just placed does not compose. The rows
+// are `rerun`, `standard_pack_check` and `composition`, which fails at once (the catalog read only
+// before the hold) with exactly `catalog_before`, `expected` `unknown`, `rules_digest_expected`
+// null, `check_config` (the outcome's code), `problems` (the preview's, as they are) and
+// `composition_problems` (those that name the game). The operation ends `post_check_failed` with
+// that row alone failed, and its hold is kept: the instance is not resumed.
+#[test]
+fn s5b_the_placed_games_schedule_refused_fails_with_the_digest_unknown() {
+    let scene = entering();
+    let problem = schedule_refused(GAME);
+    preview_refused(&scene.host, std::slice::from_ref(&problem));
+
+    let (placed, exit, journal) = scene.place();
+    assert_eq!(exit, 1, "{placed}");
+    assert_eq!(
+        placed["outcome"]["values"]["install_refusal"], "post_check_failed",
+        "{placed}"
+    );
+    assert_eq!(
+        row_ids(&journal),
+        ["rerun", "standard_pack_check", "composition"],
+        "{journal}"
+    );
+    assert_eq!(
+        check_row(&journal, "composition"),
+        json!({"id": "composition", "result": "fail", "values": {
+            "catalog_before": GENERATION_BEFORE,
+            "expected": "unknown",
+            "rules_digest_expected": null,
+            "check_config": "check_config_passed",
+            "problems": [problem],
+            "composition_problems": [problem],
+        }}),
+        "{journal}"
+    );
+    assert_eq!(
+        check_step(&journal)["evidence"]["failed"],
+        json!(["composition"]),
+        "{journal}"
+    );
+    assert_eq!(
+        scene.calls_of("catalog").len(),
+        1,
+        "{:?}",
+        scene.host.runtime.calls.borrow()
+    );
+    assert!(
+        scene.calls_of("resume ").is_empty(),
+        "{:?}",
+        scene.host.runtime.calls.borrow()
+    );
+}
+
+// Fix round 1, the coordinator's ruling 2: the same placement, and check-config previews a
+// composition refused by another game's `schedule.json` (a game in use the placement does not
+// touch): the preview as a whole composes nothing, while the workbench falls back for that game
+// alone and goes on. The row `composition` is `not_evaluated`, not a failed row, with exactly
+// `catalog_before`, `expected` `unknown`, `rules_digest_expected` null, `check_config` and
+// `problems` (the preview's, as they are). The operation is done and hands its hold back: the
+// instance resumed, `kept` false, two reads of the catalog (before the hold, and the schedule after
+// the release).
+#[test]
+fn s5b_another_games_schedule_refused_is_not_evaluated_and_releases_the_hold() {
+    let scene = entering();
+    let problem = schedule_refused(OTHER_GAME);
+    preview_refused(&scene.host, std::slice::from_ref(&problem));
+
+    let (placed, exit, journal) = scene.place();
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(
+        placed["outcome"]["code"], "install_command_done",
+        "{placed}"
+    );
+    assert_eq!(
+        check_row(&journal, "composition"),
+        json!({"id": "composition", "result": "not_evaluated", "values": {
+            "catalog_before": GENERATION_BEFORE,
+            "expected": "unknown",
+            "rules_digest_expected": null,
+            "check_config": "check_config_passed",
+            "problems": [problem],
+        }}),
+        "{journal}"
+    );
+    assert_eq!(
+        check_step(&journal)["evidence"]["failed"],
+        json!([]),
+        "{journal}"
+    );
+    assert_eq!(
+        scene.calls_of("catalog").len(),
+        2,
+        "{:?}",
+        scene.host.runtime.calls.borrow()
+    );
+    assert_eq!(scene.calls_of("resume "), [format!("resume {INSTANCE}")]);
+    assert_eq!(
+        placed["steps"][1]["result"]["hold"]["kept"],
+        json!(false),
+        "{placed}"
+    );
+}
+
+// Fix round 1, the coordinator's ruling 2: the same placement, and the live build's check-config
+// is still running at its deadline (the fake leaves it running, its pid [`STALLED_PID`]): no digest
+// can be had. The row `composition` is `not_evaluated` with exactly `catalog_before`, `expected`
+// `unknown`, `rules_digest_expected` null and `failure`: `install_command_refused` of the
+// placement, `check_config_unanswered`, the child's `pid` and the deadline's key. No row fails;
+// the operation is done and resumes the instance.
+#[test]
+fn s5b_a_check_config_that_does_not_answer_is_not_evaluated() {
+    let scene = entering();
+    scene.host.programs.stall.borrow_mut().push("check-config");
+
+    let (placed, exit, journal) = scene.place();
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(
+        placed["outcome"]["code"], "install_command_done",
+        "{placed}"
+    );
+    let composition = check_row(&journal, "composition");
+    assert_eq!(composition["result"], "not_evaluated", "{journal}");
+    let values = &composition["values"];
+    assert_eq!(
+        keys(values),
+        [
+            "catalog_before",
+            "expected",
+            "failure",
+            "rules_digest_expected"
+        ],
+        "{journal}"
+    );
+    assert_eq!(values["catalog_before"], GENERATION_BEFORE, "{journal}");
+    assert_eq!(values["expected"], "unknown", "{journal}");
+    assert!(values["rules_digest_expected"].is_null(), "{journal}");
+    let failure = &values["failure"]["outcome"];
+    assert_eq!(failure["code"], "install_command_refused", "{journal}");
+    assert_eq!(
+        failure["values"]["install_refusal"], "check_config_unanswered",
+        "{journal}"
+    );
+    assert_eq!(failure["values"]["pid"], json!(STALLED_PID), "{journal}");
+    assert_eq!(
+        failure["values"]["config_key"], "install.child.check_config_timeout_ms",
+        "{journal}"
+    );
+    assert_eq!(
+        check_step(&journal)["evidence"]["failed"],
+        json!([]),
+        "{journal}"
+    );
+    assert_eq!(scene.calls_of("resume "), [format!("resume {INSTANCE}")]);
+}
+
+/// Fix round 1: [`entering`], check-config previewing [`DIGEST_EXPECTED`] and the Runtime's latest
+/// evaluation running under [`GENERATION_EXPECTED`] (its record with that digest) from the
+/// check's first read on.
+fn entered_at_the_first_read() -> Scene {
+    let scene = entering();
+    write_composed_generation(&scene.state_root, GENERATION_EXPECTED, DIGEST_EXPECTED);
+    scene
+        .host
+        .runtime
+        .catalogs
+        .borrow_mut()
+        .extend([GENERATION_BEFORE.to_owned(), GENERATION_EXPECTED.to_owned()]);
+    preview_rules_digest(&scene.host, DIGEST_EXPECTED);
+    scene
+}
+
+/// Fix round 1: places the bundle of `scene` ([`entered_at_the_first_read`]) and checks what both
+/// tests that use it require: done, the rows `rerun`, `standard_pack_check` and `composition`, the
+/// last exactly `pass` with `catalog_hash` [`GENERATION_EXPECTED`], `catalog_before`
+/// [`GENERATION_BEFORE`], `expected` `new` and `rules_digest` [`DIGEST_EXPECTED`], no failed row,
+/// three reads of the catalog (no wait) and the instance resumed. The journal.
+fn placed_as_new(scene: &Scene) -> Value {
+    let (placed, exit, journal) = scene.place();
+    assert_eq!(exit, 0, "{placed}");
+    assert_eq!(
+        placed["outcome"]["code"], "install_command_done",
+        "{placed}"
+    );
+    assert_eq!(
+        row_ids(&journal),
+        ["rerun", "standard_pack_check", "composition"],
+        "{journal}"
+    );
+    assert_eq!(
+        check_row(&journal, "composition"),
+        json!({"id": "composition", "result": "pass", "values": {
+            "catalog_hash": GENERATION_EXPECTED,
+            "catalog_before": GENERATION_BEFORE,
+            "expected": "new",
+            "rules_digest": DIGEST_EXPECTED,
+        }}),
+        "{journal}"
+    );
+    assert_eq!(
+        check_step(&journal)["evidence"]["failed"],
+        json!([]),
+        "{journal}"
+    );
+    assert_eq!(
+        scene.calls_of("catalog").len(),
+        3,
+        "{:?}",
+        scene.host.runtime.calls.borrow()
+    );
+    assert_eq!(scene.calls_of("resume "), [format!("resume {INSTANCE}")]);
+    journal
+}
+
+// Fix round 1: a rule that enters, and the Runtime's latest evaluation already runs under the
+// generation of the expected digest at the check's first read, while the generation read before
+// the hold had another digest: the row passes at that read with `expected` `new` (the composition
+// did change, so not `unchanged`, and no `schedule_changed_rules_unchanged`) and the expected
+// digest, without a wait; the operation is done.
+#[test]
+fn s5b_the_expected_digest_at_the_first_read_passes_as_new() {
+    let scene = entered_at_the_first_read();
+    let journal = placed_as_new(&scene);
+    assert_eq!(journal["inputs"]["enabled"], json!([ENTERING]), "{journal}");
+}
+
+// Fix round 1, item 1 (the defect of the first round, pinned): that placement again, the live
+// build's check-config passing with a note naming the placed game, a table's column past its date
+// (check-config judges it by the system clock; the running Runtime goes on with it), and its
+// report listing the game's table with that column: what the row `check_config` of the checks
+// without a Runtime fails on. With a Runtime the run serves the digest alone: no such row, nothing
+// fails, and the operation is done and hands its hold back, as the placement does without the
+// note.
+#[test]
+fn s5b_a_note_naming_the_placed_game_fails_nothing() {
+    let scene = entered_at_the_first_read();
+    let table_path = format!("s5b-packs/{GAME}/tables/neutral-table.json");
+    scene
+        .host
+        .programs
+        .check_config_notes
+        .borrow_mut()
+        .push(json!({
+            "code": "standard_pack_table_column_expired",
+            "category": "warning",
+            "relation": "note",
+            "values": {
+                "operation": "standard_pack_read",
+                "game": GAME,
+                "path": table_path,
+                "table_column": "score_milli",
+            },
+        }));
+    scene.host.programs.check_config_report.borrow_mut().insert(
+        "standard_packs",
+        json!({"games": [{
+            "game": GAME,
+            "pack_count": 2,
+            "problem": null,
+            "tables": [{
+                "table_id": "neutral-table",
+                "path": table_path,
+                "row_count": 1,
+                "expired_columns": ["score_milli"],
+            }],
+        }]}),
+    );
+
+    placed_as_new(&scene);
 }

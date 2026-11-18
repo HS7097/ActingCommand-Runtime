@@ -44,6 +44,23 @@ pub const MAX_SCHEDULE_HELD: usize = 4_096;
 pub const MAX_SCHEDULE_PACKAGE_ID_BYTES: usize = 128;
 /// The longest `held` reason or reference.
 pub const MAX_SCHEDULE_TEXT_BYTES: usize = 1_024;
+/// Workflow #453 S5b fix round 1 (register §1.474): the Runtime's catalog store below its state
+/// root (`policy\catalogs`). The runtime host's catalog store keeps its generations there; the
+/// rescue module's check after a placement reads a composed generation's record from there, by
+/// this one layout.
+pub const CATALOG_STORE_PATH: [&str; 2] = ["policy", "catalogs"];
+/// Workflow #453 S5b fix round 1: the catalog store's directory of generations, each published
+/// once in a directory named by the 64 hex digits of its catalog hash after `sha256:` and never
+/// written again.
+pub const CATALOG_GENERATIONS_DIRECTORY: &str = "generations";
+/// Workflow #453 S5b fix round 1: a composed generation's composition record in its directory,
+/// whose `rules_digest` is the digest by which the scheduler workbench decides whether a check
+/// activates a new generation.
+pub const STANDARD_PACK_COMPOSITION_RECORD_FILE: &str = "standard-packs.json";
+/// Workflow #453 S5b fix round 1: the schema the scheduler workbench writes that record with and
+/// reads it back by.
+pub const STANDARD_PACK_COMPOSITION_RECORD_SCHEMA: &str =
+    "actingcommand.standard-pack-composition.v1";
 
 /// The members of `schedule.json`.
 const DOCUMENT_MEMBERS: [&str; 7] = [
