@@ -1043,16 +1043,21 @@ impl SchedulingPauseTable {
             .unwrap_or_default()
     }
 
-    /// #480 PG-2c fix round 1: whether the failure `code` of a check of the pause of
+    /// #480 PG-2c fix round 1: whether the failure spelled `spelling` of a check of the pause of
     /// `instance_alias` at `revision` is said now: the first time for this pause, never again.
-    fn first_saying(&mut self, instance_alias: &str, revision: u64, code: &'static str) -> bool {
+    fn first_saying(
+        &mut self,
+        instance_alias: &str,
+        revision: u64,
+        spelling: &'static str,
+    ) -> bool {
         self.holds_instance_at(instance_alias, revision)
             && self
                 .stage_checks
                 .entry(instance_alias.to_owned())
                 .or_default()
                 .said
-                .insert(code)
+                .insert(spelling)
     }
 }
 
