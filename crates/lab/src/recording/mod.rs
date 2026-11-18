@@ -38,7 +38,8 @@ pub(crate) mod model;
 // #463 RM-1: a template mark whose score lies nearer its threshold than a bound, on the side a
 // self-check of `record stop` needs it on.
 pub(crate) mod near;
-// #463 S2-2: a copy of a stored frame with a press and the declared boxes drawn on it.
+// #463 S2-2: a copy of a stored frame with a press and the declared boxes drawn on it; #463 S1-R:
+// and a ruler under them.
 pub(crate) mod preview;
 // #463 S2-1: everything a recording still lacks before `record stop` can make its package.
 pub(crate) mod ready;
@@ -70,6 +71,8 @@ pub use lock::RecordingLock;
 pub use model::*;
 // #463 RM-1: the warning `record_template_near_threshold` and where its judgement is.
 pub use near::{NearThresholdAt, TemplateNearThreshold};
+// #463 S1-R: the ruler a copy of a stored frame may carry, and what the answer says of it.
+pub use preview::{PreviewRuler, RulerView};
 pub use ready::{
     PressPointOnly, ReadyCheckRun, ReadyDetails, ReadyItem, ReadyMark, ReadyOptionConflict,
     ReadySources, ReadyWarningItem, RecordReadyOutcome,

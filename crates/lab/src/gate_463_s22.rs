@@ -816,7 +816,7 @@ fn s22_fix1_a_press_and_a_box_at_the_frames_edges_are_drawn_inside_it() {
     let right = i32::try_from(frame.width).expect("width") - 1;
     let bottom = i32::try_from(frame.height).expect("height") - 1;
     let drawn = |overlay: &Overlay| {
-        let copy = render(png.clone(), overlay, "the stored screen")
+        let copy = render(png.clone(), overlay, None, "the stored screen")
             .unwrap_or_else(|error| panic!("render: {}: {}", error.code, error.message));
         let image = Image::of(copy);
         assert_eq!((image.width, image.height), (frame.width, frame.height));
