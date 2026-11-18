@@ -5,11 +5,11 @@
 //! adb.
 //!
 //! One command per run (`acib devices`, `info`, `services`, `images`, `apps`, `screenshot`,
-//! `orientation` and `running`, which only read; `launch` and `stop`, which start and end one
-//! application on the phone; see `args.rs` and `README.md`). Each run prints one JSON line on
-//! standard output and ends with status 0 when the command was answered, 1 when it was refused
-//! or failed, the line then naming this program's `problem` word and, where the library gave
-//! one, its error text (of the application service, only the error's kind). After the line of a
+//! `orientation`, `running` and `probe`, which only read; `launch` and `stop`, which start and
+//! end one application on the phone; see `args.rs` and `README.md`). Each run prints one JSON
+//! line on standard output and ends with status 0 when the command was answered, 1 when it was
+//! refused or failed, the line then naming this program's `problem` word and, where the library
+//! gave one, its error text (of the application service, only the error's kind). After the line of a
 //! picture asked for with `--out -`, the picture's bytes follow on the standard output
 //! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
 //! names, and it removes that file again when the picture could not be written whole into it;
@@ -27,7 +27,9 @@ mod matching;
 mod out_file;
 mod picture;
 mod redact;
+mod stages;
 mod stopping;
+mod tap;
 
 use answer::{Failure, Line, Problem};
 use args::Invocation;
@@ -65,7 +67,8 @@ fn main() -> ExitCode {
 
 /// Runs the command, which started at `started`, on a current-thread runtime of its own,
 /// within its deadline; a screenshot whose deadline passes names the stage it was waiting in,
-/// and a command whose device was found by its key the device's number.
+/// (ACIB-3b) a command of the application service the stage it was waiting in and how long each
+/// stage before it took, and a command whose device was found by its key the device's number.
 fn run(invocation: Invocation, started: Instant) -> Printed {
     let Invocation {
         request,
@@ -86,15 +89,19 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
     runtime.block_on(async {
         // The context's deadline is taken before the command's own timeout starts, so a reader
         // of `orientation` that is cut by it is cut no later than the whole command.
-        let context = Context::new(tokio::time::Instant::now().checked_add(deadline));
-        tokio::time::timeout(deadline, bridge::answer(request, started, &context))
+        let context = Context::new(tokio::time::Instant::now().checked_add(deadline), started);
+        tokio::time::timeout(deadline, bridge::answer(request, &context))
             .await
             .unwrap_or_else(|_| {
+                // A screenshot keeps its stage in `stage`, a command of the application service
+                // in `steps`; no command sets both.
+                let steps = context.steps.borrow();
                 Printed::line(Line::deadline_passed(
                     command,
                     device.or(context.device.get()),
                     via,
-                    context.stage.get(),
+                    context.stage.get().or(steps.current()),
+                    steps.finished(),
                 ))
             })
     })
