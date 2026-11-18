@@ -11,6 +11,7 @@ use super::*;
 use crate::cli_module::{self, words};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
+    IdentifierIssuer, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeInstanceStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, SchedulingDrainSummary,
     SchedulingPauseMode, SchedulingPauseReason, SchedulingPauseScope,
 };
@@ -72,18 +73,47 @@ fn standing() -> Outcome {
     .expect("a received outcome")
 }
 
+/// #480 PG-2d (PG-2c's leftover, the review of #1826's last round): the status the row reads to
+/// resolve the instance it names: the one instance `neutral.a`.
+fn one_instance_status(
+    owner_epoch: OwnerEpoch,
+) -> impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send + 'static {
+    move |request| {
+        let instance_id = *IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_instance_id()
+            .expect("instance id")
+            .transport();
+        let instance =
+            RuntimeInstanceStatus::new("neutral.a", instance_id, false, 0, false, false, false)
+                .expect("instance status");
+        let status =
+            RuntimeControlPlaneStatus::new(owner_epoch, vec![instance]).expect("scripted status");
+        ScriptedAnswer::completed(request, RuntimeResult::Status { status })
+    }
+}
+
+// #480 PG-2d (PG-2c's leftover, the review of #1826's last round): the row pauses one instance,
+// `pause neutral.a`, the only pause the host answers with a cause (it never answers a global pause
+// so): the status that resolves the instance, then the instance pause, answered with
+// `scheduling_pause_standing` as the host answers a person's pause that stands.
 #[test]
 fn pg2c_the_pause_row_sends_stand_and_answers_the_receipts_cause() {
     let _guard = env_lock();
     let temp = TempDir::new().unwrap();
     let state = temp.path().join("state");
     fs::create_dir_all(&state).unwrap();
-    let runtime = ScriptedRuntime::start(&state, |_| {
-        vec![ScriptedConnection::new().request(|request| paused_with_cause(request, standing()))]
+    let runtime = ScriptedRuntime::start(&state, |owner_epoch| {
+        vec![
+            ScriptedConnection::new()
+                .request(one_instance_status(owner_epoch))
+                .request(|request| paused_with_cause(request, standing())),
+        ]
     });
     let _state_root = use_runtime_state_root(&state);
     let table = cli_module::table().expect("the operation table");
-    let call = words::parse(table, &["pause".to_owned()]).expect("the line pause");
+    let call = words::parse(table, &["pause".to_owned(), "neutral.a".to_owned()])
+        .expect("the line pause neutral.a");
     let operation = table.operation(&call.name).expect("the row pause");
 
     let exit = core_ops::answer(

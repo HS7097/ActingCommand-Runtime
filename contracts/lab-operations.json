@@ -518,7 +518,7 @@
         {"name": "instance", "form": "positional", "type": "instance", "required": false, "note": "absent: every instance; on the command line also --instance <x>, in place of the positional"},
         {"name": "expect", "form": "option", "type": "json", "required": false, "required_in": ["mcp"], "note": "the pause the resume lifts, as read from status"}
       ],
-      "help": "Lifts the scheduling pause of one instance or of everywhere and answers the Runtime's result.",
+      "help": "Lifts the scheduling pause of one instance or of everywhere; answers the Runtime's result and, for a pause not yet quiet, that no reconnect ran.",
       "output": "the pause state",
       "writes": true,
       "irreversible": false,
@@ -528,7 +528,7 @@
       "source": ["actingctl resume", "MCP ac_resume", "acui: conditional resume (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the request, MCP's resume of the pause it read and its answer); requests add Status, with which MCP resolves <inst>"
+      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the request, MCP's resume of the pause it read and its answer); requests add Status, with which MCP resolves <inst>. #480 PG-2d (0.12.74): the row reads the receipt's outcome too (`scheduling::resume_as`, `scheduling::resume_expected_as`); when it carries a cause (scheduling_resume_without_reconnect: a person's pause lifted before it was quiet, no reconnect ran), the answer's outcome runtime_scheduling_resumed carries that outcome as its cause, exit 0; the parameters are unchanged"
     },
     {
       "name": "config",

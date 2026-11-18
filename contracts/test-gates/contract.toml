@@ -975,3 +975,12 @@ tests = [
     "actingcommand-contract::lib::runtime::tests::pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt",
 ]
 incident = ["#480", "PG-2c"]
+
+# #480 PG-2d (0.12.74; register §1.481; brief rd-1118/brief-480-pg2d-pause-records-resume-cause.md, item 3; no wire change, runtime-client stays 12): over the scripted Runtime, runtime-client's resume_scheduling_as and resume_scheduling_expected_as answer the SchedulingResumed result with the receipt's outcome (SchedulingResumeAnswer, the shape of pause_scheduling_as): a resume of a person's pause not yet quiet carries scheduling_resume_without_reconnect as the one cause under request_resume_scheduling_completed, an ordinary resume none; resume_scheduling and resume_scheduling_expected answer the result alone, as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_480_pg2d::pg2d_the_new_resume_calls_answer_the_receipts_cause",
+    "actingcommand-runtime-client::lib::tests::gate_480_pg2d::pg2d_the_existing_resume_calls_answer_the_result_alone",
+]
+incident = ["#480", "PG-2d"]

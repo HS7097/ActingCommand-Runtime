@@ -223,7 +223,8 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     party holds the instance's admission guard, what is in the way is read outside the guard: an
     empty or absent list in a stage before `released` means that nothing was in the way at that read
     and the hand-back had not finished. A thread of the host then carries the rest of the stages on,
-    in memory only (no state file, no ledger record): runs still in flight were asked to stop at
+    in memory only (no state file, no record type of its own; since #480 PG-2d the moments of
+    "A pause's life in the ledger" below are recorded): runs still in flight were asked to stop at
     their next checkpoint and are waited for with no bound; the stage becomes `paused`; the
     hand-back waits for everything in the way with no bound and becomes `released` once nothing uses
     the device (outside the multi-Nemu gate, after its session close). It ends at `released`, at a
@@ -500,7 +501,12 @@ pause stays in stage `paused` until the Runtime stops, its row of `host.scheduli
 it was recorded, and the next start restores it as every persisted pause is restored ("Persistence,
 no expiry" below; stage `released`). A failed pause writes no ledger event of its own: its code
 is in the request's receipt only, and the ledger shows the two records of `host.scheduling_pause`,
-the one that set the pause and the one that lifted it (none for a kept one). A failed device close
+the one that set the pause and the one that lifted it (none for a kept one). #480 PG-2d (since
+0.12.74): but a tool's hold lifted without its instance having become quiet (its caller's time
+ended first, `scheduling_pause_drain_incomplete`, `scheduling_pause_release_busy`; since its fix
+round 1 also a refusing queued entry, `lease_transfer_not_safe`, and a refused close lease, the
+scheduler's refusal) writes after its lift one record, `scheduling_pause_lifted_not_quiet`, and a
+kept `stand` pause one `scheduling_pause_kept_at_shutdown` ("A pause's life in the ledger"). A failed device close
 (an instance outside the multi-Nemu gate) fails the request with the close's own error; an
 unconfirmed close stays fatal as on every close path. The
 client's receipt wait is the drain timeout plus that grace plus its IO timeout. Since 0.12.72 the
@@ -537,7 +543,12 @@ has required since before 0.12.73, so every client reads this answer): it answer
 `SchedulingResumed { scope, revision, selfcheck }` whose `selfcheck` has both sides `ok: false`
 with no values (a side without a report of a reconnect: none ran) and no `failure_code`, and its
 receipt's outcome carries `scheduling_resume_without_reconnect` (info) as the success code's cause
-(`RuntimeReceipt::scheduling_resumed`). **What says that no reconnect ran is that cause**, not the
+(`RuntimeReceipt::scheduling_resumed`). #480 PG-2d (since 0.12.74): `runtime-client`'s
+`resume_scheduling_as` and `resume_scheduling_expected_as` return that outcome with the result
+(`SchedulingResumeAnswer`, the shape of `pause_scheduling_as`; `resume_scheduling` and
+`resume_scheduling_expected` keep returning the result alone), the Lab's `resume` row (`actinglab
+resume`, the Lab's `ac_resume`) answers it as its line's cause, and the lift is one record of "A
+pause's life in the ledger". **What says that no reconnect ran is that cause**, not the
 self-check's shape: `failure_code` names only a reconnect that failed and is absent here, and a
 reconnect that runs answers a code on every failing step this build has (a refused preparation
 lease, a failed close of the session it still held, a failed emulator status read, a failed open,
@@ -681,6 +692,64 @@ stage changes `draining` to `paused` to `released` do not.
 | Conditional resume naming another owner epoch | `Denied`, `InvalidRequest` | `scheduling_pause_owner_epoch_mismatch` |
 | Conditional resume naming another revision of the scope | `Denied`, `InvalidRequest` | `scheduling_pause_revision_mismatch` |
 
+## A pause's life in the ledger
+
+#480 PG-2d (since 0.12.74; register §1.481). Before it, only the client that asked for an instance
+pause learned what happened to it, from its receipt; a second console, the Lab, or the same console
+after a restart saw a stage and could not tell why. Each moment of an instance pause's life that the
+receipt and the stage do not tell is now one record: `runtime.lifecycle_observed`, phase
+`device_state_observed` (the record the emulator watch's `emulator_autostart_skipped` and the idle
+check's `instance_idle_action` are written as), under the instance, carrying the links of the
+pause's own request (its request and correlation identifiers, whichever thread or request writes
+the record), its severity the outcome's category. One record per moment, never one per poll or per
+try:
+
+| Moment | Outcome (severity) | Written by |
+|---|---|---|
+| a `stand` pause's caller's time ended with something in the way (also an unconfirmed close, which ends it at once) | `scheduling_pause_standing` (info): the receipt's own cause, the same code with `pause_stage`, `in_the_way` and, for `check_failed`, the failure as its cause | the request, before it answers and before its continuation starts; under the persist gate, only while the pause still holds (fix round 1) |
+| that pause later became quiet by itself (stage `released`) | `scheduling_pause_settled` (info, no member) | the continuation |
+| a person's resume lifted a `stand` pause in `draining` or `paused` without a reconnect | `scheduling_resume_without_reconnect` (info): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it |
+| a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time (as it writes the standing record: under the persist gate, only while the pause still holds), else the continuation |
+| a `quiet_or_lift` hold was lifted without its instance having become quiet: its caller's time ended first (its drain past the checkpoint grace, `scheduling_pause_drain_incomplete`; its hand-back past the grace, `scheduling_pause_release_busy`, the admission guard still taken by another party included) or, since fix round 1 (the coordinator's ruling: every lift of a hold without quiet is recorded), a queued entry refused its hand-back (`lease_transfer_not_safe`) or the scheduler refused its close lease (another member's entry ahead, the takeover cooldown, a holder: `lease_busy`, `lease_cooldown`) | `scheduling_pause_lifted_not_quiet` (warning): `pause_reason` the hold's reason, `in_the_way` what was in the way (what its last check read, or what is read outside the guard another party holds, which may be empty; for a refusing entry what that check read, `queued_entry` among it; for a refused close lease `close_refused`), that failure as its cause | the request, after the lift |
+
+Nothing else of a pause writes one: a pause quiet within its caller's time (its receipt and its stage
+say all); a check that fails and is tried again (the daemon's log says it once per pause and code,
+as before; the standing record carries `check_failed` when the caller's time ends on it); a resume
+of a pause already `released`, of a fenced instance, or of a pause whose hand-back's close had begun
+(the reconnect's own records; that receipt has no cause); a person's resume during the request's
+own stages (`scheduling_pause_lifted_by_resume` on that request's receipt; the resume writes the
+lift's record); an unconfirmed close the continuation meets (the pause stands, the fence's own
+records say it); a tool's hold that failed for anything else (an unconfirmed or an otherwise failed
+close, a failed check, a shutdown, a fatal error: the receipt and the fact records say it); a
+restored pause, at the restart or later (the restore's fact record and stdout line). The global
+pause has no stages and writes none.
+
+**The order of a pause's records** (fix round 1; what the code guarantees, no more). The request's
+own record of a pause that still holds (`scheduling_pause_standing`, or
+`scheduling_pause_kept_at_shutdown` within its caller's time) is decided and written under the
+persist gate, only while the pause is still held at its revision; every lift takes that gate, and
+the resume's `scheduling_resume_without_reconnect` is written under it with its lift. So the
+request's record never comes after the record of the resume that lifted its pause: a pause lifted
+(or held again with `instance.added`) before the request took the gate writes none, and the
+resume's records say what happened. The standing record is written before the thread that carries
+the stages on starts, so it comes before every record of that thread. That thread's records
+(`scheduling_pause_settled`, `scheduling_pause_kept_at_shutdown`) are written after their moment and
+outside the gate, so a resume can come in between: a resume of the pause once `released` (the
+reconnect's path) can put its lift's fact record and the reconnect's records before the settled
+record, and a resume already running when a shutdown came can put its own record before the kept
+record. A hold's `scheduling_pause_lifted_not_quiet` comes after its lift's fact record.
+
+The links of a pause's request are kept with the pause in the Runtime's memory until it is lifted,
+so the record a person's resume writes carries them too; a pause no request set (a restored pause, a
+start's hold) is `released` and is never resumed that way. The codes are outcome codes inside an
+existing record, so a reader of `ledger` revision 9 reads them as it reads every code it has never
+seen (it checks a code's spelling, never that it is registered: [component-interfaces.md](component-interfaces.md),
+the `ledger` row of revision 5), and neither `ledger` nor `runtime-outcomes` moves, as for
+`global_paused` (register §1.468). A record that cannot be written changes nothing the pause does
+or answers: the failure is said in the daemon's log (the line of a skipped background step) with
+the record it could not write linked to it, and a write the ledger gave up on stops the Runtime by
+its own path, as every append does.
+
 ## Status
 
 `Status` (`RuntimeControlPlaneStatus`) carries `scheduling_pause: { revision, pause_reason,
@@ -689,8 +758,9 @@ since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` 
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
 
-#480 PG-2c (since 0.12.73; `runtime-client` 12; the ruling 4 on board #480: the console draws from
-the status and reads no receipt's outcome): the instance's `pause` gains two members, declared with
+#480 PG-2c (since 0.12.73; `runtime-client` 12; the ruling 4 on board #480, made while the console
+drew what it shows of a pause from the status alone; it reads its own pause receipt's cause since,
+below): the instance's `pause` gains two members, declared with
 revision 12: `pause_mode` (`stand` or `quiet_or_lift`, absent when not answered) and `in_the_way`
 (the closed list `pause_obstacle` of "Two modes", each word once, absent when empty and always in
 stage `released`). `InstancePauseState` denies unknown members, so a reader of revision 11 or lower
@@ -701,10 +771,14 @@ receipt v2 keep their schema strings; [component-interfaces.md](component-interf
 10, register §1.433), **no Runtime of 0.12.73 answers either member**: the status of every pause is
 the four members above, which the console pinned to v0.12.71 (revision 11) reads, and `min` stays 3.
 The release whose Runtime first answers them raises `runtime-client`'s `min` to 12; **the console
-must pin v0.12.73 or later before that release**. Until then a reader learns a standing pause's
-stage from `stage` (`draining` or `paused` while the host carries it on) and the rest from
-`activity`, `lease_active` and `queued_request_count`, and a caller of the pause from its receipt's
-`scheduling_pause_standing`.
+must pin v0.12.73 or later before that release**. #480 PG-2d (register §1.481): until a Runtime
+answers the two members, a console learns what is in the way of its own pause from that pause's
+receipt's cause (`scheduling_pause_standing` with `pause_stage` and `in_the_way`), and any observer
+(a second console, the Lab, the same console after a restart) learns a pause's stage from `stage`
+(`draining` or `paused` while the host carries it on), what still uses the instance from
+`activity`, `lease_active` and `queued_request_count`, and what happened to the pause from the
+records of "A pause's life in the ledger" above; once a Runtime answers the members, the status is
+the source of what is in the way.
 
 ## Relation to the player hold
 
@@ -771,7 +845,9 @@ restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Ru
 The ledger event set is unchanged: besides the fact records, a pause or resume leaves its trace
 in the request receipt, the refused dispatch admissions, the terminals of the runs it stopped,
 the device close's existing records (an instance outside the multi-Nemu gate) and the
-reconnect's existing close and open records.
+reconnect's existing close and open records; since #480 PG-2d (0.12.74) also in the
+`device_state_observed` records of "A pause's life in the ledger", an existing record type. A
+restore writes none of those: its trace is the fact record above and the stdout line.
 
 ## Pauses held at a first start
 
@@ -885,4 +961,9 @@ before any request is sent. `pause` / `resume` print the result; `status` prints
 and per-instance pause states within the status. #480 PG-2c: `actingctl pause` and its MCP's
 `ac_pause` send a person's pause (`stand`, `RuntimeClient::pause_scheduling`); the Lab's `pause` row
 (`actinglab pause`, the Lab's `ac_pause`) sends `stand` too and answers the receipt's cause
-(`RuntimeClient::pause_scheduling_as`).
+(`RuntimeClient::pause_scheduling_as`). #480 PG-2d: the Lab's `resume` row (`actinglab resume`,
+the Lab's `ac_resume`), its parameters unchanged, answers the receipt's cause the same way
+(`RuntimeClient::resume_scheduling_as`, with `expect` `resume_scheduling_expected_as`): a resume of
+a person's pause that was not quiet yet answers `runtime_scheduling_resumed` caused by the receipt's
+outcome, whose cause is `scheduling_resume_without_reconnect`, exit 0; an ordinary resume answers no
+cause. `actingctl resume` and its MCP's `ac_resume` answer the result as before.
