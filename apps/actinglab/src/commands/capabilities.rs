@@ -161,9 +161,12 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "read_only"],
             "available",
         ),
-        // #463 S2-13: the stored frames around one step's press; it only reads. #463 S1-R: but with
-        // `--ruler`, which writes a ruled copy of each frame it lists.
-        command_cap("session record frames", ["offline"], "available"),
+        // #463 S2-13: the stored frames around one step's press; it only reads.
+        command_cap(
+            "session record frames",
+            ["offline", "read_only"],
+            "available",
+        ),
         // #463 S2-2: each step as the screen before, the press and the screen after; it writes its
         // previews alone.
         command_cap("session record review", ["offline"], "available"),
@@ -186,8 +189,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record reopen", ["offline"], "available"),
         // #463 S2-1.
         command_cap("record ready", ["offline", "read_only"], "available"),
-        // #463 S2-13; #463 S1-R: `--ruler` writes ruled copies.
-        command_cap("record frames", ["offline"], "available"),
+        // #463 S2-13.
+        command_cap("record frames", ["offline", "read_only"], "available"),
         // #463 S2-2.
         command_cap("record review", ["offline"], "available"),
         command_cap("capture --record", ["device"], "available"),

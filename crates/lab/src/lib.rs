@@ -145,8 +145,8 @@ mod gate_463_rm1;
 // #463 SC-1: a select step's page is checked for uniqueness on every frame of the recording.
 #[cfg(test)]
 mod gate_463_sc1;
-// #463 S1-R: a ruler on the copies `record review` and `record frames` hand back, never on a
-// stored frame.
+// #463 S1-R: a ruler on the previews `record review` writes, never on a stored frame; `record
+// frames` as before.
 #[cfg(test)]
 mod gate_463_s1r;
 mod lab_run;

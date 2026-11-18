@@ -280,7 +280,6 @@ fn asked(step: u32, before: Option<u64>, after: Option<u64>) -> RecordFramesRequ
         step,
         before,
         after,
-        ruler: None,
     }
 }
 

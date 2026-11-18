@@ -35,10 +35,11 @@
 //!
 //! #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): with
 //! `ruler`, every preview carries the ruler under its boxes and its press (`preview::render`), is
-//! named as ruled (`s<nn>-<role>-ruled-<edges|grid>.png`, so that a preview without it keeps its
-//! name and its bytes), and the answer says what the ruler is (`ruler`); a ruler without previews
-//! (`no_preview`) is refused. `record frames` writes its ruled copies through the same writer
-//! ([`write_previews`]).
+//! written beside the plain previews under a name of its own that says it is ruled
+//! (`s<nn>-<role>-ruled-<edges|grid>.png`, so that it is never taken for the plain preview of the
+//! same step, and a preview without the ruler keeps its name and its bytes), and the answer says
+//! what the ruler is (`ruler`); a ruler without previews (`no_preview`) is refused. The ruler is
+//! `record review`'s only: `record frames` writes nothing.
 
 use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_path};
 use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};
@@ -56,7 +57,7 @@ use super::preview::{
 use super::ready::{ReadyItem, ReadyWarningItem, RecordReadyOutcome, one_pixel, press_frame};
 use super::scan::RecordReviewScan;
 use super::steps::{effective_step, live_primary, step_ref};
-use super::store::{lab_dir, read_verified, safe_file_stem, write_atomic};
+use super::store::{lab_dir, read_verified, write_atomic};
 use crate::recording_api::click_outcome;
 use actingcommand_contract::LabResult;
 use serde::Serialize;
@@ -244,12 +245,11 @@ pub struct RecordReviewPress {
     pub outcome: String,
 }
 
-/// One preview to write: the stored frame it is drawn on, what is drawn and where it goes. #463
-/// S1-R: `record frames` plans its ruled copies so too, with nothing drawn but the ruler.
-pub(crate) struct Planned<'a> {
-    pub(crate) frame: &'a RecordedFrame,
-    pub(crate) overlay: Overlay,
-    pub(crate) path: PathBuf,
+/// One preview to write: the stored frame it is drawn on, what is drawn and where it goes.
+struct Planned<'a> {
+    frame: &'a RecordedFrame,
+    overlay: Overlay,
+    path: PathBuf,
 }
 
 /// The answer of `record review` for `recording` (read as `record ready` reads it) and `ready`,
@@ -653,8 +653,15 @@ fn declared_boxes(step: &RecordingStep) -> Vec<(RecordRect, Colour)> {
 }
 
 /// Where the preview of `role` of the step `serial` is written: `lab/preview/s<nn>-<role>.png`.
-/// #463 S1-R: with `ruler`, named as ruled, `lab/preview/s<nn>-<role>-ruled-<edges|grid>.png`.
-fn preview_path(dir: &Path, serial: u32, role: &str, ruler: Option<PreviewRuler>) -> PathBuf {
+/// #463 S1-R: with `ruler`, beside it under a name of its own that says it is ruled,
+/// `lab/preview/s<nn>-<role>-ruled-<edges|grid>.png`, so that a ruled preview is never taken for the
+/// plain preview of the same step and never written over it.
+pub(crate) fn preview_path(
+    dir: &Path,
+    serial: u32,
+    role: &str,
+    ruler: Option<PreviewRuler>,
+) -> PathBuf {
     let name = match ruler {
         None => format!("s{serial:02}-{role}.png"),
         Some(ruler) => format!("s{serial:02}-{role}-ruled-{}.png", ruler.word()),
@@ -662,23 +669,12 @@ fn preview_path(dir: &Path, serial: u32, role: &str, ruler: Option<PreviewRuler>
     dir.join(PREVIEW_DIR).join(name)
 }
 
-/// #463 S1-R: where `record frames` writes the ruled copy of the stored frame `frame_id` with
-/// `ruler`: `lab/preview/<frame_id>-ruled-<edges|grid>.png`, beside the previews, never under
-/// `frames/` or `crops/`.
-pub(crate) fn ruled_frame_path(dir: &Path, frame_id: &str, ruler: PreviewRuler) -> PathBuf {
-    dir.join(PREVIEW_DIR).join(format!(
-        "{}-ruled-{}.png",
-        safe_file_stem(frame_id),
-        ruler.word()
-    ))
-}
-
 /// Writes `planned`: first every stored frame they are drawn on is read and its bytes checked
 /// against its sha256, each once, so that a frame that does not match
 /// (`record_frame_hash_mismatch`) leaves no preview written; then each preview is drawn on a copy
 /// of its frame, read and checked again, and written atomically. #463 S1-R: each with `ruler`
 /// under what it draws, when one is given.
-pub(crate) fn write_previews(
+fn write_previews(
     dir: &Path,
     planned: &[Planned<'_>],
     ruler: Option<PreviewRuler>,

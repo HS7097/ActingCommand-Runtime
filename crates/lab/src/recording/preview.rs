@@ -90,8 +90,8 @@ pub(crate) const DIGITS: [[&str; 5]; 10] = [
 const GLYPH_COLUMNS: i64 = 3;
 const GLYPH_ROWS: i64 = 5;
 
-/// #463 S1-R: the ruler a copy carries, the parameter `ruler` of `record review` and `record
-/// frames` (a closed list; absent: no ruler).
+/// #463 S1-R: the ruler a preview carries, the parameter `ruler` of `record review` alone (a closed
+/// list; absent: no ruler).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewRuler {

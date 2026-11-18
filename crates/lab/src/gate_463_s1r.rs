@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // #463 S1-R (contracts/lab-recording.md, "A ruler on the pictures a recording hands back"; register
-// §1.476): an optional ruler (`edges`, `grid`) on the copies `record review` and `record frames`
-// hand back, in the stored frame's own pixels, never on a stored frame. The pictures are drawn by
-// the previews' own renderer (`preview::render`) on synthetic frames of one flat colour, and the
-// commands read a recording made as stage one makes it, with S2-5's bench (`gate_463_s25_draft`:
-// two recorded taps on its 160x90 screens of gray with a square of noise, then the final screen;
-// step 1 marked with a recognize box and a press box over its button).
-// - `s1r_without_a_ruler_every_picture_and_answer_is_as_before`: a copy with nothing to draw is the
-//   stored frame decoded and encoded again, byte for byte; `record review`'s previews keep their
-//   names and bytes across a ruled review and are written again byte for byte, its answer is the
-//   same and has no `ruler`, and at the ruler's places they are the stored frame; `record frames`
-//   writes nothing and answers no `ruled` and no `ruler`; no recorded file changes.
+// §1.476): an optional ruler (`edges`, `grid`) on the previews `record review` writes, in the
+// stored frame's own pixels, never on a stored frame; fix round 1 (the coordinator's ruling): the
+// ruler is `record review`'s only, and `record frames` is exactly what it is on main. The pictures
+// are drawn by the previews' own renderer (`preview::render`) on synthetic frames of one flat
+// colour, and the commands read a recording made as stage one makes it, with S2-5's bench
+// (`gate_463_s25_draft`: two recorded taps on its 160x90 screens of gray with a square of noise,
+// then the final screen; step 1 marked with a recognize box and a press box over its button).
+// - `s1r_without_a_ruler_every_picture_and_answer_is_as_before`: an answer without a ruler has
+//   today's members and no `ruler`, and a preview's file name is today's (no recorded file needed);
+//   a copy with nothing to draw is the stored frame decoded and encoded again, byte for byte;
+//   `record review`'s previews keep their names and bytes across a ruled review and are written
+//   again byte for byte, its answer is the same and has no `ruler`, and at the ruler's places they
+//   are the stored frame; no recorded file changes.
 // - `s1r_edges_ticks_every_50_numbers_every_100_in_the_fonts_digits`: on a 320x240 copy the ticks
 //   at 50 and 100 along both edges in the dark tone over the light halo, a pixel away from the
 //   edges the frame's own, the numbers 100 (top) and 200 (left) cell by cell in the font, whose
@@ -22,13 +24,16 @@
 // - `s1r_frames_under_100_pixels_and_of_three_or_four_bytes_a_pixel`: 60x40 and 1x1 frames of
 //   three bytes a pixel and a 30x90 one of four, with each ruler: no panic, each copy of its size,
 //   what fits drawn, the rest the frame's own, the alpha kept.
-// - `s1r_record_frames_writes_ruled_copies_beside_and_leaves_the_stored_frames`: with `grid`, a
-//   ruled copy of each listed frame under `lab/preview/` named `<frame_id>-ruled-grid.png` and in
-//   its `ruled`, its `path` the stored frame, whose bytes and sha256 stay; the answer's `ruler`.
-// - `s1r_the_operation_table_carries_ruler_with_its_closed_list`: both rows declare the option
-//   `ruler` of type `enum:edges|grid`, the Lab's words; the MCP schema is generated from the row
-//   (`apps/actinglab-mcp`, an enumeration's words in `enum`, held for every offered row's
-//   parameters by `gate_434_lab5g2a`).
+// - `s1r_record_frames_is_as_on_main_and_a_ruled_preview_has_a_name_of_its_own`: `record frames`'
+//   row is main's (no `ruler`, `writes` false, its help saying it reads only), its request main's
+//   four members, its answer main's members, each listed frame the stored frame by its path, and
+//   it writes nothing; a ruled preview of `record review` is written beside the plain preview of
+//   the same step, in the recording's `lab/preview/`, as `s<nn>-<role>-ruled-<word>.png`, never
+//   over the plain one, whose bytes stay.
+// - `s1r_the_operation_table_carries_ruler_with_its_closed_list`: the row `record review` declares
+//   the option `ruler` of type `enum:edges|grid`, the Lab's words, and `record frames` none; the MCP
+//   schema is generated from the row (`apps/actinglab-mcp`, an enumeration's words in `enum`, held
+//   for every offered row's parameters by `gate_434_lab5g2a`).
 // No Runtime, no device; the tests read no clock and never sleep.
 
 use crate::gate_463_s25_draft::{self as draft, Bench, INSTANCE, POINTS};
@@ -37,7 +42,8 @@ use crate::recording::preview::{
     DIGITS, Glyph, Overlay, PRESS_BOX_COLOUR, PRESS_COLOUR, RULER_DARK, RULER_FONT_SCALE,
     RULER_LIGHT, render,
 };
-use crate::recording::store::{hex_sha256, lab_dir, recording_path};
+use crate::recording::review::preview_path;
+use crate::recording::store::{hex_sha256, lab_dir};
 use crate::{
     PreviewRuler, RecordFramesOutcome, RecordFramesRequest, RecordPoint, RecordRect,
     RecordReviewOutcome, RecordReviewRequest, RecordStopOptions, record_frames, record_review,
@@ -45,7 +51,7 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use serde_json::{Value, json};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // The colour of the synthetic frames, and its alpha on a frame of four bytes a pixel.
 const FRAME_RGB: [u8; 3] = [90, 140, 200];
@@ -202,15 +208,17 @@ fn review(bench: &Bench, request: &RecordReviewRequest) -> RecordReviewOutcome {
     })
 }
 
-// `record frames` of step `step` with `ruler`.
-fn frames(bench: &Bench, step: u32, ruler: Option<PreviewRuler>) -> RecordFramesOutcome {
+// `record frames` of step `step`, its request built with every member it has, main's four: a member
+// added to it does not compile here.
+fn frames(bench: &Bench, step: u32) -> RecordFramesOutcome {
     record_frames(
         &bench.state(),
         INSTANCE,
         &RecordFramesRequest {
+            record_id: None,
             step,
-            ruler,
-            ..RecordFramesRequest::default()
+            before: None,
+            after: None,
         },
     )
     .unwrap_or_else(|error| {
@@ -268,23 +276,6 @@ fn recorded_files(bench: &Bench, record_id: &str) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-// The sha256 the step table records for the frame `frame_id`.
-fn recorded_sha(bench: &Bench, record_id: &str, frame_id: &str) -> String {
-    let table: Value = serde_json::from_slice(
-        &fs::read(recording_path(&bench.state(), record_id)).expect("step table"),
-    )
-    .expect("step table JSON");
-    table["steps"]
-        .as_array()
-        .expect("steps")
-        .iter()
-        .flat_map(|step| step["frames"].as_array().expect("frames").iter())
-        .find(|frame| frame["frame_id"] == frame_id)
-        .and_then(|frame| frame["sha256"].as_str())
-        .unwrap_or_else(|| panic!("frame {frame_id}: {table}"))
-        .to_owned()
-}
-
 // What the answer says of `ruler`.
 fn ruler_member(ruler: &str) -> Value {
     let mut member = json!({"kind": ruler, "space": "frame_pixels", "tick_px": 50,
@@ -296,15 +287,79 @@ fn ruler_member(ruler: &str) -> Value {
     member
 }
 
-// The work order's test 1: without the parameter every byte is as before. A copy with nothing to
-// draw is the stored frame decoded and encoded again, byte for byte, as the renderer wrote it
-// before the ruler existed. `record review` without a ruler writes its previews under their names;
-// a review with `grid` writes ruled previews under other names and leaves them byte for byte; a
-// review without it again writes them byte for byte and answers the same, without `ruler`; at the
-// places a ruler draws on, a preview without one is its stored frame. `record frames` without a
-// ruler answers no `ruled` and no `ruler` and writes nothing. No recorded file changes.
+// The file names of the previews `named` (as `previews` gives them), in their order.
+fn file_names(named: &[(String, String)]) -> Vec<String> {
+    named
+        .iter()
+        .map(|(_, preview)| {
+            Path::new(preview)
+                .file_name()
+                .expect("a file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+// The members of the JSON object `value`, sorted.
+fn keys(value: &Value) -> Vec<String> {
+    let mut keys = value
+        .as_object()
+        .unwrap_or_else(|| panic!("an object: {value}"))
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys
+}
+
+// The row `name` of the operation table this tree holds.
+fn table_row(name: &str) -> Value {
+    let table: Value = serde_json::from_str(include_str!("../../../contracts/lab-operations.json"))
+        .expect("the operation table");
+    table["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .find(|operation| operation["name"] == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("the row {name}"))
+}
+
+// The work order's test 1: without the parameter every byte is as before. Needing no recorded file:
+// an answer of `record review` without a ruler has today's members and no `ruler`, and a preview's
+// file name without one is today's, `lab/preview/s<nn>-<role>.png`. A copy with nothing to draw is
+// the stored frame decoded and encoded again, byte for byte, as the renderer wrote it before the
+// ruler existed. `record review` without a ruler writes its previews under their names; a review
+// with `grid` writes ruled previews under other names and leaves them byte for byte; a review
+// without it again writes them byte for byte and answers the same, without `ruler`; at the places
+// a ruler draws on, a preview without one is its stored frame. No recorded file changes.
 #[test]
 fn s1r_without_a_ruler_every_picture_and_answer_is_as_before() {
+    let bare = RecordReviewOutcome {
+        record_id: "r1".to_owned(),
+        session: "active".to_owned(),
+        steps: Vec::new(),
+        steps_total: 0,
+        warnings: Vec::new(),
+        ruler: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&bare).expect("answer JSON"),
+        json!({"record_id": "r1", "session": "active", "steps": [], "steps_total": 0,
+               "warnings": []}),
+        "an answer without a ruler has no ruler member"
+    );
+    let lab = Path::new("lab");
+    assert_eq!(
+        preview_path(lab, 1, "before", None),
+        lab.join("preview").join("s01-before.png")
+    );
+    assert_eq!(
+        preview_path(lab, 12, "after", None),
+        lab.join("preview").join("s12-after.png")
+    );
+
     for png in [flat(320, 240, PixelFormat::Rgb8), draft::screen(0)] {
         let copy = render(png.clone(), &Overlay::default(), None, "the test's frame")
             .unwrap_or_else(|error| panic!("render: {}: {}", error.code, error.message));
@@ -321,18 +376,8 @@ fn s1r_without_a_ruler_every_picture_and_answer_is_as_before() {
     let record_id = first.record_id.clone();
     let recorded = recorded_files(&bench, &record_id);
     let plain = previews(&first);
-    let names = plain
-        .iter()
-        .map(|(_, preview)| {
-            Path::new(preview)
-                .file_name()
-                .expect("a file name")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        names,
+        file_names(&plain),
         [
             "s01-before.png",
             "s01-after.png",
@@ -381,22 +426,6 @@ fn s1r_without_a_ruler_every_picture_and_answer_is_as_before() {
         }
     }
 
-    let preview_dir = lab_dir(&bench.state(), &record_id).join("preview");
-    let written = files_under(&preview_dir);
-    let around = frames(&bench, 2, None);
-    let json = serde_json::to_value(&around).expect("answer JSON");
-    assert!(json.get("ruler").is_none(), "{json}");
-    assert!(json["press"]["frame"].get("ruled").is_none(), "{json}");
-    for side in ["before", "after"] {
-        for frame in json[side].as_array().expect("a side") {
-            assert!(frame.get("ruled").is_none(), "{json}");
-        }
-    }
-    assert_eq!(
-        files_under(&preview_dir),
-        written,
-        "record frames wrote a file"
-    );
     assert_eq!(
         recorded_files(&bench, &record_id),
         recorded,
@@ -471,18 +500,8 @@ fn s1r_edges_ticks_every_50_numbers_every_100_in_the_fonts_digits() {
     let json = serde_json::to_value(&answer).expect("answer JSON");
     assert_eq!(json["ruler"], ruler_member("edges"), "{json}");
     let named = previews(&answer);
-    let names = named
-        .iter()
-        .map(|(_, preview)| {
-            Path::new(preview)
-                .file_name()
-                .expect("a file name")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        names,
+        file_names(&named),
         ["s01-before-ruled-edges.png", "s01-after-ruled-edges.png"]
     );
     for (path, preview) in &named {
@@ -629,129 +648,226 @@ fn s1r_frames_under_100_pixels_and_of_three_or_four_bytes_a_pixel() {
     }
 }
 
-// The work order's test 5: `record frames` hands back the stored frames themselves, so with a
-// ruler it writes a ruled copy of each frame it lists beside the previews and names both. Step 2
-// of the bench: its press's frame f0003, before it f0001 and f0002, after it f0004. With `grid`,
-// each is answered with its `path`, the stored frame, whose bytes keep the sha256 the step table
-// recorded, and its `ruled`, `lab/preview/<frame_id>-ruled-grid.png`, a copy of its size carrying
-// the ruler and elsewhere the frame's pixels; exactly those four files are written, nothing
-// recorded changes, and the answer says what the ruler is.
+// The work order's test 5, as fix round 1 rules it: the ruler is `record review`'s only, and
+// `record frames` answers and is listed exactly as on main. Its row is main's: its parameters
+// main's six and no `ruler`, `writes` false, its help saying it reads only, nothing of this slice
+// in it. Its request is main's four members (`frames`), its answer main's members, and each frame
+// it lists (the press's, those before and after it) main's members, its `path` the stored frame
+// under `frames/`, whose bytes hash to the sha256 the answer gives; it writes nothing (the
+// recording's directory byte for byte the same, no `preview/` made) and answers the same again,
+// after a ruled review too. A ruled preview is `record review`'s: of step 2 with `grid`, written in
+// the same `lab/preview/` as the plain previews of step 2, as `s02-before-ruled-grid.png` and
+// `s02-after-ruled-grid.png`, beside `s02-before.png` and `s02-after.png`, which keep their bytes,
+// so that it is never taken for the plain preview of the same step: exactly those four files, each
+// ruled preview of its stored frame's size and carrying the ruler.
 #[test]
-fn s1r_record_frames_writes_ruled_copies_beside_and_leaves_the_stored_frames() {
-    let bench = two_taps();
-    let plain = frames(&bench, 2, None);
-    let record_id = plain.record_id.clone();
-    let recorded = recorded_files(&bench, &record_id);
-    let preview_dir = lab_dir(&bench.state(), &record_id).join("preview");
-    assert!(files_under(&preview_dir).is_empty(), "no preview yet");
-
-    let ruled = frames(&bench, 2, Some(PreviewRuler::Grid));
-    let json = serde_json::to_value(&ruled).expect("answer JSON");
-    assert_eq!(json["ruler"], ruler_member("grid"), "{json}");
-    let mut listed = vec![json["press"]["frame"].clone()];
-    for side in ["before", "after"] {
-        listed.extend(json[side].as_array().expect("a side").iter().cloned());
-    }
-    let ids = listed
+fn s1r_record_frames_is_as_on_main_and_a_ruled_preview_has_a_name_of_its_own() {
+    let row = table_row("record frames");
+    assert_eq!(row["writes"], false, "{row}");
+    let params = row["params"]
+        .as_array()
+        .expect("params")
         .iter()
-        .map(|frame| frame["frame_id"].as_str().expect("a frame id").to_owned())
+        .map(|param| param["name"].as_str().expect("a parameter's name"))
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["f0003", "f0001", "f0002", "f0004"], "{json}");
-    let mut expected_files = Vec::new();
-    for (frame, frame_id) in listed.iter().zip(&ids) {
-        let path = frame["path"].as_str().expect("the stored frame's path");
-        let copy_path = frame["ruled"].as_str().expect("the ruled copy's path");
-        let file = format!("{frame_id}-ruled-grid.png");
-        assert_eq!(
-            PathBuf::from(copy_path),
-            preview_dir.join(&file),
-            "{frame_id}: the copy is named as ruled, under lab/preview"
-        );
-        expected_files.push(file);
-        let stored = fs::read(path).expect("the stored frame");
-        assert_eq!(
-            hex_sha256(&stored),
-            recorded_sha(&bench, &record_id, frame_id),
-            "{frame_id}: the stored frame keeps its bytes"
-        );
-        assert_eq!(frame["sha256"], json!(hex_sha256(&stored)), "{json}");
-        let copy = Image::read(copy_path);
-        let original = Image::of(stored);
-        assert_eq!((copy.width, copy.height), (original.width, original.height));
-        assert_eq!(copy.at(50, 0), RULER_DARK, "{frame_id}");
-        assert_eq!(copy.at(0, 50), RULER_DARK, "{frame_id}");
-        assert_eq!(original.at(100, 60), BENCH_GRAY, "{frame_id}");
-        assert_eq!(copy.at(100, 60), RULER_LIGHT, "{frame_id}: the line at 100");
-        assert_eq!(copy.at(150, 80), original.at(150, 80), "{frame_id}");
+    assert_eq!(
+        params,
+        [
+            "instance",
+            "step",
+            "before",
+            "after",
+            "record_id",
+            "state_dir"
+        ]
+    );
+    assert_eq!(
+        row["help"],
+        "Lists the stored frames captured just before and just after one recorded step's press, \
+         each with its path and capture time; reads only."
+    );
+    let text = row.to_string();
+    assert!(!text.contains("ruler"), "{row}");
+    assert!(!text.contains("S1-R"), "{row}");
+
+    let bench = two_taps();
+    let first = frames(&bench, 2);
+    let lab = lab_dir(&bench.state(), &first.record_id);
+    let recorded = files_under(&lab);
+    assert_eq!(frames(&bench, 2), first, "the same answer again");
+    assert_eq!(files_under(&lab), recorded, "record frames wrote a file");
+    assert!(
+        !lab.join("preview").exists(),
+        "record frames wrote a preview"
+    );
+    let json = serde_json::to_value(&first).expect("answer JSON");
+    assert_eq!(
+        keys(&json),
+        [
+            "after",
+            "after_total",
+            "artifact_step",
+            "before",
+            "before_total",
+            "kind",
+            "press",
+            "record_id",
+            "step",
+            "warnings",
+        ],
+        "{json}"
+    );
+    let press_frame = &json["press"]["frame"];
+    assert_eq!(
+        keys(press_frame),
+        [
+            "captured_at_unix_ms",
+            "frame_id",
+            "path",
+            "sha256",
+            "stored_under_step",
+        ],
+        "{json}"
+    );
+    let mut listed = vec![press_frame];
+    for side in ["before", "after"] {
+        let side_frames = json[side].as_array().expect("a side");
+        assert!(!side_frames.is_empty(), "{side}: {json}");
+        for frame in side_frames {
+            assert_eq!(
+                keys(frame),
+                [
+                    "captured_at_unix_ms",
+                    "frame_id",
+                    "offset_ms",
+                    "path",
+                    "sha256",
+                    "stored_under_step",
+                ],
+                "{json}"
+            );
+            listed.push(frame);
+        }
     }
-    expected_files.sort();
-    let written = files_under(&preview_dir)
+    for frame in listed {
+        let frame_id = frame["frame_id"].as_str().expect("a frame id");
+        let path = Path::new(frame["path"].as_str().expect("the stored frame's path"));
+        assert_eq!(
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("frames"),
+            "{frame_id}: {}",
+            path.display()
+        );
+        let stored = fs::read(path).expect("the stored frame");
+        assert_eq!(frame["sha256"], json!(hex_sha256(&stored)), "{frame_id}");
+    }
+
+    let plain = previews(&review(
+        &bench,
+        &RecordReviewRequest {
+            step: Some(2),
+            ..RecordReviewRequest::default()
+        },
+    ));
+    assert_eq!(file_names(&plain), ["s02-before.png", "s02-after.png"]);
+    let plain_bytes = plain
+        .iter()
+        .map(|(_, preview)| fs::read(preview).expect("a preview"))
+        .collect::<Vec<_>>();
+    let ruled = previews(&review(
+        &bench,
+        &RecordReviewRequest {
+            step: Some(2),
+            ruler: Some(PreviewRuler::Grid),
+            ..RecordReviewRequest::default()
+        },
+    ));
+    assert_eq!(
+        file_names(&ruled),
+        ["s02-before-ruled-grid.png", "s02-after-ruled-grid.png"]
+    );
+    for (((path, preview), (ruled_path, ruled_preview)), bytes) in
+        plain.iter().zip(&ruled).zip(&plain_bytes)
+    {
+        assert_eq!(path, ruled_path, "the same stored frame");
+        assert_eq!(
+            Path::new(ruled_preview).parent(),
+            Path::new(preview).parent(),
+            "{ruled_preview}: beside the plain preview"
+        );
+        assert_eq!(
+            Path::new(preview)
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("preview"),
+            "{preview}"
+        );
+        assert_eq!(&fs::read(preview).expect("a preview"), bytes, "{preview}");
+        let copy = Image::read(ruled_preview);
+        let frame = Image::read(path);
+        assert_eq!((copy.width, copy.height), (frame.width, frame.height));
+        assert_eq!(copy.at(50, 0), RULER_DARK, "{ruled_preview}");
+        assert_eq!(frame.at(100, 60), BENCH_GRAY, "{path}");
+        assert_eq!(
+            copy.at(100, 60),
+            RULER_LIGHT,
+            "{ruled_preview}: the line at 100"
+        );
+    }
+    let mut expected = file_names(&plain);
+    expected.extend(file_names(&ruled));
+    expected.sort();
+    let written = files_under(&lab.join("preview"))
         .into_iter()
         .map(|(name, _)| name)
         .collect::<Vec<_>>();
-    assert_eq!(written, expected_files);
     assert_eq!(
-        recorded_files(&bench, &record_id),
-        recorded,
-        "a recorded file changed"
+        written, expected,
+        "the ruled previews beside the plain ones"
     );
-    // But for the copies, the answer is the one without a ruler.
-    let mut stripped = json;
-    if let Some(object) = stripped.as_object_mut() {
-        object.remove("ruler");
-    }
-    if let Some(frame) = stripped["press"]["frame"].as_object_mut() {
-        frame.remove("ruled");
-    }
-    for side in ["before", "after"] {
-        for frame in stripped[side].as_array_mut().expect("a side") {
-            if let Some(frame) = frame.as_object_mut() {
-                frame.remove("ruled");
-            }
-        }
-    }
     assert_eq!(
-        stripped,
-        serde_json::to_value(&plain).expect("answer JSON"),
-        "nothing else is added to the answer"
+        frames(&bench, 2),
+        first,
+        "record frames after a ruled review"
     );
 }
 
-// The work order's test 6: the operation table's rows `record review` and `record frames` each
-// declare the option `ruler`, not required, of the type `enum:edges|grid`, whose words are the
-// Lab's (`PreviewRuler::WORDS`), each read back to itself and no other word read. The MCP tools are
-// generated from these rows: an enumeration's words become its property's `enum`
-// (`apps/actinglab-mcp/src/tools.rs`, `value_schema`), which `gate_434_lab5g2a` holds for every
-// parameter of every offered row; and a wrong word is refused by the closed list's rule there and
-// in `serve --stdio`.
+// The work order's test 6: the operation table's row `record review` declares the option `ruler`,
+// not required, of the type `enum:edges|grid`, whose words are the Lab's (`PreviewRuler::WORDS`),
+// each read back to itself and no other word read; the row `record frames` declares none (fix round
+// 1). The MCP tools are generated from these rows: an enumeration's words become its property's
+// `enum` (`apps/actinglab-mcp/src/tools.rs`, `value_schema`), which `gate_434_lab5g2a` holds for
+// every parameter of every offered row; and a wrong word is refused by the closed list's rule
+// there and in `serve --stdio`.
 #[test]
 fn s1r_the_operation_table_carries_ruler_with_its_closed_list() {
-    let table: Value = serde_json::from_str(include_str!("../../../contracts/lab-operations.json"))
-        .expect("the operation table");
-    let operations = table["operations"].as_array().expect("operations");
-    for row in ["record review", "record frames"] {
-        let operation = operations
-            .iter()
-            .find(|operation| operation["name"] == row)
-            .unwrap_or_else(|| panic!("the row {row}"));
-        assert_eq!(operation["writes"], true, "{row}");
-        let ruler = operation["params"]
-            .as_array()
-            .expect("params")
-            .iter()
-            .find(|param| param["name"] == "ruler")
-            .unwrap_or_else(|| panic!("{row} declares ruler"));
-        assert_eq!(ruler["form"], "option", "{row}");
-        assert_eq!(ruler["required"], false, "{row}");
-        assert_eq!(ruler["type"], "enum:edges|grid", "{row}");
-        let words = ruler["type"]
-            .as_str()
-            .and_then(|kind| kind.strip_prefix("enum:"))
-            .expect("an enumeration")
-            .split('|')
-            .collect::<Vec<_>>();
-        assert_eq!(words, PreviewRuler::WORDS, "{row}");
-    }
+    let row = table_row("record review");
+    assert_eq!(row["writes"], true, "{row}");
+    let ruler = row["params"]
+        .as_array()
+        .expect("params")
+        .iter()
+        .find(|param| param["name"] == "ruler")
+        .expect("record review declares ruler");
+    assert_eq!(ruler["form"], "option", "{ruler}");
+    assert_eq!(ruler["required"], false, "{ruler}");
+    assert_eq!(ruler["type"], "enum:edges|grid", "{ruler}");
+    let words = ruler["type"]
+        .as_str()
+        .and_then(|kind| kind.strip_prefix("enum:"))
+        .expect("an enumeration")
+        .split('|')
+        .collect::<Vec<_>>();
+    assert_eq!(words, PreviewRuler::WORDS);
+    let frames_row = table_row("record frames");
+    let frames_params = frames_row["params"].as_array().expect("params");
+    assert!(
+        frames_params.iter().all(|param| param["name"] != "ruler"),
+        "record frames declares no ruler: {frames_row}"
+    );
     for word in PreviewRuler::WORDS {
         assert_eq!(
             PreviewRuler::from_word(word).map(PreviewRuler::word),

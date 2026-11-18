@@ -410,13 +410,13 @@ pub(crate) const RECORD_READY_READS: FlagReads = FlagReads {
 };
 
 /// #463 S2-13: the flags `record frames` reads: the step, how many frames each side lists and the
-/// recording named by its id. #463 S1-R: and the ruler of a ruled copy of each frame listed.
+/// recording named by its id.
 pub(crate) const RECORD_FRAMES_READS: FlagReads = FlagReads {
     row: "record frames",
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            options: &["--step", "--before", "--after", "--record-id", "--ruler"],
+            options: &["--step", "--before", "--after", "--record-id"],
             switches: &[],
             refused: &[],
         },
@@ -671,8 +671,7 @@ fn run_session_record_inner(
         .map(Ok)
         .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
     // #463 S2-13: `record frames` writes nothing, not even the session directory; #463 S2-2:
-    // `record review` writes its previews alone, in the recording's own directory (#463 S1-R: and
-    // `record frames --ruler` its ruled copies alone, there too).
+    // `record review` writes its previews alone, in the recording's own directory.
     if !matches!(action, "frames" | "review") {
         fs::create_dir_all(&state_dir).map_err(|err| {
             CliError::runtime_not_running(format!(
@@ -846,7 +845,7 @@ fn run_session_record_inner(
             })
         }
         // #463 S2-13: offline, without the recording lock.
-        "frames" => run_record_frames(global, &flags, &state_dir, &instance_id),
+        "frames" => run_record_frames(&flags, &state_dir, &instance_id),
         // #463 S2-2: offline, without the recording lock; it writes its previews alone.
         "review" => run_record_review(global, &config, &flags, &state_dir, &instance_id),
         "step" => {
@@ -3513,16 +3512,8 @@ fn run_record_reopen(
 /// range, 0 to 100, `range`). #463 stage two, train 1, fix round: read as the waits of a recorded
 /// press are read (`after_capture_ms`): a flag given more than once is its last value, and a value
 /// that is no whole number is `validation_failed` with `details{argument, reason: "wrong_type",
-/// value}`. The answer is the Lab's. #463 S1-R: `--ruler <edges|grid>` writes a ruled copy of each
-/// frame listed (`ruler_flag`); those copies are files written, so under `--dry-run` that form is
-/// `dry_run_unsupported` after the flags and before the recording is read, its alternative the
-/// form without `--ruler`.
-fn run_record_frames(
-    global: &GlobalOptions,
-    flags: &FlagArgs,
-    state_dir: &Path,
-    instance_id: &str,
-) -> CliOutcome<Value> {
+/// value}`. The answer is the Lab's.
+fn run_record_frames(flags: &FlagArgs, state_dir: &Path, instance_id: &str) -> CliOutcome<Value> {
     let step = frames_number::<u32>(flags, "--step", "step")?.ok_or_else(|| {
         CliError::usage("record frames needs --step <k>, the step's serial number")
     })?;
@@ -3531,41 +3522,27 @@ fn run_record_frames(
         step,
         before: frames_number(flags, "--before", "before")?,
         after: frames_number(flags, "--after", "after")?,
-        ruler: ruler_flag(flags)?,
     };
-    if request.ruler.is_some() {
-        crate::dry_run_gate::refuse(
-            global,
-            "record frames --ruler",
-            Some("record frames"),
-            json!({"action": "frames"}),
-        )?;
-    }
     let outcome = record_frames(state_dir, instance_id, &request)?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record frames output: {error}")))
 }
 
 /// #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): the
-/// ruler `--ruler` (MCP `ruler`) asks for on the copies `record review` and `record frames` write,
-/// `None` without the flag. The command line hands the flag on as written, so its word is checked
-/// here against the closed list the operation table gives it (`PreviewRuler::WORDS`): another
-/// word is `validation_failed` with `details{argument: "ruler", reason: "not_recognised", value}`,
-/// the word the table's own rule names such a value by; a flag given twice or without a value is
-/// refused as every value of these commands is.
+/// ruler `--ruler` (MCP `ruler`) asks for on `record review`'s previews, `None` without the flag.
+/// The command line hands the flag on as written, so its word is checked here against the closed
+/// list the operation table gives it (`PreviewRuler::WORDS`), and another word is answered as
+/// `record mark` answers another word of its closed list `--transition` on this line:
+/// `validation_failed`, its text naming the words and the word given; a flag given twice or without
+/// a value is refused as every value of these commands is.
 fn ruler_flag(flags: &FlagArgs) -> CliOutcome<Option<PreviewRuler>> {
     record_flag_value(flags, "--ruler")?
         .map(|word| {
             PreviewRuler::from_word(&word).ok_or_else(|| {
                 CliError::usage(format!(
-                    "--ruler (MCP ruler) takes one of {}, got {word}",
-                    PreviewRuler::WORDS.join(", ")
+                    "--ruler must be {}, got {word}",
+                    PreviewRuler::WORDS.join(" or ")
                 ))
-                .with_details(json!({
-                    "argument": "ruler",
-                    "reason": "not_recognised",
-                    "value": word
-                }))
             })
         })
         .transpose()

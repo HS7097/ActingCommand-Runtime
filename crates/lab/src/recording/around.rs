@@ -4,8 +4,7 @@
 //! stored frames just before and just after the press of one recorded step, which stage two of
 //! package making asks for when the frame a press happened on and the final screen do not show
 //! what the press did. The read takes no lock and writes nothing, and no frame is decoded,
-//! compared or copied: it lists what the step table holds (#463 S1-R: but for the ruled copies
-//! `ruler` asks for, below).
+//! compared or copied: it lists what the step table holds.
 //!
 //! - **The sequence.** Every frame the step table stores under a step, its page transition's too,
 //!   superseded ones included, in the order the frames entered the step table (the number of
@@ -28,19 +27,10 @@
 //!   before the time and those recorded after it. With neither, those stored under the steps
 //!   numbered below the step, and those stored under it and the steps numbered above it. Each side
 //!   keeps the sequence's order; `before` lists its last `n`, `after` its first `n`.
-//! - **#463 S1-R, a ruler** (`contracts/lab-recording.md`, "A ruler on the pictures a recording
-//!   hands back"). The answer hands back the stored frames themselves, by their paths. With
-//!   `ruler`, each frame it lists is also written as a ruled copy beside the previews of `record
-//!   review` (`lab/preview/<frame_id>-ruled-<edges|grid>.png`), through `record review`'s writer:
-//!   every listed frame read and its sha256 checked before any copy is written, the stored frame
-//!   never written; each listed frame names its copy (`ruled`) beside its `path`, and the answer
-//!   says what the ruler is (`ruler`). Without it, nothing is written or decoded, as before.
 
-use super::archive::{display, instance_mismatch, read_recording, step_kind, stored_frame_path};
+use super::archive::{instance_mismatch, read_recording, step_kind, stored_frame_path};
 use super::fold::effective_or_folded;
 use super::model::{LabRecording, RecordPoint, RecordedFrame, RecordingStep, StepTransition};
-use super::preview::{Overlay, PreviewRuler, RulerView};
-use super::review::{Planned, ruled_frame_path, write_previews};
 use super::steps::{effective_indices, lab_unavailable, not_active};
 use super::store::{LabFile, lab_dir, load_lab, read_old_record, with_details};
 use actingcommand_contract::{LabError, LabResult};
@@ -63,14 +53,12 @@ const PRESS_FRAME_NOT_STORED: &str = "press_frame_not_stored";
 
 /// `record frames`: the recording (`record_id`, or the one the instance's session header names),
 /// the step's serial number and how many frames each side lists (`None`: 3 before, 10 after).
-/// #463 S1-R: and the ruler of a ruled copy of each frame listed (`ruler`; `None`: no copy).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordFramesRequest {
     pub record_id: Option<String>,
     pub step: u32,
     pub before: Option<u64>,
     pub after: Option<u64>,
-    pub ruler: Option<PreviewRuler>,
 }
 
 /// The answer of `record frames`.
@@ -89,10 +77,6 @@ pub struct RecordFramesOutcome {
     pub before_total: usize,
     pub after_total: usize,
     pub warnings: Vec<RecordFramesWarning>,
-    /// #463 S1-R: with `ruler`, what the ruler on every ruled copy is; absent without it, so that
-    /// the answer is as before.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ruler: Option<RulerView>,
 }
 
 /// The step's press as the step table holds it: its time (an application operation's completed
@@ -108,28 +92,22 @@ pub struct RecordFramesPress {
     pub frame: Option<RecordFramesPressFrame>,
 }
 
-/// The stored frame a press was sent on. `path` is `None` when its file is missing. #463 S1-R:
-/// `ruled`, with `ruler`, the absolute path of its ruled copy; absent without it.
+/// The stored frame a press was sent on. `path` is `None` when its file is missing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordFramesPressFrame {
     pub frame_id: String,
     pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ruled: Option<String>,
     pub sha256: String,
     pub captured_at_unix_ms: u64,
     pub stored_under_step: u32,
 }
 
 /// One stored frame of a side. `offset_ms` is its capture time minus the press's time, `None`
-/// without a press time; `path` is `None` when its file is missing. #463 S1-R: `ruled` as
-/// [`RecordFramesPressFrame::ruled`].
+/// without a press time; `path` is `None` when its file is missing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecordFramesFrame {
     pub frame_id: String,
     pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ruled: Option<String>,
     pub sha256: String,
     pub captured_at_unix_ms: u64,
     pub offset_ms: Option<i64>,
@@ -168,10 +146,7 @@ struct Pressed<'a> {
 /// (`record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`). A frame
 /// whose file is missing is listed with no `path` and named in the warning `frame_file_missing`; a
 /// press sent on a capture that was not stored is named in `press_frame_not_stored`, and its
-/// `after` are the frames recorded after its time. #463 S1-R: with `request.ruler`, a ruled copy of
-/// each frame listed is written under the recording's `lab/preview/` and named in its `ruled`, the
-/// answer saying what the ruler is (`ruler`); a listed frame whose bytes do not match its sha256,
-/// or whose file is not there, is `record_frame_hash_mismatch` and no copy is written.
+/// `after` are the frames recorded after its time.
 pub fn record_frames(
     state_dir: &Path,
     instance: &str,
@@ -212,66 +187,26 @@ pub fn record_frames(
                 .partition(|stored| stored.frame.recorded_at_unix_ms <= at),
             (None, None) => sequence.iter().partition(|stored| stored.step < step.index),
         };
-    let first = earlier.len().saturating_sub(before);
-    // #463 S1-R: with a ruler, the ruled copy of every frame the answer lists, written through
-    // `record review`'s writer before the answer names them: each stored frame read and its sha256
-    // checked before any copy is written (`record_frame_hash_mismatch` otherwise, nothing written),
-    // nothing drawn but the ruler.
-    if let Some(ruler) = request.ruler {
-        let planned = position
-            .map(|at| &sequence[at])
-            .into_iter()
-            .chain(earlier[first..].iter().copied())
-            .chain(later.iter().take(after).copied())
-            .map(|stored| Planned {
-                frame: stored.frame,
-                overlay: Overlay::default(),
-                path: ruled_frame_path(&dir, &stored.frame.frame_id, ruler),
-            })
-            .collect::<Vec<_>>();
-        write_previews(&dir, &planned, Some(ruler))?;
-    }
-    let ruled = |frame: &RecordedFrame| {
-        request
-            .ruler
-            .map(|ruler| display(&ruled_frame_path(&dir, &frame.frame_id, ruler)))
-    };
     let mut missing = Vec::new();
     let frame = position.map(|at| {
         let stored = &sequence[at];
         RecordFramesPressFrame {
             frame_id: stored.frame.frame_id.clone(),
             path: located(&dir, stored.frame, &mut missing),
-            ruled: ruled(stored.frame),
             sha256: stored.frame.sha256.clone(),
             captured_at_unix_ms: stored.frame.recorded_at_unix_ms,
             stored_under_step: stored.step,
         }
     });
+    let first = earlier.len().saturating_sub(before);
     let before_frames = earlier[first..]
         .iter()
-        .map(|stored| {
-            listed(
-                &dir,
-                stored,
-                pressed.at_unix_ms,
-                ruled(stored.frame),
-                &mut missing,
-            )
-        })
+        .map(|stored| listed(&dir, stored, pressed.at_unix_ms, &mut missing))
         .collect();
     let after_frames = later
         .iter()
         .take(after)
-        .map(|stored| {
-            listed(
-                &dir,
-                stored,
-                pressed.at_unix_ms,
-                ruled(stored.frame),
-                &mut missing,
-            )
-        })
+        .map(|stored| listed(&dir, stored, pressed.at_unix_ms, &mut missing))
         .collect();
     let mut warnings = Vec::new();
     if pressed.unstored {
@@ -305,7 +240,6 @@ pub fn record_frames(
         before_total: earlier.len(),
         after_total: later.len(),
         warnings,
-        ruler: request.ruler.map(PreviewRuler::view),
     })
 }
 
@@ -436,20 +370,17 @@ pub(crate) fn located(
     }
 }
 
-/// One frame of a side, its offset from the press's time `at`; #463 S1-R: `ruled` the path of its
-/// ruled copy, with a ruler.
+/// One frame of a side, its offset from the press's time `at`.
 fn listed(
     dir: &Path,
     stored: &Stored<'_>,
     at: Option<u64>,
-    ruled: Option<String>,
     missing: &mut Vec<String>,
 ) -> RecordFramesFrame {
     let captured = stored.frame.recorded_at_unix_ms;
     RecordFramesFrame {
         frame_id: stored.frame.frame_id.clone(),
         path: located(dir, stored.frame, missing),
-        ruled,
         sha256: stored.frame.sha256.clone(),
         captured_at_unix_ms: captured,
         offset_ms: at.and_then(|at| i64::try_from(i128::from(captured) - i128::from(at)).ok()),

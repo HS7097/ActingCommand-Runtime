@@ -142,8 +142,8 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
     ("candidates", Mode::NoEffect),
     // #463 S2-1: it reads under no lock and writes nothing.
     ("ready", Mode::NoEffect),
-    // #463 S2-13: it reads the step table only; #463 S1-R: with `--ruler` it writes ruled copies.
-    ("frames", Mode::Mixed(FRAMES_FORMS)),
+    // #463 S2-13: it reads the step table only.
+    ("frames", Mode::NoEffect),
     // #463 S2-2: its previews are files written; with `--no-preview` it writes nothing.
     ("review", Mode::Mixed(REVIEW_FORMS)),
     ("build-task", Mode::Refused("resource_production_retired")),
@@ -155,13 +155,6 @@ const RECORD_FORMS: &[(&str, Mode)] = &[
 const REVIEW_FORMS: &[(&str, Mode)] = &[
     ("--no-preview", Mode::NoEffect),
     ("without --no-preview", UNSUPPORTED),
-];
-// #463 S1-R: `record frames` reads the step table only; with `--ruler` the ruled copy of each frame
-// it lists is a file written, so that form is refused after the flags, before the recording is
-// read.
-const FRAMES_FORMS: &[(&str, Mode)] = &[
-    ("without --ruler", Mode::NoEffect),
-    ("--ruler <edges|grid>", UNSUPPORTED),
 ];
 // Workflow #463 S3-11: `--plan` reads and writes nothing; the run sends one run and writes its
 // record, and `--collect` writes the record, so both are refused after the flags.
@@ -333,10 +326,6 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     // #463 S2-2: `--no-preview` writes nothing; without it the previews are files written.
     ("record review", Mode::Mixed(REVIEW_FORMS)),
     ("session record review", Mode::Mixed(REVIEW_FORMS)),
-    // #463 S1-R: without `--ruler` it reads the step table only; with it the ruled copies are
-    // files written.
-    ("record frames", Mode::Mixed(FRAMES_FORMS)),
-    ("session record frames", Mode::Mixed(FRAMES_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),
@@ -391,6 +380,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session record ready", Mode::NoEffect),
     // Workflow #434 LAB-5G4c: it changes nothing (its row's `writes` is false).
     ("record draft", Mode::NoEffect),
+    // #463 S2-13: it reads the step table only.
+    ("record frames", Mode::NoEffect),
+    ("session record frames", Mode::NoEffect),
     ("current-page", Mode::NoEffect),
     ("is-visible", Mode::NoEffect),
     ("locate", Mode::NoEffect),

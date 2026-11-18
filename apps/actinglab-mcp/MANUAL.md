@@ -408,8 +408,8 @@ naming this file.
   #463 S2-13 (0.12.65; `contracts/lab-recording.md`, "The frames around a press"):
   `ac_record_frames` (`step`, `before` 0 to 100, default 3, `after` 0 to 100, default 10,
   `record_id`) lists the stored frames captured just before the frame a step's press was sent on
-  and just after the press, with their paths, capture times and offsets from the press; it takes
-  no lock and, without `ruler` (#463 S1-R, below), reads only.
+  and just after the press, with their paths, capture times and offsets from the press; it reads
+  only and takes no lock.
   #463 S2-2 (0.12.68; `contracts/lab-recording.md`, "Reviewing a recording step by step"):
   `ac_record_review` (`record_id`, `step`, `no_preview`, `game`, `server`, `locale`, `state_dir`)
   answers each step of the recording `ac_record_ready` reads as the screen before (`before`), what
@@ -670,18 +670,18 @@ naming this file.
   select step in `ac_record_review` (`steps[].warnings`). It is the fact only, refuses nothing and
   changes no exit status; the package does not carry it.
   #463 S1-R (0.12.74; `contracts/lab-recording.md`, "A ruler on the pictures a recording hands
-  back"): `ac_record_review` and `ac_record_frames` take `ruler` (`edges` or `grid`; absent, no
-  ruler), a ruler drawn on copies only, under the boxes and the press, in the stored frame's own
-  pixels, the space `ac_record_mark` takes a box's corners in: `edges` a tick every 50 pixels along
-  the top and the left edge, a longer one with its number every 100 (the top edge's numbers are
-  `x`, the left edge's `y`); `grid` the same and a thin line across the frame every 100 pixels,
-  both ways. `ac_record_review` then names each preview `s<nn>-<before|after>-ruled-<word>.png`
-  (not with `no_preview`: `validation_failed`); `ac_record_frames` writes a ruled copy of each frame
-  it lists, `lab/preview/<frame_id>-ruled-<word>.png`, named in its `ruled` beside its `path`, the
-  stored frame's. Both answers add `ruler` (`kind`, `space` `frame_pixels`, `tick_px`,
-  `long_tick_px`, `number_px`, `top_numbers`, `left_numbers`, `line_px` on `grid`). Read the
-  numbers; give a stored frame's `path`, never a ruled copy, where a frame is taken. Without
-  `ruler` every picture and answer is as before.
+  back"): `ac_record_review` takes `ruler` (`edges` or `grid`; absent, no ruler), a ruler drawn on
+  its previews only, under the boxes and the press, in the stored frame's own pixels, the space
+  `ac_record_mark` takes a box's corners in: `edges` a tick every 50 pixels along the top and the
+  left edge, a longer one with its number every 100 (the top edge's numbers are `x`, the left
+  edge's `y`); `grid` the same and a thin line across the frame every 100 pixels, both ways. Each
+  ruled preview is written beside the plain ones under a name that says it is ruled,
+  `lab/preview/s<nn>-<before|after>-ruled-<word>.png`, never over `s<nn>-<before|after>.png` (not
+  with `no_preview`: `validation_failed`), and the answer adds `ruler` (`kind`, `space`
+  `frame_pixels`, `tick_px`, `long_tick_px`, `number_px`, `top_numbers`, `left_numbers`, `line_px`
+  on `grid`). Read the numbers; give a stored frame's `path`, never a preview, where a frame is
+  taken. Without `ruler` every preview and the answer are as before. `ac_record_frames` takes no
+  ruler and is as above.
 - **Offline scenes of another size** (Workflow #392 DA-5cd, 0.12.67, as the train of DA-5ab and
   DA-5cd leaves it; `contracts/display-adapter.md` section 12). `ac_recognize`, `ac_detect_page`,
   `ac_current_page`, `ac_is_visible`, `ac_lab_observe` on a saved scene, `ac_tap_target` and
