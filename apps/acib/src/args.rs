@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The command line of `acib` (board #479, ACIB-0):
+//! The command line of `acib` (board #479, ACIB-0 and ACIB-1):
 //!
 //! ```text
 //! acib devices                                   [--timeout-ms <ms>]
-//! acib info     --device <n>                     [--timeout-ms <ms>]
-//! acib services --device <n>                     [--timeout-ms <ms>]
-//! acib images   --device <n>                     [--timeout-ms <ms>]
-//! acib apps     --device <n> --contains <text>   [--max-matching <m>] [--timeout-ms <ms>]
+//! acib info       --device <n>                   [--timeout-ms <ms>]
+//! acib services   --device <n>                   [--timeout-ms <ms>]
+//! acib images     --device <n>                   [--timeout-ms <ms>]
+//! acib apps       --device <n> --contains <text> [--max-matching <m>] [--timeout-ms <ms>]
+//! acib screenshot --device <n> --out <file>      [--via <way>] [--timeout-ms <ms>]
 //! ```
 //!
 //! `<n>` is the device's usbmuxd session number, as `acib devices` lists it. `<text>` is what the
 //! bundle identifiers asked for hold, at least three characters. `<m>` is the most identifiers
-//! `apps` names (1 to [`MAX_MATCHING_LIMIT`]). Anything else is refused with
-//! `command_line_invalid`.
+//! `apps` names (1 to [`MAX_MATCHING_LIMIT`]). `<file>` is where the picture is written, a path
+//! that must not exist yet. `<way>` is one of the words of [`Way`] (default [`DEFAULT_WAY`]).
+//! Anything else is refused with `command_line_invalid`.
 
-use crate::answer::CommandName;
+use crate::answer::{CommandName, Way};
 
 /// How long a command may take when `--timeout-ms` does not say.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -28,6 +30,9 @@ pub const DEFAULT_MAX_MATCHING: usize = 5;
 /// The largest bound `--max-matching` takes: a larger one is refused with
 /// `command_line_invalid`, so no call names more identifiers than this.
 pub const MAX_MATCHING_LIMIT: usize = 20;
+/// The way `screenshot` takes its picture when `--via` does not say: the screen capture
+/// service, which answers one request with a picture in the format asked for.
+pub const DEFAULT_WAY: Way = Way::ScreenCapture;
 
 /// What a command line asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +46,11 @@ pub enum Request {
         contains: String,
         max_matching: usize,
     },
+    Screenshot {
+        device: u32,
+        out: String,
+        via: Way,
+    },
 }
 
 impl Request {
@@ -52,6 +62,7 @@ impl Request {
             Self::Services(_) => CommandName::Services,
             Self::Images(_) => CommandName::Images,
             Self::Apps { .. } => CommandName::Apps,
+            Self::Screenshot { .. } => CommandName::Screenshot,
         }
     }
 
@@ -62,7 +73,20 @@ impl Request {
             Self::Info(device)
             | Self::Services(device)
             | Self::Images(device)
-            | Self::Apps { device, .. } => Some(*device),
+            | Self::Apps { device, .. }
+            | Self::Screenshot { device, .. } => Some(*device),
+        }
+    }
+
+    /// The way the command takes a picture, if it takes one.
+    pub fn via(&self) -> Option<Way> {
+        match self {
+            Self::Screenshot { via, .. } => Some(*via),
+            Self::Devices
+            | Self::Info(_)
+            | Self::Services(_)
+            | Self::Images(_)
+            | Self::Apps { .. } => None,
         }
     }
 }
@@ -75,15 +99,18 @@ pub struct Invocation {
     pub timeout_ms: u64,
 }
 
-/// The command line after the program's name; `None` when it is not one of the five commands
+/// The command line after the program's name; `None` when it is not one of the six commands
 /// with their options (an option given twice, an unknown option, a number that is not one, a
-/// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`]).
+/// text too short, a bound of 0 or above [`MAX_MATCHING_LIMIT`], an empty `--out`, a way that
+/// is not one of [`Way`]'s words).
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, options) = arguments.split_first()?;
     let mut device = None;
     let mut timeout_ms = None;
     let mut contains = None;
     let mut max_matching = None;
+    let mut out = None;
+    let mut via = None;
     for pair in options.chunks(2) {
         let [option, value] = pair else {
             return None;
@@ -100,18 +127,25 @@ pub fn parse(arguments: &[String]) -> Option<Invocation> {
                         .filter(|most| (1..=MAX_MATCHING_LIMIT).contains(most))?,
                 );
             }
+            "--out" if out.is_none() => out = Some(path(value)?),
+            "--via" if via.is_none() => via = Some(Way::from_word(value)?),
             _ => return None,
         }
     }
-    let request = match (command.as_str(), device, contains, max_matching) {
-        ("devices", None, None, None) => Request::Devices,
-        ("info", Some(device), None, None) => Request::Info(device),
-        ("services", Some(device), None, None) => Request::Services(device),
-        ("images", Some(device), None, None) => Request::Images(device),
-        ("apps", Some(device), Some(contains), max_matching) => Request::Apps {
+    let request = match (command.as_str(), device, contains, max_matching, out, via) {
+        ("devices", None, None, None, None, None) => Request::Devices,
+        ("info", Some(device), None, None, None, None) => Request::Info(device),
+        ("services", Some(device), None, None, None, None) => Request::Services(device),
+        ("images", Some(device), None, None, None, None) => Request::Images(device),
+        ("apps", Some(device), Some(contains), max_matching, None, None) => Request::Apps {
             device,
             contains,
             max_matching: max_matching.unwrap_or(DEFAULT_MAX_MATCHING),
+        },
+        ("screenshot", Some(device), None, None, Some(out), via) => Request::Screenshot {
+            device,
+            out,
+            via: via.unwrap_or(DEFAULT_WAY),
         },
         _ => return None,
     };
@@ -135,6 +169,15 @@ fn text(value: &str) -> Option<String> {
         Some(value.to_owned())
     } else {
         None
+    }
+}
+
+/// The path of `--out`, when it is not empty (whether it exists is the command's to check).
+fn path(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
     }
 }
 
@@ -378,5 +421,146 @@ mod tests {
         assert_eq!(Request::Services(4).device(), Some(4));
         assert_eq!(Request::Images(5).name(), CommandName::Images);
         assert_eq!(Request::Images(5).device(), Some(5));
+    }
+
+    /// `screenshot` needs `--device` and a non-empty `--out`, takes `--via` with a word of
+    /// [`Way`] (default [`DEFAULT_WAY`]) and `--timeout-ms`, in any order, and names its
+    /// command, its device and its way.
+    #[test]
+    fn the_screenshot_command_takes_a_device_a_file_and_a_way() {
+        assert_eq!(
+            parsed(&["screenshot", "--device", "3", "--out", "screen.png"]),
+            Some(Invocation {
+                request: Request::Screenshot {
+                    device: 3,
+                    out: "screen.png".to_owned(),
+                    via: Way::ScreenCapture,
+                },
+                timeout_ms: DEFAULT_TIMEOUT_MS,
+            })
+        );
+        for (word, way) in [
+            ("screen_capture", Way::ScreenCapture),
+            ("instruments", Way::Instruments),
+        ] {
+            assert_eq!(
+                parsed(&[
+                    "screenshot",
+                    "--via",
+                    word,
+                    "--out",
+                    "shots/one.png",
+                    "--timeout-ms",
+                    "60000",
+                    "--device",
+                    "4",
+                ]),
+                Some(Invocation {
+                    request: Request::Screenshot {
+                        device: 4,
+                        out: "shots/one.png".to_owned(),
+                        via: way,
+                    },
+                    timeout_ms: 60_000,
+                }),
+                "--via {word}"
+            );
+        }
+        let request = Request::Screenshot {
+            device: 6,
+            out: "screen.png".to_owned(),
+            via: Way::Instruments,
+        };
+        assert_eq!(request.name(), CommandName::Screenshot);
+        assert_eq!(request.device(), Some(6));
+        assert_eq!(request.via(), Some(Way::Instruments));
+        assert_eq!(Request::Info(3).via(), None);
+        assert_eq!(Request::Devices.via(), None);
+    }
+
+    /// Every other `screenshot` line is refused, no other command takes `--out` or `--via`, and
+    /// there is no command for the application in front (the library offers no way to ask).
+    #[test]
+    fn every_other_screenshot_line_is_refused() {
+        let lines: &[&[&str]] = &[
+            &["screenshot"],
+            &["screenshot", "--device", "3"],
+            &["screenshot", "--out", "screen.png"],
+            &["screenshot", "--device", "3", "--out"],
+            &["screenshot", "--device", "3", "--out", ""],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--out",
+                "b.png",
+            ],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--via",
+                "instruments",
+                "--via",
+                "instruments",
+            ],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--via",
+                "SCREEN_CAPTURE",
+            ],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--via",
+                "screenshotr",
+            ],
+            &["screenshot", "--device", "3", "--out", "a.png", "--via", ""],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--contains",
+                "game",
+            ],
+            &[
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--max-matching",
+                "2",
+            ],
+            &["devices", "--out", "a.png"],
+            &["info", "--device", "3", "--out", "a.png"],
+            &["images", "--device", "3", "--via", "instruments"],
+            &[
+                "apps",
+                "--device",
+                "3",
+                "--contains",
+                "game",
+                "--out",
+                "a.png",
+            ],
+            &["foreground", "--device", "3", "--is", "com.example.app"],
+        ];
+        for line in lines {
+            assert_eq!(parsed(line), None, "{line:?}");
+        }
     }
 }
