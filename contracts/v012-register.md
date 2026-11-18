@@ -40100,17 +40100,24 @@ check, an NN region and a shared read are never moved). The comparison compares 
 `zone_met` says what the rectangle is (`PrivacyExtent`: the area, the reach beside the area when
 they differ, or a bound); a whole-frame finding is still the area's. The scene builder is not
 touched and pastes the area. (3) *Where an unbounded read is confined*: a feature a
-`repeated_anchor` layout reads at an offset carries the rectangle it is confined to: the readable
-band (the coordinate space without one) when the anchor is searched at its own size only and the
-feature's region, moved by each sample, lies inside `instance_rect` (the kernel reads only an
-instance inside the band; admission and the list check the region inside the rectangle, a shift
-at the band's edge included); else the shared read's rectangle when the read gives the row its text
-(the row reads no pixel of its own); else nothing, and `privacy_region_unbounded` is left for such a
-region alone, with `template_relative` and keyword regions. The comparison compares a bound and says
+`repeated_anchor` layout reads at an offset carries the rectangle that bounds the pixels it can take
+its value from, not the region the pack declares, decided in this order (fix round 3, after the
+third review, put the shared read first; it had come after the band, which bounds the row's region
+but not the blocks the row takes): the shared read's rectangle when the read gives the row its text
+(the row reads no pixel of its own and takes the read's blocks whose centre lies in its region; a
+block is held only inside the read's rectangle and may reach past the region and the band, which
+the read covers); else the readable band (the coordinate space without one) when the anchor is
+searched at its own size only and the feature's region, moved by each sample, lies inside
+`instance_rect` (the kernel reads only an instance inside the band; admission and the list check
+the region inside the rectangle, a shift at the band's edge included); else nothing, and
+`privacy_region_unbounded` is left for such a region alone, with `template_relative` and keyword
+regions. The comparison compares a bound and says
 the region may lie anywhere inside it. Tests 2, 8, 9 and 10 are adapted (the shared reads they
 list are readings where they serve a quantity, the rows' reads are confined, test 8 takes a value
 test and an integer field outside any list); 11 and 12 are added; no scene changes (test 2, and
-the scene checks of 11 and 12, against the function the list replaced).
+the scene checks of 11 and 12, against the function the list replaced). Fix round 3 adds one check
+to 12: an anchor at its own size and a shared read wider than the band bound the row by the read's
+rectangle.
 
 ### 1.479 Slice #463 SEL-2L-a (0.12.74): a select's names may be read by detecting blocks (fixed slots), and the refusal counts marks (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: the cards of a shop carry names of one or two lines in one title box, which a select read as one block each; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sel2l-a-fixed-blocks.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slices S-count and S-fixed, on main `a8d0aa43`; finished after a stop at a safe point under `rd-1118/brief-463-sel2l-a-finish.md`, merged with main `5d0c8c3e`)
 

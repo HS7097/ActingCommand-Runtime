@@ -28,7 +28,8 @@
 // - `priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not` (10, fix
 //   round 1, after #463 SEL-2L-b; fix round 2: the read a reading, its rows confined to the band).
 // - `priv1_a_region_is_compared_by_its_reach_and_found_with_both_rectangles` (11, fix round 2).
-// - `priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to` (12, fix round 2).
+// - `priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to` (12, fix round 2;
+//   fix round 3: a row the shared read serves is bound by the read's rectangle, before the band).
 
 use crate::recording::cases::{self, Patch, read_regions, scene_of};
 use crate::recording::frames::decode_frame;
@@ -1654,10 +1655,10 @@ fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
 // read's declared region as the layout's `shared_ocr` read, a fixed rectangle, as a `fixed_slots`
 // layout's, which the comparison finds in a zone with its layout (fix round 2: it gives its text to
 // the quantity column, so it is a reading); the rows' names and quantities the layout reads at an
-// offset from the anchor's match stay without a fixed rectangle (fix round 2: confined to the
-// readable band, as the anchor is searched at its own size and each row lies inside the instance's
-// rectangle, and found in the zone by that band), the quantity a reading. The scene pastes the
-// targets' own regions only, as the old function did.
+// offset from the anchor's match stay without a fixed rectangle (fix round 2: confined, and found
+// in the zone by that bound; fix round 3: the shared read gives them their text, so the bound is
+// its rectangle, here the band itself), the quantity a reading. The scene pastes the targets' own
+// regions only, as the old function did.
 #[test]
 fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not() {
     let band = rect(0, 20, 160, 60);
@@ -1961,7 +1962,8 @@ fn priv1_a_region_is_compared_by_its_reach_and_found_with_both_rectangles() {
 // searched at two scales, no shared read: nothing confines the column, still reported unbounded;
 // (d) an anchor searched at two scales whose shared read gives the row's name its text: confined
 // to the shared read's rectangle, found there with the shared read itself. The scene pastes the
-// targets' own regions, as the old function did.
+// targets' own regions, as the old function did. Fix round 3: (e) below, the shared read's
+// rectangle comes before the band.
 #[test]
 fn priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to() {
     let banded = rect(0, 50, 160, 40);
@@ -2124,4 +2126,41 @@ fn priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to() {
     // A scene pastes the targets' own regions, as the old function did: no read of a layout.
     let textured = |x: u32, y: u32| [u8::try_from(x).expect("x"), u8::try_from(y).expect("y"), 3];
     assert_scene_as_before("repeated anchors' reads", &package, &textured);
+    // Fix round 3: (e) an anchor at its own size, the row inside the instance's rectangle, a
+    // shared read that gives the row's name its text over a rectangle the band lies inside: the
+    // row takes the read's blocks, which may reach past the band, so its bound is the read's.
+    let wide = rect(0, 10, 160, 60);
+    let mut over = rows(
+        "rows/e",
+        "e/anchor",
+        Some(middle),
+        identity_feature(
+            "name",
+            json!([{"id": "alpha", "aliases": ["ALPHA"]}]),
+            Some(("e/name", 2, 1)),
+        ),
+    );
+    over["shared_ocr"] = json!({"region": wide, "languages": ["en"], "timeout_ms": 1000,
+                                "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256,
+                                "blocks": "detect"});
+    let own_size = pack(
+        json!([
+            template("e/anchor", json!(middle), None, middle),
+            ocr("e/name", json!(rect(0, 0, 30, 10)), &[])
+        ]),
+        json!([over]),
+    );
+    assert_eq!(
+        own_size
+            .reads(&PackReadingDeclarations::default())
+            .regions
+            .last(),
+        Some(&row_region(
+            "e/name",
+            PackReadKind::SelectName,
+            Some(wide),
+            false,
+            "rows/e"
+        ))
+    );
 }

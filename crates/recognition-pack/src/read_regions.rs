@@ -268,19 +268,22 @@ impl RecognitionPack {
     /// Fix round 2: a region that is a fixed rectangle carries its reach; a layout's shared read is
     /// a reading when it gives its text to a reading target, as the kernel counts the calls it
     /// serves; and a feature a `repeated_anchor` layout reads at an offset carries the rectangle
-    /// it is confined to, when the pack guarantees one:
+    /// it is confined to, when the pack guarantees one: a bound of the pixels the read can take
+    /// its value from, not of the region the pack declares (fix round 3: in this order):
     ///
-    /// - the layout's readable band (the coordinate space when it declares none), when its anchor
-    ///   is searched at its own size only (no factor but 1000) and the feature's region at the
-    ///   offset, moved by each of its samples, lies inside `instance_rect`: the kernel reads the
+    /// - the layout's shared read, when it gives the target its text: the row then reads no pixel
+    ///   of its own and takes the blocks of the read whose centre lies in its region
+    ///   (`layout_shared_text`); a block is held only inside the read's rectangle, so it may reach
+    ///   past the row's region and past the band, and validation makes the read cover the band
+    ///   (`validate_shared_ocr`);
+    /// - else the layout's readable band (the coordinate space when it declares none), when its
+    ///   anchor is searched at its own size only (no factor but 1000) and the feature's region at
+    ///   the offset, moved by each of its samples, lies inside `instance_rect`: the kernel reads the
     ///   features of an instance only when the instance's rectangle lies inside the band
     ///   (`SceneEvaluation::anchor_instances`), and admission holds every such region inside the
     ///   rectangle (`validate_repeated_anchor`), which this list checks itself;
-    /// - else the layout's shared read, when it gives the target its text: the row then reads no
-    ///   pixel of its own and takes the blocks of the read (`layout_shared_text`), whose pixels
-    ///   are those of the read's region;
     /// - else none: a match at another factor moves the region by a scaled offset and keeps its
-    ///   size, so nothing holds it inside the band.
+    ///   size, so nothing holds it inside the band, and the row reads its own pixels.
     pub fn reads(&self, task: &PackReadingDeclarations) -> PackReads {
         let readings = self.reading_targets(task);
         let features = self.layout_features();
@@ -513,8 +516,9 @@ impl RecognitionPack {
 
     /// Fix round 2: the rectangle the read of `feature`, which the `repeated_anchor` layout
     /// `layout` makes at the feature's offset from each anchor match with the size `size`, is
-    /// confined to, when the pack guarantees one ([`Self::reads`]); `shared` the targets the
-    /// layout's shared read gives its text to.
+    /// confined to, when the pack guarantees one ([`Self::reads`]; fix round 3: the shared read's
+    /// rectangle first, then the band); `shared` the targets the layout's shared read gives its
+    /// text to.
     fn confinement(
         &self,
         layout: &CandidateLayout,
@@ -531,6 +535,15 @@ impl RecognitionPack {
             width: i32::try_from(space.width).unwrap_or(i32::MAX),
             height: i32::try_from(space.height).unwrap_or(i32::MAX),
         });
+        // Fix round 3: a row the shared read gives its text to takes the read's blocks, which
+        // may reach past its region and past the band, never past the read's rectangle.
+        if shared.contains(target) {
+            return match layout.shared_ocr.as_ref().map(|read| &read.region) {
+                Some(PackRegion::Rect(rect)) => Some(*rect),
+                Some(PackRegion::Keyword(keyword)) if keyword == "full_frame" => whole,
+                _ => None,
+            };
+        }
         let unscaled = matches!(
             layout
                 .anchor
@@ -553,19 +566,10 @@ impl RecognitionPack {
                 )
             })
         });
-        if unscaled
-            && inside
-            && let Some(band) = layout.readable_band.or(whole)
-        {
-            return Some(band);
-        }
-        if !shared.contains(target) {
-            return None;
-        }
-        match layout.shared_ocr.as_ref().map(|read| &read.region) {
-            Some(PackRegion::Rect(rect)) => Some(*rect),
-            Some(PackRegion::Keyword(keyword)) if keyword == "full_frame" => whole,
-            _ => None,
+        if unscaled && inside {
+            layout.readable_band.or(whole)
+        } else {
+            None
         }
     }
 

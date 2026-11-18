@@ -189,18 +189,22 @@ reach is their region. The comparison compares a region's reach; a scene pastes 
 ### Where an unbounded read is confined
 
 A feature a `repeated_anchor` layout reads at an offset from its anchor's match has no fixed
-rectangle. It carries the **bound** it is confined to when the pack guarantees one, in this order:
+rectangle. It carries the **bound** it is confined to when the pack guarantees one. The bound is of
+the pixels the read can take its value from, not of the region the pack declares, so the cases are
+decided in this order:
 
-1. **The layout's readable band** (the coordinate space when it declares none), when the anchor is
-   searched at its own size only (no `scales`, or only the factor 1000) and the feature's region at
-   the offset, moved by each of its samples, lies inside `instance_rect`. The kernel reads the
+1. **The layout's shared read**, its declared rectangle (`full_frame`: the coordinate space), when
+   it gives the feature's target its text. The row then reads no pixel of its own: it takes the
+   blocks of the read whose centre lies in its region, and a block is held only inside the read's
+   rectangle, so it can reach past the row's region and past the band. The read covers the band
+   (admission refuses one that does not), so this bound holds whatever the anchor's factor.
+2. Else **the layout's readable band** (the coordinate space when it declares none), when the anchor
+   is searched at its own size only (no `scales`, or only the factor 1000) and the feature's region
+   at the offset, moved by each of its samples, lies inside `instance_rect`. The kernel reads the
    features of an instance only when the instance's rectangle lies inside the band, and at its own
    size the region lies inside the rectangle; admission refuses a region outside it, and the list
    checks it itself. A sample's shift at the band's edge stays inside, since admission and the list
    check the moved region.
-2. Else **the layout's shared read**, its declared rectangle (`full_frame`: the coordinate space),
-   when it gives the feature's target its text: the row then reads no pixel of its own and takes
-   the blocks of the read, whose pixels are those of the read's region.
 3. Else nothing confines it: an anchor matched at another factor moves the region by a scaled offset
    and keeps its own size, so neither the instance's rectangle nor the band holds it, and the row
    reads its own pixels.
