@@ -6,13 +6,14 @@
 //! The list of applications gives each application its bundle identifier and the path of its
 //! bundle, a directory; the list of processes gives each process its pid and the location of its
 //! executable, and no bundle identifier. A process is **of the bundle** when its executable lies
-//! inside the bundle's directory: the application's main executable, at the top of the
-//! directory, and every executable nested deeper in it, as an app extension's in `PlugIns/` is
-//! (Apple's documentation, "Placing content in a bundle": on iOS the main executable is at the
-//! root of the bundle and app extensions in `PlugIns/`). Everything in that directory is the
-//! application's own code, signed with it, installed and removed with it; an extension runs for
-//! it; and no other application's executable can lie in it. So `running` counts an extension
-//! that runs, and `stop` ends it too, so that nothing the application runs is left.
+//! inside the bundle's directory (Apple's documentation, "Placing content in a bundle": on iOS
+//! the main executable is at the root of the bundle and app extensions in `PlugIns/`), and the
+//! two kinds are answered apart (the coordinator's ruling on board #479, fix round 1 of ACIB-3):
+//! a process whose executable lies **directly** in the directory is the application itself, and
+//! only it counts for `running` and is ended by `stop`; a process whose executable lies deeper
+//! (an app extension in `PlugIns/`, a helper inside a nested bundle) is the bundle's, but is not
+//! the application running: a widget the system runs for it does not make the application run,
+//! and `stop` leaves it, as a person who swipes the application away does.
 //!
 //! Bundle identifiers are compared without regard to ASCII case (Apple's documentation of
 //! `CFBundleIdentifier`: "Bundle IDs are case-insensitive"); paths are compared exactly, case
@@ -23,7 +24,7 @@
 //! not absolute, is read as no place at all (a process there is of no application).
 //!
 //! Nothing here keeps or gives anything of another application: the functions answer whether
-//! the bundle asked for is installed and the pids of its own processes.
+//! the bundle asked for is installed and the pids of its own processes, by kind.
 
 /// The scheme of a file URL.
 const FILE_SCHEME: &str = "file://";
@@ -86,31 +87,61 @@ pub fn installation<'a>(
     }
 }
 
-/// The pids, ascending and each once, of the processes whose executable lies inside one of
-/// `directories` (a process without a location, or with one read as no place, is of none).
+/// The pids of a bundle's processes, each list ascending and each pid in it once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pids {
+    /// The application itself: the processes whose executable lies directly in the bundle's
+    /// directory.
+    pub application: Vec<u32>,
+    /// The processes whose executable lies deeper in the bundle's directory: its extensions'
+    /// and its nested bundles' (the bundle's, not the application running).
+    pub extensions: Vec<u32>,
+}
+
+/// Where a path lies in a directory it is inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Depth {
+    /// In the directory itself: `<directory>/<name>`.
+    Directly,
+    /// In a directory below it.
+    Deeper,
+}
+
+/// The pids of the processes whose executable lies inside one of `directories`, by kind
+/// ([`Pids`]); a process without a location, or with one read as no place, is of none.
 pub fn pids_inside<'a>(
     directories: &[String],
     processes: impl IntoIterator<Item = Process<'a>>,
-) -> Vec<u32> {
-    let mut pids: Vec<u32> = processes
-        .into_iter()
-        .filter(|process| {
-            process
-                .executable
-                .and_then(place)
-                .is_some_and(|path| directories.iter().any(|directory| inside(directory, &path)))
-        })
-        .map(|process| process.pid)
-        .collect();
-    pids.sort_unstable();
-    pids.dedup();
+) -> Pids {
+    let mut pids = Pids::default();
+    for process in processes {
+        let depth = process.executable.and_then(place).and_then(|path| {
+            directories
+                .iter()
+                .find_map(|directory| depth_in(directory, &path))
+        });
+        match depth {
+            Some(Depth::Directly) => pids.application.push(process.pid),
+            Some(Depth::Deeper) => pids.extensions.push(process.pid),
+            None => {}
+        }
+    }
+    for list in [&mut pids.application, &mut pids.extensions] {
+        list.sort_unstable();
+        list.dedup();
+    }
     pids
 }
 
-/// Whether `path` lies inside `directory`: below it, at a component's boundary.
-fn inside(directory: &str, path: &str) -> bool {
-    path.strip_prefix(directory)
-        .is_some_and(|rest| rest.starts_with('/'))
+/// Where `path` lies in `directory`, when it lies inside it: below it, at a component's
+/// boundary (`place` leaves no empty component and no slash at the end).
+fn depth_in(directory: &str, path: &str) -> Option<Depth> {
+    let rest = path.strip_prefix(directory)?.strip_prefix('/')?;
+    Some(if rest.contains('/') {
+        Depth::Deeper
+    } else {
+        Depth::Directly
+    })
 }
 
 /// The place a location names, as the matching compares it (see the module's text); `None`
@@ -202,8 +233,8 @@ mod tests {
         }
     }
 
-    /// The pids of `processes` that are of [`BUNDLE`] in the list of [`applications`].
-    fn of_the_bundle(processes: &[Process<'_>]) -> Vec<u32> {
+    /// The pids of `processes` that are of [`BUNDLE`] in the list of [`applications`], by kind.
+    fn of_the_bundle(processes: &[Process<'_>]) -> Pids {
         match installation(BUNDLE, applications()) {
             Installation::Installed(directories) => {
                 pids_inside(&directories, processes.iter().copied())
@@ -212,8 +243,16 @@ mod tests {
         }
     }
 
-    /// A bundle no process of the list is of has no pid; processes of another application, one
-    /// without a location and the system's own are of no bundle.
+    /// The application itself, `pids` alone.
+    fn application(pids: &[u32]) -> Pids {
+        Pids {
+            application: pids.to_vec(),
+            extensions: Vec::new(),
+        }
+    }
+
+    /// A bundle no process of the list is of has no pid of either kind; processes of another
+    /// application, one without a location and the system's own are of no bundle.
     #[test]
     fn a_bundle_with_no_process_has_no_pid() {
         let processes = [
@@ -227,12 +266,12 @@ mod tests {
                 executable: None,
             },
         ];
-        assert_eq!(of_the_bundle(&processes), Vec::<u32>::new());
-        assert_eq!(of_the_bundle(&[]), Vec::<u32>::new());
+        assert_eq!(of_the_bundle(&processes), Pids::default());
+        assert_eq!(of_the_bundle(&[]), Pids::default());
     }
 
-    /// The one process of the bundle, its main executable at the top of its directory, has its
-    /// pid; another application's process beside it does not.
+    /// The one process of the bundle, its main executable directly in its directory, is the
+    /// application; another application's process beside it is of no bundle.
     #[test]
     fn a_bundle_with_one_process_has_its_pid() {
         let processes = [
@@ -245,14 +284,16 @@ mod tests {
                 "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
             ),
         ];
-        assert_eq!(of_the_bundle(&processes), vec![412]);
+        assert_eq!(of_the_bundle(&processes), application(&[412]));
     }
 
-    /// An application and its extensions: the main executable and each executable nested in
-    /// the bundle's directory (an app extension in `PlugIns/`) are all of the bundle, the pids
-    /// ascending and each once; another application's extension is not.
+    /// An application and its extensions both alive: the main executable, directly in the
+    /// bundle's directory, is the application; each executable nested deeper (an app extension
+    /// in `PlugIns/`, a helper inside a nested bundle) is answered apart, as the bundle's
+    /// extensions; each list ascending and each pid once; another application's extension is
+    /// neither.
     #[test]
-    fn an_application_and_its_extension_processes_are_all_of_the_bundle() {
+    fn the_application_and_its_extensions_are_answered_apart() {
         let processes = [
             process(
                 530,
@@ -271,11 +312,44 @@ mod tests {
                 "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/PlugIns/Notify.appex/Notify",
             ),
             process(
+                640,
+                "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Frameworks/Helper.framework/Helper.app/Helper",
+            ),
+            process(
                 412,
                 "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
             ),
         ];
-        assert_eq!(of_the_bundle(&processes), vec![412, 415, 530]);
+        assert_eq!(
+            of_the_bundle(&processes),
+            Pids {
+                application: vec![412],
+                extensions: vec![415, 530, 640],
+            }
+        );
+    }
+
+    /// An application of which only an extension is alive (a widget the system runs for it)
+    /// does not run: its application list is empty, and the extension is answered apart.
+    #[test]
+    fn an_application_with_only_an_extension_alive_does_not_run() {
+        let processes = [
+            process(
+                201,
+                "file:///private/var/containers/Bundle/Application/TESTUUID-0002/Other.app/Other",
+            ),
+            process(
+                530,
+                "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/PlugIns/Widget.appex/Widget",
+            ),
+        ];
+        assert_eq!(
+            of_the_bundle(&processes),
+            Pids {
+                application: Vec::new(),
+                extensions: vec![530],
+            }
+        );
     }
 
     /// A process of another application whose path merely starts as the bundle's directory
@@ -305,7 +379,7 @@ mod tests {
                 "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/../Other.app/Other",
             ),
         ];
-        assert_eq!(of_the_bundle(&processes), Vec::<u32>::new());
+        assert_eq!(of_the_bundle(&processes), Pids::default());
     }
 
     /// A bundle identifier is matched without regard to ASCII case; a path only exactly, case
@@ -348,7 +422,7 @@ mod tests {
                 "file:///private/var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
             ),
         ];
-        assert_eq!(of_the_bundle(&processes), vec![704]);
+        assert_eq!(of_the_bundle(&processes), application(&[704]));
     }
 
     /// A location is read as a path: a plain absolute path, a `file://` URL with an empty host

@@ -12,12 +12,15 @@
 //! alone: no member holds a salt or the identifier a key was made from. (ACIB-3) The lines of
 //! `running`, `launch` and `stop` ([`Running`], [`Launch`], [`Stop`]) name the one bundle asked
 //! for, as the command line gave it, and hold of the phone's lists of applications and
-//! processes only booleans and the pids of that bundle's own processes; an error of the
-//! application service is an [`ErrorKind`], a word of this program's own, never its text. No
-//! member holds another application's name, bundle identifier, path or pid.
+//! processes only booleans and the pids of that bundle's own processes (the application's and,
+//! apart, its extensions'); an error of the application service is an [`ErrorKind`], a word of
+//! this program's own, never its text. No member holds another application's name, bundle
+//! identifier, path or pid.
 
 use crate::key::DeviceKey;
+use crate::matching::Pids;
 use crate::redact;
+use crate::stopping::Verdict;
 use serde::{Serialize, Serializer};
 use std::time::Duration;
 
@@ -133,10 +136,15 @@ pub enum Problem {
     /// absolute path or a file URL): which processes are of it cannot be told.
     BundlePathUnreadable,
     /// The application service did not answer the launch with a process; the line names the
-    /// error's [`ErrorKind`].
+    /// error's [`ErrorKind`]. Of any kind but `device_refused` the application may have been
+    /// started all the same: `running` tells.
     LaunchFailed,
-    /// After `stop` sent its signals, the second look still lists a process of the bundle.
+    /// `stop`'s last look inside the command's deadline still lists a process of the
+    /// application that `stop` sent the kill signal to.
     StillRunning,
+    /// `launch`: the list of applications does not hold the bundle, so no launch was sent (the
+    /// line's `installed` is false, as `running` and `stop` answer it).
+    NotInstalled,
 }
 
 /// How a request to the application service failed, by this program's own words: what the
@@ -732,10 +740,11 @@ pub struct Orientations {
 
 /// `acib running --device <n> --bundle <id>`, read-only: of the one bundle asked for (`bundle`,
 /// as the command line gave it), whether the application service's list of applications holds
-/// it (`installed`), whether a process of it runs (`running`) and the pids of its processes,
-/// ascending (`pids`; which processes are of a bundle: `matching.rs`). A line stopped by a
-/// problem keeps what was read before it (`installed`), and names the error's kind where the
-/// service gave an error.
+/// it (`installed`), whether the application itself runs (`running`: a process whose executable
+/// lies directly in the bundle's directory), the pids of those processes, ascending (`pids`),
+/// and apart the pids of the bundle's extensions' processes (`extension_pids`, which do not make
+/// it run; `matching.rs`). A line stopped by a problem keeps what was read before it
+/// (`installed`), and names the error's kind where the service gave an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Running {
     pub command: CommandName,
@@ -747,6 +756,8 @@ pub struct Running {
     pub running: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_pids: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -763,6 +774,7 @@ impl Running {
             installed: None,
             running: None,
             pids: None,
+            extension_pids: None,
             problem: None,
             error_kind: None,
         }
@@ -774,6 +786,7 @@ impl Running {
             installed: Some(false),
             running: Some(false),
             pids: Some(Vec::new()),
+            extension_pids: Some(Vec::new()),
             ..self
         }
     }
@@ -786,12 +799,14 @@ impl Running {
         }
     }
 
-    /// The bundle is installed and `pids` are its processes (none: it does not run).
-    pub fn found(self, pids: Vec<u32>) -> Self {
+    /// The bundle is installed and `pids` are its processes: it runs when the application itself
+    /// has one; its extensions' are named apart.
+    pub fn found(self, pids: Pids) -> Self {
         Self {
             installed: Some(true),
-            running: Some(!pids.is_empty()),
-            pids: Some(pids),
+            running: Some(!pids.application.is_empty()),
+            pids: Some(pids.application),
+            extension_pids: Some(pids.extensions),
             ..self
         }
     }
@@ -807,15 +822,18 @@ impl Running {
 }
 
 /// `acib launch --device <n> --bundle <id> [--relaunch]`: the bundle asked for, whether it was
-/// to be ended first (`relaunch`) and the pid of the process the service answered the launch
-/// with (`pid`); or `launch_failed` (or the application service's handshake word) with the
-/// error's kind.
+/// to be ended first (`relaunch`), whether the list of applications holds it (`installed`, looked
+/// up before any launch is sent) and the pid of the process the service answered the launch with
+/// (`pid`); or `not_installed` (no launch sent), `launch_failed` with the error's kind, or a word
+/// of the steps before (the application service's handshake, its list of applications).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Launch {
     pub command: CommandName,
     pub device: u32,
     pub bundle: String,
     pub relaunch: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -825,16 +843,34 @@ pub struct Launch {
 }
 
 impl Launch {
-    /// The answer for `bundle` on `device`, before the launch is asked.
+    /// The answer for `bundle` on `device`, before anything is read.
     pub fn asked(device: u32, bundle: &str, relaunch: bool) -> Self {
         Self {
             command: CommandName::Launch,
             device,
             bundle: bundle.to_owned(),
             relaunch,
+            installed: None,
             pid: None,
             problem: None,
             error_kind: None,
+        }
+    }
+
+    /// The list of applications holds the bundle (and the launch is sent).
+    pub fn installed(self) -> Self {
+        Self {
+            installed: Some(true),
+            ..self
+        }
+    }
+
+    /// The list of applications does not hold the bundle: no launch is sent.
+    pub fn not_installed(self) -> Self {
+        Self {
+            installed: Some(false),
+            problem: Some(Problem::NotInstalled),
+            ..self
         }
     }
 
@@ -856,30 +892,34 @@ impl Launch {
     }
 }
 
-/// What the kill signal to one process of the bundle answered: `refused` is the kind of the
-/// service's error, `None` when the service answered the signal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Signal {
-    pub pid: u32,
-    pub refused: Option<ErrorKind>,
+/// What `stop` sent: the pids of the application's processes the kill signal was sent to,
+/// ascending, and each signal whose answer was an error or could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signals {
+    pub signalled: Vec<u32>,
+    pub errors: Vec<SignalError>,
 }
 
-/// A process of the bundle the kill signal could not be sent to, and the kind of the error.
+/// A kill signal whose answer was an error or could not be read: the pid it was sent to and the
+/// error's kind, a fact beside `stop`'s verdict (which comes from the looks, not from it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct SignalRefusal {
+pub struct SignalError {
     pub pid: u32,
     pub error_kind: ErrorKind,
 }
 
 /// `acib stop --device <n> --bundle <id>`: of the bundle asked for, whether it is installed,
-/// whether a process of it ran at the first look (`was_running`), the pids the kill signal was
-/// sent to and the service answered (`ended`), those it could not be sent to with the error's
-/// kind (`refused`, only when there are any), the pids of the bundle the second look lists
-/// (`remaining`) and whether any runs (`running`). A bundle that does not run (or is not
-/// installed) is answered at the first look: no signal, `ended` and `remaining` empty. Still
-/// running after the second look is `still_running` (status 1); a refused signal whose process
-/// is gone at the second look is shown and does not fail the command. A line stopped by another
-/// problem keeps what was read and done before it.
+/// whether the application itself ran at the first look (`was_running`), the pids of its
+/// processes the kill signal was sent to (`signalled`), each signal whose answer was an error or
+/// could not be read, with its kind (`signal_errors`, only when there are any), the pids of the
+/// application the last look lists (`remaining`), whether any runs (`running`) and the pids of
+/// the bundle's extensions' processes the last look lists (`extension_pids`: `stop` sends them
+/// nothing and leaves them, which is no failure). An application that does not run (or is not
+/// installed) is answered at the first look: no signal, `signalled` and `remaining` empty. The
+/// last look inside the deadline still listing a process it signalled is `still_running`
+/// (status 1), whatever the signals answered; a process it lists that was not signalled (one
+/// started after the first look) is in `remaining` and `running`, and is not `still_running`. A
+/// line stopped by another problem keeps what was read and done before it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stop {
     pub command: CommandName,
@@ -890,13 +930,15 @@ pub struct Stop {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub was_running: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended: Option<Vec<u32>>,
+    pub signalled: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub refused: Vec<SignalRefusal>,
+    pub signal_errors: Vec<SignalError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub running: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_pids: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -912,10 +954,11 @@ impl Stop {
             bundle: bundle.to_owned(),
             installed: None,
             was_running: None,
-            ended: None,
-            refused: Vec::new(),
+            signalled: None,
+            signal_errors: Vec::new(),
             remaining: None,
             running: None,
+            extension_pids: None,
             problem: None,
             error_kind: None,
         }
@@ -929,55 +972,53 @@ impl Stop {
         }
     }
 
-    /// Nothing of the bundle runs at the first look (`installed` says whether it is installed):
-    /// no signal is sent, and the first look is the last.
-    pub fn nothing_ran(self, installed: bool) -> Self {
+    /// The application itself does not run at the first look (`installed` says whether it is
+    /// installed; `extension_pids` are its extensions' processes that look lists): no signal is
+    /// sent, and the first look is the last.
+    pub fn nothing_ran(self, installed: bool, extension_pids: Vec<u32>) -> Self {
         Self {
             installed: Some(installed),
             was_running: Some(false),
-            ended: Some(Vec::new()),
+            signalled: Some(Vec::new()),
             remaining: Some(Vec::new()),
             running: Some(false),
+            extension_pids: Some(extension_pids),
             ..self
         }
     }
 
-    /// The bundle ran: `signals` is what the kill signal to each process of the first look
-    /// answered, `second` the pids of the bundle the second look lists, or the kind of the
-    /// error it failed with.
-    pub fn looked_again(self, signals: &[Signal], second: Result<Vec<u32>, ErrorKind>) -> Self {
-        let ended = signals
-            .iter()
-            .filter(|signal| signal.refused.is_none())
-            .map(|signal| signal.pid)
-            .collect();
-        let refused = signals
-            .iter()
-            .filter_map(|signal| {
-                signal.refused.map(|error_kind| SignalRefusal {
-                    pid: signal.pid,
-                    error_kind,
-                })
-            })
-            .collect();
-        let looked = Self {
+    /// The application ran and was sent `signals`, and the processes of the bundle the command's
+    /// last look lists are `last`, of which `verdict` is the decision (`stopping.rs`): its
+    /// application's pids are `remaining`, and `still_running` stands when the verdict is still
+    /// running.
+    pub fn looked(self, signals: Signals, last: Pids, verdict: Verdict) -> Self {
+        let running = !last.application.is_empty();
+        Self {
+            remaining: Some(last.application),
+            running: Some(running),
+            extension_pids: Some(last.extensions),
+            problem: match verdict {
+                Verdict::StillRunning => Some(Problem::StillRunning),
+                Verdict::Stopped => None,
+            },
+            ..self.with_signals(signals)
+        }
+    }
+
+    /// The application ran and was sent `signals`, and a look after them failed with `kind`.
+    pub fn look_failed(self, signals: Signals, kind: ErrorKind) -> Self {
+        self.with_signals(signals)
+            .failed(Problem::ProcessListFailed, Some(kind))
+    }
+
+    /// The application ran and was sent `signals`.
+    fn with_signals(self, signals: Signals) -> Self {
+        Self {
             installed: Some(true),
             was_running: Some(true),
-            ended: Some(ended),
-            refused,
+            signalled: Some(signals.signalled),
+            signal_errors: signals.errors,
             ..self
-        };
-        match second {
-            Ok(remaining) => {
-                let running = !remaining.is_empty();
-                Self {
-                    remaining: Some(remaining),
-                    running: Some(running),
-                    problem: running.then_some(Problem::StillRunning),
-                    ..looked
-                }
-            }
-            Err(kind) => looked.failed(Problem::ProcessListFailed, Some(kind)),
         }
     }
 
@@ -1602,20 +1643,42 @@ mod tests {
         let running = || Running::asked(3, BUNDLE);
         let launch = |relaunch| Launch::asked(3, BUNDLE, relaunch);
         let stop = || Stop::asked(3, BUNDLE);
+        let pids = |application: &[u32], extensions: &[u32]| Pids {
+            application: application.to_vec(),
+            extensions: extensions.to_vec(),
+        };
+        let signals = |signalled: &[u32], errors: &[SignalError]| Signals {
+            signalled: signalled.to_vec(),
+            errors: errors.to_vec(),
+        };
+        let unreadable = SignalError {
+            pid: 530,
+            error_kind: ErrorKind::AnswerUnreadable,
+        };
         vec![
             (
-                Line::Running(running().found(vec![412, 530])),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,530]}"#,
+                Line::Running(running().found(pids(&[412], &[530]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[530]}"#,
                 true,
             ),
             (
-                Line::Running(running().found(Vec::new())),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[]}"#,
+                Line::Running(running().found(pids(&[412, 413], &[]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(pids(&[], &[530]))),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Running(running().found(Pids::default())),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[]}"#,
                 true,
             ),
             (
                 Line::Running(running().not_installed()),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":false,"running":false,"pids":[]}"#,
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":false,"running":false,"pids":[],"extension_pids":[]}"#,
                 true,
             ),
             (
@@ -1651,77 +1714,76 @@ mod tests {
                 false,
             ),
             (
-                Line::Launch(launch(false).launched(412)),
-                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"pid":412}"#,
+                Line::Launch(launch(false).installed().launched(412)),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"pid":412}"#,
                 true,
             ),
             (
-                Line::Launch(launch(true).launched(413)),
-                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"pid":413}"#,
+                Line::Launch(launch(true).installed().launched(413)),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"installed":true,"pid":413}"#,
                 true,
             ),
             (
                 Line::Launch(
-                    launch(false).failed(Problem::LaunchFailed, Some(ErrorKind::DeviceRefused)),
+                    launch(false)
+                        .installed()
+                        .failed(Problem::LaunchFailed, Some(ErrorKind::DeviceRefused)),
                 ),
-                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"problem":"launch_failed","error_kind":"device_refused"}"#,
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"problem":"launch_failed","error_kind":"device_refused"}"#,
                 false,
             ),
             (
                 Line::Launch(
-                    launch(true).failed(Problem::LaunchFailed, Some(ErrorKind::AnswerUnreadable)),
+                    launch(true)
+                        .installed()
+                        .failed(Problem::LaunchFailed, Some(ErrorKind::AnswerUnreadable)),
                 ),
-                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"problem":"launch_failed","error_kind":"answer_unreadable"}"#,
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"installed":true,"problem":"launch_failed","error_kind":"answer_unreadable"}"#,
                 false,
             ),
             (
-                Line::Stop(stop().nothing_ran(true)),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"ended":[],"remaining":[],"running":false}"#,
-                true,
-            ),
-            (
-                Line::Stop(stop().looked_again(
-                    &[
-                        Signal {
-                            pid: 412,
-                            refused: None,
-                        },
-                        Signal {
-                            pid: 530,
-                            refused: None,
-                        },
-                    ],
-                    Ok(Vec::new()),
-                )),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"ended":[412,530],"remaining":[],"running":false}"#,
-                true,
-            ),
-            (
-                Line::Stop(stop().looked_again(
-                    &[
-                        Signal {
-                            pid: 412,
-                            refused: None,
-                        },
-                        Signal {
-                            pid: 530,
-                            refused: Some(ErrorKind::DeviceRefused),
-                        },
-                    ],
-                    Ok(vec![530]),
-                )),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"ended":[412],"refused":[{"pid":530,"error_kind":"device_refused"}],"remaining":[530],"running":true,"problem":"still_running"}"#,
+                Line::Launch(launch(false).not_installed()),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":false,"problem":"not_installed"}"#,
                 false,
             ),
             (
-                Line::Stop(stop().looked_again(
-                    &[Signal {
-                        pid: 412,
-                        refused: None,
-                    }],
-                    Err(ErrorKind::Other),
+                Line::Launch(
+                    launch(true).failed(Problem::ApplicationListFailed, Some(ErrorKind::Other)),
+                ),
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":true,"problem":"application_list_failed","error_kind":"other"}"#,
+                false,
+            ),
+            (
+                Line::Stop(stop().nothing_ran(true, vec![530])),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().nothing_ran(false, Vec::new())),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":false,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().looked(
+                    signals(&[412, 413], &[]),
+                    pids(&[], &[530]),
+                    Verdict::Stopped,
                 )),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"ended":[412],"problem":"process_list_failed","error_kind":"other"}"#,
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,413],"remaining":[],"running":false,"extension_pids":[530]}"#,
+                true,
+            ),
+            (
+                Line::Stop(stop().looked(
+                    signals(&[412, 530], &[unreadable]),
+                    pids(&[530], &[]),
+                    Verdict::StillRunning,
+                )),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,530],"signal_errors":[{"pid":530,"error_kind":"answer_unreadable"}],"remaining":[530],"running":true,"extension_pids":[],"problem":"still_running"}"#,
+                false,
+            ),
+            (
+                Line::Stop(stop().look_failed(signals(&[412], &[]), ErrorKind::Other)),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_list_failed","error_kind":"other"}"#,
                 false,
             ),
             (
@@ -1770,10 +1832,10 @@ mod tests {
             "device_key",
             "devices",
             "elapsed_ms",
-            "ended",
             "entitlement",
             "error",
             "error_kind",
+            "extension_pids",
             "format",
             "height",
             "image_type",
@@ -1803,6 +1865,8 @@ mod tests {
             "request",
             "running",
             "services",
+            "signal_errors",
+            "signalled",
             "stage",
             "user_applications",
             "value",
@@ -1878,6 +1942,7 @@ mod tests {
             (Problem::BundlePathUnreadable, "bundle_path_unreadable"),
             (Problem::LaunchFailed, "launch_failed"),
             (Problem::StillRunning, "still_running"),
+            (Problem::NotInstalled, "not_installed"),
         ];
         let mut seen = BTreeSet::new();
         for (problem, word) in words {
@@ -2411,16 +2476,17 @@ mod tests {
             "bundle",
             "command",
             "device",
-            "ended",
             "error_kind",
+            "extension_pids",
             "installed",
             "pid",
             "pids",
             "problem",
-            "refused",
             "relaunch",
             "remaining",
             "running",
+            "signal_errors",
+            "signalled",
             "was_running",
         ];
         let mut words: BTreeSet<String> = [BUNDLE.to_owned()].into();
@@ -2437,6 +2503,7 @@ mod tests {
                 Problem::BundlePathUnreadable,
                 Problem::LaunchFailed,
                 Problem::StillRunning,
+                Problem::NotInstalled,
             ]
             .into_iter()
             .map(word),
@@ -2464,95 +2531,110 @@ mod tests {
         assert_eq!(found, allowed);
     }
 
-    /// `stop`'s answer: when nothing of the bundle runs (installed or not), it is answered at
-    /// the first look, no pid ended and none remaining, status 0; when every process it
-    /// signalled is gone at the second look, it names them as ended and none remaining, status
-    /// 0; when one remains, it names the ended ones and the one remaining, `running` true and
-    /// `still_running`, status 1, and a signal the service refused names its pid and kind.
+    /// `stop`'s answer, its verdict taken from its last look by `stopping.rs`: when the
+    /// application itself does not run (installed or not), it is answered at the first look,
+    /// nothing signalled and nothing remaining, its extensions' pids named, status 0; when every
+    /// process it signalled is gone at the last look, status 0, the extensions it left named and
+    /// no failure; when one remains, `running` true and `still_running`, status 1. A signal whose
+    /// answer was an error or could not be read is a fact beside the verdict, its pid and kind
+    /// in `signal_errors`: gone is stopped (status 0), still listed is `still_running`. A process
+    /// the last look lists that was not signalled is named in `remaining` and is not
+    /// `still_running`. A look that failed answers `process_list_failed` and keeps what was
+    /// signalled.
     #[test]
     fn stop_answers_when_nothing_runs_when_all_ended_and_when_one_remains() {
         let answered = |stop: Stop| -> (Stop, bool) {
             let line = Line::Stop(stop.clone());
             (stop, line.answered())
         };
-        for installed in [true, false] {
-            let (nothing, status) = answered(Stop::asked(3, BUNDLE).nothing_ran(installed));
+        let signals = |signalled: &[u32], errors: &[(u32, ErrorKind)]| Signals {
+            signalled: signalled.to_vec(),
+            errors: errors
+                .iter()
+                .map(|(pid, error_kind)| SignalError {
+                    pid: *pid,
+                    error_kind: *error_kind,
+                })
+                .collect(),
+        };
+        let last = |application: &[u32], extensions: &[u32]| Pids {
+            application: application.to_vec(),
+            extensions: extensions.to_vec(),
+        };
+        // The answer after `signals` when the last look lists `last`, with the decision's
+        // verdict on that look.
+        let looked = |sent: Signals, seen: Pids| {
+            let verdict = crate::stopping::verdict(&sent.signalled, &seen.application);
+            answered(Stop::asked(3, BUNDLE).looked(sent, seen, verdict))
+        };
+
+        for (installed, extensions) in [(true, vec![530]), (true, Vec::new()), (false, Vec::new())]
+        {
+            let (nothing, status) =
+                answered(Stop::asked(3, BUNDLE).nothing_ran(installed, extensions.clone()));
             assert!(status, "nothing runs, installed {installed}");
             assert_eq!(nothing.installed, Some(installed));
             assert_eq!(nothing.was_running, Some(false));
-            assert_eq!(nothing.ended, Some(Vec::new()));
+            assert_eq!(nothing.signalled, Some(Vec::new()));
             assert_eq!(nothing.remaining, Some(Vec::new()));
             assert_eq!(nothing.running, Some(false));
+            assert_eq!(nothing.extension_pids, Some(extensions));
             assert_eq!((nothing.problem, nothing.error_kind), (None, None));
-            assert!(nothing.refused.is_empty());
+            assert!(nothing.signal_errors.is_empty());
         }
 
-        let signalled = |pids: &[u32]| -> Vec<Signal> {
-            pids.iter()
-                .map(|pid| Signal {
-                    pid: *pid,
-                    refused: None,
-                })
-                .collect()
-        };
-        let (all_ended, status) = answered(
-            Stop::asked(3, BUNDLE).looked_again(&signalled(&[412, 415, 530]), Ok(Vec::new())),
-        );
-        assert!(status, "all ended");
+        let (all_ended, status) = looked(signals(&[412, 415], &[]), last(&[], &[530]));
+        assert!(status, "all ended, an extension left");
         assert_eq!(all_ended.was_running, Some(true));
-        assert_eq!(all_ended.ended, Some(vec![412, 415, 530]));
+        assert_eq!(all_ended.signalled, Some(vec![412, 415]));
         assert_eq!(all_ended.remaining, Some(Vec::new()));
         assert_eq!(all_ended.running, Some(false));
-        assert_eq!(all_ended.problem, None);
+        assert_eq!(all_ended.extension_pids, Some(vec![530]));
+        assert_eq!((all_ended.problem, all_ended.error_kind), (None, None));
 
-        let mut one_refused = signalled(&[412]);
-        one_refused.push(Signal {
-            pid: 530,
-            refused: Some(ErrorKind::DeviceRefused),
-        });
-        let (one_remains, status) =
-            answered(Stop::asked(3, BUNDLE).looked_again(&one_refused, Ok(vec![530])));
+        let (one_remains, status) = looked(signals(&[412, 413], &[]), last(&[413], &[]));
         assert!(!status, "one remains");
-        assert_eq!(one_remains.ended, Some(vec![412]));
-        assert_eq!(
-            one_remains.refused,
-            vec![SignalRefusal {
-                pid: 530,
-                error_kind: ErrorKind::DeviceRefused,
-            }]
-        );
-        assert_eq!(one_remains.remaining, Some(vec![530]));
+        assert_eq!(one_remains.remaining, Some(vec![413]));
         assert_eq!(one_remains.running, Some(true));
         assert_eq!(one_remains.problem, Some(Problem::StillRunning));
         assert_eq!(one_remains.error_kind, None);
+        assert!(one_remains.signal_errors.is_empty());
 
-        let (still_listed, status) =
-            answered(Stop::asked(3, BUNDLE).looked_again(&signalled(&[412, 530]), Ok(vec![530])));
-        assert!(!status, "a signalled process the second look still lists");
-        assert_eq!(still_listed.ended, Some(vec![412, 530]));
-        assert_eq!(still_listed.remaining, Some(vec![530]));
-        assert_eq!(still_listed.problem, Some(Problem::StillRunning));
+        for kind in [ErrorKind::DeviceRefused, ErrorKind::AnswerUnreadable] {
+            let beside = vec![SignalError {
+                pid: 413,
+                error_kind: kind,
+            }];
+            let (gone, status) = looked(signals(&[412, 413], &[(413, kind)]), last(&[], &[]));
+            assert!(status, "a signal of kind {kind:?} whose process is gone");
+            assert_eq!(gone.signal_errors, beside);
+            assert_eq!((gone.running, gone.problem), (Some(false), None));
+            let (listed, status) = looked(signals(&[412, 413], &[(413, kind)]), last(&[413], &[]));
+            assert!(
+                !status,
+                "a signal of kind {kind:?} whose process is still listed"
+            );
+            assert_eq!(listed.signal_errors, beside);
+            assert_eq!(listed.problem, Some(Problem::StillRunning));
+        }
 
-        let (gone, status) =
-            answered(Stop::asked(3, BUNDLE).looked_again(&one_refused, Ok(Vec::new())));
-        assert!(status, "a refused signal whose process is gone");
-        assert_eq!(gone.ended, Some(vec![412]));
+        let (started_anew, status) = looked(signals(&[412], &[]), last(&[777], &[]));
+        assert!(status, "only a process it did not signal is listed");
+        assert_eq!(started_anew.remaining, Some(vec![777]));
+        assert_eq!(started_anew.running, Some(true));
+        assert_eq!(started_anew.problem, None);
+
+        let (unseen, status) = answered(Stop::asked(3, BUNDLE).look_failed(
+            signals(&[412], &[(412, ErrorKind::Other)]),
+            ErrorKind::ConnectionFailed,
+        ));
+        assert!(!status, "a look failed");
+        assert_eq!(unseen.signalled, Some(vec![412]));
+        assert_eq!(unseen.signal_errors.len(), 1);
         assert_eq!(
-            gone.refused,
-            vec![SignalRefusal {
-                pid: 530,
-                error_kind: ErrorKind::DeviceRefused,
-            }]
+            (unseen.remaining, unseen.running, unseen.extension_pids),
+            (None, None, None)
         );
-        assert_eq!(gone.running, Some(false));
-
-        let (unseen, status) = answered(
-            Stop::asked(3, BUNDLE)
-                .looked_again(&signalled(&[412]), Err(ErrorKind::ConnectionFailed)),
-        );
-        assert!(!status, "the second look failed");
-        assert_eq!(unseen.ended, Some(vec![412]));
-        assert_eq!((unseen.remaining, unseen.running), (None, None));
         assert_eq!(unseen.problem, Some(Problem::ProcessListFailed));
         assert_eq!(unseen.error_kind, Some(ErrorKind::ConnectionFailed));
     }

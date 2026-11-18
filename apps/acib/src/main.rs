@@ -13,7 +13,8 @@
 //! picture asked for with `--out -`, the picture's bytes follow on the standard output
 //! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
 //! names, and it removes that file again when the picture could not be written whole into it;
-//! it installs no logger, so nothing the library traces is shown.
+//! it installs no log subscriber and no logger, so nothing the library traces is shown (see
+//! `main`).
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +27,7 @@ mod matching;
 mod out_file;
 mod picture;
 mod redact;
+mod stopping;
 
 use answer::{Failure, Line, Problem};
 use args::Invocation;
@@ -38,6 +40,13 @@ use std::time::{Duration, Instant};
 const UNWRITABLE: &str = r#"{"problem":"answer_unwritable"}"#;
 
 fn main() -> ExitCode {
+    // No log subscriber (and no `log` logger) is installed here, and none may ever be without
+    // redaction (the coordinator's ruling on board #479): the library traces at warning level
+    // the whole error dictionary a phone answers a CoreDevice request with (idevice 0.1.68,
+    // `services/core_device/mod.rs`, "XPC response did not have an output"), which can name
+    // other applications, their paths and pids, and other texts of the phone's answers beside
+    // it. With no subscriber those events go nowhere. `acib` cannot install one without a new
+    // dependency: none of its own offers one (the test below pins them).
     let started = Instant::now();
     let arguments: Option<Vec<String>> = std::env::args_os()
         .skip(1)
@@ -103,5 +112,49 @@ fn emit(printed: &Printed) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The names of the crates the manifest `manifest` makes this program depend on, in its
+    /// order; every table of dependencies other than `[dependencies]` (development, build or a
+    /// target's) is refused.
+    fn dependencies(manifest: &str) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut in_dependencies = false;
+        for line in manifest.lines() {
+            if line.starts_with('[') {
+                assert!(
+                    !line.contains("dependencies") || line == "[dependencies]",
+                    "a table of dependencies of its own: {line}"
+                );
+                in_dependencies = line == "[dependencies]";
+                continue;
+            }
+            if !in_dependencies || line.starts_with([' ', '#', ']']) {
+                continue;
+            }
+            if let Some((name, _)) = line.split_once(" = ") {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// By construction no log subscriber and no logger can be installed: a program installs one
+    /// only through a crate that offers it (`tracing-subscriber`, `tracing` itself, `log` and
+    /// its loggers), and `acib` depends on exactly these crates, none of which installs one or
+    /// lets `acib` name `tracing` or `log` (a crate it does not depend on itself cannot be named
+    /// in its code). A new dependency fails this test, and is to be held against the ruling that
+    /// nothing the library traces is ever shown without redaction (the comment in `main`).
+    /// Whether a subscriber is installed while the program runs cannot be asked without the
+    /// `tracing` crate itself.
+    #[test]
+    fn acib_depends_on_no_crate_that_could_install_a_log_subscriber() {
+        assert_eq!(
+            dependencies(include_str!("../Cargo.toml")),
+            ["idevice", "serde", "serde_json", "sha2", "tokio"]
+        );
     }
 }

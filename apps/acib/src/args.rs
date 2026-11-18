@@ -115,7 +115,7 @@ pub enum Request {
         bundle: String,
         relaunch: bool,
     },
-    /// `stop`: the bundle's processes ended.
+    /// `stop`: the application's own processes ended (not its extensions').
     Stop {
         device: Target,
         bundle: String,
