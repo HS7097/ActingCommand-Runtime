@@ -3272,14 +3272,14 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "pause_cause": "optional",
+        "receipt_cause": "optional",
         "pause_stage": "optional",
         "in_the_way": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.73",
-      "description": "#480 PG-2c fix round 2 (contracts/scheduling-pause.md, \"Two modes\"): a tool's hold (pause_mode quiet_or_lift: the Lab's rescue module's holds, a recording's hold) had its instance pause answered Completed with a cause under the success code, which a Runtime gives only a person's pause that did not end quiet (scheduling_pause_standing, scheduling_pause_kept_at_shutdown, scheduling_pause_lifted_by_resume): the hold did not get a quiet instance, and the pause the Runtime answered may still stand. A Runtime answers a quiet_or_lift pause all or nothing, so this cannot happen with it; met, it is refused loudly. Its values are what the receipt said, as the receipt's cause carried them: pause_cause that cause's code, pause_stage the stage the pause had reached, in_the_way what was still in the way; nothing else. The connection stays usable. In the rescue module it is the cause of the hold's step refusal (install_command_refused, install_refusal runtime_stop_failed), and the step does not send the pause again (a second pause of a paused instance answers scheduling_already_paused); in the Lab's record start it fails the start as the hold's other failures do (exit 5).",
+      "description": "#480 PG-2c fix round 2 (contracts/scheduling-pause.md, \"Two modes\"): a tool's hold (pause_mode quiet_or_lift: the Lab's rescue module's holds, a recording's hold) had its instance pause answered Completed with a cause under the success code, which a Runtime gives only a person's pause that did not end quiet (scheduling_pause_standing, scheduling_pause_kept_at_shutdown, scheduling_pause_lifted_by_resume): the hold did not get a quiet instance, and the pause the Runtime answered may still stand. A Runtime answers a quiet_or_lift pause all or nothing, so this cannot happen with it; met, it is refused loudly. Its values are what the receipt said, as the receipt's cause carried them: receipt_cause that cause's code, pause_stage the stage the pause had reached, in_the_way what was still in the way; nothing else. The connection stays usable. In the rescue module it is the cause of the hold's step refusal (install_command_refused, install_refusal runtime_stop_failed), and the step does not send the pause again (a second pause of a paused instance answers scheduling_already_paused); in the Lab's record start it fails the start as the hold's other failures do (exit 5).",
       "common_causes": "None in a build of the Runtime that knows pause_mode (one that does not cannot decode the request and answers nothing); a defect of the Runtime.",
       "handling": "Read the instance's pause in the status; the hold's own release (release-hold, record stop) lifts a pause with the hold's reason."
     }

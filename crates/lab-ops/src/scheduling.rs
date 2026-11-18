@@ -158,13 +158,13 @@ pub fn answered_unquiet(answer: &SchedulingPauseAnswer) -> bool {
 /// #480 PG-2c fix round 2 (item 3; one code, one cause): the failure of a tool's hold whose pause
 /// was answered before its instance was quiet ([`answered_unquiet`]), `None` for a quiet answer:
 /// `scheduling_hold_not_quiet`, an error that refuses the hold, whose values are what the receipt
-/// said and nothing else: `pause_cause` the code of its cause, `pause_stage` and `in_the_way` as
+/// said and nothing else: `receipt_cause` the code of its cause, `pause_stage` and `in_the_way` as
 /// that cause carried them (each left out where the cause carried none this build reads).
 pub fn hold_not_quiet(answer: &SchedulingPauseAnswer) -> Option<Outcome> {
     let cause = answer.outcome.causes().first()?.outcome();
     let mut failure = Outcome::new(ActingctlCode::SchedulingHoldNotQuiet);
     if let Some(code) = cause.code().registered() {
-        failure = failure.pause_cause(code);
+        failure = failure.receipt_cause(code);
     }
     if let Some(stage) = cause
         .value("pause_stage")

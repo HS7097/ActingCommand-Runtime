@@ -1694,6 +1694,10 @@ actingcommand_contract::outcome_codes! {
         /// Error. The thread that carries a standing pause's stages on could not be started
         /// (fatal; the pause is restored at the next start).
         SchedulingPauseCarryOnSpawnFailed => "scheduling_pause_carry_on_spawn_failed": error / none,
+        /// Info (fix round 3). A person's resume of a pause in `draining` or `paused` ran no
+        /// reconnect (the session was never closed): the cause of the resume's success code; its
+        /// self-check has both sides `ok: false`, no values and no `failure_code`.
+        SchedulingResumeWithoutReconnect => "scheduling_resume_without_reconnect": info / none,
         // ---- #480 PG-2c: end
     }
 }

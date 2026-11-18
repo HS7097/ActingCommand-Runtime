@@ -2784,7 +2784,7 @@ Runtime is asked to pause):
   reads its receipt's outcome, and a pause answered `Completed` with a cause under its success
   code (one of the informing causes only a person's pause is given) did not get a quiet instance:
   the start fails (fix round 2, one code, one cause) `scheduling_hold_not_quiet` (exit 5), its
-  details that code's values, what the receipt said (`pause_cause` the cause's code, `pause_stage`,
+  details that code's values, what the receipt said (`receipt_cause` the cause's code, `pause_stage`,
   `in_the_way`), after the same status read as below (the details' `pause_found` `hold_shown` when
   it shows the hold's reason). So `record start` reads the status once more, on the same
   connection:

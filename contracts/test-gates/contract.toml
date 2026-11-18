@@ -967,10 +967,11 @@ tests = [
 ]
 incident = ["#480", "PG-2c"]
 
-# #480 PG-2c fix round 2 (0.12.73; register §1.472; the coordinator's message on the fix round's CI, A; runtime-client 12): a completed instance resume that ran no reconnect carries no selfcheck and its receipt is valid, as one that reconnected carries its selfcheck; a global resume carries none, and a global resume with a selfcheck is refused
+# #480 PG-2c fix round 3 (0.12.73; register §1.472; the coordinator's rulings on the fix round's item A and the console maintainer's reading): the rule stays as v0.12.72 has it, a completed instance resume without a selfcheck is refused invalid_scheduling_pause_receipt; the selfcheck of a resume that ran no reconnect (both sides ok false, no values, no failure_code) validates, and its completed receipt built by RuntimeReceipt::scheduling_resumed carries scheduling_resume_without_reconnect as its success code's one cause; a global resume without a selfcheck is valid
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-contract::lib::runtime::tests::pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck",
+    "actingcommand-contract::lib::runtime::tests::pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused",
+    "actingcommand-contract::lib::runtime::tests::pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt",
 ]
 incident = ["#480", "PG-2c"]

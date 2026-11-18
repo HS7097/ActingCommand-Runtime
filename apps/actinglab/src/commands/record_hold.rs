@@ -280,7 +280,7 @@ fn status_after_failed_pause(
 /// not get a quiet instance. With the hold's `quiet_or_lift` a Runtime never answers so: it is
 /// refused loudly if it does. Fix round 2 (item 3, one code, one cause):
 /// `scheduling_hold_not_quiet` (`scheduling::hold_not_quiet`), exit 5 as the hold's other
-/// failures; its details hold that code's values, what the receipt said (`pause_cause`,
+/// failures; its details hold that code's values, what the receipt said (`receipt_cause`,
 /// `pause_stage`, `in_the_way`). `None` for a pause answered quiet.
 pub(crate) fn answered_unquiet_error(
     paused: &actingcommand_runtime_client::SchedulingPauseAnswer,

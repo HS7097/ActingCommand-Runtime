@@ -4935,7 +4935,10 @@ impl HostShared {
     /// checkpoint still stops there), the session the hand-back has not closed outside the
     /// multi-Nemu gate stays open, and the pause's own request, or the thread that carries its
     /// stages on, ends at its next check (`scheduling_pause_lifted_by_resume` on the request).
-    /// Answers `SchedulingResumed` with the scope's new revision and no `selfcheck`.
+    /// Answers `SchedulingResumed` with the scope's new revision and (fix round 3: an instance's
+    /// resume always carries one) a self-check with both sides `ok: false`, no values and no
+    /// `failure_code` (no report of a reconnect: none ran), and the receipt's outcome carries the
+    /// informing `scheduling_resume_without_reconnect` as its success code's cause; nothing failed.
     ///
     /// #480 PG-2c fix round 1 (b): with the refusals, under the pause table's lock, it reads where
     /// the hand-back is (`SchedulingPauseTable::begin_resume_lift`): its close begun, or the stage
@@ -4988,15 +4991,20 @@ impl HostShared {
             self.persist_scheduling_pauses(&prospective)?;
             let revision = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
                 .lift_instance(instance_alias)?;
+            // Fix round 3 (the coordinator's rulings: an instance's resume always carries a
+            // self-check, and its `failure_code` stays for a reconnect that failed, which the
+            // console shows as one): no reconnect ran, so both sides are `ok: false` with no
+            // values and no `failure_code`, and the receipt's outcome says why, the informing
+            // `scheduling_resume_without_reconnect` as the success code's cause.
             Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: None,
                 result: RuntimeResult::SchedulingResumed {
                     scope: scope.clone(),
                     revision,
-                    selfcheck: None,
+                    selfcheck: Some(scheduling_resume_selfcheck(&[], None)),
                 },
-                failure_outcome: None,
+                failure_outcome: Some(Outcome::new(HostCode::SchedulingResumeWithoutReconnect)),
             })
         })();
         match lifted {

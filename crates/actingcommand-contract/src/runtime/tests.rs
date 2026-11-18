@@ -3306,61 +3306,97 @@ fn pg2c_status_pause_members_round_trip_and_are_strict() {
     standing.validate().expect("a standing pause");
 }
 
-/// #480 PG-2c fix round 2 (`runtime-client` 12; `contracts/scheduling-pause.md`, "Resume"): an
-/// instance resume that ran no reconnect (a person's pause lifted before `released`) carries no
-/// self-check and its completed receipt is valid; an instance resume carries one when it
-/// reconnected; a global resume never does.
+/// #480 PG-2c fix round 3: the completed receipt of a resume of `scope` with `selfcheck`, as the
+/// Runtime builds it.
+fn resumed_receipt(
+    scope: &SchedulingPauseScope,
+    selfcheck: Option<SchedulingResumeSelfCheck>,
+) -> RuntimeContractResult<RuntimeReceipt> {
+    RuntimeReceipt::success(
+        &request(RuntimeOperation::ResumeScheduling {
+            scope: scope.clone(),
+            expected: None,
+        }),
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::SchedulingResumed {
+            scope: scope.clone(),
+            revision: 2,
+            selfcheck,
+        },
+    )
+}
+
+/// #480 PG-2c fix round 3 (the coordinator's ruling: the rule stays as v0.12.72 has it): an
+/// instance resume always carries a self-check, so a completed receipt of one without it is still
+/// refused (`invalid_scheduling_pause_receipt`), as every client of an earlier build refuses it.
 #[test]
-fn pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck() {
+fn pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused() {
     let instance = SchedulingPauseScope::Instance {
         instance_alias: "node.a".to_owned(),
     };
-    let resumed = |scope: &SchedulingPauseScope, selfcheck: Option<SchedulingResumeSelfCheck>| {
-        RuntimeReceipt::success(
-            &request(RuntimeOperation::ResumeScheduling {
-                scope: scope.clone(),
-                expected: None,
-            }),
-            RuntimeReceiptState::Completed,
-            None,
-            RuntimeResult::SchedulingResumed {
-                scope: scope.clone(),
-                revision: 2,
-                selfcheck,
-            },
-        )
+
+    let refused = resumed_receipt(&instance, None).expect_err("an instance resume without one");
+
+    assert_eq!(
+        refused.code().as_str(),
+        "invalid_scheduling_pause_receipt",
+        "{refused:?}"
+    );
+}
+
+/// #480 PG-2c fix round 3 (`contracts/scheduling-pause.md`, "Resume"): the self-check of a resume
+/// that ran no reconnect, both sides `ok: false` with no values and no `failure_code`, validates;
+/// the completed receipt of an instance resume that carries it with
+/// `scheduling_resume_without_reconnect` as its success code's cause
+/// (`RuntimeReceipt::scheduling_resumed`) validates and carries that cause.
+#[test]
+fn pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt() {
+    let instance = SchedulingPauseScope::Instance {
+        instance_alias: "node.a".to_owned(),
     };
     let selfcheck = SchedulingResumeSelfCheck {
         capture: SchedulingResumeCaptureCheck {
-            ok: true,
-            width: Some(1280),
-            height: Some(720),
-            capture_backend: Some("nemu_ipc".to_owned()),
+            ok: false,
+            width: None,
+            height: None,
+            capture_backend: None,
         },
         touch: SchedulingResumeTouchCheck {
-            ok: true,
-            backend: Some("adb_shell_input".to_owned()),
-            max_x: Some(1280),
-            max_y: Some(720),
+            ok: false,
+            backend: None,
+            max_x: None,
+            max_y: None,
             invasive: false,
         },
         failure_code: None,
     };
 
-    let without = resumed(&instance, None);
-    assert!(
-        without.is_ok(),
-        "an instance resume without a reconnect: {without:?}"
+    selfcheck
+        .validate()
+        .expect("the self-check of no reconnect");
+    let receipt = RuntimeReceipt::scheduling_resumed(
+        &request(RuntimeOperation::ResumeScheduling {
+            scope: instance.clone(),
+            expected: None,
+        }),
+        RuntimeResult::SchedulingResumed {
+            scope: instance,
+            revision: 2,
+            selfcheck: Some(selfcheck),
+        },
+        Some(crate::outcome::Outcome::relayed(
+            "scheduling_resume_without_reconnect",
+        )),
+    )
+    .expect("the receipt of a resume without a reconnect");
+    let [cause] = receipt.outcome().causes() else {
+        panic!("one cause: {receipt:?}");
+    };
+    assert_eq!(
+        cause.outcome().code().as_str(),
+        "scheduling_resume_without_reconnect",
+        "{receipt:?}"
     );
-    let reconnected = resumed(&instance, Some(selfcheck.clone()));
-    assert!(
-        reconnected.is_ok(),
-        "an instance resume that reconnected: {reconnected:?}"
-    );
-    let global = resumed(&SchedulingPauseScope::Global, None);
-    assert!(global.is_ok(), "a global resume: {global:?}");
-    assert!(
-        resumed(&SchedulingPauseScope::Global, Some(selfcheck)).is_err(),
-        "a global resume reconnects nothing"
-    );
+    assert!(resumed_receipt(&SchedulingPauseScope::Global, None).is_ok());
 }

@@ -195,7 +195,7 @@ fn pg2c_fix1_a_recordings_hold_answered_with_a_cause_is_its_failure() {
     assert_eq!(
         error.details,
         Some(json!({
-            "pause_cause": "scheduling_pause_standing",
+            "receipt_cause": "scheduling_pause_standing",
             "pause_stage": "paused",
             "in_the_way": ["lease"],
         })),

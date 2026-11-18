@@ -38838,7 +38838,9 @@ shutdown there, and the join at the shutdown waited with it): see "Fix round 1" 
 **The resume** (ruling 5). A `stand` pause is resumable in every stage. In `draining` or `paused`
 on an instance that is not fenced, `resume_unquiet_instance_pause` lifts it under the persist gate
 (Workflow #453 S2 fix 1's hold of an unapplied entry as in every resume) with no reconnect claim
-and no reconnect: `SchedulingResumed` with no `selfcheck`; the session the hand-back has not
+and no reconnect: `SchedulingResumed` (fix round 3: with a `selfcheck` of both sides `ok: false`,
+no values and no `failure_code`, and `scheduling_resume_without_reconnect` as the receipt's cause;
+first built with no `selfcheck`, which the receipt's check refuses); the session the hand-back has not
 closed outside the multi-Nemu gate stays open; a fenced instance resumes through the reconnect as
 before. A `quiet_or_lift` pause keeps `scheduling_pause_draining` and `scheduling_pause_releasing`.
 Fix round 1: unless the hand-back's close had begun, or the stage reached `released` since the
@@ -38905,13 +38907,24 @@ was in the way at that read, and the hand-back had not finished.
 
 **Fix round 2** (coordinator work order `rd-1118/brief-480-pg2c-fix2.md`, and the coordinator's
 message on fix round 1's CI). (a) *The resume without a reconnect.* A person's resume of a `stand`
-pause in `draining` or `paused` answers `SchedulingResumed` without `selfcheck`, which the
-receipt's check (`RuntimeReceipt::validate`) refused for an instance scope, so its receipt could not
+pause in `draining` or `paused` answered `SchedulingResumed` without `selfcheck`, which the
+receipt's check (`RuntimeReceipt::validate`) refuses for an instance scope, so its receipt could not
 be built (`runtime_receipt_build_failed`, fatal: the whole Runtime latched at a person's resume).
-The check now takes an instance resume without `selfcheck` as one that ran no reconnect, and a
-global resume still carries none ([scheduling-pause.md](scheduling-pause.md), "Resume"; the
-contract crate's `pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck`); a client
-of revision 11 or lower refuses such a receipt ("At deploy"). Each answer this slice added or
+Fix round 2 relaxed the check; fix round 3 takes that back (the coordinator's ruling: every client
+built before this slice would refuse such a receipt and latch its connection, the owner's console
+among them) and answers instead what every client reads (the coordinator's ruling after the
+console's maintainer read the installed console, which shows any `failure_code` of a resume as a
+reconnect that did not succeed): a `selfcheck` of both sides `ok: false` with no values and no
+`failure_code`, and the informing `scheduling_resume_without_reconnect` as the success code's
+cause (`RuntimeReceipt::scheduling_resumed`; [scheduling-pause.md](scheduling-pause.md), "Resume";
+the contract crate's `pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused` and
+`pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt`). That cause, not the shape, says
+no reconnect ran: a reconnect that runs answers a code on every failing step of this build (a
+refused preparation lease, a failed close of the session it still held, a failed emulator status
+read, a failed open, a failed final close), but an open that answers success with no report of
+either side would give the same shape, which this round did not rule out. The Lab's `resume` row,
+`ac_resume`, `actingctl resume` and its MCP print the Runtime's result as it is beside their
+success code and call no self-check failed, so none changed. Each answer this slice added or
 changed goes through the host's receipt builder in a host gate: the paused result with
 `scheduling_pause_standing` (L2, L3, the absent member and others), with
 `scheduling_pause_kept_at_shutdown` and its `pause_stage` (L5, L6), with
@@ -38979,8 +38992,9 @@ a `quiet_or_lift` pause failing past its grace then.
 | key `pause_stage`, vocabulary `instance_pause_stage` (`InstancePauseStage`: `draining`, `paused`, `released`) | the stage reached | | |
 | key `in_the_way`, vocabulary `pause_obstacle` (`PauseObstacle`: `contained_run`, `policy_run`, `lease`, `automatic_start`, `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`, `check_failed`) | what is in the way, each word once | | |
 | word `check_failed` (fix round 1) | the last check of the pause's stages failed with a failure that is not fatal; it is tried again | informs (a word of `scheduling_pause_standing`) | 0 |
-| `scheduling_hold_not_quiet` (new in fix round 2, error, `actingctl`'s fragment, `crates/lab-ops`; the domain `scheduling_` gains the owner `actingctl`) | a tool's hold's pause answered Completed with a cause under its success code: the hold did not get a quiet instance, and the answered pause stands; `pause_cause`, `pause_stage`, `in_the_way`, each as the receipt's cause carried it, nothing else | refuses: in the rescue module the cause of the step's `install_command_refused` (`runtime_stop_failed`); in the Lab's `record start` the start's failure | the rescue module's command 1 as its other refusals; the Lab 5 (`RuntimeUnavailable`), as the hold's other failures |
-| key `pause_cause` (fix round 2, type `code`) | the informing code a pause's completed receipt carried as its cause | | |
+| `scheduling_hold_not_quiet` (new in fix round 2, error, `actingctl`'s fragment, `crates/lab-ops`; the domain `scheduling_` gains the owner `actingctl`) | a tool's hold's pause answered Completed with a cause under its success code: the hold did not get a quiet instance, and the answered pause stands; `receipt_cause`, `pause_stage`, `in_the_way`, each as the receipt's cause carried it, nothing else | refuses: in the rescue module the cause of the step's `install_command_refused` (`runtime_stop_failed`); in the Lab's `record start` the start's failure | the rescue module's command 1 as its other refusals; the Lab 5 (`RuntimeUnavailable`), as the hold's other failures |
+| key `receipt_cause` (fix round 2, type `code`; fix round 3: first written `pause_cause`, which is Workflow #469 V0's key of vocabulary `pause_cause`, so the key table defined it twice and the contract crate did not compile) | the informing code a pause's completed receipt carried as its cause | | |
+| `scheduling_resume_without_reconnect` (new in fix round 3, info, `runtime-host`) | a person's resume of a `stand` pause in `draining` or `paused` on an instance that is not fenced ran no reconnect (the hand-back had not closed the session) | informs: the cause of the resume's success code on its Completed receipt | 0 |
 
 `scheduling_pause_kept_at_shutdown` was released in 0.12.72 with `review` `pending`: the outcome
 guard's G9 binds only a `settled` or a `retired` entry's signature (`ci/outcome_release.py`,
@@ -39050,25 +39064,30 @@ round 2"; `apps.toml` and `contract.toml`, their fix round 2): the host's
 `pg2c_fix2_5_*` of the hand-back's question, `pg2c_fix2_6_*` of a tool's hold while an automatic
 start runs; the rescue module's `pg2c_fix2_a_pause_answered_unquiet_fails_the_pause_step_at_once_with_its_cause`
 (through `hold::run_pause` on the fake Runtime, which answers such a pause through the module's own
-`quiet_hold`); the contract crate's
-`pg2c_fix2_an_instance_resume_without_a_reconnect_carries_no_selfcheck`. Adapted in fix round 2:
+`quiet_hold`). Adapted in fix round 2:
 the two tests of fix round 1's item 9 assert `scheduling_hold_not_quiet` and its values; the
 commit mark's test no longer reads the mark; the Lab's and the rescue module's scripted pause
 receipts carry the drained runs; `gate_463_s17`'s two PG-2a tests of a failed pause that may stand
-use `scheduling_pause_release_interrupted`; L3's queue timeout is the scheduler's bound.
+use `scheduling_pause_release_interrupted`; L3's queue timeout is the scheduler's bound. Fix round
+3 (`contract.toml`, its fix round 3): the contract crate's
+`pg2c_fix3_an_instance_resume_without_a_selfcheck_is_still_refused` and
+`pg2c_fix3_a_resume_without_a_reconnect_says_so_on_its_receipt` (in place of fix round 2's test of
+the relaxed rule, which was never on main); every host gate of the resume without a reconnect
+(`pg2c_a_resume_in_paused…`, `…_in_draining…`, fix round 1's three and fix round 2's three) asserts
+its `selfcheck` (both sides not ok, no values, no code) and the cause on its receipt.
 
 **At deploy.** Nothing to configure. *A console pinned to the release before this one* (v0.12.72,
 or today's v0.12.71, `runtime-client` 11) sends no member, so its pauses are `stand`; it reads every
 status of this Runtime (no new member is answered); its account pause, whose receipt wait is the
 drain and the grace plus its IO, now gets Completed with a cause it does not read where it got a
 Failed `scheduling_pause_release_busy` and a lifted pause, and the pause stays: the status shows
-`paused` until the stage becomes `released` by itself. Fix round 2: when a person resumes that
-pause in `draining` or `paused`, this Runtime answers the resume without a `selfcheck` (no
-reconnect ran; [scheduling-pause.md](scheduling-pause.md), "Resume"), which the receipt check of
-a client of `runtime-client` 11 or lower refuses (`runtime_receipt_invalid`, its connection
-latched) although the pause was lifted; the console sees its resume fail and the status shows the
-pause gone. So the console pins v0.12.73 or later before it resumes a person's pause that has not
-reached `released` on this Runtime. *Who deploys what* (fix round 1): a deploy
+`paused` until the stage becomes `released` by itself. When a person resumes that pause in
+`draining` or `paused` (fix round 3), this Runtime runs no reconnect and answers a `selfcheck`
+with both sides `ok: false`, no values and no `failure_code`, the receipt's outcome carrying
+`scheduling_resume_without_reconnect` as its cause ([scheduling-pause.md](scheduling-pause.md),
+"Resume"): such a console reads the receipt, does not act on the cause, and (as its maintainer read
+the installed console) shows the instance's schedule resumed, with no reconnect failure, since it
+names a failed reconnect only for a `failure_code`. *Who deploys what* (fix round 1): a deploy
 is run by the live build's kept copy ([lab-two-entries.md](lab-two-entries.md) §7, the copy under
 `install\builds\<commit>`). This build is deployed by v0.12.72's copy against the live v0.12.72
 Runtime: neither knows the member, and the hold meets what v0.12.72 answers every pause (PG-1,

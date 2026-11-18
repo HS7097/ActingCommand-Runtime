@@ -142,7 +142,7 @@ fn pg2c_fix1_a_holds_pause_answered_with_a_cause_fails() {
     assert_eq!(
         serde_json::Value::Object(failure.values().clone()),
         json!({
-            "pause_cause": "scheduling_pause_standing",
+            "receipt_cause": "scheduling_pause_standing",
             "pause_stage": "paused",
             "in_the_way": ["lease"],
         }),
@@ -211,7 +211,7 @@ fn pg2c_fix2_a_pause_answered_unquiet_fails_the_pause_step_at_once_with_its_caus
         "{refusal:?}"
     );
     assert_eq!(
-        cause.outcome().value("pause_cause"),
+        cause.outcome().value("receipt_cause"),
         Some(&json!("scheduling_pause_standing")),
         "{refusal:?}"
     );

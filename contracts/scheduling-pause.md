@@ -531,14 +531,17 @@ reconnects nothing.
 (`stand`) is resumable in every stage**. In stage `draining` or `paused` on an instance that is not
 fenced, the resume lifts the gate at once, under the persist gate as every resume (its rows recorded
 first; Workflow #453 S2 fix 1's hold of an unapplied `start_paused` entry applies as below), with
-no reconnect claim (something still uses the instance) and no reconnect: it answers
-`SchedulingResumed { scope, revision, selfcheck: absent }`: no reconnect ran, so there is no
-self-check of one. Fix round 2: the receipt's own check (`RuntimeReceipt::validate`, `runtime-client`
-12) takes an instance resume without `selfcheck` as one that ran no reconnect; before it, it
-refused every instance resume without one (`invalid_scheduling_pause_receipt`), so the Runtime could
-not build this answer's receipt, which is fatal to the Runtime. A client of `runtime-client` 11 or
-lower still refuses such a receipt (`runtime_receipt_invalid`, its connection latched) although the
-pause was lifted: register §1.472, "At deploy". A global resume never carries a `selfcheck`. What
+no reconnect claim (something still uses the instance) and no reconnect. Fix round 3 (the
+coordinator's rulings; an instance's resume always carries a `selfcheck`, as the receipt's check
+has required since before 0.12.73, so every client reads this answer): it answers
+`SchedulingResumed { scope, revision, selfcheck }` whose `selfcheck` has both sides `ok: false`
+with no values (a side without a report of a reconnect: none ran) and no `failure_code`, and its
+receipt's outcome carries `scheduling_resume_without_reconnect` (info) as the success code's cause
+(`RuntimeReceipt::scheduling_resumed`). **What says that no reconnect ran is that cause**, not the
+self-check's shape: `failure_code` names only a reconnect that failed and is absent here, and a
+reconnect that runs answers a code on every failing step this build has (a refused preparation
+lease, a failed close of the session it still held, a failed emulator status read, a failed open,
+a failed final close). A global resume never carries a `selfcheck`. What
 still uses the instance goes on
 (a run already asked to stop at its next checkpoint still stops there; a lease is released by its
 holder); outside the multi-Nemu gate the session the hand-back has not closed stays open for the

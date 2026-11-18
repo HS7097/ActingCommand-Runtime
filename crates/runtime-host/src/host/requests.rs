@@ -926,6 +926,10 @@ impl OperationSuccess {
             result @ RuntimeResult::SchedulingPaused { .. } => {
                 RuntimeReceipt::scheduling_paused(request, result, self.failure_outcome)
             }
+            // #480 PG-2c fix round 3: a person's resume that ran no reconnect says so as the cause.
+            result @ RuntimeResult::SchedulingResumed { .. } => {
+                RuntimeReceipt::scheduling_resumed(request, result, self.failure_outcome)
+            }
             result => RuntimeReceipt::success(request, self.state, self.terminal, result),
         }
         .map_err(|_| receipt_error())

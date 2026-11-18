@@ -24016,6 +24016,20 @@
       "description": "The thread that carries the rest of a standing instance pause's stages on after its request answered (#480 PG-2c, contracts/scheduling-pause.md \"Two modes\") could not be started. The pause is not lifted, but nothing would bring it to released: the failure is fatal and stops the Runtime; the next start restores the pause (stage released).",
       "common_causes": "The operating system refused a new thread (resources exhausted).",
       "handling": "Restart the Runtime; the pause is restored. Check the host's resources if it repeats."
+    },
+    "scheduling_resume_without_reconnect": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.73",
+      "description": "A person's resume of an instance pause (pause_mode stand) still in stage draining or paused, on an instance that is not fenced, lifted the gate and ran no reconnect, because the hand-back had not closed the instance's device session (#480 PG-2c fix round 3, contracts/scheduling-pause.md \"Resume\"). The receipt is Completed (SchedulingResumed) with this code as the success code's cause; its self-check's two sides are ok false with no values and it has no failure_code, as a self-check without a report of a reconnect is: nothing was checked and nothing failed (a failure_code names only a reconnect that failed). The session stays as the pause left it; what still used the instance goes on.",
+      "common_causes": "A person resumed an instance whose pause had not yet handed the device back (a run still draining, a lease or an entry still in the way).",
+      "handling": "None."
     }
   },
   "locations": {

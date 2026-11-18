@@ -66,6 +66,50 @@ fn completed(receipt: &RuntimeReceipt) {
     );
 }
 
+// Fix round 3: the answer of a person's resume that ran no reconnect, as the host's receipt builder
+// makes it: Completed, a self-check whose two sides are not ok with no values and no failure code
+// (the shape every client reads), and `scheduling_resume_without_reconnect` as the one cause of the
+// receipt's success code.
+#[track_caller]
+fn assert_resumed_without_a_reconnect(resumed: &RuntimeReceipt) {
+    completed(resumed);
+    let Some(RuntimeResult::SchedulingResumed {
+        selfcheck: Some(selfcheck),
+        ..
+    }) = resumed.result()
+    else {
+        panic!("a resume with its self-check: {resumed:?}");
+    };
+    assert!(!selfcheck.capture.ok && !selfcheck.touch.ok, "{resumed:?}");
+    assert_eq!(
+        (
+            selfcheck.capture.width,
+            selfcheck.capture.height,
+            selfcheck.capture.capture_backend.as_deref()
+        ),
+        (None, None, None),
+        "{resumed:?}"
+    );
+    assert_eq!(
+        (
+            selfcheck.touch.backend.as_deref(),
+            selfcheck.touch.max_x,
+            selfcheck.touch.max_y
+        ),
+        (None, None, None),
+        "{resumed:?}"
+    );
+    assert_eq!(selfcheck.failure_code, None, "{resumed:?}");
+    let [cause] = resumed.outcome().causes() else {
+        panic!("one cause of the resume: {resumed:?}");
+    };
+    assert_eq!(
+        cause.outcome().code().as_str(),
+        "scheduling_resume_without_reconnect",
+        "{resumed:?}"
+    );
+}
+
 fn process(host: &RuntimeHost, request: &RuntimeRequest, connection: u64) -> RuntimeReceipt {
     host.process_request_for_test(request, ConnectionId::new(connection).expect("connection"))
         .expect("the receipt")
@@ -738,8 +782,9 @@ fn pg2c_an_absent_pause_mode_is_stand() {
 
 // Ruling 5, in `paused`: a person's pause stands behind a client's lease; a person's resume is
 // accepted in stage `paused`: the gate is lifted at once, without a reconnect claim (the client's
-// lease still holds the instance) and without a reconnect (`selfcheck` absent); the host's
-// continuation ends at its next check.
+// lease still holds the instance) and without a reconnect (fix round 3: a self-check of both sides
+// not ok, no values, no code, and `scheduling_resume_without_reconnect` the cause on the receipt);
+// the host's continuation ends at its next check.
 #[test]
 fn pg2c_a_resume_in_paused_lifts_a_persons_pause_without_a_reconnect() {
     let root = TempDir::new().expect("tempdir");
@@ -752,17 +797,8 @@ fn pg2c_a_resume_in_paused_lifts_a_persons_pause_without_a_reconnect() {
 
     let resumed = resume(&host, instance_scope(CLIENT), 2113);
 
-    completed(&resumed);
-    assert!(
-        matches!(
-            resumed.result(),
-            Some(RuntimeResult::SchedulingResumed {
-                selfcheck: None,
-                ..
-            })
-        ),
-        "{resumed:?}"
-    );
+    // Fix round 3: the self-check of no reconnect, and the cause on the receipt.
+    assert_resumed_without_a_reconnect(&resumed);
     assert_lifted(&host, before, CLIENT);
     assert_eq!(
         host.instance_claims_for_test(CLIENT).expect("claims"),
@@ -775,7 +811,8 @@ fn pg2c_a_resume_in_paused_lifts_a_persons_pause_without_a_reconnect() {
 }
 
 // Ruling 5, in `draining`: a person's pause stands behind a rung run held in a capture; a person's
-// resume is accepted in stage `draining`: lifted at once, `selfcheck` absent. The run, asked to stop,
+// resume is accepted in stage `draining`: lifted at once, no reconnect (fix round 3: the self-check
+// of no reconnect and its cause, `assert_resumed_without_a_reconnect`). The run, asked to stop,
 // stops at its next checkpoint; the ladder, no longer held, climbs on and ends.
 #[test]
 fn pg2c_a_resume_in_draining_lifts_a_persons_pause_without_a_reconnect() {
@@ -796,17 +833,8 @@ fn pg2c_a_resume_in_draining_lifts_a_persons_pause_without_a_reconnect() {
 
     let resumed = resume(&climb.host, instance_scope(POLICY_INSTANCE_ALIAS), 2122);
 
-    completed(&resumed);
-    assert!(
-        matches!(
-            resumed.result(),
-            Some(RuntimeResult::SchedulingResumed {
-                selfcheck: None,
-                ..
-            })
-        ),
-        "{resumed:?}"
-    );
+    // Fix round 3: the self-check of no reconnect, and the cause on the receipt.
+    assert_resumed_without_a_reconnect(&resumed);
     assert_lifted(&climb.host, before, POLICY_INSTANCE_ALIAS);
     let_the_run_go(&climb);
     wait_for_no_continuation(&climb.host);
@@ -935,17 +963,8 @@ fn pg2c_fix1_3_a_resume_while_the_continuation_waits_for_the_admission_guard_clo
     let resumed = resume(&host, instance_scope(NEMU), 3012);
     go.send(()).expect("the continuation goes on");
 
-    completed(&resumed);
-    assert!(
-        matches!(
-            resumed.result(),
-            Some(RuntimeResult::SchedulingResumed {
-                selfcheck: None,
-                ..
-            })
-        ),
-        "{resumed:?}"
-    );
+    // Fix round 3: the self-check of no reconnect, and the cause on the receipt.
+    assert_resumed_without_a_reconnect(&resumed);
     wait_for_no_continuation(&host);
     drop(taken);
     assert_lifted(&host, before, NEMU);
@@ -1109,7 +1128,8 @@ fn pg2c_fix1_3_a_continuation_of_a_lifted_pause_does_nothing_beside_the_newer_pa
     completed(&process(&host, &instance_pause_as(NEMU, STAND), 3041));
     met.recv_timeout(GATE_WAIT)
         .expect("the first continuation finds the guard taken");
-    completed(&resume(&host, instance_scope(NEMU), 3042));
+    // Fix round 3: the self-check of no reconnect, and the cause on the receipt.
+    assert_resumed_without_a_reconnect(&resume(&host, instance_scope(NEMU), 3042));
     let again = process(&host, &instance_pause_as(NEMU, STAND), 3043);
     completed(&again);
     let Some(RuntimeResult::SchedulingPaused { revision, .. }) = again.result() else {
@@ -1322,7 +1342,8 @@ fn pg2c_fix1_4_a_check_that_keeps_failing_leaves_the_pause_standing_until_a_resu
         "the pause stands"
     );
     let resumed = resume(&host, instance_scope(CLIENT), 3122);
-    completed(&resumed);
+    // Fix round 3: the self-check of no reconnect, and the cause on the receipt.
+    assert_resumed_without_a_reconnect(&resumed);
     assert_lifted(&host, before, CLIENT);
     wait_for_no_continuation(&host);
     assert!(
@@ -1706,17 +1727,6 @@ fn hold_next_close_question(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Se
     (asking_rx, go_tx)
 }
 
-// Whether the resume `resumed` lifted its pause without a reconnect (no `selfcheck`).
-fn resumed_without_a_reconnect(resumed: &RuntimeReceipt) -> bool {
-    matches!(
-        resumed.result(),
-        Some(RuntimeResult::SchedulingResumed {
-            selfcheck: None,
-            ..
-        })
-    )
-}
-
 // Item 4: a person's pause, its caller's time not ended, waits for its instance's admission guard,
 // which the test's thread holds; held there by the hook, a person resumes the instance. The wait
 // sees the lift (the pause of its revision gone): the request answers Completed with
@@ -1744,8 +1754,7 @@ fn pg2c_fix2_4_a_resume_while_the_request_waits_for_the_admission_guard_answers_
     });
     drop(taken);
 
-    completed(&resumed);
-    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    assert_resumed_without_a_reconnect(&resumed);
     completed(&paused);
     assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
     assert_eq!(
@@ -1785,8 +1794,7 @@ fn pg2c_fix2_5_a_resume_between_the_top_check_and_the_close_question_closes_noth
         (pausing.join().expect("the pause's thread"), resumed)
     });
 
-    completed(&resumed);
-    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    assert_resumed_without_a_reconnect(&resumed);
     completed(&paused);
     assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
     assert_eq!(
@@ -1846,8 +1854,7 @@ fn pg2c_fix2_5_a_resume_lifting_when_the_hand_back_asks_closes_nothing() {
         (pausing.join().expect("the pause's thread"), resumed)
     });
 
-    completed(&resumed);
-    assert!(resumed_without_a_reconnect(&resumed), "{resumed:?}");
+    assert_resumed_without_a_reconnect(&resumed);
     completed(&paused);
     assert_cause(&paused, "scheduling_pause_lifted_by_resume", "paused", None);
     assert_eq!(

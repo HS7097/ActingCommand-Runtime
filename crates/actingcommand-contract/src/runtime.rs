@@ -2183,6 +2183,11 @@ pub struct SchedulingDrainSummary {
 /// Workflow #317 sc3 the reconnect is the host's preparation phase, which also answers
 /// `SelfCheckInstance` with this shape; a preparation that could not take its lease reports
 /// the scheduler code (for example `lease_transfer_not_safe`) with both sides `ok: false`.
+/// #480 PG-2c: a person's resume of a pause in `draining` or `paused` runs no reconnect (the
+/// session was never closed) and reports both sides `ok: false` with no values (no report of a
+/// reconnect) and no `failure_code`, which names only a reconnect that failed; that no reconnect
+/// ran is said by the receipt's outcome (`scheduling_resume_without_reconnect` as the success
+/// code's cause), not by this shape alone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchedulingResumeSelfCheck {
@@ -5700,9 +5705,11 @@ pub enum RuntimeResult {
         drained: Option<SchedulingDrainSummary>,
     },
     /// The scheduling pause is lifted (`ResumeScheduling`); an instance resume reconnects the
-    /// device at once and carries its self-check. #480 PG-2c fix round 2 (`runtime-client` 12): an
-    /// instance resume that ran no reconnect (a person's pause lifted in `draining` or `paused` on
-    /// an instance that is not fenced) carries none; a global resume never carries one.
+    /// device at once and carries its self-check. #480 PG-2c: an instance resume that runs no
+    /// reconnect (a person's pause lifted in `draining` or `paused` on an instance that is not
+    /// fenced) carries one too, both sides `ok: false` with no values and no `failure_code`, and
+    /// its receipt's outcome says why (`scheduling_resume_without_reconnect`, informing, the
+    /// success code's cause: [`RuntimeReceipt::scheduling_resumed`]).
     SchedulingResumed {
         scope: SchedulingPauseScope,
         revision: u64,
@@ -6157,6 +6164,31 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// #480 PG-2c fix round 3 (register §1.472): a completed `ResumeScheduling` receipt. Its
+    /// outcome is the kind's success code; an instance resume that ran no reconnect (a person's
+    /// pause lifted in `draining` or `paused`) carries `scheduling_resume_without_reconnect`
+    /// (informing) as that code's cause, as [`Self::scheduling_paused`] carries its causes, while
+    /// its self-check has both sides `ok: false` with no values and no `failure_code`.
+    pub fn scheduling_resumed(
+        request: &RuntimeRequest,
+        result: RuntimeResult,
+        cause: Option<Outcome>,
+    ) -> RuntimeContractResult<Self> {
+        if !matches!(result, RuntimeResult::SchedulingResumed { .. }) {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidReceiptOutcome,
+            ));
+        }
+        let mut receipt = Self::success(request, RuntimeReceiptState::Completed, None, result)?;
+        if let Some(cause) = cause {
+            let outcome =
+                receipt_state_outcome(request, RuntimeReceiptState::Completed)?.caused_by(cause);
+            receipt.outcome = receipt_envelope(&outcome, receipt.outcome.detail());
+            receipt.validate()?;
+        }
+        Ok(receipt)
+    }
+
     /// A denied or failed receipt whose outcome is the Runtime error code itself with the
     /// projection's values: a refusal that names no more specific code.
     pub fn error(
@@ -6476,14 +6508,9 @@ impl RuntimeReceipt {
                 selfcheck,
             }) => {
                 scope.validate()?;
-                // #480 PG-2c fix round 2: a global resume reconnects nothing and carries no
-                // self-check; an instance resume carries the self-check of its reconnect, and none
-                // when it ran no reconnect (a person's pause lifted before `released` on an
-                // instance that is not fenced: `resume_unquiet_instance_pause`).
                 if self.state != RuntimeReceiptState::Completed
                     || *revision == 0
-                    || (selfcheck.is_some()
-                        && !matches!(scope, SchedulingPauseScope::Instance { .. }))
+                    || selfcheck.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
                 {
                     return Err(RuntimeContractError::new(
                         RuntimeContractCode::InvalidSchedulingPauseReceipt,
