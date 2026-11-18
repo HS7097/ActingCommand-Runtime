@@ -13,9 +13,9 @@ checked and restricted: around private information the region that recognises a 
 that is pressed are different places, and a recognition region holds no account information. For a
 local destination nothing of privacy is handled. The check is one additional step of the public
 case. The owner's ruling of the same evening: quantities of what the account holds, shown on a
-screen, are private too. A package may still read them at run time (a resource reading, whose value
-goes only into the user's own ledger, [resource-readings.md](resource-readings.md)), but their
-pixels are never stored in a repository.
+screen, are private too. A package may still read them at run time (a reading, "A reading" below:
+the kernel reads the number there, and it goes no further than the user's own run and ledger,
+[resource-readings.md](resource-readings.md)), but their pixels are never stored in a repository.
 
 Unchanged: only recorded linear packages; the tools hand back material and propose nothing; the
 core holds no game's information.
@@ -114,7 +114,10 @@ it reads at an offset:
 - **A press box is not in it**: a target's `click`, a click-only target, a slot's or a layout's
   `click`. Pressing reads nothing.
 - **Where a region lies**: a fixed rectangle of the base; `full_frame`, the whole frame; or no fixed
-  rectangle (`template_relative`, placed where a template was found, or another keyword).
+  rectangle (`template_relative`, placed where a template was found, or another keyword). A fixed
+  rectangle carries its reach ("Where a read can reach"); a region with no fixed rectangle carries
+  the rectangle it is confined to, when the pack guarantees one ("Where an unbounded read is
+  confined").
 - **A feature read at an offset** (a feature with `target` and `offset`) is read by the kernel at
   its instance's origin plus the offset, with the target's own size, not at the target's own
   rectangle. The list gives it as the layout's read, of the target's kind (`template_search`,
@@ -123,38 +126,87 @@ it reads at an offset:
   corner) plus the offset, the rectangle the kernel reads; in a `repeated_anchor` layout one region
   with no fixed rectangle, since the anchor's match, which places it and scales its offset, is
   known only on a frame, also when the layout declares a shared read (whose own region the list
-  gives as `shared_ocr`, a fixed rectangle). A template read so takes a colour check relative to its
-  own region already gives as no fixed rectangle. A sample's jitter (a feature's `consensus`, at
-  most 8 pixels) is not in the list, of any region.
+  gives as `shared_ocr`, a fixed rectangle); such a region carries the rectangle it is confined
+  to, when the pack guarantees one ("Where an unbounded read is confined"). A template read so
+  takes a colour check relative to its match, which its own region already gives as no fixed
+  rectangle.
 - **Each region names the layout** whose read it is (its shared read, a feature it reads at an
   offset); a region its target declares itself names none.
 - **The scene** pastes the regions a target declares itself, those that name no layout, and nothing
   a layout reads itself, which a scene never pasted (a recording generates no feature read at an
   offset, and a select's shared read, #463 SEL-2L-a, only beside the slot targets the scene
   pastes): every scene the Lab builds is byte for byte what it was before this list moved into the
-  recognition pack. The scene asks for no reading.
+  recognition pack. It pastes a region's area, never its reach or its bound. The scene asks for no
+  reading.
 
 ### A reading
 
-A **reading** is a region whose recognised value the package publishes as, or into, a fact of the
-account: a resource reading, an adjustment's amount, a list's value fields. One function
-(`RecognitionPack::reading_targets`) collects the reading targets from every place the kernel
-honours, from the members of the package's entry task
-(`resources/operations/<task_id>/task.json`, `PackReadingDeclarations::of_task`) and the pack's
-candidate layouts ([resource-readings.md](resource-readings.md)):
+A **reading** is a region the kernel reads as a number at run time, whether or not the number is
+published as a fact of the account (fix round 2, the coordinator's ruling: one meaning). One
+function (`RecognitionPack::reading_targets`) collects the reading targets from every place where
+the kernel turns a recognised text into a number, from the members of the package's entry task
+(`resources/operations/<task_id>/task.json`, `PackReadingDeclarations::of_task`) and from the pack
+itself ([resource-readings.md](resource-readings.md)):
 
-| Place | Reading target |
-| --- | --- |
-| `resource_readings[]` (a mark) | its `target_id`; the mark's `capacity_fact_key` reads the same target |
-| `resource_adjustments[].amount` | its `target_id`; an adjustment without `amount` reads its key through a mark, whose target is the mark's |
-| a candidate layout's integer feature (`ocr_integer`) | the target it reads (a feature's own `target`, or a `fixed_slots` slot's target of the feature): the integer column a `read_list` step publishes into its list (an integer column is such a feature), and a select's quantity column |
-| `field_lists[].columns[]` | the `target_id` of the field it names in the list's `group` of `post_admission_ocr`, when that field is an `unsigned_integer` (an integer column) |
+| Place | Reading target | Where the text becomes a number |
+| --- | --- | --- |
+| `resource_readings[]` (a mark) | its `target_id`; the mark's `capacity_fact_key` reads the same target | `ResourceReadingDeclaration::parse_parts` (the contract crate) |
+| `resource_adjustments[].amount` | its `target_id`; an adjustment without `amount` reads its key through a mark, whose target is the mark's | `judge_resource_adjustment_amount` (the execution kernel) |
+| a candidate layout's integer feature (`ocr_integer`) | the target it reads (a feature's own `target`, or a `fixed_slots` slot's target of the feature): the integer column a `read_list` step publishes into its list, and a select's quantity column, read only to choose | `CandidateIntegerDeclaration::parse` (the recognition pack) |
+| `post_admission_ocr.fields[]` (`fields_v1`, task schema `0.8` and `0.9`) | the `target_id` of each `unsigned_integer` field, in a field list (`field_lists`) or not | `parse_ocr_field` (the execution kernel) |
+| a value test of the pack (`value_test`) | the `target_id` of its `left` side, and of its `right` side when that is another side, not a constant: the test compares them as numbers | `read_value_operand` (the recognition pack) |
 
-A list's key (a `read_list`'s `key_feature`, a field list's `key_field`) and its string and boolean
-columns name or test a position: they are no reading. The list marks every region whose target is a
-reading target, the region a target declares itself and a layout's read of it alike; every other
+A list's key (a `read_list`'s `key_feature`, a field list's `key_field`), a name, a dictionary or
+string field and a boolean column are read as text or tested as a verdict: they are no reading.
+The list marks every region whose target is a reading target, the region a target declares itself
+and a layout's read of it alike. **A layout's shared read** is a reading when it gives its text to
+at least one reading target, as the kernel counts the calls the read serves (`shared_calls`: an OCR
+target the layout's slots or features read with the read's model, languages and chain, inside the
+read's region on a `fixed_slots` layout, on every instance of a `repeated_anchor` one). Every other
 region is not a reading. The mark decides nothing: the later callers rule that a reading in a
 `value` zone may read there at run time.
+
+### Where a read can reach
+
+A target's consensus (`target_consensus`) and a feature's (`consensus` of a candidate layout's
+feature) read the region moved by the jitter of each of their samples, `dx` and `dy`, at most 8
+pixels on each axis; admission checks only that the moved region stays inside the coordinate space,
+or, for a feature read at an offset, inside its slot (`fixed_slots`) or its instance's rectangle
+(`repeated_anchor`), never that it stays off a zone. So each region that is a
+fixed rectangle carries its **reach**: the smallest rectangle that holds it under every shift the
+pack declares for it, the region itself when it declares none. The shifts of a region are:
+
+- of a target's own search area or region (a template, a colour probe, a colour digest, an OCR
+  target): each sample of its target consensus, and each sample of the consensus of a feature
+  that reads it in a `fixed_slots` slot (the slot's target of the feature, or a template of its
+  icon pool);
+- of a feature a `fixed_slots` layout reads at an offset, in each slot: each sample of the
+  feature's consensus.
+
+A template's colour check, an NN target's region and a layout's shared read are never moved: their
+reach is their region. The comparison compares a region's reach; a scene pastes its area, as before.
+
+### Where an unbounded read is confined
+
+A feature a `repeated_anchor` layout reads at an offset from its anchor's match has no fixed
+rectangle. It carries the **bound** it is confined to when the pack guarantees one, in this order:
+
+1. **The layout's readable band** (the coordinate space when it declares none), when the anchor is
+   searched at its own size only (no `scales`, or only the factor 1000) and the feature's region at
+   the offset, moved by each of its samples, lies inside `instance_rect`. The kernel reads the
+   features of an instance only when the instance's rectangle lies inside the band, and at its own
+   size the region lies inside the rectangle; admission refuses a region outside it, and the list
+   checks it itself. A sample's shift at the band's edge stays inside, since admission and the list
+   check the moved region.
+2. Else **the layout's shared read**, its declared rectangle (`full_frame`: the coordinate space),
+   when it gives the feature's target its text: the row then reads no pixel of its own and takes
+   the blocks of the read, whose pixels are those of the read's region.
+3. Else nothing confines it: an anchor matched at another factor moves the region by a scaled offset
+   and keeps its own size, so neither the instance's rectangle nor the band holds it, and the row
+   reads its own pixels.
+
+A region placed relative to where a template was found (`template_relative`) and a keyword other
+than `full_frame` are confined by nothing.
 
 ## The comparison
 
@@ -169,15 +221,19 @@ declaration (`zones`). It answers `{package_id, findings, unseen}`:
   compared.
 - Then each region of the list in its order, then each case's rectangles, case by case:
   - **`zone_met`**, once per zone a region's or rectangle's rectangle meets: their intersection's
-    area is above zero (rectangles that only touch at an edge do not meet). It carries the place (a
-    region: its target, its kind, whether it is a reading and the layout whose read it is, if any;
-    a scene's rectangle: the case's id and the rectangle's index in `scene_construction.rects`,
-    nothing free-form the case writes, and never a reading), both rectangles, and the zone's id and
-    kind;
-  - **`whole_frame`**, a region or rectangle that covers the whole base, or a region `full_frame`:
-    it meets every zone, and is named once, not once per zone;
-  - **`region_unbounded`**, a region that is no fixed rectangle (a feature a `repeated_anchor`
-    layout reads at an offset among them).
+    area is above zero (rectangles that only touch at an edge do not meet). A region is compared by
+    its reach, and a region with no fixed rectangle by its bound; a scene's rectangle as it is. It
+    carries the place (a region: its target, its kind, whether it is a reading and the layout
+    whose read it is, if any; a scene's rectangle: the case's id and the rectangle's index in
+    `scene_construction.rects`, nothing free-form the case writes, and never a reading), the
+    rectangle compared and what it is (`extent`: `area`, a scene's rectangle or a region's area;
+    `reach`, a region's reach, with its area beside it, when they differ; `bound`, the bound of a
+    region with no fixed rectangle, which may lie anywhere inside it), and the zone's rectangle, id
+    and kind;
+  - **`whole_frame`**, a region's area or a scene's rectangle that covers the whole base, or a
+    region `full_frame`: it meets every zone, and is named once, not once per zone;
+  - **`region_unbounded`**, a region that is no fixed rectangle and that nothing confines ("Where an
+    unbounded read is confined").
 - It names no pixel and no expected text, blacks nothing out, proposes no other place and decides
   nothing. Which finding refuses is its callers' rule (later slices): a reading in a `value` zone
   is allowed at run time; a scene's rectangle in any zone is refused; the transition list is
@@ -201,9 +257,9 @@ resource-tooling, ladder class `none`.
 
 | Code | What it says | Refuses or warns | Values |
 | --- | --- | --- | --- |
-| `privacy_zone_met` | a region or a scene's rectangle meets a zone | refuses | `package_id`, `privacy_rect_kind`, `privacy_zone_id`, `privacy_zone_kind`, `privacy_reading`; `target_id`?, `path`?, `json_pointer`? |
+| `privacy_zone_met` | a region (by its reach, or its bound) or a scene's rectangle meets a zone | refuses | `package_id`, `privacy_rect_kind`, `privacy_zone_id`, `privacy_zone_kind`, `privacy_reading`; `target_id`?, `path`?, `json_pointer`? |
 | `privacy_whole_frame` | a region or a scene's rectangle covers the whole base | refuses | `package_id`, `privacy_rect_kind`; `target_id`?, `path`?, `json_pointer`? |
-| `privacy_region_unbounded` | a region is no fixed rectangle | refuses | `package_id`, `privacy_rect_kind`, `target_id`; `path`?, `json_pointer`? |
+| `privacy_region_unbounded` | a region is no fixed rectangle and nothing confines it | refuses | `package_id`, `privacy_rect_kind`, `target_id`; `path`?, `json_pointer`? |
 | `privacy_base_undeclared` | the package's base size is not declared | refuses | `package_id`, `base_width`, `base_height` |
 | `privacy_destination_local` | a package marked for local use only is in a root that is public (who says a root is public: "Who says a root is public" above) | refuses | `package_id`; `path`? |
 | `privacy_undeclared` | the root holds no declaration | warns | `path`? |

@@ -25,20 +25,34 @@
 //!   where it lies (a fixed rectangle, the keyword `full_frame`, or no fixed rectangle at all), the
 //!   layout whose read it is (none for a region its target declares itself, the only regions a
 //!   case's scene pastes) and whether it is a reading.
-//! - **A reading** (fix round 1) is a region whose recognised value the package publishes as, or
-//!   into, a fact of the account: its target is one [`RecognitionPack::reading_targets`] collects,
-//!   from every place the kernel honours.
+//! - **Where a read can reach** (fix round 2): a sample of a target consensus or of a feature's
+//!   consensus reads the region moved by its jitter (at most 8 pixels on each axis). A region that
+//!   is a fixed rectangle carries its reach, the smallest rectangle that holds it under every shift
+//!   the pack declares for it, the region itself when it declares none. The scene still pastes the
+//!   region itself.
+//! - **Where an unbounded read is confined** (fix round 2): a feature a `repeated_anchor` layout
+//!   reads at an offset carries the rectangle the pack confines it to, when it guarantees one
+//!   ([`RecognitionPack::reads`]); any other region with no fixed rectangle carries none.
+//! - **A reading** (fix round 2, the one meaning) is a region the kernel reads as a number at run
+//!   time, whether or not the number is published as a fact: its target is one
+//!   [`RecognitionPack::reading_targets`] collects; and a layout's shared read is one when it gives
+//!   its text to a reading target.
 //! - **What a rectangle does not show** is counted beside the list: the texts an OCR target
 //!   expects and the aliases a layout's identity entries are read as.
 
+use crate::candidate_layout::shared_calls;
+use crate::template_scales::searched_factors;
 use crate::{
-    CandidateFeatureValue, PackPoint, PackRect, PackRegion, RecognitionPack, RecognitionTarget,
+    CandidateFeatureDeclaration, CandidateFeatureValue, CandidateLayout, CandidateSampleVariant,
+    PackPoint, PackRect, PackRegion, RecognitionPack, RecognitionTarget, ValueTestRight,
+    rect_is_within,
 };
 use actingcommand_contract::candidate_projection::CandidateLayoutKind;
 use actingcommand_contract::{
-    FieldListDeclaration, OcrFieldDeclaration, OcrFieldType, OcrFieldsDeclaration,
-    ResourceAdjustmentDeclaration, ResourceReadingDeclaration,
+    OcrFieldDeclaration, OcrFieldType, OcrFieldsDeclaration, ResourceAdjustmentDeclaration,
+    ResourceReadingDeclaration,
 };
+use actingcommand_recognition::resample::SCALE_IDENTITY_MILLI;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -79,7 +93,8 @@ pub enum PackReadArea {
     FullFrame,
     /// No fixed rectangle: a region placed relative to where a template was found
     /// (`template_relative`, or a feature a `repeated_anchor` layout reads at an offset from its
-    /// anchor's match), or a keyword other than `full_frame`.
+    /// anchor's match), or a keyword other than `full_frame`. Fix round 2: the region's `bound`
+    /// says the rectangle the pack confines it to, when it guarantees one.
     Unbounded,
 }
 
@@ -90,8 +105,19 @@ pub struct PackReadRegion {
     pub target: String,
     pub kind: PackReadKind,
     pub area: PackReadArea,
+    /// Fix round 2 (`contracts/privacy-zones.md`, "Where a read can reach"): of an area that is a
+    /// fixed rectangle, its reach, the smallest rectangle that holds it under every shift the pack
+    /// declares for it (the jitter of each sample of the target's consensus, or of a feature's
+    /// consensus that reads it), the area itself when it declares none; none of an area that is
+    /// no fixed rectangle.
+    pub reach: Option<PackRect>,
+    /// Fix round 2 (`contracts/privacy-zones.md`, "Where an unbounded read is confined"): of an
+    /// area that is no fixed rectangle, the rectangle the pack confines it to, when it guarantees
+    /// one: the region may lie anywhere inside it; none otherwise.
+    pub bound: Option<PackRect>,
     /// Whether the region is a reading: its target is one of the package's reading targets
-    /// ([`RecognitionPack::reading_targets`]).
+    /// ([`RecognitionPack::reading_targets`]), or (fix round 2) it is a layout's shared read that
+    /// gives its text to one.
     pub reading: bool,
     /// Fix round 1: the candidate layout whose read the region is (its shared read, or a feature
     /// it reads at an offset); none for a region its target declares itself, which is what a
@@ -111,29 +137,28 @@ pub struct PackReads {
 }
 
 /// Fix round 1: the members of a package's entry task (`resources/operations/<task_id>/task.json`)
-/// that name the targets whose recognised value the package publishes as, or into, a fact of the
-/// account ([`RecognitionPack::reading_targets`]). The default declares none.
+/// that name targets the kernel reads as a number at run time
+/// ([`RecognitionPack::reading_targets`]). The default declares none.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackReadingDeclarations {
     /// `resource_readings`, the marks.
     pub readings: Vec<ResourceReadingDeclaration>,
     /// `resource_adjustments`.
     pub adjustments: Vec<ResourceAdjustmentDeclaration>,
-    /// `field_lists`.
-    pub field_lists: Vec<FieldListDeclaration>,
-    /// The fields of `post_admission_ocr`, which a field list's columns name.
+    /// Fix round 2: the fields of `post_admission_ocr` (`fields_v1`), each of which the kernel
+    /// reads after admission, in a field list or not.
     pub fields: Vec<OcrFieldDeclaration>,
 }
 
 impl PackReadingDeclarations {
     /// The members of the entry task `task`, its `task.json` as one JSON value: a member it does
-    /// not declare is empty. The fields of `post_admission_ocr` are read only when the task
-    /// declares a field list, which needs their `fields_v1` form (an operation `0.7` declares
-    /// another form). A member that does not decode is the decoder's error.
+    /// not declare is empty. The fields of `post_admission_ocr` are read when it is declared in
+    /// its `fields_v1` form (`"mode": "fields_v1"`, task schema `0.8` and `0.9`); its other form,
+    /// an operation `0.7`'s comparison with a truth set, reads no number and declares none. A
+    /// member that does not decode is the decoder's error.
     pub fn of_task(task: &Value) -> serde_json::Result<Self> {
-        let field_lists: Vec<FieldListDeclaration> = member(task, "field_lists")?;
         let fields = match task.get("post_admission_ocr") {
-            Some(declared) if !field_lists.is_empty() => {
+            Some(declared) if declared.get("mode").and_then(Value::as_str) == Some("fields_v1") => {
                 serde_json::from_value::<OcrFieldsDeclaration>(declared.clone())?.fields
             }
             _ => Vec::new(),
@@ -141,7 +166,6 @@ impl PackReadingDeclarations {
         Ok(Self {
             readings: member(task, "resource_readings")?,
             adjustments: member(task, "resource_adjustments")?,
-            field_lists,
             fields,
         })
     }
@@ -177,21 +201,26 @@ impl LayoutFeatures<'_> {
 }
 
 impl RecognitionPack {
-    /// Fix round 1 (`contracts/privacy-zones.md`, "A reading"): the one collection of the targets
-    /// whose recognised value the package publishes as, or into, a fact of the account, from every
-    /// place the kernel honours, with `task` the members of its entry task:
+    /// Fix round 2 (`contracts/privacy-zones.md`, "A reading", the one meaning): the one
+    /// collection of the targets the kernel reads as a number at run time, whether or not the
+    /// number is published as a fact, with `task` the members of the package's entry task:
     ///
-    /// - each resource reading's `target_id` (a mark; its capacity key reads the same target);
-    /// - each adjustment's `amount.target_id` (an adjustment without `amount` reads its key through
-    ///   a mark, whose target is the mark's);
-    /// - each target a candidate layout of this pack reads as an integer feature (`ocr_integer`, a
-    ///   feature's own `target` or a `fixed_slots` slot's target of the feature): the integer
-    ///   column a `read_list` step publishes into its list, and a select's quantity column;
-    /// - the target of each integer field (`unsigned_integer`) of its group a field list's column
-    ///   names.
+    /// - each mark's `target_id` (`resource_readings`; its capacity key reads the same target),
+    ///   parsed by `ResourceReadingDeclaration::parse_parts`;
+    /// - each adjustment's `amount.target_id` (`resource_adjustments`; an adjustment without
+    ///   `amount` reads its key through a mark, whose target is the mark's), parsed by the
+    ///   execution kernel's `judge_resource_adjustment_amount`;
+    /// - each target a candidate layout of this pack reads as an integer feature (`ocr_integer`,
+    ///   a feature's own `target` or a `fixed_slots` slot's target of the feature), parsed by
+    ///   `CandidateIntegerDeclaration::parse`: the integer column a `read_list` step publishes
+    ///   into its list, and a select's quantity column, used only to choose;
+    /// - the target of each integer field (`unsigned_integer`) of the task's `post_admission_ocr`,
+    ///   in a field list or not, parsed by the execution kernel's `parse_ocr_field`;
+    /// - the OCR target of each side of each value test of this pack (`left`, and `right` when it
+    ///   is another side), which the test parses and compares as numbers.
     ///
-    /// A list's key, its string and its boolean columns name or test a position, and are no
-    /// reading.
+    /// A list's key, a string or dictionary field and a name are no reading: the kernel reads
+    /// them as text.
     pub fn reading_targets(&self, task: &PackReadingDeclarations) -> BTreeSet<String> {
         let marks = task
             .readings
@@ -203,22 +232,30 @@ impl RecognitionPack {
             .filter_map(|adjustment| adjustment.amount.as_ref())
             .map(|amount| amount.target_id.as_str());
         let columns = self.layout_features().integer;
-        let fields = task.field_lists.iter().flat_map(|list| {
-            list.columns.iter().filter_map(move |column| {
-                task.fields
-                    .iter()
-                    .find(|field| {
-                        field.id == column.field
-                            && field.group == list.group
-                            && matches!(field.value, OcrFieldType::UnsignedInteger { .. })
-                    })
-                    .map(|field| field.target_id.as_str())
+        let fields = task
+            .fields
+            .iter()
+            .filter(|field| matches!(field.value, OcrFieldType::UnsignedInteger { .. }))
+            .map(|field| field.target_id.as_str());
+        let sides = self
+            .targets
+            .iter()
+            .filter_map(|target| match target {
+                RecognitionTarget::ValueTest(test) => Some(test),
+                _ => None,
             })
-        });
+            .flat_map(|test| {
+                std::iter::once(&test.left).chain(match &test.right {
+                    Some(ValueTestRight::Operand(operand)) => Some(operand),
+                    _ => None,
+                })
+            })
+            .map(|operand| operand.target_id.as_str());
         marks
             .chain(amounts)
             .chain(columns)
             .chain(fields)
+            .chain(sides)
             .map(str::to_owned)
             .collect()
     }
@@ -227,19 +264,42 @@ impl RecognitionPack {
     /// reading when its target is one of the reading targets of `task`, the members of the
     /// package's entry task ([`Self::reading_targets`]); a caller that needs no mark (the Lab's
     /// scene) passes none.
+    ///
+    /// Fix round 2: a region that is a fixed rectangle carries its reach; a layout's shared read is
+    /// a reading when it gives its text to a reading target, as the kernel counts the calls it
+    /// serves; and a feature a `repeated_anchor` layout reads at an offset carries the rectangle
+    /// it is confined to, when the pack guarantees one:
+    ///
+    /// - the layout's readable band (the coordinate space when it declares none), when its anchor
+    ///   is searched at its own size only (no factor but 1000) and the feature's region at the
+    ///   offset, moved by each of its samples, lies inside `instance_rect`: the kernel reads the
+    ///   features of an instance only when the instance's rectangle lies inside the band
+    ///   (`SceneEvaluation::anchor_instances`), and admission holds every such region inside the
+    ///   rectangle (`validate_repeated_anchor`), which this list checks itself;
+    /// - else the layout's shared read, when it gives the target its text: the row then reads no
+    ///   pixel of its own and takes the blocks of the read (`layout_shared_text`), whose pixels
+    ///   are those of the read's region;
+    /// - else none: a match at another factor moves the region by a scaled offset and keeps its
+    ///   size, so nothing holds it inside the band.
     pub fn reads(&self, task: &PackReadingDeclarations) -> PackReads {
-        let read = self.reading_targets(task);
+        let readings = self.reading_targets(task);
         let features = self.layout_features();
-        let region =
-            |target: &str, kind: PackReadKind, area: PackReadArea, layout: Option<&str>| {
-                PackReadRegion {
-                    target: target.to_owned(),
-                    kind,
-                    area,
-                    reading: read.contains(target),
-                    layout: layout.map(str::to_owned),
-                }
-            };
+        let region = |target: &str,
+                      kind: PackReadKind,
+                      area: PackReadArea,
+                      shifts: &[(i16, i16)],
+                      layout: Option<&str>| PackReadRegion {
+            target: target.to_owned(),
+            kind,
+            area,
+            reach: match area {
+                PackReadArea::Rect(rect) => Some(reached(rect, shifts)),
+                PackReadArea::FullFrame | PackReadArea::Unbounded => None,
+            },
+            bound: None,
+            reading: readings.contains(target),
+            layout: layout.map(str::to_owned),
+        };
         let mut reads = PackReads::default();
         for target in &self.targets {
             match target {
@@ -248,13 +308,16 @@ impl RecognitionPack {
                         &template.id,
                         PackReadKind::TemplateSearch,
                         area_of(&template.region),
+                        &self.own_shifts(&template.id),
                         None,
                     ));
+                    // A sample moves a template's search area, never its colour check.
                     if let Some(check) = &template.color_check {
                         reads.regions.push(region(
                             &template.id,
                             PackReadKind::ColorCheck,
                             area_of(&check.region),
+                            &[],
                             None,
                         ));
                     }
@@ -263,12 +326,14 @@ impl RecognitionPack {
                     &color.id,
                     PackReadKind::Color,
                     PackReadArea::Rect(color.region),
+                    &self.own_shifts(&color.id),
                     None,
                 )),
                 RecognitionTarget::ColorDigest(digest) => reads.regions.push(region(
                     &digest.id,
                     PackReadKind::ColorDigest,
                     PackReadArea::Rect(digest.region),
+                    &self.own_shifts(&digest.id),
                     None,
                 )),
                 RecognitionTarget::Ocr(ocr) => {
@@ -276,28 +341,37 @@ impl RecognitionPack {
                         &ocr.id,
                         features.ocr_kind(&ocr.id),
                         area_of(&ocr.region),
+                        &self.own_shifts(&ocr.id),
                         None,
                     ));
                     reads.expected_texts += ocr.expected.len();
                 }
-                RecognitionTarget::Nn(nn) => {
-                    reads
-                        .regions
-                        .push(region(&nn.id, PackReadKind::Nn, area_of(&nn.region), None))
-                }
+                // No sample moves an NN target: consensus takes none.
+                RecognitionTarget::Nn(nn) => reads.regions.push(region(
+                    &nn.id,
+                    PackReadKind::Nn,
+                    area_of(&nn.region),
+                    &[],
+                    None,
+                )),
                 RecognitionTarget::ClickOnly(_)
                 | RecognitionTarget::Composite(_)
                 | RecognitionTarget::ValueTest(_) => {}
             }
         }
         for layout in &self.candidate_layouts {
-            if let Some(shared) = &layout.shared_ocr {
-                reads.regions.push(region(
+            let shared = self.shared_text(layout);
+            if let Some(read) = &layout.shared_ocr {
+                // The shared read is read once a frame, where it is declared: no sample moves it.
+                let mut shared_read = region(
                     &layout.id,
                     PackReadKind::SharedOcr,
-                    area_of(&shared.region),
+                    area_of(&read.region),
+                    &[],
                     Some(layout.id.as_str()),
-                ));
+                );
+                shared_read.reading = shared.iter().any(|target| readings.contains(target));
+                reads.regions.push(shared_read);
             }
             for feature in &layout.features {
                 let (Some(target), Some(offset)) = (&feature.target, feature.offset) else {
@@ -308,21 +382,28 @@ impl RecognitionPack {
                 };
                 match layout.kind {
                     CandidateLayoutKind::FixedSlots => {
+                        let shifts = sampled(feature);
                         for slot in &layout.slots {
                             reads.regions.push(region(
                                 target,
                                 kind,
                                 placed(slot.rect, offset, size),
+                                &shifts,
                                 Some(layout.id.as_str()),
                             ));
                         }
                     }
-                    CandidateLayoutKind::RepeatedAnchor => reads.regions.push(region(
-                        target,
-                        kind,
-                        PackReadArea::Unbounded,
-                        Some(layout.id.as_str()),
-                    )),
+                    CandidateLayoutKind::RepeatedAnchor => {
+                        let mut row = region(
+                            target,
+                            kind,
+                            PackReadArea::Unbounded,
+                            &[],
+                            Some(layout.id.as_str()),
+                        );
+                        row.bound = self.confinement(layout, feature, size, &shared);
+                        reads.regions.push(row);
+                    }
                 }
             }
             reads.aliases += layout
@@ -374,6 +455,118 @@ impl RecognitionPack {
             }
         }
         features
+    }
+
+    /// Fix round 2: the shifts the pack declares for the region the target `id` declares itself,
+    /// each a sample's jitter `(dx, dy)`: of each sample of its target consensus
+    /// (`target_consensus`), and of each sample of the consensus of a candidate layout's feature
+    /// that reads it in a `fixed_slots` slot (the slot's target of the feature, or a template of
+    /// its icon pool), where the kernel reads the target's own region moved by the sample.
+    fn own_shifts(&self, id: &str) -> Vec<(i16, i16)> {
+        let mut shifts = Vec::new();
+        if let Some(consensus) = self.target_consensus.get(id) {
+            shifts.extend(consensus.samples.iter().map(jitter));
+        }
+        for layout in &self.candidate_layouts {
+            for feature in &layout.features {
+                let Some(consensus) = &feature.consensus else {
+                    continue;
+                };
+                let reads_it = layout.slots.iter().any(|slot| {
+                    slot.targets
+                        .get(&feature.name)
+                        .is_some_and(|target| target.as_str() == id)
+                        || slot
+                            .identity_templates
+                            .get(&feature.name)
+                            .is_some_and(|pool| {
+                                pool.iter().any(|template| template.target_id == id)
+                            })
+                });
+                if reads_it {
+                    shifts.extend(consensus.samples.iter().map(jitter));
+                }
+            }
+        }
+        shifts
+    }
+
+    /// Fix round 2: the targets the shared read of `layout` gives its text to, as the kernel
+    /// counts the calls it serves (`shared_calls`, the read's own chain): an OCR target the
+    /// layout's slots or features read with the read's model, languages and chain, inside the
+    /// read's region on a `fixed_slots` layout, on any instance of a `repeated_anchor` one. None
+    /// without a shared read.
+    fn shared_text(&self, layout: &CandidateLayout) -> BTreeSet<String> {
+        let lookup = |target_id: &str| self.targets.iter().find(|target| target.id() == target_id);
+        shared_calls(
+            layout,
+            self.defaults.match_metric,
+            self.coordinate_space,
+            &lookup,
+            false,
+        )
+        .0
+        .into_iter()
+        .map(|call| call.4)
+        .collect()
+    }
+
+    /// Fix round 2: the rectangle the read of `feature`, which the `repeated_anchor` layout
+    /// `layout` makes at the feature's offset from each anchor match with the size `size`, is
+    /// confined to, when the pack guarantees one ([`Self::reads`]); `shared` the targets the
+    /// layout's shared read gives its text to.
+    fn confinement(
+        &self,
+        layout: &CandidateLayout,
+        feature: &CandidateFeatureDeclaration,
+        size: PackRect,
+        shared: &BTreeSet<String>,
+    ) -> Option<PackRect> {
+        let (Some(target), Some(offset)) = (&feature.target, feature.offset) else {
+            return None;
+        };
+        let whole = self.coordinate_space.map(|space| PackRect {
+            x: 0,
+            y: 0,
+            width: i32::try_from(space.width).unwrap_or(i32::MAX),
+            height: i32::try_from(space.height).unwrap_or(i32::MAX),
+        });
+        let unscaled = matches!(
+            layout
+                .anchor
+                .as_deref()
+                .and_then(|id| self.targets.iter().find(|candidate| candidate.id() == id)),
+            Some(RecognitionTarget::Template(anchor))
+                if searched_factors(anchor)
+                    .iter()
+                    .all(|factor| *factor == SCALE_IDENTITY_MILLI)
+        );
+        let inside = layout.instance_rect.is_some_and(|instance| {
+            sampled(feature).into_iter().all(|(dx, dy)| {
+                rect_is_within(
+                    PackRect {
+                        x: offset.x.saturating_add(i32::from(dx)),
+                        y: offset.y.saturating_add(i32::from(dy)),
+                        ..size
+                    },
+                    instance,
+                )
+            })
+        });
+        if unscaled
+            && inside
+            && let Some(band) = layout.readable_band.or(whole)
+        {
+            return Some(band);
+        }
+        if !shared.contains(target) {
+            return None;
+        }
+        match layout.shared_ocr.as_ref().map(|read| &read.region) {
+            Some(PackRegion::Rect(rect)) => Some(*rect),
+            Some(PackRegion::Keyword(keyword)) if keyword == "full_frame" => whole,
+            _ => None,
+        }
     }
 
     /// The kind and the size of the region the target `id` is read with at an offset: a template's
@@ -429,5 +622,38 @@ fn placed(slot: PackRect, offset: PackPoint, size: PackRect) -> PackReadArea {
             height: size.height,
         }),
         _ => PackReadArea::Unbounded,
+    }
+}
+
+/// A sample's jitter, `(dx, dy)`.
+fn jitter(sample: &CandidateSampleVariant) -> (i16, i16) {
+    (sample.dx, sample.dy)
+}
+
+/// Fix round 2: the jitter of each sample `feature` reads with, as the kernel samples it
+/// (`CandidateLayout::feature_samples`): its consensus's samples, or the one unshifted sample of a
+/// feature without consensus.
+fn sampled(feature: &CandidateFeatureDeclaration) -> Vec<(i16, i16)> {
+    match &feature.consensus {
+        Some(consensus) => consensus.samples.iter().map(jitter).collect(),
+        None => vec![(0, 0)],
+    }
+}
+
+/// Fix round 2: the reach of `area` under `shifts`: the smallest rectangle that holds it and each
+/// of its copies moved by a shift; `area` itself when there is none.
+fn reached(area: PackRect, shifts: &[(i16, i16)]) -> PackRect {
+    let (mut left, mut top, mut right, mut bottom) = (0_i32, 0_i32, 0_i32, 0_i32);
+    for &(dx, dy) in shifts {
+        left = left.min(i32::from(dx));
+        right = right.max(i32::from(dx));
+        top = top.min(i32::from(dy));
+        bottom = bottom.max(i32::from(dy));
+    }
+    PackRect {
+        x: area.x.saturating_add(left),
+        y: area.y.saturating_add(top),
+        width: area.width.saturating_add(right - left),
+        height: area.height.saturating_add(bottom - top),
     }
 }

@@ -2930,7 +2930,7 @@
     },
     "privacy_reading": {
       "type": "boolean",
-      "description": "Whether the region of a privacy finding is a reading: a region whose recognised value the package publishes as, or into, a fact of the account (a resource reading's target, an adjustment's amount, a list's value fields: a field list's integer fields and a candidate layout's integer features, ocr_integer, a select's quantity column among them); a rectangle of a case's scene is never one (#463 PRIV-1 amendment 1 and fix round 1, contracts/privacy-zones.md \"A reading\", since 0.12.74)."
+      "description": "Whether the region of a privacy finding is a reading: a region the kernel reads as a number at run time, whether or not the number is published as a fact (a mark's target, an adjustment's amount, a candidate layout's integer feature, ocr_integer, a select's quantity column among them, an integer field of the entry task's OCR fields, in a field list or not, a value test's sides), or a layout's shared read that gives its text to one; a rectangle of a case's scene is never one (#463 PRIV-1 amendment 1 and fix rounds 1 and 2, contracts/privacy-zones.md \"A reading\", since 0.12.74)."
     },
     "privacy_unseen_kind": {
       "type": "vocab:privacy_unseen_kind",
@@ -11544,7 +11544,7 @@
           "description": "An OCR target a candidate layout reads as a feature (a fixed_slots slot's targets, a feature's target), and none as an integer: a select's name region."
         },
         "select_quantity": {
-          "description": "An OCR target a candidate layout reads as an integer feature (ocr_integer): a select's quantity column, the integer column a read_list step publishes into its list; such a region is a reading (fix round 1)."
+          "description": "An OCR target a candidate layout reads as an integer feature (ocr_integer): a select's quantity column, the integer column a read_list step publishes into its list; the kernel reads it as a number, so such a region is a reading (fix rounds 1 and 2)."
         },
         "scene_rect": {
           "description": "A rectangle of a regression case's scene, scene_construction.rects."
@@ -11563,7 +11563,7 @@
           "description": "Who the account is (a nickname, an account number, a server name): nothing may read there. A zone that declares no kind is of this kind."
         },
         "value": {
-          "description": "A quantity the account holds: only a reading may read there (its value goes only into the user's own ledger), and no scene may hold its pixels."
+          "description": "A quantity the account holds: only a reading, a region the kernel reads as a number at run time, may read there, and no scene may hold its pixels."
         }
       }
     },

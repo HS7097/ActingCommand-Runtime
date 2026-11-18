@@ -21,11 +21,14 @@
 // - `priv1_a_whole_frame_an_unbounded_region_and_an_undeclared_base_are_each_a_finding` (5).
 // - `priv1_what_a_rectangle_cannot_see_is_counted_by_kind` (6).
 // - `priv1_a_reading_and_a_zones_kind_are_reported_as_facts` (7, amendment 1).
-// - `priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region` (8, fix round 1):
-//   one region per source of a reading marked, a target of no source not.
+// - `priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region` (8, fix round 1;
+//   fix round 2, one meaning: a region the kernel reads as a number at run time): one region per
+//   source of a reading marked, a target of no source not, a shared read by what it serves.
 // - `priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it` (9, fix round 1).
 // - `priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not` (10, fix
-//   round 1, after #463 SEL-2L-b).
+//   round 1, after #463 SEL-2L-b; fix round 2: the read a reading, its rows confined to the band).
+// - `priv1_a_region_is_compared_by_its_reach_and_found_with_both_rectangles` (11, fix round 2).
+// - `priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to` (12, fix round 2).
 
 use crate::recording::cases::{self, Patch, read_regions, scene_of};
 use crate::recording::frames::decode_frame;
@@ -43,8 +46,8 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_resource_tooling::{
     PRIVACY_ZONES_FILE, PrivacyBase, PrivacyCase, PrivacyDeclaration, PrivacyExemption,
-    PrivacyFinding, PrivacyPlace, PrivacyRectKind, PrivacyUnseen, PrivacyUnseenKind, PrivacyZone,
-    PrivacyZoneKind, PublicPrivacyZones, compare_privacy_zones,
+    PrivacyExtent, PrivacyFinding, PrivacyPlace, PrivacyRectKind, PrivacyUnseen, PrivacyUnseenKind,
+    PrivacyZone, PrivacyZoneKind, PublicPrivacyZones, compare_privacy_zones,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,14 +88,31 @@ const SQUARE: PackRect = rect(0, 0, 16, 16);
 
 // A recognition pack of `targets` and the candidate layouts `layouts`, as its JSON reads.
 fn pack(targets: Value, layouts: Value) -> RecognitionPack {
+    sampled_pack(targets, layouts, json!({}))
+}
+
+// Fix round 2: a recognition pack of `targets`, the candidate layouts `layouts` and the target
+// consensus `consensus` (`target_consensus`, by target id), as its JSON reads.
+fn sampled_pack(targets: Value, layouts: Value, consensus: Value) -> RecognitionPack {
     serde_json::from_value(json!({
         "schema_version": "0.7",
         "game": "neutral",
         "coordinate_space": {"width": WIDTH, "height": HEIGHT},
         "targets": targets,
-        "candidate_layouts": layouts
+        "candidate_layouts": layouts,
+        "target_consensus": consensus
     }))
     .expect("a recognition pack")
+}
+
+// Fix round 2: a feature's consensus whose samples, all on the current frame, read the region
+// moved by each of `shifts`; one of them is enough.
+fn feature_consensus(shifts: &[(i16, i16)]) -> Value {
+    let samples = shifts
+        .iter()
+        .map(|(dx, dy)| json!({"dx": dx, "dy": dy}))
+        .collect::<Vec<_>>();
+    json!({"samples": samples, "aggregate": {"kind": "k_of_n", "k": 1}})
 }
 
 fn color(id: &str, area: PackRect) -> Value {
@@ -232,8 +252,7 @@ fn select_layout(
     )
 }
 
-// The JSON of a resource reading `id` of the OCR target `target`, as a task's `resource_readings`
-// declares it.
+// The JSON of a mark `id` of the OCR target `target`, as a task's `resource_readings` declares it.
 fn reading_json(id: &str, target: &str) -> Value {
     json!({
         "id": id,
@@ -248,7 +267,7 @@ fn reading_json(id: &str, target: &str) -> Value {
 }
 
 fn reading(id: &str, target: &str) -> ResourceReadingDeclaration {
-    serde_json::from_value(reading_json(id, target)).expect("a resource reading")
+    serde_json::from_value(reading_json(id, target)).expect("a mark")
 }
 
 // An OCR field `id` of the group `row` read from `target`, of the type `value`.
@@ -257,7 +276,8 @@ fn field(id: &str, target: &str, value: Value) -> Value {
            "trim": "whitespace_v1", "value": value})
 }
 
-// A region of the one list.
+// A region of the one list that no declared shift moves: a fixed rectangle's reach is the rectangle
+// itself (fix round 2), and it is confined to no bound.
 fn read_region(
     target: &str,
     kind: PackReadKind,
@@ -269,8 +289,28 @@ fn read_region(
         target: target.to_owned(),
         kind,
         area,
+        reach: match area {
+            PackReadArea::Rect(fixed) => Some(fixed),
+            PackReadArea::FullFrame | PackReadArea::Unbounded => None,
+        },
+        bound: None,
         reading,
         layout: layout.map(str::to_owned),
+    }
+}
+
+// Fix round 2: a read of the `repeated_anchor` layout `layout` with no fixed rectangle, confined to
+// `bound` when it is given.
+fn row_region(
+    target: &str,
+    kind: PackReadKind,
+    bound: Option<PackRect>,
+    reading: bool,
+    layout: &str,
+) -> PackReadRegion {
+    PackReadRegion {
+        bound,
+        ..read_region(target, kind, PackReadArea::Unbounded, reading, Some(layout))
     }
 }
 
@@ -326,7 +366,8 @@ fn layout_region(
     }
 }
 
-// The finding that `place`, at `area`, meets the zone `id` of `kind` at `zone_rect`.
+// The finding that `place`, at `area`, meets the zone `id` of `kind` at `zone_rect`; `area` is
+// where the place reads, which no declared shift moves (fix round 2: its extent is the area).
 fn met(
     place: PrivacyPlace,
     area: PackRect,
@@ -334,9 +375,22 @@ fn met(
     kind: PrivacyZoneKind,
     zone_rect: PackRect,
 ) -> PrivacyFinding {
+    met_by(place, area, PrivacyExtent::Area, (id, kind, zone_rect))
+}
+
+// Fix round 2: the finding that `place`, by the rectangle `compared` of the extent `extent`, meets
+// the zone `zone`, its id, kind and rectangle.
+fn met_by(
+    place: PrivacyPlace,
+    compared: PackRect,
+    extent: PrivacyExtent,
+    zone: (&str, PrivacyZoneKind, PackRect),
+) -> PrivacyFinding {
+    let (id, kind, zone_rect) = zone;
     PrivacyFinding::ZoneMet {
         place,
-        rect: area,
+        rect: compared,
+        extent,
         zone_id: id.to_owned(),
         zone_kind: kind,
         zone_rect,
@@ -779,7 +833,10 @@ fn priv1_the_scene_of_the_s210_fixture_and_of_every_kind_is_byte_for_byte_as_bef
     assert_scene_as_before("every kind", &every, &textured);
     // The list in the pack's order: each target's own regions, then each layout's reads; no press
     // box. The quantity column is a reading wherever it is read, the layouts' reads name their
-    // layout, and the scene pastes none of them.
+    // layout, and the scene pastes none of them. Fix round 2: no region declares a shift, so each
+    // fixed rectangle's reach is the rectangle; the select's shared read gives its text to the
+    // quantity column and is a reading; the rows' read is confined to the whole base (the anchor is
+    // searched at its own size, the region lies inside the instance's rectangle, no band declared).
     let at = PackReadArea::Rect;
     assert_eq!(
         every.reads(&PackReadingDeclarations::default()).regions,
@@ -865,7 +922,7 @@ fn priv1_the_scene_of_the_s210_fixture_and_of_every_kind_is_byte_for_byte_as_bef
                 "select/slots",
                 PackReadKind::SharedOcr,
                 at(rect(96, 56, 60, 30)),
-                false,
+                true,
                 Some("select/slots")
             ),
             read_region(
@@ -875,12 +932,12 @@ fn priv1_the_scene_of_the_s210_fixture_and_of_every_kind_is_byte_for_byte_as_bef
                 false,
                 Some("select/slots")
             ),
-            read_region(
+            row_region(
                 "row/value",
                 PackReadKind::SelectQuantity,
-                PackReadArea::Unbounded,
+                Some(rect(0, 0, 160, 90)),
                 true,
-                Some("rows")
+                "rows"
             ),
         ]
     );
@@ -1157,8 +1214,8 @@ fn priv1_what_a_rectangle_cannot_see_is_counted_by_kind() {
     );
 }
 
-// Amendment 1's tests: a region whose target a resource reading of the package names is marked a
-// reading in the one list. In one `value` zone, a reading's region and a region that is no reading
+// Amendment 1's tests: a region whose target a mark of the package (`resource_readings`) names is
+// marked a reading in the one list. In one `value` zone, a reading's region and a region that is no reading
 // are both reported, each with its facts; a reading's region in an `identity` zone (a zone without
 // `kind`) is reported too. The comparison decides nothing of them.
 #[test]
@@ -1235,16 +1292,19 @@ fn priv1_a_reading_and_a_zones_kind_are_reported_as_facts() {
     assert_eq!(place.rect_kind(), PrivacyRectKind::Ocr);
 }
 
-// Fix round 1, the review's must-change 2: every place whose recognised value the kernel
-// publishes as, or into, a fact of the account marks its target's regions a reading, from
-// the members of the entry task as `task.json` writes them: a mark's target (`resource_readings`),
-// an adjustment's amount (`resource_adjustments`; an adjustment without amount names no target), the
-// integer column of the layout a `read_list` step reads (its `ocr_integer` feature, read at an
-// offset from the anchor's match: both its own region and the layout's read), a select's quantity
-// column (a `fixed_slots` slot's target of an `ocr_integer` feature, of kind `select_quantity`), and
-// a field list's integer column (`field_lists`, the `unsigned_integer` field of its group in
-// `post_admission_ocr`). Not marked: a target of no source, a list's key (the identity feature, the
-// key field) and a field list's string column.
+// Fix round 1, the review's must-change 2, and fix round 2, the one meaning of a reading (a region
+// the kernel reads as a number at run time, whether or not the number is published as a fact):
+// every place where the kernel turns a recognised text into a number marks its target's regions a
+// reading, from the members of the entry task as `task.json` writes them and from the pack: a
+// mark's target (`resource_readings`), an adjustment's amount (`resource_adjustments`; an
+// adjustment without amount names no target), the integer column of the layout a `read_list` step
+// reads (its `ocr_integer` feature, read at an offset from the anchor's match: both its own region
+// and the layout's read), a select's quantity column (a `fixed_slots` slot's target of an
+// `ocr_integer` feature, of kind `select_quantity`, read only to choose), every `unsigned_integer`
+// field of `post_admission_ocr`, in a field list or not, and both sides of a value test. Not marked:
+// a target of no source, a list's key (the identity feature, the key field), a dictionary field,
+// and a select's shared read whose region holds the name alone, so that the quantity column reads
+// on its own: it gives its text to no reading target.
 #[test]
 fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() {
     let package = pack(
@@ -1264,7 +1324,17 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
             ocr("slot/0/count", json!(rect(100, 72, 20, 10)), &[]),
             ocr("field/name", json!(rect(70, 20, 40, 10)), &[]),
             ocr("field/count", json!(rect(70, 32, 20, 10)), &[]),
-            ocr("field/kind", json!(rect(70, 44, 40, 10)), &[])
+            ocr("field/kind", json!(rect(70, 44, 40, 10)), &[]),
+            ocr("field/level", json!(rect(120, 20, 20, 10)), &[]),
+            ocr("test/need", json!(rect(120, 32, 20, 10)), &[]),
+            ocr("test/have", json!(rect(120, 44, 20, 10)), &[]),
+            json!({"type": "value_test", "id": "check/enough",
+                   "left": {"target_id": "test/need", "trim": "whitespace_v1",
+                            "value": {"type": "unsigned_integer", "min": 0, "max": 999}},
+                   "op": "le",
+                   "right": {"target_id": "test/have", "trim": "whitespace_v1",
+                             "value": {"type": "unsigned_integer", "min": 0, "max": 999},
+                             "mul": 1, "add": 0}})
         ]),
         json!([
             anchored_layout(
@@ -1289,7 +1359,7 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
                     rect(100, 60, 40, 24),
                     json!({"name": "slot/0/name", "count": "slot/0/count"})
                 )],
-                None
+                Some(rect(100, 60, 40, 12))
             )
         ]),
     );
@@ -1310,7 +1380,9 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
                 field("name", "field/name", dictionary("dictionaries/names.json")),
                 field("amount", "field/count",
                       json!({"type": "unsigned_integer", "min": 0, "max": 9999})),
-                field("kind", "field/kind", dictionary("dictionaries/kinds.json"))
+                field("kind", "field/kind", dictionary("dictionaries/kinds.json")),
+                field("level", "field/level",
+                      json!({"type": "unsigned_integer", "min": 0, "max": 99}))
             ],
             "limits": {"max_frames": 8, "max_items": 8, "max_string_bytes": 64,
                        "max_total_bytes": 4096, "max_truth_entries": 8},
@@ -1332,7 +1404,10 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
             "text/amount",
             "list/count",
             "slot/0/count",
-            "field/count"
+            "field/count",
+            "field/level",
+            "test/need",
+            "test/have"
         ]
         .into_iter()
         .map(str::to_owned)
@@ -1362,6 +1437,9 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
             ("field/name", PackReadKind::Ocr, None, false),
             ("field/count", PackReadKind::Ocr, None, true),
             ("field/kind", PackReadKind::Ocr, None, false),
+            ("field/level", PackReadKind::Ocr, None, true),
+            ("test/need", PackReadKind::Ocr, None, true),
+            ("test/have", PackReadKind::Ocr, None, true),
             (
                 "list/name",
                 PackReadKind::SelectName,
@@ -1374,15 +1452,39 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
                 Some("list/rows"),
                 true
             ),
+            (
+                "select/slots",
+                PackReadKind::SharedOcr,
+                Some("select/slots"),
+                false
+            ),
         ]
     );
-    // A task that declares none of them marks only what the pack's layouts read as an integer.
+    // A task that declares none of them marks what the pack itself reads as a number: its layouts'
+    // integer features and its value test's sides.
     assert_eq!(
         package.reading_targets(&PackReadingDeclarations::default()),
-        ["list/count", "slot/0/count"]
+        ["list/count", "slot/0/count", "test/need", "test/have"]
             .into_iter()
             .map(str::to_owned)
             .collect::<BTreeSet<_>>()
+    );
+    // The same select's shared read over the name and the quantity column gives its text to the
+    // column, and is a reading.
+    let mut covering = package.clone();
+    covering.candidate_layouts[1]
+        .shared_ocr
+        .as_mut()
+        .expect("the select's shared read")
+        .region = PackRegion::Rect(rect(100, 60, 40, 24));
+    assert_eq!(
+        covering
+            .reads(&PackReadingDeclarations::default())
+            .regions
+            .iter()
+            .find(|region| region.kind == PackReadKind::SharedOcr)
+            .map(|region| region.reading),
+        Some(true)
     );
 }
 
@@ -1391,9 +1493,10 @@ fn priv1_every_place_the_kernel_reads_a_value_of_the_account_marks_its_region() 
 // `fixed_slots` layout the list gives one region per slot at that rectangle (a template's search
 // area, a colour probe's region), which the comparison finds in a zone with its layout; in a
 // `repeated_anchor` layout the anchor's match places it, known only on a frame: the list gives a
-// region with no fixed rectangle, which the comparison reports as unbounded. The target's own
-// region stays in the list, and the scene pastes exactly what the old function pasted: no read of
-// a layout.
+// region with no fixed rectangle (fix round 2: confined to the layout's readable band, here the
+// whole base, as its anchor is searched at its own size and the region lies inside the instance's
+// rectangle), which the comparison compares by that bound. The target's own region stays in the
+// list, and the scene pastes exactly what the old function pasted: no read of a layout.
 #[test]
 fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
     let package = pack(
@@ -1494,12 +1597,12 @@ fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
                 false,
                 Some("select/slots")
             ),
-            read_region(
+            row_region(
                 "row/value",
                 PackReadKind::SelectQuantity,
-                PackReadArea::Unbounded,
+                Some(rect(0, 0, 160, 90)),
                 true,
-                Some("rows")
+                "rows"
             ),
         ]
     );
@@ -1521,9 +1624,12 @@ fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
                 PrivacyZoneKind::Identity,
                 zone_rect
             ),
-            PrivacyFinding::RegionUnbounded {
-                place: layout_region("row/value", PrivacyRectKind::SelectQuantity, true, "rows"),
-            },
+            met_by(
+                layout_region("row/value", PrivacyRectKind::SelectQuantity, true, "rows"),
+                rect(0, 0, 160, 90),
+                PrivacyExtent::Bound,
+                ("z_name", PrivacyZoneKind::Identity, zone_rect)
+            ),
         ]
     );
     // The scene pastes the targets' own regions, as the old function did, and no read of a layout.
@@ -1546,10 +1652,12 @@ fn priv1_a_feature_read_at_an_offset_is_listed_where_the_kernel_reads_it() {
 // Fix round 1, the coordinator's addition after #463 SEL-2L-b (register §1.480), which lets a
 // `repeated_anchor` layout declare a shared read over its readable band: the list gives that
 // read's declared region as the layout's `shared_ocr` read, a fixed rectangle, as a `fixed_slots`
-// layout's, which the comparison finds in a zone with its layout; the rows' names and quantities
-// the layout reads at an offset from the anchor's match stay without a fixed rectangle, reported
-// unbounded, the quantity a reading. The scene pastes the targets' own regions only, as the old
-// function did.
+// layout's, which the comparison finds in a zone with its layout (fix round 2: it gives its text to
+// the quantity column, so it is a reading); the rows' names and quantities the layout reads at an
+// offset from the anchor's match stay without a fixed rectangle (fix round 2: confined to the
+// readable band, as the anchor is searched at its own size and each row lies inside the instance's
+// rectangle, and found in the zone by that band), the quantity a reading. The scene pastes the
+// targets' own regions only, as the old function did.
 #[test]
 fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_are_not() {
     let band = rect(0, 20, 160, 60);
@@ -1605,22 +1713,22 @@ fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_ar
                 "rows",
                 PackReadKind::SharedOcr,
                 PackReadArea::Rect(band),
-                false,
-                Some("rows")
-            ),
-            read_region(
-                "row/name",
-                PackReadKind::SelectName,
-                PackReadArea::Unbounded,
-                false,
-                Some("rows")
-            ),
-            read_region(
-                "row/count",
-                PackReadKind::SelectQuantity,
-                PackReadArea::Unbounded,
                 true,
                 Some("rows")
+            ),
+            row_region(
+                "row/name",
+                PackReadKind::SelectName,
+                Some(band),
+                false,
+                "rows"
+            ),
+            row_region(
+                "row/count",
+                PackReadKind::SelectQuantity,
+                Some(band),
+                true,
+                "rows"
             ),
         ]
     );
@@ -1629,6 +1737,7 @@ fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_ar
         "z_stock", "value", stock_zone
     )])));
     let compared = compare_privacy_zones("neutral.test.neutral_task", &reads, &[], BASE, &zones);
+    let stock = ("z_stock", PrivacyZoneKind::Value, stock_zone);
     assert_eq!(
         compared.findings,
         vec![
@@ -1640,18 +1749,24 @@ fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_ar
                 stock_zone
             ),
             met(
-                layout_region("rows", PrivacyRectKind::SharedOcr, false, "rows"),
+                layout_region("rows", PrivacyRectKind::SharedOcr, true, "rows"),
                 band,
                 "z_stock",
                 PrivacyZoneKind::Value,
                 stock_zone
             ),
-            PrivacyFinding::RegionUnbounded {
-                place: layout_region("row/name", PrivacyRectKind::SelectName, false, "rows"),
-            },
-            PrivacyFinding::RegionUnbounded {
-                place: layout_region("row/count", PrivacyRectKind::SelectQuantity, true, "rows"),
-            },
+            met_by(
+                layout_region("row/name", PrivacyRectKind::SelectName, false, "rows"),
+                band,
+                PrivacyExtent::Bound,
+                stock
+            ),
+            met_by(
+                layout_region("row/count", PrivacyRectKind::SelectQuantity, true, "rows"),
+                band,
+                PrivacyExtent::Bound,
+                stock
+            ),
         ]
     );
     // The scene pastes the targets' own regions, as the old function did: no shared read, no row.
@@ -1666,4 +1781,347 @@ fn priv1_a_repeated_anchor_layouts_shared_read_is_a_fixed_region_and_its_rows_ar
         read_regions(&package, SIZE).expect("the scene's patches"),
         patches(&pasted)
     );
+}
+
+// Fix round 2, where a read can reach: a sample of a target consensus or of a feature's consensus
+// reads the region moved by its jitter, so each fixed rectangle of the list carries its reach, the
+// smallest rectangle that holds it under every shift the pack declares for it: an OCR target's
+// region moved 8 to the right by its target consensus, a template's search area moved 8 up by its
+// own (its colour check never moved), a select's quantity column moved 8 down by its feature's
+// consensus, and a dot a `fixed_slots` layout reads at an offset moved 8 to the left by its
+// feature's. Each of these misses its zone by its area and meets it by its reach: found, with both
+// rectangles. A colour probe that declares no consensus is found by its area exactly as before.
+// The scene pastes the areas, as the old function did.
+#[test]
+fn priv1_a_region_is_compared_by_its_reach_and_found_with_both_rectangles() {
+    let mut count = integer_feature("count", None);
+    count["consensus"] = feature_consensus(&[(0, 0), (0, 8)]);
+    let mut dot = passed_feature("dot", "slot/dot", 30, 1);
+    dot["consensus"] = feature_consensus(&[(0, 0), (-8, 0)]);
+    let package = sampled_pack(
+        json!([
+            ocr("text/jittered", json!(rect(40, 40, 20, 10)), &[]),
+            template(
+                "tpl/checked",
+                json!(rect(100, 10, 20, 20)),
+                Some(json!(rect(104, 14, 4, 4))),
+                rect(100, 10, 20, 20)
+            ),
+            color("probe/plain", rect(10, 70, 10, 10)),
+            ocr("slot/0/count", json!(rect(100, 60, 20, 10)), &[]),
+            color("slot/dot", rect(0, 0, 4, 4))
+        ]),
+        json!([slots_layout(
+            "select/slots",
+            json!([count, dot]),
+            &[(rect(100, 56, 50, 30), json!({"count": "slot/0/count"}))],
+            None
+        )]),
+        json!({
+            "text/jittered": {"samples": [{}, {"dx": 8}], "k": 1},
+            "tpl/checked": {"samples": [{}, {"dy": -8}], "k": 1}
+        }),
+    );
+    let at = PackReadArea::Rect;
+    let reads = package.reads(&PackReadingDeclarations::default());
+    assert_eq!(
+        reads.regions,
+        vec![
+            PackReadRegion {
+                reach: Some(rect(40, 40, 28, 10)),
+                ..read_region(
+                    "text/jittered",
+                    PackReadKind::Ocr,
+                    at(rect(40, 40, 20, 10)),
+                    false,
+                    None
+                )
+            },
+            PackReadRegion {
+                reach: Some(rect(100, 2, 20, 28)),
+                ..read_region(
+                    "tpl/checked",
+                    PackReadKind::TemplateSearch,
+                    at(rect(100, 10, 20, 20)),
+                    false,
+                    None
+                )
+            },
+            read_region(
+                "tpl/checked",
+                PackReadKind::ColorCheck,
+                at(rect(104, 14, 4, 4)),
+                false,
+                None
+            ),
+            read_region(
+                "probe/plain",
+                PackReadKind::Color,
+                at(rect(10, 70, 10, 10)),
+                false,
+                None
+            ),
+            PackReadRegion {
+                reach: Some(rect(100, 60, 20, 18)),
+                ..read_region(
+                    "slot/0/count",
+                    PackReadKind::SelectQuantity,
+                    at(rect(100, 60, 20, 10)),
+                    true,
+                    None
+                )
+            },
+            read_region(
+                "slot/dot",
+                PackReadKind::Color,
+                at(rect(0, 0, 4, 4)),
+                false,
+                None
+            ),
+            PackReadRegion {
+                reach: Some(rect(122, 57, 12, 4)),
+                ..read_region(
+                    "slot/dot",
+                    PackReadKind::Color,
+                    at(rect(130, 57, 4, 4)),
+                    false,
+                    Some("select/slots")
+                )
+            },
+        ]
+    );
+    let right = ("z_right", PrivacyZoneKind::Identity, rect(61, 40, 10, 10));
+    let top = ("z_top", PrivacyZoneKind::Value, rect(100, 0, 20, 4));
+    let plain = rect(12, 72, 4, 4);
+    let below = ("z_below", PrivacyZoneKind::Value, rect(100, 75, 10, 5));
+    let left = ("z_dot", PrivacyZoneKind::Identity, rect(124, 57, 4, 4));
+    let zones = public(&zones_at_base(json!([
+        zone(right.0, right.2),
+        zone_of(top.0, "value", top.2),
+        zone("z_plain", plain),
+        zone_of(below.0, "value", below.2),
+        zone(left.0, left.2)
+    ])));
+    let compared = compare_privacy_zones("neutral.test.neutral_task", &reads, &[], BASE, &zones);
+    assert_eq!(
+        compared.findings,
+        vec![
+            met_by(
+                region("text/jittered", PrivacyRectKind::Ocr, false),
+                rect(40, 40, 28, 10),
+                PrivacyExtent::Reach {
+                    area: rect(40, 40, 20, 10)
+                },
+                right
+            ),
+            met_by(
+                region("tpl/checked", PrivacyRectKind::TemplateSearch, false),
+                rect(100, 2, 20, 28),
+                PrivacyExtent::Reach {
+                    area: rect(100, 10, 20, 20)
+                },
+                top
+            ),
+            met(
+                region("probe/plain", PrivacyRectKind::Color, false),
+                rect(10, 70, 10, 10),
+                "z_plain",
+                PrivacyZoneKind::Identity,
+                plain
+            ),
+            met_by(
+                region("slot/0/count", PrivacyRectKind::SelectQuantity, true),
+                rect(100, 60, 20, 18),
+                PrivacyExtent::Reach {
+                    area: rect(100, 60, 20, 10)
+                },
+                below
+            ),
+            met_by(
+                layout_region("slot/dot", PrivacyRectKind::Color, false, "select/slots"),
+                rect(122, 57, 12, 4),
+                PrivacyExtent::Reach {
+                    area: rect(130, 57, 4, 4)
+                },
+                left
+            ),
+        ]
+    );
+    // A scene pastes the areas, as the old function did, never a reach.
+    let textured = |x: u32, y: u32| [u8::try_from(x).expect("x"), u8::try_from(y).expect("y"), 5];
+    assert_scene_as_before("regions with a reach", &package, &textured);
+}
+
+// Fix round 2, where an unbounded read is confined: a feature a `repeated_anchor` layout reads at an
+// offset from its anchor's match has no fixed rectangle, and carries the rectangle the pack confines
+// it to. Four layouts: (a) its anchor searched at its own size and the quantity column, moved by
+// each of its samples (one 4 to the right, to the instance's edge), inside the instance's
+// rectangle: confined to the readable band, which meets a value zone: found by that bound, the
+// region anywhere inside it; (b) the same, whose band misses every zone: not found; (c) an anchor
+// searched at two scales, no shared read: nothing confines the column, still reported unbounded;
+// (d) an anchor searched at two scales whose shared read gives the row's name its text: confined
+// to the shared read's rectangle, found there with the shared read itself. The scene pastes the
+// targets' own regions, as the old function did.
+#[test]
+fn priv1_a_repeated_anchor_read_is_compared_by_the_bound_it_is_confined_to() {
+    let banded = rect(0, 50, 160, 40);
+    let top = rect(0, 0, 160, 20);
+    let middle = rect(0, 22, 160, 26);
+    let rows = |id: &str, anchor: &str, band: Option<PackRect>, feature: Value| {
+        let mut layout = anchored_layout(id, anchor, json!([feature]));
+        if let Some(band) = band {
+            layout["readable_band"] = json!(band);
+        }
+        layout
+    };
+    let mut column = integer_feature("count", Some(("a/count", 40, 1)));
+    column["consensus"] = feature_consensus(&[(0, 0), (4, 0)]);
+    let mut scaled_c = template(
+        "c/anchor",
+        json!(rect(150, 40, 10, 10)),
+        None,
+        rect(150, 40, 10, 10),
+    );
+    scaled_c["scales"] = json!({"factors_milli": [1000, 1500]});
+    let mut scaled_d = template(
+        "d/anchor",
+        json!(rect(140, 40, 10, 10)),
+        None,
+        rect(140, 40, 10, 10),
+    );
+    scaled_d["scales"] = json!({"factors_milli": [500, 1000]});
+    let mut shared = rows(
+        "rows/d",
+        "d/anchor",
+        Some(middle),
+        identity_feature(
+            "name",
+            json!([{"id": "alpha", "aliases": ["ALPHA"]}]),
+            Some(("d/name", 2, 1)),
+        ),
+    );
+    shared["shared_ocr"] = json!({"region": middle, "languages": ["en"], "timeout_ms": 1000,
+                                  "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256,
+                                  "blocks": "detect"});
+    let package = pack(
+        json!([
+            template(
+                "a/anchor",
+                json!(rect(150, 80, 10, 10)),
+                None,
+                rect(150, 80, 10, 10)
+            ),
+            ocr("a/count", json!(rect(0, 0, 16, 10)), &[]),
+            template(
+                "b/anchor",
+                json!(rect(150, 0, 10, 10)),
+                None,
+                rect(150, 0, 10, 10)
+            ),
+            ocr("b/count", json!(rect(0, 0, 16, 10)), &[]),
+            scaled_c,
+            ocr("c/count", json!(rect(0, 0, 16, 10)), &[]),
+            scaled_d,
+            ocr("d/name", json!(rect(0, 0, 30, 10)), &[])
+        ]),
+        json!([
+            rows("rows/a", "a/anchor", Some(banded), column),
+            rows(
+                "rows/b",
+                "b/anchor",
+                Some(top),
+                integer_feature("count", Some(("b/count", 40, 1)))
+            ),
+            rows(
+                "rows/c",
+                "c/anchor",
+                None,
+                integer_feature("count", Some(("c/count", 40, 1)))
+            ),
+            shared
+        ]),
+    );
+    let reads = package.reads(&PackReadingDeclarations::default());
+    assert_eq!(
+        reads
+            .regions
+            .iter()
+            .filter(|region| region.layout.is_some())
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            row_region(
+                "a/count",
+                PackReadKind::SelectQuantity,
+                Some(banded),
+                true,
+                "rows/a"
+            ),
+            row_region(
+                "b/count",
+                PackReadKind::SelectQuantity,
+                Some(top),
+                true,
+                "rows/b"
+            ),
+            row_region(
+                "c/count",
+                PackReadKind::SelectQuantity,
+                None,
+                true,
+                "rows/c"
+            ),
+            read_region(
+                "rows/d",
+                PackReadKind::SharedOcr,
+                PackReadArea::Rect(middle),
+                false,
+                Some("rows/d")
+            ),
+            row_region(
+                "d/name",
+                PackReadKind::SelectName,
+                Some(middle),
+                false,
+                "rows/d"
+            ),
+        ]
+    );
+    let stock = ("z_stock", PrivacyZoneKind::Value, rect(100, 60, 20, 10));
+    let name = ("z_name", PrivacyZoneKind::Identity, rect(0, 30, 20, 10));
+    let zones = public(&zones_at_base(json!([
+        zone_of(stock.0, "value", stock.2),
+        zone(name.0, name.2)
+    ])));
+    let compared = compare_privacy_zones("neutral.test.neutral_task", &reads, &[], BASE, &zones);
+    assert_eq!(
+        compared.findings,
+        vec![
+            met_by(
+                layout_region("a/count", PrivacyRectKind::SelectQuantity, true, "rows/a"),
+                banded,
+                PrivacyExtent::Bound,
+                stock
+            ),
+            PrivacyFinding::RegionUnbounded {
+                place: layout_region("c/count", PrivacyRectKind::SelectQuantity, true, "rows/c"),
+            },
+            met(
+                layout_region("rows/d", PrivacyRectKind::SharedOcr, false, "rows/d"),
+                middle,
+                name.0,
+                name.1,
+                name.2
+            ),
+            met_by(
+                layout_region("d/name", PrivacyRectKind::SelectName, false, "rows/d"),
+                middle,
+                PrivacyExtent::Bound,
+                name
+            ),
+        ]
+    );
+    // A scene pastes the targets' own regions, as the old function did: no read of a layout.
+    let textured = |x: u32, y: u32| [u8::try_from(x).expect("x"), u8::try_from(y).expect("y"), 3];
+    assert_scene_as_before("repeated anchors' reads", &package, &textured);
 }

@@ -39923,7 +39923,7 @@ and restricted (around private information the recognition region and the press 
 different places, and a recognition region holds no account information), for a local one nothing
 of privacy is handled, and the check is one additional step of the public case. Amendment 1, the
 owner's ruling of the same evening: quantities of what the account holds, shown on a screen, are
-private; a package may still read them at run time (a resource reading), but their pixels are
+private; a package may still read them at run time (a reading), but their pixels are
 never stored in a repository. The case of 11-17: a case's scene pastes every region the package's
 targets read, from every case's frame, so the region of one page, cut from another page's frame,
 held that page's private information.
@@ -39961,24 +39961,31 @@ held that page's private information.
   `fixed_slots` layout or (§1.480, #463 SEL-2L-b) a `repeated_anchor` one, whose rows' reads at
   an offset stay without a fixed rectangle. Press boxes are not in it. The scene pastes the regions that name no
   layout, which are exactly what it pasted before, and finds all of a target's regions fixed before
-  it places the first, as before: every scene the Lab builds is byte for byte what it was.
-- *A reading* is a region whose recognised value the package publishes as, or into, a fact of the
-  account (a resource reading, an adjustment's amount, a list's value fields). One function,
-  `RecognitionPack::reading_targets`, collects the reading targets from every place the kernel
-  honours: each mark's `target_id` (`resource_readings`), each adjustment's `amount.target_id`
-  (`resource_adjustments`), the target of each integer feature (`ocr_integer`) of the pack's
-  candidate layouts (a `read_list`'s integer column, a select's quantity column, of kind
-  `select_quantity`), and the target of each `unsigned_integer` field a field list's column names
-  in its group (`field_lists`, `post_admission_ocr`); a list's key and its string and boolean
-  columns are no reading. The entry task's members come from `PackReadingDeclarations::of_task`.
+  it places the first, as before: every scene the Lab builds is byte for byte what it was. Fix
+  round 2: a fixed rectangle carries its reach, and a `repeated_anchor` layout's read at an offset
+  the bound it is confined to, when the pack guarantees one (below); the scene pastes the area.
+- *A reading* (fix round 2, the one meaning) is a region the kernel reads as a number at run time,
+  whether or not the number is published as a fact. One function,
+  `RecognitionPack::reading_targets`, collects the reading targets from every place where the
+  kernel turns a recognised text into a number: each mark's `target_id` (`resource_readings`),
+  each adjustment's `amount.target_id` (`resource_adjustments`), the target of each integer
+  feature (`ocr_integer`) of the pack's candidate layouts (a `read_list`'s integer column, a
+  select's quantity column, of kind `select_quantity`, read only to choose), the target of each
+  `unsigned_integer` field of the entry task's `post_admission_ocr` (`fields_v1`), in a field list
+  or not, and the OCR target of each side of each value test of the pack. A list's key, a name, a
+  dictionary or string field and a boolean column are no reading. A layout's shared read is a
+  reading when it gives its text to a reading target, as the kernel counts the calls it serves
+  (`shared_calls`, now visible to the crate). The entry task's members come from
+  `PackReadingDeclarations::of_task`.
 - *The comparison* `compare_privacy_zones` takes the list, the rectangles of the package's cases
   when the caller has them (a case of another schema counted, not read), the package's base size
   and a public declaration, and answers facts: a base size not declared (no zone compared then);
-  each region or scene rectangle that meets a zone (intersection area above zero; once per zone),
+  each region or scene rectangle that meets a zone (intersection area above zero; once per zone;
+  fix round 2: a region by its reach, a region with no fixed rectangle by its bound),
   with the case when it is a scene's (its id and the rectangle's index, nothing free-form of the
   case), the target, the kind, the layout whose read a region is, both rectangles, the zone's id
   and, amendment 1, its kind and whether the region is a reading; a whole-frame one, named once; a
-  region that is no fixed rectangle. Beside them, what a rectangle cannot see, counted by kind: the
+  region that is no fixed rectangle and that nothing confines. Beside them, what a rectangle cannot see, counted by kind: the
   texts OCR targets expect, the aliases of layouts' identity entries, the cases of another schema.
   It names no pixel and no expected text, blacks nothing out, proposes no other place and decides
   nothing; which finding refuses is the later callers' rule.
@@ -40024,8 +40031,9 @@ press box over a zone (4); a whole-frame region, an unbounded region, an undecla
 counts of what cannot be seen (6); amendment 1's readings in `value` and `identity` zones (7);
 every place of a reading marked, one region per source, a target of no source not (8); a feature
 read at an offset listed where the kernel reads it (9); a `repeated_anchor` layout's shared read a
-fixed rectangle, its rows' reads not (10), as the gate map's comment lists them. No existing test
-changes; none retires; no golden changes.
+fixed rectangle, its rows' reads not (10); fix round 2: a region compared by its reach and found
+with both rectangles (11), a `repeated_anchor` read compared by the bound it is confined to (12),
+as the gate map's comment lists them. No existing test changes; none retires; no golden changes.
 
 **What is not changed.** Any recording's, scene's or generated package's bytes; Runtime admission;
 every interface revision; what `resource verify`, `standard-pack build` and `standard-pack adopt`
@@ -40067,6 +40075,42 @@ to §1.480, each whole; the exec gate map keeps both sides' rows; the Lab's crat
 modules. Since §1.480 a `repeated_anchor` layout may declare a shared read: the list gives its
 declared region as the layout's `shared_ocr` read, a fixed rectangle, as a `fixed_slots`
 layout's, and its rows' reads at an offset without one (test 10).
+
+**Fix round 2** (coordinator work order `rd-1119/brief-463-priv1-fix2.md`, after the second review;
+the facts must be right for the later slices, which rule that in a `value` zone only a reading may
+read and that a scene holds no pixel of a reading). (1) *One meaning of a reading* (the
+coordinator's ruling): a region the kernel reads as a number at run time, whether or not the number
+is published. The definition had said "published as a fact", while a select's quantity column, used
+only to choose, was counted, a value test's sides were not, and a shared read that gives its text to
+a quantity column was never marked. Now the reading targets also take every `unsigned_integer`
+field of `post_admission_ocr` (`fields_v1`), in a field list or not (`PackReadingDeclarations`
+keeps the fields and no longer the field lists), and both sides of each value test; a layout's
+shared read is a reading when the calls it serves (`shared_calls`, made visible to the crate, the
+one change to `candidate_layout.rs`) read a reading target. The kernel turns a recognised text into
+a number in exactly these five places (`ResourceReadingDeclaration::parse_parts`,
+`judge_resource_adjustment_amount`, `CandidateIntegerDeclaration::parse`, `parse_ocr_field`,
+`read_value_operand`); no other. The words are "a reading" everywhere (the `value` zone's texts and
+`privacy_zone_met`'s handling). (2) *Where a read can reach*: a target's consensus and a feature's
+read the region moved by each sample's jitter (at most 8 pixels on each axis), which admission
+checks only against the coordinate space, a slot or an instance's rectangle. Each fixed rectangle of
+the list carries its `reach`, the smallest rectangle that holds it under every shift the pack
+declares for it (a target's own region: its target consensus and the consensus of a feature that
+reads it in a slot; a `fixed_slots` layout's read at an offset: its feature's consensus; a colour
+check, an NN region and a shared read are never moved). The comparison compares the reach; its
+`zone_met` says what the rectangle is (`PrivacyExtent`: the area, the reach beside the area when
+they differ, or a bound); a whole-frame finding is still the area's. The scene builder is not
+touched and pastes the area. (3) *Where an unbounded read is confined*: a feature a
+`repeated_anchor` layout reads at an offset carries the rectangle it is confined to: the readable
+band (the coordinate space without one) when the anchor is searched at its own size only and the
+feature's region, moved by each sample, lies inside `instance_rect` (the kernel reads only an
+instance inside the band; admission and the list check the region inside the rectangle, a shift
+at the band's edge included); else the shared read's rectangle when the read gives the row its text
+(the row reads no pixel of its own); else nothing, and `privacy_region_unbounded` is left for such a
+region alone, with `template_relative` and keyword regions. The comparison compares a bound and says
+the region may lie anywhere inside it. Tests 2, 8, 9 and 10 are adapted (the shared reads they
+list are readings where they serve a quantity, the rows' reads are confined, test 8 takes a value
+test and an integer field outside any list); 11 and 12 are added; no scene changes (test 2, and
+the scene checks of 11 and 12, against the function the list replaced).
 
 ### 1.479 Slice #463 SEL-2L-a (0.12.74): a select's names may be read by detecting blocks (fixed slots), and the refusal counts marks (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: the cards of a shop carry names of one or two lines in one title box, which a select read as one block each; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-sel2l-a-fixed-blocks.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slices S-count and S-fixed, on main `a8d0aa43`; finished after a stop at a safe point under `rd-1118/brief-463-sel2l-a-finish.md`, merged with main `5d0c8c3e`)
 

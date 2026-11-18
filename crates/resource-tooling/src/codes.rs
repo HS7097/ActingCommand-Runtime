@@ -248,14 +248,16 @@ actingcommand_contract::outcome_codes! {
         // of `standard-pack adopt` (later slices of #463 PRIV) answer them from the comparison's
         // findings (`privacy_zones`).
         /// #463 PRIV-1, declared ahead: a region of the package, or a rectangle of a case's scene,
-        /// meets a sensitive zone (keys `package_id`, `privacy_rect_kind`, `privacy_zone_id`,
+        /// meets a sensitive zone (a region by its reach, or by the bound a region with no fixed
+        /// rectangle is confined to; keys `package_id`, `privacy_rect_kind`, `privacy_zone_id`,
         /// `privacy_zone_kind`, `privacy_reading`; optional `target_id`, `path`, `json_pointer`).
         PrivacyZoneMet => "privacy_zone_met": error / none,
         /// #463 PRIV-1, declared ahead: a region or a scene's rectangle covers the whole base
         /// (keys `package_id`, `privacy_rect_kind`; optional `target_id`, `path`, `json_pointer`).
         PrivacyWholeFrame => "privacy_whole_frame": error / none,
-        /// #463 PRIV-1, declared ahead: a region is no fixed rectangle (keys `package_id`,
-        /// `privacy_rect_kind`, `target_id`; optional `path`, `json_pointer`).
+        /// #463 PRIV-1, declared ahead: a region is no fixed rectangle and nothing confines it to
+        /// one (keys `package_id`, `privacy_rect_kind`, `target_id`; optional `path`,
+        /// `json_pointer`).
         PrivacyRegionUnbounded => "privacy_region_unbounded": error / none,
         /// #463 PRIV-1, declared ahead: the package's base size is no base of the root's
         /// declaration (keys `package_id`, `base_width`, `base_height`).
@@ -313,8 +315,8 @@ actingcommand_contract::outcome_vocabulary! {
         /// Who the account is (a nickname, an account number, a server name): nothing may read
         /// there. A zone without `kind` is of this kind.
         Identity => "identity",
-        /// A quantity the account holds: only a resource reading may read there, and no scene may
-        /// hold its pixels.
+        /// A quantity the account holds: only a reading (a region the kernel reads as a number at
+        /// run time) may read there, and no scene may hold its pixels.
         Value => "value",
     }
 }

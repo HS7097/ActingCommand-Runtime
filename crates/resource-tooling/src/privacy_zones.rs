@@ -17,8 +17,10 @@
 //! - **The comparison** ([`compare_privacy_zones`]) takes the one list of a package's read regions
 //!   (`RecognitionPack::reads`), the rectangles of its regression cases' scenes when the caller has
 //!   them, the package's base size and a public declaration, and answers what it found as facts:
-//!   each region or rectangle that meets a zone (their intersection's area is above zero), a
-//!   whole-frame one, a region that is no fixed rectangle, a base size the declaration does not
+//!   each region or rectangle that meets a zone (their intersection's area is above zero; fix
+//!   round 2: of a region, its reach, where every shift the pack declares for it can take it, or
+//!   the bound a region with no fixed rectangle is confined to, anywhere inside which it may lie),
+//!   a whole-frame one, a region that nothing confines, a base size the declaration does not
 //!   list; and counts what a rectangle cannot show. A finding names a case by its id, never by
 //!   anything the case writes. It names no pixel and no expected text, blacks nothing out,
 //!   proposes no other place and decides nothing: which finding refuses is its caller's (later
@@ -507,25 +509,44 @@ impl PrivacyPlace {
     }
 }
 
+/// Fix round 2: what the rectangle a zone-met finding compared is of its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyExtent {
+    /// Where the place reads: a scene's rectangle, or the area of a region whose reach is its area
+    /// (the pack declares no shift that moves it).
+    Area,
+    /// The reach of a region whose area, `area`, a declared shift moves: the smallest rectangle
+    /// that holds the area under every shift the pack declares for it (a sample's jitter).
+    Reach { area: PackRect },
+    /// The bound of a region with no fixed rectangle (`PackReadRegion::bound`): the region may lie
+    /// anywhere inside it.
+    Bound,
+}
+
 /// One fact the comparison found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrivacyFinding {
-    /// A region or a scene's rectangle, `rect`, meets the zone `zone_id` of kind `zone_kind` at
-    /// `zone_rect`: their intersection's area is above zero (rectangles that only touch at an edge
-    /// do not meet). One finding per zone met.
+    /// A region or a scene's rectangle, by its rectangle `rect`, meets the zone `zone_id` of kind
+    /// `zone_kind` at `zone_rect`: their intersection's area is above zero (rectangles that only
+    /// touch at an edge do not meet). One finding per zone met. Fix round 2: `extent` says what
+    /// `rect` is of the place: a scene's rectangle or a region's area; a region's reach, beside its
+    /// area when they differ; or the bound of a region with no fixed rectangle, which may lie
+    /// anywhere inside it.
     ZoneMet {
         place: PrivacyPlace,
         rect: PackRect,
+        extent: PrivacyExtent,
         zone_id: String,
         zone_kind: PrivacyZoneKind,
         zone_rect: PackRect,
     },
-    /// A region or a scene's rectangle covers the whole base (a region `full_frame` too): it meets
-    /// every zone there is, and is named once, as this, not once per zone.
+    /// A region's area or a scene's rectangle covers the whole base (a region `full_frame` too):
+    /// it meets every zone there is, and is named once, as this, not once per zone.
     WholeFrame { place: PrivacyPlace },
     /// A region that is no fixed rectangle (placed relative to a match, a feature a
     /// `repeated_anchor` layout reads at an offset from its anchor's match, or a keyword other
-    /// than `full_frame`): where it reads is not known before a run.
+    /// than `full_frame`) and that nothing confines (fix round 2: no `bound`): where it reads is
+    /// not known before a run.
     RegionUnbounded { place: PrivacyPlace },
     /// The package's base size is no base of the declaration: no zone is compared.
     BaseUndeclared { width: u32, height: u32 },
@@ -566,7 +587,11 @@ pub struct PrivacyComparison {
 /// #463 PRIV-1: compares the read regions `reads` of the package `package_id` and the scenes of
 /// its regression cases `cases` (empty when the caller has none) with the zones of the public
 /// declaration `zones` for the package's base size `base` (the module text). Every region and
-/// every rectangle is compared; nothing is left out for a finding before it.
+/// every rectangle is compared; nothing is left out for a finding before it. Fix round 2: a region
+/// whose area is a fixed rectangle is a whole-frame finding when its area covers the base, else
+/// its reach (its area when the list gives none) is compared with each zone; a region with no
+/// fixed rectangle is compared by its bound when the list gives one, and is unbounded otherwise;
+/// a scene's rectangle is compared as it is, since a scene pastes a region's area.
 pub fn compare_privacy_zones(
     package_id: &str,
     reads: &PackReads,
@@ -595,10 +620,32 @@ pub fn compare_privacy_zones(
             reading: region.reading,
             layout: region.layout.clone(),
         };
-        match region.area {
-            PackReadArea::Rect(rect) => compare(place, rect, base, base_zones, &mut findings),
-            PackReadArea::FullFrame => findings.push(PrivacyFinding::WholeFrame { place }),
-            PackReadArea::Unbounded => findings.push(PrivacyFinding::RegionUnbounded { place }),
+        match (region.area, region.bound) {
+            (PackReadArea::Rect(area), _) if covers_base(area, base) => {
+                findings.push(PrivacyFinding::WholeFrame { place });
+            }
+            (PackReadArea::Rect(area), _) => {
+                let reach = region.reach.unwrap_or(area);
+                let extent = if reach == area {
+                    PrivacyExtent::Area
+                } else {
+                    PrivacyExtent::Reach { area }
+                };
+                meet(place, reach, extent, base_zones, &mut findings);
+            }
+            (PackReadArea::FullFrame, _) => findings.push(PrivacyFinding::WholeFrame { place }),
+            (PackReadArea::Unbounded, Some(bound)) => {
+                meet(
+                    place,
+                    bound,
+                    PrivacyExtent::Bound,
+                    base_zones,
+                    &mut findings,
+                );
+            }
+            (PackReadArea::Unbounded, None) => {
+                findings.push(PrivacyFinding::RegionUnbounded { place });
+            }
         }
     }
     let mut cases_other_schema = 0;
@@ -610,7 +657,11 @@ pub fn compare_privacy_zones(
                         case: case.clone(),
                         index,
                     };
-                    compare(place, *rect, base, base_zones, &mut findings);
+                    if covers_base(*rect, base) {
+                        findings.push(PrivacyFinding::WholeFrame { place });
+                    } else {
+                        meet(place, *rect, PrivacyExtent::Area, base_zones, &mut findings);
+                    }
                 }
             }
             PrivacyCase::OtherSchema { .. } => cases_other_schema += 1,
@@ -627,22 +678,20 @@ pub fn compare_privacy_zones(
     }
 }
 
-/// The findings of the rectangle `rect` at `place`: the whole base, or each zone it meets.
-fn compare(
+/// The findings of the rectangle `rect` of `place`, which `extent` says what it is of the place:
+/// one for each zone it meets.
+fn meet(
     place: PrivacyPlace,
     rect: PackRect,
-    base: PackCoordinateSpace,
+    extent: PrivacyExtent,
     zones: &[PrivacyZone],
     findings: &mut Vec<PrivacyFinding>,
 ) {
-    if covers_base(rect, base) {
-        findings.push(PrivacyFinding::WholeFrame { place });
-        return;
-    }
     for zone in zones.iter().filter(|zone| meets(rect, zone.rect)) {
         findings.push(PrivacyFinding::ZoneMet {
             place: place.clone(),
             rect,
+            extent,
             zone_id: zone.id.clone(),
             zone_kind: zone.kind,
             zone_rect: zone.rect,
