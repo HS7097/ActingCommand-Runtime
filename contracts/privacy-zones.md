@@ -136,8 +136,14 @@ it reads at an offset:
   a layout reads itself, which a scene never pasted (a recording generates no feature read at an
   offset, and a select's shared read, #463 SEL-2L-a, only beside the slot targets the scene
   pastes): every scene the Lab builds is byte for byte what it was before this list moved into the
-  recognition pack. It pastes a region's area, never its reach or its bound. The scene asks for no
-  reading.
+  recognition pack. It pastes a region's area, never its reach or its bound. That is the scene of
+  a local recording, which asks for no reading. #463 PRIV-3: a public recording's scene asks the
+  list with the reading declarations of the generated entry task and pastes no region that is a
+  reading: after the other regions are pasted, it fills with the canvas colour each reading's
+  reach (a fixed rectangle), the bound a reading with no fixed rectangle is confined to, and a
+  layout's shared read that is a reading as a whole; a reading nothing confines, or confined only
+  to the whole frame, gives no scene and the recording cannot be public
+  ([lab-recording.md](lab-recording.md), "Regression cases written with the package").
 
 ### A reading
 

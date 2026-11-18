@@ -40880,6 +40880,107 @@ before going back. Rollback: before going back to a build before 0.12.74, unbind
 with 0.12.74's Lab (`devices unbind`); an earlier Runtime reads a version-2 file as malformed and
 refuses to start while a handset is configured.
 
+### 1.483 Slice #463 PRIV-3 (0.12.74): a recording has a destination; a public recording's scenes hold no value reading (board #463, work order #482; the destination's two meanings and the privacy of quantities shown on a screen are the owner's rulings of 11-18, every other rule below is the coordinator's)
+
+This section takes 1.483. It ships in 0.12.74. [lab-recording.md](lab-recording.md) ("A
+recording's destination", "Regression cases written with the package") is the contract; the one
+list of a package's read regions it uses is [privacy-zones.md](privacy-zones.md)'s (§1.478).
+
+- *The destination.* `record start --destination <local|public>` (MCP `destination`, the closed
+  list `enum:local|public` of the operation table; absent `public`) is stored on the recording as
+  the optional member `destination`, which a public recording does not write
+  (`skip_serializing_if`): a recording made before this slice loads as public and serialises byte
+  for byte. `record start`, `record status` and `record stop` (`lab.destination`) answer it in its
+  word. `record stop --destination`, on an open or a stopped recording, changes it when its word
+  differs and generates again, as an amendment after the stop does (`amended_at_unix_ms`); the
+  same word, or none, changes nothing. A refused stop writes nothing.
+- *In the package.* A local recording's entry task carries `provenance.destination: "local"`; a
+  public one's carries no mark (no mark means public). Admission asks of `provenance` only that it
+  is an object or null (`crates/pack-containment/src/source/declarations.rs`, the bundle's
+  `provenance`), so no `package` revision moves.
+- *The scenes.* Of a public recording, `cases::scene_regions` asks the one list with the generated
+  entry task's reading declarations (`PackReadingDeclarations::of_task`) and withholds each
+  reading: a fixed rectangle by its `reach`, a confined one by its `bound`, a layout's shared read
+  that is a reading as a whole; each withheld rectangle is filled with the canvas colour after
+  every patch is pasted. A reading nothing confines, or whose bound covers the frame, refuses the
+  self-check `cases` with `record_case_reading_unbounded`. `scene_construction` lists only what is
+  pasted and gains no member. A local recording's scenes, and a public recording's that reads no
+  value, are byte for byte as before.
+- *A value read in a page or a guard* (amendment 1, `rd-1119/brief-463-priv3-amend1.md`; the owner:
+  a package may read a quantity at run time, only its pixels may not be stored). A target needs a
+  withheld reading by declaration when it is a reading target of the list, a value test with such
+  a side or a check with such a member, transitively (`needing_readings`); a public recording's
+  case leaves it out of `expect.recognize`, required or forbidden. A page that requires one has its
+  case made without the page judgement, as a page recognised beside another has; a page with
+  nothing else to pin gives no case and the warning `record_case_reading_not_written`.
+  `record_case_reading_withheld` stays a refusal for one cause: a failed check's target that needs
+  no reading and whose own region (or a member's) reads inside a withheld rectangle, a box drawn
+  over a reading. `record stop` (`lab.withheld`, `lab.readings_left_out`) and `record ready`
+  (`withheld`, `readings_left_out`) answer the withheld rectangles with their reading targets and
+  the forbidden targets that read inside them, and each case's targets left out (`{case, page,
+  targets, page_judged}`), each member only when it holds something: a public recording without a
+  reading answers as before but for `destination`.
+- *Codes* (Lab fragment, the index regenerated): `record_case_reading_unbounded` and
+  `record_case_reading_withheld`, each an error that refuses `record stop` (exit 3) and is an item
+  of `record ready`'s `cases`; `record_case_reading_not_written`, a warning (exit 0) among
+  `lab.cases.warnings` and `record ready`'s warnings.
+- *Tests* (`crates/lab/src/gate_463_priv3.rs`, exec gate map "#463 PRIV-3"): the brief's nine and
+  amendment 1's two, the latter folded into tests 3, 4 and 7: a recording without the member is
+  public and serialises unchanged, local is stored and answered, another word is none (1); public
+  without a reading generates what local does but for the mark (2); public with a value test its
+  page requires generates, the value test left out and named, its side withheld (3); the same local
+  is today's with the one mark (4); a select's quantity column and a shared read that serves it
+  (5); a banded row, an unbanded one refused, a reach filled (6); a box over a reading refuses and
+  the same recording stopped local generates (7); another destination at stop generates again, the
+  same does nothing (8); the operation table's two rows (9). Adapted: none. `gate_lab_b9`'s tests
+  are main's, public by default, unchanged.
+- *The ruler slice's leftover* (#1830): the places that said a ruled preview is written beside
+  the plain one now say that a call with `ruler` writes only the ruled previews, and the plain ones
+  only a call without it (the contract twice, the operation table's `ruler`, the MCP manual's
+  `ac_record_review`, a comment of `review.rs`).
+- *Fix round 1* (`rd-1119/brief-463-priv3-fix1.md`, after the first CI round and the independent
+  review). The Lab's library compiles: `cases.rs` reached a target's id through
+  `RecognitionTarget::id`, which the recognition pack keeps to itself (E0624); a private
+  `cases::target_id` over the eight kinds, each of whose `id` is public, takes its place, and the
+  recognition pack's interface does not move. **A template's stored picture holds no pixel of a
+  reading** (the coordinator's ruling): of a public recording, before any case is made and whether
+  or not one would pass, a picture the package keeps itself whose rectangle meets a withheld
+  rectangle refuses the self-check `cases` with `record_case_reading_withheld`, naming the target,
+  the picture's rectangle (`kept`), the withheld rectangles and the readings they hold: a
+  template's crop (a template mark's region; a scrolling select's anchor, start and end marks,
+  `scan::template_crops`) and, the one other kind found to keep pixels when each kind was checked,
+  a colour digest's region, whose `cells` keep its colours cell by cell (up to 32 by 32 cells at
+  five bits a channel); a colour probe and a colour check keep one mean colour, an OCR target its
+  expected texts, an NN target its labels, a check, a value test and a click-only target nothing
+  of a frame. The code's one cause is now said as "a target that needs no reading reads, or keeps,
+  pixels inside a withheld rectangle", which also covers a judged page that fails because a target
+  it forbids, which needs no reading and reads inside a withheld rectangle, passes on the canvas
+  colour there (each such target run alone on the stored scene). Each entry of the refusal's
+  `withheld` names its `readings`. A case made without the page judgement for a value reading names
+  in its `readings_left_out` entry the forbidden targets a scene cannot evaluate
+  (`forbidden_left_out`), as `record_case_page_ambiguous` does. `contracts/privacy-zones.md` says
+  what a public recording's scene does; the contract, the operation table and the comment of
+  `generate.rs` say that admission asks `provenance` to be an object or null; the command-line
+  contracts of `record start` and `record stop` (`lab2_cli.rs`, `session_contracts.rs`) name
+  `--destination`. Tests: a template kept over a reading, its case passing all the same, refused,
+  and the same recording local generated as before (10); the unbounded reading driven to its code
+  through the self-check `cases` (11; no recording makes a reading nothing confines, so the package
+  the self-checks before `cases` build has its value test's side made `full_frame`); actinglab's
+  command line given a third word (12, `apps/actinglab/src/tests/gate_463_priv3_cli.rs`). Adapted:
+  test 7, whose box over the reading was a template and is now a colour probe (a template there
+  is refused before its case, test 10), its `withheld` naming the reading.
+- *Fix round 2* (`rd-1119/brief-463-priv3-fix2.md`, after CI's `light` and the second review). The
+  architecture guard `lab_source_obeys_dependency_law` found a public field of untyped JSON:
+  `RecordReadyOutcome::readings_left_out` is now `Vec<OpaqueJson>`, the Lab's own transparent
+  carrier that `record stop`'s `lab` and `record ready`'s generator warnings already use, so
+  `record ready`'s answer is byte for byte what it was. Nothing else the slice added exposes
+  `serde_json::Value` or a Ledger storage type in a public item, or holds a call the guard forbids.
+  The contract's paragraph on `provenance` is reflowed; the MCP manual's `ac_record_stop` names the
+  third way to `record_case_reading_withheld` (a target a page forbids passing on the canvas colour
+  inside a withheld rectangle); the code's catalogue entry says that a case failing for this cause
+  and another at once is refused with it, its `checks` still listing every failed check. Tests:
+  none added, none adapted.
+
 ### 1.484 Slice #463 SEL-2L-rows (0.12.74): a scrolling select read by detecting blocks: the recording generates the shared read (Workflow #463, work order board #482; met on 11-18 by the channel that makes packages: an archived recording of a scrolling grid of shop cards whose names take one or two lines in one title box waits for it to become a package; the rules below are the coordinator's in the work order, not the owner's words; coordinator work order `rd-1119/brief-463-sel2l-rows-generator.md`, after the read-only design `rd-1118/design-463-sel2l.md`, its slice S-rows, on main `1e5a46b7`)
 
 This section takes 1.484, the number the work order gives (1.481 to 1.483 are other slices'). It

@@ -216,6 +216,10 @@ mod gate_463_s18;
 // session directory.
 #[path = "gate_463_s213.rs"]
 mod gate_463_s213;
+// #463 PRIV-3 fix round 1: the command line refuses a destination that is neither `local` nor
+// `public`.
+#[path = "gate_463_priv3_cli.rs"]
+mod gate_463_priv3_cli;
 // #463 S2-1b: `record ready` takes the package's game, server and locale as `record stop` takes
 // them and, in an installation, the instance's game and server from its configuration.
 #[path = "gate_463_s21b.rs"]

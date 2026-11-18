@@ -30,10 +30,10 @@ use super::model::{
     LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
     LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
-    LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec, RecordPoint,
-    RecordRect, RecordSize, RecordedFrame, RecordedMark, RecordingDefaults, RecordingEnding,
-    RecordingStep, SelfTestStatus, StepApplication, StepClick, StepOptional, StepSelect,
-    StepTransition, ValueTestRight, value_test_side_id,
+    LabRecording, MarkFamily, MarkRequest, MarkSpec, OpaqueJson, OptionalAfterSpec,
+    RecordDestination, RecordPoint, RecordRect, RecordSize, RecordedFrame, RecordedMark,
+    RecordingDefaults, RecordingEnding, RecordingStep, SelfTestStatus, StepApplication, StepClick,
+    StepOptional, StepSelect, StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::select::{
     OTHER_PAGE_PASSES, PAGE_PASSES_ON_OTHER_FRAME, SELECT_REJECTION_ID, SELF_TEST_ERROR,
@@ -138,6 +138,8 @@ pub(crate) fn new_recording(
         amended_at_unix_ms: None,
         endings: Vec::new(),
         base_size,
+        // #463 PRIV-3: public until `record start` gives another destination.
+        destination: RecordDestination::Public,
     }
 }
 
