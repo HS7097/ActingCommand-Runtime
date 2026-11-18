@@ -23843,6 +23843,26 @@
       "common_causes": "Several applications declared on one device (device_group in instances[]), and the close of another application's session could not be confirmed, so that application is fenced: its fence waits for its ladder, its recheck or a person.",
       "handling": "Nothing was performed. Lift the fence of the member alias names: run its self-check (actingctl selfcheck), or resume it; actingctl status shows its resource_fence, and each held member's device_held. Then ask again."
     },
+    "device_system_backend_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "A capture, input or application operation on an iOS handset, bound or not, was refused by the device registry before anything was opened or run: this build has no backend for that operation on that device system (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\"; the registry's stage device_system_unsupported). It is the caused_by link of the operation's own failure (a capture, input or application failure, or a preparation's open failure), whichever operation it was; only that instance's operation fails, and the instance is never available to policy (availability_source device_system).",
+      "common_causes": "A configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it; a request, a direct run or the start's preparation that asked it for a capture, an input or an application action.",
+      "handling": "Nothing was opened and nothing was pressed. An iOS handset is listed and bound in this build (actinglab devices, devices bind) and shown by status, and nothing runs on it until its capture backend ships."
+    },
     "run_variable_undeclared": {
       "category": "error",
       "ladder_class": "none",
@@ -30546,6 +30566,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a session-opening refusal: the instance is a handset the private binding file binds no device to (Workflow #398 RD-1b), so no adb command runs against it."
+    },
+    "device_system_unsupported": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.74",
+      "description": "Stage of a session-opening refusal: the instance is an iOS handset, bound or not, a device system for which this build has no backend (Workflow #479 F-2), so nothing is opened or run for it; the failure's cause is device_system_backend_missing."
     },
     "device_registry_input_operation": {
       "owner": "runtime-host",

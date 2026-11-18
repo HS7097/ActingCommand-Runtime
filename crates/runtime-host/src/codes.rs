@@ -1658,6 +1658,14 @@ actingcommand_contract::outcome_codes! {
         /// fence. Nothing was granted (keys `alias` the fenced member).
         DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
         // ---- Workflow #437 G1: end
+        // ---- Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): begin
+        /// Error. A capture, input or application operation on an iOS handset, bound or not,
+        /// refused by the device registry before anything was opened or run: this build has no
+        /// backend for that operation on that device system (the stage
+        /// `device_system_unsupported`). The `caused_by` of the operation's own failure; only that
+        /// instance's operation fails.
+        DeviceSystemBackendMissing => "device_system_backend_missing": error / declaration_error,
+        // ---- Workflow #479 F-2: end
         // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
         // contained run"): begin. Each refuses a direct run in its preparation, before any record,
         // claim or lease (keys `package_id` the run's package, `variable_name` the value's name).
@@ -2601,6 +2609,8 @@ actingcommand_contract::outcome_locations! {
         AdbEndpointUnresolved => "adb_endpoint_unresolved",
         // Workflow #398 RD-1b: a handset the private binding file binds no device to.
         DeviceEndpointUnbound => "device_endpoint_unbound",
+        // Workflow #479 F-2: an iOS handset, for which this build has no backend.
+        DeviceSystemUnsupported => "device_system_unsupported",
         DeviceRegistryInputOperation => "device_registry_input_operation",
         EmulatorControlBinding => "emulator_control_binding",
         EmulatorControlRegistration => "emulator_control_registration",
@@ -3575,7 +3585,10 @@ actingcommand_contract::outcome_vocabulary! {
         DeviceLink => "device_link",
         /// The handset is held (with `device_hold`).
         DeviceState => "device_state",
-        /// A publisher other than these four.
+        /// Workflow #479 F-2: the handset's device system has no backend in this build (an iOS
+        /// handset before its capture slice), so it is never available to policy.
+        DeviceSystem => "device_system",
+        /// A publisher other than these five.
         OtherPublisher => "other_publisher",
         /// The instance's facts are missing or unreadable.
         FactsMissing => "facts_missing",

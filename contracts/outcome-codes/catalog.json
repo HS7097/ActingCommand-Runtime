@@ -1985,6 +1985,10 @@
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
     },
+    "ios_list_problem": {
+      "type": "vocab:ios_list_problem",
+      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones (Workflow #479 F-2)."
+    },
     "device_row_problem": {
       "type": "vocab:device_row_problem",
       "description": "Why a device row adb lists cannot be bound to a handset instance (#398 DB-2)."
@@ -7192,10 +7196,16 @@
           "description": "A handset names instance_index, instance_name or nemu_app_index."
         },
         "backend_kind_unsupported": {
-          "description": "The instance selects a backend its device kind does not allow."
+          "description": "The instance selects a backend its device kind does not allow, or (Workflow #479 F-2) any backend on an iOS handset, which has none in this build."
         },
         "alias_too_long": {
           "description": "A handset's alias is longer than 248 bytes, so its label would not fit a name."
+        },
+        "system_unsupported": {
+          "description": "device.system is neither android nor ios, or is named beside a kind other than handset (Workflow #479 F-2)."
+        },
+        "acib_path_without_ios": {
+          "description": "An instance that is no iOS handset names acib_path (Workflow #479 F-2)."
         }
       }
     },
@@ -7212,10 +7222,16 @@
           "description": "Two bindings name the same alias."
         },
         "duplicate_serial": {
-          "description": "Two bindings name the same serial: one device is bound to one instance only."
+          "description": "Two bindings name the same device (two Android rows of one serial, or, Workflow #479 F-2, two iOS rows of one device key): one device is bound to one instance only."
         },
         "serial_invalid": {
           "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
+        },
+        "device_key_invalid": {
+          "description": "An iOS row's device_key is not sha256: and 64 lowercase hexadecimal digits (Workflow #479 F-2)."
+        },
+        "system_mismatch": {
+          "description": "The row of a handset's alias is of another device system than the handset's configuration names: an iOS row for an Android handset, or the reverse (Workflow #479 F-2)."
         }
       }
     },
@@ -7248,6 +7264,41 @@
         }
       }
     },
+    "ios_list_problem": {
+      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones: one of acib's own words for acib devices, or one of the Lab's three (Workflow #479 F-2, contracts/device-binding.md, An iOS handset). A listing says it in its member ios_devices_unlisted and answers its Android rows; an iOS bind is refused device_ios_list_failed with it.",
+      "tokens": {
+        "not_installed": {
+          "description": "acib is not installed: no file at the install root's tools\\acib.exe."
+        },
+        "not_started": {
+          "description": "The file is there but the system could not start it."
+        },
+        "answer_unreadable": {
+          "description": "acib ran but its line is not one of its devices answers (no line, not JSON of its shape, or a word of none of these)."
+        },
+        "command_line_invalid": {
+          "description": "acib's word: its command line was refused."
+        },
+        "async_runtime_failed": {
+          "description": "acib's word: its asynchronous runtime could not start."
+        },
+        "deadline_passed": {
+          "description": "acib's word: its listing did not finish within its deadline."
+        },
+        "usbmuxd_unreachable": {
+          "description": "acib's word: Apple's device service (usbmuxd) does not answer."
+        },
+        "usbmuxd_list_failed": {
+          "description": "acib's word: usbmuxd answered but its device list could not be read."
+        },
+        "key_salt_unusable": {
+          "description": "acib's word: the salt it was given for the keys is unusable."
+        },
+        "binding_salt_unusable": {
+          "description": "acib's word: the salt it was given for the binding keys is unusable."
+        }
+      }
+    },
     "device_row_problem": {
       "description": "Why a device row adb lists cannot be bound to a handset instance (#398 DB-2, contracts/device-binding.md, Choosing a device).",
       "tokens": {
@@ -7256,6 +7307,9 @@
         },
         "transport_mismatch": {
           "description": "The row's transport is not the one the handset instance declares (device.transport, usb when it names none): a tcp row, an emulator's loopback row among them."
+        },
+        "system_mismatch": {
+          "description": "The row is a phone of another device system than the handset instance declares (device.system): an Android device's key or handle named for an iOS handset, or an iOS phone's key for an Android one (Workflow #479 F-2)."
         }
       }
     },
@@ -11135,6 +11189,9 @@
         },
         "device_state": {
           "description": "The handset is locked, too hot, low on battery or in use (see device_hold)."
+        },
+        "device_system": {
+          "description": "The handset's device system has no backend in this build (an iOS handset before its capture slice), so it is never available to policy (Workflow #479 F-2)."
         },
         "other_publisher": {
           "description": "Another publisher marked the application unavailable."

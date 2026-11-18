@@ -39778,6 +39778,109 @@ nothing in the checkout.
 **At deploy.** Nothing to configure. An adoption's answer is longer by its `timings`, some 600
 bytes.
 
+### 1.482 #479 F-2 (0.12.74): an iOS handset is an instance the Runtime knows: configuration and binding, nothing captured or pressed (Workflow #479; the owner's rulings of 11-18 on board #479: an iPhone is scheduled like any instance, the release may carry `acib`, the phone's frames may be kept in the state root; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-479-f2-ios-handset-config-binding.md`, the design `rd-1118/design-479-f1.md` (its F-2), on main `5d0c8c3e`, which holds ACIB-2)
+
+1.482 is the number the coordinator assigned this section; §1.476 and §1.478 to §1.481 are other
+slices dispatched with it. It ships in 0.12.74. [device-binding.md](device-binding.md), "An iOS
+handset", is the contract.
+
+**What it is.** `acib`, the project's iOS device bridge (`apps/acib`, ACIB-0 to ACIB-2), was a
+program the Runtime did not know. An iOS handset is now an instance: configured
+(`device.system` `ios`), listed and bound by the Lab through `acib`, registered and recorded by the
+Runtime by its key, shown by status, never available to policy, and refused every capture, input
+and application operation before anything is opened. Nothing is captured and nothing is pressed:
+capture is the next slice (F-3). `apps/acib` is not changed.
+
+**The configuration** (`actingd-config` revision 34; the last slice that added configuration
+members is #463 U1b, §1.389, revision 33; this one follows its list, and #453 S2's (§1.362) where
+an instance entry's member without a default differs from a section's key with one):
+
+| Part | Where |
+|---|---|
+| `device.system`, `android` or `ios`, a handset's member only (absent: `android`) | `apps/actingd/src/config/device_binding.rs`, `InstanceDeviceConfigFile::system`, `check_device` (`system_unsupported`), `device_system` |
+| an iOS handset names no backend (`backend_kind_unsupported`) and uses no adb | `check_device`; the assembly skips the install root's adb for it (`apps/actingd/src/config.rs`) |
+| `acib_path`, an iOS handset's member alone (`acib_path_without_ios`), not empty (`instance_config_invalid`); absent, `<install root>\tools\acib.exe`; not run by this build, so the file need not exist | `InstanceConfig::acib_path`, `ios_registration` |
+| the key `instance.<instance id>.device_system` (string, tokens `android`, `ios`, no default, `NotSettable::ReadAtAssembly`, console tier `hidden`), reported only for an entry that names it; no row of the key table for `acib_path`, as `adb_path` has none | `crates/runtime-config/src/instance.rs`, `DEVICE_SYSTEM`, `DEVICE_SYSTEM_TOKENS` |
+| the defaults file: nothing (no default) | — |
+| check-config: the manifest row, as every instance key; an unbound iOS handset is `device_binding_missing` as an Android one is | `apps/actingd/src/check_config.rs` (unchanged) |
+| the interface table, the declaration, the architecture pin, the installer's range (it reads the declaration) | [component-interfaces.md](component-interfaces.md) row 34; `distribution/windows/component-interfaces.json` [5, 34]; `tools/actinglab-architecture/tests/component_interfaces.rs` |
+
+**The private row.** `{alias, system: "ios", device_key, bound_at_unix_ms, bound_via}`: the
+phone's key under the installation's own secret, made by `acib` (its `--binding-salt-env`, the
+ledger's function for a handset's serial). The file's own rules for a new kind of row: a file that
+holds one is `actingcommand.device-bindings.v2` (a reader of version 1 refuses the row's members);
+a file of Android rows alone is written as version 1, byte for byte, and a version-1 file loads as
+before; every row denies unknown members; a key not of its form is `device_key_invalid`, two rows of
+one key `duplicate_serial`, a row of another system than its handset's `system_mismatch` (two new
+words of `device_binding_problem`). `crates/actingcommand-contract/src/device_binding.rs`
+(`DeviceSystem`, `DeviceBinding::ios`, `device_key`, `system`, `serial` now `Option`,
+`device_bindings_schema`, `device_key_valid`); actingd binds an iOS handset by its row
+(`bind_handsets`).
+
+**The Lab** (`crates/lab-ops/src/devices.rs`). `devices` lists, after adb's rows, the phones of
+`acib devices` (`tools\acib.exe` of the install root, beside its adb), each `{device_key?, system:
+"ios", transport, bound_alias?}`; an adb row names no `system` (it is Android, as an entry without
+`system` is). One call asks `acib` for both keys: `--key-salt-env ACTINGCOMMAND_ACIB_KEY_SALT`
+(the caller's salt, else the installation's secret) and `--binding-salt-env
+ACTINGCOMMAND_ACIB_BINDING_SALT` (the secret, for `bound_alias`); the values are variables of that
+child's environment alone, never an argument, a log line or an answer, and the caller's own
+`--key-salt-env` variable is removed from it; `acib` is started with standard input from nowhere
+and pipes for its output and errors (§1.475; `run_acib`, `AcibCall`, `AcibRun`). Not installed and
+no iOS handset configured: nothing is asked and the answer is the one of before. Otherwise a list
+`acib` did not give is the member `ios_devices_unlisted` `{why}` (`ios_list_problem`) beside adb's
+rows, the listing a success. `devices bind` of an iOS handset takes the listing's `device_key`,
+has `acib` find the phone and answer its key under the secret, and writes the row; the answer is
+`{alias, device_key, system: "ios", restart_required: true}`. Mixed systems are
+`device_row_unbindable` `system_mismatch`. An Android bind whose key no adb row carries asks an
+installed `acib` under the same salt only to tell `system_mismatch` from `device_key_unknown`.
+
+**The Runtime.** `HandsetEndpoint::Ios(Option<KeyedHandsetBinding>)`
+(`crates/execution-kernel/src/provider.rs`): `binding()` stays an Android handset's (an iOS
+handset has no serial, so no adb link watch, device-state read or reconnect concerns it);
+`system()`, `keyed_binding()`, `is_bound()`. `runtime.instance_bound` records the key as the
+fingerprint as it is (`InstanceDeviceBindingDraft::keyed_handset`, `Sha256Fingerprint::stored`),
+in the record of an Android handset's shape: no `ledger` revision. The registry's `require_bound`
+refuses an iOS handset first, bound or not, with the stage `device_system_unsupported` and the
+device error's mark `device_system_unsupported` (`crates/device/src/error.rs`), which the kernel's
+failure context carries (`ExecutionFailureContext::device_system_unsupported`) and
+`RuntimeHostError::execution` turns into the cause `device_system_backend_missing` of whatever
+operation failed. The policy availability is withdrawn under `runtime.device-system`,
+`device_system:ios`, before the unbound check (`host/runtime_facts.rs`, `host/facts.rs`), and
+Workflow #469 H1's `availability_source` reads `device_system`. `device_link::start` records
+`device.system` and `device.bound` for each iOS handset; the Lab's overview row shows them as
+`device` `{kind, system, bound}` (`crates/lab-ops/src/overview.rs`, `handset_device`).
+
+**Codes and words.** Added: `device_system_backend_missing` (runtime-host, error, ladder class
+`declaration_error`, a cause only: refuses an operation, ends no process), the location
+`device_system_unsupported` (runtime-host), `device_ios_list_failed` (actingctl, error, exit 1:
+`alias`, `ios_list_problem`) and `device_binding_secret_missing` (actingctl, error, exit 1:
+`alias`); the key and vocabulary `ios_list_problem` (`not_installed`, `not_started`,
+`answer_unreadable` and `acib`'s seven words for `devices`); the words `system_unsupported` and
+`acib_path_without_ios` (`device_config_problem`), `device_key_invalid` and `system_mismatch`
+(`device_binding_problem`), `system_mismatch` (`device_row_problem`), `device_system`
+(`availability_source`). `duplicate_serial` and `backend_kind_unsupported` say they cover the iOS
+row and an iOS handset too. The outcome code index is regenerated. No decision reads a code: the
+cause comes from the error's mark, the availability's word from its record's source.
+
+**Tests.** Gate files `apps/actingd/src/config/gate_479_f2.rs` (apps "#479 F-2"),
+`crates/lab-ops/src/gate_479_f2.rs` (apps "#479 F-2"), `crates/runtime-host/src/tests/gate_479_f2.rs`
+(host "#479 F-2"); `acib` is scripted the way the DB-2 tests script adb, no clock is read.
+Adapted because the row may now hold a key and no serial (`DeviceBinding::serial` is an `Option`):
+`devices::tests::rd1c_t2_…` and `rd1c_t5_…` compare `Some(serial)`. No golden changes; no test
+leaves a gate map.
+
+**What is not changed.** An emulator or an Android handset: its configuration without `system`,
+the listing's rows, bind, unbind, status, records and every answer, byte for byte when no iOS
+instance is configured and `acib` is absent; the private file of Android rows alone; the `ledger`
+range; `apps/acib`.
+
+**At deploy.** Nothing to configure. `acib.exe` is not shipped yet (a later slice ships it): the
+Lab's listing is the one of before until it is laid at `<root>\tools\acib.exe`, and a configured iOS
+handset is listed as not installed. The consoles and installers that write an entry's `device`
+must accept `actingd-config` 34 before they write `system`. Binding an iOS phone writes a version-2
+private file, which a build before this one refuses (`device_binding_file_invalid`): unbind it
+before going back.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

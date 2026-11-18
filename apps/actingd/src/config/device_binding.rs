@@ -13,15 +13,21 @@
 //!   read or breaks its rules refuses the assembly (`device_binding_file_invalid`).
 //! - A serial leaves this module only inside the device layer's `DeviceSerial`, which shows its
 //!   label `handset:<alias>` wherever it is printed.
+//! - Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"; `actingd-config`
+//!   revision 34): a handset's `device.system`, `android` (also when absent) or `ios`, a handset's
+//!   member only; an iOS handset names no touch or capture backend (this build has none for it),
+//!   and only it may name `acib_path`. Its binding is the private file's iOS row, its phone's
+//!   device key, never an identifier of the phone.
 
 use super::InstanceConfig;
 use crate::codes::{ActingdCode, DeviceConfigProblem};
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    DeviceBindingProblem, MAX_HANDSET_ALIAS_BYTES, device_bindings_path, read_device_bindings,
+    DeviceBindingProblem, DeviceSystem, MAX_HANDSET_ALIAS_BYTES, Sha256Fingerprint,
+    device_bindings_path, read_device_bindings,
 };
 use actingcommand_device::{CaptureBackendChoice, DeviceKind, DeviceSerial, TouchBackendChoice};
-use actingcommand_runtime_host::{HandsetBinding, HandsetEndpoint};
+use actingcommand_runtime_host::{HandsetBinding, HandsetEndpoint, KeyedHandsetBinding};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -35,13 +41,15 @@ const KIND_HANDSET: &str = "handset";
 const TRANSPORT_USB: &str = "usb";
 
 /// An instance entry's `device` member (§3.1). `transport` is a handset's only; absent, a
-/// handset is on USB.
+/// handset is on USB. Workflow #479 F-2: `system` is a handset's only; absent, it is Android.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InstanceDeviceConfigFile {
     kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
 }
 
 /// A refused device declaration: the instance and what is wrong (`device_config_invalid`).
@@ -143,6 +151,28 @@ pub(super) fn check_device(instance: &InstanceConfig) -> Result<DeviceKind, Devi
     ) {
         return Err(refused(DeviceConfigProblem::TransportUnsupported));
     }
+    // Workflow #479 F-2: `system` is a handset's member, one word of the closed pair.
+    let named_system = instance
+        .device
+        .as_ref()
+        .and_then(|device| device.system.as_deref());
+    let system = match named_system {
+        None => DeviceSystem::Android,
+        Some(word) if kind == DeviceKind::Handset => {
+            match [DeviceSystem::Android, DeviceSystem::Ios]
+                .into_iter()
+                .find(|system| system.as_str() == word)
+            {
+                Some(system) => system,
+                None => return Err(refused(DeviceConfigProblem::SystemUnsupported)),
+            }
+        }
+        Some(_) => return Err(refused(DeviceConfigProblem::SystemUnsupported)),
+    };
+    // Workflow #479 F-2: `acib_path` is an iOS handset's member alone.
+    if instance.acib_path.is_some() && system != DeviceSystem::Ios {
+        return Err(refused(DeviceConfigProblem::AcibPathWithoutIos));
+    }
     if kind == DeviceKind::Handset {
         if instance.alias.len() > MAX_HANDSET_ALIAS_BYTES {
             return Err(refused(DeviceConfigProblem::AliasTooLong));
@@ -159,6 +189,12 @@ pub(super) fn check_device(instance: &InstanceConfig) -> Result<DeviceKind, Devi
         {
             return Err(refused(DeviceConfigProblem::DiscoveryKeyWithHandset));
         }
+    }
+    // Workflow #479 F-2: an iOS handset has no backend in this build, so it names none.
+    if system == DeviceSystem::Ios
+        && (instance.touch_backend.is_some() || instance.capture_backend.is_some())
+    {
+        return Err(refused(DeviceConfigProblem::BackendKindUnsupported));
     }
     // A backend name that does not parse is refused by its own code later; one that parses
     // must be a backend this kind of device has.
@@ -178,6 +214,19 @@ pub(super) fn check_device(instance: &InstanceConfig) -> Result<DeviceKind, Devi
     Ok(kind)
 }
 
+/// Workflow #479 F-2: the device system of a handset whose `device` [`check_device`] accepted:
+/// `ios` when its entry names it, Android otherwise.
+pub(super) fn device_system(instance: &InstanceConfig) -> DeviceSystem {
+    match instance
+        .device
+        .as_ref()
+        .and_then(|device| device.system.as_deref())
+    {
+        Some(word) if word == DeviceSystem::Ios.as_str() => DeviceSystem::Ios,
+        _ => DeviceSystem::Android,
+    }
+}
+
 /// The handsets' bindings from the private binding file (§3.2, §3.6).
 pub(super) struct HandsetBindings {
     /// Per handset alias: its device, or unbound when the file has no binding for it.
@@ -189,35 +238,60 @@ pub(super) struct HandsetBindings {
 }
 
 /// Reads the private binding file of `state_root` once and binds each handset of `handsets`
-/// (aliases, in configuration order) to its device. Each bound serial is the device layer's
-/// `DeviceSerial`, labelled `handset:<alias>`.
+/// (aliases with their device systems, in configuration order) to its device. Each bound serial
+/// is the device layer's `DeviceSerial`, labelled `handset:<alias>`. Workflow #479 F-2: an iOS
+/// handset is bound by its row's device key, which holds no identifier of its phone; a row of
+/// another device system than its handset's is `system_mismatch`.
 pub(super) fn bind_handsets(
     state_root: &Path,
-    handsets: &[String],
+    handsets: &[(String, DeviceSystem)],
 ) -> Result<HandsetBindings, DeviceBindingRefusal> {
-    let bindings = read_device_bindings(state_root).map_err(|problem| DeviceBindingRefusal {
+    let refusal = |problem| DeviceBindingRefusal {
         path: device_bindings_path(state_root),
         problem,
-    })?;
+    };
+    let bindings = read_device_bindings(state_root).map_err(refusal)?;
     let mut endpoints = BTreeMap::new();
     let mut unbound = Vec::new();
-    for alias in handsets {
-        let endpoint = match bindings.get(alias) {
-            Some(binding) => HandsetEndpoint::Bound(HandsetBinding::new(
-                DeviceSerial::handset(binding.serial(), alias),
-                binding.bound_at_unix_ms,
-                binding.bound_via,
-            )),
-            None => {
+    for (alias, system) in handsets {
+        let endpoint = match (bindings.get(alias), system) {
+            (Some(binding), DeviceSystem::Android) => {
+                let serial = binding
+                    .serial()
+                    .ok_or_else(|| refusal(DeviceBindingProblem::SystemMismatch))?;
+                HandsetEndpoint::Bound(HandsetBinding::new(
+                    DeviceSerial::handset(serial, alias),
+                    binding.bound_at_unix_ms,
+                    binding.bound_via,
+                ))
+            }
+            (Some(binding), DeviceSystem::Ios) => {
+                let device_key = binding
+                    .device_key()
+                    .ok_or_else(|| refusal(DeviceBindingProblem::SystemMismatch))?;
+                // The reader checked the key's form (`device_key_invalid`).
+                let device_key = Sha256Fingerprint::stored(device_key)
+                    .map_err(|_| refusal(DeviceBindingProblem::DeviceKeyInvalid))?;
+                HandsetEndpoint::Ios(Some(KeyedHandsetBinding::new(
+                    device_key,
+                    binding.bound_at_unix_ms,
+                    binding.bound_via,
+                )))
+            }
+            (None, DeviceSystem::Android) => {
                 unbound.push(alias.clone());
                 HandsetEndpoint::Unbound
+            }
+            (None, DeviceSystem::Ios) => {
+                unbound.push(alias.clone());
+                HandsetEndpoint::Ios(None)
             }
         };
         endpoints.insert(alias.clone(), endpoint);
     }
     let unused = bindings
         .iter()
-        .filter(|binding| !handsets.contains(&binding.alias))
+        .filter(|binding| !handsets.iter().any(|(alias, _)| *alias == binding.alias))
         .map(|binding| binding.alias.clone())
         .collect();
     Ok(HandsetBindings {
@@ -225,6 +299,17 @@ pub(super) fn bind_handsets(
         unbound,
         unused,
     })
+}
+
+/// Test-only (Workflow #479 F-2's gate, `gate_479_f2`): writes `bytes` as the private binding file
+/// of `state_root`, so that the gate file, which may not name the file (architecture guard
+/// RD-1b-T10), writes it through its reader's module.
+#[cfg(test)]
+pub(super) fn write_private_file_for_test(state_root: &Path, bytes: &[u8]) {
+    let path = device_bindings_path(state_root);
+    std::fs::create_dir_all(path.parent().expect("the private directory"))
+        .expect("create the private directory");
+    std::fs::write(&path, bytes).expect("write the private binding file");
 }
 
 #[cfg(test)]

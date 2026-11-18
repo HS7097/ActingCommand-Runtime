@@ -635,9 +635,30 @@ struct StoredDeviceEvidence {
     /// Workflow #463 KB-1 fix round 1 (R2): the backend refused the input before it sent
     /// anything, because it does not perform it.
     input_unsupported: bool,
+    /// Workflow #479 F-2: the registry refused the operation before anything was opened, because
+    /// this build has no backend for it on the instance's device system (an iOS handset).
+    device_system_unsupported: bool,
 }
 
 impl DeviceError {
+    /// Workflow #479 F-2: this error as the refusal of a capture, input or application operation
+    /// on a handset of a device system this build has no backend for, made before anything was
+    /// opened or run.
+    pub fn with_device_system_unsupported(mut self) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .device_system_unsupported = true;
+        self
+    }
+
+    /// Workflow #479 F-2: whether this error is such a refusal
+    /// ([`Self::with_device_system_unsupported`]).
+    pub fn device_system_unsupported(&self) -> bool {
+        self.evidence
+            .as_deref()
+            .is_some_and(|evidence| evidence.device_system_unsupported)
+    }
+
     /// Workflow #463 KB-1 fix round 1 (the coordinator's ruling R2 of 11-16): this error as the
     /// refusal of an input its backend does not perform, made before anything was sent (the Nemu
     /// input's key on an emulator library without the key calls). Not a device failure: the

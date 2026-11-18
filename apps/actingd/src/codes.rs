@@ -248,10 +248,16 @@ actingcommand_contract::outcome_vocabulary! {
         SerialInConfig => "serial_in_config",
         /// A handset names `instance_index`, `instance_name` or `nemu_app_index`.
         DiscoveryKeyWithHandset => "discovery_key_with_handset",
-        /// The instance selects a backend its device kind does not allow.
+        /// The instance selects a backend its device kind does not allow; Workflow #479 F-2: or
+        /// any backend on an iOS handset, which has none in this build.
         BackendKindUnsupported => "backend_kind_unsupported",
         /// A handset's alias is longer than 248 bytes, so its label would not fit a name.
         AliasTooLong => "alias_too_long",
+        /// Workflow #479 F-2: `device.system` is neither `android` nor `ios`, or is named beside a
+        /// kind other than `handset`.
+        SystemUnsupported => "system_unsupported",
+        /// Workflow #479 F-2: an instance that is no iOS handset names `acib_path`.
+        AcibPathWithoutIos => "acib_path_without_ios",
     }
 }
 

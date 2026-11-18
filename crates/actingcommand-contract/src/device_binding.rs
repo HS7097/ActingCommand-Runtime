@@ -14,6 +14,12 @@
 //!   assembles its configuration (start and check-config).
 //! - Nothing here interprets a serial beyond its form, and nothing prints one: a binding's
 //!   `Debug` leaves the serial out.
+//! - Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): a handset's device
+//!   system ([`DeviceSystem`], `device.system`: `android`, also what an absent member means, or
+//!   `ios`), and the iOS row of the private file: the alias, `system` `ios` and the phone's
+//!   `device_key`, the fingerprint `acib` made of the phone's identifier under the installation's
+//!   own secret, never the identifier. A file with an iOS row is `actingcommand.device-bindings.v2`;
+//!   a file without one is written and read as before, version 1, byte for byte.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -28,6 +34,10 @@ pub const PRIVATE_DIRECTORY: &str = "private";
 pub const DEVICE_BINDINGS_FILE: &str = "device-bindings.json";
 /// The private binding file's `schema`.
 pub const DEVICE_BINDINGS_SCHEMA: &str = "actingcommand.device-bindings.v1";
+/// Workflow #479 F-2: the private binding file's `schema` once it holds an iOS handset's row, a
+/// kind of row a reader of version 1 refuses (its rows deny unknown members). A file without one
+/// keeps [`DEVICE_BINDINGS_SCHEMA`] ([`device_bindings_schema`]).
+pub const DEVICE_BINDINGS_SCHEMA_V2: &str = "actingcommand.device-bindings.v2";
 /// The largest private binding file read, in bytes.
 pub const MAX_DEVICE_BINDINGS_FILE_BYTES: u64 = 1024 * 1024;
 /// The longest device serial, in bytes (§3.2).
@@ -51,6 +61,25 @@ pub enum InstanceDeviceKind {
     Handset,
 }
 
+/// Workflow #479 F-2: the device system of a handset, an instance entry's `device.system` (a
+/// handset's member only): `android`, also what an absent member means, or `ios`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSystem {
+    Android,
+    Ios,
+}
+
+impl DeviceSystem {
+    /// The configuration's word.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Android => "android",
+            Self::Ios => "ios",
+        }
+    }
+}
+
 /// Who wrote a binding (§3.2 `bound_via`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,10 +101,17 @@ crate::outcome_vocabulary! {
         Malformed => "malformed",
         /// Two bindings name the same alias.
         DuplicateAlias => "duplicate_alias",
-        /// Two bindings name the same serial: one device is bound to one instance only.
+        /// Two bindings name the same device: one device is bound to one instance only (two
+        /// Android rows of one serial, or, Workflow #479 F-2, two iOS rows of one device key).
         DuplicateSerial => "duplicate_serial",
         /// A serial is not 1 to 64 bytes of printable ASCII without white space.
         SerialInvalid => "serial_invalid",
+        /// Workflow #479 F-2: an iOS row's `device_key` is not `sha256:` and 64 lowercase
+        /// hexadecimal digits.
+        DeviceKeyInvalid => "device_key_invalid",
+        /// Workflow #479 F-2: the row of a handset's alias is of another device system than the
+        /// handset's configuration names (an iOS row for an Android handset, or the reverse).
+        SystemMismatch => "system_mismatch",
     }
 }
 
@@ -119,17 +155,91 @@ crate::outcome_vocabulary! {
     }
 }
 
-/// One binding of the private file: an instance alias and the serial of its handset.
+/// One binding of the private file: an instance alias and the device of its handset, an Android
+/// handset's adb serial or (Workflow #479 F-2) an iOS handset's device key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "DeviceBindingRow", into = "DeviceBindingRow")]
 pub struct DeviceBinding {
     pub alias: String,
-    serial: String,
+    device: BoundDevice,
     pub bound_at_unix_ms: u64,
     pub bound_via: DeviceBoundVia,
 }
 
+/// Workflow #479 F-2: what a row binds the alias to.
+#[derive(Clone, PartialEq, Eq)]
+enum BoundDevice {
+    /// An Android handset's adb serial.
+    Serial(String),
+    /// An iOS handset's device key: the fingerprint `acib` made of the phone's identifier under
+    /// the installation's own secret (`sha256:` and 64 lowercase hexadecimal digits).
+    Key(String),
+}
+
+/// Workflow #479 F-2: a row of the file as written. An Android row is `{alias, serial,
+/// bound_at_unix_ms, bound_via}`, as before; an iOS row `{alias, system: "ios", device_key,
+/// bound_at_unix_ms, bound_via}`. Any other member, or another mix of these, is no row.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceBindingRow {
+    alias: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system: Option<DeviceSystem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    serial: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_key: Option<String>,
+    bound_at_unix_ms: u64,
+    bound_via: DeviceBoundVia,
+}
+
+/// Workflow #479 F-2: a row that is neither an Android row (a serial and no system) nor an iOS
+/// row (`system` `ios` and a device key); the file's reader answers `malformed` for it.
+pub struct DeviceBindingRowInvalid;
+
+impl fmt::Display for DeviceBindingRowInvalid {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a binding row names a serial and no system, or system ios and a key")
+    }
+}
+
+impl TryFrom<DeviceBindingRow> for DeviceBinding {
+    type Error = DeviceBindingRowInvalid;
+
+    fn try_from(row: DeviceBindingRow) -> Result<Self, Self::Error> {
+        let device = match (row.system, row.serial, row.device_key) {
+            (None, Some(serial), None) => BoundDevice::Serial(serial),
+            (Some(DeviceSystem::Ios), None, Some(device_key)) => BoundDevice::Key(device_key),
+            _ => return Err(DeviceBindingRowInvalid),
+        };
+        Ok(Self {
+            alias: row.alias,
+            device,
+            bound_at_unix_ms: row.bound_at_unix_ms,
+            bound_via: row.bound_via,
+        })
+    }
+}
+
+impl From<DeviceBinding> for DeviceBindingRow {
+    fn from(binding: DeviceBinding) -> Self {
+        let (system, serial, device_key) = match binding.device {
+            BoundDevice::Serial(serial) => (None, Some(serial), None),
+            BoundDevice::Key(device_key) => (Some(DeviceSystem::Ios), None, Some(device_key)),
+        };
+        Self {
+            alias: binding.alias,
+            system,
+            serial,
+            device_key,
+            bound_at_unix_ms: binding.bound_at_unix_ms,
+            bound_via: binding.bound_via,
+        }
+    }
+}
+
 impl DeviceBinding {
+    /// An Android handset's row: `alias` bound to the adb serial `serial`.
     pub fn new(
         alias: impl Into<String>,
         serial: impl Into<String>,
@@ -138,24 +248,65 @@ impl DeviceBinding {
     ) -> Self {
         Self {
             alias: alias.into(),
-            serial: serial.into(),
+            device: BoundDevice::Serial(serial.into()),
             bound_at_unix_ms,
             bound_via,
         }
     }
 
-    /// The raw serial: for the adb command line and the record's fingerprint only.
-    pub fn serial(&self) -> &str {
-        &self.serial
+    /// Workflow #479 F-2: an iOS handset's row: `alias` bound to the phone of `device_key`, the
+    /// fingerprint `acib` made of its identifier under the installation's own secret.
+    pub fn ios(
+        alias: impl Into<String>,
+        device_key: impl Into<String>,
+        bound_at_unix_ms: u64,
+        bound_via: DeviceBoundVia,
+    ) -> Self {
+        Self {
+            alias: alias.into(),
+            device: BoundDevice::Key(device_key.into()),
+            bound_at_unix_ms,
+            bound_via,
+        }
+    }
+
+    /// The raw serial of an Android row: for the adb command line and the record's fingerprint
+    /// only. `None` for an iOS row, which holds no identifier of its phone.
+    pub fn serial(&self) -> Option<&str> {
+        match &self.device {
+            BoundDevice::Serial(serial) => Some(serial),
+            BoundDevice::Key(_) => None,
+        }
+    }
+
+    /// Workflow #479 F-2: the device key of an iOS row; `None` for an Android row.
+    pub fn device_key(&self) -> Option<&str> {
+        match &self.device {
+            BoundDevice::Serial(_) => None,
+            BoundDevice::Key(device_key) => Some(device_key),
+        }
+    }
+
+    /// Workflow #479 F-2: the device system of the row's handset.
+    pub const fn system(&self) -> DeviceSystem {
+        match self.device {
+            BoundDevice::Serial(_) => DeviceSystem::Android,
+            BoundDevice::Key(_) => DeviceSystem::Ios,
+        }
     }
 }
 
 impl fmt::Debug for DeviceBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeviceBinding")
-            .field("alias", &self.alias)
-            .field("serial", &"<redacted>")
+        let mut debug = formatter.debug_struct("DeviceBinding");
+        debug.field("alias", &self.alias);
+        match &self.device {
+            BoundDevice::Serial(_) => debug.field("serial", &"<redacted>"),
+            BoundDevice::Key(_) => debug
+                .field("system", &DeviceSystem::Ios)
+                .field("device_key", &"<redacted>"),
+        };
+        debug
             .field("bound_at_unix_ms", &self.bound_at_unix_ms)
             .field("bound_via", &self.bound_via)
             .finish()
@@ -211,11 +362,25 @@ pub fn read_device_bindings(state_root: &Path) -> Result<DeviceBindings, DeviceB
 
 /// The rules of the private binding file (§3.2): its schema and shape, every alias one an
 /// instance bound to a device can have, every serial 1 to 64 bytes of printable ASCII without
-/// white space, and no alias and no serial twice.
+/// white space, and no alias and no serial twice. Workflow #479 F-2: a file of
+/// [`DEVICE_BINDINGS_SCHEMA_V2`] may hold iOS rows, each device key of the fingerprint's form
+/// (`device_key_invalid`) and none twice (`duplicate_serial`: one device bound twice); a file of
+/// [`DEVICE_BINDINGS_SCHEMA`] holds Android rows alone, as before (an iOS row in it is
+/// `malformed`).
 pub fn parse_device_bindings(bytes: &[u8]) -> Result<DeviceBindings, DeviceBindingProblem> {
     let file = serde_json::from_slice::<DeviceBindingsFile>(bytes)
         .map_err(|_| DeviceBindingProblem::Malformed)?;
-    if file.schema != DEVICE_BINDINGS_SCHEMA {
+    let ios_rows_allowed = match file.schema.as_str() {
+        DEVICE_BINDINGS_SCHEMA => false,
+        DEVICE_BINDINGS_SCHEMA_V2 => true,
+        _ => return Err(DeviceBindingProblem::Malformed),
+    };
+    if !ios_rows_allowed
+        && file
+            .bindings
+            .iter()
+            .any(|binding| binding.system() == DeviceSystem::Ios)
+    {
         return Err(DeviceBindingProblem::Malformed);
     }
     check_bindings(&file.bindings)?;
@@ -224,24 +389,48 @@ pub fn parse_device_bindings(bytes: &[u8]) -> Result<DeviceBindings, DeviceBindi
     })
 }
 
-/// Every alias one an instance bound to a device can have, every serial of its form, and no
-/// alias and no serial twice.
+/// Workflow #479 F-2: the `schema` a file holding `bindings` is written with: version 2 when one
+/// of them is an iOS row, version 1 otherwise, so a file of Android rows alone is what it was.
+pub fn device_bindings_schema(bindings: &[DeviceBinding]) -> &'static str {
+    if bindings
+        .iter()
+        .any(|binding| binding.system() == DeviceSystem::Ios)
+    {
+        DEVICE_BINDINGS_SCHEMA_V2
+    } else {
+        DEVICE_BINDINGS_SCHEMA
+    }
+}
+
+/// Every alias one an instance bound to a device can have, every serial and device key of its
+/// form, and no alias and no device twice.
 fn check_bindings(bindings: &[DeviceBinding]) -> Result<(), DeviceBindingProblem> {
     let mut aliases = BTreeSet::new();
     let mut serials = BTreeSet::new();
+    let mut device_keys = BTreeSet::new();
     for binding in bindings {
         if crate::validate_instance_alias(&binding.alias).is_err()
             || binding.alias.len() > MAX_HANDSET_ALIAS_BYTES
         {
             return Err(DeviceBindingProblem::Malformed);
         }
-        if !device_serial_valid(&binding.serial) {
-            return Err(DeviceBindingProblem::SerialInvalid);
+        match &binding.device {
+            BoundDevice::Serial(serial) if !device_serial_valid(serial) => {
+                return Err(DeviceBindingProblem::SerialInvalid);
+            }
+            BoundDevice::Key(device_key) if !device_key_valid(device_key) => {
+                return Err(DeviceBindingProblem::DeviceKeyInvalid);
+            }
+            BoundDevice::Serial(_) | BoundDevice::Key(_) => {}
         }
         if !aliases.insert(binding.alias.as_str()) {
             return Err(DeviceBindingProblem::DuplicateAlias);
         }
-        if !serials.insert(binding.serial.as_str()) {
+        let first = match &binding.device {
+            BoundDevice::Serial(serial) => serials.insert(serial.as_str()),
+            BoundDevice::Key(device_key) => device_keys.insert(device_key.as_str()),
+        };
+        if !first {
             return Err(DeviceBindingProblem::DuplicateSerial);
         }
     }
@@ -252,4 +441,15 @@ fn check_bindings(bindings: &[DeviceBinding]) -> Result<(), DeviceBindingProblem
 pub fn device_serial_valid(serial: &str) -> bool {
     (1..=MAX_DEVICE_SERIAL_BYTES).contains(&serial.len())
         && serial.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+/// Workflow #479 F-2: whether `device_key` has the form of a device key, the contract's
+/// fingerprint: `sha256:` and 64 lowercase hexadecimal digits.
+pub fn device_key_valid(device_key: &str) -> bool {
+    device_key.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }

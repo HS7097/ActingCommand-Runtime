@@ -969,6 +969,12 @@ fn instance_rows(
         if let Some(facts) = facts {
             row["backend_selfcheck"] = backend_selfcheck(facts, instance.instance_id());
         }
+        // Workflow #479 F-2: an iOS handset's row says it is a handset, its device system and
+        // whether a phone is bound to it; every other row is as before.
+        if let Some(device) = facts.and_then(|facts| handset_device(facts, instance.instance_id()))
+        {
+            row["device"] = device;
+        }
         run_block(
             client, instance, window, deadline, &mut row, warnings, incomplete,
         );
@@ -1154,6 +1160,40 @@ fn foreground(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Option<Va
             }
             _ => None,
         })
+}
+
+/// Workflow #479 F-2: the program facts the Runtime records at its start for an iOS handset, its
+/// device system and whether a phone is bound to it (`host/device_link.rs`).
+const DEVICE_SYSTEM_FACT_KEY: &str = "device.system";
+const DEVICE_BOUND_FACT_KEY: &str = "device.bound";
+
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): `{kind: "handset", system,
+/// bound}` of an instance whose program facts hold its device system (an iOS handset: the Runtime
+/// records it for no other instance), `bound` whether the private binding file binds a phone to
+/// it; `None` for every other instance, whose row stays as it was.
+pub(crate) fn handset_device(
+    facts: &RuntimeFactSnapshot,
+    instance_id: InstanceId,
+) -> Option<Value> {
+    let fact = |key: &str| {
+        facts
+            .records
+            .iter()
+            .find(|record| {
+                record.scope == (RuntimeFactScope::Instance { instance_id }) && record.key == key
+            })
+            .map(|record| &record.value)
+    };
+    let Some(FactValue::String(system)) = fact(DEVICE_SYSTEM_FACT_KEY) else {
+        return None;
+    };
+    let mut device = Map::new();
+    device.insert("kind".to_owned(), json!("handset"));
+    device.insert("system".to_owned(), json!(system));
+    if let Some(FactValue::Boolean(bound)) = fact(DEVICE_BOUND_FACT_KEY) {
+        device.insert("bound".to_owned(), json!(bound));
+    }
+    Some(Value::Object(device))
 }
 
 /// The self-check fact keys the Runtime writes for each recorded backend open (Workflow #317

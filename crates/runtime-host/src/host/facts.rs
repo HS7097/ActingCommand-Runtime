@@ -28,6 +28,12 @@ pub(super) const DEVICE_LINK_UNBOUND: &str = "unbound";
 /// `device_state:<hold>`, beside `backend_selfcheck:` and `device_link:`.
 const DEVICE_STATE_AVAILABILITY_DETECTOR: &str = "runtime.device-state";
 const DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_state:";
+/// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): `source_detector` and
+/// `source_snapshot_id` prefix of the `session.instance.available = false` record of a handset
+/// whose device system this build has no backend for, `device_system:<system>` (an iOS handset:
+/// `device_system:ios`), beside `device_link:` and `device_state:`.
+const DEVICE_SYSTEM_AVAILABILITY_DETECTOR: &str = "runtime.device-system";
+const DEVICE_SYSTEM_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_system:";
 
 // Workflow #392 DA-A (model 392 v1.1, section 8.1): the instance's display, recorded and never
 // checked. `display.aspect` has no reader in the Runtime (architecture guard DA-A-T3).
@@ -869,6 +875,47 @@ impl HostShared {
         )
     }
 
+    /// Workflow #479 F-2: withdraws the policy availability of a handset whose device system this
+    /// build has no backend for (`device_system:<system>`), through [`Self::publish_fact`];
+    /// nothing publishes it again while the instance is such a handset.
+    pub(super) fn publish_device_system_unavailable(
+        &self,
+        instance_alias: &str,
+        system: actingcommand_contract::DeviceSystem,
+    ) -> RuntimeHostResult<()> {
+        self.publish_policy_instance_availability(
+            instance_alias,
+            false,
+            DEVICE_SYSTEM_AVAILABILITY_DETECTOR,
+            |_| {
+                format!(
+                    "{DEVICE_SYSTEM_AVAILABILITY_SNAPSHOT_PREFIX}{}",
+                    system.as_str()
+                )
+            },
+        )
+    }
+
+    /// Workflow #479 F-2: whether `record` is the withdrawal for the device system `system`.
+    pub(super) fn withdrawn_for_device_system(
+        record: Option<&FactRecord>,
+        system: actingcommand_contract::DeviceSystem,
+    ) -> bool {
+        record.is_some_and(|record| {
+            record.source_detector == DEVICE_SYSTEM_AVAILABILITY_DETECTOR
+                && record
+                    .source_snapshot_id
+                    .strip_prefix(DEVICE_SYSTEM_AVAILABILITY_SNAPSHOT_PREFIX)
+                    == Some(system.as_str())
+                && matches!(
+                    record.content,
+                    FactContent::Inline {
+                        value: ContractFactValue::Boolean(false)
+                    }
+                )
+        })
+    }
+
     /// Workflow #398 RD-5b: whether `record` is a withdrawal a device-state hold published,
     /// whatever the hold.
     pub(super) fn withdrawn_by_device_state(record: Option<&FactRecord>) -> bool {
@@ -963,6 +1010,12 @@ impl HostShared {
                     .find(|known| known.as_str() == hold),
                 ..withdrawal(AvailabilitySource::DeviceState)
             };
+        }
+        // Workflow #479 F-2: a handset whose device system has no backend in this build.
+        if detector == DEVICE_SYSTEM_AVAILABILITY_DETECTOR
+            && snapshot.starts_with(DEVICE_SYSTEM_AVAILABILITY_SNAPSHOT_PREFIX)
+        {
+            return withdrawal(AvailabilitySource::DeviceSystem);
         }
         withdrawal(AvailabilitySource::OtherPublisher)
     }

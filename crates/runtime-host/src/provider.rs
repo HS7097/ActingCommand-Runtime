@@ -34,10 +34,10 @@ pub use actingcommand_execution_kernel::{
     DeviceLinkWatch, DeviceLinkWatchEvent, DeviceLinkWatchStop, DeviceProcessPresence,
     DiscoveredInstanceBinding, EmulatorControlFailure, EmulatorControlOutcome,
     EmulatorControlResult, ExecutionBackendProvider, ForegroundApplicationObservation,
-    HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure, InstanceState, PendingAdbEndpoint,
-    ProviderDiscoveredInstance, ProviderInstanceDiscovery, RecognitionVisionProvider,
-    ResolvedAdbEndpoint, ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider,
-    VisionModelIdentity,
+    HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure, InstanceState, KeyedHandsetBinding,
+    PendingAdbEndpoint, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
+    RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedExecutionInstance,
+    ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
 };
 #[cfg(feature = "fixture-backends")]
 pub use fixtures::FixtureInstanceSpec;
@@ -472,9 +472,30 @@ impl EntryEndpoint {
 
     /// The typed refusal of every session-opening path while the port is unknown, and of a
     /// handset the private binding file has no serial for (Workflow #398 RD-1b, model-398 §3.6):
-    /// no adb command runs against it.
+    /// no adb command runs against it. Workflow #479 F-2: first, of an iOS handset, bound or not:
+    /// this build has no backend for any capture, input or application operation on its device
+    /// system, so nothing is opened or run for it (`device_system_backend_missing`, the stage
+    /// `device_system_unsupported`).
     fn require_bound(&self, operation: impl Into<Location>) -> DeviceResult<()> {
         let operation: Location = operation.into();
+        if self
+            .handset()
+            .is_some_and(|handset| handset.system() == actingcommand_contract::DeviceSystem::Ios)
+        {
+            return Err(DeviceError::fatal(
+                "device system without backend: this build has no backend for that operation on an iOS handset; nothing is opened",
+            )
+            .with_device_system_unsupported()
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                HostLocation::DeviceSystemUnsupported,
+            )
+            .with_diagnostic_context(
+                "execution_backend_registry",
+                operation,
+                DeviceErrorSensitivity::Sensitive,
+            ));
+        }
         if self.handset() == Some(&HandsetEndpoint::Unbound) {
             return Err(DeviceError::fatal(
                 "device binding missing: the private binding file binds no device to this handset instance; bind one and restart",
@@ -1000,7 +1021,8 @@ impl ExecutionBackendEntry {
                 binding.serial().clone(),
                 self.application_adb.adb_path.clone(),
             )),
-            Some(HandsetEndpoint::Unbound) | None => None,
+            // Workflow #479 F-2: an iOS handset has no serial, and no adb reaches it.
+            Some(HandsetEndpoint::Unbound | HandsetEndpoint::Ios(_)) | None => None,
         }
     }
 
@@ -1027,7 +1049,10 @@ impl ExecutionBackendEntry {
             let endpoint = self.endpoint();
             match endpoint.handset() {
                 Some(HandsetEndpoint::Bound(_)) => endpoint.application_target.clone(),
-                Some(HandsetEndpoint::Unbound) | None => return Ok(false),
+                // Workflow #479 F-2: an iOS handset gets no adb device-state command.
+                Some(HandsetEndpoint::Unbound | HandsetEndpoint::Ios(_)) | None => {
+                    return Ok(false);
+                }
             }
         };
         let adb = Adb::new(self.application_adb.clone());

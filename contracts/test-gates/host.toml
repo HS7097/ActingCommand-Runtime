@@ -4450,3 +4450,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_rl1b::s5b_the_previews_rules_digest_is_the_one_the_workbench_records",
 ]
 incident = ["#453 S5b"]
+
+# Workflow #479 F-2 (0.12.74; register §1.482; brief rd-1118/brief-479-f2-ios-handset-config-binding.md; contracts/device-binding.md, "An iOS handset"): a bound iOS handset's runtime.instance_bound names no ADB host or port and records device {kind handset, fingerprint, bound_at_unix_ms, bound_via}, the fingerprint the stored key as it is, and no other member (1); an iOS handset bound and one unbound, on fakes whose self-check would pass, are unavailable under device_system:ios, the program facts device.system ios and device.bound true and false, the unbound one's record {kind handset} alone, the Runtime healthy (2); on the registry's own registration of an iOS handset, bound and unbound, a capture, an input (reset) and an application launch, each on a kernel of its own, are refused with the device error's mark device_system_unsupported (nothing run: the registry's adb is a name that never runs), and RuntimeHostError::execution of each carries the cause device_system_backend_missing (3). No clock read
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_479_f2::f2_a_bound_ios_handsets_binding_records_its_stored_key_as_its_fingerprint",
+    "actingcommand-runtime-host::lib::tests::gate_479_f2::f2_an_ios_handset_is_never_available_and_its_facts_say_its_system_and_binding",
+    "actingcommand-runtime-host::lib::tests::gate_479_f2::f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_opens",
+]
+incident = ["#479 F-2"]

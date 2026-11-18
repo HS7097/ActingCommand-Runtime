@@ -15,16 +15,16 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1774 locations are not in it, and 11 of the header's 42 owners have no fragment file and so no file
+1775 locations are not in it, and 11 of the header's 42 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3943 |
+| active | 3946 |
 | retired | 89 |
-| all | 4032 |
+| all | 4035 |
 
 ## Active codes by category
 
@@ -33,26 +33,26 @@ here.
 | success | 125 |
 | info | 218 |
 | warning | 175 |
-| error | 3408 |
+| error | 3411 |
 | fatal | 17 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 791 |
+| `common_causes` and `handling` both written | 792 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3148 |
+| neither written (`TBD` or empty) | 3150 |
 | `settled` | 154 |
-| `pending` | 3789 |
-| all active codes | 3943 |
+| `pending` | 3792 |
+| all active codes | 3946 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
 | [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
-| [actingctl](actingctl.md) | 207 | 202 | 41 | 8 |
+| [actingctl](actingctl.md) | 209 | 204 | 41 | 8 |
 | [actingd](actingd.md) | 155 | 153 | 98 | 85 |
 | [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1170 | 1123 | 201 | 6 |
+| [runtime-host](runtime-host.md) | 1171 | 1124 | 202 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4032 | 3943 | 791 | 154 |
+| all | 4035 | 3946 | 792 | 154 |

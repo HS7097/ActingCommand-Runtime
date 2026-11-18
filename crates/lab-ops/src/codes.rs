@@ -146,6 +146,11 @@ actingcommand_contract::outcome_codes! {
         // carries; every bind, a row that cannot be a handset's device (`device_row_problem`).
         DeviceKeyUnknown => "device_key_unknown": error / none,
         DeviceRowUnbindable => "device_row_unbindable": error / none,
+        // Workflow #479 F-2 (since 0.12.74): a bind of an iOS handset whose list of phones `acib`
+        // did not give (`ios_list_problem`), and one whose configuration provides no installation
+        // secret to write its phone's key under.
+        DeviceIosListFailed => "device_ios_list_failed": error / none,
+        DeviceBindingSecretMissing => "device_binding_secret_missing": error / none,
         // ---- end of RD-1c
         // ---- Workflow #410 item 6: `capability-gap` / `ac_capability_gap`.
         ActingctlCapabilityGapRecorded => "actingctl_capability_gap_recorded": success / none,
@@ -318,6 +323,40 @@ actingcommand_contract::outcome_vocabulary! {
         /// The row's transport is not the one the handset instance declares (`device.transport`,
         /// `usb` when it names none): a `tcp` row, an emulator's loopback row among them.
         TransportMismatch => "transport_mismatch",
+        /// Workflow #479 F-2: the row is a phone of another device system than the handset
+        /// instance declares (`device.system`): an Android device's key or handle named for an
+        /// iOS handset, or an iOS phone's key for an Android one.
+        SystemMismatch => "system_mismatch",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #479 F-2 (vocabulary `ios_list_problem`): why `acib`, the project's iOS device
+    /// bridge, gave no list of iOS phones: one of its own words for `acib devices`, or one of the
+    /// Lab's three. A listing says it in its member `ios_devices_unlisted` and lists its Android
+    /// rows as before; a bind of an iOS handset is refused `device_ios_list_failed` with it.
+    pub enum IosListProblem: "ios_list_problem" {
+        /// `acib` is not installed: no file at the install root's `tools\acib.exe`.
+        NotInstalled => "not_installed",
+        /// The file is there but the system could not start it.
+        NotStarted => "not_started",
+        /// `acib` ran but its line is not one of its `devices` answers (no line, not JSON of its
+        /// shape, or a word of none of these).
+        AnswerUnreadable => "answer_unreadable",
+        /// `acib`'s word: its command line was refused.
+        CommandLineInvalid => "command_line_invalid",
+        /// `acib`'s word: its asynchronous runtime could not start.
+        AsyncRuntimeFailed => "async_runtime_failed",
+        /// `acib`'s word: its listing did not finish within its deadline.
+        DeadlinePassed => "deadline_passed",
+        /// `acib`'s word: Apple's device service (usbmuxd) does not answer.
+        UsbmuxdUnreachable => "usbmuxd_unreachable",
+        /// `acib`'s word: usbmuxd answered but its device list could not be read.
+        UsbmuxdListFailed => "usbmuxd_list_failed",
+        /// `acib`'s word: the salt it was given for the keys is unusable.
+        KeySaltUnusable => "key_salt_unusable",
+        /// `acib`'s word: the salt it was given for the binding keys is unusable.
+        BindingSaltUnusable => "binding_salt_unusable",
     }
 }
 

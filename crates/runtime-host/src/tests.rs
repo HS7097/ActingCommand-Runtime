@@ -539,6 +539,10 @@ mod gate_398_rd2;
 mod gate_398_rd4;
 // Workflow #398 RD-5b: a handset's device state, its holds and the start gate through the host.
 mod gate_398_rd5b;
+// Workflow #479 F-2 (register §1.482): an iOS handset is an instance the Runtime knows, recorded by
+// its key, never available to policy, and refused every capture, input and application operation
+// before anything opens.
+mod gate_479_f2;
 // STORE-FG-2 (0.12.29): a store update package's store tap goes to exactly its allowed store;
 // every other input expects the assigned application.
 mod gate_store_fg2;
