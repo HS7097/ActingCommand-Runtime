@@ -7204,8 +7204,8 @@
         "system_unsupported": {
           "description": "device.system is neither android nor ios, or is named beside a kind other than handset (Workflow #479 F-2)."
         },
-        "acib_path_without_ios": {
-          "description": "An instance that is no iOS handset names acib_path (Workflow #479 F-2)."
+        "adb_member_with_ios": {
+          "description": "An iOS handset names a member only a device reached through adb has: adb_path, command_timeout_ms or a touch tool's member (maatouch_local_path, minitouch_local_path, push_touch_tool, handshake_timeout_ms, shutdown_timeout_ms, tap_hold_ms); refused, never ignored (Workflow #479 F-2 fix round 1)."
         }
       }
     },
@@ -7265,7 +7265,7 @@
       }
     },
     "ios_list_problem": {
-      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones: one of acib's own words for acib devices, or one of the Lab's three (Workflow #479 F-2, contracts/device-binding.md, An iOS handset). A listing says it in its member ios_devices_unlisted and answers its Android rows; an iOS bind is refused device_ios_list_failed with it.",
+      "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones: one of acib's own words for acib devices, or one of the Lab's (three, and fix round 1's three: the Lab calls acib with a deadline, waits for it a little longer, reads a bounded amount of its output and ends it past either) (Workflow #479 F-2, contracts/device-binding.md, An iOS handset). A listing says it in its member ios_devices_unlisted and answers its Android rows; an iOS bind is refused device_ios_list_failed with it.",
       "tokens": {
         "not_installed": {
           "description": "acib is not installed: no file at the install root's tools\\acib.exe."
@@ -7274,7 +7274,7 @@
           "description": "The file is there but the system could not start it."
         },
         "answer_unreadable": {
-          "description": "acib ran but its line is not one of its devices answers (no line, not JSON of its shape, or a word of none of these)."
+          "description": "acib ran but its line is not one of its devices answers (no line, a line its output could not be read for, not JSON of its shape, or a word of none of these)."
         },
         "command_line_invalid": {
           "description": "acib's word: its command line was refused."
@@ -7296,6 +7296,15 @@
         },
         "binding_salt_unusable": {
           "description": "acib's word: the salt it was given for the binding keys is unusable."
+        },
+        "no_answer_in_time": {
+          "description": "acib had not ended with its answer when the Lab's wait (12 s, a little above the 10 s deadline the Lab gives it, --timeout-ms) passed; the Lab ended it (Workflow #479 F-2 fix round 1)."
+        },
+        "answer_too_long": {
+          "description": "acib printed more than the Lab reads of one of its streams (64 KiB of its output or of its errors); the Lab ended it (Workflow #479 F-2 fix round 1)."
+        },
+        "not_ended": {
+          "description": "The Lab had to end acib (past its wait or its cap) or could not tell whether it had ended, and ending it failed: it may still run (Workflow #479 F-2 fix round 1)."
         }
       }
     },

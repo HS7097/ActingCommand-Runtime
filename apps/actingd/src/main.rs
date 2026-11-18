@@ -658,6 +658,7 @@ fn start_daemon(
         adb_requirement,
         emulator_autostart,
         process_priority: priorities,
+        mismatched_handsets,
         ..
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         match device_refusal.filter(|refused| refused.code() == code) {
@@ -676,6 +677,13 @@ fn start_daemon(
         &process_priority::apply(priorities, &process_priority::SystemProcessPriority),
         None,
     ));
+    // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a private
+    // row of another device system than its handset's configuration names binds nothing; that
+    // handset alone starts unbound, and the start says so in one warning daemon line each, its
+    // alias and the word, never an identifier.
+    for warning in config::binding_mismatch_warnings(&mismatched_handsets) {
+        write_stderr(&daemon_lines(&warning, None));
+    }
     // Workflow #337: the install root's adb check of `check-config`, before any side effect.
     config::ac_adb::require(&adb_requirement).map_err(|rejection| {
         ActingdError::refused(rejection.code(), rejection.outcome())

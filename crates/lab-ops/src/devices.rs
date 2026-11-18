@@ -51,9 +51,12 @@
 //!   `tools\acib.exe`, started as adb is (standard input from nowhere, pipes for its output and
 //!   errors), and a salt reaches it only as a variable of that one child's environment under the
 //!   Lab's fixed names ([`ACIB_KEY_SALT_VARIABLE`], [`ACIB_BINDING_SALT_VARIABLE`]), never an
-//!   argument. When `acib` is not installed and no iOS handset is configured the listing is as
-//!   before; otherwise an iOS listing that fails is the member `ios_devices_unlisted` `{why}`
-//!   (`ios_list_problem`) beside the Android rows, never the listing's failure. `bind` of an iOS
+//!   argument. Fix round 1: `acib` is given its own deadline ([`ACIB_TIMEOUT_MS`]) and the Lab
+//!   waits for it a little longer, reading a bounded amount of its output ([`wait_acib`]); past
+//!   either it ends its child. When `acib` is not installed and no iOS handset is configured the
+//!   listing is as before; otherwise an iOS listing that fails is the member
+//!   `ios_devices_unlisted` `{why}` (`ios_list_problem`) beside the Android rows, never the
+//!   listing's failure. `bind` of an iOS
 //!   handset names its phone by the listing's `device_key`, has `acib` find it and answer its key
 //!   under the installation's secret, and writes the iOS row; a key or handle of the other device
 //!   system is `device_row_unbindable` `system_mismatch`.
@@ -81,10 +84,12 @@ use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const COMMAND: &str = "devices";
 pub const LIST: &str = "list";
@@ -216,11 +221,102 @@ pub enum AcibRun {
     Refused(Vec<u8>),
     /// It did not start.
     NotStarted(std::io::Error),
+    /// Workflow #479 F-2 fix round 1: it had not ended with its answer when the Lab's wait
+    /// ([`ACIB_WAIT_MS`]) passed, and the Lab ended it.
+    Overdue,
+    /// Workflow #479 F-2 fix round 1: it printed more than [`ACIB_OUTPUT_LIMIT_BYTES`] on one of
+    /// its two streams, and the Lab ended it.
+    TooLong,
+    /// Workflow #479 F-2 fix round 1: the Lab had to end it (past its wait or its cap) or could not
+    /// tell whether it had ended, and ending it failed: it may still run.
+    NotEnded,
+}
+
+/// Workflow #479 F-2 fix round 1: the deadline the Lab gives `acib` for one call (`--timeout-ms`):
+/// 10 s, well under the 30 s the installer waits for a Lab call (register §1.475), so a listing
+/// whose wait for Apple's device service runs out still answers adb's rows in time.
+pub const ACIB_TIMEOUT_MS: u64 = 10_000;
+/// Workflow #479 F-2 fix round 1: how long the Lab waits for `acib`, a little above its own
+/// deadline: a child still running then is ended (it is the Lab's own child) and the call answers
+/// `no_answer_in_time`.
+pub const ACIB_WAIT_MS: u64 = 12_000;
+/// Workflow #479 F-2 fix round 1: the most the Lab reads of each of `acib`'s two streams (its
+/// output, and its errors, which are read and dropped); a child that prints more is ended and the
+/// call answers `answer_too_long`. A `devices` line of many phones is a few kilobytes.
+pub const ACIB_OUTPUT_LIMIT_BYTES: usize = 64 * 1024;
+/// How often the Lab looks whether `acib` ended.
+const ACIB_POLL_MS: u64 = 10;
+
+/// Workflow #479 F-2 fix round 1: the bounds of one wait for `acib` ([`wait_acib`]).
+#[derive(Debug, Clone, Copy)]
+pub struct AcibBounds {
+    /// The longest the Lab waits for the child to end with its answer.
+    pub wait: Duration,
+    /// The most read of each of its two streams.
+    pub output_limit: usize,
+    /// The time between two looks.
+    pub poll: Duration,
+}
+
+impl AcibBounds {
+    /// The bounds of [`run_acib`]: [`ACIB_WAIT_MS`], [`ACIB_OUTPUT_LIMIT_BYTES`] and a look every
+    /// 10 ms.
+    pub const fn lab() -> Self {
+        Self {
+            wait: Duration::from_millis(ACIB_WAIT_MS),
+            output_limit: ACIB_OUTPUT_LIMIT_BYTES,
+            poll: Duration::from_millis(ACIB_POLL_MS),
+        }
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: a started `acib` as [`wait_acib`] follows it: the Lab's own
+/// child process, or a test's scripted one.
+pub trait AcibChild {
+    /// Whether it ended, `Some(true)` with status 0; `None` while it runs.
+    fn ended(&mut self) -> std::io::Result<Option<bool>>;
+    /// Ends it and waits for its end.
+    fn end(&mut self) -> std::io::Result<()>;
+}
+
+impl AcibChild for Child {
+    fn ended(&mut self) -> std::io::Result<Option<bool>> {
+        self.try_wait()
+            .map(|status| status.map(|status| status.success()))
+    }
+
+    fn end(&mut self) -> std::io::Result<()> {
+        self.kill()?;
+        self.wait().map(|_| ())
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: the clock a wait for `acib` reads: the wall clock in
+/// [`run_acib`], a test's own in its tests.
+pub trait AcibClock {
+    /// The time since the wait began.
+    fn elapsed(&self) -> Duration;
+    /// Waits `span` before the next look.
+    fn pause(&self, span: Duration);
+}
+
+/// The wall clock of one wait, from its start.
+struct WallClock(Instant);
+
+impl AcibClock for WallClock {
+    fn elapsed(&self) -> Duration {
+        self.0.elapsed()
+    }
+
+    fn pause(&self, span: Duration) {
+        std::thread::sleep(span);
+    }
 }
 
 /// Workflow #479 F-2: runs `acib` at `acib` as `call` says, started as adb is: standard input from
 /// nowhere, its output and errors through pipes (register §1.475), and the salts in its own
-/// environment alone.
+/// environment alone. Fix round 1: the call carries `acib`'s own deadline ([`ACIB_TIMEOUT_MS`],
+/// [`AcibSalts::call`]), and the Lab waits for it within [`AcibBounds::lab`] ([`wait_acib`]).
 pub fn run_acib(acib: &Path, call: &AcibCall) -> AcibRun {
     let mut command = Command::new(acib);
     command
@@ -234,10 +330,143 @@ pub fn run_acib(acib: &Path, call: &AcibCall) -> AcibRun {
     for (name, value) in &call.environment {
         command.env(name, value);
     }
-    match command.output() {
-        Err(error) => AcibRun::NotStarted(error),
-        Ok(output) if output.status.success() => AcibRun::Answered(output.stdout),
-        Ok(output) => AcibRun::Refused(output.stdout),
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return AcibRun::NotStarted(error),
+    };
+    let clock = WallClock(Instant::now());
+    match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => wait_acib(
+            &mut child,
+            Box::new(stdout),
+            Box::new(stderr),
+            AcibBounds::lab(),
+            &clock,
+        ),
+        // Both were asked for as pipes, so both are there; without them no line can be read.
+        _ => ended_as(&mut child, AcibRun::Refused(Vec::new())),
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: what one reader of a stream of `acib` read to the stream's end.
+enum StreamRead {
+    /// Its bytes (none for the errors, which are dropped).
+    Ended(Vec<u8>),
+    /// More than the limit.
+    TooLong,
+    /// The read failed.
+    Failed,
+}
+
+/// Which of `acib`'s two streams a [`StreamRead`] is of.
+#[derive(Clone, Copy)]
+enum AcibStream {
+    Output,
+    Errors,
+}
+
+/// Reads `stream` to its end, at most `limit` bytes, keeping them when `keep` is set.
+fn read_bounded(mut stream: Box<dyn Read + Send>, limit: usize, keep: bool) -> StreamRead {
+    let mut kept = Vec::new();
+    let mut read = 0_usize;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => return StreamRead::Ended(kept),
+            Ok(count) => {
+                read = read.saturating_add(count);
+                if read > limit {
+                    return StreamRead::TooLong;
+                }
+                if keep {
+                    kept.extend_from_slice(&buffer[..count]);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return StreamRead::Failed,
+        }
+    }
+}
+
+/// `child`'s run as `run` once it is ended; [`AcibRun::NotEnded`] when ending it fails.
+fn ended_as(child: &mut dyn AcibChild, run: AcibRun) -> AcibRun {
+    match child.end() {
+        Ok(()) => run,
+        Err(_) => AcibRun::NotEnded,
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: follows the started `acib` `child`, whose standard output and
+/// errors are `output` and `errors`, within `bounds` on `clock`. Each stream is read on a thread
+/// of its own, at most `bounds.output_limit` bytes (the errors read and dropped), so a child that
+/// fills a pipe never blocks. The run is the child's answer once it ended and both streams
+/// reached their end; a stream past the limit ends the child, [`AcibRun::TooLong`]; a child (or
+/// a stream) not at its end when `bounds.wait` has passed is ended, [`AcibRun::Overdue`]; a
+/// stream that cannot be read ends the child, as a line the Lab cannot read
+/// ([`AcibRun::Refused`] with nothing). Ending the child or reading its state failing is
+/// [`AcibRun::NotEnded`].
+pub fn wait_acib(
+    child: &mut dyn AcibChild,
+    output: Box<dyn Read + Send>,
+    errors: Box<dyn Read + Send>,
+    bounds: AcibBounds,
+    clock: &dyn AcibClock,
+) -> AcibRun {
+    let (sender, receiver) = mpsc::channel();
+    for (stream, which) in [(output, AcibStream::Output), (errors, AcibStream::Errors)] {
+        let sender = sender.clone();
+        let limit = bounds.output_limit;
+        let keep = matches!(which, AcibStream::Output);
+        // A reader the wait no longer listens to ends with its stream (the ended child's pipe);
+        // nothing joins it, and what it would send has nobody left to read it.
+        let _reader = std::thread::spawn(move || {
+            let read = read_bounded(stream, limit, keep);
+            sender.send((which, read)).ok();
+        });
+    }
+    drop(sender);
+    let mut answer = None;
+    let mut errors_read = false;
+    let mut status = None;
+    loop {
+        while let Ok((which, read)) = receiver.try_recv() {
+            match (which, read) {
+                (_, StreamRead::TooLong) => return end_unless(child, status, AcibRun::TooLong),
+                (_, StreamRead::Failed) => {
+                    return end_unless(child, status, AcibRun::Refused(Vec::new()));
+                }
+                (AcibStream::Output, StreamRead::Ended(bytes)) => answer = Some(bytes),
+                (AcibStream::Errors, StreamRead::Ended(_)) => errors_read = true,
+            }
+        }
+        if status.is_none() {
+            match child.ended() {
+                Ok(ended) => status = ended,
+                Err(_) => return ended_as(child, AcibRun::NotEnded),
+            }
+        }
+        if let (Some(success), true) = (status, errors_read)
+            && let Some(answer) = answer.take()
+        {
+            return if success {
+                AcibRun::Answered(answer)
+            } else {
+                AcibRun::Refused(answer)
+            };
+        }
+        if clock.elapsed() >= bounds.wait {
+            return end_unless(child, status, AcibRun::Overdue);
+        }
+        clock.pause(bounds.poll);
+    }
+}
+
+/// `run` for `child`, ended first unless it already ended (`status` is some).
+fn end_unless(child: &mut dyn AcibChild, status: Option<bool>, run: AcibRun) -> AcibRun {
+    if status.is_some() {
+        run
+    } else {
+        ended_as(child, run)
     }
 }
 
@@ -253,6 +482,7 @@ struct AcibSalts<'a> {
 impl AcibSalts<'_> {
     /// The call: `devices`, `--key-salt-env` naming the Lab's variable when there is a key salt,
     /// and `--binding-salt-env` when there is a secret too; the salts as those variables' values.
+    /// Fix round 1: and `--timeout-ms` [`ACIB_TIMEOUT_MS`], `acib`'s own deadline.
     fn call(&self) -> AcibCall {
         let mut arguments = vec!["devices".to_owned()];
         let mut environment = Vec::new();
@@ -272,6 +502,8 @@ impl AcibSalts<'_> {
                 ));
             }
         }
+        arguments.push("--timeout-ms".to_owned());
+        arguments.push(ACIB_TIMEOUT_MS.to_string());
         AcibCall {
             arguments,
             environment,
@@ -345,6 +577,10 @@ fn ios_rows(
 ) -> Result<Vec<IosListed>, IosListProblem> {
     let line = match run(acib, &salts.call()) {
         AcibRun::NotStarted(_) => return Err(IosListProblem::NotStarted),
+        // Workflow #479 F-2 fix round 1: past the Lab's wait, past its cap, or not ended.
+        AcibRun::Overdue => return Err(IosListProblem::NoAnswerInTime),
+        AcibRun::TooLong => return Err(IosListProblem::AnswerTooLong),
+        AcibRun::NotEnded => return Err(IosListProblem::NotEnded),
         AcibRun::Refused(stdout) => {
             return Err(serde_json::from_slice::<AcibProblemLine>(&stdout)
                 .ok()

@@ -333,15 +333,16 @@ actingcommand_contract::outcome_vocabulary! {
 actingcommand_contract::outcome_vocabulary! {
     /// Workflow #479 F-2 (vocabulary `ios_list_problem`): why `acib`, the project's iOS device
     /// bridge, gave no list of iOS phones: one of its own words for `acib devices`, or one of the
-    /// Lab's three. A listing says it in its member `ios_devices_unlisted` and lists its Android
-    /// rows as before; a bind of an iOS handset is refused `device_ios_list_failed` with it.
+    /// Lab's (three, and fix round 1's three). A listing says it in its member
+    /// `ios_devices_unlisted` and lists its Android rows as before; a bind of an iOS handset is
+    /// refused `device_ios_list_failed` with it.
     pub enum IosListProblem: "ios_list_problem" {
         /// `acib` is not installed: no file at the install root's `tools\acib.exe`.
         NotInstalled => "not_installed",
         /// The file is there but the system could not start it.
         NotStarted => "not_started",
-        /// `acib` ran but its line is not one of its `devices` answers (no line, not JSON of its
-        /// shape, or a word of none of these).
+        /// `acib` ran but its line is not one of its `devices` answers (no line, a line its output
+        /// could not be read for, not JSON of its shape, or a word of none of these).
         AnswerUnreadable => "answer_unreadable",
         /// `acib`'s word: its command line was refused.
         CommandLineInvalid => "command_line_invalid",
@@ -357,6 +358,15 @@ actingcommand_contract::outcome_vocabulary! {
         KeySaltUnusable => "key_salt_unusable",
         /// `acib`'s word: the salt it was given for the binding keys is unusable.
         BindingSaltUnusable => "binding_salt_unusable",
+        /// Workflow #479 F-2 fix round 1: `acib` had not ended with its answer when the Lab's
+        /// wait (a little above the deadline it gives `acib`) passed; the Lab ended it.
+        NoAnswerInTime => "no_answer_in_time",
+        /// Workflow #479 F-2 fix round 1: `acib` printed more than the Lab reads of one of its
+        /// streams; the Lab ended it.
+        AnswerTooLong => "answer_too_long",
+        /// Workflow #479 F-2 fix round 1: the Lab had to end `acib` (past its wait or its cap) or
+        /// could not tell whether it had ended, and ending it failed: it may still run.
+        NotEnded => "not_ended",
     }
 }
 

@@ -1655,12 +1655,26 @@ impl HostShared {
         )?
         .values()
         .filter(|instance| instance.device_self_checked())
-        .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+        .map(|instance| {
+            (
+                instance.instance_alias.clone(),
+                instance.instance_id,
+                instance.device_system_without_backend().is_some(),
+            )
+        })
         .collect::<Vec<_>>();
         let mut cooling = Vec::new();
-        for (instance_alias, instance_id) in instances {
+        for (instance_alias, instance_id, inert) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
+            // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): an
+            // instance inert by design (a handset whose device system has no backend in this
+            // build) is not attempted: its availability is withdrawn above under
+            // `device_system:<system>` (once, unless that withdrawal is in effect), the plain
+            // statement of what it is, and nothing is opened, recorded as a failure or counted.
+            if inert {
+                continue;
+            }
             if lock(
                 &self.scheduling_pause,
                 HostLocation::ReadInstallStartupPause,

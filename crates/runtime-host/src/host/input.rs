@@ -112,6 +112,22 @@ impl HostShared {
                 ),
             )?);
         }
+        // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): an
+        // instance whose device system has no backend in this build is refused here, before the
+        // Nemu input's check, the key table, the frame, the foreground gate, the ADB baseline or
+        // any backend of its stand-in registration is looked at: `input_backend_open_failed`
+        // caused by `device_system_backend_missing`, denied; nothing is recorded or changed.
+        if let Some(refused) = super::lease::device_system_refusal(
+            &resolved,
+            super::lease::DeviceOperation::Input,
+            HostLocation::ExecuteInput,
+        ) {
+            return Err(RequestFailure::request(
+                refused,
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         // ISO-2b (#419 R1, ISO-M row E08): the run whose stop a stopped input reports.
         let stop_control = input_control.clone();
         let input_check = self
@@ -742,6 +758,22 @@ impl HostShared {
                     &SchedulerError::TransferNotSafe,
                 ),
             )?);
+        }
+        // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): an
+        // application command on an instance whose device system has no backend in this build is
+        // refused here, before its admission is recorded, its resources are prepared or any
+        // backend of its stand-in registration is looked at: `application_backend_operation_failed`
+        // caused by `device_system_backend_missing`, denied; nothing is recorded or changed.
+        if let Some(refused) = super::lease::device_system_refusal(
+            &resolved,
+            super::lease::DeviceOperation::Application,
+            HostLocation::ControlApplication,
+        ) {
+            return Err(RequestFailure::request(
+                refused,
+                RuntimeReceiptState::Denied,
+                None,
+            ));
         }
         self.append_scheduler_admitted_for(
             request,

@@ -34,13 +34,14 @@ An instance entry of the actingd configuration takes an optional member `device`
 
 - Workflow #479 F-2 (since 0.12.74, `actingd-config` revision 34): `system` is a handset's member
   only, `android` (also what an absent `system` means) or `ios` ("An iOS handset", below); an iOS
-  handset names no touch or capture backend, and only it may name `acib_path`.
+  handset names no touch or capture backend and no member only a device reached through adb has
+  (`adb_path`, `command_timeout_ms`, a touch tool's member).
 
 A declaration that breaks one of these rules is refused at stage `assemble`, by check-config and
 by a start alike, with `device_config_invalid` and the value `device_config_problem`
 (`kind_unknown`, `transport_unsupported`, `endpoint_with_handset`, `serial_in_config`,
 `discovery_key_with_handset`, `backend_kind_unsupported`, `alias_too_long`; since 0.12.74
-`system_unsupported`, `acib_path_without_ios`). check-config prints `{alias,
+`system_unsupported`, `adb_member_with_ios`). check-config prints `{alias,
 device_config_problem}` as `error.detail`.
 
 The manifest reports the kind of an instance that names `device` as the parameter
@@ -174,15 +175,21 @@ No record, key, code or word is added; the switch's refusal no longer names `dis
   secret (`sha256:` and 64 lowercase hexadecimal digits, `device_key_invalid` otherwise), never an
   identifier of the phone. A file that holds one is `actingcommand.device-bindings.v2`; a file of
   Android rows alone is written as `v1`, byte for byte as before, and a `v1` file loads as before.
-  A `v1` file with an iOS row, and a row of any other shape, is `malformed`; two iOS rows of one
-  key are `duplicate_serial` (one device bound twice); a row of another device system than its
-  handset's configuration names is `system_mismatch`.
+  A `v1` file with an iOS row, and a row of any other shape, is `malformed` (fix round 1: each
+  kind of row is read by its own members, so a `v1` file is read exactly as before this slice: an
+  Android row with a `system` member, `null` included, is `malformed`); two iOS rows of one key are
+  `duplicate_serial` (one device bound twice). A row of another device system than its handset's
+  configuration names (`system_mismatch`) binds nothing (fix round 1): a start registers that
+  handset unbound, writes one warning daemon line `device_binding_ignored` `{alias,
+  device_binding_problem}` (no identifier) and starts every other instance; check-config refuses
+  the file (`device_binding_file_invalid` `system_mismatch`).
 
 | Condition | Code | check-config | Start |
 |---|---|---|---|
 | The file cannot be read, is not JSON of its shape and schema, is too large, names an alias twice or a serial twice, or holds a serial of the wrong form | `device_binding_file_invalid` (`path`, `device_binding_problem`: `unreadable`, `malformed`, `duplicate_alias`, `duplicate_serial`, `serial_invalid`) | fails at `assemble`, `error.detail` `{path, device_binding_problem}` | refused |
 | A handset has no binding | `device_binding_missing` (`alias`) | fails at `assemble`, `error.detail` `{alias}` | goes on; the handset is registered unbound (below) |
 | The file binds an alias no handset of the configuration has | `device_binding_unused` (`alias`, info) | one warning `device_binding_unused:<alias>`, status stays `ok` | nothing |
+| Workflow #479 F-2 fix round 1: a handset's row is of another device system than its configuration names | `device_binding_file_invalid` (`path`, `system_mismatch`) at check-config; `device_binding_ignored` (`alias`, `device_binding_problem`, warning) at a start | fails at `assemble` | goes on; that handset alone is registered unbound, one warning daemon line |
 
 ## Unbound handset
 
@@ -442,10 +449,13 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   `device_config_invalid` `system_unsupported`. The manifest reports it as
   `instance.<instance id>.device_system` only for an entry that names it (no default, read at
   assembly, not settable). An iOS handset names no touch or capture backend
-  (`backend_kind_unsupported`), uses no adb, and its optional `acib_path` (an iOS handset's member
-  alone, `acib_path_without_ios` elsewhere; not empty, `instance_config_invalid`) defaults to
-  `<install root>\tools\acib.exe` as an absent `adb_path` is the install root's adb. The file need
-  not exist: nothing of this build runs it from the Runtime. A configuration written before this
+  (`backend_kind_unsupported`) and uses no adb: fix round 1, a member only a device reached
+  through adb has (`adb_path`, `command_timeout_ms`, `maatouch_local_path`,
+  `minitouch_local_path`, `push_touch_tool`, `handshake_timeout_ms`, `shutdown_timeout_ms`,
+  `tap_hold_ms`) is refused, `adb_member_with_ios`, never ignored. The configuration names no path
+  of `acib` (fix round 1: the member that did, which nothing read, went): the Lab runs the install
+  root's `tools\acib.exe`, the one place one function names, and the slice that first runs `acib`
+  from the Runtime adds the member with what resolves it. A configuration written before this
   slice loads unchanged.
 - **The private row.** `{alias, system: "ios", device_key, bound_at_unix_ms, bound_via}` ("The
   private binding file", above): the key `acib` makes of the phone's identifier under the
@@ -463,12 +473,17 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   `ACTINGCOMMAND_ACIB_KEY_SALT` and `ACTINGCOMMAND_ACIB_BINDING_SALT` (never an argument, a log
   line or an answer; the caller's own `--key-salt-env` variable is not inherited by it), and `acib`
   is started as adb is: standard input from nowhere, pipes for its output and errors (register
-  §1.475). When `acib` is not installed and the configuration the listing reads has no iOS
-  handset, nothing is asked and the answer is the one of before. Otherwise a listing `acib` did not
-  give answers adb's rows as before and one member, `ios_devices_unlisted` `{why}`, `why` a word
-  of `ios_list_problem`: `not_installed` (no file), `not_started`, `answer_unreadable`, or one of
-  `acib`'s own words for `devices` (`usbmuxd_unreachable` when Apple's device service does not
-  answer, `usbmuxd_list_failed`, `deadline_passed`, `async_runtime_failed`,
+  §1.475). Fix round 1: the call carries `acib`'s own deadline, `--timeout-ms 10000`, well under
+  the installer's 30 s; the Lab waits for the child 12 s at most and reads at most 64 KiB of each
+  of its streams (its errors read and dropped), and ends the child (its own) past either. When
+  `acib` is not installed and the configuration the listing reads has no iOS handset, nothing is
+  asked and the answer is the one of before. Otherwise a listing `acib` did not give answers adb's
+  rows as before and one member, `ios_devices_unlisted` `{why}`, `why` a word of
+  `ios_list_problem`: `not_installed` (no file), `not_started`, `answer_unreadable`, fix round 1's
+  `no_answer_in_time` (not ended with its answer within the Lab's wait; ended), `answer_too_long`
+  (more than the cap on a stream; ended) and `not_ended` (it had to be ended and could not be), or
+  one of `acib`'s own words for `devices` (`usbmuxd_unreachable` when Apple's device service does
+  not answer, `usbmuxd_list_failed`, `deadline_passed`, `async_runtime_failed`,
   `command_line_invalid`, `key_salt_unusable`, `binding_salt_unusable`); the listing is a success.
 - **`devices bind` and `unbind`.** For an alias whose configuration says `ios`, `bind` takes the
   listing's `device_key` (with the salt it was listed under, else under the secret), has `acib`
@@ -489,15 +504,26 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   handset's shape, so no `ledger` revision. Until the capture slice it is never available to
   policy: `session.instance.available` `false` under `source_detector` `runtime.device-system` and
   `source_snapshot_id` `device_system:ios`, bound or not, whatever its self-check says
-  (`availability_source` `device_system`). The registry refuses every capture, input and
-  application operation on it (and the ADB baseline probe and the foreground query) before
-  anything is opened or run, with the stage `device_system_unsupported`; the operation's failure
-  has the cause `device_system_backend_missing` (error, ladder class `declaration_error`): this
-  build has no backend for that operation on that device system. Only that instance's operation
-  fails. No adb device-link watch or device-state read concerns it. At its start the Runtime
-  records the program facts `device.system` (`ios`) and `device.bound` (boolean) of each iOS
-  handset, and the Lab's status shows them on its row as `device` `{kind: "handset", system,
-  bound}`; nothing is recorded for an Android handset or an emulator.
+  (`availability_source` `device_system`). Fix round 1: the host refuses every input, capture and
+  application operation on it at the front of its admission (`HostShared::input`,
+  `control_application_of`, a read-only observe, a capture sequence, a Lab or recovery look, a
+  run's capture, a monitor's configuration), before any key table, foreground gate, ADB baseline
+  or backend of its stand-in registration is looked at, denied with the operation's own failure
+  code (`input_backend_open_failed`, `capture_backend_open_failed`,
+  `application_backend_operation_failed`) and the cause `device_system_backend_missing` (error,
+  ladder class `declaration_error`): this build has no backend for that operation on that device
+  system; nothing is recorded or changed. Behind it the registry refuses the same way (the stage
+  `device_system_unsupported`, the same codes and cause), the ADB baseline probe and the
+  foreground query included, before anything is opened or run. Only that instance's operation
+  fails. It is inert (fix round 1): the start's preparation, the idle planner and every other
+  party that acts on an instance without a person asking skip it, so nothing is attempted, and no
+  failure, ladder or stability count arises from it; what the ledger says of it is, once per
+  start, the availability withdrawal above (when not already in effect) and the program facts
+  `device.system` (`ios`) and `device.bound` (boolean), which the Lab's status shows on its row as
+  `device` `{kind: "handset", system, bound}` (nothing of these for an Android handset or an
+  emulator). Its capability table names no backend: every row unsupported and unavailable, its
+  source `device_system:ios`, its failure semantics why. No adb device-link watch or device-state
+  read concerns it.
 
 ## Later slices
 

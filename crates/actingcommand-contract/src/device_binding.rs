@@ -158,7 +158,7 @@ crate::outcome_vocabulary! {
 /// One binding of the private file: an instance alias and the device of its handset, an Android
 /// handset's adb serial or (Workflow #479 F-2) an iOS handset's device key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "DeviceBindingRow", into = "DeviceBindingRow")]
+#[serde(from = "DeviceBindingRow", into = "DeviceBindingRow")]
 pub struct DeviceBinding {
     pub alias: String,
     device: BoundDevice,
@@ -176,64 +176,85 @@ enum BoundDevice {
     Key(String),
 }
 
-/// Workflow #479 F-2: a row of the file as written. An Android row is `{alias, serial,
-/// bound_at_unix_ms, bound_via}`, as before; an iOS row `{alias, system: "ios", device_key,
-/// bound_at_unix_ms, bound_via}`. Any other member, or another mix of these, is no row.
+/// Workflow #479 F-2: a row of the file as written: an Android row or an iOS row. Fix round 1:
+/// each kind of row is read by its own members and denies every other one, so a version-1 file is
+/// read exactly as before this slice (an Android row with any `system` member, `null` included,
+/// is no row) and any other mix of members is no row either; the file's reader answers
+/// `malformed` for it.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum DeviceBindingRow {
+    Android(AndroidBindingRow),
+    Ios(IosBindingRow),
+}
+
+/// An Android row, `{alias, serial, bound_at_unix_ms, bound_via}`: the row of version 1, member
+/// for member and in that order.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DeviceBindingRow {
+struct AndroidBindingRow {
     alias: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    system: Option<DeviceSystem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    serial: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    device_key: Option<String>,
+    serial: String,
     bound_at_unix_ms: u64,
     bound_via: DeviceBoundVia,
 }
 
-/// Workflow #479 F-2: a row that is neither an Android row (a serial and no system) nor an iOS
-/// row (`system` `ios` and a device key); the file's reader answers `malformed` for it.
-pub struct DeviceBindingRowInvalid;
-
-impl fmt::Display for DeviceBindingRowInvalid {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a binding row names a serial and no system, or system ios and a key")
-    }
+/// Workflow #479 F-2: an iOS row, `{alias, system: "ios", device_key, bound_at_unix_ms,
+/// bound_via}`.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IosBindingRow {
+    alias: String,
+    system: IosRowSystem,
+    device_key: String,
+    bound_at_unix_ms: u64,
+    bound_via: DeviceBoundVia,
 }
 
-impl TryFrom<DeviceBindingRow> for DeviceBinding {
-    type Error = DeviceBindingRowInvalid;
+/// Workflow #479 F-2 fix round 1: the one word an iOS row's `system` holds.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IosRowSystem {
+    Ios,
+}
 
-    fn try_from(row: DeviceBindingRow) -> Result<Self, Self::Error> {
-        let device = match (row.system, row.serial, row.device_key) {
-            (None, Some(serial), None) => BoundDevice::Serial(serial),
-            (Some(DeviceSystem::Ios), None, Some(device_key)) => BoundDevice::Key(device_key),
-            _ => return Err(DeviceBindingRowInvalid),
-        };
-        Ok(Self {
-            alias: row.alias,
-            device,
-            bound_at_unix_ms: row.bound_at_unix_ms,
-            bound_via: row.bound_via,
-        })
+impl From<DeviceBindingRow> for DeviceBinding {
+    fn from(row: DeviceBindingRow) -> Self {
+        match row {
+            DeviceBindingRow::Android(row) => Self {
+                alias: row.alias,
+                device: BoundDevice::Serial(row.serial),
+                bound_at_unix_ms: row.bound_at_unix_ms,
+                bound_via: row.bound_via,
+            },
+            DeviceBindingRow::Ios(row) => Self {
+                alias: row.alias,
+                device: match row.system {
+                    IosRowSystem::Ios => BoundDevice::Key(row.device_key),
+                },
+                bound_at_unix_ms: row.bound_at_unix_ms,
+                bound_via: row.bound_via,
+            },
+        }
     }
 }
 
 impl From<DeviceBinding> for DeviceBindingRow {
     fn from(binding: DeviceBinding) -> Self {
-        let (system, serial, device_key) = match binding.device {
-            BoundDevice::Serial(serial) => (None, Some(serial), None),
-            BoundDevice::Key(device_key) => (Some(DeviceSystem::Ios), None, Some(device_key)),
-        };
-        Self {
-            alias: binding.alias,
-            system,
-            serial,
-            device_key,
-            bound_at_unix_ms: binding.bound_at_unix_ms,
-            bound_via: binding.bound_via,
+        match binding.device {
+            BoundDevice::Serial(serial) => Self::Android(AndroidBindingRow {
+                alias: binding.alias,
+                serial,
+                bound_at_unix_ms: binding.bound_at_unix_ms,
+                bound_via: binding.bound_via,
+            }),
+            BoundDevice::Key(device_key) => Self::Ios(IosBindingRow {
+                alias: binding.alias,
+                system: IosRowSystem::Ios,
+                device_key,
+                bound_at_unix_ms: binding.bound_at_unix_ms,
+                bound_via: binding.bound_via,
+            }),
         }
     }
 }

@@ -73,6 +73,11 @@ actingcommand_contract::outcome_codes! {
         /// #398 R1 §3.2 (RD-1b): the private binding file binds an alias no handset instance of
         /// the configuration has (`alias`); a check-config note, not a failure.
         DeviceBindingUnused => "device_binding_unused": info / none,
+        /// Workflow #479 F-2 fix round 1: the private binding file's row of a handset is of another
+        /// device system than its configuration names (`alias`, `device_binding_problem`
+        /// `system_mismatch`): a start registers that handset unbound, says so in one warning
+        /// daemon line and starts every other instance; check-config refuses the file.
+        DeviceBindingIgnored => "device_binding_ignored": warning / none,
         /// Workflow #369 S6a: an instance names `start_emulator: true` but has no emulator the
         /// daemon can start: a fixture, or an instance not bound by discovery (`alias`).
         StartEmulatorRequiresDiscoveryBinding => "start_emulator_requires_discovery_binding": error / none,
@@ -256,8 +261,9 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #479 F-2: `device.system` is neither `android` nor `ios`, or is named beside a
         /// kind other than `handset`.
         SystemUnsupported => "system_unsupported",
-        /// Workflow #479 F-2: an instance that is no iOS handset names `acib_path`.
-        AcibPathWithoutIos => "acib_path_without_ios",
+        /// Workflow #479 F-2 fix round 1: an iOS handset names a member only a device reached
+        /// through adb has (`adb_path`, `command_timeout_ms` or a touch tool's member).
+        AdbMemberWithIos => "adb_member_with_ios",
     }
 }
 

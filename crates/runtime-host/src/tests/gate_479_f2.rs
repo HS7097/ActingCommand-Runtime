@@ -9,14 +9,27 @@
 // capture, input and application operation on it before anything is opened, with the one cause
 // `device_system_backend_missing`. The registrations are the registry's own; the key is a neutral
 // fake, and no identifier of a phone exists anywhere here.
+//
+// Fix round 1 (rd-1119/brief-479-f2-fix1.md, items 1 and 2): through the host, a person's tap, key
+// (one the stand-in's key table holds and one it does not), swipe, capture and application launch
+// on an iOS handset are each refused at the front of the host's admission with the operation's
+// own failure code and that cause, before any key table, foreground gate, baseline or backend of
+// the stand-in is looked at; and a start with an iOS handset bound and one unbound beside an
+// emulator attempts neither handset (no preparation, no failure record naming it, no ladder, no
+// idle step) while the emulator starts as it does alone. `business_step` is test-only, as the
+// other gate files of this crate keep the scheduler's issuing bridge (architecture guard
+// `fenced_close_requires_scheduler_witness`).
 
 use super::gate_398_rd1b::{last_availability, resolved_handset};
 use super::gate_398_rd2::{fact, instance_facts};
+use super::instance_workers::{all_events, phases};
 use super::*;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, IdleCode};
+use actingcommand_contract::codes::{DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::{
-    DeviceBoundVia, FencedWrite, FencedWritePurpose, InstanceDeviceKind,
-    RuntimeInstanceBindingPayload, RuntimePayload, Sha256Fingerprint, issue_fenced_write,
+    DeviceBoundVia, FencedWrite, FencedWritePurpose, InstanceDeviceKind, RecoveryTriggerStage,
+    RuntimeConfigManifest, RuntimeInstanceBindingPayload, RuntimeLifecyclePhase, RuntimePayload,
+    Sha256Fingerprint, issue_fenced_write,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceSerial, DeviceTarget,
@@ -66,6 +79,7 @@ fn ios_registration(
 }
 
 /// A business step of a lease on `instance_id`, as the host admits an input with.
+#[cfg(test)]
 fn business_step(instance_id: InstanceId) -> Arc<FencedWrite> {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     Arc::new(issue_fenced_write(
@@ -295,5 +309,309 @@ fn f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_
                 .close()
                 .expect("nothing was opened, so nothing is left");
         }
+    }
+}
+
+/// `receipt` is the denial of an operation on an iOS handset: `code`, the operation's own failure
+/// code, caused by `device_system_backend_missing`.
+fn refused_by_device_system(receipt: &RuntimeReceipt, code: &str) {
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    let outcome = receipt.outcome();
+    assert_eq!(outcome.code().as_str(), code, "{receipt:?}");
+    assert!(
+        outcome.causes().iter().any(|link| {
+            link.relation().as_str() == "caused_by"
+                && link.outcome().is(HostCode::DeviceSystemBackendMissing)
+        }),
+        "{receipt:?}"
+    );
+}
+
+/// The counts of what the fake behind an instance was asked: input opens, inputs, capture opens,
+/// captures and application commands.
+fn asked(state: &FakeState) -> [usize; 5] {
+    [
+        state.open_count.load(Ordering::Acquire),
+        state.input_count.load(Ordering::Acquire),
+        state.capture_open_count.load(Ordering::Acquire),
+        state.capture_count.load(Ordering::Acquire),
+        state.application_count.load(Ordering::Acquire),
+    ]
+}
+
+/// Fix round 1, item 1: through the host, a person's tap, key inside the stand-in's key table
+/// (`back`) and outside it, swipe, capture and application launch on a bound iOS handset are each
+/// denied with the operation's own failure code caused by `device_system_backend_missing`. None
+/// reaches the stand-in: the foreground gate never asks (the fake's one foreground failure, which
+/// would have refused the tap as `application_foreground_unknown` and dropped the ADB baseline, is
+/// still there), the key table never refuses (`input_key_unsupported`), and nothing is opened,
+/// sent, captured or commanded on the fake behind it.
+#[test]
+fn f2_fix1_a_tap_a_key_a_swipe_a_capture_and_a_launch_are_refused_at_the_hosts_front() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    *state
+        .foreground_error_once
+        .lock()
+        .expect("the fake's foreground failure") = Some(actingcommand_device::DeviceError::fatal(
+        "neutral foreground query failure",
+    ));
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(
+            FakeProvider::one(ALIAS, instance_id, Arc::clone(&state))
+                .with_resolved_for(ALIAS, resolved_handset(ALIAS, instance_id, bound_ios())),
+        ),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let connection = ConnectionId::new(4791).expect("connection");
+    let process = |operation| {
+        host.process_request_for_test(&runtime_request(&ids, operation), connection)
+            .expect("the request's receipt")
+    };
+
+    // The inputs, on a lease of the person's.
+    let lease = process(RuntimeOperation::acquire_lease(
+        ALIAS,
+        ids.mint_holder_id().expect("holder"),
+    ));
+    let Some(RuntimeResult::LeaseGranted { token }) = lease.result() else {
+        panic!("a lease on the handset: {lease:?}");
+    };
+    let token = token.clone();
+    for action in [
+        InputAction::Tap { x: 10, y: 20 },
+        InputAction::Key {
+            key: "back".to_owned(),
+        },
+        InputAction::Key {
+            key: "KEYCODE_HOME".to_owned(),
+        },
+        InputAction::Swipe {
+            x1: 10,
+            y1: 20,
+            x2: 30,
+            y2: 40,
+            duration_ms: 300,
+        },
+    ] {
+        let receipt = process(RuntimeOperation::Input {
+            token: token.clone(),
+            action,
+            frame: None,
+        });
+        refused_by_device_system(
+            &receipt,
+            DeviceSelfCheckFailure::InputBackendOpenFailed
+                .code()
+                .as_str(),
+        );
+    }
+    let released = process(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        released.state(),
+        RuntimeReceiptState::Completed,
+        "{released:?}"
+    );
+
+    // A capture, as the Lab's look asks for one.
+    let observed = process(RuntimeOperation::ObserveReadonly {
+        instance_alias: ALIAS.to_owned(),
+    });
+    refused_by_device_system(
+        &observed,
+        DeviceSelfCheckFailure::CaptureBackendOpenFailed
+            .code()
+            .as_str(),
+    );
+
+    // An application launch, on the request's own claim.
+    let launched = process(RuntimeOperation::application_lifecycle(
+        ALIAS,
+        ids.mint_holder_id().expect("holder"),
+        ApplicationLifecycleAction::Launch,
+    ));
+    refused_by_device_system(
+        &launched,
+        SharedCode::ApplicationBackendOperationFailed
+            .code()
+            .as_str(),
+    );
+
+    assert_eq!(asked(&state), [0; 5], "nothing reached the stand-in");
+    assert!(
+        state
+            .foreground_error_once
+            .lock()
+            .expect("the fake's foreground failure")
+            .is_some(),
+        "the foreground gate never asked"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// The configuration manifest of `instances` over the defaults file, each instance naming the idle
+/// action `close_app`.
+fn close_app_manifest(instances: &[InstanceId]) -> RuntimeConfigManifest {
+    let ids = instances
+        .iter()
+        .map(
+            |instance| match serde_json::to_value(instance).expect("an instance id encodes") {
+                serde_json::Value::String(text) => text,
+                other => panic!("an instance id is a string: {other}"),
+            },
+        )
+        .collect::<Vec<_>>();
+    let file = serde_json::json!({
+        "instances": ids
+            .iter()
+            .map(|id| serde_json::json!({"instance_id": id, "idle": {"action": "close_app"}}))
+            .collect::<Vec<_>>()
+    });
+    let (_, defaults) =
+        actingcommand_runtime_config::DefaultsFile::shipped().expect("the defaults file parses");
+    let mut parameters = actingcommand_runtime_config::render_parameters(
+        &actingcommand_runtime_config::mechanism_rows(),
+        &ids,
+        &defaults,
+        &file,
+        &|_| None,
+    )
+    .expect("the sections resolve");
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// Whether the start's preparation of `instance` finished without a failure.
+fn prepared_at_start(events: &[PersistedEvent], instance: InstanceId) -> bool {
+    phases(events).into_iter().any(|(event, phase)| {
+        event.links().instance_id() == Some(&instance)
+            && matches!(
+                phase,
+                RuntimeLifecyclePhase::InstancePreparationFinished {
+                    stage: RecoveryTriggerStage::StartupPreparation,
+                    outcome: None,
+                    ..
+                }
+            )
+    })
+}
+
+/// Fix round 1, item 2: a start with an iOS handset bound and one unbound beside an emulator, each
+/// of the three naming the idle action `close_app`. Neither handset is attempted: nothing is
+/// opened on the fakes behind them (which would pass), no preparation, failure, ladder or idle
+/// record names them, and the idle check that notes the emulator's missing way back meets neither
+/// handset. The emulator's start preparation is what it is in a start without them: finished
+/// without a failure.
+#[test]
+fn f2_fix1_a_start_attempts_no_ios_handset_and_the_emulator_beside_them_starts_as_alone() {
+    const IPHONE: &str = "neutral.iphone";
+    const IPHONE_UNBOUND: &str = "neutral.iphone-unbound";
+    const EMULATOR: &str = "neutral.emulator";
+    let opening = || {
+        let state = Arc::new(FakeState::default());
+        state.observed_open.store(true, Ordering::Release);
+        state
+    };
+
+    // The emulator alone.
+    let alone = {
+        let root = TempDir::new().expect("tempdir");
+        let emulator = instance_id();
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(EMULATOR, emulator, opening()).with_device_endpoints()),
+        )
+        .expect("runtime host");
+        let events = all_events(&host);
+        host.close().expect("close host");
+        prepared_at_start(&events, emulator)
+    };
+    assert!(alone, "the emulator alone prepares at its start");
+
+    // The emulator beside an iOS handset bound and one unbound.
+    let root = TempDir::new().expect("tempdir");
+    let (bound, unbound, emulator) = (instance_id(), instance_id(), instance_id());
+    let (bound_state, unbound_state) = (opening(), opening());
+    let host = RuntimeHost::start(
+        config(&root).with_config_manifest(close_app_manifest(&[bound, unbound, emulator])),
+        Arc::new(
+            FakeProvider::from_entries([
+                (IPHONE.to_owned(), bound, Arc::clone(&bound_state)),
+                (
+                    IPHONE_UNBOUND.to_owned(),
+                    unbound,
+                    Arc::clone(&unbound_state),
+                ),
+                (EMULATOR.to_owned(), emulator, opening()),
+            ])
+            .with_device_endpoints()
+            .with_resolved_for(IPHONE, resolved_handset(IPHONE, bound, bound_ios()))
+            .with_resolved_for(
+                IPHONE_UNBOUND,
+                resolved_handset(IPHONE_UNBOUND, unbound, HandsetEndpoint::Ios(None)),
+            ),
+        ),
+    )
+    .expect("the start goes on beside iOS handsets");
+    // The idle check, as at a policy cycle, with no plan: an instance whose action cannot bring
+    // it back says so once (none has a startup package).
+    host.check_idle_instances_for_test(&BTreeMap::new())
+        .expect("the idle check");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let events = all_events(&host);
+    host.close().expect("close host");
+
+    assert_eq!(
+        prepared_at_start(&events, emulator),
+        alone,
+        "the emulator starts as it does alone"
+    );
+    let idle_noted = |instance: InstanceId| {
+        phases(&events).into_iter().any(|(event, phase)| {
+            event.links().instance_id() == Some(&instance)
+                && matches!(
+                    &phase,
+                    RuntimeLifecyclePhase::DeviceStateObserved { outcome }
+                        if outcome.code().as_str() == IdleCode::Unsupported.as_str()
+                )
+        })
+    };
+    assert!(idle_noted(emulator), "the idle check met the emulator");
+    for (handset, state) in [(bound, &bound_state), (unbound, &unbound_state)] {
+        assert_eq!(asked(state), [0; 5], "nothing is opened on {handset:?}");
+        assert!(
+            events
+                .iter()
+                .filter(|event| event.links().instance_id() == Some(&handset))
+                .all(|event| !matches!(
+                    event.payload(),
+                    EventPayload::Runtime(RuntimePayload::Failed(_))
+                )),
+            "no failure record names {handset:?}"
+        );
+        let attempted = phases(&events)
+            .into_iter()
+            .filter(|(event, _)| event.links().instance_id() == Some(&handset))
+            .map(|(_, phase)| phase)
+            .filter(|phase| {
+                matches!(
+                    phase,
+                    RuntimeLifecyclePhase::InstancePreparationFinished { .. }
+                        | RuntimeLifecyclePhase::RecoveryLadderStarted { .. }
+                        | RuntimeLifecyclePhase::DeviceStateObserved { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(attempted.is_empty(), "{handset:?}: {attempted:?}");
+        assert!(!idle_noted(handset));
     }
 }

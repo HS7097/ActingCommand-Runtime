@@ -97,8 +97,8 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   read, so [5, 32]. Workflow #463 U1b (0.12.63, register §1.389) raises it to 33: the members
 ///   `suspension.break_in_runs` and `suspension.break_in_ms` of the `scheduling` section; revisions
 ///   5 to 32 are still read, so [5, 33]. Workflow #479 F-2 (0.12.74, register §1.482) raises it to
-///   34: an instance entry's `device.system` (`android` or `ios`, a handset's only) and an iOS
-///   handset's `acib_path`; revisions 5 to 33 are still read, so [5, 34].
+///   34: an instance entry's `device.system` (`android` or `ios`, a handset's only); revisions 5
+///   to 33 are still read, so [5, 34].
 /// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks

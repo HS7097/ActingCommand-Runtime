@@ -1869,7 +1869,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "devices bind of an iOS handset alias (device.system ios): acib, the install root's tools\\acib.exe, gave no list of iOS phones, as ios_list_problem says: not installed, not started, an answer the Lab does not read, or one of acib's own words for devices (usbmuxd_unreachable when Apple's device service does not answer). Nothing was written (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\").",
+      "description": "devices bind of an iOS handset alias (device.system ios): acib, the install root's tools\\acib.exe, gave no list of iOS phones, as ios_list_problem says: not installed, not started, an answer the Lab does not read, (fix round 1) no answer within the Lab's wait or more output than its cap (the child ended) or a child that could not be ended, or one of acib's own words for devices (usbmuxd_unreachable when Apple's device service does not answer). Nothing was written (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\").",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -646,6 +646,7 @@ impl ExecutionBackendEntry {
             registration.input.requested,
             registration.capture.requested,
             registration.provider_profile.as_ref(),
+            state.bound().and_then(ResolvedAdbEndpoint::handset),
         )?;
         let mut endpoint = EntryEndpoint {
             state,
@@ -695,8 +696,12 @@ impl ExecutionBackendEntry {
         let input = endpoint.input.clone().with_requested(touch);
         let candidate = endpoint.capture.clone().with_requested(capture);
         check_backend_selection(&input, &candidate, HostLocation::SwitchInstanceBackends)?;
-        let capabilities =
-            entry_capability_profile(touch, capture, self.provider_profile.as_ref())?;
+        let capabilities = entry_capability_profile(
+            touch,
+            capture,
+            self.provider_profile.as_ref(),
+            endpoint.handset(),
+        )?;
         endpoint.configuration.input_backend = touch.as_str().to_owned();
         endpoint.configuration.capture_backend = capture.as_str().to_owned();
         endpoint.input = input;
@@ -1303,12 +1308,59 @@ fn entry_capability_profile(
     input: TouchBackendChoice,
     capture: CaptureBackendChoice,
     provider: Option<&EmulatorCapabilityProfile>,
+    handset: Option<&HandsetEndpoint>,
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
-    let capabilities = capability_profile(input, capture)?;
+    // Workflow #479 F-2 fix round 1: a handset whose device system has no backend in this build
+    // has the table of no backend, whatever stand-ins its registration holds.
+    let capabilities = match handset
+        .map(HandsetEndpoint::system)
+        .filter(|system| *system == actingcommand_contract::DeviceSystem::Ios)
+    {
+        Some(system) => device_system_capability_profile(system)?,
+        None => capability_profile(input, capture)?,
+    };
     match provider {
         Some(provider) => merge_capability_profile(&capabilities, provider),
         None => Ok(capabilities),
     }
+}
+
+/// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the capability
+/// table of a handset of the device system `system`, for which this build has no backend: every
+/// row unsupported and unavailable, its source the device system (`device_system:<system>`) and
+/// its failure semantics why; no row names a backend, since none is there.
+fn device_system_capability_profile(
+    system: actingcommand_contract::DeviceSystem,
+) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+    let invalid = |_| {
+        RuntimeHostError::fatal(
+            HostCode::ExecutionCapabilityProfileInvalid,
+            HostLocation::BuildExecutionBackendRegistry,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    };
+    let source = format!("device_system:{}", system.as_str());
+    let evidence = EmulatorCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            EmulatorCapabilityEvidence::new(
+                capability,
+                EmulatorCapabilityAvailability::Unavailable,
+                "This build has no backend for the instance's device system: every capture, input and application operation on it is refused before anything is opened (device_system_backend_missing).",
+                source.as_str(),
+            )?
+            .with_implementation(EmulatorCapabilityImplementation::Unsupported)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
+    EmulatorCapabilityProfile::new(
+        "runtime.execution_backend_registry",
+        EmulatorVersionEvidence::Unavailable {
+            reason: EmulatorVersionUnavailableReason::NotProbed,
+        },
+        evidence,
+    )
+    .map_err(invalid)
 }
 
 /// Records implementation/configuration only; this path never opens or probes a backend.

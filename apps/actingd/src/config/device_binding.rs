@@ -15,9 +15,10 @@
 //!   label `handset:<alias>` wherever it is printed.
 //! - Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"; `actingd-config`
 //!   revision 34): a handset's `device.system`, `android` (also when absent) or `ios`, a handset's
-//!   member only; an iOS handset names no touch or capture backend (this build has none for it),
-//!   and only it may name `acib_path`. Its binding is the private file's iOS row, its phone's
-//!   device key, never an identifier of the phone.
+//!   member only; an iOS handset names no touch or capture backend (this build has none for it)
+//!   and (fix round 1) no member only a device reached through adb has. Its binding is the private
+//!   file's iOS row, its phone's device key, never an identifier of the phone. Fix round 1: a row
+//!   of another device system than its handset's binds nothing; that handset alone is unbound.
 
 use super::InstanceConfig;
 use crate::codes::{ActingdCode, DeviceConfigProblem};
@@ -169,10 +170,6 @@ pub(super) fn check_device(instance: &InstanceConfig) -> Result<DeviceKind, Devi
         }
         Some(_) => return Err(refused(DeviceConfigProblem::SystemUnsupported)),
     };
-    // Workflow #479 F-2: `acib_path` is an iOS handset's member alone.
-    if instance.acib_path.is_some() && system != DeviceSystem::Ios {
-        return Err(refused(DeviceConfigProblem::AcibPathWithoutIos));
-    }
     if kind == DeviceKind::Handset {
         if instance.alias.len() > MAX_HANDSET_ALIAS_BYTES {
             return Err(refused(DeviceConfigProblem::AliasTooLong));
@@ -190,11 +187,24 @@ pub(super) fn check_device(instance: &InstanceConfig) -> Result<DeviceKind, Devi
             return Err(refused(DeviceConfigProblem::DiscoveryKeyWithHandset));
         }
     }
-    // Workflow #479 F-2: an iOS handset has no backend in this build, so it names none.
-    if system == DeviceSystem::Ios
-        && (instance.touch_backend.is_some() || instance.capture_backend.is_some())
-    {
-        return Err(refused(DeviceConfigProblem::BackendKindUnsupported));
+    if system == DeviceSystem::Ios {
+        // Workflow #479 F-2: an iOS handset has no backend in this build, so it names none.
+        if instance.touch_backend.is_some() || instance.capture_backend.is_some() {
+            return Err(refused(DeviceConfigProblem::BackendKindUnsupported));
+        }
+        // Workflow #479 F-2 fix round 1: nor a member only a device reached through adb has (its
+        // adb, its commands' timeout, a touch tool's members): refused, never ignored.
+        if instance.adb_path.is_some()
+            || instance.command_timeout_ms.is_some()
+            || instance.maatouch_local_path.is_some()
+            || instance.minitouch_local_path.is_some()
+            || instance.push_touch_tool.is_some()
+            || instance.handshake_timeout_ms.is_some()
+            || instance.shutdown_timeout_ms.is_some()
+            || instance.tap_hold_ms.is_some()
+        {
+            return Err(refused(DeviceConfigProblem::AdbMemberWithIos));
+        }
     }
     // A backend name that does not parse is refused by its own code later; one that parses
     // must be a backend this kind of device has.
@@ -235,13 +245,20 @@ pub(super) struct HandsetBindings {
     pub(super) unbound: Vec<String>,
     /// The aliases the file binds that no handset of the configuration has, in file order.
     pub(super) unused: Vec<String>,
+    /// Workflow #479 F-2 fix round 1: the handsets whose row is of another device system than
+    /// their configuration names (`system_mismatch`), in configuration order. Each is unbound (and
+    /// in `unbound`): a start warns of it and starts every other instance; check-config refuses the
+    /// file as before.
+    pub(super) mismatched: Vec<String>,
 }
 
 /// Reads the private binding file of `state_root` once and binds each handset of `handsets`
 /// (aliases with their device systems, in configuration order) to its device. Each bound serial
 /// is the device layer's `DeviceSerial`, labelled `handset:<alias>`. Workflow #479 F-2: an iOS
-/// handset is bound by its row's device key, which holds no identifier of its phone; a row of
-/// another device system than its handset's is `system_mismatch`.
+/// handset is bound by its row's device key, which holds no identifier of its phone. Fix round 1:
+/// a row of another device system than its handset's binds nothing: that handset alone is unbound
+/// and named in `mismatched`; a file that cannot be read or breaks its rules is refused whole, as
+/// before.
 pub(super) fn bind_handsets(
     state_root: &Path,
     handsets: &[(String, DeviceSystem)],
@@ -253,38 +270,47 @@ pub(super) fn bind_handsets(
     let bindings = read_device_bindings(state_root).map_err(refusal)?;
     let mut endpoints = BTreeMap::new();
     let mut unbound = Vec::new();
+    let mut mismatched = Vec::new();
     for (alias, system) in handsets {
-        let endpoint = match (bindings.get(alias), system) {
-            (Some(binding), DeviceSystem::Android) => {
-                let serial = binding
-                    .serial()
-                    .ok_or_else(|| refusal(DeviceBindingProblem::SystemMismatch))?;
-                HandsetEndpoint::Bound(HandsetBinding::new(
-                    DeviceSerial::handset(serial, alias),
-                    binding.bound_at_unix_ms,
-                    binding.bound_via,
-                ))
-            }
-            (Some(binding), DeviceSystem::Ios) => {
-                let device_key = binding
-                    .device_key()
-                    .ok_or_else(|| refusal(DeviceBindingProblem::SystemMismatch))?;
-                // The reader checked the key's form (`device_key_invalid`).
-                let device_key = Sha256Fingerprint::stored(device_key)
-                    .map_err(|_| refusal(DeviceBindingProblem::DeviceKeyInvalid))?;
-                HandsetEndpoint::Ios(Some(KeyedHandsetBinding::new(
-                    device_key,
-                    binding.bound_at_unix_ms,
-                    binding.bound_via,
-                )))
-            }
-            (None, DeviceSystem::Android) => {
+        let row = bindings.get(alias);
+        let endpoint = match system {
+            DeviceSystem::Android => row.and_then(|binding| {
+                binding.serial().map(|serial| {
+                    HandsetEndpoint::Bound(HandsetBinding::new(
+                        DeviceSerial::handset(serial, alias),
+                        binding.bound_at_unix_ms,
+                        binding.bound_via,
+                    ))
+                })
+            }),
+            DeviceSystem::Ios => match row
+                .and_then(|binding| binding.device_key().map(|device_key| (binding, device_key)))
+            {
+                Some((binding, device_key)) => {
+                    // The reader checked the key's form (`device_key_invalid`).
+                    let device_key = Sha256Fingerprint::stored(device_key)
+                        .map_err(|_| refusal(DeviceBindingProblem::DeviceKeyInvalid))?;
+                    Some(HandsetEndpoint::Ios(Some(KeyedHandsetBinding::new(
+                        device_key,
+                        binding.bound_at_unix_ms,
+                        binding.bound_via,
+                    ))))
+                }
+                None => None,
+            },
+        };
+        let endpoint = match endpoint {
+            Some(endpoint) => endpoint,
+            None => {
+                // No row, or a row of the other device system (fix round 1): unbound.
+                if row.is_some() {
+                    mismatched.push(alias.clone());
+                }
                 unbound.push(alias.clone());
-                HandsetEndpoint::Unbound
-            }
-            (None, DeviceSystem::Ios) => {
-                unbound.push(alias.clone());
-                HandsetEndpoint::Ios(None)
+                match system {
+                    DeviceSystem::Android => HandsetEndpoint::Unbound,
+                    DeviceSystem::Ios => HandsetEndpoint::Ios(None),
+                }
             }
         };
         endpoints.insert(alias.clone(), endpoint);
@@ -298,7 +324,19 @@ pub(super) fn bind_handsets(
         endpoints,
         unbound,
         unused,
+        mismatched,
     })
+}
+
+/// Workflow #479 F-2 fix round 1: check-config's refusal of the private binding file of
+/// `state_root` when a row of it is of another device system than its handset's configuration
+/// names, as before this round (`device_binding_file_invalid` `system_mismatch`); a start binds
+/// the rest of the file instead.
+pub(super) fn system_mismatch_refusal(state_root: &Path) -> DeviceBindingRefusal {
+    DeviceBindingRefusal {
+        path: device_bindings_path(state_root),
+        problem: DeviceBindingProblem::SystemMismatch,
+    }
 }
 
 /// Test-only (Workflow #479 F-2's gate, `gate_479_f2`): writes `bytes` as the private binding file

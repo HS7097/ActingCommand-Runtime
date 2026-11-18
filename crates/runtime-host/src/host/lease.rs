@@ -3412,6 +3412,43 @@ impl HostShared {
         ))
     }
 
+    /// Workflow #479 F-2 fix round 1: [`device_system_refusal`] of the registered instance
+    /// `instance_alias`; `None` for every other instance (an alias not registered meets its own
+    /// refusal where it is resolved). Only a registry that cannot be read is the error.
+    pub(super) fn device_system_refusal_of(
+        &self,
+        instance_alias: &str,
+        operation: DeviceOperation,
+        location: impl Into<Location>,
+    ) -> Result<Option<RuntimeHostError>, RequestFailure> {
+        Ok(lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceRegistry,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .and_then(|instance| device_system_refusal(instance, operation, location)))
+    }
+
+    /// Workflow #479 F-2 fix round 1: [`Self::device_system_refusal_of`] as the denial of the
+    /// request that asked `operation` of `instance_alias`, nothing recorded; `Ok` for every other
+    /// instance.
+    pub(super) fn refuse_device_system_without_backend(
+        &self,
+        instance_alias: &str,
+        operation: DeviceOperation,
+        location: impl Into<Location>,
+    ) -> Result<(), RequestFailure> {
+        match self.device_system_refusal_of(instance_alias, operation, location)? {
+            Some(refused) => Err(RequestFailure::request(
+                refused,
+                RuntimeReceiptState::Denied,
+                None,
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// The admission guard of `instance_id`'s device. Workflow #437 MAPP-1b
     /// (`contracts/device-group.md`, "One queue, one worker, one lease per device"): keyed by the
     /// device key, so a device step of one member of a device group never meets a keyless
@@ -4583,4 +4620,55 @@ pub(super) fn instance_not_running(instance: &RegisteredInstance) -> RuntimeHost
     ));
     error.lifecycle.instance_id = Some(instance.instance_id);
     Err(error)
+}
+
+/// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"; ruling 6 of
+/// the slice's work order): the operations the host refuses on an instance whose device system
+/// this build has no backend for, each with its own failure code, the one the device registry's
+/// own refusal ends it with (`require_bound`), so such an instance is refused in one way wherever
+/// it is met.
+#[derive(Clone, Copy)]
+pub(super) enum DeviceOperation {
+    /// An input (`input_backend_open_failed`).
+    Input,
+    /// A capture (`capture_backend_open_failed`).
+    Capture,
+    /// An application command (`application_backend_operation_failed`).
+    Application,
+}
+
+impl DeviceOperation {
+    fn code(self) -> actingcommand_contract::outcome::Code {
+        match self {
+            Self::Input => {
+                actingcommand_contract::codes::DeviceSelfCheckFailure::InputBackendOpenFailed.code()
+            }
+            Self::Capture => {
+                actingcommand_contract::codes::DeviceSelfCheckFailure::CaptureBackendOpenFailed
+                    .code()
+            }
+            Self::Application => SharedCode::ApplicationBackendOperationFailed.code(),
+        }
+    }
+}
+
+/// Workflow #479 F-2 fix round 1: the refusal of `operation` at `location` on `instance` when its
+/// device system has no backend in this build (an iOS handset, bound or not): the operation's own
+/// failure code ([`DeviceOperation`]) with the cause `device_system_backend_missing`, of that
+/// instance, not fatal; `None` for every other instance. It is made at the front of the host's
+/// admission, before anything of the instance's stand-in registration is looked at (a key table,
+/// the foreground gate, the ADB baseline, a backend), and records nothing.
+pub(super) fn device_system_refusal(
+    instance: &RegisteredInstance,
+    operation: DeviceOperation,
+    location: impl Into<Location>,
+) -> Option<RuntimeHostError> {
+    instance.device_system_without_backend()?;
+    let mut error =
+        RuntimeHostError::request(operation.code(), location, RuntimeErrorCode::InvalidRequest)
+            .with_caused_by(actingcommand_contract::outcome::Outcome::new(
+                HostCode::DeviceSystemBackendMissing,
+            ));
+    error.lifecycle.instance_id = Some(instance.instance_id);
+    Some(error)
 }

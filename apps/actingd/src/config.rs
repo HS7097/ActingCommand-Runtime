@@ -1085,15 +1085,6 @@ struct InstanceConfig {
     nemu_app_index: Option<u32>,
     #[serde(default)]
     adb_path: Option<String>,
-    /// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): an iOS handset's
-    /// `acib`, the project's iOS device bridge; absent, `<install root>\tools\acib.exe`, as an
-    /// absent `adb_path` is the install root's adb. An iOS handset's member alone
-    /// (`acib_path_without_ios`); one it names must not be empty. Nothing of this build runs it:
-    /// the file need not exist.
-    // Interface anchor `actingd-config` revision 34: a Runtime before #479 F-2 refuses an entry
-    // that names it, because the entry denies unknown members (`config_decode_failed`).
-    #[serde(default)]
-    acib_path: Option<String>,
     #[serde(default)]
     serial: Option<String>,
     #[serde(default)]
@@ -1301,6 +1292,11 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// of the configuration has, in file order (`check-config` notes).
     pub(super) unused_device_bindings: Vec<String>,
+    /// Workflow #479 F-2 fix round 1: the handsets whose private row is of another device system
+    /// than their configuration names, in configuration order, each also in `unbound_handsets`: a
+    /// start registers them unbound and warns of each ([`binding_mismatch_warnings`]); check-config
+    /// refuses the file (`device_binding_file_invalid` `system_mismatch`).
+    pub(super) mismatched_handsets: Vec<String>,
     /// Workflow #369 S6a: the discovery-bound instances whose `start_emulator` is `true`, in
     /// configuration order: the daemon starts their stopped emulators at its start (S6c);
     /// `check-config` reports each instance's value.
@@ -1944,15 +1940,18 @@ impl ActingdConfigFile {
         }
         // Workflow #398 RD-1b (model-398 v1.1 §3.2, §3.6): the private binding file, read once
         // and only when a handset is configured.
-        let (unbound_handsets, unused_device_bindings) = if handsets.is_empty() {
-            (Vec::new(), Vec::new())
+        // Workflow #479 F-2 fix round 1: a row of another device system than its handset's binds
+        // nothing; that handset alone is unbound (`mismatched_handsets`).
+        let (unbound_handsets, unused_device_bindings, mismatched_handsets) = if handsets.is_empty()
+        {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             let mut bound = device_binding::bind_handsets(&self.state_root, &handsets)
                 .map_err(|refused| refused.code())?;
             for instance in &mut instances {
                 instance.handset = bound.endpoints.remove(&instance.alias);
             }
-            (bound.unbound, bound.unused)
+            (bound.unbound, bound.unused, bound.mismatched)
         };
         let configured_aliases = instances
             .iter()
@@ -2274,6 +2273,7 @@ impl ActingdConfigFile {
             adb_requirement,
             unbound_handsets,
             unused_device_bindings,
+            mismatched_handsets,
             emulator_autostart,
             process_priority,
             device_groups,
@@ -2303,9 +2303,17 @@ impl ActingdConfigFile {
         if handsets.is_empty() {
             return None;
         }
-        device_binding::bind_handsets(&self.state_root, &handsets)
-            .err()
-            .map(DeviceRefusal::BindingFile)
+        match device_binding::bind_handsets(&self.state_root, &handsets) {
+            Err(refused) => Some(DeviceRefusal::BindingFile(refused)),
+            // Workflow #479 F-2 fix round 1: a row of another device system than its handset's,
+            // which a start ignores (that handset unbound, with a warning), is the refusal
+            // check-config makes, as before.
+            Ok(bound) => (!bound.mismatched.is_empty()).then(|| {
+                DeviceRefusal::BindingFile(device_binding::system_mismatch_refusal(
+                    &self.state_root,
+                ))
+            }),
+        }
     }
 
     /// Workflow #369 S6a: the alias of the first instance whose `start_emulator: true`
@@ -2409,6 +2417,24 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
     ignored
         .iter()
         .map(|variable| Outcome::new(ActingdCode::EnvOverrideIgnored).variable(*variable))
+        .collect()
+}
+
+/// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the start's
+/// one warning for each handset of `mismatched` (`RuntimeAssembly::mismatched_handsets`), whose
+/// private row is of another device system than its configuration names and which starts
+/// unbound: `device_binding_ignored` with its `alias` and `device_binding_problem`
+/// `system_mismatch`; no identifier of a device.
+pub(super) fn binding_mismatch_warnings(mismatched: &[String]) -> Vec<Outcome> {
+    mismatched
+        .iter()
+        .map(|alias| {
+            Outcome::new(ActingdCode::DeviceBindingIgnored)
+                .alias(alias)
+                .device_binding_problem(
+                    actingcommand_contract::DeviceBindingProblem::SystemMismatch,
+                )
+        })
         .collect()
 }
 
@@ -3074,20 +3100,11 @@ impl InstanceConfig {
 
     /// Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): the registration of
     /// an iOS handset, bound or not. This build has no backend for its device system, so the
-    /// registry refuses every capture, input and application operation on it before anything is
+    /// Runtime refuses every capture, input and application operation on it before anything is
     /// opened (`device_system_backend_missing`): its two backends are stand-ins on the stand-in
     /// target of an unbound handset (`handset:<alias>`, no serial), never opened, and its adb is a
-    /// stand-in name that never runs, as a discovery-bound entry's is before its discovery. Its
-    /// `acib_path`, when named, must not be empty (`instance_config_invalid`); nothing of this
-    /// build runs it.
+    /// stand-in name that never runs, as a discovery-bound entry's is before its discovery.
     fn ios_registration(self) -> Result<ExecutionBackendRegistration, Code> {
-        if self
-            .acib_path
-            .as_ref()
-            .is_some_and(|path| path.trim().is_empty())
-        {
-            return Err(ActingdCode::InstanceConfigInvalid.code());
-        }
         let application_id = self
             .application_id
             .filter(|value| !value.trim().is_empty())
@@ -3128,7 +3145,6 @@ impl InstanceConfig {
             || self.instance_index.is_some()
             || self.instance_name.is_some()
             || self.adb_path.is_some()
-            || self.acib_path.is_some()
             || self.serial.is_some()
             || self.host.is_some()
             || self.port.is_some()

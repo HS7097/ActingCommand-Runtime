@@ -26,11 +26,18 @@
 //   could hold an identifier of a phone, and a call's `Debug` shows no salt.
 // - f2_t6: the private file reads a version-1 file as before and writes it back byte for byte; a
 //   version-2 file holds iOS rows, each key of its form and none twice; a version-1 file with an
-//   iOS row and a row of another shape are malformed.
+//   iOS row and a row of another shape are malformed; fix round 1: a version-1 Android row with a
+//   `system` member, `null` included, is malformed, as before this slice.
+// - f2_t7 (fix round 1, item 4): `acib` is called with its own deadline and followed within the
+//   Lab's: on a scripted child and a clock that moves only when it is asked to wait, a child that
+//   never ends is ended past the wait, `no_answer_in_time`; one that prints without end is ended
+//   past the cap, `answer_too_long` (its output or its errors); one that ends gives its line;
+//   one that cannot be ended is `not_ended`; a listing answers adb's rows and the word.
 
 use crate::cli_line::Exit;
 use crate::devices::{
-    self, ACIB_BINDING_SALT_VARIABLE, ACIB_KEY_SALT_VARIABLE, AcibCall, AcibRun, AdbRun,
+    self, ACIB_BINDING_SALT_VARIABLE, ACIB_KEY_SALT_VARIABLE, AcibBounds, AcibCall, AcibChild,
+    AcibClock, AcibRun, AdbRun,
 };
 use actingcommand_contract::{
     DeviceBinding, DeviceBindingProblem, DeviceBindingsFile, DeviceBoundVia, DeviceSystem,
@@ -348,6 +355,7 @@ fn f2_t1_the_listing_adds_each_phone_with_its_system_and_its_key_under_the_calle
     assert!(listed.get("ios_devices_unlisted").is_none(), "{listed}");
     nothing_private(&printed(&exit));
     let received = only(calls.borrow().clone());
+    // Fix round 1: and `acib`'s own deadline, 10 s.
     assert_eq!(
         received.arguments,
         [
@@ -356,6 +364,8 @@ fn f2_t1_the_listing_adds_each_phone_with_its_system_and_its_key_under_the_calle
             ACIB_KEY_SALT_VARIABLE,
             "--binding-salt-env",
             ACIB_BINDING_SALT_VARIABLE,
+            "--timeout-ms",
+            "10000",
         ]
     );
     for argument in &received.arguments {
@@ -832,7 +842,21 @@ fn f2_t6_the_private_file_reads_version_1_as_before_and_version_2_with_ios_rows(
     unknown_member["udid"] = json!(IDENTIFIER);
     let mut android_with_system = android.clone();
     android_with_system["system"] = json!("android");
+    // Fix round 1: a version-1 row is read exactly as before this slice: a `system` member, even
+    // `null`, is no Android row's (nor is a `device_key` one).
+    let mut android_with_null_system = android.clone();
+    android_with_null_system["system"] = Value::Null;
+    let mut android_with_null_key = android.clone();
+    android_with_null_key["device_key"] = Value::Null;
     for (bytes, problem) in [
+        (
+            file(v1, vec![android_with_null_system]),
+            DeviceBindingProblem::Malformed,
+        ),
+        (
+            file(v1, vec![android_with_null_key]),
+            DeviceBindingProblem::Malformed,
+        ),
         (
             file(v1, vec![ios(IPHONE, &key)]),
             DeviceBindingProblem::Malformed,
@@ -866,4 +890,157 @@ fn f2_t6_the_private_file_reads_version_1_as_before_and_version_2_with_ios_rows(
             String::from_utf8_lossy(&bytes)
         );
     }
+}
+
+/// A scripted `acib` child: it ends with status 0 at its look number `ends_at` (never without
+/// one); ending it fails when `end_fails` is set. It counts the times it is ended.
+struct ScriptedChild {
+    looks: usize,
+    ends_at: Option<usize>,
+    end_fails: bool,
+    ends: usize,
+}
+
+impl ScriptedChild {
+    fn new(ends_at: Option<usize>, end_fails: bool) -> Self {
+        Self {
+            looks: 0,
+            ends_at,
+            end_fails,
+            ends: 0,
+        }
+    }
+}
+
+impl AcibChild for ScriptedChild {
+    fn ended(&mut self) -> std::io::Result<Option<bool>> {
+        self.looks += 1;
+        Ok(self
+            .ends_at
+            .is_some_and(|at| self.looks >= at)
+            .then_some(true))
+    }
+
+    fn end(&mut self) -> std::io::Result<()> {
+        self.ends += 1;
+        if self.end_fails {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A clock that stands still and moves on by each pause it is asked for, waiting no time.
+struct StepClock(std::cell::Cell<std::time::Duration>);
+
+impl StepClock {
+    fn new() -> Self {
+        Self(std::cell::Cell::new(std::time::Duration::ZERO))
+    }
+}
+
+impl AcibClock for StepClock {
+    fn elapsed(&self) -> std::time::Duration {
+        self.0.get()
+    }
+
+    fn pause(&self, span: std::time::Duration) {
+        self.0.set(self.0.get().saturating_add(span));
+        std::thread::yield_now();
+    }
+}
+
+/// A stream that has ended.
+fn ended_stream() -> Box<dyn std::io::Read + Send> {
+    Box::new(std::io::empty())
+}
+
+/// A stream that prints without end.
+fn endless_stream() -> Box<dyn std::io::Read + Send> {
+    Box::new(std::io::repeat(b'x'))
+}
+
+/// The Lab's bounds with a wait that never passes, so only the child's end or a stream decides.
+fn no_wait() -> AcibBounds {
+    AcibBounds {
+        wait: std::time::Duration::MAX,
+        ..AcibBounds::lab()
+    }
+}
+
+#[test]
+fn f2_t7_acib_is_called_with_its_deadline_and_ended_past_the_labs_wait_or_its_cap() {
+    // The deadline the Lab gives `acib` is under its own wait, which is well under the 30 s the
+    // installer gives a Lab call (register §1.475).
+    let lab = AcibBounds::lab();
+    assert_eq!(devices::ACIB_TIMEOUT_MS, 10_000);
+    assert!(lab.wait > std::time::Duration::from_millis(devices::ACIB_TIMEOUT_MS));
+    assert!(lab.wait < std::time::Duration::from_secs(30));
+
+    // A child that never ends: ended once the Lab's wait passed, `no_answer_in_time` below.
+    let mut child = ScriptedChild::new(None, false);
+    let clock = StepClock::new();
+    let waited = devices::wait_acib(&mut child, ended_stream(), ended_stream(), lab, &clock);
+    assert!(matches!(waited, AcibRun::Overdue));
+    assert_eq!(child.ends, 1);
+    assert!(clock.elapsed() >= lab.wait);
+
+    // A child that prints without end, on its output or on its errors: ended past the cap.
+    for (output, errors) in [
+        (endless_stream(), ended_stream()),
+        (ended_stream(), endless_stream()),
+    ] {
+        let mut child = ScriptedChild::new(None, false);
+        let waited = devices::wait_acib(&mut child, output, errors, no_wait(), &StepClock::new());
+        assert!(matches!(waited, AcibRun::TooLong));
+        assert_eq!(child.ends, 1);
+    }
+
+    // A child that ends gives its line and is not ended by the Lab.
+    let line = br#"{"command":"devices","devices":[]}"#.to_vec();
+    let mut child = ScriptedChild::new(Some(3), false);
+    let waited = devices::wait_acib(
+        &mut child,
+        Box::new(std::io::Cursor::new(line.clone())),
+        ended_stream(),
+        no_wait(),
+        &StepClock::new(),
+    );
+    assert!(matches!(waited, AcibRun::Answered(answer) if answer == line));
+    assert_eq!(child.ends, 0);
+
+    // A child that cannot be ended.
+    let mut child = ScriptedChild::new(None, true);
+    let waited = devices::wait_acib(
+        &mut child,
+        ended_stream(),
+        ended_stream(),
+        lab,
+        &StepClock::new(),
+    );
+    assert!(matches!(waited, AcibRun::NotEnded));
+
+    // A listing answers adb's rows and the word for each.
+    let at = roots(&mixed(), true);
+    let overdue = |_: &Path, _: &AcibCall| AcibRun::Overdue;
+    let too_long = |_: &Path, _: &AcibCall| AcibRun::TooLong;
+    let not_ended = |_: &Path, _: &AcibCall| AcibRun::NotEnded;
+    let cases: [(ScriptedAcib<'_>, &str); 3] = [
+        (&overdue, "no_answer_in_time"),
+        (&too_long, "answer_too_long"),
+        (&not_ended, "not_ended"),
+    ];
+    for (acib, word) in cases {
+        let exit = run_devices(&at, acib);
+        let (listed, code) = answered(&exit);
+        assert_eq!(code, "device_list_reported", "{word}");
+        assert_eq!(rows(&listed), [android_row(SECRET)], "{word}");
+        assert_eq!(listed["ios_devices_unlisted"], json!({"why": word}));
+    }
+}
+
+/// `devices list` against the candidate of `at`, `acib` run by `acib`, no salt given.
+fn run_devices(at: &Roots, acib: &dyn Fn(&Path, &AcibCall) -> AcibRun) -> Exit {
+    run(at, &["devices", "list"], &[], acib, &nothing)
 }

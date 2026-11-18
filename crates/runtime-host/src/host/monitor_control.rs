@@ -37,6 +37,21 @@ impl HostShared {
         policy: RuntimeMonitorPolicy,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
+        // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a
+        // monitor captures on its own at each probe, so on an instance whose device system has no
+        // backend in this build it is refused here, as its capture would be, and no probe ever
+        // acts on that instance: nothing is recorded or changed.
+        if let Some(refused) = super::lease::device_system_refusal(
+            &resolved,
+            super::lease::DeviceOperation::Capture,
+            HostLocation::ConfigureMonitorRegistry,
+        ) {
+            return Err(RequestFailure::request(
+                refused,
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         let links = self.append_client_command_intent(
             original,
             request,

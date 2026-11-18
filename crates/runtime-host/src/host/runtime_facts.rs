@@ -805,10 +805,7 @@ impl HostShared {
             HostLocation::ReadBackendSelfcheckInstance,
         )?
         .get(&instance_id)
-        .and_then(RegisteredInstance::bound_adb_endpoint)
-        .and_then(ResolvedAdbEndpoint::handset)
-        .map(actingcommand_execution_kernel::HandsetEndpoint::system)
-        .filter(|system| *system == actingcommand_contract::DeviceSystem::Ios))
+        .and_then(RegisteredInstance::device_system_without_backend))
     }
 
     /// Workflow #479 F-2: such a handset is unavailable with the source `device_system:<system>`;

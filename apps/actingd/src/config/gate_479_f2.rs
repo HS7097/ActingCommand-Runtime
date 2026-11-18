@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #479 F-2 (register §1.482; contracts/device-binding.md, "An iOS handset";
-// `actingd-config` revision 34; the coordinator's rulings 1, 2 and 3 in work order
-// rd-1118/brief-479-f2-ios-handset-config-binding.md): an instance's `device` takes `system`,
-// `android` (also what an absent member means) or `ios`, beside `kind: "handset"` alone. An iOS
-// handset loads, reports `instance.<id>.device_system`, names no backend, and is registered with
-// the private file's iOS row (its phone's key, never an identifier) or unbound; `acib_path` is its
-// member alone and need not exist. An Android handset without `system` assembles as before, with no
-// such row. The ids, aliases, paths and keys are made up; no file of `acib` exists.
+// `actingd-config` revision 34; the coordinator's rulings 1 and 3 in work order
+// rd-1118/brief-479-f2-ios-handset-config-binding.md, and fix round 1's items 3 and 5 and its
+// small items in rd-1119/brief-479-f2-fix1.md): an instance's `device` takes `system`, `android`
+// (also what an absent member means) or `ios`, beside `kind: "handset"` alone. An iOS handset
+// loads, reports `instance.<id>.device_system`, names no backend and no member only a device
+// reached through adb has, and is registered with the private file's iOS row (its phone's key,
+// never an identifier) or unbound. A row of the other device system unbinds its handset alone,
+// with one warning, and every other instance starts. An Android handset without `system`
+// assembles as before, with no such row. The ids, aliases, paths and keys are made up.
 
 use super::device_binding::write_private_file_for_test;
 use super::*;
 use crate::codes::DeviceConfigProblem;
+use actingcommand_contract::outcome::Category;
 use actingcommand_contract::{
     ConfigParameterSource, DeviceBindingProblem, DeviceBoundVia, FactScalar, IdentifierIssuer,
 };
@@ -21,6 +24,8 @@ use tempfile::TempDir;
 
 const IPHONE: &str = "neutral.iphone";
 const PHONE: &str = "neutral.phone";
+const EMULATOR: &str = "neutral.emulator";
+const SERIAL: &str = "TESTSERIAL0479";
 /// The phone's key the private file holds, made under the installation's own secret.
 const KEY: &str = "sha256:4790f2000000000000000000000000000000000000000000000000000000f2a1";
 const BOUND_AT_UNIX_MS: u64 = 1_700_000_000_479;
@@ -56,6 +61,19 @@ fn android_entry(id: InstanceId) -> Value {
     })
 }
 
+/// An emulator's entry, addressed by its port, as RD-1b's T9 writes one.
+fn emulator_entry(id: InstanceId) -> Value {
+    json!({
+        "alias": EMULATOR,
+        "instance_id": id,
+        "application_id": "neutral.application",
+        "adb_path": "neutral-adb",
+        "port": 16479,
+        "touch_backend": "adb_shell_input",
+        "capture_backend": "adb"
+    })
+}
+
 fn config(state_root: &Path, instances: Vec<Value>) -> ActingdConfigFile {
     serde_json::from_value(json!({
         "schema_version": CONFIG_SCHEMA_VERSION,
@@ -81,6 +99,15 @@ fn ios_row(alias: &str) -> Value {
         "alias": alias,
         "system": "ios",
         "device_key": KEY,
+        "bound_at_unix_ms": BOUND_AT_UNIX_MS,
+        "bound_via": "cli"
+    })
+}
+
+fn android_row(alias: &str) -> Value {
+    json!({
+        "alias": alias,
+        "serial": SERIAL,
         "bound_at_unix_ms": BOUND_AT_UNIX_MS,
         "bound_via": "cli"
     })
@@ -114,7 +141,7 @@ fn handset_of(assembly: RuntimeAssembly, alias: &str) -> HandsetEndpoint {
 // `system: "ios"` beside `handset` loads, bound by the private file's iOS row or unbound; the
 // manifest reports `instance.<id>.device_system` (explicit, not settable) beside its kind, and the
 // key table has the row; an iOS handset uses no adb. An Android handset without `system` loads as
-// before, with no such row. An `acib_path` that names a file that does not exist loads.
+// before, with no such row.
 #[test]
 fn f2_config_an_ios_handset_loads_and_reports_its_system_and_an_android_one_as_before() {
     let root = TempDir::new().expect("tempdir");
@@ -124,12 +151,11 @@ fn f2_config_an_ios_handset_loads_and_reports_its_system_and_an_android_one_as_b
         "actingcommand.device-bindings.v2",
         vec![ios_row(IPHONE)],
     );
-    let mut entry = ios_entry(iphone);
-    entry["acib_path"] = json!(root.path().join("absent").join("acib.exe"));
-    let assembly = config(root.path(), vec![entry])
+    let assembly = config(root.path(), vec![ios_entry(iphone)])
         .assemble()
         .expect("an iOS handset assembles");
     assert!(assembly.unbound_handsets.is_empty());
+    assert!(assembly.mismatched_handsets.is_empty());
     let parameter = |assembly: &RuntimeAssembly, key: &str| {
         assembly
             .manifest
@@ -167,6 +193,7 @@ fn f2_config_an_ios_handset_loads_and_reports_its_system_and_an_android_one_as_b
         .assemble()
         .expect("an unbound iOS handset assembles");
     assert_eq!(assembly.unbound_handsets, [IPHONE]);
+    assert!(assembly.mismatched_handsets.is_empty());
     assert_eq!(handset_of(assembly, IPHONE), HandsetEndpoint::Ios(None));
 
     // An Android handset without `system`: no system row, bound by its serial as before.
@@ -174,12 +201,7 @@ fn f2_config_an_ios_handset_loads_and_reports_its_system_and_an_android_one_as_b
     bindings(
         android_root.path(),
         "actingcommand.device-bindings.v1",
-        vec![json!({
-            "alias": PHONE,
-            "serial": "TESTSERIAL0479",
-            "bound_at_unix_ms": BOUND_AT_UNIX_MS,
-            "bound_via": "cli"
-        })],
+        vec![android_row(PHONE)],
     );
     let assembly = config(android_root.path(), vec![android_entry(phone)])
         .assemble()
@@ -223,10 +245,9 @@ fn f2_config_an_ios_handset_loads_and_reports_its_system_and_an_android_one_as_b
 
 // `system` beside a kind other than `handset`, or a word outside the pair, is refused by the
 // existing rule for an invalid device member (`device_config_invalid`, `system_unsupported`); an
-// iOS handset that names a backend is `backend_kind_unsupported`; `acib_path` on an instance that
-// is no iOS handset is `acib_path_without_ios`; an empty one is `instance_config_invalid`. The
-// private file's row of another system than its handset's is `device_binding_file_invalid`
-// `system_mismatch`.
+// iOS handset that names a backend is `backend_kind_unsupported`; fix round 1: one that names a
+// member only a device reached through adb has (its adb, its commands' timeout, a touch tool's
+// member) is refused the same way, `adb_member_with_ios`, never ignored.
 #[test]
 fn f2_config_system_is_a_handsets_member_of_its_pair_and_an_ios_handset_names_no_backend() {
     let id = instance_id();
@@ -240,27 +261,54 @@ fn f2_config_system_is_a_handsets_member_of_its_pair_and_an_ios_handset_names_no
         entry["device"]["system"] = json!("neutral-system");
         entry
     };
-    let with_touch = {
+    let ios_with = |member: &str, value: Value| {
         let mut entry = ios_entry(id);
-        entry["touch_backend"] = json!("adb_shell_input");
-        entry
-    };
-    let with_capture = {
-        let mut entry = ios_entry(id);
-        entry["capture_backend"] = json!("adb");
-        entry
-    };
-    let android_with_acib = {
-        let mut entry = android_entry(id);
-        entry["acib_path"] = json!("acib.exe");
+        entry[member] = value;
         entry
     };
     for (entry, problem) in [
         (emulator_with_system, DeviceConfigProblem::SystemUnsupported),
         (unknown_system, DeviceConfigProblem::SystemUnsupported),
-        (with_touch, DeviceConfigProblem::BackendKindUnsupported),
-        (with_capture, DeviceConfigProblem::BackendKindUnsupported),
-        (android_with_acib, DeviceConfigProblem::AcibPathWithoutIos),
+        (
+            ios_with("touch_backend", json!("adb_shell_input")),
+            DeviceConfigProblem::BackendKindUnsupported,
+        ),
+        (
+            ios_with("capture_backend", json!("adb")),
+            DeviceConfigProblem::BackendKindUnsupported,
+        ),
+        (
+            ios_with("adb_path", json!("neutral-adb")),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("command_timeout_ms", json!(5_000)),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("maatouch_local_path", json!("neutral-maatouch")),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("minitouch_local_path", json!("neutral-minitouch")),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("push_touch_tool", json!(false)),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("handshake_timeout_ms", json!(1_000)),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("shutdown_timeout_ms", json!(1_000)),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
+        (
+            ios_with("tap_hold_ms", json!(50)),
+            DeviceConfigProblem::AdbMemberWithIos,
+        ),
     ] {
         let root = TempDir::new().expect("tempdir");
         let alias = entry["alias"].clone();
@@ -277,42 +325,108 @@ fn f2_config_system_is_a_handsets_member_of_its_pair_and_an_ios_handset_names_no
             "{problem}"
         );
     }
+}
 
+// Fix round 1, item 3: a private row of another device system than its handset's configuration
+// names (an Android row for an iOS handset, and the reverse) unbinds that handset only: the start
+// registers it unbound and says so in one warning, naming its alias and the word and no
+// identifier, and every other instance assembles as it would without it (the good Android row
+// binds its handset, the emulator is registered). check-config refuses the file as before
+// (`device_binding_file_invalid` `system_mismatch`).
+#[test]
+fn f2_config_a_row_of_the_other_system_unbinds_its_handset_alone_and_the_others_start() {
+    let (iphone, phone, emulator) = (instance_id(), instance_id(), instance_id());
+
+    // An iOS handset whose row is an Android row, beside a good Android row and an emulator.
     let root = TempDir::new().expect("tempdir");
-    let mut empty_acib = ios_entry(id);
-    empty_acib["acib_path"] = json!(" ");
-    assert_eq!(
-        config(root.path(), vec![empty_acib])
-            .assemble()
-            .err()
-            .map(Code::as_str),
-        Some(ActingdCode::InstanceConfigInvalid.as_str())
+    let mut iphone_row = android_row(IPHONE);
+    iphone_row["serial"] = json!("TESTSERIAL0480");
+    bindings(
+        root.path(),
+        "actingcommand.device-bindings.v1",
+        vec![iphone_row, android_row(PHONE)],
     );
+    let file = config(
+        root.path(),
+        vec![
+            ios_entry(iphone),
+            android_entry(phone),
+            emulator_entry(emulator),
+        ],
+    );
+    let refused = file
+        .device_refusal()
+        .expect("check-config's refusal of the file");
+    assert_eq!(refused.code(), ActingdCode::DeviceBindingFileInvalid.code());
+    assert_eq!(
+        refused.outcome().values()["device_binding_problem"],
+        json!(DeviceBindingProblem::SystemMismatch.as_str())
+    );
+    let assembly = file.assemble().expect("the start assembles");
+    assert_eq!(assembly.unbound_handsets, [IPHONE]);
+    assert_eq!(assembly.mismatched_handsets, [IPHONE]);
+    let warnings = binding_mismatch_warnings(&assembly.mismatched_handsets);
+    let [warning] = &warnings[..] else {
+        panic!("one warning: {warnings:?}");
+    };
+    assert_eq!(warning.code().as_str(), "device_binding_ignored");
+    assert_eq!(warning.category(), Category::Warning);
+    assert_eq!(
+        Value::Object(warning.values().clone()),
+        json!({"alias": IPHONE, "device_binding_problem": "system_mismatch"})
+    );
+    let shown =
+        serde_json::to_string(&warning.envelope(actingcommand_contract::outcome::Detail::Full))
+            .expect("the warning's envelope");
+    assert!(
+        !shown.contains("TESTSERIAL0480") && !shown.contains(SERIAL),
+        "{shown}"
+    );
+    let registry = assembly
+        .provider
+        .into_registry()
+        .expect("configured registry");
+    let handset = |alias: &str| {
+        registry
+            .resolve(alias)
+            .expect("registered")
+            .adb_endpoint()
+            .and_then(ResolvedInstanceEndpoint::bound)
+            .and_then(ResolvedAdbEndpoint::handset)
+            .cloned()
+    };
+    assert_eq!(handset(IPHONE), Some(HandsetEndpoint::Ios(None)));
+    assert!(matches!(handset(PHONE), Some(HandsetEndpoint::Bound(_))));
+    assert_eq!(handset(EMULATOR), None, "the emulator is registered as one");
 
-    // A row of the other system: an iOS row for an Android handset, and the reverse.
-    for (entry, row) in [
-        (android_entry(id), ios_row(PHONE)),
-        (
-            ios_entry(id),
-            json!({
-                "alias": IPHONE,
-                "serial": "TESTSERIAL0479",
-                "bound_at_unix_ms": BOUND_AT_UNIX_MS,
-                "bound_via": "cli"
-            }),
-        ),
-    ] {
-        let root = TempDir::new().expect("tempdir");
-        bindings(root.path(), "actingcommand.device-bindings.v2", vec![row]);
-        let config = config(root.path(), vec![entry]);
-        let refused = config.device_refusal().expect("a binding file refusal");
-        assert_eq!(
-            refused.outcome().values()["device_binding_problem"],
-            json!(DeviceBindingProblem::SystemMismatch.as_str())
-        );
-        assert_eq!(
-            config.assemble().err().map(Code::as_str),
-            Some(ActingdCode::DeviceBindingFileInvalid.as_str())
-        );
-    }
+    // An Android handset whose row is an iOS row: the same, the other way round.
+    let root = TempDir::new().expect("tempdir");
+    bindings(
+        root.path(),
+        "actingcommand.device-bindings.v2",
+        vec![ios_row(PHONE)],
+    );
+    let assembly = config(
+        root.path(),
+        vec![android_entry(phone), emulator_entry(emulator)],
+    )
+    .assemble()
+    .expect("the start assembles");
+    assert_eq!(assembly.unbound_handsets, [PHONE]);
+    assert_eq!(assembly.mismatched_handsets, [PHONE]);
+    assert_eq!(handset_of(assembly, PHONE), HandsetEndpoint::Unbound);
+
+    // A file malformed as a whole keeps refusing the start.
+    let root = TempDir::new().expect("tempdir");
+    write_private_file_for_test(root.path(), b"{not json");
+    assert_eq!(
+        config(
+            root.path(),
+            vec![ios_entry(iphone), emulator_entry(emulator)]
+        )
+        .assemble()
+        .err()
+        .map(Code::as_str),
+        Some(ActingdCode::DeviceBindingFileInvalid.as_str())
+    );
 }
