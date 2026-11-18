@@ -10,7 +10,8 @@ It only reads. Each run is one command; it prints **one JSON line** on standard 
 with status 0 when the command was answered, or 1 when it was refused or failed. A refused or
 failed line names a `problem` word of this program (the words are its own, not Runtime outcome
 codes) and, where the library gave one, its error text in `error`. The one file it writes is
-the picture `screenshot` takes, at the path `--out` names.
+the picture `screenshot` takes, at the path `--out` names; it removes that file again when the
+picture could not be written whole into it.
 
 usbmuxd is reached where the library finds it on this platform: on Windows the TCP port 27015
 of 127.0.0.1, which the device service of Apple's own software serves. Pairing is not part of
@@ -31,7 +32,8 @@ logged or kept anywhere but in the file `--out` names.
 ## The commands
 
 Every command takes `--timeout-ms <ms>` (default 30000); a command not finished by then answers
-`deadline_passed`. `<n>` is the device's usbmuxd session number, as `acib devices` lists it.
+`deadline_passed` (for `screenshot`, with the `stage` it was waiting in, below). `<n>` is the
+device's usbmuxd session number, as `acib devices` lists it.
 
 - `acib devices`: the devices usbmuxd lists now, each with its session number (`device`) and
   its connection (`usb`, `network`, or `unknown` for one usbmuxd names otherwise).
@@ -77,8 +79,10 @@ Every command takes `--timeout-ms <ms>` (default 30000); a command not finished 
   application's record (no display name, path, version or signer).
 - `acib screenshot --device <n> --out <file> [--via <way>]`: in a session, through the tunnel of
   `services` and the remote service discovery handshake, one picture of the screen as the
-  device gives it, written byte for byte (not re-encoded) to `<file>`. `<file>` must not exist:
-  a path that names anything already is refused with `out_exists` before the device is asked.
+  device gives it, written byte for byte (not re-encoded) to `<file>`. `<file>` must not exist,
+  and the directory it is to be made in (the current one for a bare file name) must: a path
+  that names anything already is refused with `out_exists`, and one whose directory does not
+  exist or is no directory with `out_unwritable`, both before the device is asked.
   The line names the way used as `via`, the picture's `format` (`png` or `jpeg`), `width` and
   `height` as the picture's own header gives them (read by a few lines of this program's own,
   with no image library), its length in `bytes`, `elapsed_ms` with `request` (the screenshot
@@ -87,7 +91,19 @@ Every command takes `--timeout-ms <ms>` (default 30000); a command not finished 
   `picture_header_truncated` or `picture_header_unknown` (status 1). A way the device refuses
   answers its word (`service_not_listed`, `service_unreachable`, `service_handshake_failed`,
   `channel_refused`, `screenshot_failed`, and those of the session and the tunnel) and writes
-  no file. The ways, by `--via` (default `screen_capture`):
+  no file. `out_unwritable` is the word of a file that could not be made at all: then nothing
+  was written. A picture that could not be written whole into the file made (a full disk, say)
+  answers `out_write_failed` with the system's error and `out_left`: the program removes the
+  file it made (its own: it was made where nothing was), and `out_left` is `true` only when
+  that removal failed too, a file then being left at `<file>` with a part of the picture or
+  none of it. A screenshot whose deadline passes names in `stage` the step it was waiting in:
+  `session` (usbmuxd's device list, the pairing record and the lockdown session that starts the
+  tunnel's service), `tunnel` (the tunnel and the remote service discovery handshake),
+  `service_handshake` (the connection to the way's remote service and its own handshake),
+  `server_first_message` (the first message of the instruments server, which the `instruments`
+  way reads before it asks for anything) and `picture_request` (the picture's request; for
+  `instruments`, that of its screenshot channel and then of the picture). No deadline passes
+  while the file is written. The ways, by `--via` (default `screen_capture`):
   - `screen_capture`: CoreDevice's screen capture service
     (`com.apple.coredevice.screencaptureservice`), asked for a PNG of the main display in one
     request.
@@ -99,8 +115,9 @@ The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_pas
 `lockdown_read_failed`, `lockdown_value_unexpected`, `pair_record_unreadable`, `not_paired`,
 `session_refused`, `service_refused`, `service_unreachable`, `tunnel_failed`,
 `rsd_unreachable`, `rsd_handshake_failed`, `apps_lookup_failed`, `too_many_matching`,
-`out_exists`, `out_unwritable`, `service_not_listed`, `service_handshake_failed`,
-`channel_refused`, `screenshot_failed`, `picture_header_truncated`, `picture_header_unknown`.
+`out_exists`, `out_unwritable`, `out_write_failed`, `service_not_listed`,
+`service_handshake_failed`, `channel_refused`, `screenshot_failed`, `picture_header_truncated`,
+`picture_header_unknown`.
 
 Not in this version: pairing, mounting an image, any input, starting or stopping an
 application, a stream of pictures, a daemon mode, and which application is in front: the

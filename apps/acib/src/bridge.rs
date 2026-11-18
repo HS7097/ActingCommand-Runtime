@@ -9,15 +9,16 @@
 //! The tunnel of iOS 17.4 and later is the lockdown service CoreDeviceProxy with the library's
 //! own TCP stack inside this process: no network adapter is created. No library type is ever
 //! printed with its `Debug` form: only the values the answer types name leave this module. A
-//! picture of the screen is written, as the service gave it, to the file `--out` names and is
-//! kept nowhere else.
+//! picture of the screen is written, as the service gave it, to the file `--out` names (see
+//! `out_file.rs`) and is kept nowhere else.
 
 use crate::answer::{
     Apps, CommandName, DeviceEntry, Devices, Elapsed, Failure, ImageQuery, ImageQueryName, Images,
     Info, Line, Link, ListedImage, Mounted, Problem, Reading, Screenshot, ServiceEntry, Services,
-    Way,
+    Stage, Way,
 };
 use crate::args::Request;
+use crate::out_file::{self, NotWritten};
 use crate::redact;
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
@@ -33,7 +34,8 @@ use idevice::tcp::handle::AdapterHandle;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
 use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService};
 use std::borrow::Cow;
-use std::io::Write;
+use std::cell::Cell;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// The label the library sends with each connection.
@@ -46,8 +48,10 @@ const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
 /// The application type the installation proxy is asked for: the user's own applications.
 const USER_APPLICATIONS: &str = "User";
 
-/// Runs one request, of a command that started at `started`, and gives its line.
-pub async fn answer(request: Request, started: Instant) -> Line {
+/// Runs one request, of a command that started at `started`, and gives its line. A screenshot
+/// keeps in `stage` the stage it is in, for the line of a deadline that passes in it; no other
+/// command sets it.
+pub async fn answer(request: Request, started: Instant, stage: &Cell<Option<Stage>>) -> Line {
     let (command, device, via) = (request.name(), request.device(), request.via());
     let answered = match request {
         Request::Devices => devices().await,
@@ -63,7 +67,7 @@ pub async fn answer(request: Request, started: Instant) -> Line {
             device: number,
             out,
             via: way,
-        } => screenshot(number, &out, way, started).await,
+        } => screenshot(number, &out, way, started, stage).await,
     };
     answered.unwrap_or_else(|failure| Line::refused_on(Some(command), device, via, failure))
 }
@@ -133,7 +137,8 @@ async fn info(number: u32) -> Result<Line, Failure> {
 async fn services(number: u32) -> Result<Line, Failure> {
     let device = find(number).await?;
     let record = paired_record(&device).await?;
-    let (_tunnel, handshake) = open_tunnel(&device, &record).await?;
+    let proxy = proxy_service(&device, &record).await?;
+    let (_tunnel, handshake) = open_tunnel(proxy).await?;
     // Of each service the handshake describes, its port and the entitlement it names are
     // shown; its other members are not.
     let mut services: Vec<ServiceEntry> = handshake
@@ -224,22 +229,36 @@ async fn apps(number: u32, contains: &str, max_matching: usize) -> Result<Line, 
 }
 
 /// One picture of the screen, the way `way` takes it, written as the service gave it to `out`,
-/// which must name nothing that exists: that is checked before the device is asked. A way the
-/// device refuses writes no file.
-async fn screenshot(number: u32, out: &str, way: Way, started: Instant) -> Result<Line, Failure> {
-    match std::fs::symlink_metadata(out) {
-        Ok(_) => return Err(Failure::own(Problem::OutExists)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(Failure::library(Problem::OutUnwritable, &error)),
-    }
+/// which must name nothing that exists, in a directory that exists: both are checked before the
+/// device is asked. A way the device refuses writes no file; a picture that cannot be written
+/// whole has its file removed again (`out_write_failed`). The stage the command is in is kept
+/// in `stage` from the first step that waits on the device.
+async fn screenshot(
+    number: u32,
+    out: &str,
+    way: Way,
+    started: Instant,
+    stage: &Cell<Option<Stage>>,
+) -> Result<Line, Failure> {
+    let path = Path::new(out);
+    out_file::check(path)?;
+    stage.set(Some(Stage::Session));
     let device = find(number).await?;
     let record = paired_record(&device).await?;
-    let (mut tunnel, handshake) = open_tunnel(&device, &record).await?;
+    let proxy = proxy_service(&device, &record).await?;
+    stage.set(Some(Stage::Tunnel));
+    let (mut tunnel, handshake) = open_tunnel(proxy).await?;
     let (picture, request) = match way {
-        Way::ScreenCapture => screen_capture(&mut tunnel, &handshake).await?,
-        Way::Instruments => instruments(&mut tunnel, &handshake).await?,
+        Way::ScreenCapture => screen_capture(&mut tunnel, &handshake, stage).await?,
+        Way::Instruments => instruments(&mut tunnel, &handshake, stage).await?,
     };
-    write_new(out, &picture)?;
+    match out_file::write_new(path, &picture) {
+        Ok(()) => {}
+        Err(NotWritten::NotMade(failure)) => return Err(failure),
+        Err(NotWritten::Cut { error, left }) => {
+            return Ok(Line::out_write_failed(number, way, &error, left));
+        }
+    }
     let elapsed = Elapsed::of(request, started.elapsed());
     Ok(Line::Screenshot(Screenshot::of(
         number, way, &picture, elapsed, out,
@@ -251,8 +270,10 @@ async fn screenshot(number: u32, out: &str, way: Way, started: Instant) -> Resul
 async fn screen_capture(
     tunnel: &mut AdapterHandle,
     handshake: &RsdHandshake,
+    stage: &Cell<Option<Stage>>,
 ) -> Result<(Vec<u8>, Duration), Failure> {
     type Client = ScreenCaptureServiceClient<Box<dyn ReadWrite>>;
+    stage.set(Some(Stage::ServiceHandshake));
     let stream = remote_service(
         tunnel,
         handshake,
@@ -262,6 +283,7 @@ async fn screen_capture(
     let mut client = <Client as RsdService>::from_stream(stream)
         .await
         .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    stage.set(Some(Stage::PictureRequest));
     let asked = Instant::now();
     let picture = client
         .take_screenshot(None, ImageFormat::Png)
@@ -277,8 +299,10 @@ async fn screen_capture(
 async fn instruments(
     tunnel: &mut AdapterHandle,
     handshake: &RsdHandshake,
+    stage: &Cell<Option<Stage>>,
 ) -> Result<(Vec<u8>, Duration), Failure> {
     type Client = RemoteServerClient<Box<dyn ReadWrite>>;
+    stage.set(Some(Stage::ServiceHandshake));
     let stream = remote_service(
         tunnel,
         handshake,
@@ -288,10 +312,12 @@ async fn instruments(
     let mut client = <Client as RsdService>::from_stream(stream)
         .await
         .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    stage.set(Some(Stage::ServerFirstMessage));
     client
         .read_message(0)
         .await
         .map_err(|error| Failure::library(Problem::ServiceHandshakeFailed, &error))?;
+    stage.set(Some(Stage::PictureRequest));
     let mut channel = ScreenshotClient::new(&mut client)
         .await
         .map_err(|error| Failure::library(Problem::ChannelRefused, &error))?;
@@ -303,38 +329,22 @@ async fn instruments(
     Ok((picture, asked.elapsed()))
 }
 
-/// Writes `picture` to a new file at `out`; a file that exists by then is not touched.
-fn write_new(out: &str, picture: &[u8]) -> Result<(), Failure> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .map_err(|error| {
-            let problem = if error.kind() == std::io::ErrorKind::AlreadyExists {
-                Problem::OutExists
-            } else {
-                Problem::OutUnwritable
-            };
-            Failure::library(problem, &error)
-        })?;
-    file.write_all(picture)
-        .and_then(|()| file.flush())
-        .map_err(|error| Failure::library(Problem::OutUnwritable, &error))
-}
-
-/// The tunnel of iOS 17.4 and later (CoreDeviceProxy, with the library's own TCP stack inside
-/// this process) and the remote service discovery handshake through it.
-async fn open_tunnel(
-    device: &UsbmuxdDevice,
-    record: &PairingFile,
-) -> Result<(AdapterHandle, RsdHandshake), Failure> {
+/// The connection to the tunnel's lockdown service, CoreDeviceProxy, started in a session with
+/// this host's record.
+async fn proxy_service(device: &UsbmuxdDevice, record: &PairingFile) -> Result<Idevice, Failure> {
     let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
-    let connection = open_service(
+    open_service(
         &provider,
         record,
         <CoreDeviceProxy as IdeviceService>::service_name(),
     )
-    .await?;
+    .await
+}
+
+/// The tunnel of iOS 17.4 and later through the CoreDeviceProxy `connection` (with the
+/// library's own TCP stack inside this process) and the remote service discovery handshake
+/// through it.
+async fn open_tunnel(connection: Idevice) -> Result<(AdapterHandle, RsdHandshake), Failure> {
     let proxy = CoreDeviceProxy::new(connection)
         .await
         .map_err(|error| Failure::library(Problem::TunnelFailed, &error))?;

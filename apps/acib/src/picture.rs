@@ -200,6 +200,40 @@ pub(crate) mod tests {
         }
     }
 
+    /// A JPEG whose EXIF segment (APP1) holds an embedded thumbnail, itself a JPEG with a frame
+    /// header of its own: the segment is skipped whole by its length, and the size answered is
+    /// the outer picture's, not the thumbnail's.
+    #[test]
+    fn a_jpeg_header_skips_an_exif_segment_that_holds_a_thumbnail() {
+        let mut thumbnail = jpeg_file(0xC0, 160, 120);
+        thumbnail.extend_from_slice(&[0xFF, 0xD9]);
+        assert_eq!(
+            read_header(&thumbnail).map(|header| (header.width, header.height)),
+            Ok((160, 120)),
+            "the thumbnail alone has a frame header of its own"
+        );
+        // The segment's content: its name, a TIFF header (little-endian, its first directory at
+        // eight; the directories are left out), then the thumbnail.
+        let mut exif = b"Exif\0\0".to_vec();
+        exif.extend_from_slice(b"II*\0\x08\0\0\0");
+        exif.extend_from_slice(&thumbnail);
+        let length = u16::try_from(exif.len() + 2).expect("the segment's length fits");
+        let mut bytes = JPEG_START.to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xE1]);
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(&exif);
+        // Then the outer picture's own segments and its frame header.
+        bytes.extend_from_slice(&jpeg_file(0xC2, 1170, 2532)[JPEG_START.len()..]);
+        assert_eq!(
+            read_header(&bytes),
+            Ok(Header {
+                format: PictureFormat::Jpeg,
+                width: 1170,
+                height: 2532,
+            })
+        );
+    }
+
     /// Bytes that end before the header gives the size, at every length up to it.
     #[test]
     fn a_header_that_ends_too_early_is_truncated() {

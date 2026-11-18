@@ -9,18 +9,21 @@
 //! standard output and ends with status 0 when the command was answered, 1 when it was refused
 //! or failed, the line then naming this program's `problem` word and, where the library gave
 //! one, its error text. The one file it writes is the picture `screenshot` takes, to the path
-//! `--out` names; it installs no logger, so nothing the library traces is shown.
+//! `--out` names, and it removes that file again when the picture could not be written whole
+//! into it; it installs no logger, so nothing the library traces is shown.
 
 #![forbid(unsafe_code)]
 
 mod answer;
 mod args;
 mod bridge;
+mod out_file;
 mod picture;
 mod redact;
 
-use answer::{Failure, Line, Problem};
+use answer::{Failure, Line, Problem, Stage};
 use args::Invocation;
+use std::cell::Cell;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -42,25 +45,31 @@ fn main() -> ExitCode {
 }
 
 /// Runs the command, which started at `started`, on a current-thread runtime of its own,
-/// within its deadline.
+/// within its deadline; a screenshot whose deadline passes names the stage it was waiting in.
 fn run(invocation: Invocation, started: Instant) -> Line {
     let Invocation {
         request,
         timeout_ms,
     } = invocation;
     let (command, device, via) = (request.name(), request.device(), request.via());
-    let refused = |failure| Line::refused_on(Some(command), device, via, failure);
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
-        Err(error) => return refused(Failure::library(Problem::AsyncRuntimeFailed, &error)),
+        Err(error) => {
+            let failure = Failure::library(Problem::AsyncRuntimeFailed, &error);
+            return Line::refused_on(Some(command), device, via, failure);
+        }
     };
     let deadline = Duration::from_millis(timeout_ms);
+    // The stage a screenshot is in; no other command sets it.
+    let stage: Cell<Option<Stage>> = Cell::new(None);
     runtime
-        .block_on(async { tokio::time::timeout(deadline, bridge::answer(request, started)).await })
-        .unwrap_or_else(|_| refused(Failure::own(Problem::DeadlinePassed)))
+        .block_on(async {
+            tokio::time::timeout(deadline, bridge::answer(request, started, &stage)).await
+        })
+        .unwrap_or_else(|_| Line::deadline_passed(command, device, via, stage.get()))
 }
 
 /// Prints the line; the status is 0 only for an answered command whose line was written.

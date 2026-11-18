@@ -34,7 +34,8 @@ pub enum Problem {
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
-    /// The command did not finish within `--timeout-ms`.
+    /// The command did not finish within `--timeout-ms`; a screenshot's line names the `stage`
+    /// it was waiting in.
     DeadlinePassed,
     /// No connection to usbmuxd.
     UsbmuxdUnreachable,
@@ -72,9 +73,15 @@ pub enum Problem {
     TooManyMatching,
     /// `--out` names something that exists already: refused before the device is asked.
     OutExists,
-    /// The place `--out` names could not be looked at, or the picture could not be written
-    /// there; nothing of the picture is kept.
+    /// No file could be made at `--out`: the place it names could not be looked at, the
+    /// directory it is to be made in does not exist or is no directory (both found before the
+    /// device is asked), or the file could not be created. Nothing was written.
     OutUnwritable,
+    /// The file `--out` names was made, but the picture could not be written whole into it: the
+    /// program removed that file (its own, made where nothing was), and the line's `out_left`
+    /// says whether a file is left there, `true` only when the removal failed too (that file
+    /// then holds a part of the picture or none of it).
+    OutWriteFailed,
     /// The remote service discovery handshake lists no service of the way asked for.
     ServiceNotListed,
     /// A remote service inside the tunnel took the connection, but its own first exchange
@@ -484,6 +491,29 @@ fn whole_milliseconds(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// The step a screenshot was waiting in when its deadline passed (`stage` beside
+/// `deadline_passed`), by this program's own words, in the order a screenshot goes through
+/// them. The file is written after the last of them, and no deadline passes while it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    /// The session: usbmuxd's device list, the pairing record, and the lockdown session that
+    /// starts the tunnel's service (CoreDeviceProxy).
+    Session,
+    /// The tunnel through CoreDeviceProxy and the remote service discovery handshake through
+    /// it.
+    Tunnel,
+    /// The connection inside the tunnel to the way's remote service and the service's own
+    /// handshake (the screen capture service's XPC handshake).
+    ServiceHandshake,
+    /// The instruments server's first message (the capabilities it publishes), read before its
+    /// screenshot channel is asked for: only the `instruments` way waits in it.
+    ServerFirstMessage,
+    /// The picture's request; for `instruments`, the request of its screenshot channel and then
+    /// of the picture.
+    PictureRequest,
+}
+
 /// `acib screenshot --device <n> --out <file> [--via <way>]`: the way used, the picture's
 /// format, width and height as its header gives them, its length in bytes, the two durations
 /// and the file it was written to. A picture whose header cannot be read keeps its length and
@@ -545,6 +575,13 @@ pub struct Refused {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<Way>,
     pub problem: Problem,
+    /// Beside `deadline_passed` of a screenshot: the stage it was waiting in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
+    /// Beside `out_write_failed`: whether a file is left at `--out`, `true` only when the file
+    /// this program made could not be removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_left: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -580,6 +617,46 @@ impl Line {
             device,
             via,
             problem: failure.problem,
+            stage: None,
+            out_left: None,
+            error: failure.error,
+        })
+    }
+
+    /// `deadline_passed` of `command` on `device`; a screenshot's line names the stage it was
+    /// waiting in (`stage`, which no other command sets).
+    pub fn deadline_passed(
+        command: CommandName,
+        device: Option<u32>,
+        via: Option<Way>,
+        stage: Option<Stage>,
+    ) -> Self {
+        Self::Refused(Refused {
+            command: Some(command),
+            device,
+            via,
+            problem: Problem::DeadlinePassed,
+            stage,
+            out_left: None,
+            error: None,
+        })
+    }
+
+    /// `out_write_failed` of a screenshot on `device` the way `via`: the picture could not be
+    /// written whole into the file this program made at `--out` (the error the system gave, as
+    /// a library error is shown), and whether a file is left there.
+    pub fn out_write_failed<E>(device: u32, via: Way, error: &E, out_left: bool) -> Self
+    where
+        E: std::fmt::Debug + std::fmt::Display,
+    {
+        let failure = Failure::library(Problem::OutWriteFailed, error);
+        Self::Refused(Refused {
+            command: Some(CommandName::Screenshot),
+            device: Some(device),
+            via: Some(via),
+            problem: failure.problem,
+            stage: None,
+            out_left: Some(out_left),
             error: failure.error,
         })
     }
@@ -893,11 +970,37 @@ mod tests {
                 false,
             ),
             (
-                Line::refused(
-                    Some(CommandName::Devices),
-                    None,
-                    Failure::own(Problem::DeadlinePassed),
+                Line::out_write_failed(
+                    3,
+                    Way::ScreenCapture,
+                    &std::io::Error::other("no space left for the picture"),
+                    false,
                 ),
+                r#"{"command":"screenshot","device":3,"via":"screen_capture","problem":"out_write_failed","out_left":false,"error":"no space left for the picture"}"#,
+                false,
+            ),
+            (
+                Line::out_write_failed(
+                    3,
+                    Way::Instruments,
+                    &std::io::Error::other("no space left for the picture"),
+                    true,
+                ),
+                r#"{"command":"screenshot","device":3,"via":"instruments","problem":"out_write_failed","out_left":true,"error":"no space left for the picture"}"#,
+                false,
+            ),
+            (
+                Line::deadline_passed(
+                    CommandName::Screenshot,
+                    Some(3),
+                    Some(Way::Instruments),
+                    Some(Stage::ServerFirstMessage),
+                ),
+                r#"{"command":"screenshot","device":3,"via":"instruments","problem":"deadline_passed","stage":"server_first_message"}"#,
+                false,
+            ),
+            (
+                Line::deadline_passed(CommandName::Devices, None, None, None),
                 r#"{"command":"devices","problem":"deadline_passed"}"#,
                 false,
             ),
@@ -921,7 +1024,7 @@ mod tests {
 
     /// The answer types have no member for a serial number, a UDID, a name, an address or a
     /// pairing record, nor (ACIB-1) for a picture's content: every member any line holds is one
-    /// of these.
+    /// of these (a screenshot's `stage` is a word of [`Stage`], its `out_left` a boolean).
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
@@ -950,6 +1053,7 @@ mod tests {
             "mounted",
             "name",
             "out",
+            "out_left",
             "paired",
             "password_protected",
             "port",
@@ -961,6 +1065,7 @@ mod tests {
             "refused",
             "request",
             "services",
+            "stage",
             "user_applications",
             "value",
             "via",
@@ -1018,6 +1123,7 @@ mod tests {
             (Problem::TooManyMatching, "too_many_matching"),
             (Problem::OutExists, "out_exists"),
             (Problem::OutUnwritable, "out_unwritable"),
+            (Problem::OutWriteFailed, "out_write_failed"),
             (Problem::ServiceNotListed, "service_not_listed"),
             (Problem::ServiceHandshakeFailed, "service_handshake_failed"),
             (Problem::ChannelRefused, "channel_refused"),
@@ -1360,6 +1466,31 @@ mod tests {
             "screenshotr",
         ] {
             assert_eq!(Way::from_word(word), None, "{word}");
+        }
+    }
+
+    /// A screenshot's deadline names the stage it was waiting in by one of five words of this
+    /// program's own, one word for each stage, in the order a screenshot goes through them.
+    #[test]
+    fn every_stage_of_a_screenshot_has_a_word_of_its_own() {
+        let words = [
+            (Stage::Session, "session"),
+            (Stage::Tunnel, "tunnel"),
+            (Stage::ServiceHandshake, "service_handshake"),
+            (Stage::ServerFirstMessage, "server_first_message"),
+            (Stage::PictureRequest, "picture_request"),
+        ];
+        let mut seen = BTreeSet::new();
+        for (stage, word) in words {
+            assert_eq!(
+                serde_json::to_value(stage).expect("a stage serializes"),
+                serde_json::Value::String(word.to_owned())
+            );
+            assert!(
+                word.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{word} is snake_case"
+            );
+            assert!(seen.insert(word), "{word} is one word for one stage");
         }
     }
 }
