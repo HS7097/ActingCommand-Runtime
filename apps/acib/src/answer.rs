@@ -15,12 +15,17 @@
 //! processes only booleans and the pids of that bundle's own processes (the application's and,
 //! apart, its extensions'); an error of the application service is an [`ErrorKind`], a word of
 //! this program's own, never its text. No member holds another application's name, bundle
-//! identifier, path or pid.
+//! identifier, path or pid. (ACIB-3b, second round) The line of `probe` ([`Probe`]) holds of
+//! each way it asked the phone a word of its own lists, an error kind, a count of entries and
+//! the counts of what the phone sent ([`PhoneSent`]), and nothing else; the line of `services
+//! --service` ([`ServiceLine`]) what the discovery handshake says of one service, each name
+//! cut as `redact.rs` cuts a service's name.
 
 use crate::key::DeviceKey;
 use crate::matching::Pids;
 use crate::redact;
 use crate::stopping::Verdict;
+use crate::tap::{PhoneSent, Reads};
 use serde::{Serialize, Serializer};
 use std::time::Duration;
 
@@ -38,6 +43,7 @@ pub enum CommandName {
     Running,
     Launch,
     Stop,
+    Probe,
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
@@ -45,13 +51,13 @@ pub enum CommandName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
-    /// The command line is not one of the ten commands with their options.
+    /// The command line is not one of the eleven commands with their options.
     CommandLineInvalid,
     /// The async runtime of this process could not be built.
     AsyncRuntimeFailed,
     /// The command did not finish within `--timeout-ms`; a screenshot's line names the `stage`
     /// it was waiting in, and (ACIB-3b) a line of `running`, `launch` and `stop` the `stage` it
-    /// was waiting in and `elapsed_ms`, the time of each stage that finished before it. Of
+    /// was waiting in and `stage_ms`, the time of each stage that finished before it. Of
     /// `orientation`, a reader that had not answered by then answers it, and so does each
     /// reader after it, which is not asked.
     DeadlinePassed,
@@ -108,7 +114,8 @@ pub enum Problem {
     /// says whether a file is left there, `true` only when the removal failed too (that file
     /// then holds a part of the picture or none of it).
     OutWriteFailed,
-    /// The remote service discovery handshake lists no service of the way asked for.
+    /// The remote service discovery handshake lists no service of the way asked for (of
+    /// `services --service`, no service of the name given; of `probe`, no application service).
     ServiceNotListed,
     /// A remote service inside the tunnel took the connection, but its own first exchange
     /// failed (a CoreDevice service's XPC handshake, the instruments server's first message).
@@ -289,6 +296,180 @@ pub struct Services {
     pub device: u32,
     pub count: usize,
     pub services: Vec<ServiceEntry>,
+}
+
+/// (ACIB-3b, second round) What the remote service discovery handshake says of one service
+/// (idevice 0.1.68, `services/rsd.rs` 13-24 and 77-104): its name, its port inside the tunnel,
+/// the entitlement it names, whether its properties say it uses RemoteXPC (`false` too when they
+/// do not say), its `ServiceVersion` and its `Features`, each of the last two only when the
+/// handshake gives it, the features in the handshake's order. A name, an entitlement or a feature
+/// that could carry an identifier is `withheld` ([`redact::shown_name`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceDetail {
+    pub name: String,
+    pub port: u16,
+    pub entitlement: String,
+    pub uses_remote_xpc: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub features: Option<Vec<String>>,
+}
+
+impl ServiceDetail {
+    /// The detail of the service `name`, every text of it cut as a service's name is.
+    pub fn of(
+        name: &str,
+        port: u16,
+        entitlement: &str,
+        uses_remote_xpc: bool,
+        service_version: Option<i64>,
+        features: Option<&[String]>,
+    ) -> Self {
+        Self {
+            name: redact::shown_name(name),
+            port,
+            entitlement: redact::shown_name(entitlement),
+            uses_remote_xpc,
+            service_version,
+            features: features.map(|features| {
+                features
+                    .iter()
+                    .map(String::as_str)
+                    .map(redact::shown_name)
+                    .collect()
+            }),
+        }
+    }
+}
+
+/// `acib services --device <n> --service <name>`: what the handshake says of that one service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceLine {
+    pub command: CommandName,
+    pub device: u32,
+    pub service: ServiceDetail,
+}
+
+/// A way `acib probe` asks the phone (ACIB-3b, second round), by this program's own word, in the
+/// order it asks them ([`ProbeWay::ALL`]), each on a connection of its own inside the one tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeWay {
+    /// CoreDevice's screen capture service, which answers on the phone: the library's RemoteXPC
+    /// handshake on it and nothing asked; what such a service sends unasked.
+    ListenScreenCapture,
+    /// The application service: the same handshake and nothing asked; what it sends unasked (the
+    /// baseline of the three ways after it).
+    Listen,
+    /// The library's `list_apps`, as `running` asks it by default: the feature `listapps`,
+    /// protocol version 0, its answer read on the reply channel.
+    ListApps,
+    /// The streamed list: the feature `streamapplist`, protocol version 2, a side channel named
+    /// in its input, its answer read on the root channel until the stream's end.
+    StreamApps,
+    /// The library's `list_processes`: the feature `listprocesses`, protocol version 0, its
+    /// answer read on the reply channel.
+    ListProcesses,
+}
+
+impl ProbeWay {
+    /// Every way, in the order `probe` asks them.
+    pub const ALL: [Self; 5] = [
+        Self::ListenScreenCapture,
+        Self::Listen,
+        Self::ListApps,
+        Self::StreamApps,
+        Self::ListProcesses,
+    ];
+
+    /// The channels the library reads this way's answer on.
+    pub const fn reads(self) -> Reads {
+        match self {
+            Self::ListenScreenCapture | Self::Listen => Reads::Both,
+            Self::ListApps | Self::ListProcesses => Reads::Reply,
+            Self::StreamApps => Reads::Root,
+        }
+    }
+}
+
+/// What one way of `acib probe` came to, by this program's own words, one cause each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeOutcome {
+    /// The library returned what the way asks for: a list (`entries`, its count), or, for a
+    /// `listen`, a message with a body the phone sent unasked.
+    Answered,
+    /// The service answered with its error in place of an output (`device_refused`).
+    Refused,
+    /// The library returned another error (`error_kind`); the phone did not end the connection.
+    Failed,
+    /// The phone ended the connection or reset a stream (a read found its end, a GOAWAY or a
+    /// RST_STREAM frame), with the kind of the error the library made of it.
+    ConnectionClosed,
+    /// The wait passed; beyond what the `listen` of the service counted, a message with a body
+    /// came on a channel the way does not read.
+    AnswerOnOtherChannel,
+    /// The wait passed; a frame or a message was started and is not whole, or messages with a
+    /// body came on the channel read without the library returning (a streamed list without its
+    /// end).
+    AnswerIncomplete,
+    /// The wait passed; beyond what the `listen` counted, a message flagged as a reply came on
+    /// the channel read with an empty dictionary or no body at all, which the library skips.
+    AnswerWithoutBody,
+    /// The wait passed; the phone sent bytes on the connection, but none of the above.
+    NoAnswer,
+    /// The wait passed; the phone sent not one byte on the connection, not even HTTP/2 settings.
+    Silent,
+    /// The handshake lists no such service (only the screen capture service can be missing:
+    /// without the application service the probe is refused).
+    ServiceNotListed,
+    /// The connection to the service's port inside the tunnel failed (`error_kind`).
+    ServiceUnreachable,
+    /// The library's RemoteXPC handshake on the connection failed (`error_kind`).
+    HandshakeFailed,
+    /// The command's deadline left no time to ask.
+    NotAsked,
+}
+
+/// What one way of `acib probe` came to: its word, the error's kind where the library gave an
+/// error, the count of the list's entries where it answered one, how long it took from its
+/// connection on, and what the phone sent on that connection (none when no connection was made).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProbeResult {
+    pub way: ProbeWay,
+    pub outcome: ProbeOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<usize>,
+    pub ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_sent: Option<PhoneSent>,
+}
+
+impl ProbeResult {
+    /// A way that made no connection: `outcome`, of `kind` where the library gave an error.
+    pub fn unconnected(way: ProbeWay, outcome: ProbeOutcome, kind: Option<ErrorKind>) -> Self {
+        Self {
+            way,
+            outcome,
+            error_kind: kind,
+            entries: None,
+            ms: 0,
+            phone_sent: None,
+        }
+    }
+}
+
+/// `acib probe --device <n> [--wait-ms <ms>]`, read-only: each way of [`ProbeWay::ALL`] in turn,
+/// each with a wait of its own (`wait_ms`, within the command's deadline).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Probe {
+    pub command: CommandName,
+    pub device: u32,
+    pub wait_ms: u64,
+    pub ways: Vec<ProbeResult>,
 }
 
 /// Whether a developer image is mounted, as far as the image mounter's answers tell: `true`,
@@ -565,7 +746,8 @@ impl Elapsed {
     }
 }
 
-fn whole_milliseconds(duration: Duration) -> u64 {
+/// A duration in whole milliseconds.
+pub fn whole_milliseconds(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -576,10 +758,11 @@ fn whole_milliseconds(duration: Duration) -> u64 {
 /// through `session` and then the ones after the first five, in the order the code takes them
 /// (`running`: up to `process_list`; `launch`: up to `application_list`, then `launch_request`;
 /// `stop`: up to `process_list`, then `kill_signals` and `looks_after_signals`), and name the
-/// time of each that finished in `elapsed_ms` ([`StageTimes`]). A stage the library gives no way
-/// to interrupt is named as that stage. Where one of the first five covers what two of the
-/// others split (`tunnel`, `service_handshake`), the screenshot keeps its word and the
-/// application service's commands use theirs, so that one word has one meaning.
+/// time of each that finished in `stage_ms` ([`StageTimes`]). A stage the library gives no way
+/// to interrupt is named as that stage. A stage says where a command waited, not why. Where one
+/// of the first five covers what two of the others split (`tunnel`, `service_handshake`), the
+/// screenshot keeps its word and the application service's commands use theirs, so that one
+/// word has one meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
@@ -612,7 +795,10 @@ pub enum Stage {
     /// (the library's RemoteXPC handshake, over HTTP/2).
     ServiceXpcHandshake,
     /// The application service's commands: the request of the list of applications and its
-    /// answer.
+    /// answer (the streamed list's own connection and handshake too, when the service lists that
+    /// feature). The service's handshake only writes: what the phone sent on the service's
+    /// connection is first read here, so waiting here does not show that the phone accepted the
+    /// handshake.
     ApplicationList,
     /// `running` and `stop`: the request of the list of processes and its answer (for `stop`,
     /// the first look, before any signal).
@@ -626,9 +812,10 @@ pub enum Stage {
 }
 
 /// How long each finished stage of a command of the application service took, in whole
-/// milliseconds, by its stage's word, in the order the command took them (`elapsed_ms` of
+/// milliseconds, by its stage's word, in the order the command took them (`stage_ms` of
 /// `running`, `launch` and `stop`, and beside their `deadline_passed`, where the stage it was
-/// waiting in is not among them). Nothing but a stage's word and a number is in it.
+/// waiting in is not among them; a member of its own, as a screenshot's `elapsed_ms` is of
+/// another shape). Nothing but a stage's word and a number is in it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StageTimes(Vec<(Stage, u64)>);
 
@@ -829,7 +1016,7 @@ pub struct Running {
     pub error_kind: Option<ErrorKind>,
     /// (ACIB-3b) How long each stage took ([`StageTimes`]).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_ms: Option<StageTimes>,
+    pub stage_ms: Option<StageTimes>,
 }
 
 impl Running {
@@ -845,7 +1032,7 @@ impl Running {
             extension_pids: None,
             problem: None,
             error_kind: None,
-            elapsed_ms: None,
+            stage_ms: None,
         }
     }
 
@@ -912,7 +1099,7 @@ pub struct Launch {
     pub error_kind: Option<ErrorKind>,
     /// (ACIB-3b) How long each stage took ([`StageTimes`]).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_ms: Option<StageTimes>,
+    pub stage_ms: Option<StageTimes>,
 }
 
 impl Launch {
@@ -927,7 +1114,7 @@ impl Launch {
             pid: None,
             problem: None,
             error_kind: None,
-            elapsed_ms: None,
+            stage_ms: None,
         }
     }
 
@@ -1019,7 +1206,7 @@ pub struct Stop {
     pub error_kind: Option<ErrorKind>,
     /// (ACIB-3b) How long each stage took ([`StageTimes`]).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_ms: Option<StageTimes>,
+    pub stage_ms: Option<StageTimes>,
 }
 
 impl Stop {
@@ -1038,7 +1225,7 @@ impl Stop {
             extension_pids: None,
             problem: None,
             error_kind: None,
-            elapsed_ms: None,
+            stage_ms: None,
         }
     }
 
@@ -1128,7 +1315,7 @@ pub struct Refused {
     /// (ACIB-3b) Beside `deadline_passed` of `running`, `launch` and `stop`: how long each stage
     /// that finished before it took (not the one it was waiting in).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_ms: Option<StageTimes>,
+    pub stage_ms: Option<StageTimes>,
     /// Beside `out_write_failed`: whether a file is left at `--out`, `true` only when the file
     /// this program made could not be removed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1338,8 @@ pub enum Line {
     Running(Running),
     Launch(Launch),
     Stop(Stop),
+    Service(ServiceLine),
+    Probe(Probe),
     Refused(Refused),
 }
 
@@ -1173,7 +1362,7 @@ impl Line {
             via,
             problem: failure.problem,
             stage: None,
-            elapsed_ms: None,
+            stage_ms: None,
             out_left: None,
             error: failure.error,
         })
@@ -1181,14 +1370,14 @@ impl Line {
 
     /// `deadline_passed` of `command` on `device`; a screenshot's line names the stage it was
     /// waiting in (`stage`), and so does (ACIB-3b) a line of `running`, `launch` and `stop`,
-    /// with how long each stage that finished before it took (`elapsed_ms`); no other command
+    /// with how long each stage that finished before it took (`stage_ms`); no other command
     /// sets either.
     pub fn deadline_passed(
         command: CommandName,
         device: Option<u32>,
         via: Option<Way>,
         stage: Option<Stage>,
-        elapsed_ms: Option<StageTimes>,
+        stage_ms: Option<StageTimes>,
     ) -> Self {
         Self::Refused(Refused {
             command: Some(command),
@@ -1196,7 +1385,7 @@ impl Line {
             via,
             problem: Problem::DeadlinePassed,
             stage,
-            elapsed_ms,
+            stage_ms,
             out_left: None,
             error: None,
         })
@@ -1207,15 +1396,15 @@ impl Line {
     pub fn timed(self, times: StageTimes) -> Self {
         match self {
             Self::Running(running) => Self::Running(Running {
-                elapsed_ms: Some(times),
+                stage_ms: Some(times),
                 ..running
             }),
             Self::Launch(launch) => Self::Launch(Launch {
-                elapsed_ms: Some(times),
+                stage_ms: Some(times),
                 ..launch
             }),
             Self::Stop(stop) => Self::Stop(Stop {
-                elapsed_ms: Some(times),
+                stage_ms: Some(times),
                 ..stop
             }),
             other => other,
@@ -1236,7 +1425,7 @@ impl Line {
             via: Some(via),
             problem: failure.problem,
             stage: None,
-            elapsed_ms: None,
+            stage_ms: None,
             out_left: Some(out_left),
             error: failure.error,
         })
@@ -1256,7 +1445,11 @@ impl Line {
                 .candidates
                 .iter()
                 .all(|candidate| candidate.orientation.is_some()),
-            Self::Devices(_) | Self::Services(_) | Self::Images(_) => true,
+            Self::Devices(_)
+            | Self::Services(_)
+            | Self::Images(_)
+            | Self::Service(_)
+            | Self::Probe(_) => true,
         }
     }
 }
@@ -1736,6 +1929,7 @@ mod tests {
             ),
         ];
         shapes.extend(every_application_shape());
+        shapes.extend(every_probe_and_service_shape());
         shapes.push((
             Line::refused(None, None, Failure::own(Problem::CommandLineInvalid)),
             r#"{"problem":"command_line_invalid"}"#,
@@ -1917,7 +2111,7 @@ mod tests {
                     (Stage::ApplicationList, 410),
                     (Stage::ProcessList, 120),
                 ])),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"elapsed_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3,"service_xpc_handshake":20,"application_list":410,"process_list":120}}"#,
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412],"extension_pids":[],"stage_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3,"service_xpc_handshake":20,"application_list":410,"process_list":120}}"#,
                 true,
             ),
             (
@@ -1930,7 +2124,7 @@ mod tests {
                     (Stage::ApplicationList, 380),
                     (Stage::LaunchRequest, 1_250),
                 ])),
-                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"pid":412,"elapsed_ms":{"session":700,"proxy_tunnel":90,"discovery_handshake":41,"service_connection":2,"service_xpc_handshake":19,"application_list":380,"launch_request":1250}}"#,
+                r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":true,"pid":412,"stage_ms":{"session":700,"proxy_tunnel":90,"discovery_handshake":41,"service_connection":2,"service_xpc_handshake":19,"application_list":380,"launch_request":1250}}"#,
                 true,
             ),
             (
@@ -1946,7 +2140,7 @@ mod tests {
                         (Stage::KillSignals, 30),
                         (Stage::LooksAfterSignals, 415),
                     ])),
-                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"remaining":[],"running":false,"extension_pids":[],"elapsed_ms":{"session":690,"proxy_tunnel":88,"discovery_handshake":39,"service_connection":2,"service_xpc_handshake":18,"application_list":377,"process_list":110,"kill_signals":30,"looks_after_signals":415}}"#,
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"remaining":[],"running":false,"extension_pids":[],"stage_ms":{"session":690,"proxy_tunnel":88,"discovery_handshake":39,"service_connection":2,"service_xpc_handshake":18,"application_list":377,"process_list":110,"kill_signals":30,"looks_after_signals":415}}"#,
                 true,
             ),
             (
@@ -1955,7 +2149,7 @@ mod tests {
                     Some(ErrorKind::AnswerUnreadable),
                 ))
                 .timed(times(&[(Stage::Session, 812), (Stage::ApplicationList, 7)])),
-                r#"{"command":"running","device":3,"bundle":"com.example.app","problem":"application_list_failed","error_kind":"answer_unreadable","elapsed_ms":{"session":812,"application_list":7}}"#,
+                r#"{"command":"running","device":3,"bundle":"com.example.app","problem":"application_list_failed","error_kind":"answer_unreadable","stage_ms":{"session":812,"application_list":7}}"#,
                 false,
             ),
             (
@@ -1971,7 +2165,7 @@ mod tests {
                         (Stage::ServiceConnection, 3),
                     ])),
                 ),
-                r#"{"command":"running","device":3,"problem":"deadline_passed","stage":"service_xpc_handshake","elapsed_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3}}"#,
+                r#"{"command":"running","device":3,"problem":"deadline_passed","stage":"service_xpc_handshake","stage_ms":{"session":812,"proxy_tunnel":95,"discovery_handshake":40,"service_connection":3}}"#,
                 false,
             ),
             (
@@ -1985,7 +2179,7 @@ mod tests {
                         (Stage::ApplicationList, 380),
                     ])),
                 ),
-                r#"{"command":"launch","device":3,"problem":"deadline_passed","stage":"launch_request","elapsed_ms":{"session":700,"application_list":380}}"#,
+                r#"{"command":"launch","device":3,"problem":"deadline_passed","stage":"launch_request","stage_ms":{"session":700,"application_list":380}}"#,
                 false,
             ),
             (
@@ -1996,7 +2190,139 @@ mod tests {
                     Some(Stage::Session),
                     Some(StageTimes::default()),
                 ),
-                r#"{"command":"stop","problem":"deadline_passed","stage":"session","elapsed_ms":{}}"#,
+                r#"{"command":"stop","problem":"deadline_passed","stage":"session","stage_ms":{}}"#,
+                false,
+            ),
+        ]
+    }
+
+    /// What a phone sent on one connection: its settings, a window update, two headers, five DATA
+    /// frames, on the root channel an empty dictionary and a message without a body, on the reply
+    /// channel one with a body and a reply without one.
+    fn phone_sent() -> PhoneSent {
+        use crate::tap::{ChannelCounts, Frames};
+        PhoneSent {
+            bytes: 6_200,
+            closed: false,
+            read_failed: false,
+            frames: Frames {
+                settings: 2,
+                window_update: 1,
+                headers: 2,
+                data: 5,
+                rst_stream: 0,
+                goaway: 0,
+                other: 0,
+            },
+            root: ChannelCounts {
+                content: 0,
+                empty: 1,
+                bodyless: 1,
+                unreadable: 0,
+                replies_without_body: 0,
+                pending_bytes: 0,
+            },
+            reply: ChannelCounts {
+                content: 1,
+                empty: 0,
+                bodyless: 1,
+                unreadable: 0,
+                replies_without_body: 1,
+                pending_bytes: 0,
+            },
+            other_stream_bytes: 0,
+            pending_frame_bytes: 0,
+        }
+    }
+
+    /// (ACIB-3b, second round) One line of every shape `probe` and `services --service` print,
+    /// with its text and whether it is answered.
+    fn every_probe_and_service_shape() -> Vec<(Line, &'static str, bool)> {
+        let features = vec![
+            "com.example.feature.one".to_owned(),
+            "com.example.feature.0123456789ABCDEF01234567".to_owned(),
+        ];
+        vec![
+            (
+                Line::Probe(Probe {
+                    command: CommandName::Probe,
+                    device: 3,
+                    wait_ms: 4_000,
+                    ways: vec![
+                        ProbeResult {
+                            way: ProbeWay::ListApps,
+                            outcome: ProbeOutcome::Answered,
+                            error_kind: None,
+                            entries: Some(41),
+                            ms: 380,
+                            phone_sent: Some(phone_sent()),
+                        },
+                        ProbeResult {
+                            way: ProbeWay::StreamApps,
+                            outcome: ProbeOutcome::Failed,
+                            error_kind: Some(ErrorKind::XpcFailed),
+                            entries: None,
+                            ms: 12,
+                            phone_sent: Some(PhoneSent::default()),
+                        },
+                        ProbeResult::unconnected(
+                            ProbeWay::ListProcesses,
+                            ProbeOutcome::NotAsked,
+                            None,
+                        ),
+                    ],
+                }),
+                r#"{"command":"probe","device":3,"wait_ms":4000,"ways":[{"way":"list_apps","outcome":"answered","entries":41,"ms":380,"phone_sent":{"bytes":6200,"closed":false,"read_failed":false,"frames":{"settings":2,"window_update":1,"headers":2,"data":5,"rst_stream":0,"goaway":0,"other":0},"root":{"content":0,"empty":1,"bodyless":1,"unreadable":0,"replies_without_body":0,"pending_bytes":0},"reply":{"content":1,"empty":0,"bodyless":1,"unreadable":0,"replies_without_body":1,"pending_bytes":0},"other_stream_bytes":0,"pending_frame_bytes":0}},{"way":"stream_apps","outcome":"failed","error_kind":"xpc_failed","ms":12,"phone_sent":{"bytes":0,"closed":false,"read_failed":false,"frames":{"settings":0,"window_update":0,"headers":0,"data":0,"rst_stream":0,"goaway":0,"other":0},"root":{"content":0,"empty":0,"bodyless":0,"unreadable":0,"replies_without_body":0,"pending_bytes":0},"reply":{"content":0,"empty":0,"bodyless":0,"unreadable":0,"replies_without_body":0,"pending_bytes":0},"other_stream_bytes":0,"pending_frame_bytes":0}},{"way":"list_processes","outcome":"not_asked","ms":0}]}"#,
+                true,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Probe),
+                    Some(3),
+                    Failure::own(Problem::ServiceNotListed),
+                ),
+                r#"{"command":"probe","device":3,"problem":"service_not_listed"}"#,
+                false,
+            ),
+            (
+                Line::Service(ServiceLine {
+                    command: CommandName::Services,
+                    device: 3,
+                    service: ServiceDetail::of(
+                        "com.example.service",
+                        49152,
+                        "com.example.entitlement.trusted",
+                        true,
+                        Some(1),
+                        Some(features.as_slice()),
+                    ),
+                }),
+                r#"{"command":"services","device":3,"service":{"name":"com.example.service","port":49152,"entitlement":"com.example.entitlement.trusted","uses_remote_xpc":true,"service_version":1,"features":["com.example.feature.one","withheld"]}}"#,
+                true,
+            ),
+            (
+                Line::Service(ServiceLine {
+                    command: CommandName::Services,
+                    device: 3,
+                    service: ServiceDetail::of(
+                        "com.example.two",
+                        58783,
+                        "com.example.entitlement.untrusted",
+                        false,
+                        None,
+                        None,
+                    ),
+                }),
+                r#"{"command":"services","device":3,"service":{"name":"com.example.two","port":58783,"entitlement":"com.example.entitlement.untrusted","uses_remote_xpc":false}}"#,
+                true,
+            ),
+            (
+                Line::refused(
+                    Some(CommandName::Services),
+                    Some(3),
+                    Failure::own(Problem::ServiceNotListed),
+                ),
+                r#"{"command":"services","device":3,"problem":"service_not_listed"}"#,
                 false,
             ),
         ]
@@ -2032,14 +2358,18 @@ mod tests {
             "answer",
             "application_list",
             "binding_key",
+            "bodyless",
             "build_version",
             "bundle",
             "bytes",
             "candidates",
+            "closed",
             "command",
             "connection",
             "contains",
+            "content",
             "count",
+            "data",
             "developer_mode",
             "device",
             "device_class",
@@ -2047,11 +2377,17 @@ mod tests {
             "devices",
             "discovery_handshake",
             "elapsed_ms",
+            "empty",
             "entitlement",
+            "entries",
             "error",
             "error_kind",
             "extension_pids",
+            "features",
             "format",
+            "frames",
+            "goaway",
+            "headers",
             "height",
             "image_type",
             "installed",
@@ -2063,12 +2399,19 @@ mod tests {
             "matching_count",
             "members",
             "mounted",
+            "ms",
             "name",
             "orientation",
+            "other",
+            "other_stream_bytes",
             "out",
             "out_left",
+            "outcome",
             "paired",
             "password_protected",
+            "pending_bytes",
+            "pending_frame_bytes",
+            "phone_sent",
             "pid",
             "pids",
             "port",
@@ -2079,23 +2422,38 @@ mod tests {
             "proxy_tunnel",
             "queries",
             "query",
+            "read_failed",
             "refused",
             "relaunch",
             "remaining",
+            "replies_without_body",
+            "reply",
             "request",
+            "root",
+            "rst_stream",
             "running",
+            "service",
             "service_connection",
+            "service_version",
             "service_xpc_handshake",
             "services",
             "session",
+            "settings",
             "signal_errors",
             "signalled",
             "stage",
+            "stage_ms",
+            "unreadable",
             "user_applications",
+            "uses_remote_xpc",
             "value",
             "via",
+            "wait_ms",
             "was_running",
+            "way",
+            "ways",
             "width",
+            "window_update",
         ];
         fn collect(value: &serde_json::Value, found: &mut BTreeSet<String>) {
             match value {
@@ -2692,11 +3050,11 @@ mod tests {
     /// carry another application's name, bundle identifier, path or pid: their members are
     /// these, every text in them is the bundle asked for or a word of this program's own
     /// closed lists (a command, a problem, an error kind, a stage), every member of
-    /// `elapsed_ms` a stage's word, and every number a device's number, a pid of the bundle's
+    /// `stage_ms` a stage's word, and every number a device's number, a pid of the bundle's
     /// own processes or (ACIB-3b) a stage's milliseconds.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
-        // ACIB-3b: `elapsed_ms`, whose members are the stages' words, and `stage` beside a
+        // ACIB-3b: `stage_ms`, whose members are the stages' words, and `stage` beside a
         // deadline, whose text is one of them.
         const STAGES: [Stage; 10] = [
             Stage::Session,
@@ -2714,7 +3072,6 @@ mod tests {
             "bundle",
             "command",
             "device",
-            "elapsed_ms",
             "error_kind",
             "extension_pids",
             "installed",
@@ -2727,6 +3084,7 @@ mod tests {
             "signal_errors",
             "signalled",
             "stage",
+            "stage_ms",
             "was_running",
         ];
         let mut words: BTreeSet<String> = [BUNDLE.to_owned()].into();
@@ -2881,6 +3239,158 @@ mod tests {
         );
         assert_eq!(unseen.problem, Some(Problem::ProcessListFailed));
         assert_eq!(unseen.error_kind, Some(ErrorKind::ConnectionFailed));
+    }
+
+    /// (ACIB-3b, second round) By construction, a line of `probe` holds of each way only its
+    /// word, its outcome's word, an error's kind, a count of entries, its milliseconds and the
+    /// counts of what the phone sent: these members, every text a word of this program's own
+    /// closed lists, each way and each outcome one word for one cause. A line of `services
+    /// --service` holds the facts the handshake names of the service, and a name, an
+    /// entitlement or a feature shaped like an identifier is withheld.
+    #[test]
+    fn the_probe_and_service_lines_hold_only_words_counts_and_service_facts() {
+        let ways = [
+            (ProbeWay::ListenScreenCapture, "listen_screen_capture"),
+            (ProbeWay::Listen, "listen"),
+            (ProbeWay::ListApps, "list_apps"),
+            (ProbeWay::StreamApps, "stream_apps"),
+            (ProbeWay::ListProcesses, "list_processes"),
+        ];
+        let outcomes = [
+            (ProbeOutcome::Answered, "answered"),
+            (ProbeOutcome::Refused, "refused"),
+            (ProbeOutcome::Failed, "failed"),
+            (ProbeOutcome::ConnectionClosed, "connection_closed"),
+            (
+                ProbeOutcome::AnswerOnOtherChannel,
+                "answer_on_other_channel",
+            ),
+            (ProbeOutcome::AnswerIncomplete, "answer_incomplete"),
+            (ProbeOutcome::AnswerWithoutBody, "answer_without_body"),
+            (ProbeOutcome::NoAnswer, "no_answer"),
+            (ProbeOutcome::Silent, "silent"),
+            (ProbeOutcome::ServiceNotListed, "service_not_listed"),
+            (ProbeOutcome::ServiceUnreachable, "service_unreachable"),
+            (ProbeOutcome::HandshakeFailed, "handshake_failed"),
+            (ProbeOutcome::NotAsked, "not_asked"),
+        ];
+        assert_eq!(ProbeWay::ALL, ways.map(|(way, _)| way));
+        let mut seen = BTreeSet::new();
+        for expected in ways
+            .iter()
+            .map(|(way, expected)| (word(*way), *expected))
+            .chain(
+                outcomes
+                    .iter()
+                    .map(|(outcome, expected)| (word(*outcome), *expected)),
+            )
+        {
+            assert_eq!(expected.0, expected.1);
+            assert!(
+                expected
+                    .1
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{} is snake_case",
+                expected.1
+            );
+            assert!(seen.insert(expected.1), "{} is one word", expected.1);
+        }
+
+        let results: Vec<ProbeResult> = outcomes
+            .iter()
+            .zip(ProbeWay::ALL.iter().cycle())
+            .map(|((outcome, _), way)| ProbeResult {
+                way: *way,
+                outcome: *outcome,
+                error_kind: Some(ErrorKind::Other),
+                entries: Some(2),
+                ms: 5,
+                phone_sent: Some(phone_sent()),
+            })
+            .collect();
+        let line = Line::Probe(Probe {
+            command: CommandName::Probe,
+            device: 3,
+            wait_ms: 4_000,
+            ways: results,
+        });
+        assert!(line.answered());
+        let (members, texts) = members_and_texts(&line);
+        let mut words: BTreeSet<String> = ways.iter().map(|(way, _)| word(*way)).collect();
+        words.extend(outcomes.iter().map(|(outcome, _)| word(*outcome)));
+        words.insert(word(CommandName::Probe));
+        words.insert(word(ErrorKind::Other));
+        for text in &texts {
+            assert!(words.contains(text), "{text}");
+        }
+        let expected: BTreeSet<String> = [
+            "bodyless",
+            "bytes",
+            "closed",
+            "command",
+            "content",
+            "data",
+            "device",
+            "empty",
+            "entries",
+            "error_kind",
+            "frames",
+            "goaway",
+            "headers",
+            "ms",
+            "other",
+            "other_stream_bytes",
+            "outcome",
+            "pending_bytes",
+            "pending_frame_bytes",
+            "phone_sent",
+            "read_failed",
+            "replies_without_body",
+            "reply",
+            "root",
+            "rst_stream",
+            "settings",
+            "unreadable",
+            "wait_ms",
+            "way",
+            "ways",
+            "window_update",
+        ]
+        .iter()
+        .map(|member| (*member).to_owned())
+        .collect();
+        assert_eq!(members, expected);
+
+        const RUN: &str = "0123456789abcdef0123456789abcdef01234567";
+        let features = vec![
+            format!("com.example.feature.{RUN}"),
+            "com.example.feature.one".to_owned(),
+        ];
+        let detail = ServiceDetail::of(
+            &format!("com.example.{RUN}"),
+            49152,
+            &format!("com.example.entitlement.{RUN}"),
+            true,
+            Some(2),
+            Some(features.as_slice()),
+        );
+        assert_eq!(detail.name, "withheld");
+        assert_eq!(detail.entitlement, "withheld");
+        assert_eq!(
+            detail.features,
+            Some(vec![
+                "withheld".to_owned(),
+                "com.example.feature.one".to_owned()
+            ])
+        );
+        let line = Line::Service(ServiceLine {
+            command: CommandName::Services,
+            device: 3,
+            service: detail,
+        });
+        assert!(!json(&line).contains(RUN));
+        assert!(line.answered());
     }
 
     /// Each error kind of the application service has a snake_case word of its own.

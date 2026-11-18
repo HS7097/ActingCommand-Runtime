@@ -59,42 +59,90 @@ mod tests {
     use crate::answer::{CommandName, Line};
     use std::collections::BTreeSet;
 
-    /// The stages before the application service answers anything, which the three commands
-    /// share, in the order the code takes them.
-    const OPENING: [Stage; 5] = [
+    /// The code of the commands, where each enters its stages (`bridge.rs`).
+    const BRIDGE: &str = include_str!("bridge.rs");
+
+    /// Every stage of [`Stage`], to read a stage's name in the code by.
+    const ALL_STAGES: [Stage; 14] = [
         Stage::Session,
+        Stage::Tunnel,
+        Stage::ServiceHandshake,
+        Stage::ServerFirstMessage,
+        Stage::PictureRequest,
         Stage::ProxyTunnel,
         Stage::DiscoveryHandshake,
         Stage::ServiceConnection,
         Stage::ServiceXpcHandshake,
+        Stage::ApplicationList,
+        Stage::ProcessList,
+        Stage::LaunchRequest,
+        Stage::KillSignals,
+        Stage::LooksAfterSignals,
     ];
 
-    /// The stages of each command of the application service, in the order its code takes
-    /// them, the longest way through (a bundle installed and, for `stop`, running).
+    /// The stage the code names `Stage::<name>`: the one whose word is `name` in snake case.
+    fn named(name: &str) -> Stage {
+        let mut snake = String::new();
+        for (index, character) in name.chars().enumerate() {
+            if character.is_ascii_uppercase() && index > 0 {
+                snake.push('_');
+            }
+            snake.push(character.to_ascii_lowercase());
+        }
+        ALL_STAGES
+            .into_iter()
+            .find(|stage| word(*stage) == snake)
+            .unwrap_or_else(|| panic!("no stage is named {name}"))
+    }
+
+    /// The code of the function `name` of `bridge.rs`, from its `fn` to the brace that closes it
+    /// (rustfmt closes a function of the module at the start of a line).
+    fn body(name: &str) -> &'static str {
+        let start = BRIDGE
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("bridge.rs has no fn {name}"));
+        let rest = &BRIDGE[start..];
+        let end = rest
+            .find("\n}")
+            .unwrap_or_else(|| panic!("fn {name} does not end"));
+        &rest[..end]
+    }
+
+    /// The stages the function `name` of `bridge.rs` enters, in the order of its code: each
+    /// `context.enter(Stage::<name>)` in it and, where it calls `app_service`, the stages that
+    /// function enters. Each of these steps is taken in the order the code is written (no
+    /// branch or loop of these functions enters a stage before one written above it).
+    fn entered(name: &str) -> Vec<Stage> {
+        const ENTER: &str = "context.enter(Stage::";
+        const OPENING: &str = "app_service(target, context)";
+        let mut rest = body(name);
+        let mut stages = Vec::new();
+        loop {
+            let enter = rest.find(ENTER).unwrap_or(usize::MAX);
+            let opening = rest.find(OPENING).unwrap_or(usize::MAX);
+            if enter == usize::MAX && opening == usize::MAX {
+                break;
+            }
+            if enter < opening {
+                let after = &rest[enter + ENTER.len()..];
+                let end = after.find(')').expect("a stage's name ends");
+                stages.push(named(&after[..end]));
+                rest = &after[end..];
+            } else {
+                stages.extend(entered("app_service"));
+                rest = &rest[opening + OPENING.len()..];
+            }
+        }
+        stages
+    }
+
+    /// The stages of each command of the application service, the longest way through (a
+    /// bundle installed and, for `stop`, running), as its code in `bridge.rs` enters them.
     fn paths() -> [(CommandName, Vec<Stage>); 3] {
-        let after = |rest: &[Stage]| {
-            let mut path = OPENING.to_vec();
-            path.extend_from_slice(rest);
-            path
-        };
         [
-            (
-                CommandName::Running,
-                after(&[Stage::ApplicationList, Stage::ProcessList]),
-            ),
-            (
-                CommandName::Launch,
-                after(&[Stage::ApplicationList, Stage::LaunchRequest]),
-            ),
-            (
-                CommandName::Stop,
-                after(&[
-                    Stage::ApplicationList,
-                    Stage::ProcessList,
-                    Stage::KillSignals,
-                    Stage::LooksAfterSignals,
-                ]),
-            ),
+            (CommandName::Running, entered("running")),
+            (CommandName::Launch, entered("launch")),
+            (CommandName::Stop, entered("stop")),
         ]
     }
 
@@ -140,7 +188,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&line).expect("a line serializes"),
-            r#"{"command":"running","device":3,"problem":"deadline_passed","stage":"discovery_handshake","elapsed_ms":{"session":812,"proxy_tunnel":88}}"#
+            r#"{"command":"running","device":3,"problem":"deadline_passed","stage":"discovery_handshake","stage_ms":{"session":812,"proxy_tunnel":88}}"#
         );
         assert!(!line.answered());
         let times = steps.end(ms(1_000));
@@ -151,12 +199,19 @@ mod tests {
         );
     }
 
-    /// Each stage of the application service's commands is reached on a command's way, and a
-    /// deadline in it names it, with the times of the stages before it on that way and of no
-    /// other; every stage word of these commands is reached so, and none of the screenshot's
-    /// words that means something else here (`tunnel`, `service_handshake`) is.
+    /// Each stage of the application service's commands is reached on a command's way, as the
+    /// code in `bridge.rs` enters them (ACIB-3b, second round: read from the code, not from a
+    /// table of its own), and a deadline in it names it, with the times of the stages before it
+    /// on that way and of no other; every stage word of these commands is reached so, each
+    /// command's way opens with the same five stages, and none of the screenshot's words that
+    /// means something else here (`tunnel`, `service_handshake`) is.
     #[test]
     fn each_stage_of_the_application_service_is_reached_and_named_by_its_deadline() {
+        let opening = entered("app_service");
+        assert_eq!(opening.len(), 5, "{opening:?}");
+        for (command, path) in paths() {
+            assert_eq!(path[..5], opening[..], "{command:?}");
+        }
         let mut reached = BTreeSet::new();
         for (command, path) in paths() {
             let mut steps = Steps::default();
@@ -177,7 +232,7 @@ mod tests {
                 // the order is the string's, below.
                 let before: BTreeSet<String> =
                     path[..index].iter().map(|done| word(*done)).collect();
-                let named: BTreeSet<String> = value["elapsed_ms"]
+                let named: BTreeSet<String> = value["stage_ms"]
                     .as_object()
                     .expect("the times of the stages before")
                     .iter()

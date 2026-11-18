@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The ten commands against the device, through the `idevice` library (board #479, ACIB-0 to
-//! ACIB-3).
+//! The eleven commands against the device, through the `idevice` library (board #479, ACIB-0 to
+//! ACIB-3b).
+//!
+//! (ACIB-3b, second round) `probe` asks the application service each way of [`ProbeWay::ALL`]
+//! on a connection of its own, each read through `tap.rs`, and answers per way only a word, an
+//! error's kind, a count and counts of what the phone sent. The list of applications of
+//! `running`, `launch` and `stop` is asked the way the service itself names among its features
+//! in the discovery handshake ([`Listing`]).
 //!
 //! Everything here only reads, but for `launch`, which launches one application, and `stop`,
 //! which ends one application's own processes (ACIB-3). Of the application service's lists of
@@ -22,8 +28,9 @@
 use crate::answer::{
     Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind, Failure, ImageQuery,
     ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted, Orientation,
-    Orientations, Problem, Reader, Reading, Running, Screenshot, ServiceEntry, Services,
-    SignalError, Signals, Stage, Stop, Way,
+    Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay, Problem, Reader, Reading, Running,
+    Screenshot, ServiceDetail, ServiceEntry, ServiceLine, Services, SignalError, Signals, Stage,
+    Stop, Way, whole_milliseconds,
 };
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
@@ -33,6 +40,7 @@ use crate::out_file::{self, NotWritten};
 use crate::redact;
 use crate::stages::Steps;
 use crate::stopping::{self, LOOK_INTERVAL, Next};
+use crate::tap::{self, PhoneSent, Seen, Tapped};
 use idevice::pairing_file::PairingFile;
 use idevice::provider::{IdeviceProvider, RsdProvider, UsbmuxdProvider};
 use idevice::services::core_device::{
@@ -48,10 +56,14 @@ use idevice::services::rsd::RsdHandshake;
 use idevice::services::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
 use idevice::tcp::handle::AdapterHandle;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
-use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService};
+use idevice::xpc::{Dictionary, XPCObject};
+use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, RemoteXpcClient, RsdService};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The label the library sends with each connection.
@@ -70,9 +82,88 @@ const KILL: u32 = 9;
 
 /// The client of CoreDevice's application service inside the tunnel.
 type AppService = AppServiceClient<Box<dyn ReadWrite>>;
-/// A device's number, the tunnel to it, and its application service's client, or the kind of
-/// the error the service's handshake failed with.
-type AppConnection = (u32, AdapterHandle, Result<AppService, ErrorKind>);
+/// The client of CoreDevice's screen capture service inside the tunnel.
+type ScreenCaptureService = ScreenCaptureServiceClient<Box<dyn ReadWrite>>;
+/// The library's RemoteXPC client on a connection inside the tunnel.
+type Xpc = RemoteXpcClient<Box<dyn ReadWrite>>;
+
+/// (ACIB-3b, second round) The feature the application service names, among its features in the
+/// discovery handshake, when it offers the streamed list of applications (idevice 0.1.68,
+/// `services/core_device/app_service.rs` 209).
+const STREAMED_LIST_FEATURE: &str = "com.apple.coredevice.feature.streamapplist";
+/// The member of a streamed answer that holds the stream's status (`services/core_device/mod.rs`
+/// 252-253).
+const SIDE_CHANNEL_STATUS: &str = "CoreDevice.XPCMessageKey.sideChannelStatus";
+/// The version of CoreDevice the library sends with every request (`services/core_device/mod.rs`
+/// 44), and its two components.
+const CORE_DEVICE_VERSION: &str = "629.3";
+const CORE_DEVICE_VERSION_COMPONENTS: [u64; 2] = [629, 3];
+/// The magic, the version and the type of an XPC object holding a UUID, as the library's encoder
+/// writes one and its decoder reads it (`xpc/format.rs` 80, 184-185, 262-265, 275-291).
+const XPC_OBJECT_MAGIC: u32 = 0x4213_3742;
+const XPC_OBJECT_VERSION: u32 = 0x0000_0005;
+const XPC_UUID_TYPE: u32 = 0x0000_a000;
+/// The flags of the list of applications, in the library's order (`app_list_options` in
+/// `services/core_device/app_service.rs` 381-398): App Clips, removable, hidden, internal and
+/// default applications asked as `list_apps` is asked here, then the three keys the library adds,
+/// each `false`.
+const LIST_OPTIONS: [(&str, bool); 8] = [
+    ("includeAppClips", false),
+    ("includeRemovableApps", true),
+    ("includeHiddenApps", true),
+    ("includeInternalApps", false),
+    ("includeDefaultApps", true),
+    ("includeAppGroupIdentifiers", false),
+    ("includeContainerPaths", false),
+    ("requireContainerAccess", false),
+];
+
+/// (ACIB-3b, second round) How the application service's list of applications is asked for: the
+/// way the service names among its features in the discovery handshake, as the library's own tool
+/// chooses (idevice's repository, `tools/src/app_service.rs`, commit 6e1222075e of 2026-08-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    /// The library's `list_apps` on the service's client: the feature `listapps`, its answer read
+    /// on the reply channel. When the service names no streamed list.
+    ListApps,
+    /// The streamed list, on a connection of its own to the service: the feature
+    /// `streamapplist`, its answer read on the root channel. When the service names it.
+    StreamAppList,
+}
+
+impl Listing {
+    /// The way of the service whose features the handshake names as `features`.
+    fn advertised(features: Option<&[String]>) -> Self {
+        let streamed = features.is_some_and(|features| {
+            features
+                .iter()
+                .any(|feature| feature == STREAMED_LIST_FEATURE)
+        });
+        if streamed {
+            Self::StreamAppList
+        } else {
+            Self::ListApps
+        }
+    }
+}
+
+/// A device's number, the tunnel to it, the application service's port in it and the way its list
+/// of applications is asked for, and the service's client, or the kind of the error the service's
+/// handshake failed with.
+struct AppConnection {
+    device: u32,
+    /// The tunnel, which stays open while it is held.
+    tunnel: AdapterHandle,
+    port: u16,
+    listing: Listing,
+    client: Result<AppService, ErrorKind>,
+}
+
+/// One application of a list, as `matching.rs` reads it: its bundle identifier and its path.
+struct ListedApplication {
+    bundle_identifier: String,
+    path: String,
+}
 
 /// What a command keeps while it runs, for the line of a deadline that passes in it: the
 /// command's deadline and start, the stage a screenshot is in (no other command sets it), the
@@ -160,6 +251,14 @@ pub async fn answer(request: Request, context: &Context) -> Printed {
         } => stop(&target, &bundle, context)
             .await
             .map(|line| Printed::line(context.timed(line))),
+        Request::ServiceByName {
+            device: target,
+            name,
+        } => service(&target, &name, context).await.map(Printed::line),
+        Request::Probe {
+            device: target,
+            wait_ms,
+        } => probe(&target, wait_ms, context).await.map(Printed::line),
     };
     answered.unwrap_or_else(|failure| {
         let device = given.or(context.device.get());
@@ -275,6 +374,193 @@ async fn services(target: &Target, context: &Context) -> Result<Line, Failure> {
         count: services.len(),
         services,
     }))
+}
+
+/// (ACIB-3b, second round) `services --service <name>`: in the tunnel of `services`, what the
+/// discovery handshake says of the one service `name` (its port, its entitlement, whether it uses
+/// RemoteXPC, its version and its features: idevice 0.1.68, `services/rsd.rs` 77-104), each name
+/// cut as `services` cuts one; `service_not_listed` when the handshake lists no such service. No
+/// service is opened.
+async fn service(target: &Target, name: &str, context: &Context) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
+    let record = paired_record(&device).await?;
+    let proxy = proxy_service(&device, &record).await?;
+    let (_tunnel, handshake) = open_tunnel(proxy, || {}).await?;
+    let listed = handshake
+        .services
+        .get(name)
+        .ok_or(Failure::own(Problem::ServiceNotListed))?;
+    Ok(Line::Service(ServiceLine {
+        command: CommandName::Services,
+        device: number,
+        service: ServiceDetail::of(
+            name,
+            listed.port,
+            &listed.entitlement,
+            listed.uses_remote_xpc,
+            listed.service_version,
+            listed.features.as_deref(),
+        ),
+    }))
+}
+
+/// (ACIB-3b, second round) `probe`, read-only: in the tunnel of `services`, each way of
+/// [`ProbeWay::ALL`] in turn, each on a connection of its own to its service's port, read through
+/// a [`Tapped`] stream, each waited for `wait_ms` within the command's deadline (a way the
+/// deadline leaves no time for is `not_asked`). Nothing changes on the phone: the two `listen`
+/// ways ask nothing, the others ask for a list. The application service not listed refuses the
+/// probe (`service_not_listed`); the screen capture service not listed is its way's word. The
+/// three ways after the application service's `listen` count the phone's messages beyond what it
+/// counted (its answers to the handshake alone).
+async fn probe(target: &Target, wait_ms: u64, context: &Context) -> Result<Line, Failure> {
+    let device = locate(target, context).await?;
+    let number = device.device_id;
+    let record = paired_record(&device).await?;
+    let proxy = proxy_service(&device, &record).await?;
+    let (mut tunnel, handshake) = open_tunnel(proxy, || {}).await?;
+    let application = port_of(&handshake, &<AppService as RsdService>::rsd_service_name())?;
+    let screen = port_of(
+        &handshake,
+        &<ScreenCaptureService as RsdService>::rsd_service_name(),
+    )
+    .ok();
+    let wait = Duration::from_millis(wait_ms);
+    let mut baseline: Option<PhoneSent> = None;
+    let mut ways = Vec::with_capacity(ProbeWay::ALL.len());
+    for way in ProbeWay::ALL {
+        let (port, compared) = match way {
+            ProbeWay::ListenScreenCapture => (screen, None),
+            ProbeWay::Listen => (Some(application), None),
+            ProbeWay::ListApps | ProbeWay::StreamApps | ProbeWay::ListProcesses => {
+                (Some(application), baseline.as_ref())
+            }
+        };
+        let result = probe_way(&mut tunnel, way, port, compared, wait, context.deadline).await;
+        if way == ProbeWay::Listen {
+            baseline = result.phone_sent;
+        }
+        ways.push(result);
+    }
+    Ok(Line::Probe(Probe {
+        command: CommandName::Probe,
+        device: number,
+        wait_ms,
+        ways,
+    }))
+}
+
+/// One way of `probe` on the port `port` (`None`: its service is not listed): asked within
+/// `wait`, and no later than `deadline`, on a connection read through a [`Tapped`] stream; its
+/// word from what the library returned or, when the wait passed first, from what the phone sent
+/// beyond `baseline` (`tap.rs`).
+async fn probe_way(
+    tunnel: &mut AdapterHandle,
+    way: ProbeWay,
+    port: Option<u16>,
+    baseline: Option<&PhoneSent>,
+    wait: Duration,
+    deadline: Option<tokio::time::Instant>,
+) -> ProbeResult {
+    let Some(port) = port else {
+        return ProbeResult::unconnected(way, ProbeOutcome::ServiceNotListed, None);
+    };
+    let now = tokio::time::Instant::now();
+    let until = match deadline {
+        Some(deadline) => deadline.min(now + wait),
+        None => now + wait,
+    };
+    if until <= now {
+        return ProbeResult::unconnected(way, ProbeOutcome::NotAsked, None);
+    }
+    let started = Instant::now();
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let asked = tokio::time::timeout_at(until, ask(tunnel, way, port, &seen)).await;
+    let ms = whole_milliseconds(started.elapsed());
+    let sent = tap::summary_of(&seen);
+    let (outcome, error_kind, entries) = match asked {
+        Ok(Ok(entries)) => (ProbeOutcome::Answered, None, entries),
+        Ok(Err(Asked::Unreachable(kind))) => {
+            let mut unreachable =
+                ProbeResult::unconnected(way, ProbeOutcome::ServiceUnreachable, Some(kind));
+            unreachable.ms = ms;
+            return unreachable;
+        }
+        Ok(Err(Asked::Handshake(kind))) => (ProbeOutcome::HandshakeFailed, Some(kind), None),
+        Ok(Err(Asked::Request(kind))) => {
+            let (outcome, kind) = tap::failed(&sent, kind);
+            (outcome, kind, None)
+        }
+        Err(_) => (tap::unanswered(&sent, baseline, way.reads()), None, None),
+    };
+    ProbeResult {
+        way,
+        outcome,
+        error_kind,
+        entries,
+        ms,
+        phone_sent: Some(sent),
+    }
+}
+
+/// How one way of `probe` stopped before the library returned what it asks for.
+enum Asked {
+    /// The connection to the service's port failed.
+    Unreachable(ErrorKind),
+    /// The library's RemoteXPC handshake on it failed.
+    Handshake(ErrorKind),
+    /// The request, or the reading of its answer, failed.
+    Request(ErrorKind),
+}
+
+/// One way of `probe` asked on a new connection to `port`, its reads counted in `seen`: the count
+/// of the list's entries it answered, none for a `listen` (whose message is dropped unread).
+async fn ask(
+    tunnel: &mut AdapterHandle,
+    way: ProbeWay,
+    port: u16,
+    seen: &Arc<Mutex<Seen>>,
+) -> Result<Option<usize>, Asked> {
+    let stream = tunnel
+        .connect_to_service_port(port)
+        .await
+        .map_err(|error| Asked::Unreachable(service_error_kind(&error)))?;
+    let tapped: Box<dyn ReadWrite> = Box::new(Tapped::new(stream, Arc::clone(seen)));
+    let handshake = |error: IdeviceError| Asked::Handshake(service_error_kind(&error));
+    let request = |error: IdeviceError| Asked::Request(service_error_kind(&error));
+    match way {
+        ProbeWay::ListenScreenCapture | ProbeWay::Listen => {
+            let mut client = Xpc::new(tapped).await.map_err(handshake)?;
+            client.do_handshake().await.map_err(handshake)?;
+            client.recv_any().await.map_err(request)?;
+            Ok(None)
+        }
+        ProbeWay::ListApps => {
+            let mut client = <AppService as RsdService>::from_stream(tapped)
+                .await
+                .map_err(handshake)?;
+            let applications = client
+                .list_apps(false, true, true, false, true)
+                .await
+                .map_err(request)?;
+            Ok(Some(applications.len()))
+        }
+        ProbeWay::StreamApps => {
+            let mut client = Xpc::new(tapped).await.map_err(handshake)?;
+            client.do_handshake().await.map_err(handshake)?;
+            let applications = streamed_applications(&mut client)
+                .await
+                .map_err(Asked::Request)?;
+            Ok(Some(applications.len()))
+        }
+        ProbeWay::ListProcesses => {
+            let mut client = <AppService as RsdService>::from_stream(tapped)
+                .await
+                .map_err(handshake)?;
+            let processes = client.list_processes().await.map_err(request)?;
+            Ok(Some(processes.len()))
+        }
+    }
 }
 
 async fn images(target: &Target, context: &Context) -> Result<Line, Failure> {
@@ -509,7 +795,13 @@ fn reported(orientation: InterfaceOrientation) -> Orientation {
 /// asked for its list of applications and, when the bundle is in it, its list of processes;
 /// nothing is changed on the phone.
 async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
-    let (number, _tunnel, service) = app_service(target, context).await?;
+    let AppConnection {
+        device: number,
+        mut tunnel,
+        port,
+        listing,
+        client: service,
+    } = app_service(target, context).await?;
     let asked = Running::asked(number, bundle);
     let mut client = match service {
         Ok(client) => client,
@@ -519,7 +811,7 @@ async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Lin
         }
     };
     context.enter(Stage::ApplicationList);
-    let answer = match installation(&mut client, bundle).await {
+    let answer = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
         Err(kind) => asked.failed(Problem::ApplicationListFailed, Some(kind)),
         Ok(Installation::NotInstalled) => asked.not_installed(),
         Ok(Installation::PathUnreadable) => asked
@@ -552,7 +844,13 @@ async fn launch(
     relaunch: bool,
     context: &Context,
 ) -> Result<Line, Failure> {
-    let (number, _tunnel, service) = app_service(target, context).await?;
+    let AppConnection {
+        device: number,
+        mut tunnel,
+        port,
+        listing,
+        client: service,
+    } = app_service(target, context).await?;
     let asked = Launch::asked(number, bundle, relaunch);
     let mut client = match service {
         Ok(client) => client,
@@ -563,7 +861,7 @@ async fn launch(
     };
     // Where the bundle lies is not needed to launch it: a path read as no place is installed.
     context.enter(Stage::ApplicationList);
-    let asked = match installation(&mut client, bundle).await {
+    let asked = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
             return Ok(Line::Launch(failed));
@@ -592,7 +890,13 @@ async fn launch(
 /// at the first look and sent nothing. A deadline that passes before the first look after the
 /// signals has answered is the command's `deadline_passed`, as for every command.
 async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
-    let (number, _tunnel, service) = app_service(target, context).await?;
+    let AppConnection {
+        device: number,
+        mut tunnel,
+        port,
+        listing,
+        client: service,
+    } = app_service(target, context).await?;
     let asked = Stop::asked(number, bundle);
     let mut client = match service {
         Ok(client) => client,
@@ -602,7 +906,7 @@ async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, 
         }
     };
     context.enter(Stage::ApplicationList);
-    let directories = match installation(&mut client, bundle).await {
+    let directories = match installation(&mut client, &mut tunnel, port, listing, bundle).await {
         Err(kind) => {
             let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
             return Ok(Line::Stop(failed));
@@ -687,11 +991,12 @@ async fn look_within(
 
 /// The device `target` names and a connection to its application service
 /// (`com.apple.coredevice.appservice`) inside the tunnel of iOS 17.4 and later, with the tunnel,
-/// which stays open while it is held. A step before the service's own handshake fails as every
-/// command's does (its problem word, the library's text cut as `redact.rs` cuts it); the
-/// service's handshake failing is its [`ErrorKind`] alone. (ACIB-3b) Each step enters its
-/// stage first: `session`, `proxy_tunnel`, `discovery_handshake`, `service_connection`,
-/// `service_xpc_handshake`.
+/// which stays open while it is held, the service's port and the way its list of applications is
+/// asked for ([`Listing`], from the features the handshake names for it). A step before the
+/// service's own handshake fails as every command's does (its problem word, the library's text
+/// cut as `redact.rs` cuts it); the service's handshake failing is its [`ErrorKind`] alone.
+/// (ACIB-3b) Each step enters its stage first: `session`, `proxy_tunnel`, `discovery_handshake`,
+/// `service_connection`, `service_xpc_handshake`.
 async fn app_service(target: &Target, context: &Context) -> Result<AppConnection, Failure> {
     context.enter(Stage::Session);
     let device = locate(target, context).await?;
@@ -701,17 +1006,29 @@ async fn app_service(target: &Target, context: &Context) -> Result<AppConnection
     let (mut tunnel, handshake) =
         open_tunnel(proxy, || context.enter(Stage::DiscoveryHandshake)).await?;
     context.enter(Stage::ServiceConnection);
-    let stream = remote_service(
-        &mut tunnel,
-        &handshake,
-        &<AppService as RsdService>::rsd_service_name(),
-    )
-    .await?;
+    let name: &str = &<AppService as RsdService>::rsd_service_name();
+    let port = port_of(&handshake, name)?;
+    let listing = Listing::advertised(
+        handshake
+            .services
+            .get(name)
+            .and_then(|listed| listed.features.as_deref()),
+    );
+    let stream = tunnel
+        .connect_to_service_port(port)
+        .await
+        .map_err(|error| Failure::library(Problem::ServiceUnreachable, &error))?;
     context.enter(Stage::ServiceXpcHandshake);
     let client = <AppService as RsdService>::from_stream(stream)
         .await
         .map_err(|error| service_error_kind(&error));
-    Ok((device.device_id, tunnel, client))
+    Ok(AppConnection {
+        device: device.device_id,
+        tunnel,
+        port,
+        listing,
+        client,
+    })
 }
 
 /// What the application service's list of applications says of `bundle`. The list stays in
@@ -728,13 +1045,31 @@ async fn app_service(target: &Target, context: &Context) -> Result<AppConnection
 /// whether or not the phone has it under another category: `running` and `stop` answer it
 /// `installed` false and `stop` sends it nothing, `launch` answers `not_installed` and sends
 /// nothing. An entry the library cannot read fails the whole list (`answer_unreadable`): the
-/// library's behaviour.
-async fn installation(client: &mut AppService, bundle: &str) -> Result<Installation, ErrorKind> {
-    // The library's order of the flags: App Clips, removable, hidden, internal, default.
-    let applications = client
-        .list_apps(false, true, true, false, true)
-        .await
-        .map_err(|error| service_error_kind(&error))?;
+/// library's behaviour, and the same of an element of the streamed list without a bundle
+/// identifier or a path. (ACIB-3b, second round) The list is asked the way `listing` names: the
+/// library's `list_apps` on `client`, or the streamed list on a connection of its own to `port`
+/// through `tunnel`, with the same flags.
+async fn installation(
+    client: &mut AppService,
+    tunnel: &mut AdapterHandle,
+    port: u16,
+    listing: Listing,
+    bundle: &str,
+) -> Result<Installation, ErrorKind> {
+    let applications: Vec<ListedApplication> = match listing {
+        // The library's order of the flags: App Clips, removable, hidden, internal, default.
+        Listing::ListApps => client
+            .list_apps(false, true, true, false, true)
+            .await
+            .map_err(|error| service_error_kind(&error))?
+            .into_iter()
+            .map(|application| ListedApplication {
+                bundle_identifier: application.bundle_identifier,
+                path: application.path,
+            })
+            .collect(),
+        Listing::StreamAppList => streamed_list(tunnel, port).await?,
+    };
     Ok(matching::installation(
         bundle,
         applications.iter().map(|application| Application {
@@ -742,6 +1077,193 @@ async fn installation(client: &mut AppService, bundle: &str) -> Result<Installat
             path: &application.path,
         }),
     ))
+}
+
+/// The streamed list of applications on a connection of its own to the application service's
+/// `port` through `tunnel`: the connection, the library's RemoteXPC handshake on it, then
+/// [`streamed_applications`]. Each failure is its [`ErrorKind`] alone.
+async fn streamed_list(
+    tunnel: &mut AdapterHandle,
+    port: u16,
+) -> Result<Vec<ListedApplication>, ErrorKind> {
+    let stream = tunnel
+        .connect_to_service_port(port)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    let mut client = Xpc::new(stream)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    client
+        .do_handshake()
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    streamed_applications(&mut client).await
+}
+
+/// The streamed list of applications, asked on `client` as the library's `stream_apps` asks it
+/// (idevice 0.1.68, `invoke_streaming_with_plist` in `services/core_device/mod.rs` 109-159, with
+/// the flags of `list_apps`: [`streamed_list_request`]), its answer read on the root channel as
+/// the library reads it (`parse_stream_response`, 248-282): a message whose stream status names
+/// `pushing` holds elements, one that names `finishStreaming` ends the list, one that names
+/// `receivedError`, or that holds `CoreDevice.error` and no status, is the phone's refusal
+/// (`device_refused`), and any other is `answer_unreadable`. Of each element only its bundle
+/// identifier and its path are kept, in memory for the command; one without either is
+/// `answer_unreadable`. The library's own `stream_apps` gives a `futures` stream, which this
+/// program cannot read without a crate of its own: the request is made here and sent through the
+/// library's RemoteXPC client.
+async fn streamed_applications(client: &mut Xpc) -> Result<Vec<ListedApplication>, ErrorKind> {
+    let request = streamed_list_request().ok_or(ErrorKind::Other)?;
+    client
+        .send_object(request, true)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    let mut listed = Vec::new();
+    loop {
+        let response = client
+            .recv_root()
+            .await
+            .map_err(|error| service_error_kind(&error))?;
+        let message = response
+            .as_dictionary()
+            .ok_or(ErrorKind::AnswerUnreadable)?;
+        let Some(status) = message.get(SIDE_CHANNEL_STATUS) else {
+            return Err(if message.contains_key("CoreDevice.error") {
+                ErrorKind::DeviceRefused
+            } else {
+                ErrorKind::AnswerUnreadable
+            });
+        };
+        let status = status.as_dictionary().ok_or(ErrorKind::AnswerUnreadable)?;
+        if status.contains_key("receivedError") {
+            return Err(ErrorKind::DeviceRefused);
+        }
+        if status.contains_key("finishStreaming") {
+            return Ok(listed);
+        }
+        let elements = status
+            .get("pushing")
+            .and_then(|pushing| pushing.as_dictionary())
+            .and_then(|pushing| pushing.get("elements"))
+            .and_then(|elements| elements.as_array())
+            .ok_or(ErrorKind::AnswerUnreadable)?;
+        for element in elements {
+            let entry = element.as_dictionary();
+            let text = |key: &str| {
+                entry
+                    .and_then(|entry| entry.get(key))
+                    .and_then(|value| value.as_string())
+                    .map(str::to_owned)
+            };
+            match (text("bundleIdentifier"), text("path")) {
+                (Some(bundle_identifier), Some(path)) => listed.push(ListedApplication {
+                    bundle_identifier,
+                    path,
+                }),
+                _ => return Err(ErrorKind::AnswerUnreadable),
+            }
+        }
+    }
+}
+
+/// The request of the streamed list, member for member the one the library's `stream_apps` sends
+/// (`services/core_device/mod.rs` 117-144): protocol version 2, an empty action, the CoreDevice
+/// version, a device identifier and an invocation identifier (each a random UUID made for this
+/// request, as the library makes them: neither is the phone's identifier), the feature, and as
+/// input the flags of the list ([`LIST_OPTIONS`]) beside a stream proxy naming a side channel (a
+/// random UUID too). `None` only if the library's decoder did not read the side channel's UUID
+/// (the library offers no other way to make an XPC UUID without a crate of its own).
+fn streamed_list_request() -> Option<XPCObject> {
+    let mut options = Dictionary::new();
+    for (key, value) in LIST_OPTIONS {
+        options.insert(key.to_owned(), XPCObject::Bool(value));
+    }
+    let mut proxy = Dictionary::new();
+    proxy.insert("sideChannel".to_owned(), uuid_object(random_uuid())?);
+    let mut input = Dictionary::new();
+    input.insert("actualInput".to_owned(), XPCObject::Dictionary(options));
+    input.insert("streamProxy".to_owned(), XPCObject::Dictionary(proxy));
+    let mut version = Dictionary::new();
+    version.insert(
+        "originalComponentsCount".to_owned(),
+        XPCObject::Int64(CORE_DEVICE_VERSION_COMPONENTS.len() as i64),
+    );
+    version.insert(
+        "components".to_owned(),
+        XPCObject::Array(
+            CORE_DEVICE_VERSION_COMPONENTS
+                .iter()
+                .map(|component| XPCObject::UInt64(*component))
+                .collect(),
+        ),
+    );
+    version.insert(
+        "stringValue".to_owned(),
+        XPCObject::String(CORE_DEVICE_VERSION.to_owned()),
+    );
+    let mut request = Dictionary::new();
+    request.insert(
+        "CoreDevice.CoreDeviceDDIProtocolVersion".to_owned(),
+        XPCObject::Int64(2),
+    );
+    request.insert(
+        "CoreDevice.action".to_owned(),
+        XPCObject::Dictionary(Dictionary::new()),
+    );
+    request.insert(
+        "CoreDevice.coreDeviceVersion".to_owned(),
+        XPCObject::Dictionary(version),
+    );
+    request.insert(
+        "CoreDevice.deviceIdentifier".to_owned(),
+        XPCObject::String(uuid_text(random_uuid())),
+    );
+    request.insert(
+        "CoreDevice.featureIdentifier".to_owned(),
+        XPCObject::String(STREAMED_LIST_FEATURE.to_owned()),
+    );
+    request.insert("CoreDevice.input".to_owned(), XPCObject::Dictionary(input));
+    request.insert(
+        "CoreDevice.invocationIdentifier".to_owned(),
+        XPCObject::String(uuid_text(random_uuid())),
+    );
+    Some(XPCObject::Dictionary(request))
+}
+
+/// Sixteen bytes of a random UUID (version 4, its variant 10): two hashes of a hasher the
+/// standard library seeds at random for each new state (not for cryptography; an identifier of
+/// one request, as the library's own `Uuid::new_v4`).
+fn random_uuid() -> [u8; 16] {
+    let state = RandomState::new();
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&state.hash_one(0u8).to_le_bytes());
+    bytes[8..].copy_from_slice(&state.hash_one(1u8).to_le_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    bytes
+}
+
+/// A UUID written as its text: 32 lowercase hexadecimal digits in groups of 8, 4, 4, 4 and 12.
+fn uuid_text(bytes: [u8; 16]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(36);
+    for (index, &byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            text.push('-');
+        }
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+/// The XPC object of the UUID `bytes`, as the library's decoder reads one from the wire.
+fn uuid_object(bytes: [u8; 16]) -> Option<XPCObject> {
+    let mut encoded = Vec::with_capacity(28);
+    encoded.extend_from_slice(&XPC_OBJECT_MAGIC.to_le_bytes());
+    encoded.extend_from_slice(&XPC_OBJECT_VERSION.to_le_bytes());
+    encoded.extend_from_slice(&XPC_UUID_TYPE.to_le_bytes());
+    encoded.extend_from_slice(&bytes);
+    XPCObject::decode(&encoded).ok()
 }
 
 /// The pids of the processes the application service lists whose executable lies inside one
@@ -886,17 +1408,23 @@ async fn open_tunnel(
     Ok((tunnel, handshake))
 }
 
+/// The port inside the tunnel the handshake names for the remote service `name`, or
+/// `service_not_listed`.
+fn port_of(handshake: &RsdHandshake, name: &str) -> Result<u16, Failure> {
+    handshake
+        .services
+        .get(name)
+        .map(|service| service.port)
+        .ok_or(Failure::own(Problem::ServiceNotListed))
+}
+
 /// A connection, inside the tunnel, to the remote service the handshake lists as `name`.
 async fn remote_service(
     tunnel: &mut AdapterHandle,
     handshake: &RsdHandshake,
     name: &str,
 ) -> Result<Box<dyn ReadWrite>, Failure> {
-    let port = handshake
-        .services
-        .get(name)
-        .map(|service| service.port)
-        .ok_or(Failure::own(Problem::ServiceNotListed))?;
+    let port = port_of(handshake, name)?;
     tunnel
         .connect_to_service_port(port)
         .await
@@ -1249,5 +1777,149 @@ mod tests {
                 assert!(!text.contains(piece), "{piece} in {text}");
             }
         }
+    }
+
+    /// Whether a text is a UUID of version 4 written as its text.
+    fn is_uuid_text(text: &str) -> bool {
+        let bytes = text.as_bytes();
+        bytes.len() == 36
+            && bytes.iter().enumerate().all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => *byte == b'-',
+                _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(byte),
+            })
+            && bytes[14] == b'4'
+            && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+    }
+
+    /// (ACIB-3b, second round) The list is asked the way the service names among its features:
+    /// streamed only when it names `streamapplist`. The streamed list's request is, member for
+    /// member and in the library's order, the one the library's `stream_apps` sends
+    /// (`services/core_device/mod.rs` 117-144) with the flags of `list_apps` as `running` asks
+    /// them; its identifiers are random UUIDs made for it, each written as a UUID's text, the
+    /// side channel an XPC UUID; and the request encodes.
+    #[test]
+    fn the_list_is_streamed_only_when_the_service_names_it_as_the_library_streams_it() {
+        fn named(features: &[&str]) -> Vec<String> {
+            features
+                .iter()
+                .map(|feature| (*feature).to_owned())
+                .collect()
+        }
+        let nothing = named(&[]);
+        let listed_only = named(&["com.apple.coredevice.feature.listapps"]);
+        let both = named(&[
+            "com.apple.coredevice.feature.listapps",
+            STREAMED_LIST_FEATURE,
+        ]);
+        assert_eq!(Listing::advertised(None), Listing::ListApps);
+        assert_eq!(
+            Listing::advertised(Some(nothing.as_slice())),
+            Listing::ListApps
+        );
+        assert_eq!(
+            Listing::advertised(Some(listed_only.as_slice())),
+            Listing::ListApps
+        );
+        assert_eq!(
+            Listing::advertised(Some(both.as_slice())),
+            Listing::StreamAppList
+        );
+
+        let Some(XPCObject::Dictionary(request)) = streamed_list_request() else {
+            panic!("the request is a dictionary");
+        };
+        let keys: Vec<&str> = request.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "CoreDevice.CoreDeviceDDIProtocolVersion",
+                "CoreDevice.action",
+                "CoreDevice.coreDeviceVersion",
+                "CoreDevice.deviceIdentifier",
+                "CoreDevice.featureIdentifier",
+                "CoreDevice.input",
+                "CoreDevice.invocationIdentifier",
+            ]
+        );
+        assert_eq!(
+            request.get("CoreDevice.CoreDeviceDDIProtocolVersion"),
+            Some(&XPCObject::Int64(2))
+        );
+        assert_eq!(
+            request.get("CoreDevice.action"),
+            Some(&XPCObject::Dictionary(Dictionary::new()))
+        );
+        let mut version = Dictionary::new();
+        version.insert("originalComponentsCount".to_owned(), XPCObject::Int64(2));
+        version.insert(
+            "components".to_owned(),
+            XPCObject::Array(vec![XPCObject::UInt64(629), XPCObject::UInt64(3)]),
+        );
+        version.insert(
+            "stringValue".to_owned(),
+            XPCObject::String("629.3".to_owned()),
+        );
+        assert_eq!(
+            request.get("CoreDevice.coreDeviceVersion"),
+            Some(&XPCObject::Dictionary(version))
+        );
+        assert_eq!(
+            request.get("CoreDevice.featureIdentifier"),
+            Some(&XPCObject::String(
+                "com.apple.coredevice.feature.streamapplist".to_owned()
+            ))
+        );
+        let identifier = |key: &str| match request.get(key) {
+            Some(XPCObject::String(text)) => text.clone(),
+            other => panic!("{key} is {other:?}"),
+        };
+        let (device, invocation) = (
+            identifier("CoreDevice.deviceIdentifier"),
+            identifier("CoreDevice.invocationIdentifier"),
+        );
+        assert!(is_uuid_text(&device), "{device}");
+        assert!(is_uuid_text(&invocation), "{invocation}");
+        assert_ne!(device, invocation);
+        let Some(XPCObject::Dictionary(input)) = request.get("CoreDevice.input") else {
+            panic!("the input is a dictionary");
+        };
+        let input_keys: Vec<&str> = input.keys().map(String::as_str).collect();
+        assert_eq!(input_keys, ["actualInput", "streamProxy"]);
+        let mut options = Dictionary::new();
+        for (key, value) in [
+            ("includeAppClips", false),
+            ("includeRemovableApps", true),
+            ("includeHiddenApps", true),
+            ("includeInternalApps", false),
+            ("includeDefaultApps", true),
+            ("includeAppGroupIdentifiers", false),
+            ("includeContainerPaths", false),
+            ("requireContainerAccess", false),
+        ] {
+            options.insert(key.to_owned(), XPCObject::Bool(value));
+        }
+        assert_eq!(
+            input.get("actualInput"),
+            Some(&XPCObject::Dictionary(options))
+        );
+        let Some(XPCObject::Dictionary(proxy)) = input.get("streamProxy") else {
+            panic!("the stream proxy is a dictionary");
+        };
+        let proxy_keys: Vec<&str> = proxy.keys().map(String::as_str).collect();
+        assert_eq!(proxy_keys, ["sideChannel"]);
+        assert!(matches!(proxy.get("sideChannel"), Some(XPCObject::Uuid(_))));
+        assert!(XPCObject::Dictionary(request.clone()).encode().is_ok());
+
+        let (one, other) = (random_uuid(), random_uuid());
+        assert_ne!(one, other);
+        assert!(is_uuid_text(&uuid_text(one)));
+        assert_eq!(
+            uuid_text([
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x4c, 0xde, 0x8f, 0x01, 0x23, 0x45, 0x67, 0x89,
+                0xab, 0xcd
+            ]),
+            "01234567-89ab-4cde-8f01-23456789abcd"
+        );
+        assert!(matches!(uuid_object(one), Some(XPCObject::Uuid(_))));
     }
 }

@@ -30,8 +30,8 @@ phone's refusal (below), may already have changed the phone: `acib running` tell
 usbmuxd is reached where the library finds it on this platform: on Windows the TCP port 27015
 of 127.0.0.1, which the device service of Apple's own software serves. Pairing is not part of
 this version: a device whose pairing record usbmuxd does not hold answers `not_paired` (to
-`services`, `images`, `apps`, `screenshot`, `orientation`, `running`, `launch` and `stop`, and
-to the second half of `info`).
+`services`, `images`, `apps`, `screenshot`, `orientation`, `running`, `launch`, `stop` and
+`probe`, and to the second half of `info`).
 
 It never prints, logs or writes a device's serial number, UDID, name or address, nor anything of
 a pairing record (the record is asked for, kept in memory for the command and never shown). A
@@ -104,10 +104,10 @@ key, and a key holds neither the identifier nor the salt, only their digest.
 
 Every command takes `--timeout-ms <ms>` (default 30000); a command not finished by then answers
 `deadline_passed` (for `screenshot`, with the `stage` it was waiting in, below; for `running`,
-`launch` and `stop`, with the `stage` it was waiting in and `elapsed_ms`, below; for
-`orientation`, per reader). `<n>` is the device's usbmuxd session number, as `acib devices`
-lists it; wherever `--device <n>` is written below, `--device-key <key> --key-salt-env <NAME>`
-may stand in its place.
+`launch` and `stop`, with the `stage` it was waiting in and `stage_ms`, below; for
+`orientation`, per reader; for `probe`, per way, below). `<n>` is the device's usbmuxd session
+number, as `acib devices` lists it; wherever `--device <n>` is written below, `--device-key
+<key> --key-salt-env <NAME>` may stand in its place.
 
 - `acib devices [--key-salt-env <NAME> [--binding-salt-env <NAME2>]]`: the devices usbmuxd
   lists now, each with its session number (`device`) and its connection (`usb`, `network`, or
@@ -126,7 +126,17 @@ may stand in its place.
   adapter is created and no administrator right is needed), the remote service discovery
   handshake, and its answer: the services sorted by name, each with its `name`, the `port` it is
   served on inside the tunnel and the `entitlement` the handshake names for it (which tells
-  whether it needs the trusted tunnel), and their `count`. No service is opened.
+  whether it needs the trusted tunnel), and their `count`. No service is opened. With
+  `--service <name>` (one service's name, as the list names it: ASCII letters and digits, `.`,
+  `-` and `_`) the line names that service alone, in `service`, with what else the handshake
+  says of it (idevice 0.1.68, `services/rsd.rs`): `name`, `port`, `entitlement`,
+  `uses_remote_xpc` (its properties' `UsesRemoteXPC`; `false` also when they do not say),
+  `service_version` (its `ServiceVersion`) and `features` (its `Features`, in the handshake's
+  order), each of the last two only when the handshake gives it; a name, an entitlement or a
+  feature that could carry an identifier is `withheld`. A name the handshake does not list
+  answers `service_not_listed` (status 1). For example `acib services --device 3 --service
+  com.apple.coredevice.appservice` tells which features the application service names, among
+  them whether it offers the streamed list of applications (`running`, below).
 - `acib images --device <n>`: in a session, the image mounter's read-only queries, each in
   `queries` with what it answered: the listing of what is mounted (`copy_devices`: `listed`,
   each entry with the names of its members, never a value), then the lookup of the image types
@@ -269,6 +279,32 @@ the answer carries flags of its own (among them `isRemovable`, `isHidden`, `isIn
 `isAppClip`), each true or false apart from the others; which entries the phone lists for which
 flags of the request has not been checked on a phone.
 
+**How the list is asked (ACIB-3b, second round).** The library offers two ways to ask this
+service for its list of applications, and `acib` takes the one the service names among its
+features in the remote service discovery handshake, as the library's own tool chooses
+(idevice's repository, `tools/src/app_service.rs`, commit `6e1222075e`):
+
+- When the service's features name `com.apple.coredevice.feature.streamapplist`, **the
+  streamed list**, on a connection of its own to the service (opened, with the library's
+  RemoteXPC handshake, inside the stage `application_list`): the request the library's
+  `stream_apps` sends (idevice 0.1.68, `services/core_device/mod.rs` 109-159: the feature
+  `streamapplist`, protocol version 2, the CoreDevice version 629.3, a device identifier and an
+  invocation identifier that are random UUIDs made for the request, as the library makes them,
+  and as input the flags above beside a stream proxy naming a side channel, a random UUID too),
+  its answers read on the root channel as the library reads them, a batch of entries at a time
+  until the stream's end; a message that names the stream's error, or the service's error in
+  place of a status, is `device_refused`. The library's `stream_apps` hands the entries as a
+  `futures` stream, which `acib` cannot read without a crate of its own, so `acib` makes that
+  request itself and sends it through the library's RemoteXPC client; of each entry it keeps
+  its bundle identifier and its path, and an entry without either is `answer_unreadable` for
+  the whole list.
+- Otherwise **the library's `list_apps`** on the service's connection, as before: the feature
+  `listapps`, protocol version 0, no action identifier, its answer read on the reply channel.
+
+`acib services --service com.apple.coredevice.appservice` tells which features the phone names.
+The rest of each command (the list of processes, the launch, the signals) is asked as before,
+through the library's client of the service.
+
 **An application the list does not hold.** The three commands answer a bundle the phone's list,
 for the categories asked, does not hold (one the phone does not have, or one it has only under
 a category not asked for) alike, as not installed: `running` answers `installed` false and
@@ -292,7 +328,8 @@ code takes the steps, and a line names them by these words:
   `com.apple.coredevice.appservice`.
 - `service_xpc_handshake`: the service's own handshake on that connection (the library's
   RemoteXPC handshake, over HTTP/2).
-- `application_list`: the request of the list of applications and its answer.
+- `application_list`: the request of the list of applications and its answer (for the streamed
+  list, its own connection and handshake too).
 - `process_list`: the request of the list of processes and its answer (for `stop`, the first
   look, before any signal).
 - `launch_request`: the launch request and its answer.
@@ -312,19 +349,25 @@ them only. A screenshot's `tunnel` covers what `proxy_tunnel` and `discovery_han
 and its `service_handshake` what `service_connection` and `service_xpc_handshake` split: the
 screenshot keeps its words, and these commands use theirs, so that one word has one meaning.
 
+A stage says where a command waited, not why. In particular, waiting in `application_list` does
+not show that the phone accepted the service's handshake: the library's handshake only writes
+(idevice 0.1.68, `xpc/mod.rs` 50-85), so what the phone sent on the service's connection is
+first read in `application_list`. Why a command waits there is what `probe` tells (below).
+
 Every line of the three (one that answers and one stopped by a problem of the service alike)
-names in `elapsed_ms` how long each stage it went through took, in whole milliseconds, by the
-stage's word, in the order taken: for example `"elapsed_ms":{"session":812,"proxy_tunnel":95,
+names in `stage_ms` how long each stage it went through took, in whole milliseconds, by the
+stage's word, in the order taken: for example `"stage_ms":{"session":812,"proxy_tunnel":95,
 "discovery_handshake":40,"service_connection":3,"service_xpc_handshake":20,
-"application_list":410,"process_list":120}`. A deadline that passes answers `deadline_passed`
-with the `stage` the command was waiting in and, in `elapsed_ms`, the stages that finished
+"application_list":410,"process_list":120}`. (It is a member of its own: a screenshot's
+`elapsed_ms` is of another shape.) A deadline that passes answers `deadline_passed`
+with the `stage` the command was waiting in and, in `stage_ms`, the stages that finished
 before it (not the one it was waiting in): `{"command":"running","device":3,
-"problem":"deadline_passed","stage":"service_xpc_handshake","elapsed_ms":{"session":812,
+"problem":"deadline_passed","stage":"service_xpc_handshake","stage_ms":{"session":812,
 "proxy_tunnel":95,"discovery_handshake":40,"service_connection":3}}`. A step the library gives
 no way to interrupt is named as its stage all the same: the deadline cuts the command there.
 Nothing but a stage's word and a number is in either: no identifier of the phone or of any
 application. A refusal of a step before the service (`not_paired`, `tunnel_failed`,
-`service_not_listed` and the like) is answered as before, with no `elapsed_ms`.
+`service_not_listed` and the like) is answered as before, with no `stage_ms`.
 
 The library reads each entry of the list into a record of its own (the entry's identifier,
 name, path and flags); one entry it cannot read fails the whole list, for every bundle:
@@ -438,6 +481,64 @@ starts like the bundle's directory (a longer name, a sibling directory) is not o
   SIGKILL cannot be caught. The service's own signal request is used (not the instruments
   server's `kill`) because it is on the same connection as the lists and answers each signal. It
   changes what the phone runs (above).
+
+### What the application service does with a request: `probe` (ACIB-3b, second round)
+
+`acib probe --device <n> [--wait-ms <ms>]`, read-only: in the tunnel of `services`, each of
+five ways in turn, each on a connection of its own to its service's port, each waited for
+`--wait-ms` (1 to 120000, default 4000) and no later than the command's deadline (a way the
+deadline leaves no time for answers `not_asked`; with five ways of 4000 ms the default 30000 ms
+is enough). Nothing on the phone changes: two ways ask nothing, the others ask for a list. The
+ways, in this order:
+
+- `listen_screen_capture`: CoreDevice's screen capture service, which answers on the phone, the
+  library's RemoteXPC handshake on it, and nothing asked: what a service that answers sends
+  unasked.
+- `listen`: the application service, the same handshake, nothing asked: what it sends unasked,
+  its answers to the handshake among it. The three ways after it count the messages beyond it.
+- `list_apps`: the library's `list_apps`, as `running` asks it when the service names no
+  streamed list: the feature `listapps`, protocol version 0, the answer read on the reply
+  channel (stream 3).
+- `stream_apps`: the streamed list, as `running` asks it when the service names it: the feature
+  `streamapplist`, protocol version 2, a side channel, the answer read on the root channel
+  (stream 1) to the stream's end.
+- `list_processes`: the library's `list_processes`: the feature `listprocesses`, protocol
+  version 0, the reply channel.
+
+The line names `wait_ms` and, in `ways`, per way: `way`, `outcome`, `error_kind` (where the
+library gave an error: the words of the application service above), `entries` (the count of the
+list's entries, when one was answered; nothing of an entry), `ms` (from the way's connection on)
+and `phone_sent`: what the phone sent on that connection, as far as the library read it, counted
+by `acib`'s own reading of the bytes as they pass (no byte is changed): `bytes`, `closed` (a
+read found the connection ended), `read_failed`, `frames` (the HTTP/2 frames by type:
+`settings`, `window_update`, `headers`, `data`, `rst_stream`, `goaway` and `other`, a type the
+library fails on), for the root channel (`root`) and the reply channel (`reply`) the XPC
+messages by what the library does with them (`content`, a body it returns; `empty`, an empty
+dictionary, and `bodyless`, no body at all, both of which it skips; `unreadable`;
+`replies_without_body`, the skipped ones flagged as a reply; `pending_bytes`, a message not
+whole yet), `other_stream_bytes` and `pending_frame_bytes` (a frame not whole yet). The library
+reads only while it waits for an answer, so everything the phone sent on the connection until
+the way ended is counted. Only counts and words: no identifier of the phone, nothing of any
+application, no content of a message. The words of `outcome`, one cause each:
+
+- `answered`: the library returned what the way asks for (for a `listen`: a message with a body
+  the phone sent unasked).
+- `refused`: the service answered with its error in place of an output.
+- `failed`: the library returned another error, with its `error_kind`; the phone did not end
+  the connection.
+- `connection_closed`: the phone ended the connection or reset a stream (a read found its end,
+  a GOAWAY or a RST_STREAM frame), with the `error_kind` the library made of it.
+- When the wait passed before the library returned, from what the phone sent, in this order:
+  `answer_on_other_channel` (beyond `listen`, a message with a body came on the channel the way
+  does not read), `answer_incomplete` (a frame or a message was started and is not whole, or
+  messages with a body came on the channel read without the library returning, as a streamed
+  list without its end), `answer_without_body` (beyond `listen`, a message flagged as a reply
+  came on the channel read with an empty dictionary or no body, which the library skips),
+  `silent` (not one byte, not even HTTP/2 settings) and `no_answer` (bytes, but none of these).
+- `service_not_listed` (only the screen capture service can be missing: without the
+  application service the probe answers `service_not_listed` itself), `service_unreachable` and
+  `handshake_failed` (the connection, or the library's handshake on it, failed, with its
+  `error_kind`), and `not_asked`.
 
 The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_passed`,
 `usbmuxd_unreachable`, `usbmuxd_list_failed`, `device_not_listed`, `lockdown_unreachable`,

@@ -5,11 +5,11 @@
 //! adb.
 //!
 //! One command per run (`acib devices`, `info`, `services`, `images`, `apps`, `screenshot`,
-//! `orientation` and `running`, which only read; `launch` and `stop`, which start and end one
-//! application on the phone; see `args.rs` and `README.md`). Each run prints one JSON line on
-//! standard output and ends with status 0 when the command was answered, 1 when it was refused
-//! or failed, the line then naming this program's `problem` word and, where the library gave
-//! one, its error text (of the application service, only the error's kind). After the line of a
+//! `orientation`, `running` and `probe`, which only read; `launch` and `stop`, which start and
+//! end one application on the phone; see `args.rs` and `README.md`). Each run prints one JSON
+//! line on standard output and ends with status 0 when the command was answered, 1 when it was
+//! refused or failed, the line then naming this program's `problem` word and, where the library
+//! gave one, its error text (of the application service, only the error's kind). After the line of a
 //! picture asked for with `--out -`, the picture's bytes follow on the standard output
 //! (`framing.rs`). The one file it writes is the picture `screenshot` takes, to the path `--out`
 //! names, and it removes that file again when the picture could not be written whole into it;
@@ -29,6 +29,7 @@ mod picture;
 mod redact;
 mod stages;
 mod stopping;
+mod tap;
 
 use answer::{Failure, Line, Problem};
 use args::Invocation;
