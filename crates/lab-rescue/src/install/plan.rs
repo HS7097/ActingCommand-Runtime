@@ -275,8 +275,9 @@ fn edge(interface: &'static str, check: &'static str, passes: bool, parties: Vec
 }
 
 /// The edges of an update or rollback (`contracts/install-cli.md`, "Interface checks"); the
-/// caveats of unknown pack declarations (of the command `operation`) go to `warnings`.
-fn interface_edges(
+/// caveats of unknown pack declarations (of the command `operation`) go to `warnings`. #480
+/// PG-2e: visible to the install module's gate files, unchanged.
+pub(super) fn interface_edges(
     installer: &Speaks,
     live: &Speaks,
     target: &Speaks,

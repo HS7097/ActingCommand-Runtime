@@ -215,6 +215,10 @@ mod gate_480_pg2c;
 // #480 PG-2d (0.12.74; register §1.481): a pause's life in the ledger, one record per moment; a
 // continuation's panic is latched where it runs.
 mod gate_480_pg2d;
+// #480 PG-2e (0.12.75; register §1.485): the status answers an instance pause's mode and what its
+// own latest check found in its way, running no check; the continuation's records are decided
+// under the persist gate.
+mod gate_480_pg2e;
 // Workflow #429 R-3 (register §1.272): `start_emulator` set while the Runtime runs, on a
 // discovery-bound instance, and read in effect by every automatic emulator start.
 mod gate_r3;

@@ -1445,3 +1445,19 @@ test = "actingcommand-lab::lib::gate_463_sel2l_a::sel2l_blocks_and_line_merge_co
 ruling = "#463 SEL-2L-rows (0.12.74; register §1.484; the coordinator's work order rd-1119/brief-463-sel2l-rows-generator.md, item 3: the refusal blocks_with_rows goes, a scrolling select's read takes blocks and line_merge)"
 reason = "Renamed and narrowed: the test pinned that blocks on a select with rows is refused record_select_invalid blocks_with_rows, which is no longer produced; its other part, blocks and line_merge together or neither, stays under the new name."
 covered_by = "actingcommand-lab::lib::gate_463_sel2l_a::sel2l_blocks_and_line_merge_come_together, in the exec.toml row of #463 SEL-2L-a (one member without the other is validation_failed naming the missing one); actingcommand-lab::lib::gate_463_sel2l_rows::sel2l_rows_every_card_the_band_holds_is_read_through_the_shared_read_and_a_cut_card_is_not and sel2l_rows_blocks_with_rows_is_gone_from_the_vocabulary, in the exec.toml row of #463 SEL-2L-rows (a select with rows and blocks is marked and generated; the word is gone)."
+
+# host.toml, the row of #480 PG-2c (ruling 4, the status a reader of runtime-client 11 reads).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members"
+ruling = "#480 PG-2e (0.12.75; register §1.485; the coordinator's work order rd-1119/brief-480-pg2e-status-answers-the-pause.md, items 2 to 4: the status answers pause_mode and in_the_way, runtime-client min 12)"
+reason = "Renamed and adapted: the test pinned that the status of a standing pause carries only revision 11's four members, since no Runtime of 0.12.73 answered pause_mode or in_the_way. Since 0.12.75 the Runtime answers both, so the name said the opposite of what is true."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_480_pg2c::pg2c_the_status_of_a_standing_pause_carries_revision_12s_members, in the host.toml row of #480 PG-2c (the four members and revision 12's two, pause_mode stand and in_the_way lease); actingcommand-runtime-host::lib::tests::gate_480_pg2e::pg2e_1_a_standing_pause_answers_stand_and_the_receipts_reading_then_nothing_once_released, in the host.toml row of #480 PG-2e."
+
+# apps.toml, the row of Workflow #429 R-0b (the build's runtime-client floor).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused"
+ruling = "#480 PG-2e (0.12.75; register §1.485; the coordinator's work order rd-1119/brief-480-pg2e-status-answers-the-pause.md, item 4: runtime-client min 12)"
+reason = "Renamed and adapted: the test pinned that a console speaking at most 3, 4, 9, 10 or 11 pairs with this build, the floor being 3. The floor is 12 since 0.12.75, so such a console no longer pairs and the name said the opposite."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused, in the apps.toml row of Workflow #429 R-0b: a console of [3, 12] or [12, 12] pairs, one of [3, 11] or [2, 2] fails ui_meets_next alone."

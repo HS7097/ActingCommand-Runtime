@@ -11691,13 +11691,17 @@ impl HostShared {
     /// `scheduling_pause_drain_interrupted` or `scheduling_pause_drain_incomplete`; a person's
     /// pause is kept or stands); without `grace` (a standing pause's continuation) it waits until
     /// the runs ended; with `watched`, the pause's alias and revision, it ends once a person's
-    /// resume lifted that pause.
+    /// resume lifted that pause. #480 PG-2e: with `noted`, the pause's alias and revision (stage
+    /// (b), either mode), every poll keeps what it read in the pause's way with the pause
+    /// (`note_pause_drain`: `contained_run` while a run of the instance is in flight, else
+    /// nothing), which the status answers.
     pub(super) fn drain_contained_runs_for_pause(
         &self,
         instance_id: InstanceId,
         stop_at: Instant,
         grace: Option<Instant>,
         watched: Option<(&str, u64)>,
+        noted: Option<(&str, u64)>,
     ) -> Result<PauseDrainEnd, RequestFailure> {
         // Request identity -> (the run's control, whether this drain asked it to stop).
         let mut tracked = BTreeMap::<RequestId, (Arc<ContainedRunControl>, bool)>::new();
@@ -11750,6 +11754,9 @@ impl HostShared {
             }
             for (request_id, control) in active {
                 tracked.entry(request_id).or_insert((control, false));
+            }
+            if let Some((alias, revision)) = noted {
+                self.note_pause_drain(alias, revision, !tracked.is_empty())?;
             }
             if tracked.is_empty() {
                 return Ok(PauseDrainEnd::Drained(summary));
