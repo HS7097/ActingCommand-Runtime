@@ -39677,6 +39677,107 @@ revision changes, and no code is added.
 **At deploy.** Nothing to do. A running MCP server or entry of the build before keeps its handles
 until it is started again.
 
+### 1.477 Slice #463 S2b-1 (0.12.74): adoption answers each stage's time and checks the package root once (Workflow #463; observed on 11-18 by the channels that make packages, adoptions past the MCP server's call budget; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-s2b-adopt-timing.md`, work order board #482, on main `a8d0aa43`)
+
+This section takes 1.477 (1.476 is another slice's). It ships in 0.12.74. The contract is
+[standard-pack-authoring.md](standard-pack-authoring.md), "The stages and their times" and "The
+adopted pack's readiness".
+
+**Why.** The owner wants an ordinary package made in ten to fifteen minutes. On 11-18 every
+`standard-pack adopt` of one authoring seat, and many of the others, ran past the MCP server's 25 s
+call budget, and the answer said nothing of where the time went. And one adoption checked the game
+root of its check tree twice.
+
+**What a call does, in order** (read at `a8d0aa43`; `crates/resource-tooling/src/adopt.rs` unless
+another file is named). A dry run and a real run take the same steps in the same order; the dry
+run's write step only lists what would be written (1480-1483).
+
+| Step | Where | What it reads and writes |
+|---|---|---|
+| the checkout | 894-896, `Repository::read` 1659 | `applications.json`, `maintenance.json`, `schedule.json`, the leftovers of `packs/` |
+| the recording | 900-916, `recorded_package` 2269 | with `--record-id`: `recording.json`, `record ready`'s one function (`AdoptLab::recording_ready`), the cases directory listed |
+| the package | 917, `Package::read` 2037 | the package admitted (`describe_path`) and its files read |
+| the checks | 918-1264 | in memory, but `--replace`'s `git status` (1019) and volumes, the decision file, the trial records (`trial_summary`, 1215); the plan (1256) |
+| the check tree | 1267, `check_tree` 5110, `prepare_check_tree` 4886 | made, or locked and emptied of the earlier call's tree (4955-4972: its three copies of every package) |
+| the other packages | 5115-5141 | every other pack directory copied file by file into `packs-root/` (first copy), the candidate and `root/schedule.json` written |
+| the bundle | 5150, `package_bundle` (`package_directory.rs` 75) | every package read and written into `bundle/packs/` (second copy), each admitted, the root cross-checked, the schedule composed |
+| the installed tree | 5170-5203 | every file of the bundle read and written into `installed/<game>/` (third copy) |
+| the root check | 5204, `check_standard_pack_root_with_catalog` (`standard_pack_check.rs` 294) | every package admitted again, the schedule composed again, the variables, the goals, the catalogue |
+| the rule's checks | 1276-1330 | the compiled schedule, the packages' declared keys |
+| the cases | 1331-1357, `plan_cases` 2687 | each case run on `packs-root/<package_id>` by the Lab's runner, or the checkout's cases read |
+| the warnings | 1358-1453, `with_packs_named` (`standard_pack_ready.rs` 555) | `read_root` of `installed/<game>/` |
+| the writes | 1455-1520, `write_adoption` 5336, `write_cases` 2815 | the pack directory, the root files, the cases, in the checkout; the replaced directories moved to `<state>/adopt/` |
+| the readiness | 1560, `adopted_readiness` 1610, `judge_readiness_and_placement` (`standard_pack_ready.rs` 445) | `read_root` (463), **`check_standard_pack_root` again (467)**: every package admitted a third time and the schedule composed a third time; `Rules::of` (478) composes it a fourth time, and every package is admitted once more (480-496) |
+
+**The two root checks read the same things.** Both check `installed/<game>/` of the call's check
+tree: the first is given that path, absolute since the state directory is (895), and makes it
+absolute (`standard_pack_check.rs` 297); the readiness makes the same path absolute (448) and
+hands it to the check, which makes it absolute again, which changes nothing. Between the first
+(5204) and the readiness (1560) nothing is written under `installed/`: the rule's checks read; the
+cases are run on `packs-root/<package_id>`, which actinglab's runner (`LabAdoption::run_cases`,
+`apps/actinglab/src/standard_pack_cli.rs` 1627) loads and runs and does not write; the warnings'
+reading reads; the writes are in the checkout and in `<state>/adopt/`, never under `adopt-check/`;
+the check tree's marker, locked for the whole call, keeps every other adoption of the checkout
+out. The catalogue is the same: the bundle lays no `pack-catalog.json`, so neither check reads one,
+and the schedule both compose is the same `schedule.json`. The check reads nothing outside its root
+but the clock of its admission deadlines. And the readiness reads of the check only its warnings
+when it accepts the root (467-470), which the first did, or the adoption would have refused.
+
+**The rule.**
+- *The times.* The answer gains `timings` `{stages, total_ms}`: `stages` each `{stage, ms}`, every
+  stage of a closed list, in the order a call runs them, `ms` the wall-clock milliseconds from its
+  start to the next one's; `total_ms` the whole call. The list (`AdoptStage`): `repository`,
+  `recording`, `package`, `checks`, `check_tree`, `copy_packages`, `bundle`, `installed_tree`,
+  `root_check`, `rule_checks`, `cases`, `warnings`, `write`, `readiness`, one per step of the table
+  above, each always run (`recording` with `--package` only takes its path; `cases` taking none
+  reads the checkout's cases; `write` under `--dry-run` lists). The same through the CLI line and
+  MCP, whose tool's answer is that line, and in a job's answer `ac_run_show` reads.
+- *A call that fails* answers its error as before, its `details` (an object, or none before) gaining
+  `timings` with the stages that ran, the last the one it stopped in, `total_ms` and `stopped_in`,
+  that stage. No later stage ran.
+- *The clock.* The resource tooling reads it (`Instant`, as it does for its deadlines already; no
+  guard keeps a clock out of the crate, only out of gate files), in `Stages` of `adopt.rs`. The
+  worktree adopt is given is told each stage as it starts (`AdoptWorktree::stage_started`, a
+  default method that does nothing, so actinglab's `GitWorktree` is unchanged); the tests use it.
+  A duration decides nothing and nothing is kept between calls.
+- *One root check.* The readiness is handed the first check's warnings
+  (`standard_pack_ready::judge_checked_readiness`) and takes them as the answer of its own check,
+  which it does not run; everything else of the one readiness function runs as it is
+  (`judge_with_check`, which `judge_readiness_and_placement`, and so `standard-pack ready` and
+  `standard-pack status`, call without them). Only within one call, from the same inputs.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The stages and the clock | `crates/resource-tooling/src/adopt.rs`: `AdoptStage`, `AdoptStageTime`, `AdoptTimings` (exported), `Stages`, `standard_pack_adopt` (the clock and a failure's details) around `adopt_in_stages` (the former body, each stage entered), `check_tree` (its five stages), `AdoptWorktree::stage_started` |
+| One root check | `adopted_readiness` with the check's warnings; `crates/resource-tooling/src/standard_pack_ready.rs`: `judge_checked_readiness`, `judge_with_check` |
+| The test seam | `crates/resource-tooling/src/standard_pack_check.rs`: under `cfg(test)` only, a count of the root checks of the thread (`root_checks_run`) |
+| Texts | [standard-pack-authoring.md](standard-pack-authoring.md), "The answer", "The adopted pack's readiness", "The stages and their times"; the table's row `standard-pack adopt` (`output`, `notes`) |
+
+**Codes and words.** None. `timings`, `stages`, `stage`, `ms`, `total_ms` and `stopped_in` are
+members of the answer and of a failed call's details; the stage names are the contract's closed
+list, not words of the outcome catalogue. No decision reads a code.
+
+**Tests** (`crates/resource-tooling/src/gate_463_s2b1.rs`, exec gate map "#463 S2b-1"; P1's made-up
+checkout; a worktree whose Lab runs each case with a set verdict and which keeps the stages it is
+told and may spoil the check tree's `bundle.json` as one starts, as another writer would; no clock
+read, no duration compared): the six of the gate map's comment: every stage in order for a dry run
+and a real run, and the worktree told the same; a refusal in `root_check` and one in `cases`, each
+named, no later stage; a root check that warns (a variable two packages declare differently) and a
+readiness not judged, each answered as the readiness function answers with its own root check of
+the same root; one root check per call by the seam's count. No existing test changed; no golden
+changes; no test leaves a gate map.
+
+**What is not changed.** What adoption refuses and accepts, and the order of its checks; the files
+it writes and their bytes; every existing member of its answer and of its refusals' details; the
+readiness, its row, its warnings and `readiness_not_judged`; `standard-pack ready`,
+`standard-pack status` and `standard-pack build`, which run the check as before; a dry run writes
+nothing in the checkout.
+
+**At deploy.** Nothing to configure. An adoption's answer is longer by its `timings`, some 600
+bytes.
+
 ### 1.478 Slice #463 PRIV-1 (0.12.74): the sensitive-zone declaration, the one list of a package's read regions, and the comparison (Workflow #463, work order #482; the owner's rulings of 11-18 on a package's destination and, amendment 1, on the quantities an account holds; the other rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-463-priv1-zones-and-compare.md` and its amendment 1 `rd-1118/brief-463-priv1-amend1.md`, after the design `rd-1118/design-463-priv.md`, on main `a8d0aa43`)
 
 This section takes 1.478 (1.476 and 1.477 are other slices'). It ships in 0.12.74.

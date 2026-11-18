@@ -169,6 +169,11 @@ mod gate_477_pc1;
 #[cfg(test)]
 mod gate_477_pc2;
 
+// Workflow #463 S2b-1 (register §1.477): adoption answers each stage's time and checks the
+// package root once.
+#[cfg(test)]
+mod gate_463_s2b1;
+
 mod maa_task_graph;
 // Workflow #444 NOTICES-3: a notices directory on disk, held to the contract crate's rules.
 mod notices_directory;
@@ -213,6 +218,8 @@ pub use adopt::{
 };
 // Workflow #463 AD-1: the warnings an adoption counts, those that name another package.
 pub use adopt::OtherPackagesWarnings;
+// Workflow #463 S2b-1: an adoption's stages and their times.
+pub use adopt::{AdoptStage, AdoptStageTime, AdoptTimings};
 pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;

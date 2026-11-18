@@ -992,3 +992,11 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_463_s110::s110_t4_an_anchor_staged_with_its_trigger_and_the_pin_admits_it_without_the_full_read",
 ]
 incident = ["#463 S1-10"]
+
+# Workflow #479 ACIB-2 (0.12.74; apps/acib, its README; brief rd-1118/brief-479-acib2-keys-stdout-orientation.md): the iOS bridge acib makes a phone's key with this fingerprinter's function for a handset's serial and depends on no crate of the Runtime, so one test vector holds the two together: Sha256SecretFingerprinter under the salt acib-and-ledger-shared-test-salt fingerprints the device serial TESTSERIAL0001 as exactly the string acib's own test asserts (apps.toml, ACIB-2 row, key::tests::the_key_function_gives_the_test_vector_the_ledger_gives). A test only: no code of the ledger changes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::acib2_the_device_key_test_vector_is_the_device_serial_fingerprint",
+]
+incident = ["#479 ACIB-2"]

@@ -118,17 +118,26 @@
 //!   tree's game root cannot be read again for it, the adoption is not refused, as the readiness
 //!   is not by the same failure: every warning is answered whole, `other_packages_warnings` is
 //!   absent and the warning `adopt_warnings_not_split` says why.
+//! - **The stages and their times** (Workflow #463 S2b-1, `contracts/standard-pack-authoring.md`,
+//!   "The stages and their times"): a call runs the stages of [`AdoptStage`], one after the other,
+//!   in that order, under `--dry-run` too; the answer's `timings` gives the wall-clock milliseconds
+//!   of each and the total, and a call that fails carries the same in its details with the stage it
+//!   stopped in. The clock is read here, in the library (this crate reads `Instant` for its
+//!   deadlines already), and [`AdoptWorktree::stage_started`] is told each stage as it starts.
+//!   **One root check**: the readiness of the check tree's game root takes the warnings of the
+//!   check of that root this call ran, after which nothing under the root was written, instead of
+//!   checking it again (`standard_pack_ready::judge_checked_readiness`).
 
 use crate::codes::{AdoptCasesState, AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{check_standard_pack_root_with_catalog, root_issue_outcome};
-use crate::standard_pack_ready::with_packs_named;
+use crate::standard_pack_ready::{judge_checked_readiness, with_packs_named};
 use crate::standard_pack_trial::{
     TrialNotRead, TrialSummary, cause_of, content_hash_prefix_of, trial_summary,
 };
 use crate::{
     PackReadiness, PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
-    StandardPackReadyRequest, StandardPackRootFiles, judge_standard_pack_readiness, package_bundle,
+    StandardPackReadyRequest, StandardPackRootFiles, package_bundle,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
@@ -396,6 +405,12 @@ pub trait AdoptWorktree {
     /// Workflow #463 AC-1: the Lab's own parts adopt calls ([`AdoptLab`]): `record ready`'s one
     /// function and the one runner of a regression case.
     fn lab(&self) -> &dyn AdoptLab;
+
+    /// Workflow #463 S2b-1: told as each stage of the adoption starts, in the order they run
+    /// ([`AdoptStage`]), once the stage before it has ended. The times are measured by adopt
+    /// itself; the product's does nothing here. A test sets its own to see the stages, or to
+    /// change the check tree between two of them as another writer would.
+    fn stage_started(&self, _stage: AdoptStage) {}
 }
 
 /// Workflow #463 AC-1 (`contracts/standard-pack-authoring.md`, "The cases" and "One judgement of
@@ -793,6 +808,67 @@ pub struct OtherPackagesWarnings {
     pub counts: BTreeMap<String, usize>,
 }
 
+/// Workflow #463 S2b-1 (`contracts/standard-pack-authoring.md`, "The stages and their times"): the
+/// stages of one adoption, a closed list, in the order a call runs them; a dry run runs each too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdoptStage {
+    /// The checkout read: `applications.json`, `maintenance.json`, `schedule.json`, what an
+    /// interrupted call left.
+    Repository,
+    /// With `--record-id`, the recording read and judged by `record ready`'s one function, its
+    /// package and its cases found; with `--package`, nothing but its path.
+    Recording,
+    /// The package admitted as `package preflight` admits it, and its files read.
+    Package,
+    /// The checks before the check tree (the package's game, server and id, an earlier adoption,
+    /// `--replace`'s version control and volumes, the decision and the role, the review and the
+    /// trial records, local paths) and the plan of what is written.
+    Checks,
+    /// The checkout's check tree made, or locked and emptied of the earlier call's scratch.
+    CheckTree,
+    /// The checkout's other packages copied into the check tree, the package and the root files
+    /// adopt changes written beside them.
+    CopyPackages,
+    /// `package bundle` of the check tree.
+    Bundle,
+    /// The bundle's installed layout copied into the check tree.
+    InstalledTree,
+    /// `standard-pack check` of that installed layout: the one root check of the call.
+    RootCheck,
+    /// The outcome keys the schedule reads and the business rule's value.
+    RuleChecks,
+    /// The regression cases run on the package as written, or, taking none, the checkout's cases
+    /// of the package read.
+    Cases,
+    /// The coverage, the value's wait and the warnings, told apart by the package they name.
+    Warnings,
+    /// The writes; under `--dry-run`, the list of what would be written.
+    Write,
+    /// The adopted pack's readiness on the check tree's game root.
+    Readiness,
+}
+
+/// Workflow #463 S2b-1: the wall-clock time of one stage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdoptStageTime {
+    pub stage: AdoptStage,
+    /// From the stage's start to the next one's, or to the end of the call.
+    pub ms: u64,
+}
+
+/// Workflow #463 S2b-1: the answer's `timings`, and a failed call's `details.timings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdoptTimings {
+    /// Each stage that ran, in the order it ran.
+    pub stages: Vec<AdoptStageTime>,
+    /// The whole call, from its start to its answer.
+    pub total_ms: u64,
+    /// A failed call's: the stage it stopped in, the last of `stages`; absent in an answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_in: Option<AdoptStage>,
+}
+
 /// The answer of `standard-pack adopt`.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardPackAdoptResponse {
@@ -884,19 +960,108 @@ pub struct StandardPackAdoptResponse {
     /// Workflow #463 AC-1: the regression cases the adoption took from its recording, or the word
     /// why it took none.
     pub cases: AdoptCases,
+    /// Workflow #463 S2b-1: the wall-clock milliseconds of each stage, in order, and the total.
+    pub timings: AdoptTimings,
 }
 
-/// Workflow #464 P1: `actinglab standard-pack adopt` (module doc).
+/// Workflow #463 S2b-1: the member of a failed call's details that holds its [`AdoptTimings`].
+const TIMINGS_MEMBER: &str = "timings";
+
+/// Workflow #463 S2b-1: the wall clock of one adoption's stages. They follow one another: each runs
+/// from the moment it is entered to the moment the next one is, or the call ends.
+struct Stages<'a> {
+    worktree: &'a dyn AdoptWorktree,
+    started: Instant,
+    done: Vec<AdoptStageTime>,
+    running: Option<(AdoptStage, Instant)>,
+}
+
+impl<'a> Stages<'a> {
+    fn start(worktree: &'a dyn AdoptWorktree) -> Self {
+        Self {
+            worktree,
+            started: Instant::now(),
+            done: Vec::new(),
+            running: None,
+        }
+    }
+
+    /// Ends the running stage and starts `stage`, told to the worktree first.
+    fn enter(&mut self, stage: AdoptStage) {
+        self.end();
+        self.worktree.stage_started(stage);
+        self.running = Some((stage, Instant::now()));
+    }
+
+    fn end(&mut self) {
+        if let Some((stage, since)) = self.running.take() {
+            self.done.push(AdoptStageTime {
+                stage,
+                ms: millis_since(since),
+            });
+        }
+    }
+
+    /// The answer's `timings`: the running stage ended, every stage that ran and the total.
+    fn answer(&mut self) -> AdoptTimings {
+        self.end();
+        AdoptTimings {
+            stages: self.done.clone(),
+            total_ms: millis_since(self.started),
+            stopped_in: None,
+        }
+    }
+
+    /// `error`, the failure of the running stage, with the timings in its details: the stages
+    /// that ran, the last the one it stopped in. Every refusal of adoption carries its details as
+    /// an object or none; details that are no object would be left as they are.
+    fn stopped(&mut self, mut error: LabError) -> LabError {
+        let stopped_in = self.running.map(|(stage, _)| stage);
+        let mut timings = self.answer();
+        timings.stopped_in = stopped_in;
+        let mut details = match error.details.take() {
+            Some(Value::Object(details)) => details,
+            None => Map::new(),
+            Some(other) => {
+                error.details = Some(other);
+                return error;
+            }
+        };
+        details.insert(TIMINGS_MEMBER.to_owned(), json!(timings));
+        error.details = Some(Value::Object(details));
+        error
+    }
+}
+
+/// The whole milliseconds since `since`.
+fn millis_since(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Workflow #464 P1: `actinglab standard-pack adopt` (module doc). Workflow #463 S2b-1: each stage
+/// timed, a failure answered with the times of the stages that ran.
 pub fn standard_pack_adopt(
     request: StandardPackAdoptRequest,
     worktree: &dyn AdoptWorktree,
 ) -> LabResult<StandardPackAdoptResponse> {
+    let mut stages = Stages::start(worktree);
+    adopt_in_stages(request, worktree, &mut stages).map_err(|error| stages.stopped(error))
+}
+
+/// The adoption, each of its stages entered in `stages` as it starts.
+fn adopt_in_stages(
+    request: StandardPackAdoptRequest,
+    worktree: &dyn AdoptWorktree,
+    stages: &mut Stages<'_>,
+) -> LabResult<StandardPackAdoptResponse> {
+    stages.enter(AdoptStage::Repository);
     let repo = absolute(&request.repo)?;
     let state = absolute(&request.state_dir)?;
     let root = Repository::read(&repo)?;
     // Workflow #463 S3-17: a recording is judged by `record ready`'s one function; Workflow #463
     // AC-1: with the cases its last stop wrote beside its package. Workflow #463 AD-1: all of it
     // read from the directory the source names, which nothing here writes.
+    stages.enter(AdoptStage::Recording);
     let (locator, record_id, recorded, recordings) = match &request.source {
         AdoptSource::Recording {
             record_id,
@@ -914,7 +1079,9 @@ pub fn standard_pack_adopt(
         }
         AdoptSource::Package(path) => (absolute(path)?, None, None, None),
     };
+    stages.enter(AdoptStage::Package);
     let package = Package::read(&locator)?;
+    stages.enter(AdoptStage::Checks);
     let game = package.descriptor.game().to_owned();
     let server = package.descriptor.server().to_owned();
     let package_id = package.descriptor.package_id().to_owned();
@@ -1264,15 +1431,19 @@ pub fn standard_pack_adopt(
     })?;
 
     // The tree as it would be written, checked as the Runtime reads it.
-    let check = check_tree(&CheckInputs {
-        repo: &repo,
-        root: &root,
-        state: &state,
-        at_unix_ms: request.at_unix_ms,
-        package_id: &package_id,
-        files: &package.files,
-        plan: &plan,
-    })?;
+    let check = check_tree(
+        &CheckInputs {
+            repo: &repo,
+            root: &root,
+            state: &state,
+            at_unix_ms: request.at_unix_ms,
+            package_id: &package_id,
+            files: &package.files,
+            plan: &plan,
+        },
+        stages,
+    )?;
+    stages.enter(AdoptStage::RuleChecks);
     let rule_id = plan.rule_id();
     if check.answer.warnings.iter().any(|warning| {
         warning.is(SharedCode::StandardPackPackageUnclassified)
@@ -1331,6 +1502,7 @@ pub fn standard_pack_adopt(
     // Workflow #463 AC-1: the cases, checked last, before the first write: each names one
     // directory of the checkout that is free or the earlier set's, and each is run by the one
     // runner on the package as this adoption writes it, the check tree's copy of it.
+    stages.enter(AdoptStage::Cases);
     let case_plan = match (taken, &checkout_cases) {
         (Some(recording_cases), Some(checkout)) => {
             let package_dir = check.tree.join(CHECK_PACKS_ROOT).join(&package_id);
@@ -1355,6 +1527,7 @@ pub fn standard_pack_adopt(
         None => CheckoutCases::read(&regression_dir, &regression_relative, &package_id)?
             .left(&regression_relative),
     };
+    stages.enter(AdoptStage::Warnings);
     let coverage = match (&plan.rule, class) {
         (Some(rule), AdoptClass::Business) if plan.held.is_none() => {
             Some(rule_coverage(rule, &root.schedule.pools, &check.answer))
@@ -1453,6 +1626,7 @@ pub fn standard_pack_adopt(
         };
 
     // What it writes, in the order it renames it into place.
+    stages.enter(AdoptStage::Write);
     let mut changed = vec![pack_relative.clone()];
     for name in root_order(class == AdoptClass::Maintenance) {
         let changes = if name == STANDARD_PACK_SCHEDULE_FILE {
@@ -1554,13 +1728,18 @@ pub fn standard_pack_adopt(
             not_proven: Vec::new(),
         },
     };
+    let next = next_items(&repo, &root.game, unvalued_rule.as_deref(), none_taken);
     // Workflow #463 S3-5: every check passed (a refused adoption answers no readiness); the
     // adopted pack's readiness on the game root the check tree laid out, by the same path under
-    // `--dry-run`. It changes nothing of the adoption.
-    let (readiness, readiness_not_judged) = match adopted_readiness(&check.installed, &package_id) {
-        Ok(row) => (Some(row), None),
-        Err(why) => (None, Some(why)),
-    };
+    // `--dry-run`. It changes nothing of the adoption. Workflow #463 S2b-1: with the warnings of
+    // the check of that root, which nothing has written under since.
+    stages.enter(AdoptStage::Readiness);
+    let (readiness, readiness_not_judged) =
+        match adopted_readiness(&check.installed, &package_id, &check.answer.warnings) {
+            Ok(row) => (Some(row), None),
+            Err(why) => (None, Some(why)),
+        };
+    let timings = stages.answer();
     Ok(StandardPackAdoptResponse {
         status: if request.dry_run {
             "validated".to_owned()
@@ -1597,8 +1776,9 @@ pub fn standard_pack_adopt(
         check_tree: check.tree.display().to_string(),
         readiness,
         readiness_not_judged,
-        next: next_items(&repo, &root.game, unvalued_rule.as_deref(), none_taken),
+        next,
         cases,
+        timings,
     })
 }
 
@@ -1606,10 +1786,14 @@ pub fn standard_pack_adopt(
 /// tree's game root `installed` (`<tree>/installed/<game>/`), judged by the readiness function,
 /// called as it is, with no installation, so `ready_to_place` at best. When that function refuses
 /// the root, or answers no row of the pack (the function's own `package_invalid`, "is no package
-/// of the bundle"), why it was not judged: the refusal's outcome and the same in words.
+/// of the bundle"), why it was not judged: the refusal's outcome and the same in words. Workflow
+/// #463 S2b-1: the root is not checked a second time: `checked` are the warnings of the check of
+/// this root the call ran and that accepted it ([`check_tree`]), handed to the readiness as that
+/// check's answer.
 fn adopted_readiness(
     installed: &Path,
     package_id: &str,
+    checked: &[Outcome],
 ) -> Result<PackReadiness, ReadinessNotJudged> {
     let not_judged = |error: &LabError| ReadinessNotJudged {
         outcome: cause_of(error),
@@ -1619,11 +1803,14 @@ fn adopted_readiness(
             installed.display()
         ),
     };
-    judge_standard_pack_readiness(&StandardPackReadyRequest {
-        root: installed.to_path_buf(),
-        declared_package: None,
-        installation: None,
-    })
+    judge_checked_readiness(
+        &StandardPackReadyRequest {
+            root: installed.to_path_buf(),
+            declared_package: None,
+            installation: None,
+        },
+        checked,
+    )
     .map_err(|error| not_judged(&error))?
     .packs
     .into_iter()
@@ -5106,9 +5293,12 @@ fn gone(path: &Path, removed: io::Result<()>) -> LabResult<()> {
 /// every root file the repository holds) and `installed/<game>/` (its installed layout, checked by
 /// `standard-pack check`). Both compose the schedule with one instance per server; a composition
 /// that refuses the file as it would be written is `rule_refused` with the composer's pointer, any
-/// other refusal is answered as it is. Nothing is written in the repository.
-fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
+/// other refusal is answered as it is. Nothing is written in the repository. Workflow #463 S2b-1:
+/// its five stages entered in `stages` (`check_tree` to `root_check`).
+fn check_tree(inputs: &CheckInputs<'_>, stages: &mut Stages<'_>) -> LabResult<Checked> {
+    stages.enter(AdoptStage::CheckTree);
     let (tree, marker) = prepare_check_tree(inputs.state, inputs.repo, inputs.at_unix_ms)?;
+    stages.enter(AdoptStage::CopyPackages);
     let packs_root = tree.join(CHECK_PACKS_ROOT);
     create_dir(&packs_root)?;
     let packs = inputs.repo.join(PACKS_DIRECTORY);
@@ -5139,6 +5329,7 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
         }
         None => None,
     };
+    stages.enter(AdoptStage::Bundle);
     let present = |name: &str| {
         let path = inputs.repo.join(name);
         fs::metadata(&path)
@@ -5167,6 +5358,7 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
         },
     })
     .map_err(|error| composed(error, &tree))?;
+    stages.enter(AdoptStage::InstalledTree);
     let installed = tree.join("installed").join(&inputs.root.game);
     fs::create_dir_all(&installed)
         .map_err(|error| tree_failed(&installed, &error, IoOp::CreateDir))?;
@@ -5201,6 +5393,7 @@ fn check_tree(inputs: &CheckInputs<'_>) -> LabResult<Checked> {
             copy_tree(&source, &installed.join(&name))?;
         }
     }
+    stages.enter(AdoptStage::RootCheck);
     let (answer, compiled) = check_standard_pack_root_with_catalog(StandardPackCheckRequest {
         root: installed.clone(),
     })
