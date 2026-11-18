@@ -78,7 +78,9 @@ const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
 const LEGACY_CATALOG_POINTER_SCHEMA: &str = "actingcommand.catalog-pointer-file.v1";
 const ACTIVE_POINTER_FILE: &str = "active.json";
 const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
-const GENERATIONS_DIR: &str = "generations";
+// Workflow #453 S5b fix round 1: the layout of the catalog store is the contract crate's, which the
+// rescue module's check after a placement reads by too.
+const GENERATIONS_DIR: &str = actingcommand_contract::CATALOG_GENERATIONS_DIRECTORY;
 const MAX_POINTER_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 // Published generations are immutable, so verified compiled catalogs are memoised by hash.
@@ -86,7 +88,7 @@ const MAX_CATALOG_MEMO_GENERATIONS: usize = 8;
 /// ROUT-L RL-1b (frozen model v1.0 §3.3): a composed generation's directory holds each game's
 /// `schedule.json` as composed under `fragments/`, and the composition record.
 const FRAGMENTS_DIR: &str = "fragments";
-const COMPOSITION_RECORD_FILE: &str = "standard-packs.json";
+const COMPOSITION_RECORD_FILE: &str = actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_FILE;
 const DEFAULT_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_COOLDOWN_MS: u64 = 1_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS: u64 = 60_000;
@@ -7858,9 +7860,18 @@ impl CatalogMemo {
     }
 }
 
+/// Workflow #453 S5b fix round 1: the catalog store below `state_root`, by the contract crate's
+/// [`actingcommand_contract::CATALOG_STORE_PATH`], the layout the rescue module's check after a
+/// placement reads a composed generation's record by.
+fn catalog_store_root(state_root: &Path) -> PathBuf {
+    actingcommand_contract::CATALOG_STORE_PATH
+        .iter()
+        .fold(state_root.to_path_buf(), |path, part| path.join(part))
+}
+
 impl CatalogStore {
     fn open(state_root: &Path, state: Arc<RuntimeStateStore>) -> RuntimeHostResult<Self> {
-        let root = state_root.join("policy").join("catalogs");
+        let root = catalog_store_root(state_root);
         let generations = root.join(GENERATIONS_DIR);
         fs::create_dir_all(&generations).map_err(|_| {
             fatal(
@@ -7881,7 +7892,7 @@ impl CatalogStore {
     /// Workflow #361 C3: the same store over an existing state root, read only: no directory
     /// is created and nothing is staged or migrated.
     fn open_read_only(state_root: &Path, state: Arc<RuntimeStateStore>) -> Self {
-        let root = state_root.join("policy").join("catalogs");
+        let root = catalog_store_root(state_root);
         Self {
             legacy_active_pointer: root.join(ACTIVE_POINTER_FILE),
             generations: root.join(GENERATIONS_DIR),

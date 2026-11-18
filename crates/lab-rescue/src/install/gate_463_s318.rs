@@ -65,10 +65,14 @@
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device, no
 // sleep, no clock read; every root is a temporary folder with neutral files (made-up ids, no real
 // game). Both roots of every scene hold a `schedule.json`, but the bundle of the second test of
-// fix round 1.
+// fix round 1. Workflow #453 S5b (register §1.474): with a Runtime, the scene's catalogs are
+// generations whose composition records carry rules digests, and the fixture's check-config
+// previews the second one's, so that a placement that changes `schedule.json` passes its check as
+// before.
 
 use super::fixture::{
-    BuildSpec, C1, FakeHost, REPOSITORY, code, live_root, run, tree, word, write_json,
+    BuildSpec, C1, FakeHost, REPOSITORY, code, live_root, preview_rules_digest, run, tree, word,
+    write_composed_generation, write_json,
 };
 use super::host::RunningImage;
 use crate::agent_channel::Answer as Answered;
@@ -106,9 +110,21 @@ const UNREADABLE_SCHEDULE: &[u8] = br#"{"neutral": "schedule"}"#;
 const REFERENCE: &str = "board-463-comment-neutral-18";
 /// The catalogs the fake Runtime answers while it runs: the one read before a placement's hold,
 /// and a new one at the read of its check, so that a placement that changes `schedule.json` sees
-/// a new composition.
-const CATALOG_BEFORE: &str = "neutral-catalog-before";
-const CATALOG_AFTER: &str = "neutral-catalog-after";
+/// a new composition. Workflow #453 S5b: generations as the Runtime names them (`sha256:` and 64
+/// hex digits), whose composition records carry the rules digests below, the second the one the
+/// fixture's check-config previews for every placed root.
+const CATALOG_BEFORE: &str = concat!(
+    "sha256:",
+    "01010101010101010101010101010101",
+    "01010101010101010101010101010101"
+);
+const CATALOG_AFTER: &str = concat!(
+    "sha256:",
+    "02020202020202020202020202020202",
+    "02020202020202020202020202020202"
+);
+const DIGEST_BEFORE: &str = "sha256:neutral-rules-before";
+const DIGEST_AFTER: &str = "sha256:neutral-rules-after";
 /// The process id of an actingd the fake host lists under the root.
 const STARTING_PID: u32 = 4_242;
 
@@ -345,6 +361,13 @@ fn staged(way: Way, before: &Layout, after: &Layout) -> Scene {
             .catalogs
             .borrow_mut()
             .extend([CATALOG_BEFORE.to_owned(), CATALOG_AFTER.to_owned()]);
+        // Workflow #453 S5b: the check after a placement that changes `schedule.json` compares
+        // the rules digest the live build's check-config previews with the Runtime's generation.
+        let state_root = actingcommand_lab_ops::locate::configured_state_root(&config_path)
+            .expect("the configured state root");
+        write_composed_generation(&state_root, CATALOG_BEFORE, DIGEST_BEFORE);
+        write_composed_generation(&state_root, CATALOG_AFTER, DIGEST_AFTER);
+        preview_rules_digest(&host, DIGEST_AFTER);
     }
     let zip = temp.path().join("neutral-bundle.zip");
     after.write_zip(&zip);
