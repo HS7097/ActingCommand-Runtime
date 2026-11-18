@@ -653,8 +653,9 @@ fn kp1_admission_refuses_an_unknown_key_a_retried_key_and_a_click_with_a_key() {
 }
 
 // The revision pair (contracts/component-interfaces.md, the `package` row 17): this build reads
-// `package` up to 17 (up to 18 since Workflow #463 K-c, register §1.454, and up to 19 since
-// Workflow #463 INT-1, register §1.473, 17 within it), so at the installer's `package` edge
+// `package` up to 17 (up to 18 since Workflow #463 K-c, register §1.454, up to 19 since
+// Workflow #463 INT-1, register §1.473, and up to 20 since Workflow #463 SEL-2L, register
+// §1.480, 17 within it), so at the installer's `package` edge
 // (`package_edge_holds`) its range holds a bundle whose package has a key step, which declares
 // [17, 17], and a range that ends below 17 refuses it; a bundle without a key step keeps its
 // revision ([3, 15]) and both ranges hold it. This build admits both packages.
@@ -673,9 +674,10 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     let with_key = [KEY_REVISION, KEY_REVISION];
     let without_key = [3, 15];
 
-    // Workflow #463 K-c (register §1.454) declares 18, the scan select without an end, and
-    // Workflow #463 INT-1 (register §1.473) 19, an interrupt entry without handlers.
-    assert_eq!(own, [3, KEY_REVISION + 2]);
+    // Workflow #463 K-c (register §1.454) declares 18, the scan select without an end, Workflow
+    // #463 INT-1 (register §1.473) 19, an interrupt entry without handlers, and Workflow #463
+    // SEL-2L (register §1.480) 20, a repeated_anchor layout's shared read.
+    assert_eq!(own, [3, KEY_REVISION + 3]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));
