@@ -42,7 +42,6 @@ use super::model::{
     AfterCaptureRecord, ClickGesture, LabRecording, RecordPoint, RecordRect, RecordedFrame,
     RecordedMark, RecordingStep, StepChoice, StepClick,
 };
-use super::near::TemplateNearThreshold;
 use super::preview::{
     Colour, Glyph, MARK_COLOUR, Overlay, PRESS_BOX_COLOUR, RECOGNIZE_BOX_COLOUR, render,
 };
@@ -141,9 +140,11 @@ pub struct RecordReviewStep {
     /// names this step by its serial number (`record_index`: its page on its own frames, the
     /// arrival gate after its effect, its optional page, or the skip target it is), as `record
     /// ready` answers them; absent when there is none, so that a step without one is answered as
-    /// before. A warning of an ending names no step and is no step's.
+    /// before. A warning of an ending names no step and is no step's. #463 SC-1 fix round 1: and
+    /// the warnings `record_select_page_passes_after_press` of `record ready` whose select step is
+    /// this step (`record_index`), each as `record ready` answers it, in `record ready`'s order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<TemplateNearThreshold>,
+    pub warnings: Vec<ReadyWarningItem>,
 }
 
 /// #463 S2-8': one swipe folded into a press step's scrolling search, as that step's sheet lists
@@ -366,14 +367,16 @@ pub(crate) fn review_outcome(
             warnings: ready
                 .warnings
                 .iter()
-                .filter_map(|warning| match warning {
-                    ReadyWarningItem::NearThreshold(near)
-                        if near.at.record_index == Some(step.index) =>
-                    {
-                        Some(near.clone())
+                .filter(|warning| match warning {
+                    ReadyWarningItem::NearThreshold(near) => {
+                        near.at.record_index == Some(step.index)
                     }
-                    _ => None,
+                    ReadyWarningItem::SelectPageAfterPress(found) => {
+                        found.record_index == step.index
+                    }
+                    _ => false,
                 })
+                .cloned()
                 .collect(),
         });
     }

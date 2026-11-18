@@ -58,6 +58,8 @@ pub use around::{
     RecordFramesFrame, RecordFramesOutcome, RecordFramesPress, RecordFramesPressFrame,
     RecordFramesRequest, RecordFramesWarning, record_frames,
 };
+// #463 SC-1 fix round 1: the warning `record_select_page_passes_after_press`.
+pub use crosscheck::SelectPagePassesAfterPress;
 pub use hold::{
     LAB_RECORDING_HOLD_PREFIX, LAB_RECORDING_WARNING_HOLD_UNREAD,
     LAB_RECORDING_WARNING_INSTANCE_NOT_HELD, LAB_RECORDING_WARNING_NO_RUNTIME_LISTENING,
