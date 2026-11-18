@@ -113,8 +113,9 @@ pub fn resume_expected(
 
 /// #480 PG-2d (register §1.481; `contracts/scheduling-pause.md`, "Resume"): the Lab's `resume` row
 /// (its command line and `ac_resume`): [`resume`] with the receipt's outcome, whose cause says when
-/// the Runtime lifted a person's pause that was not quiet yet and ran no reconnect
-/// (`scheduling_resume_without_reconnect`).
+/// the Runtime ran no reconnect, one of two: it lifted a person's pause that was not quiet yet
+/// (`scheduling_resume_without_reconnect`), or (Workflow #479 F-2) the instance's device system has
+/// no backend in this build, an iOS handset (`scheduling_resume_without_backend`).
 pub fn resume_as(
     client: &RuntimeClient,
     scope: SchedulingPauseScope,

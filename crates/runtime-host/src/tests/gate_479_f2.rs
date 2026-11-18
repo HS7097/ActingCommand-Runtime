@@ -29,6 +29,9 @@
 // asked. The coordinator's follow-up: its pause, a person's and a tool's hold, is quiet at once,
 // and its resume lifts the pause with no reconnect (`scheduling_resume_without_backend`), nothing
 // failed; a tool's hold over it and an emulator is quiet and both resume.
+//
+// Fix round 4 (rd-1119/brief-479-f2-fix4.md, item 5): a person's pause and resume of an iOS handset
+// that is not bound answer as a bound one's do.
 
 use super::gate_369_s6c::{instance_scope, instance_status, pause, resume, send};
 use super::gate_398_rd1b::{last_availability, resolved_handset};
@@ -924,13 +927,13 @@ fn f2_fix2_a_self_check_and_a_drill_are_refused_at_their_entry() {
     stand_in_untouched(&state, &events, instance_id);
 }
 
-/// Fix round 2, the coordinator's follow-up: a person's `stand` pause of a bound iOS handset is
-/// quiet at once (Completed with no standing cause, stage `released`), and its resume succeeds: the
-/// pause is lifted and no reconnect is attempted (no claim: no lease is granted on the handset; no
-/// preparation, no open), the answer's self-check reports none, the receipt's cause and one record
-/// of the ledger say `scheduling_resume_without_backend`, and no failure is answered or recorded.
-#[test]
-fn f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_reconnects_nothing() {
+/// A person's `stand` pause of an iOS handset registered as `handset` (bound or not), on a host of
+/// its own, is quiet at once (Completed with no standing cause, stage `released`), and its resume
+/// succeeds: the pause is lifted and no reconnect is attempted (no claim: no lease is granted on the
+/// handset; no preparation, no open), the answer's self-check reports none, the receipt's cause and
+/// one record of the ledger say `scheduling_resume_without_backend`, and no failure is answered or
+/// recorded.
+fn stand_pause_and_resume_reconnect_nothing(handset: HandsetEndpoint) {
     const ALIAS: &str = "neutral.iphone";
     let root = TempDir::new().expect("tempdir");
     let instance_id = instance_id();
@@ -939,7 +942,7 @@ fn f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_recon
         config(&root),
         Arc::new(
             FakeProvider::one(ALIAS, instance_id, Arc::clone(&state))
-                .with_resolved_for(ALIAS, resolved_handset(ALIAS, instance_id, bound_ios())),
+                .with_resolved_for(ALIAS, resolved_handset(ALIAS, instance_id, handset)),
         ),
     )
     .expect("runtime host");
@@ -975,6 +978,21 @@ fn f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_recon
         }),
         "no claim was granted on the handset"
     );
+}
+
+/// Fix round 2, the coordinator's follow-up: `stand_pause_and_resume_reconnect_nothing` of a bound
+/// iOS handset.
+#[test]
+fn f2_fix2_a_stand_pause_of_an_ios_handset_is_quiet_at_once_and_its_resume_reconnects_nothing() {
+    stand_pause_and_resume_reconnect_nothing(bound_ios());
+}
+
+/// Fix round 4 (the third review: the pause and the resume were tested on a bound handset only):
+/// an iOS handset that is not bound answers its pause and its resume as a bound one does,
+/// `stand_pause_and_resume_reconnect_nothing` of `HandsetEndpoint::Ios(None)`.
+#[test]
+fn f2_fix4_an_unbound_ios_handsets_pause_and_resume_answer_as_a_bound_ones() {
+    stand_pause_and_resume_reconnect_nothing(HandsetEndpoint::Ios(None));
 }
 
 /// Fix round 2, the coordinator's follow-up: a tool's hold (`quiet_or_lift`, one pause per instance

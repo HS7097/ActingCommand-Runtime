@@ -538,9 +538,16 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   attempts none: no claim, no preparation, no open. The answer is `SchedulingResumed` with a
   self-check of both sides `ok: false`, no values and no `failure_code`, the receipt's success
   code caused by `scheduling_resume_without_backend` (info), and the ledger holds one
-  `device_state_observed` record of it under the pause's links; nothing is answered or recorded
-  as a failure. It is inert (fix round 1): the start's preparation, the
-  idle planner and every other party that acts on an instance without a person asking skip it, so
+  `device_state_observed` record of it under the pause's links (the instance's own, under fresh
+  system links, when no request set the pause: [scheduling-pause.md](scheduling-pause.md), "A
+  pause's life in the ledger"); nothing is answered or recorded as a failure. A fenced one
+  (Workflow #403) is resumed the same way, paused or not: the pause, if one holds, is lifted, the
+  answer and the record are the same, and the fence stays, because nothing can certify the
+  instance again (the reconnect's preparation and its passing self-check, which every other fenced
+  instance's resume runs) until this build has a backend for its device system; an inert handset
+  has no way to be fenced by a run, since nothing it runs opens a session or a backend whose close
+  could be left unconfirmed or whose command could fail. It is inert (fix round 1): the start's
+  preparation, the idle planner and every other party that acts on an instance without a person asking skip it, so
   nothing is attempted, and no failure, ladder or stability count arises from it. What the ledger
   says of it is the availability withdrawal above, information and no failure, and the program
   facts `device.system` (`ios`) and `device.bound` (boolean), which the Lab's status shows on its

@@ -528,7 +528,7 @@
       "source": ["actingctl resume", "MCP ac_resume", "acui: conditional resume (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1b",
       "status": "planned",
-      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the request, MCP's resume of the pause it read and its answer); requests add Status, with which MCP resolves <inst>. #480 PG-2d (0.12.74): the row reads the receipt's outcome too (`scheduling::resume_as`, `scheduling::resume_expected_as`); when it carries a cause (scheduling_resume_without_reconnect: a person's pause lifted before it was quiet, no reconnect ran), the answer's outcome runtime_scheduling_resumed carries that outcome as its cause, exit 0; the parameters are unchanged"
+      "notes": "LAB-1b moved its code into lab-ops: `scheduling` (the scope, the request, MCP's resume of the pause it read and its answer); requests add Status, with which MCP resolves <inst>. #480 PG-2d (0.12.74): the row reads the receipt's outcome too (`scheduling::resume_as`, `scheduling::resume_expected_as`); when it carries a cause, one of two (scheduling_resume_without_reconnect: a person's pause lifted before it was quiet, no reconnect ran; #479 F-2, scheduling_resume_without_backend: an instance whose device system has no backend in this build, an iOS handset, resumed with no reconnect attempted), the answer's outcome runtime_scheduling_resumed carries that outcome as its cause, exit 0; the parameters are unchanged"
     },
     {
       "name": "config",

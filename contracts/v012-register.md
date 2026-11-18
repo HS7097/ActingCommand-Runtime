@@ -40621,7 +40621,7 @@ does changes: no decision, wait, lock order or lift differs.
   `scheduling_pause_lifted_not_quiet` with their words and cause. `gate_480_pg2c`'s `nemu_host` and
   `NEMU` are made visible to that gate (`pub(super)`), unchanged; no existing test is adapted.
 
-### 1.482 #479 F-2 (0.12.74): an iOS handset is an instance the Runtime knows: configuration and binding, nothing captured or pressed (Workflow #479; the owner's rulings of 11-18 on board #479: an iPhone is scheduled like any instance, the release may carry `acib`, the phone's frames may be kept in the state root; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-479-f2-ios-handset-config-binding.md`, the design `rd-1118/design-479-f1.md` (its F-2), on main `5d0c8c3e`, which holds ACIB-2; fix round 1, work order `rd-1119/brief-479-f2-fix1.md`; fix round 2, work order `rd-1119/brief-479-f2-fix2.md`)
+### 1.482 #479 F-2 (0.12.74): an iOS handset is an instance the Runtime knows: configuration and binding, nothing captured or pressed (Workflow #479; the owner's rulings of 11-18 on board #479: an iPhone is scheduled like any instance, the release may carry `acib`, the phone's frames may be kept in the state root; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1118/brief-479-f2-ios-handset-config-binding.md`, the design `rd-1118/design-479-f1.md` (its F-2), on main `5d0c8c3e`, which holds ACIB-2; fix round 1, work order `rd-1119/brief-479-f2-fix1.md`; fix round 2, work order `rd-1119/brief-479-f2-fix2.md`; fix round 4, work order `rd-1119/brief-479-f2-fix4.md`, after the third review)
 
 1.482 is the number the coordinator assigned this section; §1.476 and §1.478 to §1.481 are other
 slices dispatched with it. It ships in 0.12.74. [device-binding.md](device-binding.md), "An iOS
@@ -40839,10 +40839,37 @@ Adapted because the row may now hold a key and no serial (`DeviceBinding::serial
 `f2_t1` (the call's `--timeout-ms`) and `f2_config_system_is_a_handsets_member…` (`acib_path`
 gone, the adb members in). No golden changes; no test leaves a gate map.
 
+**Fix round 4** (after the third review; words, comments and one test: nothing the program does
+changes). [scheduling-pause.md](scheduling-pause.md) now says what the follow-up made true: the
+table of a pause's recorded moments gains the row of an instance without a backend being resumed
+(`scheduling_resume_without_backend`, info, written by the resume after the lift under the persist
+gate, under the pause request's links, else the instance's own under fresh system links), and the
+table of what a pause answers, the sentences on the records of a `released` pause's resume and of a
+pause no request set, the reconnect after a resume and the Lab's `resume` row each gain one sentence
+of exception that points to "An iOS handset"; the `resume` row of `lab-operations.json` names the
+two causes. A fenced iOS handset takes the new path too (`resume_scheduling` reads the fence, then
+`without_device_backend`, and `resume_without_device_backend` lifts with it): its resume answers
+success and writes the record, and the fence stays, because nothing can certify the instance again
+until a backend exists; both contracts say so, and that an inert handset has no way to be fenced by
+a run. The comments that named `scheduling_resume_without_reconnect` as a resume's one cause name
+the two, each with its meaning (`runtime-client`'s `SchedulingResumeAnswer` and
+`resume_scheduling_as`, the Lab's `reported_with_cause` and `scheduling::resume_as`, the contract's
+`RuntimeReceipt::scheduling_resumed`). Test (host "#479 F-2"):
+`f2_fix4_an_unbound_ios_handsets_pause_and_resume_answer_as_a_bound_ones`, the pause and the resume
+of an iOS handset that is not bound (`HandsetEndpoint::Ios(None)`) with every assertion of the bound
+one's test, whose body became the helper `stand_pause_and_resume_reconnect_nothing` that both run
+(its assertions unchanged).
+
 **What is not changed.** An emulator or an Android handset: its configuration without `system`,
 the listing's rows, bind, unbind, status, records and every answer, byte for byte when no iOS
 instance is configured and `acib` is absent; the private file of Android rows alone; the `ledger`
-range; `apps/acib`.
+range; `apps/acib`. The `ledger` range does not move for `scheduling_resume_without_backend`
+either (fix round 4): it is an outcome code inside the existing `device_state_observed` record, and
+a reader of `ledger` revision 9 accepts an outcome code it has never seen inside this record, by the
+reasoning of §1.481 ("A reader of `ledger` revision 9 reads a new code in the existing record": the
+phase's `Outcome` takes any code's spelling, and the ledger's read checks no code against a
+catalogue; this slice's change to `payload.rs` touches only the handset's binding draft, not that
+phase or its reading).
 
 **At deploy.** Nothing to configure. `acib.exe` is not shipped yet (a later slice ships it): the
 Lab's listing is the one of before until it is laid at `<root>\tools\acib.exe`, and a configured iOS
