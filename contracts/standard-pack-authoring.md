@@ -553,8 +553,8 @@ but each that names another package of the root), `other_packages_warnings` (Wor
 those, counted by code, "The warnings of other packages"; fix round 1: absent beside
 `adopt_warnings_not_split`), `written` (in the order it was renamed into place), `would_write`, `kept`, `check_tree`,
 `readiness` or `readiness_not_judged` (below), `next` (each item `{path}`; Workflow #463 S3-12:
-`ours/model/bindings.json` with `fixed_value` too, below) and (Workflow #463 AC-1) `cases` ("The
-cases").
+`ours/model/bindings.json` with `fixed_value` too, below), (Workflow #463 AC-1) `cases` ("The
+cases") and (Workflow #463 S2b-1) `timings` ("The stages and their times").
 
 **The trial and the two warnings** (Workflow #463 S3-12, Runtime 0.12.68;
 [v012-register.md](v012-register.md) §1.445). Two things are told apart by name: that the
@@ -641,7 +641,12 @@ of the pack, the answer carries `readiness_not_judged` instead: `outcome`, the f
 with its code as the function answered it, or, when the function answered and the pack's row is
 not in its answer, adoption's own `package_invalid` (the pack is no package of the bundle); and
 `text`, the same in words. Nothing else of the answer changes by it, and the call does not fail by
-it.
+it. Workflow #463 S2b-1: the root is checked once in an adoption. The readiness function runs
+`standard-pack check` on the root it judges; here that root is the one the check of the tree
+checked a moment before, and nothing under it was written since, so the function is handed that
+check's warnings as the answer of its own check, which it does not run again. The rest of the
+function runs as it is; the row, its warnings, `readiness_not_judged` and its outcome are what
+the function answers when it runs the check itself on the same tree.
 
 ## The canonical form
 
@@ -875,3 +880,47 @@ for it: the readiness says it in a member of its own (`readiness_not_judged`) an
 `package_readiness_unjudged`, an information of a readiness item of a pack, neither a warning of the
 adoption's answer about its warnings. No decision reads a code by name: the warnings are split, or
 not, by whether that reading answered.
+
+## The stages and their times
+
+Workflow #463 S2b-1 (Runtime 0.12.74; [v012-register.md](v012-register.md) §1.477; the
+coordinator's work order on board #463, after adoptions on production ran past the MCP server's
+call budget of 25 s without saying where the time went). A call runs fourteen stages, one after
+the other, always in this order, under `--dry-run` too (its `write` only lists what would be
+written):
+
+| Stage | What it does |
+|---|---|
+| `repository` | reads the checkout: `applications.json`, `maintenance.json`, `schedule.json`, what an interrupted call left |
+| `recording` | with `--record-id`: reads the recording, judges it by `record ready`'s one function, finds its package and its cases; with `--package`: nothing but the path |
+| `package` | admits the package as `package preflight` admits it and reads its files |
+| `checks` | the checks before the check tree ("The checks": the game, the server and the `package_id`, an earlier adoption, `--replace`'s version control and volumes, the decision and the role, the review and the trial records, local paths) and the plan of what is written |
+| `check_tree` | makes the checkout's check tree, or locks it and empties it of the earlier call's scratch |
+| `copy_packages` | copies every other package of the checkout into the check tree and writes the package and the root files adopt changes beside them |
+| `bundle` | `package bundle` of the check tree |
+| `installed_tree` | copies the bundle's installed layout, `installed/<game>/` |
+| `root_check` | `standard-pack check` of that layout: the one check of the root in the call |
+| `rule_checks` | the outcome keys the schedule reads and the business rule's value |
+| `cases` | runs the regression cases on the package as written ("The cases"), or, taking none, reads the checkout's cases of the package |
+| `warnings` | the coverage, the value's wait and the warnings, told apart by the package they name ("The warnings of other packages") |
+| `write` | the writes ("What it writes"); under `--dry-run` the list of what would be written |
+| `readiness` | the adopted pack's readiness ("The adopted pack's readiness"), with the root check's warnings |
+
+- **The answer** carries `timings` `{stages, total_ms}`: `stages` each `{stage, ms}`, every stage
+  of the list in its order, `ms` the wall-clock milliseconds from its start to the next one's,
+  `total_ms` those of the whole call. The same over MCP, where the tool's answer is the line's, and
+  in the answer of the call's job that `ac_run_show` reads when the call ran past the call budget.
+- **A call that fails** (a refusal, `adopt_write_failed` or another error) answers its refusal as
+  before, and its `details` carry `timings` too: `stages`, those that ran, the last the one it
+  stopped in, `total_ms`, and `stopped_in`, that stage. No stage after it ran.
+- The clock is read by the resource tooling itself; the worktree adopt is given is told each
+  stage as it starts (a test's worktree sees them, or changes the check tree between two of them),
+  and actinglab's does nothing with it. A duration is never compared with anything: no stage is
+  refused or warned for its time, and nothing is kept from one call to the next.
+- The root is checked once ("The adopted pack's readiness"): the readiness takes the warnings of
+  `root_check`. What adoption refuses and accepts, what it writes and the members of its answer
+  are as before.
+
+`timings`, `stages`, `stage`, `ms`, `total_ms` and `stopped_in` are members of the answer and of a
+failed call's details, the fourteen stage names the closed list above; no code or word of the
+outcome catalogue is added.

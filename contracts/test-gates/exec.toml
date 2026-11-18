@@ -4211,3 +4211,16 @@ tests = [
     "actingcommand-lab::lib::gate_463_s1r::s1r_the_operation_table_carries_ruler_with_its_closed_list",
 ]
 incident = ["#463 S1-R"]
+
+# #463 S2b-1 (0.12.74; register §1.477; brief rd-1118/brief-463-s2b-adopt-timing.md; contracts/standard-pack-authoring.md, "The stages and their times" and "The adopted pack's readiness"): standard-pack adopt answers the wall-clock milliseconds of each of its fourteen stages, a closed list in the order a call runs them, and checks the check tree's game root once. On P1's made-up resource repository, a worktree whose Lab cannot read the made-up recordings whole and runs each case with a set verdict, and which keeps the stages it is told and may spoil the check tree's bundle.json as one starts, as another writer would; no duration is compared, no clock read: a recording with one case adopted under --dry-run and then for real answers timings {stages, total_ms}, each stage {stage, ms}, named repository, recording, package, checks, check_tree, copy_packages, bundle, installed_tree, root_check, rule_checks, cases, warnings, write, readiness in that order, the worktree told the same stages in the same order (1); bundle.json spoiled as root_check starts: refused standard_pack_root_invalid, its outcome as before, details.timings {stages, stopped_in root_check, total_ms}, the stages the list up to root_check (2); the case failing: case_failed with failed_total 1 as before, stopped_in cases, the stages the list up to cases, nothing written (3); both packages declaring one variable differently: the answer's readiness is the row judge_standard_pack_readiness answers with its own root check of the same game root, the adopted package's variable warning whole in warnings as in that row, the other's counted in other_packages_warnings, written the pack directory and schedule.json (4); bundle.json spoiled as readiness starts: readiness_not_judged's outcome the cause of the refusal judge_standard_pack_readiness answers for that root and its text, and the same dry run unspoiled answers the same warnings, other_packages_warnings and would_write, its readiness the function's row (5); a dry run and a real run each run one root check by the test seam's count, and the readiness function alone runs its own (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_a_dry_run_and_a_real_run_answer_every_stage_in_order",
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_a_refusal_in_the_root_check_names_it_and_no_later_stage",
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_a_refusal_in_the_cases_names_it_and_no_later_stage",
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_a_root_check_that_warns_answers_as_the_readiness_function_with_its_own_check",
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_a_readiness_not_judged_answers_as_the_readiness_function_refuses",
+    "actingcommand-resource-tooling::lib::gate_463_s2b1::s2b1_an_adoption_checks_the_root_once",
+]
+incident = ["#463 S2b-1"]
