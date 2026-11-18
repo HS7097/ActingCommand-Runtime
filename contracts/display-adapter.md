@@ -15,6 +15,7 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-5ab | the Lab's online observation and its presses on a display that maps to its package's base, in the base coordinates | section 11, built in 0.12.67 |
 | DA-5cd | the Lab's offline recognition on a stored scene of another size than its package; the base size of a recording and the refusal of a recording on a display that is not the base size | section 12, 0.12.67 |
 | DA-5 | task schema `0.10` and box references; the conversion of a recording made on a display that is not the base size | later |
+| F-3b | without a rule, a display within a pixel of the base's shape is the base's display scaled, each axis by its own factor (Workflow #479) | section 13, 0.12.75 |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
 input a run makes leaves through it (section 10); a 1280×720 package on a 1280×720 frame behaves
@@ -72,7 +73,9 @@ frame–display check below.
 
 - **Without a rule**, only a pure scale maps: the layout must have the base's aspect ratio and
   no insets may be in use (insets of 0 are not in use); then `s` = layout width / `Wb`.
-  Otherwise `layout_undeclared`.
+  Otherwise `layout_undeclared`. Workflow #479 F-3b (section 13): the base's aspect ratio
+  exactly or within a pixel; each axis then has its own factor, the layout's width over `Wb`
+  across (`s`) and its height over `Hb` down, one fraction when the ratio is exact.
 - **With a rule**, `s` is the scale area's height over `Hb` (`by: height`) or its width over
   `Wb` (`by: width`). The screen is the whole layout; the safe area is the layout less the
   insets, and needs insets (declared, section 9; else the host's
@@ -133,7 +136,9 @@ Integer arithmetic only, so the same inputs give the same results bit for bit on
 | a length in base pixels (a brake, `cross_px`, `delta`, `min_segment_px`) | `round_half_up(v · num / den)`, then held to its own bounds by its caller |
 | device frame → scale frame (the reverse; insets, the layout, the crop's offset) | `round_half_up(v · den / num)` |
 
-`round_half_up` rounds halves towards positive infinity.
+`round_half_up` rounds halves towards positive infinity. Workflow #479 F-3b: on a display of
+section 13 each axis takes its own factor in every row, the width's across and the height's down;
+on every other map the two are `s`.
 
 ## 6 Cropped frames and turned frames
 
@@ -528,7 +533,9 @@ nothing changes, byte for byte.
   of the device frame resampled once under the map. `ContainedPageObservation::validate` (the
   client's check of the receipt and of a Lab operation record's projections) takes a projection
   frame that is the observation frame itself, or of its ratio, no larger and with no side of zero
-  (fix round 1: a zero side was taken before): what a pure scale brings that frame to. It knows the
+  (fix round 1: a zero side was taken before; Workflow #479 F-3b: "of its ratio" is the adapter's
+  own test, `CaptureExtent::has_shape_of`, exactly or within a pixel, section 13): what a pure
+  scale brings that frame to. It knows the
   two sizes and not the package, so it cannot know the package's base: any base of the frame's
   ratio no larger than the frame passes, and so does a scale whose presses the input side does not
   send (5/4, whose observation stands); that the projection is the package's base is the
@@ -596,7 +603,8 @@ presses on such a display are section 11's.
   DA-5cd. Any other scene is judged, reduced and answered exactly as a frame of its size is by the
   Lab's live observation (section 11), by the same function, the kernel's `lab_scene_on_base` (the
   frame gate's map, built with no producer geometry and no game declaration, and its one
-  resample, area average): a scene of the base's ratio, not smaller and in its orientation, is
+  resample, area average): a scene of the base's ratio (Workflow #479 F-3b: exactly or within a
+  pixel, section 13), not smaller and in its orientation, is
   reduced once to the base and evaluated there, a 5/4 one too (whether a press could land exactly
   is no reason to refuse a read; a press at 5/4 stays refused where presses are admitted, section
   11). Every rectangle and point of the answer is the base's, and the answer names
@@ -653,3 +661,82 @@ presses on such a display are section 11's.
   refusal stands until the owner orders it. A display the Runtime does not know (no contained task
   has run on the device, or nothing listens) no longer starts a recording of another size: the
   start goes on, and the first frame is refused unless it is the base size (fix round 1).
+
+## 13 A display within a pixel of the base's shape (F-3b)
+
+Workflow #479 F-3b (0.12.75; register §1.487); the rule is the coordinator's ruling in the slice's
+work order, not the owner's words. A package is written against its base (1280×720 for the games in
+use). Without a declared rule a display of another size mapped to the base only when its shape was
+exactly the base's, `W · Hb = H · Wb`. A 1334×750 display (960480 against 960000) and a 1366×768
+one (983520 against 983040) failed that product by a third of a pixel and were `layout_undeclared`,
+so the Lab, which never has a rule, could not read a frame of them, and every game would have had to
+declare a rule for them. This is a fact about displays, not about a game.
+
+- **The rule.** A display with **no declared rule** is of the base's shape
+  (`CaptureExtent::has_shape_of`, in the contract crate, the one function the map and the client's
+  check of a projection frame ask) when `W · Hb = H · Wb`, or when neither of its sides is the
+  base's own length and its size, scaled to the base by its width, comes out at the base's height
+  after rounding to whole pixels (`round_half_up(H · Wb / W) = Hb`), or, scaled by its height, at
+  the base's width (`round_half_up(W · Hb / H) = Wb`). Such a display is the base's display scaled:
+  a pure scale, each axis by its own factor, `sx = W / Wb` across and `sy = H / Hb` down, each
+  reduced (`DisplayMap::scale`, `DisplayMap::height_scale`). Its scale space and scale frame are
+  `round_half_up(W / sx) × round_half_up(H / sy)`, the base itself, its anchor area all of it, and
+  its kind `scale`, with the members an exactly proportional display's map has; a factor below 1 is
+  `scale_below_base`, as a smaller display of the exact shape is. Of exactly the base's shape the
+  two factors are one fraction and the map is the one before this slice, member for member. No
+  insets may be in use, as before.
+- **The sizes it was reasoned on**, against 1280×720:
+
+  | Display | `W·Hb`, `H·Wb` | Scaled by its width: rows | Scaled by its height: columns | Without a rule |
+  |---|---|---|---|---|
+  | 1334×750 | 960480, 960000 | 719.64, so 720 | 1280.64, so 1281 | a pure scale, 667/640 across, 25/24 down |
+  | 1366×768 | 983520, 983040 | 719.65, so 720 | 1280.63, so 1281 | a pure scale, 683/640 across, 16/15 down |
+  | 1335×750 | 961200, 960000 | 719.10, so 719 | 1281.60, so 1282 | `layout_undeclared`, as before |
+  | 1280×719 | 921600, 920320 | 719 | 1281.78, so 1282 | `layout_undeclared`, as before |
+
+  1335×750 is not such a display. On a landscape base the second test admits nothing the first
+  does not (it asks `|W·Hb − H·Wb|` at most `H / 2`, the first at most `W / 2`), on a portrait base
+  the reverse; either suffices.
+- **How far a point can be off.** A base point goes to `(round_half_up(x · sx), round_half_up(y ·
+  sy))`, the nearest device pixel of the point scaled by its own axis's factor (half a device
+  pixel, as under every pure scale), and a device point goes back by the same two factors,
+  `round_half_up(X / sx)` and `round_half_up(Y / sy)`; both factors exceed 1, so every base point
+  comes back to itself. A press maps by the same two factors. A picture of the base drawn at one
+  factor (a game that scales its base onto the display by its width, or by its height) lies at
+  most `|W·Hb − H·Wb| / Hb` device pixels across and `|W·Hb − H·Wb| / Wb` down from the two-factor
+  placement, at the base's far edges, beyond that rounding. For 1334×750 that is 480 / 720 = 0.667
+  device pixel across (0.640 base pixel) and 480 / 1280 = 0.375 down (0.360 base pixel); for
+  1366×768 0.667 across (0.625 base pixel) and 0.375 down (0.352 base pixel). The worst case over
+  the two axes is across, 2/3 of a device pixel for both sizes: 0.640 base pixel on 1334×750, 0.625
+  on 1366×768. Over every display the rule admits for 1280×720 it is at most `Wb / (2 · Hb)` =
+  0.889 base pixel across and `Hb / (2 · Hb − 1)` = 720 / 1439 = 0.5003 base pixel down.
+- **What a pure scale lets the rest do.** The run's frame gate and the Lab take such a frame as
+  they take any pure scale (sections 8, 11 and 12): it is resampled once to the base's size (REC-5,
+  area average, each axis by its own ratio) and recognised there, and its evidence boxes go back by
+  the two factors, outward. The Lab's live observations and its stored scenes of such a size answer
+  on the base, `frame_coordinates` in section 11's base form (`reduced_from` the device's size),
+  where they were refused `display_map_unresolved` and `lab_scene_size_unsupported`
+  (`layout_undeclared`). The client's check of an observation's projection frame takes the frame
+  reduced to such a base. The input side sends only under factors whose double is whole (section
+  10, `admit_input`, now asked of both factors): the factors of 1334×750 and 1366×768 are not, so a
+  press on such a display is refused at its input, `display_map_unresolved` (`input_scale_unsupported`
+  at `display_input_map`), with nothing sent, as on a 5/4 display (it was `layout_undeclared` at
+  `display_map_build`); `device_input` converts it by the two factors (a length down, a brake, by
+  `sy`) for the slice that draws the points in the device box.
+- **What is unchanged.** A declared rule decides first, as before: 1334×750 by width is the rule's
+  pure scale with one factor, 667/640, on both axes; by height the rule's translation onto 1281
+  columns, `translation_unsupported`. An exactly proportional display maps as before, byte for
+  byte. A display that meets neither test is `layout_undeclared`, a turned frame `orientation_mismatch`
+  and a translation or a cropped frame `translation_unsupported`, as before. A run's
+  `task.geometry_observed` names such a map's `display_map` as it names an exactly proportional
+  display's (`kind` `scale`, `scale_num` and `scale_den` the width's factor, `scale_width` and
+  `scale_height` the base, `scale_by` `width`, `declared` false); the height's factor is the frame's
+  height over the base's. No record, receipt, status member or package gains a member or a value, no
+  closed list gains a word, no code is added and no interface revision moves. A recording is still
+  made at the base size only: `record start`'s display check and the first frame's judgement refuse
+  such a display `record_display_not_base`, and `record stop` such frames `record_size_not_base`
+  (section 12). Two paths that ask the map whether a size is the base scaled count these sizes too:
+  a recording whose header names no base size (made before 0.12.67) holding frames of such a size is
+  `record_size_not_base`, as one of 1920×1080 frames is; and an ending's frame of such a size is
+  converted to its recording's size, as one of twice its size is
+  ([lab-recording.md](lab-recording.md), "Endings").
