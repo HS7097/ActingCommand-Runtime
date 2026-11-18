@@ -26,6 +26,7 @@ use actingcommand_lab::{
 };
 // #463 S1-R: the ruler of `record review`'s previews.
 use actingcommand_lab::PreviewRuler;
+use actingcommand_lab::RecordDestination;
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use serde::{Deserialize, Serialize};
@@ -342,6 +343,8 @@ pub(crate) const RECORD_START_READS: FlagReads = FlagReads {
                 "--lease-holder",
                 "--record-id",
                 "--lease-id",
+                // #463 PRIV-3.
+                "--destination",
             ],
             switches: &["--force"],
             refused: &[],
@@ -2903,7 +2906,28 @@ fn record_start_lab_options(
         match_metric: record_flag_value(flags, "--metric")?,
         template_threshold,
         base_size: recording_base(),
+        // #463 PRIV-3: absent, public.
+        destination: destination_flag(flags)?.unwrap_or_default(),
     })
+}
+
+/// #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"): the destination
+/// `--destination` (MCP `destination`) gives `record start` and `record stop`, `None` without the
+/// flag. The command line hands the flag on as written, so its word is checked here against the
+/// closed list the operation table gives it (`RecordDestination::WORDS`), and another word is
+/// answered as `--ruler` answers one: `validation_failed`, its text naming the words and the word
+/// given.
+fn destination_flag(flags: &FlagArgs) -> CliOutcome<Option<RecordDestination>> {
+    record_flag_value(flags, "--destination")?
+        .map(|word| {
+            RecordDestination::from_word(&word).ok_or_else(|| {
+                CliError::usage(format!(
+                    "--destination must be {}, got {word}",
+                    RecordDestination::WORDS.join(" or ")
+                ))
+            })
+        })
+        .transpose()
 }
 
 /// Workflow #392 DA-5cd fix round 1 (`contracts/lab-recording.md`, "A recording's size"): the base
@@ -2971,6 +2995,8 @@ pub(crate) const RECORD_STOP_FLAGS: &[&str] = &[
     "--instance",
     // #463 RM-1.
     "--template-margin-bound",
+    // #463 PRIV-3.
+    "--destination",
 ];
 
 /// `record stop` options (Workflow #336 L4). Unknown flags and positional arguments are
@@ -3018,6 +3044,8 @@ fn record_stop_options(
         application_arrival_timeout_ms: millis("--application-arrival-timeout-ms")?,
         dry_run: global.dry_run || record_flag_switch(flags, "--dry-run")?,
         template_margin_bound: template_margin_bound(flags)?,
+        // #463 PRIV-3: another word than the recording's changes it and generates again.
+        destination: destination_flag(flags)?,
         ..identity
     })
 }

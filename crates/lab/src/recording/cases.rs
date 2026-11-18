@@ -25,6 +25,31 @@
 //!   page it answers too is written and named with the warning `record_case_bare_canvas`. Fix round
 //!   3: without a text-recognition model for a text target the page detection reads, no case's page
 //!   is judged, which the warning `record_cases_ocr_unavailable` says once.
+//! - **A public recording's scenes hold no pixel of a value reading** (#463 PRIV-3,
+//!   [`scene_regions`]; the owner's ruling of 11-18: quantities an account holds, shown on a
+//!   screen, are private, and their pixels are never stored in a repository). The one list of the
+//!   package's read regions is asked with the reading declarations of the generated entry task.
+//!   A reading of a fixed rectangle, its target's own or a layout's read of it, is withheld: not
+//!   pasted, and after every patch is pasted its reach is filled with the canvas colour, so that no
+//!   other target's patch leaves its pixels; a reading with no fixed rectangle is withheld by the
+//!   bound the list confines it to; a layout's shared read that is a reading is withheld as a
+//!   whole. A reading nothing confines, or confined only to the whole frame, gives no scene:
+//!   `record_case_reading_unbounded`, naming the target. Amendment 1 (the owner allows a package to
+//!   read a quantity at run time; only its pixels may not be stored): a target that needs a
+//!   withheld reading by declaration (a reading target, a value test with such a side, a check
+//!   with such a member) is left out of a case's expectations and named in the answer; a page that
+//!   requires one has its case made without the page judgement, and one left with nothing to pin
+//!   gives no case (`record_case_reading_not_written`). A case that fails where a failed check's
+//!   target needs no reading and reads inside a withheld rectangle is
+//!   `record_case_reading_withheld`; every other failure is `record_case_failed`. Fix round 1:
+//!   so is a page judgement that fails because a target the page forbids, which needs no reading
+//!   and reads inside a withheld rectangle, passes on the canvas colour there; and, before any
+//!   case is made, whether or not one would pass, a picture the package keeps itself (a
+//!   template's crop, a colour digest's cells, [`kept_pictures`]) whose rectangle meets a withheld
+//!   rectangle: one cause, a target that is no reading reads, or keeps, pixels inside a withheld
+//!   rectangle. `scene_construction` lists what is pasted, as before; `record stop` and `record
+//!   ready` answer the withheld rectangles and their targets, and the targets left out, each only
+//!   when there is one. A local recording's scenes are built as before.
 //! - **Ambiguity is no miss** (the coordinator's ruling after the first round, R2's ruling 4 as its
 //!   precedent): a press step of a linear run waits for its own page and does not ask which page of
 //!   the whole package a screen is (#463 SC-1: a select step's confirmation does, before its press,
@@ -46,7 +71,9 @@
 use super::crosscheck::{Failures, FrameCache, Locus, evaluator_bundle};
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
-use super::model::{RecordSize, RecordedFrame};
+use super::model::{
+    MarkFamily, RecordDestination, RecordRect, RecordSize, RecordWithheld, RecordedFrame,
+};
 use super::ready::press_frame;
 use super::store::{blocked, hex_sha256, invalid, with_details};
 use crate::LabOcr;
@@ -57,14 +84,15 @@ use crate::regression_case::{
     REGRESSION_CASE_FILE, REGRESSION_CASE_SCHEMA, RegressionCaseVerdict, RegressionCheck,
     run_regression_case_on_bundle,
 };
-use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_contract::outcome::{Detail, Outcome, OutcomeEnvelope};
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::page_anchor_matches;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::{
-    PackReadArea, PackReadRegion, PackReadingDeclarations, PackRect, RecognitionPack, TargetKind,
+    PackReadArea, PackReadRegion, PackReadingDeclarations, PackRect, RecognitionPack,
+    RecognitionTarget, TargetKind, ValueTestRight,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,6 +133,12 @@ const AMBIGUOUS_UNWRITTEN_MESSAGE: &str = "This case's page is recognised on its
     are the other pages named here, and the page has no recognition target to pin: without \
     expect.observe the case would declare nothing, so it is not written. Mark a target on this \
     page's screen and run record stop again to have it written.";
+/// The text of the warning `record_case_reading_not_written` (#463 PRIV-3 amendment 1).
+const READING_UNWRITTEN_MESSAGE: &str = "This case's page is recognised only by targets that \
+    need a value reading (the targets named here), whose pixels a public recording's scenes do not \
+    hold: nothing of this page can be proven on a scene without a value reading, so the case is \
+    not written. The package still reads the value at run time. Mark a target of the page that \
+    reads no value (a template or a colour of a fixed element) to have the case written.";
 /// The text of the warning `record_case_whole_frame` (fix round 3).
 const WHOLE_FRAME_MESSAGE: &str = "A recognition target of the package reads the whole frame \
     (the targets named here), so this case's scene is the whole frame, not patches of it: it holds \
@@ -148,13 +182,64 @@ pub(crate) struct CaseSet {
     not_proven: Vec<Value>,
     warnings: Vec<Value>,
     ambiguous: Vec<Value>,
+    /// #463 PRIV-3: of a public recording that withholds a rectangle, the rectangles withheld from
+    /// its scenes with the reading targets they belong to; `None` otherwise.
+    withheld: Option<Vec<RecordWithheld>>,
+    /// #463 PRIV-3 amendment 1: of a public recording, each written case that leaves out a target
+    /// its page requires or forbids because it needs a withheld reading by declaration, `{case,
+    /// page, targets, page_judged}`, in the order of the cases.
+    left_out: Vec<Value>,
 }
 
 impl CaseSet {
-    /// The warnings `record_case_page_ambiguous` and `record_case_ambiguous_not_written`, in the
-    /// order of the cases, which `record ready` names as `record stop` does.
+    /// #463 PRIV-3: the rectangles withheld from a public recording's scenes, with the reading
+    /// targets they belong to; `None` when nothing is withheld (a local recording, or a public one
+    /// that reads no value: amendment 1).
+    pub(crate) fn withheld(&self) -> Option<&[RecordWithheld]> {
+        self.withheld.as_deref()
+    }
+
+    /// #463 PRIV-3 amendment 1: the written cases that leave out targets needing a withheld
+    /// reading, `{case, page, targets, page_judged}`; empty when none does.
+    pub(crate) fn readings_left_out(&self) -> &[Value] {
+        &self.left_out
+    }
+
+    /// The warnings `record_case_page_ambiguous` and `record_case_ambiguous_not_written`, and
+    /// (#463 PRIV-3 amendment 1) `record_case_reading_not_written`, in the order of the cases,
+    /// which `record ready` names as `record stop` does.
     pub(crate) fn ambiguity_warnings(&self) -> &[Value] {
         &self.ambiguous
+    }
+
+    /// #463 PRIV-3 amendment 1: the `expect` of the case `id` of a public recording, whose page
+    /// `page` requires a target that needs a withheld reading (`left_out`, with the targets it
+    /// forbids that need one), so that the page is not recognised on the stored scene: made
+    /// without the page judgement, as [`Self::without_page_judgement`] makes one, of every other
+    /// target its page requires (`required`), `passed: true`, and every other target it forbids
+    /// that a scene can evaluate (`forbidden`), `passed: false`. `None` when there is no such
+    /// target: nothing of the page can be proven on a scene without a value reading, the case is
+    /// not written, and the warning `record_case_reading_not_written` names it.
+    pub(crate) fn without_readings(
+        &mut self,
+        id: &str,
+        page: &str,
+        left_out: &[String],
+        required: &[String],
+        forbidden: &[String],
+    ) -> Option<Value> {
+        if required.is_empty() && forbidden.is_empty() {
+            self.warn_ambiguity(json!({
+                "code": LabCode::RecordCaseReadingNotWritten.as_str(),
+                "case": id,
+                "page": page,
+                "targets": left_out,
+                "written": false,
+                "message": READING_UNWRITTEN_MESSAGE
+            }));
+            return None;
+        }
+        Some(expectation(None, required, forbidden))
     }
 
     /// The ids of the cases, in their order.
@@ -337,7 +422,14 @@ pub(crate) fn regression_cases(
             "the generated package gives no page set",
         )
     })?;
-    let regions = read_regions(evaluator.pack(), plan.size)?;
+    // #463 PRIV-3: a public recording's scenes hold no pixel of a value reading; the reading
+    // declarations are its generated entry task's.
+    let declarations = match plan.destination {
+        RecordDestination::Public => reading_declarations(plan, entries)?,
+        RecordDestination::Local => PackReadingDeclarations::default(),
+    };
+    let built = scene_regions(evaluator.pack(), &declarations, plan.size, plan.destination)?;
+    let regions = &built.pasted;
     // Fix round 3: the targets whose region or search area is the whole frame, which make every
     // scene the whole frame.
     let whole_frame = regions
@@ -345,7 +437,11 @@ pub(crate) fn regression_cases(
         .cloned()
         .unwrap_or_default();
     let bare = bare_canvas_pages(plan, bundle, ocr)?;
-    let mut set = CaseSet::default();
+    let sources = sources(plan)?;
+    let mut set = CaseSet {
+        withheld: built.answer(sources.iter().flat_map(|source| &source.forbidden)),
+        ..CaseSet::default()
+    };
     // Fix round 3: without a text-recognition model for a text target the page detection reads
     // (the runner's own check, `LabOcr::require_pages`), the runner judges no case's page: said
     // once, before every case's warnings.
@@ -355,7 +451,32 @@ pub(crate) fn regression_cases(
             "message": PAGES_UNJUDGED_MESSAGE
         }));
     }
-    for source in sources(plan)? {
+    // #463 PRIV-3: a reading nothing confines gives no scene without its pixels: the recording
+    // cannot be public, and no case is made.
+    if !built.unbounded.is_empty() {
+        for target in &built.unbounded {
+            // `record ready`'s item names the target.
+            let locus = Locus {
+                target: Some(target.clone()),
+                ..Locus::default()
+            };
+            failures.fail(locus, reading_unbounded(target))?;
+        }
+        return Ok(set);
+    }
+    // #463 PRIV-3 fix round 1 (the coordinator's ruling): the package keeps no pixel of a reading
+    // in a picture of its own, a template's crop or a colour digest's cells, whether or not a case
+    // would pass; a local recording withholds nothing.
+    if !built.withheld.is_empty() {
+        for (target, met) in built.kept_over(&kept_pictures(plan, evaluator.pack())?) {
+            let locus = Locus {
+                target: Some(target.clone()),
+                ..Locus::default()
+            };
+            failures.fail(locus, picture_withheld(&target, met))?;
+        }
+    }
+    for source in sources {
         let page = detected_page(detector, &plan.game, &source.page)?;
         let loaded = cache.get(&source.frame.sha256).ok_or_else(|| {
             invalid(
@@ -363,35 +484,62 @@ pub(crate) fn regression_cases(
                 format!("frame {} was not loaded", source.frame.frame_id),
             )
         })?;
-        let scene = scene_of(loaded, &regions, plan.size)?;
-        let mut document = case_document(
-            plan,
-            &source.id,
-            &source.source,
-            &regions,
-            &scene,
-            expectation(Some(page.as_str()), &source.targets, &[]),
-        )?;
-        let mut verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+        let scene = built.scene(loaded, plan.size)?;
         // Fix round 3: a target the page forbids that a scene cannot evaluate (a click-only
         // target) is left out of a case made without the page judgement, and named.
         let (forbidden, left_out): (Vec<String>, Vec<String>) =
             source.forbidden.iter().cloned().partition(|target| {
                 evaluator.target_kind(target).ok() != Some(TargetKind::ClickOnly)
             });
-        // The coordinator's ruling (R2's ruling 4 as precedent): another page matching beside the
-        // case's own is no miss. The case is made again without the page judgement and run again
-        // in that form; a page with no target to pin gives no case.
-        let others = others_matched(&verdict, &page);
-        if let Some(others) = &others {
+        // #463 PRIV-3 amendment 1: of a public recording, a target the page requires or forbids
+        // that needs a withheld reading by declaration cannot be evaluated on the scene: the case
+        // leaves it out and the answer names it. A page that requires one is not recognised on the
+        // stored scene, so its case is made without the page judgement. A local recording leaves
+        // nothing out.
+        let (required, required_out) = built.split_needing(&source.targets);
+        let (forbidden, forbidden_out) = built.split_needing(&forbidden);
+        let readings_out = required_out
+            .iter()
+            .chain(&forbidden_out)
+            .cloned()
+            .collect::<Vec<_>>();
+        let judged = required_out.is_empty();
+        let (document, verdict, others) = if judged {
+            let mut document = case_document(
+                plan,
+                &source.id,
+                &source.source,
+                regions,
+                &scene,
+                expectation(Some(page.as_str()), &required, &[]),
+            )?;
+            let mut verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+            // The coordinator's ruling (R2's ruling 4 as precedent): another page matching beside
+            // the case's own is no miss. The case is made again without the page judgement and
+            // run again in that form; a page with no target to pin gives no case.
+            let others = others_matched(&verdict, &page);
+            if let Some(others) = &others {
+                let Some(expect) =
+                    set.without_page_judgement(&source.id, &page, others, &required, &forbidden)
+                else {
+                    continue;
+                };
+                document =
+                    case_document(plan, &source.id, &source.source, regions, &scene, expect)?;
+                verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+            }
+            (document, verdict, others)
+        } else {
             let Some(expect) =
-                set.without_page_judgement(&source.id, &page, others, &source.targets, &forbidden)
+                set.without_readings(&source.id, &page, &readings_out, &required, &forbidden)
             else {
                 continue;
             };
-            document = case_document(plan, &source.id, &source.source, &regions, &scene, expect)?;
-            verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
-        }
+            let document =
+                case_document(plan, &source.id, &source.source, regions, &scene, expect)?;
+            let verdict = run_regression_case_on_bundle(bundle, &document, &scene, ocr);
+            (document, verdict, None)
+        };
         match verdict.verdict {
             RegressionVerdict::Failed => {
                 let failed = verdict
@@ -400,7 +548,38 @@ pub(crate) fn regression_cases(
                     .filter(|check| check.result == RegressionResult::Failed)
                     .cloned()
                     .collect::<Vec<_>>();
-                let refusal = case_failed(&source, &page, &failed);
+                // #463 PRIV-3: a failed check's target that reads inside a withheld rectangle
+                // makes the failure the withholding's; every other failure is today's.
+                let mut met = built.met_by(&failed);
+                // Fix round 1: a page judgement that fails with no such check to blame may fail
+                // because a target the page forbids, which needs no reading and reads inside a
+                // withheld rectangle, passes on the canvas colour there (a colour probe that
+                // expects black): each such target is run alone on the scene, and one that passes
+                // is the failure's, a box drawn over a value reading.
+                if met.is_empty() && judged && failed.iter().any(|check| check.page.is_some()) {
+                    for target in forbidden
+                        .iter()
+                        .filter(|target| built.over_withheld(target))
+                    {
+                        let probe = case_document(
+                            plan,
+                            &source.id,
+                            &source.source,
+                            regions,
+                            &scene,
+                            expectation(None, &[], std::slice::from_ref(target)),
+                        )?;
+                        let probed = run_regression_case_on_bundle(bundle, &probe, &scene, ocr);
+                        if passes_on_scene(&probed, target) {
+                            met.push(built.met_json(target, &built.withheld_met(target)));
+                        }
+                    }
+                }
+                let refusal = if met.is_empty() {
+                    case_failed(&source, &page, &failed)
+                } else {
+                    case_reading_withheld(&source, &page, &failed, met)
+                };
                 // Fix round 3: the item names the page as the warnings do.
                 failures.fail(
                     source.locus.with_page(&page).with_case(&source.id, failed),
@@ -419,6 +598,22 @@ pub(crate) fn regression_cases(
         }
         if let Some(others) = &others {
             set.warn_ambiguous(&source.id, &page, others, &left_out);
+        }
+        // #463 PRIV-3 amendment 1: the targets this case leaves out because they need a withheld
+        // reading, by their ids only, and whether its page was judged; fix round 1: a case made
+        // without the page judgement for it names the targets its page forbids that a scene
+        // cannot evaluate, as `record_case_page_ambiguous` names them.
+        if !readings_out.is_empty() {
+            let mut item = json!({
+                "case": source.id,
+                "page": page,
+                "targets": readings_out,
+                "page_judged": judged
+            });
+            if !judged && !left_out.is_empty() {
+                item["forbidden_left_out"] = json!(left_out);
+            }
+            set.left_out.push(item);
         }
         if bare.contains(&page) {
             set.warnings.push(json!({
@@ -576,11 +771,497 @@ pub(crate) fn read_regions(
     size: RecordSize,
 ) -> LabResult<BTreeMap<Patch, Vec<String>>> {
     let reads = pack.reads(&PackReadingDeclarations::default());
-    let pasted = reads
-        .regions
+    pasted_regions(
+        reads
+            .regions
+            .iter()
+            .filter(|region| region.layout.is_none()),
+        size,
+    )
+}
+
+/// #463 PRIV-3: what the scenes of a recording's regression cases are built of.
+pub(crate) struct SceneRegions {
+    /// Every rectangle pasted, each once with the targets that read it: [`read_regions`]'s, and
+    /// of a public recording without the regions that are readings.
+    pub(crate) pasted: BTreeMap<Patch, Vec<String>>,
+    /// Of a public recording, every rectangle withheld (filled with the canvas colour after the
+    /// patches are pasted), each once with the reading targets it belongs to.
+    pub(crate) withheld: BTreeMap<Patch, Vec<String>>,
+    /// Of a public recording, the reading targets nothing confines (or only the whole frame), in
+    /// the order of the list: no scene can be made without their pixels.
+    pub(crate) unbounded: Vec<String>,
+    /// Of a public recording, the rectangles each target reads (its regions' reaches, or bounds,
+    /// and those of a check's members and of a value test's sides), to tell a failure inside a
+    /// withheld rectangle.
+    reads: BTreeMap<String, Vec<PackRect>>,
+    /// Amendment 1: of a public recording, the targets that need a withheld reading by
+    /// declaration ([`needing_readings`]), which no scene can evaluate; empty of a local one.
+    needs: BTreeSet<String>,
+    /// Whether the recording is public.
+    public: bool,
+}
+
+impl SceneRegions {
+    /// Amendment 1: `targets` split into those a scene can evaluate and those that need a withheld
+    /// reading by declaration, each in their order; of a local recording, all of them can.
+    pub(crate) fn split_needing(&self, targets: &[String]) -> (Vec<String>, Vec<String>) {
+        targets
+            .iter()
+            .cloned()
+            .partition(|target| !self.needs.contains(target))
+    }
+
+    /// The scene of the frame `loaded`: the patches pasted ([`scene_of`]), then each withheld
+    /// rectangle filled with the canvas colour. Without a withheld rectangle it is [`scene_of`]'s,
+    /// byte for byte.
+    pub(crate) fn scene(&self, loaded: &LoadedFrame, size: RecordSize) -> LabResult<Vec<u8>> {
+        if self.withheld.is_empty() {
+            return scene_of(loaded, &self.pasted, size);
+        }
+        let mut pixels = pasted_pixels(loaded, &self.pasted, size)?;
+        let width = size.width as usize;
+        for patch in self.withheld.keys() {
+            let canvas = CANVAS_FILL.repeat(patch.width as usize);
+            for row in patch.y..patch.y + patch.height {
+                let start = (row as usize * width + patch.x as usize) * 3;
+                pixels[start..start + canvas.len()].copy_from_slice(&canvas);
+            }
+        }
+        png(size, pixels)
+    }
+
+    /// For each failed check of `failed` that names a target that needs no reading by declaration
+    /// (amendment 1: a box drawn over a quantity), the withheld rectangles that target reads inside
+    /// (its rectangles meet them: their intersection's area is above zero), as [`Self::met_json`]
+    /// names them, when there is one; empty of a local recording.
+    pub(crate) fn met_by(&self, failed: &[RegressionCheck]) -> Vec<Value> {
+        failed
+            .iter()
+            .filter_map(|check| check.target.as_ref())
+            .filter(|check| !self.needs.contains(&check.target))
+            .filter_map(|check| {
+                let met = self.withheld_met(&check.target);
+                (!met.is_empty()).then(|| self.met_json(&check.target, &met))
+            })
+            .collect()
+    }
+
+    /// Fix round 1: whether the target `id` needs no reading by declaration and reads inside a
+    /// withheld rectangle; never of a local recording.
+    fn over_withheld(&self, id: &str) -> bool {
+        !self.needs.contains(id) && !self.withheld_met(id).is_empty()
+    }
+
+    /// The target `id` and the withheld rectangles `met` it reads or keeps pixels inside, `{target,
+    /// withheld, readings}`: each rectangle `{x, y, width, height}`, and (fix round 1) the reading
+    /// targets they belong to, each once, in their order.
+    fn met_json(&self, id: &str, met: &[&Patch]) -> Value {
+        let mut readings: Vec<&String> = Vec::new();
+        for owner in met
+            .iter()
+            .filter_map(|patch| self.withheld.get(*patch))
+            .flatten()
+        {
+            if !readings.contains(&owner) {
+                readings.push(owner);
+            }
+        }
+        json!({
+            "target": id,
+            "withheld": met.iter().map(|patch| patch_json(**patch)).collect::<Vec<_>>(),
+            "readings": readings
+        })
+    }
+
+    /// Fix round 1 (the coordinator's ruling: a template's stored picture holds no pixel of a
+    /// reading): of the pictures the package keeps, `kept` (`(target, rectangle)`,
+    /// [`kept_pictures`]), each whose rectangle meets a withheld rectangle, with the target and,
+    /// as [`Self::met_json`] names it, `kept` the rectangle; none of a local recording, which
+    /// withholds nothing.
+    pub(crate) fn kept_over(&self, kept: &[(String, PackRect)]) -> Vec<(String, Value)> {
+        kept.iter()
+            .filter_map(|(target, rect)| {
+                let met = self
+                    .withheld
+                    .keys()
+                    .filter(|patch| meets(*rect, **patch))
+                    .collect::<Vec<_>>();
+                (!met.is_empty()).then(|| {
+                    let mut named = self.met_json(target, &met);
+                    named["kept"] = json!({
+                        "x": rect.x,
+                        "y": rect.y,
+                        "width": rect.width,
+                        "height": rect.height
+                    });
+                    (target.clone(), named)
+                })
+            })
+            .collect()
+    }
+
+    /// The withheld rectangles the target `id` reads inside.
+    fn withheld_met(&self, id: &str) -> Vec<&Patch> {
+        let Some(rects) = self.reads.get(id) else {
+            return Vec::new();
+        };
+        self.withheld
+            .keys()
+            .filter(|patch| rects.iter().any(|rect| meets(*rect, **patch)))
+            .collect()
+    }
+
+    /// The answer's withheld rectangles of a public recording, each with the reading targets it
+    /// belongs to and the targets of `forbidden` (the targets the package's pages forbid) that
+    /// need no reading by declaration and read inside it; `None` of a local recording and
+    /// (amendment 1) of a public one that withholds nothing.
+    pub(crate) fn answer<'f>(
+        &self,
+        forbidden: impl IntoIterator<Item = &'f String>,
+    ) -> Option<Vec<RecordWithheld>> {
+        if !self.public || self.withheld.is_empty() {
+            return None;
+        }
+        let forbidden = forbidden
+            .into_iter()
+            .filter(|target| !self.needs.contains(*target))
+            .collect::<BTreeSet<_>>();
+        Some(
+            self.withheld
+                .iter()
+                .map(|(patch, targets)| RecordWithheld {
+                    x: patch.x,
+                    y: patch.y,
+                    width: patch.width,
+                    height: patch.height,
+                    targets: targets.clone(),
+                    forbidden: forbidden
+                        .iter()
+                        .filter(|target| {
+                            self.reads
+                                .get(target.as_str())
+                                .is_some_and(|rects| rects.iter().any(|rect| meets(*rect, *patch)))
+                        })
+                        .map(|target| (*target).clone())
+                        .collect(),
+                })
+                .collect(),
+        )
+    }
+}
+
+/// #463 PRIV-3 (`contracts/lab-recording.md`, "Regression cases written with the package"): what
+/// the scenes of a recording of `destination` are built of, of the admitted package `pack` whose
+/// entry task declares `task` and the recording's frame of `size`. A local recording's are
+/// [`read_regions`]'s, nothing withheld. A public recording's are asked of the one list with
+/// `task`'s reading declarations, and each region that is a reading is withheld instead of
+/// pasted:
+///
+/// - a fixed rectangle, its target's own or a layout's read of it (a feature at an offset in a
+///   slot, a shared read): its reach, the rectangle that holds it under every shift the pack
+///   declares for it;
+/// - no fixed rectangle: the bound the list confines it to, unless that bound is the whole frame;
+/// - nothing confines it (`full_frame`, a relative region, a `repeated_anchor` row without a band),
+///   or only the whole frame: it is `unbounded`, and no scene can be made.
+///
+/// The patches are the regions [`read_regions`] pastes that are no reading; a withheld rectangle
+/// is clipped to the frame.
+pub(crate) fn scene_regions(
+    pack: &RecognitionPack,
+    task: &PackReadingDeclarations,
+    size: RecordSize,
+    destination: RecordDestination,
+) -> LabResult<SceneRegions> {
+    if destination == RecordDestination::Local {
+        return Ok(SceneRegions {
+            pasted: read_regions(pack, size)?,
+            withheld: BTreeMap::new(),
+            unbounded: Vec::new(),
+            reads: BTreeMap::new(),
+            needs: BTreeSet::new(),
+            public: false,
+        });
+    }
+    let list = pack.reads(task);
+    let pasted = pasted_regions(
+        list.regions
+            .iter()
+            .filter(|region| region.layout.is_none() && !region.reading),
+        size,
+    )?;
+    let mut withheld: BTreeMap<Patch, Vec<String>> = BTreeMap::new();
+    let mut unbounded = Vec::new();
+    for region in list.regions.iter().filter(|region| region.reading) {
+        let rect = match region.area {
+            PackReadArea::Rect(area) => Some(region.reach.unwrap_or(area)),
+            PackReadArea::FullFrame | PackReadArea::Unbounded => {
+                region.bound.filter(|bound| !covers_frame(*bound, size))
+            }
+        };
+        match rect {
+            Some(rect) => {
+                if let Some(patch) = clipped(rect, size) {
+                    let owners = withheld.entry(patch).or_default();
+                    if !owners.contains(&region.target) {
+                        owners.push(region.target.clone());
+                    }
+                }
+            }
+            None => {
+                if !unbounded.contains(&region.target) {
+                    unbounded.push(region.target.clone());
+                }
+            }
+        }
+    }
+    Ok(SceneRegions {
+        pasted,
+        withheld,
+        unbounded,
+        reads: target_reads(pack, &list.regions, size),
+        needs: needing_readings(pack, pack.reading_targets(task)),
+        public: true,
+    })
+}
+
+/// #463 PRIV-3 amendment 1: the targets of `pack` that need a withheld reading by declaration: each
+/// reading target of `readings` (the list's, [`RecognitionPack::reading_targets`]), each value test
+/// one of whose sides is one, and each check (`all_of`, `any_of`) one of whose members needs one,
+/// transitively. A scene holds none of their pixels, so no case can evaluate them.
+fn needing_readings(pack: &RecognitionPack, readings: BTreeSet<String>) -> BTreeSet<String> {
+    let mut needs = readings;
+    loop {
+        let before = needs.len();
+        for target in &pack.targets {
+            let needed = match target {
+                RecognitionTarget::ValueTest(test) => {
+                    needs.contains(&test.left.target_id)
+                        || matches!(
+                            &test.right,
+                            Some(ValueTestRight::Operand(operand))
+                                if needs.contains(&operand.target_id)
+                        )
+                }
+                RecognitionTarget::Composite(check) => {
+                    check.members.iter().any(|member| needs.contains(member))
+                }
+                _ => false,
+            };
+            if needed {
+                needs.insert(target_id(target).to_owned());
+            }
+        }
+        if needs.len() == before {
+            return needs;
+        }
+    }
+}
+
+/// #463 PRIV-3: the reading declarations of the generated package's entry task,
+/// `resources/operations/<task_id>/task.json` of its final files `entries`.
+fn reading_declarations(
+    plan: &Plan,
+    entries: &BTreeMap<String, Vec<u8>>,
+) -> LabResult<PackReadingDeclarations> {
+    let name = format!("{}/task.json", plan.task_dir());
+    let bytes = entries.get(&name).ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("the generated package holds no {name}"),
+        )
+    })?;
+    serde_json::from_slice::<Value>(bytes)
+        .and_then(|task| PackReadingDeclarations::of_task(&task))
+        .map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("the generated package's {name} declares no readable reading: {error}"),
+            )
+        })
+}
+
+/// #463 PRIV-3 fix round 1 (the coordinator's ruling: a template's stored picture holds no pixel
+/// of a reading): the rectangles of the frame whose pixels the package of `plan`, admitted as
+/// `pack`, keeps itself, each with its target: each template's crop, the picture its asset holds
+/// (a template mark's region, cut from its frame by `record mark`; a scrolling select's anchor,
+/// start and end marks, cut from its screens by `record stop`), then each colour digest's region,
+/// whose `cells` keep its colours cell by cell (up to 32 by 32 cells, five bits a channel). No
+/// other kind of target keeps a pixel of a frame: a colour probe and a template's colour check
+/// keep one mean colour of their region, an OCR target the texts it expects, an NN target its
+/// labels, and a check, a value test and a click-only target nothing of a frame.
+fn kept_pictures(plan: &Plan, pack: &RecognitionPack) -> LabResult<Vec<(String, PackRect)>> {
+    let mut kept = Vec::new();
+    // The template marks whose crops the package carries (`Plan::template_assets`).
+    for mark in plan.emitted.iter().filter_map(|id| plan.marks.get(id)) {
+        if mark.family != MarkFamily::Template || mark.crop.is_none() {
+            continue;
+        }
+        let crop = mark.region.ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("template '{}' has no region its crop was cut from", mark.id),
+            )
+        })?;
+        kept.push((plan.target_id(&mark.id), pack_rect(crop)));
+    }
+    for (target, crop) in super::scan::template_crops(plan)? {
+        kept.push((target, pack_rect(crop)));
+    }
+    for target in &pack.targets {
+        if let RecognitionTarget::ColorDigest(digest) = target {
+            kept.push((digest.id.clone(), digest.region));
+        }
+    }
+    Ok(kept)
+}
+
+/// `rect`, a rectangle of the recording, as the package's.
+fn pack_rect(rect: RecordRect) -> PackRect {
+    PackRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+/// #463 PRIV-3: the rectangles each target of `pack` reads, of the list's `regions`: each of its
+/// regions by its reach (a fixed rectangle), the whole frame of `size` (`full_frame`) or its bound
+/// (no fixed rectangle, when it has one); and, of a check, its members', of a value test, its
+/// sides'.
+fn target_reads(
+    pack: &RecognitionPack,
+    regions: &[PackReadRegion],
+    size: RecordSize,
+) -> BTreeMap<String, Vec<PackRect>> {
+    let whole = PackRect {
+        x: 0,
+        y: 0,
+        width: i32::try_from(size.width).unwrap_or(i32::MAX),
+        height: i32::try_from(size.height).unwrap_or(i32::MAX),
+    };
+    let mut own: BTreeMap<&str, Vec<PackRect>> = BTreeMap::new();
+    for region in regions {
+        let rect = match region.area {
+            PackReadArea::Rect(area) => Some(region.reach.unwrap_or(area)),
+            PackReadArea::FullFrame => Some(whole),
+            PackReadArea::Unbounded => region.bound,
+        };
+        if let Some(rect) = rect {
+            own.entry(region.target.as_str()).or_default().push(rect);
+        }
+    }
+    pack.targets
         .iter()
-        .filter(|region| region.layout.is_none())
-        .collect::<Vec<_>>();
+        .map(|target| {
+            let mut rects = Vec::new();
+            gather(
+                pack,
+                &own,
+                target_id(target),
+                &mut BTreeSet::new(),
+                &mut rects,
+            );
+            (target_id(target).to_owned(), rects)
+        })
+        .collect()
+}
+
+/// Fix round 1: the id of the recognition target `target`, each kind's own `id` (the recognition
+/// pack keeps its accessor of it to itself).
+fn target_id(target: &RecognitionTarget) -> &str {
+    match target {
+        RecognitionTarget::Template(target) => &target.id,
+        RecognitionTarget::Color(target) => &target.id,
+        RecognitionTarget::ClickOnly(target) => &target.id,
+        RecognitionTarget::Ocr(target) => &target.id,
+        RecognitionTarget::Nn(target) => &target.id,
+        RecognitionTarget::ColorDigest(target) => &target.id,
+        RecognitionTarget::Composite(target) => &target.id,
+        RecognitionTarget::ValueTest(target) => &target.id,
+    }
+}
+
+/// The rectangles the target `id` reads into `rects`: its own (`own`), and a check's members' or
+/// a value test's sides', each target once (`seen`).
+fn gather<'p>(
+    pack: &'p RecognitionPack,
+    own: &BTreeMap<&str, Vec<PackRect>>,
+    id: &'p str,
+    seen: &mut BTreeSet<&'p str>,
+    rects: &mut Vec<PackRect>,
+) {
+    if !seen.insert(id) {
+        return;
+    }
+    if let Some(found) = own.get(id) {
+        rects.extend(found.iter().copied());
+    }
+    match pack.targets.iter().find(|target| target_id(target) == id) {
+        Some(RecognitionTarget::Composite(check)) => {
+            for member in &check.members {
+                gather(pack, own, member, seen, rects);
+            }
+        }
+        Some(RecognitionTarget::ValueTest(test)) => {
+            gather(pack, own, &test.left.target_id, seen, rects);
+            if let Some(ValueTestRight::Operand(operand)) = &test.right {
+                gather(pack, own, &operand.target_id, seen, rects);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `rect` covers the whole frame of `size`.
+fn covers_frame(rect: PackRect, size: RecordSize) -> bool {
+    rect.x <= 0
+        && rect.y <= 0
+        && i64::from(rect.x) + i64::from(rect.width) >= i64::from(size.width)
+        && i64::from(rect.y) + i64::from(rect.height) >= i64::from(size.height)
+}
+
+/// The part of `rect` inside the frame of `size`, as a patch; `None` when none is.
+fn clipped(rect: PackRect, size: RecordSize) -> Option<Patch> {
+    let left = i64::from(rect.x).max(0);
+    let top = i64::from(rect.y).max(0);
+    let right = (i64::from(rect.x) + i64::from(rect.width)).min(i64::from(size.width));
+    let bottom = (i64::from(rect.y) + i64::from(rect.height)).min(i64::from(size.height));
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some(Patch {
+        y: u32::try_from(top).ok()?,
+        x: u32::try_from(left).ok()?,
+        height: u32::try_from(bottom - top).ok()?,
+        width: u32::try_from(right - left).ok()?,
+    })
+}
+
+/// Whether `rect` and `patch` meet: their intersection's area is above zero.
+fn meets(rect: PackRect, patch: Patch) -> bool {
+    let left = i64::from(rect.x).max(i64::from(patch.x));
+    let top = i64::from(rect.y).max(i64::from(patch.y));
+    let right = (i64::from(rect.x) + i64::from(rect.width))
+        .min(i64::from(patch.x) + i64::from(patch.width));
+    let bottom = (i64::from(rect.y) + i64::from(rect.height))
+        .min(i64::from(patch.y) + i64::from(patch.height));
+    right > left && bottom > top
+}
+
+/// A patch as an answer names it, `{x, y, width, height}`.
+fn patch_json(patch: Patch) -> Value {
+    json!({"x": patch.x, "y": patch.y, "width": patch.width, "height": patch.height})
+}
+
+/// The patches of `regions`, each rectangle once with the targets that read it, in the order the
+/// list gives them; a target's regions are all found fixed before the first of them is placed.
+fn pasted_regions<'r>(
+    regions: impl Iterator<Item = &'r PackReadRegion>,
+    size: RecordSize,
+) -> LabResult<BTreeMap<Patch, Vec<String>>> {
+    let pasted = regions.collect::<Vec<_>>();
     let mut regions: BTreeMap<Patch, Vec<String>> = BTreeMap::new();
     for target in pasted.chunk_by(|one, other| one.target == other.target) {
         let rects = target
@@ -652,6 +1333,15 @@ pub(crate) fn scene_of(
     regions: &BTreeMap<Patch, Vec<String>>,
     size: RecordSize,
 ) -> LabResult<Vec<u8>> {
+    png(size, pasted_pixels(loaded, regions, size)?)
+}
+
+/// The RGB rows of [`scene_of`]'s scene, before it is encoded.
+fn pasted_pixels(
+    loaded: &LoadedFrame,
+    regions: &BTreeMap<Patch, Vec<String>>,
+    size: RecordSize,
+) -> LabResult<Vec<u8>> {
     if (loaded.scene.width(), loaded.scene.height()) != (size.width, size.height) {
         return Err(invalid(
             "validation_failed",
@@ -674,7 +1364,7 @@ pub(crate) fn scene_of(
             pixels[start..end].copy_from_slice(&frame[start..end]);
         }
     }
-    png(size, pixels)
+    Ok(pixels)
 }
 
 /// The PNG of `pixels`, RGB rows of a frame of `size`.
@@ -811,6 +1501,17 @@ fn others_matched(verdict: &RegressionCaseVerdict, page: &str) -> Option<Vec<Str
     })
 }
 
+/// #463 PRIV-3 fix round 1: whether the run `verdict` of a case that expects the target `target`
+/// not to pass found it passing on its scene.
+fn passes_on_scene(verdict: &RegressionCaseVerdict, target: &str) -> bool {
+    verdict.checks.iter().any(|check| {
+        check
+            .target
+            .as_ref()
+            .is_some_and(|checked| checked.target == target && checked.recognized == Some(true))
+    })
+}
+
 /// The runner's reasons, each once, for the checks of `verdict` that did not run.
 fn not_run_reasons(verdict: &RegressionCaseVerdict) -> Vec<&'static str> {
     verdict
@@ -836,25 +1537,14 @@ fn case_failed(source: &Source<'_>, page: &str, failed: &[RegressionCheck]) -> L
             ),
         );
     };
-    let mut details = json!({
-        "case": source.id,
-        "page": page,
-        "frame_id": source.frame.frame_id,
-        "verdict": RegressionVerdict::Failed.as_str(),
-        "checks": failed,
-        "outcome": Outcome::new(LabCode::RecordCaseFailed)
+    let details = case_details(
+        source,
+        page,
+        failed,
+        Outcome::new(LabCode::RecordCaseFailed)
             .regression_problem(problem)
-            .envelope(Detail::Full)
-    });
-    if let Some(object) = details.as_object_mut() {
-        if let Some((step, artifact_step)) = source.locus.step {
-            object.insert("step".to_string(), json!(step));
-            object.insert("artifact_step".to_string(), json!(artifact_step));
-        }
-        if let Some(key) = &source.locus.outcome_key {
-            object.insert("outcome_key".to_string(), json!(key));
-        }
-    }
+            .envelope(Detail::Full),
+    );
     with_details(
         blocked(
             LabCode::RecordCaseFailed.as_str(),
@@ -866,5 +1556,121 @@ fn case_failed(source: &Source<'_>, page: &str, failed: &[RegressionCheck]) -> L
             ),
         ),
         details,
+    )
+}
+
+/// The details of a failed case of `source`, which expects the page `page`: the case, its page,
+/// frame and verdict, the checks `failed`, the outcome `outcome`, and its step or ending.
+fn case_details(
+    source: &Source<'_>,
+    page: &str,
+    failed: &[RegressionCheck],
+    outcome: OutcomeEnvelope,
+) -> Value {
+    let mut details = json!({
+        "case": source.id,
+        "page": page,
+        "frame_id": source.frame.frame_id,
+        "verdict": RegressionVerdict::Failed.as_str(),
+        "checks": failed,
+        "outcome": outcome
+    });
+    if let Some(object) = details.as_object_mut() {
+        if let Some((step, artifact_step)) = source.locus.step {
+            object.insert("step".to_string(), json!(step));
+            object.insert("artifact_step".to_string(), json!(artifact_step));
+        }
+        if let Some(key) = &source.locus.outcome_key {
+            object.insert("outcome_key".to_string(), json!(key));
+        }
+    }
+    details
+}
+
+/// #463 PRIV-3 (amendment 1, one cause): `record_case_reading_withheld`: the case of `source` of a
+/// public recording, which expects the page `page`, failed the checks `failed`, and the target of
+/// at least one of them, or (fix round 1) a target its page forbids that passes on the scene,
+/// needs no reading by declaration and reads inside a rectangle withheld from the scene (`met`,
+/// each `{target, withheld, readings}`): a recognition box drawn over a value reading.
+fn case_reading_withheld(
+    source: &Source<'_>,
+    page: &str,
+    failed: &[RegressionCheck],
+    met: Vec<Value>,
+) -> LabError {
+    let mut details = case_details(
+        source,
+        page,
+        failed,
+        Outcome::new(LabCode::RecordCaseReadingWithheld).envelope(Detail::Full),
+    );
+    if let Some(object) = details.as_object_mut() {
+        object.insert("withheld".to_string(), Value::Array(met));
+    }
+    with_details(
+        blocked(
+            LabCode::RecordCaseReadingWithheld.as_str(),
+            format!(
+                "the regression case {} that record stop made from frame {} for page {} does not \
+                 pass, and a target it is about, which reads no value itself, reads inside a \
+                 rectangle withheld from the scene of this public recording, which holds a value \
+                 reading (details.withheld): a recognition box is drawn over a value reading. \
+                 Separate the boxes (narrow that target's region off the reading, or anchor the \
+                 page on another part of its screen), or record with --destination local; nothing \
+                 was written",
+                source.id, source.frame.frame_id, page
+            ),
+        ),
+        details,
+    )
+}
+
+/// #463 PRIV-3 fix round 1 (the one cause [`case_reading_withheld`]'s is: a target that needs no
+/// reading reads, or keeps, pixels inside a withheld rectangle): `record_case_reading_withheld`:
+/// the package of a public recording would keep a picture of the target `target` (a template's
+/// crop, a colour digest's cells) whose rectangle meets rectangles withheld from its scenes, `met`
+/// (`{target, kept, withheld, readings}`), whether or not a case would pass.
+fn picture_withheld(target: &str, met: Value) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordCaseReadingWithheld.as_str(),
+            format!(
+                "the package of this public recording would keep a picture of '{target}' (a \
+                 template's image, a colour digest's cells) whose rectangle meets a rectangle \
+                 withheld from its scenes, which holds a value reading (details.withheld): the \
+                 picture would carry the reading's pixels into the package, whether or not a case \
+                 passes. Separate the boxes (draw the template or the digest off the reading), or \
+                 record with --destination local; nothing was written"
+            ),
+        ),
+        json!({
+            "target": target,
+            "withheld": [met],
+            "outcome": Outcome::new(LabCode::RecordCaseReadingWithheld).envelope(Detail::Full)
+        }),
+    )
+}
+
+/// #463 PRIV-3: `record_case_reading_unbounded`: the package of a public recording reads a value
+/// at the target `target` where nothing confines it to a rectangle smaller than the frame, so no
+/// scene can be made without its pixels and the recording cannot be public.
+pub(crate) fn reading_unbounded(target: &str) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordCaseReadingUnbounded.as_str(),
+            format!(
+                "the package of this public recording reads a value at '{target}' where nothing \
+                 confines it to a rectangle smaller than the frame (a full_frame region, a region \
+                 placed relative to a template, a repeated_anchor layout without a readable band, \
+                 or a bound that is the whole frame): no regression case's scene can be made \
+                 without its pixels, so the recording cannot be public. Bound the reading to a \
+                 rectangle, or record with --destination local; no case was made and nothing was \
+                 written"
+            ),
+        ),
+        json!({
+            "target": target,
+            "outcome": Outcome::new(LabCode::RecordCaseReadingUnbounded).envelope(Detail::Full)
+        }),
     )
 }

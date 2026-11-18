@@ -169,6 +169,30 @@ actingcommand_contract::outcome_codes! {
         /// the frames and other page, with every such frame); it refuses nothing, proposes nothing
         /// and is not written into the package.
         RecordSelectPagePassesAfterPress => "record_select_page_passes_after_press": warning / none,
+        /// Error. #463 PRIV-3: the package of a public recording reads a value (a reading of the
+        /// one list of its read regions) where nothing confines it to a rectangle smaller than the
+        /// frame (`full_frame`, a region placed relative to a template, a `repeated_anchor` layout
+        /// without a readable band, or a bound that is the whole frame), so no regression case's
+        /// scene can be made without its pixels: the recording cannot be public. A failure of
+        /// `record stop`'s self-check `cases`, one for each such target; no case is made and
+        /// nothing is written (exit 3; actinglab details `target`).
+        RecordCaseReadingUnbounded => "record_case_reading_unbounded": error / none,
+        /// Error. #463 PRIV-3 (amendment 1 and fix round 1, one cause): in a public recording, a
+        /// target that needs no reading by declaration reads, or keeps, pixels inside a rectangle
+        /// withheld from the scenes: a recognition box drawn over a value reading. A case misses
+        /// on such a target (a failed check's, or one its page forbids that passes on the canvas
+        /// colour), or, before any case, a picture the package keeps (a template's crop, a colour
+        /// digest's cells) meets such a rectangle. `record stop` refuses as at any self-check's
+        /// failure, nothing written (exit 3; actinglab details `withheld`, and those of
+        /// `record_case_failed` of a failed case, `target` of a kept picture).
+        RecordCaseReadingWithheld => "record_case_reading_withheld": error / none,
+        /// Warning. #463 PRIV-3 amendment 1: the page of a regression case of a public recording
+        /// requires a target that needs a withheld reading by declaration, so its case is made
+        /// without the page judgement, and nothing else of the page can be pinned (no other target
+        /// it requires, none it forbids that a scene can evaluate): nothing of the page can be
+        /// proven on a scene without a value reading, and the case is not written. It refuses
+        /// nothing (exit 0).
+        RecordCaseReadingNotWritten => "record_case_reading_not_written": warning / none,
     }
 }
 

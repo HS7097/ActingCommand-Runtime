@@ -38,8 +38,9 @@
 //! written beside the plain previews under a name of its own that says it is ruled
 //! (`s<nn>-<role>-ruled-<edges|grid>.png`, so that it is never taken for the plain preview of the
 //! same step, and a preview without the ruler keeps its name and its bytes), and the answer says
-//! what the ruler is (`ruler`); a ruler without previews (`no_preview`) is refused. The ruler is
-//! `record review`'s only: `record frames` writes nothing.
+//! what the ruler is (`ruler`); a ruler without previews (`no_preview`) is refused. A call with
+//! `ruler` writes only the ruled previews: the plain previews are written only by a call without
+//! it. The ruler is `record review`'s only: `record frames` writes nothing.
 
 use super::archive::{PERFORMED, display, outcome_of, step_kind, stored_frame_path};
 use super::around::{FRAME_FILE_MISSING, RecordFramesWarning, Stored, located, sequence_of};

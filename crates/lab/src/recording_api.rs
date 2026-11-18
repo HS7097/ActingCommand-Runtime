@@ -37,9 +37,9 @@ use crate::recording::model::{
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
     PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest, RecordSize,
     RecordStartOptions, RecordStepOutcome, RecordStepRequest, RecordStopOptions, RecordStopOutcome,
-    RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults, RecordingStep,
-    SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition, StepView,
-    TransitionSpec, TransitionView,
+    RecordWithheld, RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults,
+    RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition,
+    StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::near::{TemplateNearThreshold, template_margin_bound};
 use crate::recording::ready::{
@@ -121,6 +121,7 @@ pub fn record_start(
         path: path.clone(),
         record_id: old.record_id.clone(),
         defaults: defaults.clone(),
+        destination: options.destination,
     };
     if !task_id_valid_for_lab(&old.task_id) {
         return Ok(unavailable("task_id_invalid_for_lab_package"));
@@ -130,7 +131,7 @@ pub fn record_start(
     }
     // Workflow #392 DA-5cd fix round 1: the header names the base size the options give, the size
     // its first frame must have.
-    let recording = new_recording(
+    let mut recording = new_recording(
         &old,
         defaults.clone(),
         options.game.clone(),
@@ -138,6 +139,8 @@ pub fn record_start(
         options.locale.clone(),
         options.base_size,
     );
+    // #463 PRIV-3: the destination the person chose, which a public recording does not write.
+    recording.destination = options.destination;
     create_recording(state_dir, &recording)?;
     Ok(LabRecordingStart {
         status: "active".to_string(),
@@ -145,6 +148,7 @@ pub fn record_start(
         path,
         record_id: old.record_id,
         defaults,
+        destination: options.destination,
     })
 }
 
@@ -187,6 +191,7 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
                 open_step: open_step(&recording),
                 steps,
                 artifact: recording.artifact.clone(),
+                destination: recording.destination,
                 amended_at_unix_ms: recording.amended_at_unix_ms,
                 endings: recording.endings.clone(),
             }))))
@@ -238,15 +243,27 @@ pub fn record_stop(
             json!({"reason": "recording_archived", "record_id": old.record_id}),
         ));
     }
-    let recording = match load_lab(state_dir, &old)? {
+    let mut recording = match load_lab(state_dir, &old)? {
         LabFile::Ready(recording) => *recording,
         LabFile::Missing | LabFile::Unavailable(_) => return Ok(none),
     };
+    // #463 PRIV-3 (`contracts/lab-recording.md`, "A recording's destination"): a destination other
+    // than the one the recording holds changes it, and the package is generated again with it, as
+    // after a mark after the stop (the stop that writes the package writes the recording with
+    // it); the same word, or none, changes nothing and generates nothing again.
+    let destination_changed = options
+        .destination
+        .filter(|given| *given != recording.destination);
+    if let Some(given) = destination_changed {
+        recording.destination = given;
+    }
     if recording.status == "stopped" {
         return match &recording.artifact {
             // Workflow #390 LAB-2: marked again after its package was generated, the recording
-            // generates its package again.
-            Some(artifact) if recording.amended_at_unix_ms.is_some() => {
+            // generates its package again; #463 PRIV-3: so does another destination.
+            Some(artifact)
+                if recording.amended_at_unix_ms.is_some() || destination_changed.is_some() =>
+            {
                 let settings = regeneration_settings(artifact, options).0;
                 generate_and_write(state_dir, &old, &recording, &settings, options, ocr, true)
             }
@@ -463,6 +480,10 @@ fn ready_of(
     // round 1: `size_not_base`, `record_size_not_base`); `record stop` refuses it before its
     // self-checks, so none of them runs.
     let not_base = recording_not_base(recording);
+    // #463 PRIV-3: what a public recording's scenes withhold, once `cases` made them, and
+    // (amendment 1) the targets its cases leave out because they need a withheld reading.
+    let mut withheld = None;
+    let mut readings_left_out = Vec::new();
     let (missing, checks, checks_after) = match survey(recording, &settings)? {
         Survey::Lacking(lacks) => (
             lack_items(recording, &lacks)?,
@@ -501,6 +522,8 @@ fn ready_of(
                 // #463 S2-10: a case's page recognised beside another page, as `record stop`
                 // names it.
                 warnings.extend(generator_warnings(checked.cases.ambiguity_warnings())?);
+                withheld = checked.cases.withheld().map(<[RecordWithheld]>::to_vec);
+                readings_left_out = checked.cases.readings_left_out().to_vec();
                 (Vec::new(), every_check_complete(), Vec::new())
             }
             Err(failed) => {
@@ -528,6 +551,8 @@ fn ready_of(
                         .map(ReadyWarningItem::NearThreshold),
                 );
                 warnings.extend(generator_warnings(&failed.warnings)?);
+                withheld = failed.withheld.clone();
+                readings_left_out = failed.readings_left_out.clone();
                 (
                     check_items(recording, &failed.ran),
                     check_runs(&failed.ran),
@@ -536,7 +561,7 @@ fn ready_of(
             }
         },
     };
-    Ok(ready_outcome(
+    let mut outcome = ready_outcome(
         recording,
         session,
         with_size_item(not_base.as_ref(), missing),
@@ -544,7 +569,15 @@ fn ready_of(
         checks,
         &checks_after,
         sources,
-    ))
+    );
+    outcome.withheld = withheld;
+    // Fix round 2: the Lab's public answer carries no untyped JSON; each member is carried as it
+    // is, byte for byte what `record stop` answers.
+    outcome.readings_left_out = readings_left_out
+        .iter()
+        .map(OpaqueJson::from_serializable)
+        .collect::<LabResult<Vec<_>>>()?;
+    Ok(outcome)
 }
 
 /// #463 S2-2 (`contracts/lab-recording.md`, "Reviewing a recording step by step: `record
@@ -813,6 +846,8 @@ fn generate_and_write(
     lab.insert("container".to_string(), json!(ext));
     lab.insert("package_id".to_string(), json!(plan.package_id));
     lab.insert("task_id".to_string(), json!(plan.task_id));
+    // #463 PRIV-3: the destination the package was generated for, in its word.
+    lab.insert("destination".to_string(), json!(plan.destination.word()));
     lab.insert("path".to_string(), json!(absolute_display(&copy_path)));
     lab.insert(
         "lab_dir_path".to_string(),
@@ -979,6 +1014,19 @@ fn generate_and_write(
         "cases".to_string(),
         cases.answer(absolute_display(&cases_path), cases_status, cases_kept),
     );
+    // #463 PRIV-3: beside the cases, the rectangles withheld from a public recording's scenes and
+    // the reading targets they belong to, as facts (rectangles and ids, never a value or a pixel);
+    // amendment 1: and the targets its cases leave out because they need a withheld reading (ids
+    // only); each only when there is one.
+    if let Some(withheld) = cases.withheld() {
+        lab.insert("withheld".to_string(), json!(withheld));
+    }
+    if !cases.readings_left_out().is_empty() {
+        lab.insert(
+            "readings_left_out".to_string(),
+            json!(cases.readings_left_out()),
+        );
+    }
     insert_binding(
         &mut lab,
         &plan.package_id,
@@ -1041,6 +1089,12 @@ struct SelfCheckFailures {
     /// #463 SC-1 fix round 1: the warnings `record_select_page_passes_after_press` of self-check
     /// item 8, under the same condition as `near_threshold`, and named before them.
     after_press: Vec<SelectPagePassesAfterPress>,
+    /// #463 PRIV-3: of a public recording whose check `cases` ran to its end and met a failure,
+    /// the rectangles withheld from its scenes; `record ready` answers them.
+    withheld: Option<Vec<RecordWithheld>>,
+    /// #463 PRIV-3 amendment 1: under the same condition, the cases' targets left out because they
+    /// need a withheld reading; `record ready` answers them.
+    readings_left_out: Vec<Value>,
 }
 
 impl SelfCheckFailures {
@@ -1156,6 +1210,8 @@ impl Runner {
             warnings: Vec::new(),
             near_threshold: Vec::new(),
             after_press: Vec::new(),
+            withheld: None,
+            readings_left_out: Vec::new(),
         }
     }
 }
@@ -1209,6 +1265,8 @@ fn self_checks(
         failed.warnings = cases.ambiguity_warnings().to_vec();
         failed.near_threshold = package.near_threshold;
         failed.after_press = package.selects.after_press;
+        failed.withheld = cases.withheld().map(<[RecordWithheld]>::to_vec);
+        failed.readings_left_out = cases.readings_left_out().to_vec();
         return Err(failed);
     }
     Ok(Checked { package, cases })
@@ -1943,6 +2001,11 @@ fn stop_already_generated(
     lab.insert("container".to_string(), json!(artifact.container));
     lab.insert("package_id".to_string(), json!(artifact.package_id));
     lab.insert("task_id".to_string(), json!(recording.task_id));
+    // #463 PRIV-3: the destination the recording holds, which its package was generated for.
+    lab.insert(
+        "destination".to_string(),
+        json!(recording.destination.word()),
+    );
     lab.insert("path".to_string(), json!(artifact.path));
     lab.insert(
         "lab_dir_path".to_string(),
