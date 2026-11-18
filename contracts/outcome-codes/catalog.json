@@ -5282,6 +5282,9 @@
         },
         "scan_swipe_too_long": {
           "description": "The first forward swipe of the fold, the package's advance, moves the finger further along the list than the kernel's admission allows (the list's length less a row's, less one), which no given number changes; details displacement_px and most_px; the scroll is recorded again with shorter swipes, so that neighbouring screens share at least one row (#463 S2-9a fix round 1, since 0.12.70)."
+        },
+        "blocks_with_rows": {
+          "description": "The request's read declares blocks (and line_merge) beside rows: a scrolling select's names are not read by detecting their blocks yet, only a select of fixed slots takes the two members; they are left out of a select with rows (#463 SEL-2L-a, since 0.12.74)."
         }
       }
     },
