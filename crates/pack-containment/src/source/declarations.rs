@@ -1913,10 +1913,12 @@ impl Declaration<'_> {
     }
 
     /// Workflow #396 REC-8: `candidate_layouts[].shared_ocr` of task schema `0.9`, a
-    /// `fixed_slots` layout's one shared detection read: a `rect` or `full_frame` region, the
-    /// OCR request's `languages`, `timeout_ms`, `model_ref` and `model_sha256`, `blocks` and an
-    /// optional `line_merge`. Its shape is checked here; its values with the derived
-    /// recognition pack (`contracts/selection-graph.md`, section Shared OCR read).
+    /// `fixed_slots` layout's (Workflow #463 SEL-2L: or a `repeated_anchor` layout's) one shared
+    /// detection read: a `rect` or `full_frame` region, the OCR request's `languages`,
+    /// `timeout_ms`, `model_ref` and `model_sha256`, `blocks` and an optional `line_merge`. Its
+    /// shape is checked here; its values with the derived recognition pack
+    /// (`contracts/selection-graph.md`, section Shared OCR read), but for the cover of a
+    /// `repeated_anchor` layout's band, which the layout's check makes here.
     fn shared_ocr(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if self.schema_before(TaskSchema::V0_9) {
             return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
@@ -2707,9 +2709,11 @@ impl Declaration<'_> {
     /// `readable_band` inside the coordinate space; each of its features reads a target at an
     /// offset, except (Workflow #404 FS-2) an `anchor_milli` feature, which only a
     /// `repeated_anchor` layout declares and which names no `target` or `offset`. A field of the
-    /// other kind is unknown. Whether the page is one the task declares, and whether each target
-    /// exists in the derived pack with a kind the feature can read, is checked while the pack is
-    /// derived.
+    /// other kind is unknown. Workflow #463 SEL-2L: a layout of either kind may declare
+    /// `shared_ocr`; a `repeated_anchor` layout's covers its `readable_band`, or the whole frame
+    /// without one (`InvalidValue` at `/candidate_layouts/<i>/shared_ocr/region` otherwise).
+    /// Whether the page is one the task declares, and whether each target exists in the derived
+    /// pack with a kind the feature can read, is checked while the pack is derived.
     fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
         for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
@@ -2754,8 +2758,9 @@ impl Declaration<'_> {
                     return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
                 }
             };
+            // Workflow #463 SEL-2L: a `repeated_anchor` layout declares `shared_ocr` too.
             let other_kind: &[&str] = if anchored {
-                &["slots", "shared_ocr"]
+                &["slots"]
             } else {
                 &[
                     "anchor",
@@ -2886,6 +2891,15 @@ impl Declaration<'_> {
                 }
                 if let Some(band) = object.get("readable_band") {
                     self.frame_rect(band, &child(&pointer, "readable_band"), frame)?;
+                }
+                // Workflow #463 SEL-2L: the shared read covers the readable band.
+                if let Some(shared) = object.get("shared_ocr") {
+                    self.shared_read_covers_band(
+                        shared,
+                        object.get("readable_band"),
+                        &child(&child(&pointer, "shared_ocr"), "region"),
+                        frame,
+                    )?;
                 }
             }
             let slots_pointer = child(&pointer, "slots");
@@ -3051,6 +3065,45 @@ impl Declaration<'_> {
             return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
         }
         Ok(())
+    }
+
+    /// Workflow #463 SEL-2L: the `shared_ocr` of a `repeated_anchor` layout, its shape and the
+    /// layout's `band` checked before, covers the band, or the whole `frame` when the layout
+    /// declares none: its region is `full_frame`, or a `rect` that holds the band. Otherwise it
+    /// is `InvalidValue` at the region's `pointer`.
+    fn shared_read_covers_band(
+        &self,
+        shared: &Value,
+        band: Option<&Value>,
+        pointer: &str,
+        frame: [u64; 2],
+    ) -> CliOutcome<()> {
+        let region = &shared["region"];
+        if region.get("mode").and_then(Value::as_str) == Some("full_frame") {
+            return Ok(());
+        }
+        let bounds = |rect: &Value| {
+            let value = |field: &str| rect.get(field).and_then(Value::as_i64).map(i128::from);
+            Some([value("x")?, value("y")?, value("width")?, value("height")?])
+        };
+        let band = match band {
+            Some(band) => bounds(band),
+            None => Some([0, 0, i128::from(frame[0]), i128::from(frame[1])]),
+        };
+        let covers = match (region.get("rect").and_then(bounds), band) {
+            (Some([x, y, width, height]), Some([left, top, band_width, band_height])) => {
+                x <= left
+                    && y <= top
+                    && x + width >= left + band_width
+                    && y + height >= top + band_height
+            }
+            _ => false,
+        };
+        if covers {
+            Ok(())
+        } else {
+            Err(self.error(pointer, ResourceDeclarationReason::InvalidValue))
+        }
     }
 
     /// Workflow #411 B3: `alternatives` of a `color_probes[]` entry or a `color_check`, task

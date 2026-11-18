@@ -43,6 +43,10 @@
 //! - **A select step's scan without an end**, 18 (Workflow #463 K-c, register §1.454; S2-9b,
 //!   §1.458): a member left out, which no row of [`ROWS`] can find, so read on its own
 //!   ([`scan_without_end`]).
+//! - **A `repeated_anchor` layout's shared read**, 20 (Workflow #463 SEL-2L, register §1.480): a
+//!   task file's candidate layout of the kind `repeated_anchor` that declares `shared_ocr`, a
+//!   member a row finds only beside its layout's `kind`, so read on its own
+//!   ([`anchored_shared_read`]).
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -112,6 +116,13 @@ const TERMINAL_PAGES: &str = "terminal_pages";
 const SCAN_WITHOUT_END_REVISION: u64 = 18;
 const SCAN: &str = "scan";
 const END: &str = "end";
+/// Revision 20: a `repeated_anchor` layout's shared read (Workflow #463 SEL-2L), and the members
+/// it reads: a task file's `candidate_layouts`, a layout's `kind` and its `shared_ocr`.
+const ANCHORED_SHARED_READ_REVISION: u64 = 20;
+const CANDIDATE_LAYOUTS: &str = "candidate_layouts";
+const KIND: &str = "kind";
+const REPEATED_ANCHOR: &str = "repeated_anchor";
+const SHARED_OCR: &str = "shared_ocr";
 
 /// The file a row's member stands in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -493,7 +504,8 @@ impl Row {
 }
 
 /// The `package` revision the zip's `entries` (its `interfaces.json` aside) need: the highest any
-/// entry needs (a task file with a scan without an end, 18, [`scan_without_end`]),
+/// entry needs (a task file with a scan without an end, 18, [`scan_without_end`]; with a
+/// `repeated_anchor` layout's shared read, 20, [`anchored_shared_read`]),
 /// [`LINEAR_ENDINGS_REVISION`] when a pack declares an ending page ([`declares_linear_ending`]),
 /// [`PACKAGE_REVISION`] when nothing needs a later one.
 pub(crate) fn content_revision(entries: &BTreeMap<String, Vec<u8>>) -> u64 {
@@ -656,7 +668,24 @@ fn document_revision(
     if file == File::Task && scan_without_end(&document) {
         revision = revision.max(SCAN_WITHOUT_END_REVISION);
     }
+    if file == File::Task && anchored_shared_read(&document) {
+        revision = revision.max(ANCHORED_SHARED_READ_REVISION);
+    }
     revision
+}
+
+/// Revision 20 (Workflow #463 SEL-2L, register §1.480; contracts/component-interfaces.md, the
+/// `package` row 20): the task file `task` declares a candidate layout of the kind
+/// `repeated_anchor` with a `shared_ocr`, which every Runtime before 20 refuses at its declaration
+/// gate (`UnknownField` at `/candidate_layouts/<i>/shared_ocr`), in a pack of any execution mode
+/// and a task of any schema. A `fixed_slots` layout's `shared_ocr` needs nothing here.
+fn anchored_shared_read(task: &Value) -> bool {
+    task.get(CANDIDATE_LAYOUTS)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|layout| layout.get(KIND).and_then(Value::as_str) == Some(REPEATED_ANCHOR))
+        .any(|layout| layout.get(SHARED_OCR).is_some())
 }
 
 /// Revision 18 (Workflow #463 K-c, register §1.454; S2-9b, §1.458;

@@ -145,7 +145,7 @@ field:
 
 | Rule | Pointer | Checked by |
 | --- | --- | --- |
-| The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Unknown fields and fields of the other kind are refused. | the field | gate |
+| The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Either kind may add `shared_ocr` (a `repeated_anchor` layout since 0.12.74, Workflow #463 SEL-2L). Unknown fields and fields of the other kind are refused. | the field | gate |
 | The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/candidate_layouts/i/id` | gate |
 | The kind is `fixed_slots` or `repeated_anchor`. | `/candidate_layouts/i/kind` | gate |
 | 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed`, `measure_milli`, `identity`, `ocr_integer` or (Workflow #404 FS-2, since 0.12.43) `anchor_milli`. A feature may add its own `target` (a string) and `offset` (`{x, y}` integers), both or neither; every `repeated_anchor` feature declares both, except an `anchor_milli` feature, which declares neither (`UnknownField` at the `target` or `offset` it names). Only a `repeated_anchor` layout declares `anchor_milli` (`InvalidValue` at `…/features/j/value` in a `fixed_slots` layout). | `…/features`, `…/features/j/name`, `…/features/j/value`, `…/features/j/target`, `…/features/j/offset` | gate |
@@ -154,7 +154,8 @@ field:
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
 | A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
 | Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
-| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on; an older task schema refuses it with `UnconsumedField`, and a `repeated_anchor` layout with `UnknownField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. Workflow #428 CFL-2: the optional `preprocess` is a chain of [recognition-preprocess.md](recognition-preprocess.md), refused at its own pointer below `…/shared_ocr/preprocess`, and a `threshold` of `"otsu"` in it is `InvalidValue` at `…/preprocess/steps/<k>/value` (section Shared OCR read, Preprocessing). | `/candidate_layouts/i/shared_ocr` and its fields | gate |
+| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on, and (Workflow #463 SEL-2L, since 0.12.74) so may a `repeated_anchor` layout, which a Runtime before 0.12.74 refuses with `UnknownField`; an older task schema refuses it with `UnconsumedField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. Workflow #428 CFL-2: the optional `preprocess` is a chain of [recognition-preprocess.md](recognition-preprocess.md), refused at its own pointer below `…/shared_ocr/preprocess`, and a `threshold` of `"otsu"` in it is `InvalidValue` at `…/preprocess/steps/<k>/value` (section Shared OCR read, Preprocessing). | `/candidate_layouts/i/shared_ocr` and its fields | gate |
+| Workflow #463 SEL-2L (since 0.12.74): a `repeated_anchor` layout's `shared_ocr` covers its `readable_band`, or the task's whole `coordinate_space` where it declares none: its region is `full_frame`, or a `rect` that holds the band (section Shared OCR read, "A `repeated_anchor` layout's shared read"). Otherwise `InvalidValue`. | `/candidate_layouts/i/shared_ocr/region` | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
 | A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
@@ -255,7 +256,8 @@ relative to the match's top-left corner:
 ### Shared OCR read
 
 Workflow #396 REC-8. A `fixed_slots` layout may declare one OCR detection read that its slots
-share:
+share (and, since 0.12.74, a `repeated_anchor` layout one that its instances share: "A
+`repeated_anchor` layout's shared read" below):
 
 ```json
 {"id": "layout/roster", "page_id": "list_page", "kind": "fixed_slots",
@@ -280,6 +282,12 @@ share:
   Without blocks the text is empty, and the feature's existing rules make it Unknown. The
   target's verdict and evidence are those of an OCR target that read this text. Every other OCR
   target reads on its own.
+- **The order of a target's blocks**, in plain words (Workflow #463 SEL-2L states it; the order is
+  unchanged and the same for both kinds of layout): blocks are ordered by their top, then their
+  left. Two blocks of one line whose tops differ by a pixel therefore come in the order of their
+  tops, the higher first, also where it stands to the right of the other; nothing groups blocks
+  into lines before they are ordered. An author who sees one line come back as two blocks raises
+  `line_merge`'s `gap_factor`, so that the provider joins the two before the order is applied.
 - One projection calls the provider once for each frame whose read serves a target; the read's
   PP-OCR reports go with the first target it serves.
 - When the detector found more boxes than the model folder's `max_boxes`, the projection fails
@@ -335,6 +343,59 @@ The read may declare `preprocess`, the chain of
   the read in the recognition pack) for each target that lies in the read with its model and
   languages but declares another chain, so that it reads on its own. Nothing is refused.
 
+#### A `repeated_anchor` layout's shared read (Workflow #463 SEL-2L, since 0.12.74)
+
+A `repeated_anchor` layout may declare `shared_ocr` too, so that a name of one or two lines in a
+card's title box is read by the detector rather than as one block:
+
+```json
+{"id": "layout/cards", "page_id": "list_page", "kind": "repeated_anchor",
+ "anchor": "ui/card_icon", "max_instances": 16, "order": "top_to_bottom",
+ "instance_rect": {"x": 0, "y": 0, "width": 140, "height": 236},
+ "click": {"x": 10, "y": 208, "width": 120, "height": 26},
+ "readable_band": {"x": 620, "y": 122, "width": 606, "height": 496},
+ "features": [{"name": "member", "value": "identity", "target": "card/name",
+               "offset": {"x": 4, "y": 4}, "identity": {}}],
+ "shared_ocr": {"region": {"x": 620, "y": 122, "width": 606, "height": 496},
+                "languages": ["en"], "timeout_ms": 5000,
+                "model_ref": "<model>", "model_sha256": "<64 hex>",
+                "blocks": "detect", "line_merge": {"gap_factor": 0}}}
+```
+
+- **Its region covers the readable band**, or the whole frame where the layout declares none: a
+  rectangle that holds the band, or `full_frame`. Any other region is refused at
+  `/candidate_layouts/<i>/shared_ocr/region`: by the source gate with
+  `resource_declaration_invalid`, `InvalidValue`, and by the recognition pack's rules (section
+  Rules). Its other members follow the rules above.
+- **The read.** On the frame of a projection the detector runs once over the region, one provider
+  call whatever the instances; a select over a scan projects its viewports as before, each
+  projection with its one read (the scan's settle and window rules are unchanged). Each OCR target
+  the read gives
+  text to (by the rules above: no `locate`, the read's model, languages and chain) that an
+  actionable instance's feature reads takes its text from the read, its region placed at the
+  instance as the feature places it: the blocks whose center lies in that region, in the order
+  above, joined with `\n`, with the lowest of their confidences. A block belongs to the instance
+  whose region holds its center; a block that lies across the regions of two instances belongs to
+  the one that holds its center, and a block in no instance's region is dropped. An instance whose
+  region holds no block reads empty text, which its feature's rules make Unknown. An instance
+  outside the band is not actionable and is not read, as before.
+- **Every actionable instance is served by the read**: none falls back to a read of its own. The
+  band holds every actionable instance, and the read covers the band; a region placed at a scaled
+  match may reach past the band, where the read holds no block.
+- **The count** ([candidate-projection.md](candidate-projection.md), section Budgets): the read is
+  one evaluation for each frame it serves, whatever the instances; the targets it serves count
+  none; a target it does not serve counts once for each actionable instance, as before. The bound
+  of provider time admission takes is the read's timeout once for each frame it serves, and the
+  instances' own reads for as many instances as the evaluations the read leaves allow, at most
+  `max_instances`.
+- **Truncation**: as above, `text_read_blocks_truncated` fails the projection.
+- **Unchanged**: a `repeated_anchor` layout without the member (its projection, its count and its
+  answers), a `fixed_slots` layout's read, and a located target's own rule
+  ([ocr-fields.md](ocr-fields.md), section Located text). A pack that declares the member needs
+  `package` revision 20 ([component-interfaces.md](component-interfaces.md)): a Runtime before
+  0.12.74 refuses it at its declaration gate (`UnknownField` at
+  `/candidate_layouts/<i>/shared_ocr`).
+
 ### Rules
 
 The recognition pack checks every rule that needs only the pack when its evaluator is built.
@@ -356,8 +417,8 @@ Each failure message starts with the pointer of the offending field.
 | The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
-| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
-| Workflow #396 REC-8: only a `fixed_slots` layout declares `shared_ocr`. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
+| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. Workflow #463 SEL-2L: a `repeated_anchor` layout's shared read is counted once for each frame it serves, apart from that product. | `/candidate_layouts/i/slots`, `…/features` |
+| Workflow #396 REC-8: a `fixed_slots` layout declares `shared_ocr`, and since 0.12.74 (Workflow #463 SEL-2L) a `repeated_anchor` layout too, whose region covers its `readable_band`, or `coordinate_space` where it declares none. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
 
 `coordinate_space` is required for every pack schema, so layouts need no rule of their own for
 it.

@@ -24,6 +24,8 @@ use actingcommand_lab::{
     record_ready, record_reopen, record_review, record_start, record_start_defaults, record_status,
     record_stop, record_stop_close,
 };
+// #463 S1-R: the ruler of `record review`'s previews.
+use actingcommand_lab::PreviewRuler;
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
 use serde::{Deserialize, Serialize};
@@ -433,7 +435,8 @@ pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
     parts: &[
         &RECORD_SESSION_READS,
         &ReadPart {
-            // #463 RM-1: and the bound of the warning `record_template_near_threshold`.
+            // #463 RM-1: and the bound of the warning `record_template_near_threshold`. #463
+            // S1-R: and the ruler every preview carries.
             options: &[
                 "--record-id",
                 "--step",
@@ -441,6 +444,7 @@ pub(crate) const RECORD_REVIEW_READS: FlagReads = FlagReads {
                 "--server",
                 "--locale",
                 "--template-margin-bound",
+                "--ruler",
             ],
             switches: &["--no-preview"],
             refused: &[],
@@ -3563,7 +3567,8 @@ fn frames_number<T: std::str::FromStr>(
 /// function `record ready` reads them with (`identity_options`), else the recording's, the Lab's
 /// and the installation's. Under `--dry-run` the previews are files written, so the form without
 /// `--no-preview` is refused `dry_run_unsupported` before anything of the recording is read; with
-/// it nothing is written (`no_effect`). The answer is the Lab's.
+/// it nothing is written (`no_effect`). The answer is the Lab's. #463 S1-R: `--ruler <edges|grid>`
+/// draws that ruler on every preview (`ruler_flag`); beside `--no-preview` the Lab refuses it.
 fn run_record_review(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -3584,6 +3589,7 @@ fn run_record_review(
         record_id: record_flag_value(flags, "--record-id")?,
         step: frames_number(flags, "--step", "step")?,
         no_preview,
+        ruler: ruler_flag(flags)?,
     };
     // #463 RM-1: with the bound of `record_template_near_threshold`, as `record ready`.
     let options = RecordStopOptions {
@@ -3599,6 +3605,26 @@ fn run_record_review(
     )?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record review output: {error}")))
+}
+
+/// #463 S1-R (`contracts/lab-recording.md`, "A ruler on the pictures a recording hands back"): the
+/// ruler `--ruler` (MCP `ruler`) asks for on `record review`'s previews, `None` without the flag.
+/// The command line hands the flag on as written, so its word is checked here against the closed
+/// list the operation table gives it (`PreviewRuler::WORDS`), and another word is answered as
+/// `record mark` answers another word of its closed list `--transition` on this line:
+/// `validation_failed`, its text naming the words and the word given; a flag given twice or without
+/// a value is refused as every value of these commands is.
+fn ruler_flag(flags: &FlagArgs) -> CliOutcome<Option<PreviewRuler>> {
+    record_flag_value(flags, "--ruler")?
+        .map(|word| {
+            PreviewRuler::from_word(&word).ok_or_else(|| {
+                CliError::usage(format!(
+                    "--ruler must be {}, got {word}",
+                    PreviewRuler::WORDS.join(" or ")
+                ))
+            })
+        })
+        .transpose()
 }
 
 fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {

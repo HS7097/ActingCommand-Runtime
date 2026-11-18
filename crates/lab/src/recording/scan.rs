@@ -303,6 +303,15 @@ pub(crate) fn validate_scan_shape(step: Option<u32>, select: &SelectSpec) -> Lab
              on a fresh frame after its return to the chosen row; leave confirm out",
         ));
     }
+    // #463 SEL-2L-a: the rows' side of reading names by detecting their blocks is not built yet.
+    if select.rows.is_some() && select.read.blocks.is_some() {
+        return Err(refuse(
+            SelectProblem::BlocksWithRows,
+            "the request declares read.blocks beside rows: reading the names of a scrolling list by \
+             detecting their blocks is not built yet, only a select of fixed slots takes it; leave \
+             blocks and line_merge out of a select with rows",
+        ));
+    }
     let (rows, scan) = rows_and_scan(select)
         .map_err(|_| shape("declares rows and scan together, or neither".to_owned()))?;
     if scan.stop.is_none() {
