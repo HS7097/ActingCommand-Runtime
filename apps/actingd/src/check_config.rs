@@ -111,6 +111,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         unbound_handsets,
         unused_device_bindings,
         mismatched_handsets,
+        acib_missing,
         emulator_autostart,
         // RB-2: check-config checks the `host` section (its rows are in the manifest) and
         // applies nothing; only the start sets its own priorities.
@@ -252,6 +253,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         adb_default,
         vision,
         unused_device_bindings,
+        acib_missing,
         emulator_autostart,
         device_groups: device_groups.names(),
     };
@@ -512,6 +514,8 @@ struct CheckedAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// has, in file order.
     unused_device_bindings: Vec<String>,
+    /// Workflow #479 F-3a: the iOS handsets when `acib` is not where their captures run it from.
+    acib_missing: Option<config::AcibMissing>,
     /// Workflow #369 S6a: the instances whose `start_emulator` is `true`.
     emulator_autostart: Vec<String>,
     /// Workflow #437 MAPP-1: the device group of each entry that names one, by alias.
@@ -847,6 +851,10 @@ fn summarize(
             .iter()
             .map(|alias| Outcome::new(ActingdCode::DeviceBindingUnused).alias(alias)),
     );
+    // Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): `acib` missing is a
+    // note, never a refusal: a configuration that names an iOS handset passes while the release
+    // does not carry the program, and those handsets' captures answer `acib_missing`.
+    notes.extend(checked.acib_missing.as_ref().map(config::AcibMissing::note));
     // Workflow #453 S2 (`contracts/scheduling-pause.md`, "Pauses held at a first start"): with an
     // entry that declares `start_paused`, a `ledger_observer.tag.workbench_patterns` in effect that
     // leaves out `host.start_pause_applied` leaves the fact unclassified. Today's start still

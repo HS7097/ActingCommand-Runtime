@@ -77,6 +77,12 @@ impl InstalledAdb {
         }
     }
 
+    /// Workflow #479 F-3a: the install root holding `tools\`, whose `acib` an iOS handset's
+    /// capture runs (`actingcommand_contract::acib_path`).
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The adb path an instance that uses this adb registers.
     pub(super) fn path_string(&self) -> String {
         self.adb.to_string_lossy().into_owned()

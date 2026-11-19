@@ -984,3 +984,12 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_480_pg2d::pg2d_the_existing_resume_calls_answer_the_result_alone",
 ]
 incident = ["#480", "PG-2d"]
+
+# Workflow #479 F-3a fix round 1 (0.12.75; register §1.486; brief rd-1119/brief-479-f3a-fix1.md, item 4; contracts/component-interfaces.md, the runtime-client row of revision 13; ledger stays [3, 9]): the run's geometry record (task.geometry_observed) holds no capture backend acib_screen_capture. Built with the contract's own types: the writer refuses, invalid_task_semantic_payload, the initial record of a frame of acib_screen_capture whose producer observed no geometry, and the records whose frame's producer or whose observation observed a display with that backend; the same records of an adb_screencap frame, a display observed through adb or no geometry observed, are written and read back. The reader refuses the written record of an adb_screencap frame with no geometry observed once its frame's backend is set to acib_screen_capture (it decodes; the record's check refuses it, invalid_task_semantic_payload), the same record before the edit reading back
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::gate_479_f3a::f3a_a_geometry_record_naming_acib_is_refused_by_the_writer",
+    "actingcommand-contract::lib::event::tests::gate_479_f3a::f3a_a_stored_geometry_record_naming_acib_is_refused_by_the_reader",
+]
+incident = ["#479 F-3a"]

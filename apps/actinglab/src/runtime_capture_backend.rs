@@ -262,6 +262,8 @@ pub(super) const fn device_backend_name(backend: RuntimeCaptureBackend) -> Captu
         RuntimeCaptureBackend::DroidcastRaw => CaptureBackendName::DroidcastRaw,
         RuntimeCaptureBackend::NemuIpc => CaptureBackendName::NemuIpc,
         RuntimeCaptureBackend::Scrcpy => CaptureBackendName::Scrcpy,
+        // Workflow #479 F-3a: an iOS handset's frame.
+        RuntimeCaptureBackend::AcibScreenCapture => CaptureBackendName::AcibScreenCapture,
     }
 }
 
@@ -407,6 +409,10 @@ mod tests {
             ),
             (RuntimeCaptureBackend::NemuIpc, CaptureBackendName::NemuIpc),
             (RuntimeCaptureBackend::Scrcpy, CaptureBackendName::Scrcpy),
+            (
+                RuntimeCaptureBackend::AcibScreenCapture,
+                CaptureBackendName::AcibScreenCapture,
+            ),
         ];
         for (runtime, device) in mappings {
             assert_eq!(device_backend_name(runtime), device);

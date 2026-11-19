@@ -5004,13 +5004,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .begin_boundary(Boundary::Capture, self.timing_identity(Boundary::Capture));
         let result = (|| {
             // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a
-            // run's capture of an instance whose device system has no backend in this build fails
-            // the run here, before the capture is requested or any backend, baseline or session of
-            // its stand-in registration is looked at: `capture_backend_open_failed` caused by
-            // `device_system_backend_missing`, not severe; nothing is recorded or changed.
+            // run's capture of an instance whose device system has no backend of it in this build
+            // fails the run here, before the capture is requested or any backend, baseline or
+            // session of its stand-in registration is looked at: `capture_backend_open_failed`
+            // caused by `device_system_backend_missing`, not severe; nothing is recorded or
+            // changed. Workflow #479 F-3a: an iOS handset's read-only capture opens, its run's
+            // capture does not (no geometry of its frames is observed).
             if let Some(refused) = self.host.device_system_refusal_of(
                 self.instance_alias,
-                super::lease::DeviceOperation::Capture,
+                super::lease::DeviceOperation::RunCapture,
                 HostLocation::RunContainedTaskCapture,
             )? {
                 return Err(RequestFailure {

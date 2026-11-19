@@ -4632,8 +4632,17 @@ pub(super) fn instance_not_running(instance: &RegisteredInstance) -> RuntimeHost
 pub(super) enum DeviceOperation {
     /// An input (`input_backend_open_failed`).
     Input,
-    /// A capture (`capture_backend_open_failed`).
+    /// A read-only capture: a read-only observe, a capture sequence, an observation's frames, a
+    /// Lab or recovery look (`capture_backend_open_failed`). Workflow #479 F-3a: an iOS handset
+    /// has one, through `acib`.
     Capture,
+    /// Workflow #479 F-3a: a run's capture (`capture_backend_open_failed`), which an iOS handset
+    /// does not have yet: a run's frame needs its geometry, which no backend of it observes.
+    RunCapture,
+    /// Workflow #479 F-3a: a monitor's configuration, since a monitor captures on its own at each
+    /// probe (`capture_backend_open_failed`); an iOS handset has none, as nothing acts on it
+    /// without a person asking.
+    MonitorCapture,
     /// An application command (`application_backend_operation_failed`).
     Application,
     /// Fix round 2: a connection preparation a person asks for, a self-check
@@ -4652,12 +4661,23 @@ impl DeviceOperation {
             Self::Input | Self::Preparation => {
                 actingcommand_contract::codes::DeviceSelfCheckFailure::InputBackendOpenFailed.code()
             }
-            Self::Capture => {
+            Self::Capture | Self::RunCapture | Self::MonitorCapture => {
                 actingcommand_contract::codes::DeviceSelfCheckFailure::CaptureBackendOpenFailed
                     .code()
             }
             Self::Application => SharedCode::ApplicationBackendOperationFailed.code(),
             Self::Drill => HostCode::RecoveryLadderDrillUnsupported.code(),
+        }
+    }
+
+    /// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): whether this build
+    /// has a backend of this operation for a handset of `system`. An Android handset has every
+    /// one; an iOS handset only the read-only capture (`acib`), and no input, application
+    /// command, run's capture, monitor, preparation or drill.
+    pub(super) const fn has_backend_on(self, system: actingcommand_contract::DeviceSystem) -> bool {
+        match system {
+            actingcommand_contract::DeviceSystem::Android => true,
+            actingcommand_contract::DeviceSystem::Ios => matches!(self, Self::Capture),
         }
     }
 }
@@ -4675,7 +4695,10 @@ pub(super) fn device_system_refusal(
     operation: DeviceOperation,
     location: impl Into<Location>,
 ) -> Option<RuntimeHostError> {
-    instance.device_system_without_backend()?;
+    // Workflow #479 F-3a: split by operation: the capture's backend and the input's.
+    if operation.has_backend_on(instance.handset_system()?) {
+        return None;
+    }
     let mut error =
         RuntimeHostError::request(operation.code(), location, RuntimeErrorCode::InvalidRequest)
             .with_caused_by(actingcommand_contract::outcome::Outcome::new(

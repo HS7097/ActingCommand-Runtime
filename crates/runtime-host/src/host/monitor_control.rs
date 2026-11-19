@@ -43,7 +43,7 @@ impl HostShared {
         // acts on that instance: nothing is recorded or changed.
         if let Some(refused) = super::lease::device_system_refusal(
             &resolved,
-            super::lease::DeviceOperation::Capture,
+            super::lease::DeviceOperation::MonitorCapture,
             HostLocation::ConfigureMonitorRegistry,
         ) {
             return Err(RequestFailure::request(

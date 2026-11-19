@@ -4227,3 +4227,7 @@ mod pkg_s2;
 // (register §1.314 R6B-3, §1.315).
 #[path = "gate_429_r6b1.rs"]
 mod gate_429_r6b1;
+// Workflow #479 F-3a fix round 1: the run's geometry record holds no iOS handset's capture backend
+// (register §1.486).
+#[path = "gate_479_f3a.rs"]
+mod gate_479_f3a;

@@ -2927,3 +2927,11 @@ tests = [
     "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_480_pg2e::pg2e_ac_status_and_ac_pause_take_the_parameters_they_took",
 ]
 incident = ["#480", "PG-2e"]
+
+# Workflow #479 F-3a fix round 1 (0.12.75; register §1.486; brief rd-1119/brief-479-f3a-fix1.md, item 3; contracts/device-binding.md, "An iOS handset", "Where acib is"): actingd's check-config of a configuration naming an iOS handset bound by the private file's iOS row, judged from no install root, passes: its outcome's exit status 0, one note device_acib_missing, a warning, with aliases [the handset], never a refusal; a configuration with a fixture alone passes with no such note
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_479_f3a::f3a_check_config_notes_device_acib_missing_and_passes",
+]
+incident = ["#479 F-3a"]

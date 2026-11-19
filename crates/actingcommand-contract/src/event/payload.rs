@@ -4173,6 +4173,20 @@ impl TaskGeometryObservation {
                 "geometry",
             ));
         }
+        // Workflow #479 F-3a fix round 1 (register §1.486; `contracts/component-interfaces.md`, the
+        // `runtime-client` row of revision 13): no geometry record holds an iOS handset's capture
+        // backend, `acib_screen_capture`, which `ledger` 9 does not hold. A run's capture of such a
+        // handset is refused before any frame; this refusal keeps the value out of a record on the
+        // write and on the read (every reader of the ledger runs this check over every record it
+        // decodes in full, and no record of any ledger holds the value: no build before this one
+        // has it, and this one refuses to write it). The slice that lets a run capture from such a
+        // handset removes it, together with the ledger revision that admits the value.
+        if names_acib_screen_capture(self) {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidTaskSemanticPayload,
+                "backend",
+            ));
+        }
         if let Some(frame) = &self.frame {
             validate_geometry_source(&frame.producer)?;
         }
@@ -4200,6 +4214,26 @@ impl TaskGeometryObservation {
         }
         Ok(())
     }
+}
+
+/// Workflow #479 F-3a fix round 1: whether `observation` names an iOS handset's capture backend,
+/// `acib_screen_capture`, anywhere: as its frame's backend, its frame's producer's or its
+/// observation's.
+fn names_acib_screen_capture(observation: &TaskGeometryObservation) -> bool {
+    let acib = |backend: crate::CaptureBackendName| {
+        backend == crate::CaptureBackendName::AcibScreenCapture
+    };
+    let observed_acib = |geometry: &crate::CaptureGeometryObservation| {
+        matches!(
+            geometry,
+            crate::CaptureGeometryObservation::Observed(observed) if acib(observed.backend)
+        )
+    };
+    observation
+        .frame
+        .as_ref()
+        .is_some_and(|frame| acib(frame.backend) || observed_acib(&frame.producer))
+        || observation.observation.as_ref().is_some_and(observed_acib)
 }
 
 fn same_geometry_source_binding(

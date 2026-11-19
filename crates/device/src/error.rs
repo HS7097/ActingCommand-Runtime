@@ -638,9 +638,78 @@ struct StoredDeviceEvidence {
     /// Workflow #479 F-2: the registry refused the operation before anything was opened, because
     /// this build has no backend for it on the instance's device system (an iOS handset).
     device_system_unsupported: bool,
+    /// Workflow #479 F-3a: why an iOS handset's capture through `acib` took no frame.
+    ios_capture: Option<IosCaptureFailure>,
+    /// Workflow #479 F-3a: the backend refused the picture it took as no frame, and stays open,
+    /// holding nothing: the capture closes no session.
+    frame_refused: Option<FrameRefusal>,
+}
+
+/// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): why an iOS handset's
+/// capture through `acib` took no frame: the one cause (`ios_capture_problem`), and `acib`'s own
+/// word and stage where it answered them. Never `acib`'s error text, its standard error or a
+/// session number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IosCaptureFailure {
+    pub problem: crate::IosCaptureProblem,
+    pub acib_problem: Option<crate::AcibProblem>,
+    pub acib_stage: Option<crate::AcibStage>,
+}
+
+impl IosCaptureFailure {
+    /// The cause `problem` alone, with no word of `acib`'s.
+    pub const fn of(problem: crate::IosCaptureProblem) -> Self {
+        Self {
+            problem,
+            acib_problem: None,
+            acib_stage: None,
+        }
+    }
+}
+
+/// Workflow #479 F-3a: why a backend refused the picture it took as no frame, keeping itself open
+/// for the next capture (the coordinator's ruling 3 on #479 F-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameRefusal {
+    /// Every byte of the converted picture is zero (`capture_frame_all_black`).
+    AllBlack,
 }
 
 impl DeviceError {
+    /// Workflow #479 F-3a: this error as an iOS handset's capture through `acib` that took no
+    /// frame, for `failure`.
+    pub fn with_ios_capture_failure(mut self, failure: IosCaptureFailure) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .ios_capture = Some(failure);
+        self
+    }
+
+    /// Workflow #479 F-3a: why the iOS handset's capture this error ended took no frame, when it
+    /// was one ([`Self::with_ios_capture_failure`]).
+    pub fn ios_capture_failure(&self) -> Option<IosCaptureFailure> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.ios_capture)
+    }
+
+    /// Workflow #479 F-3a: this error as a picture its backend refused as no frame (`refusal`),
+    /// the backend open and holding nothing, so nothing is to close.
+    pub fn with_frame_refused(mut self, refusal: FrameRefusal) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .frame_refused = Some(refusal);
+        self
+    }
+
+    /// Workflow #479 F-3a: why the backend refused its picture as no frame, when it did
+    /// ([`Self::with_frame_refused`]).
+    pub fn frame_refused(&self) -> Option<FrameRefusal> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.frame_refused)
+    }
+
     /// Workflow #479 F-2: this error as the refusal of a capture, input or application operation
     /// on a handset of a device system this build has no backend for, made before anything was
     /// opened or run.

@@ -6679,17 +6679,25 @@ impl RegisteredInstance {
         self.provenance == ExecutionBackendProvenance::PhysicalDevice && self.adb_endpoint.is_some()
     }
 
-    /// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the
-    /// device system of this instance when it is a handset of a system this build has no backend
-    /// for (an iOS handset, bound or not); `None` for every other instance. Such an instance is
-    /// inert: no party acts on it without a person asking (the start's preparation, the idle
-    /// planner), and the host refuses every capture, input and application operation a person
-    /// asks of it at the front of its admission (`lease::device_system_refusal`).
-    fn device_system_without_backend(&self) -> Option<actingcommand_contract::DeviceSystem> {
+    /// Workflow #479 F-3a: the device system of this instance when it is a handset, bound or not;
+    /// `None` for an emulator and a fixture.
+    fn handset_system(&self) -> Option<actingcommand_contract::DeviceSystem> {
         self.bound_adb_endpoint()
             .and_then(ResolvedAdbEndpoint::handset)
             .map(actingcommand_execution_kernel::HandsetEndpoint::system)
-            .filter(|system| *system == actingcommand_contract::DeviceSystem::Ios)
+    }
+
+    /// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the
+    /// device system of this instance when it is a handset of a system this build has no input
+    /// backend for (an iOS handset, bound or not); `None` for every other instance. Such an
+    /// instance is inert: no party acts on it without a person asking (the start's preparation,
+    /// the idle planner), and the host refuses every operation of it a person asks for that has
+    /// no backend at the front of its admission (`lease::device_system_refusal`). Workflow #479
+    /// F-3a: the predicate is split into the input's (this one) and the capture's
+    /// (`lease::DeviceOperation::has_backend_on`): an iOS handset has a read-only capture.
+    fn device_system_without_input_backend(&self) -> Option<actingcommand_contract::DeviceSystem> {
+        self.handset_system()
+            .filter(|system| !lease::DeviceOperation::Input.has_backend_on(*system))
     }
 
     /// Workflow #429 R-3 (register §1.272): whether an automatic emulator start may start this

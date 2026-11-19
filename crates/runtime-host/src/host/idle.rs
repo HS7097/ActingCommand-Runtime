@@ -367,7 +367,7 @@ impl HostShared {
             .values()
             .filter(|instance| {
                 instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
-                    && instance.device_system_without_backend().is_none()
+                    && instance.device_system_without_input_backend().is_none()
             })
             .map(|instance| {
                 (
@@ -661,7 +661,7 @@ impl HostShared {
             .values()
             .filter(|instance| {
                 instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
-                    && instance.device_system_without_backend().is_none()
+                    && instance.device_system_without_input_backend().is_none()
             })
             .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
             .collect::<Vec<_>>();

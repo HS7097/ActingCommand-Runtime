@@ -163,8 +163,9 @@ mod gate_480_pg2c;
 // by hand (PG-2c's leftover test).
 #[cfg(test)]
 mod gate_480_pg2d;
-// Test-only: #480 PG-2e, `runtime-client` [12, 12]: the update from 0.12.74 and the way back to
-// 0.12.74 and 0.12.73 pass, a build whose tools end at 11 is refused (register §1.485).
+// Test-only: #480 PG-2e, `runtime-client` `min` 12 ([12, 13] with revision 13): the update from
+// 0.12.74 and the way back to 0.12.74 and 0.12.73 pass, a build whose tools end at 11 is refused
+// (register §1.485).
 #[cfg(test)]
 mod gate_480_pg2e;
 // Test-only: Workflow #453 S5 and S6, the rescue module's `place` with no instance bound to the

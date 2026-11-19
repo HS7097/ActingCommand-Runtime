@@ -164,9 +164,27 @@ pub struct ExecutionFailureContext {
     /// this build has no backend for it on the instance's device system (the primary device
     /// failure's).
     device_system_unsupported: bool,
+    /// Workflow #479 F-3a: why an iOS handset's capture through `acib` took no frame (the primary
+    /// device failure's).
+    ios_capture: Option<actingcommand_device::IosCaptureFailure>,
+    /// Workflow #479 F-3a: the capture backend refused the picture it took as no frame and stays
+    /// open holding nothing, so the capture closes no session (the primary device failure's).
+    frame_refused: Option<actingcommand_device::FrameRefusal>,
 }
 
 impl ExecutionFailureContext {
+    /// Workflow #479 F-3a: why the iOS handset's capture this failure ended took no frame, when it
+    /// was one (`DeviceError::ios_capture_failure`).
+    pub const fn ios_capture_failure(&self) -> Option<actingcommand_device::IosCaptureFailure> {
+        self.ios_capture
+    }
+
+    /// Workflow #479 F-3a: why the capture backend refused its picture as no frame, when it did
+    /// (`DeviceError::frame_refused`): the backend stays open and the session is kept.
+    pub const fn frame_refused(&self) -> Option<actingcommand_device::FrameRefusal> {
+        self.frame_refused
+    }
+
     /// Workflow #479 F-2: whether the provider refused the operation this failure ended before
     /// anything was opened, because this build has no backend for it on the instance's device
     /// system (`DeviceError::device_system_unsupported`, an iOS handset).
@@ -540,6 +558,8 @@ impl ExecutionKernelError {
                 nemu_app_index_problem: error.nemu_app_index_problem(),
                 input_unsupported: error.input_unsupported(),
                 device_system_unsupported: error.device_system_unsupported(),
+                ios_capture: error.ios_capture_failure(),
+                frame_refused: error.frame_refused(),
                 causes,
                 resources: error
                     .resource_contributions()
@@ -682,6 +702,15 @@ impl ExecutionKernelError {
     }
     pub const fn resource_quiescence(&self) -> Option<ResourceQuiescence> {
         self.resource_quiescence
+    }
+    /// Workflow #479 F-3a fix round 1: whether this failure is a picture its backend refused as no
+    /// frame ([`ExecutionFailureContext::frame_refused`]) and leaves no resource unconfirmed. Only
+    /// such a failure keeps its session and closes nothing (the kernel, the session's worker and
+    /// the host's close read this one test); one that carries the mark beside an unconfirmed
+    /// resource is an unconfirmed resource and is handled as one.
+    pub fn frame_refused_holding_nothing(&self) -> bool {
+        self.lifecycle.frame_refused().is_some()
+            && self.resource_quiescence != Some(ResourceQuiescence::Unconfirmed)
     }
     pub const fn resource_count(&self) -> u16 {
         self.resource_count
