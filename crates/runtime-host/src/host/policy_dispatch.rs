@@ -2222,6 +2222,15 @@ impl HostShared {
         let variable_warnings =
             lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?.take_variable_warnings();
         self.report_variable_warnings(variable_warnings)?;
+        // #484 IDLE-W2 fix round 1 (review-1845; `runtime-config.md`, "What wakes an idle
+        // instance"): each failure of the idle plan's look ahead that does not stop the Runtime
+        // (one that does ended the evaluation) is said in the daemon's log as a skipped background
+        // step is; the candidate it was read for was counted due, as before.
+        let look_ahead_failures = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?
+            .take_idle_look_ahead_failures();
+        for failure in &look_ahead_failures {
+            self.fatal.report_skipped(failure);
+        }
         // Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of runs an online
         // reconciliation settled (this cycle's), not yet recorded; the start records its own
         // before it completes.

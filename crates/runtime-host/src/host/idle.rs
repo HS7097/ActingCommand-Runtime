@@ -1233,6 +1233,10 @@ impl HostShared {
             _ => IdleEnd::NotPerformed,
         };
         let kept = self.end_idle_action(|planner| planner.finished(alias, end));
+        // #484 IDLE-W2 fix round 1, tests: the planner knows the action's end and its claim still
+        // holds the key, as an evaluation meets them in the action's own half second.
+        #[cfg(test)]
+        self.idle_action_finished_for_test();
         let released = held
             .as_ref()
             .map_or(Ok(()), |key| self.release_host_key(key));
@@ -1833,6 +1837,20 @@ impl HostShared {
         self.idle_action_ended.notify_all();
     }
 
+    /// #484 IDLE-W2 fix round 1, test only: runs, once, the hook a test set for the moment an
+    /// action carried out has told the planner its end while its claim still holds the key.
+    #[cfg(test)]
+    fn idle_action_finished_for_test(&self) {
+        let hook = self
+            .idle_action_finished_hook_for_test
+            .lock()
+            .ok()
+            .and_then(|mut hook| hook.take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     /// Test only: the number of idle actions whose worker ended, once it reaches `ended`,
     /// waiting at most `wait`; `None` when it did not in time.
     #[cfg(test)]
@@ -1902,6 +1920,20 @@ impl RuntimeHost {
         let shared = self.shared_ref(IdleLocation::Check)?;
         let policy = lock(shared.policy()?, IdleLocation::Check)?;
         Ok(policy.idle_due_task(alias))
+    }
+
+    /// #484 IDLE-W2 fix round 1, tests: runs `hook` once, on the instance's worker, when the next
+    /// idle action carried out has told the planner its end and before its claim releases the key.
+    pub(crate) fn run_when_idle_action_finished_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(IdleLocation::Action)?;
+        *lock(
+            &shared.idle_action_finished_hook_for_test,
+            IdleLocation::Action,
+        )? = Some(hook);
+        Ok(())
     }
 
     /// IDLE-1, tests: the number of idle actions whose worker ended, once it reaches `ended`,

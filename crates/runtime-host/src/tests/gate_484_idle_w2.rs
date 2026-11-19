@@ -36,21 +36,53 @@
 //!   X's action, a check while a run holds X's admission guard reads a plan with nothing due and
 //!   queues no wake; a plan with a task due queues one, and its record names `task_due` and the
 //!   task.
+//!
+//! Fix round 1 (review-1845):
+//! - A cooldown (a hold with a time of its own) in front of the spent budget, on a closed
+//!   instance whose key is held: no wake at the cooldown's end; the wake stays the reset less the
+//!   lead, and a later position that names no time leaves no wake from the candidate.
+//! - A look ahead that fails (a test switch, `LOOK_AHEAD_FAILS_FOR_TEST`) leaves the candidate due
+//!   and its failure in the daemon's log as a skipped background step.
+//! - The host with its own plan and its own planner (no plan handed in; every check is the one
+//!   the host's own evaluated cycle runs, `RuntimeHost::evaluate_policy_cycle`): the fixture
+//!   instance with the idle action `close_app` (emulator-controlled, its startup package, a
+//!   standard pack root that declares its application). The close carried out, an evaluation
+//!   inside its own claim (a test hook holds the claim once the planner knows the close's end), a
+//!   client's tap the closed application refuses `application_not_foreground` and the evaluations
+//!   under and after that client's lease queue no wake; the task due again after its reset
+//!   queues one whose record names `task_due` and the task. And a restart: the close and a pause
+//!   restored by a seeding and a loading start, the first evaluations under the pause and under a
+//!   claim after the resume queue no wake, and the planned wake is kept. What the fixtures cannot
+//!   give: an evaluation inside a start's own preparation, which runs inside `RuntimeHost::start`
+//!   before it returns (and is skipped for an instance whose pause the start restored); a
+//!   client's lease after the resume stands for it.
 
 use super::gate_369_s6c::{connectivity, head};
 use super::gate_372k2::{SlotTask, Slots, at, slot_sources};
+use super::gate_idle1p::kept_rows;
 use super::instance_workers::{all_events, phases};
 use super::*;
+use crate::application_update::IdleUpdateHold;
 use crate::codes::{HostCode, IdleCode, IdleLocation, IdleWakeCause};
 use crate::idle_action::{IdleEnd, IdlePlan, IdlePlanner, IdleStep, IdleView, KeptIdle, WakeWork};
+use crate::policy_host::LOOK_AHEAD_FAILS_FOR_TEST;
+use crate::schedule_explanation::{
+    IdleGates, IdleHeldAhead, IdleHeldBack, ScheduleExplanationTable,
+};
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{InstanceStuckRecovery, RuntimeConfigManifest, RuntimeLifecyclePhase};
+use actingcommand_contract::{
+    ConfigParameter, ConfigParameterSource, FactScalar, InstanceStuckRecovery,
+    RuntimeConfigManifest, RuntimeLifecyclePhase,
+};
 use actingcommand_host_metrics::NetworkConnectivity;
-use actingcommand_policy::{EligibilityState, SchedulingDecisionState, TaskDecision};
+use actingcommand_policy::{
+    DecisionReason, EligibilityState, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
+};
 use actingcommand_runtime_config::{
     DefaultsFile, IdleAction, IdleConfig, annotate_settable, mechanism_rows, render_parameters,
 };
 use serde_json::{Value, json};
+use std::sync::Mutex;
 
 const TASK: &str = "fixture.idle_w2";
 const ALIAS: &str = POLICY_INSTANCE_ALIAS;
@@ -831,4 +863,769 @@ fn idle_w2_host_a_held_instance_queues_no_wake_and_a_due_task_queues_one_that_na
     );
     let HostFixture { host, _root, .. } = fixture;
     host.close().expect("close the host");
+}
+
+// ---- Fix round 1 (review-1845): a cooldown in front of a later gate. ----
+
+/// `TASK`'s decision on the fixture instance: eligible, deferred by `code` with its wake `wake`.
+fn deferred(code: HostCode, wake: u64) -> TaskDecision {
+    TaskDecision {
+        task_id: TASK.to_owned(),
+        instance_id: Some(ALIAS.to_owned()),
+        eligibility: EligibilityState::True,
+        state: SchedulingDecisionState::Deferred,
+        rank: None,
+        detection_suggestions: Vec::new(),
+        reasons: vec![DecisionReason {
+            outcome: Outcome::new(code),
+            detail: code.as_str().to_owned(),
+        }],
+        next_wake_unix_ms: Some(wake),
+    }
+}
+
+/// The idle check's plan of the fixture instance from an evaluation at `at` whose one decision is
+/// `decision`, with what the look ahead behind a hold answered for it (`held_ahead`; none: no hold
+/// hid a later position), as the policy host records it.
+fn gated_plan(decision: TaskDecision, at: u64, held_ahead: Option<Option<u64>>) -> IdlePlan {
+    let held_ahead = held_ahead
+        .map(|release| {
+            IdleHeldAhead::from([(
+                ALIAS.to_owned(),
+                BTreeMap::from([(TASK.to_owned(), release)]),
+            )])
+        })
+        .unwrap_or_default();
+    let mut table = ScheduleExplanationTable::default();
+    table.record_gated(
+        &PolicyEvaluation {
+            decisions: vec![decision],
+            next_wake_unix_ms: None,
+            preload_hint: None,
+            dispatch_intents: Vec::new(),
+            reason_chains: Vec::new(),
+        },
+        "sha256:idle-w2-fix1",
+        at,
+        &|_: &str, _: &str| -> Option<(u64, String)> { None },
+        IdleGates {
+            held_back: &IdleHeldBack::new(),
+            held_ahead: &held_ahead,
+            update_hold: IdleUpdateHold::default(),
+        },
+    );
+    table.idle_plan(ALIAS).expect("an evaluated plan")
+}
+
+#[test]
+fn idle_w2_fix1_a_cooldown_in_front_of_a_spent_budget_wakes_at_the_reset_not_at_its_end() {
+    let closed_at = at(1, 6, 30);
+    let reset = at(2, 0, 0);
+    // Free, the budget defers the task to its reset: the idle check closes the application, its
+    // wake at the reset less the lead.
+    let mut planner = IdlePlanner::default();
+    let free_plan = gated_plan(
+        deferred(HostCode::PolicyBudgetExhausted, reset),
+        closed_at,
+        None,
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(free_plan), closed_at),
+        Some(IdleStep::Act {
+            action: IdleAction::CloseApp,
+            next_due_unix_ms: Some(reset),
+            wake_at_unix_ms: Some(reset - LEAD_MS),
+        }),
+        "the idle check closes the application"
+    );
+    planner.finished(ALIAS, IdleEnd::Done);
+
+    // A minute later the key is held and a cooldown of six seconds defers the task to its end (a
+    // takeover cooldown after an abnormal stop), while the spent budget would hold it back behind
+    // the cooldown; or a later position that names no time (a suspended package) would.
+    let held_at = closed_at + MINUTE_MS;
+    let cooldown_end = held_at + 6_000;
+    for (what, behind, wake) in [
+        ("the spent budget", Some(reset), Some(reset)),
+        ("a position that names no time", None, None),
+    ] {
+        let read = gated_plan(
+            deferred(HostCode::DispatchInstanceCooldown, cooldown_end),
+            held_at,
+            Some(behind),
+        );
+        assert!(
+            !read.due_now,
+            "{what}: not due behind the cooldown: {read:?}"
+        );
+        assert_eq!(
+            read.next_wake_unix_ms, wake,
+            "{what}: the later of the cooldown's end and what holds it back behind it"
+        );
+        assert_eq!(
+            planner.check(ALIAS, &PRODUCTION, leased(), Some(read), held_at),
+            None,
+            "{what}: no wake under the cooldown"
+        );
+        // The cooldown's end: the free evaluation defers the task to its reset.
+        let after = gated_plan(
+            deferred(HostCode::PolicyBudgetExhausted, reset),
+            cooldown_end,
+            None,
+        );
+        assert_eq!(
+            planner.check(ALIAS, &PRODUCTION, free(), Some(after), cooldown_end),
+            None,
+            "{what}: no wake at the cooldown's end"
+        );
+        assert_eq!(
+            planner.planned_wake(ALIAS),
+            Some(reset - LEAD_MS),
+            "{what}: the wake stays the reset less the lead"
+        );
+    }
+}
+
+// ---- Fix round 1: the host's own plan and planner. ----
+
+/// The game and the server of `gate_372k2`'s fixture instance (`policy_facts`).
+const GAME: &str = "fixture-game-a";
+const SERVER: &str = "fixture-server-a";
+/// The application the fake device assigns the fixture instance (its default), which its game's
+/// standard pack root declares for its server.
+const APPLICATION: &str = "neutral.application";
+/// What the device shows in front once the application is closed: the home screen's package.
+const LAUNCHER: &str = "neutral.launcher";
+
+/// The daemon's log of the steps the host skipped, as actingd's reporter writes them.
+#[derive(Default)]
+struct DaemonLog {
+    skipped: Mutex<Vec<Outcome>>,
+}
+
+impl DaemonLog {
+    /// The code of each skipped step so far, in order.
+    fn skipped_codes(&self) -> Vec<String> {
+        self.skipped
+            .lock()
+            .expect("the daemon's log")
+            .iter()
+            .map(|outcome| outcome.code().as_str().to_owned())
+            .collect()
+    }
+}
+
+impl RuntimeDaemonReporter for DaemonLog {
+    fn fatal_latched(&self, _outcome: &Outcome) {}
+
+    fn step_skipped(&self, outcome: &Outcome) {
+        self.skipped
+            .lock()
+            .expect("the daemon's log")
+            .push(outcome.clone());
+    }
+
+    fn warning_recorded(&self, _outcome: &Outcome) {}
+}
+
+/// How the fixture instance is started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fixture {
+    /// As `gate_372k2`'s: no idle action.
+    Plain,
+    /// With the idle action `close_app`: emulator-controlled from the start (so it registers with
+    /// its emulator running), its startup package configured, its stuck recovery off, and a
+    /// standard pack root whose game declares its application for its server.
+    CloseApp,
+}
+
+/// The configuration of the fixture instance `instance` with the idle action `close_app`: the
+/// `idle` section's keys as the assembly renders them from the shipped defaults file (the start's
+/// check of the instance's own idle keys reads every member the instance does not name from them,
+/// `gate_ord1c`'s fix round 2), its own `idle.action`, and its no-progress guard off.
+fn close_app_manifest(instance: InstanceId) -> RuntimeConfigManifest {
+    let (_, defaults) = DefaultsFile::shipped().expect("the defaults file parses");
+    let section = actingcommand_runtime_config::idle::SECTION;
+    let mut parameters =
+        render_parameters(&mechanism_rows(), &[], &defaults, &json!({}), &|_| None)
+            .expect("every key resolves")
+            .into_iter()
+            .filter(|row| row.key.split('.').next() == Some(section))
+            .collect::<Vec<_>>();
+    parameters.push(ConfigParameter {
+        key: actingcommand_runtime_config::instance_key(
+            &crate::failure_identity::identifier_text(&instance),
+            actingcommand_runtime_config::idle::ACTION,
+        ),
+        value: FactScalar::String(IdleAction::CloseApp.as_str().to_owned()),
+        source: ConfigParameterSource::Explicit,
+        settable: false,
+    });
+    parameters.extend(no_progress_off_manifest(&instance).parameters);
+    annotate_settable(&mut parameters).expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// A standard pack root under `root` whose game of the fixture instance declares its application
+/// for its server (`applications.json`), as `close_app` reads it.
+fn declared_application(root: &TempDir) -> PathBuf {
+    let packs = root.path().join("packages");
+    let game = packs.join(GAME);
+    fs::create_dir_all(&game).expect("the game's root");
+    let declared = json!({"servers": {SERVER: {"application_id": APPLICATION}}});
+    fs::write(
+        game.join("applications.json"),
+        serde_json::to_vec_pretty(&declared).expect("the declared application"),
+    )
+    .expect("write the declared application");
+    packs
+}
+
+/// A start of the fixture instance's host on `root`, as [`OwnHost`] describes it.
+fn open_own_host(
+    fixture: Fixture,
+    root: &TempDir,
+    registered: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    log: &Arc<DaemonLog>,
+) -> RuntimeHost {
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    let host_config = config(root)
+        .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
+        .with_runtime_clock(clock.clone())
+        .with_daemon_reporter(log.clone());
+    let host_config = match fixture {
+        Fixture::Plain => host_config.with_config_manifest(no_progress_off_manifest(&registered)),
+        Fixture::CloseApp => {
+            // `gate_ord1c`'s fix round 3: the start withdraws a device self-checked instance's
+            // availability at the clock, and its passing self-check publishes it again at the
+            // clock; the preparation's first frame takes the clock's millisecond, as a real open
+            // takes time, so the second is newer than the first.
+            let moved = Arc::clone(clock);
+            *state.capture_hook.lock().expect("capture hook") =
+                Some(Box::new(move || moved.advance(1)));
+            let package = root.path().join("idle-w2-startup-package.zip");
+            fs::write(&package, neutral_contained_task_package(true))
+                .expect("write the startup package");
+            let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+                .and_then(|request| request.with_response_deadline_ms(60_000))
+                .expect("the startup package request");
+            host_config
+                .with_config_manifest(close_app_manifest(registered))
+                .with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)]))
+                .with_standard_packs_root(Some(declared_application(root)))
+                .with_stuck_recovery(BTreeMap::from([(
+                    ALIAS.to_owned(),
+                    InstanceStuckRecovery {
+                        enabled: false,
+                        cooldown_secs: 600,
+                    },
+                )]))
+        }
+    };
+    RuntimeHost::start(
+        host_config,
+        Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(state))),
+    )
+    .expect("start the fixture's host")
+}
+
+/// `gate_372k2`'s fixture instance (one task, `TASK`, whose trigger is always true, `daily_limit`
+/// 2, an activity interval of 1 ms) on a host of its own, with a daemon log: every idle check is
+/// the one the host runs itself on its own latest plan, with its own planner.
+struct OwnHost {
+    host: RuntimeHost,
+    clock: Arc<ManualRuntimeClock>,
+    state: Arc<FakeState>,
+    registered: InstanceId,
+    fixture: Fixture,
+    log: Arc<DaemonLog>,
+    approved: BTreeSet<String>,
+    root: TempDir,
+}
+
+/// The fixture instance's scripted device for one start: with `close_app`, emulator-controlled
+/// from the start (so it registers with its emulator running) and its opens passing.
+fn fixture_state(fixture: Fixture) -> Arc<FakeState> {
+    let state = Arc::new(FakeState::default());
+    if fixture == Fixture::CloseApp {
+        for flag in [
+            &state.emulator_control,
+            &state.observed_open,
+            &state.physical_task_geometry,
+            &state.transition_capture_after_input,
+        ] {
+            flag.store(true, Ordering::Release);
+        }
+    }
+    state
+}
+
+impl OwnHost {
+    fn start(fixture: Fixture, unix_ms: u64) -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let registered = instance_id();
+        let state = fixture_state(fixture);
+        let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+        let log = Arc::new(DaemonLog::default());
+        let host = open_own_host(fixture, &root, registered, &clock, &state, &log);
+        host.activate_policy_catalog(&sources(1))
+            .expect("activate the catalog");
+        Self {
+            host,
+            clock,
+            state,
+            registered,
+            fixture,
+            log,
+            approved: BTreeSet::new(),
+            root,
+        }
+    }
+
+    /// A clean stop and a new start on the same state root, its Runtime clock and its device's
+    /// script a new process's, at `unix_ms`.
+    fn restart(self, unix_ms: u64) -> Self {
+        let Self {
+            host,
+            registered,
+            fixture,
+            log,
+            approved,
+            root,
+            ..
+        } = self;
+        host.close().expect("close the fixture's host");
+        let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+        let state = fixture_state(fixture);
+        let host = open_own_host(fixture, &root, registered, &clock, &state, &log);
+        Self {
+            host,
+            clock,
+            state,
+            registered,
+            fixture,
+            log,
+            approved,
+            root,
+        }
+    }
+
+    fn close(self) {
+        self.host.close().expect("close the fixture's host");
+    }
+
+    /// Moves the Runtime clock and samples the host's capacity at the new time, as its capacity
+    /// monitor does while time passes.
+    fn set_time(&self, unix_ms: u64) {
+        self.clock.set_unix_ms(unix_ms);
+        let sample_capacity = self
+            .host
+            .capacity_sampler_for_test()
+            .expect("capacity owner");
+        sample_capacity().expect("capacity sample");
+    }
+
+    /// One cycle at `unix_ms` on the test inputs, as `Slots::evaluate` runs it: no idle check.
+    fn evaluate(&self, unix_ms: u64) -> PolicyCycle {
+        self.set_time(unix_ms);
+        let mut facts = policy_facts();
+        facts.outcomes.clear();
+        self.host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms,
+                    monotonic_ms: unix_ms,
+                },
+                7,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("evaluate at {unix_ms}: {error}"))
+    }
+
+    /// One cycle at `unix_ms` as actingd's driver asks for it: the evaluation, then the host's
+    /// own idle check on the plan it leaves.
+    fn cycle(&self, unix_ms: u64) -> PolicyCycle {
+        self.set_time(unix_ms);
+        let cycle = self
+            .host
+            .evaluate_policy_cycle(PolicyTrigger::Recovery)
+            .unwrap_or_else(|error| panic!("the cycle at {unix_ms}: {error}"));
+        assert!(
+            cycle.evaluation.is_some(),
+            "the cycle at {unix_ms} is evaluated: {:?}",
+            cycle.directive
+        );
+        cycle
+    }
+
+    /// Evaluates at `unix_ms`, admits the task's dispatch the cycle selected, completes it and
+    /// ends its lease, as a run of the task does (`Slots::dispatch`).
+    fn dispatch(&mut self, unix_ms: u64) {
+        let cycle = self.evaluate(unix_ms);
+        let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == TASK)
+            .unwrap_or_else(|| panic!("the task is selected at {unix_ms}: {evaluation:#?}"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("the dispatch's reason chain")
+            .clone();
+        if self.approved.insert(intent.catalog_hash.clone()) {
+            record_policy_approval(&self.host, &intent);
+        }
+        let PolicyDispatchAdmission::Granted { context } = self
+            .host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&self.host, &intent))
+            .unwrap_or_else(|error| panic!("admit the task at {unix_ms}: {error}"))
+        else {
+            panic!("the task is granted at {unix_ms}");
+        };
+        self.host
+            .complete_policy_dispatch(&intent.decision_id)
+            .expect("complete the dispatch");
+        self.host
+            .release_policy_dispatch_lease_for_test(&context)
+            .expect("end the dispatch's lease");
+    }
+
+    fn scheduling(&self, operation: RuntimeOperation) {
+        let mut client = TestClient::connect(&self.host);
+        let request = client.request(operation);
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+    }
+
+    /// A person's instance pause, as `actingctl pause` sends it.
+    fn pause(&self) {
+        self.scheduling(RuntimeOperation::PauseScheduling {
+            scope: actingcommand_contract::SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new("idle_w2_pause")
+                .expect("pause reason"),
+            drain_timeout_ms: 1_000,
+            pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
+        });
+    }
+
+    fn resume(&self) {
+        self.scheduling(RuntimeOperation::ResumeScheduling {
+            scope: actingcommand_contract::SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            expected: None,
+        });
+    }
+
+    /// A client's lease that holds the instance's key until it is released (`Slots::release`).
+    fn hold(&self) -> (TestClient, LeaseToken) {
+        let mut holder = TestClient::connect(&self.host);
+        let (_, token) = holder.acquire(ALIAS);
+        (holder, token)
+    }
+
+    /// The instance's latest plan, as the host's idle check reads it.
+    fn plan(&self) -> IdlePlan {
+        self.host
+            .idle_plan_and_runs_counted_for_test(ALIAS)
+            .expect("the idle plan")
+            .0
+            .expect("an evaluated plan")
+    }
+
+    /// The task the instance's latest plan counts due.
+    fn due_task(&self) -> Option<String> {
+        self.host
+            .idle_due_task_for_test(ALIAS)
+            .expect("the idle plan's due task")
+    }
+
+    /// The instance's `instance_idle_action` records after `after` ([`idle_records`]).
+    fn records(&self, after: u64) -> Vec<(String, Option<String>, Option<String>)> {
+        idle_records(&self.host, self.registered, after)
+    }
+}
+
+/// The fixture instance's row of `host.idle_state`: closed by `close_app`, its wake at `wake`.
+fn closed_row(wake: u64) -> BTreeMap<String, FactScalar> {
+    BTreeMap::from([
+        (
+            "instance_alias".to_owned(),
+            FactScalar::String(ALIAS.to_owned()),
+        ),
+        (
+            "action".to_owned(),
+            FactScalar::String(IdleAction::CloseApp.as_str().to_owned()),
+        ),
+        ("wake_at_unix_ms".to_owned(), FactScalar::TimestampMs(wake)),
+    ])
+}
+
+#[test]
+fn idle_w2_fix1_a_look_ahead_that_fails_is_said_and_leaves_the_candidate_due() {
+    let mut own = OwnHost::start(Fixture::Plain, at(1, 6, 0));
+    own.dispatch(at(1, 6, 10));
+    own.dispatch(at(1, 6, 20));
+    // A client holds the key and the look ahead behind that hold fails.
+    let holder = own.hold();
+    LOOK_AHEAD_FAILS_FOR_TEST.with(|fails| fails.set(true));
+    let held = own.evaluate(at(1, 6, 30));
+    LOOK_AHEAD_FAILS_FOR_TEST.with(|fails| fails.set(false));
+    assert_eq!(
+        deferred_by(&held, HostCode::DispatchInstanceHeld),
+        None,
+        "the decision is the hold's, as before"
+    );
+    let read = own.plan();
+    assert!(
+        read.due_now,
+        "a candidate whose look ahead failed counts due, as before: {read:?}"
+    );
+    assert_eq!(own.due_task(), Some(TASK.to_owned()), "the plan names it");
+    let skipped = own.log.skipped_codes();
+    assert!(
+        !skipped.is_empty()
+            && skipped
+                .iter()
+                .all(|code| code == HostCode::PolicyEvaluationRejected.as_str()),
+        "the failure is in the daemon's log as a skipped background step: {skipped:?}"
+    );
+    Slots::release(holder);
+    own.close();
+}
+
+#[test]
+fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_task() {
+    let mut own = OwnHost::start(Fixture::CloseApp, at(1, 6, 0));
+    let before = head(&own.host);
+    // The day's two runs spend the task's budget.
+    own.dispatch(at(1, 6, 10));
+    own.dispatch(at(1, 6, 20));
+
+    // The close's own claim: its worker waits once the planner knows the close's end, before the
+    // claim releases the key.
+    let (entered_tx, entered) = mpsc::channel::<()>();
+    let (go, go_rx) = mpsc::channel::<()>();
+    own.host
+        .run_when_idle_action_finished_for_test(Box::new(move || {
+            entered_tx
+                .send(())
+                .expect("the test waits for the close's end");
+            go_rx
+                .recv_timeout(WAIT)
+                .expect("the test lets the close's claim release the key");
+        }))
+        .expect("the hook");
+
+    // 06:30, free: the budget defers the task to its reset, and the host's own idle check closes
+    // the application on its own plan.
+    let closed_at = at(1, 6, 30);
+    let reset = deferred_by(&own.cycle(closed_at), HostCode::PolicyBudgetExhausted)
+        .expect("the budget names its reset");
+    entered
+        .recv_timeout(WAIT)
+        .expect("the close ended and its claim still holds the key");
+    assert_eq!(
+        own.state
+            .application_actions
+            .lock()
+            .expect("application actions")
+            .last(),
+        Some(&ApplicationLifecycleAction::Stop),
+        "the close stopped the application"
+    );
+
+    // Half a second later, inside the close's own claim.
+    let in_claim = closed_at + 500;
+    assert_eq!(
+        deferred_by(&own.cycle(in_claim), HostCode::DispatchInstanceHeld),
+        None,
+        "the close's claim holds the task with no wake"
+    );
+    let held_plan = own.plan();
+    assert!(
+        !held_plan.due_now,
+        "not due behind the claim: {held_plan:?}"
+    );
+    assert_eq!(
+        held_plan.next_wake_unix_ms,
+        Some(reset),
+        "its wake: the reset"
+    );
+    go.send(()).expect("the close's claim waits");
+    assert_eq!(
+        own.host.await_idle_action_ends_for_test(1, WAIT),
+        Some(1),
+        "the close ended"
+    );
+    let closed: (String, Option<String>, Option<String>) =
+        (IdleLocation::Action.as_str().to_owned(), None, None);
+    assert_eq!(
+        own.records(before),
+        [closed.clone()],
+        "the close, and no wake inside its own claim"
+    );
+    assert_eq!(
+        kept_rows(&own.host),
+        Some(vec![closed_row(reset - LEAD_MS)]),
+        "kept closed with its wake at the reset less the lead"
+    );
+
+    // A client's run on the closed application: its tap meets the home screen in front and is
+    // refused; the evaluations under its lease and after it queue no wake.
+    *own.state
+        .foreground_script
+        .lock()
+        .expect("foreground script") =
+        Some(Arc::new(|_: usize, _: usize| Some(LAUNCHER.to_owned())));
+    let run_at = closed_at + MINUTE_MS;
+    own.set_time(run_at);
+    let (mut client, token) = own.hold();
+    let tap = client.request(RuntimeOperation::Input {
+        frame: None,
+        token: token.clone(),
+        action: InputAction::Tap { x: 1, y: 1 },
+    });
+    let refused = client.send(&tap);
+    assert_eq!(refused.state(), RuntimeReceiptState::Denied, "{refused:?}");
+    assert_eq!(
+        refused.outcome().code().as_str(),
+        HostCode::ApplicationNotForeground.as_str(),
+        "{refused:?}"
+    );
+    assert_eq!(
+        deferred_by(&own.cycle(run_at + 1_000), HostCode::DispatchInstanceHeld),
+        None,
+        "the client's lease holds the task with no wake"
+    );
+    assert!(!own.plan().due_now, "not due behind the client's lease");
+    Slots::release((client, token));
+    assert_eq!(
+        deferred_by(&own.cycle(run_at + 2_000), HostCode::PolicyBudgetExhausted),
+        Some(reset),
+        "free, the budget defers the task to its reset"
+    );
+    assert_eq!(
+        own.records(before),
+        [closed.clone()],
+        "no wake under the client's run or after it"
+    );
+    *own.state
+        .foreground_script
+        .lock()
+        .expect("foreground script") = None;
+
+    // The next day, past the reset: the task is due again, and the host's own idle check wakes
+    // the application at once, its record naming why and for which task.
+    let due_at = at(2, 6, 10);
+    assert!(reset <= due_at, "the reset {reset} comes before {due_at}");
+    own.cycle(due_at);
+    assert_eq!(
+        own.due_task(),
+        Some(TASK.to_owned()),
+        "the plan names the task"
+    );
+    assert_eq!(
+        own.records(before),
+        [
+            closed,
+            (
+                IdleLocation::Wake.as_str().to_owned(),
+                Some(IdleWakeCause::TaskDue.as_str().to_owned()),
+                Some(TASK.to_owned()),
+            ),
+        ],
+        "one close, then one wake that names its cause and its task"
+    );
+    own.close();
+}
+
+#[test]
+fn idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes_nothing() {
+    let mut own = OwnHost::start(Fixture::CloseApp, at(1, 6, 0));
+    own.dispatch(at(1, 6, 10));
+    own.dispatch(at(1, 6, 20));
+    // 06:30: the host's own idle check closes the application, its wake at the reset less the
+    // lead; then a person pauses the instance.
+    let reset = deferred_by(&own.cycle(at(1, 6, 30)), HostCode::PolicyBudgetExhausted)
+        .expect("the budget names its reset");
+    assert_eq!(
+        own.host.await_idle_action_ends_for_test(1, WAIT),
+        Some(1),
+        "the close ended"
+    );
+    let kept = Some(vec![closed_row(reset - LEAD_MS)]);
+    assert_eq!(kept_rows(&own.host), kept, "kept closed with its wake");
+    own.pause();
+
+    // The root's second start seeds (it replays the history), its third loads the decision
+    // memory from its value records, as every restart of an installation does; each restores the
+    // close from `host.idle_state` and the pause.
+    let own = own.restart(at(1, 7, 0));
+    let own = own.restart(at(1, 7, 1));
+    let started = at(1, 7, 1);
+    let after_start = head(&own.host);
+    assert_eq!(
+        kept_rows(&own.host),
+        kept,
+        "the start restored the application closed with its wake"
+    );
+
+    // The first evaluation after the start, under the restored pause (the start withholds the
+    // instance's availability until the resume's reconnect proves it again, so no candidate of
+    // it is due in any case).
+    own.cycle(started + 1_000);
+    let under_pause = own.plan();
+    assert!(
+        !under_pause.due_now,
+        "nothing due under the pause: {under_pause:?}"
+    );
+    assert!(
+        own.records(after_start).is_empty(),
+        "no wake under the restored pause"
+    );
+
+    // The resume, then a claim on the key, as a start's preparation holds it.
+    own.resume();
+    let holder = own.hold();
+    assert_eq!(
+        deferred_by(&own.cycle(started + 2_000), HostCode::DispatchInstanceHeld),
+        None,
+        "the claim holds the task with no wake"
+    );
+    let held_plan = own.plan();
+    assert!(
+        !held_plan.due_now,
+        "not due behind the claim: {held_plan:?}"
+    );
+    assert_eq!(held_plan.next_wake_unix_ms, Some(reset), "{held_plan:?}");
+    Slots::release(holder);
+    assert_eq!(
+        deferred_by(&own.cycle(started + 3_000), HostCode::PolicyBudgetExhausted),
+        Some(reset),
+        "free, the budget defers the task to its reset"
+    );
+    assert!(
+        own.records(after_start).is_empty(),
+        "no wake after the start"
+    );
+    assert_eq!(kept_rows(&own.host), kept, "the planned wake is kept");
+    own.close();
 }

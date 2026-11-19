@@ -1347,20 +1347,28 @@ gone: a suspended package, a blackout, a client update, a closed pack schedule, 
 pacing, the quiet before a blackout or the day boundary, a remedy round, a spent budget, a backoff,
 the activity interval, a closed activity window or a task pause make it not due, and its wake is
 that position's own release (none when it names none) less the action's wake lead (with a
-time-bound gate as well, the later of the two). Only a candidate no later position holds back is
-due, and it still wakes the instance at once, under the hold too (the case above, unchanged). Each
-position is read as the evaluation reads it, read only: no lift check runs (a suspended package and
-a paused task count as standing until the evaluation without the hold checks them), nothing is
-copied, drawn (the random delay of position 9 is not read) or noted for a clock slot,
-and a position that cannot answer there leaves the candidate counted as before (its failure is the
-evaluation's own once no hold comes first). Nothing a dispatch decides changes: the order, each
-deferral's code and wake, the not-run explanation, the clock-slot records and the budgets are the
-evaluation's as before. What a person watching an instance sees: an application closed as idle
-stays closed until work can really be dispatched (or its planned wake), whatever claims, Lab runs
-or pauses come in between; a client's run on it meets the closed application as before (whether it
-should wake it first is not this rule's). So after a restart and after a resume, too: the first
-evaluation after a start reads a restored pause and a start's preparation on the key as any hold,
-and an application closed as idle stays closed until its planned wake.
+time-bound gate as well, the later of the two). A hold with a time of its own, a cooldown, lets
+the candidate through no earlier than its end: its wake is the later of the cooldown's end and
+that position's release, none when either names none (fix round 1). Only a candidate no later
+position holds back is due, and it still wakes the instance at once, under the hold too (the case
+above, unchanged). Each position is read as the evaluation reads it, read only: no lift check runs
+(a suspended package and a paused task count as standing until the evaluation without the hold
+checks them), nothing is copied, drawn (the random delay of position 9 is not read) or noted for a
+clock slot. A position that cannot answer there leaves the candidate counted as before, due, and
+its failure is not hidden: one that stops the Runtime ends the evaluation, as it ends the
+evaluation that reads that position itself; any other is written to the daemon's log as a skipped
+background step is (the reporter's `step_skipped`: the failure's code and operation), and the
+evaluation goes on. Nothing a dispatch decides changes: the order, each deferral's code and wake,
+the not-run explanation, the clock-slot records and the budgets are the evaluation's as before.
+What a person watching an instance sees: an application closed as idle stays closed until work can
+really be dispatched (or its planned wake), whatever claims, Lab runs or pauses come in between,
+except behind a later position that names no time of its own (a suspended package, a paused
+task): once the hold ends, the evaluation without it defers such a candidate with no wake, and the
+plan counts it due and wakes the instance, as before this rule. A client's run on it meets the
+closed application as before (whether it should wake it first is not this rule's). So after a
+restart and after a resume, too: the first evaluation after a start reads a restored pause and a
+claim on the key as any hold, and an application closed as idle stays closed until its planned
+wake, with the same exception.
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

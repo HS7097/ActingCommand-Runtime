@@ -362,7 +362,10 @@ policy host reads positions 3 to 8 as well, in this order and each by its own re
 (positions 3 and 8 without their lift checks, so a suspended package and a paused task count as
 standing; nothing copied, drawn or noted for a clock slot; position 9 not read): the first that would hold the candidate back makes it not due for the idle plan, with that
 position's release as its wake (a candidate a cooldown defers is not due before the cooldown's end
-in any case, and keeps that wake). This look ahead serves the idle plan alone: the order above, the
+in any case: its wake is the later of the cooldown's end and that release, none when either names
+none). A reading that fails leaves the candidate due, as before, and is said: a failure that stops
+the Runtime ends the evaluation, any other goes to the daemon's log as a skipped background step
+([runtime-config.md](runtime-config.md)). This look ahead serves the idle plan alone: the order above, the
 reason and wake each deferral answers, the not-run explanation, the clock-slot records of Workflow
 #372 K2 and the budgets' accounting are what they were. A position added to the order is added to
 the look ahead (`PolicyHost::evaluate`, `look_ahead`).

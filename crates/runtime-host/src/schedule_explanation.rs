@@ -175,7 +175,10 @@ struct InstanceRows {
 /// order would hold it back as well ([`IdleHeldAhead`]: a spent budget, a backoff, the activity
 /// interval, a suspended package among them). It is not due, and its wake is that position's
 /// release; with a time-bound gate as well, the later of the two. A task no later position holds
-/// back is due as before, also behind a hold: it wakes the instance at once.
+/// back is due as before, also behind a hold: it wakes the instance at once. Fix round 1
+/// (review-1845): a hold with a time of its own (a cooldown) lets such a task through no earlier
+/// than that time, so its wake is the later of the cooldown's end and the later position's
+/// release, none when either names none.
 #[derive(Debug, Default)]
 struct IdleDraft {
     task_due: bool,
@@ -253,6 +256,24 @@ impl IdleDraft {
             // IDLE-WG, #484 IDLE-W2: not dispatchable now; it wakes the instance when what holds
             // it back lets it through.
             self.task_wake = earliest(self.task_wake, through);
+            return;
+        }
+        // #484 IDLE-W2 fix round 1 (review-1845's must-fix): a candidate a hold with a time of its
+        // own defers (a cooldown) is not due before that time; when a later position would hold it
+        // back as well, it is let through at the later of the two times, and none when either
+        // names none. Its own time alone moved a closed instance's wake to the cooldown's end: a
+        // start for nothing.
+        if decision.task_id != FACT_REFRESH_TASK_ID
+            && !due
+            && let Some(release) = held_ahead
+        {
+            self.task_wake = earliest(
+                self.task_wake,
+                decision
+                    .next_wake_unix_ms
+                    .zip(release)
+                    .map(|(own, later)| own.max(later)),
+            );
             return;
         }
         if decision.task_id == FACT_REFRESH_TASK_ID {

@@ -1103,6 +1103,15 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #484 IDLE-W2 fix round 1, test builds only: while set on this thread, the idle plan's look
+    /// ahead behind a hold fails before it reads a position, as a position that cannot answer
+    /// fails (`policy_evaluation_rejected`, not fatal), so a test sees where that failure goes.
+    pub(crate) static LOOK_AHEAD_FAILS_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Workflow #437 ORD-1c: whether the order's entries run: always in a build.
 #[cfg(not(test))]
 pub(crate) const fn queue_order_on() -> bool {
@@ -1716,6 +1725,11 @@ pub(crate) struct PolicyHost {
     /// `goal_value_package_unreadable` ones) the last evaluations decided and the cycle's recorder
     /// has not taken yet ([`Self::take_variable_warnings`]).
     variable_warnings: Vec<Outcome>,
+    /// #484 IDLE-W2 fix round 1 (review-1845): the failures of the idle plan's look ahead that do
+    /// not stop the Runtime, which the evaluations since the last call met and the cycle has not
+    /// taken yet ([`Self::take_idle_look_ahead_failures`]); the candidate each was read for was
+    /// counted as before, due. Memory only.
+    idle_look_ahead_failures: Vec<Outcome>,
     /// Workflow #463 V3 (register §1.383): the remedy parameters the last evaluation's remedy plan
     /// resolved, its `policy_dispatch_parameters` per (task, instance) before the variable values
     /// joined it, which the goal page shows read-only. Memory only; none before an evaluation.
@@ -2309,6 +2323,7 @@ impl PolicyHost {
             variable_warned: BTreeSet::new(),
             unread_variables_warned: BTreeSet::new(),
             variable_warnings: Vec::new(),
+            idle_look_ahead_failures: Vec::new(),
             resolved_parameters: BTreeMap::new(),
         };
         match tagged {
@@ -4063,9 +4078,20 @@ impl PolicyHost {
         // copied, drawn or noted for a clock slot. `Some(through)`: the first later position that would hold the
         // candidate back, with the time it lets it through (none: it names none); `None`: none
         // would, so the candidate could be dispatched once the hold ends. The evaluation, its
-        // decisions and the not-run explanation do not read it.
+        // decisions and the not-run explanation do not read it. Fix round 1 (review-1845): the
+        // outcomes of its failures that do not stop the Runtime (`look_ahead_failures`), which the
+        // cycle says in the daemon's log.
         let mut held_ahead = crate::schedule_explanation::IdleHeldAhead::new();
+        let mut look_ahead_failures = Vec::new();
         let look_ahead = |intent: &DispatchIntent| -> RuntimeHostResult<Option<Option<u64>>> {
+            // Fix round 1, tests: the look ahead fails as a position that cannot answer fails.
+            #[cfg(test)]
+            if LOOK_AHEAD_FAILS_FOR_TEST.with(std::cell::Cell::get) {
+                return Err(request(
+                    HostCode::PolicyEvaluationRejected,
+                    HostLocation::EvaluatePolicyCycle,
+                ));
+            }
             // Position 3, without its lift check (which may lift, copy or record).
             if pack_admission.suspends(suspension_lift, intent)? {
                 return Ok(Some(None));
@@ -4175,14 +4201,24 @@ impl PolicyHost {
                     instance_occupancy(&intent.instance_id),
                 ) {
                     // #484 IDLE-W2: what the later positions would answer, for the idle plan
-                    // alone; the decision is the hold's, as before. A later position that cannot
-                    // answer here leaves the candidate counted as before; its failure is the
-                    // evaluation's own once no hold comes first.
-                    if !refresh && let Ok(Some(through)) = look_ahead(intent) {
-                        held_ahead
-                            .entry(intent.instance_id.clone())
-                            .or_default()
-                            .insert(intent.task_id.clone(), through);
+                    // alone; the decision is the hold's, as before. Fix round 1 (review-1845): a
+                    // later position that cannot answer here leaves the candidate counted as
+                    // before (due), and its failure is said: one that stops the Runtime ends this
+                    // evaluation, as it ends the evaluation that reads that position itself; any
+                    // other goes to the cycle, which writes it to the daemon's log as a skipped
+                    // background step is written.
+                    if !refresh {
+                        match look_ahead(intent) {
+                            Ok(Some(through)) => {
+                                held_ahead
+                                    .entry(intent.instance_id.clone())
+                                    .or_default()
+                                    .insert(intent.task_id.clone(), through);
+                            }
+                            Ok(None) => {}
+                            Err(error) if error.halts_runtime() => return Err(error),
+                            Err(error) => look_ahead_failures.push(error.outcome()),
+                        }
                     }
                     return Ok(hold.eligibility(refresh));
                 }
@@ -4330,6 +4366,9 @@ impl PolicyHost {
         // evaluation released because its pair was due for another cause is forgotten, whatever
         // the evaluation's result, so it stays released.
         self.no_progress.forget_released(&no_progress_guards);
+        // #484 IDLE-W2 fix round 1: the look ahead's failures are kept for the cycle whatever the
+        // evaluation's result, so none is lost behind a failed evaluation.
+        self.idle_look_ahead_failures.extend(look_ahead_failures);
         let mut evaluation = evaluation?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the stops, lifts and expiries the plan
@@ -4971,6 +5010,13 @@ impl PolicyHost {
     /// start, for the cycle's recorder.
     pub(crate) fn take_variable_warnings(&mut self) -> Vec<Outcome> {
         std::mem::take(&mut self.variable_warnings)
+    }
+
+    /// #484 IDLE-W2 fix round 1 (review-1845): the failures of the idle plan's look ahead that the
+    /// evaluations since the last call met and that do not stop the Runtime, each as its outcome,
+    /// for the cycle, which says them in the daemon's log.
+    pub(crate) fn take_idle_look_ahead_failures(&mut self) -> Vec<Outcome> {
+        std::mem::take(&mut self.idle_look_ahead_failures)
     }
 
     /// Workflow #411 B15 R4 (model-b15 §7.8, at start): per pair of a task that declares a
