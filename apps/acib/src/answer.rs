@@ -1376,9 +1376,9 @@ impl SignalError {
 /// (fix round 2) its own acknowledgement of a channel the phone opened that it failed to write are
 /// that one error, `reader_stopped`; a wait whose time passed is no failure but the answer
 /// `not_in_time` ([`KillAnswer`]). (Fix round 3) A word says why this program saw no answer to the
-/// request, never that the phone sent none: `stop` reads on after a failed read and takes every
-/// answer the library had read (`bridge.rs`, `kill_answers`), but one it had not read whole when
-/// the connection ended is never seen.
+/// request, never that the phone sent none: after the connection's end `stop` reads on and takes
+/// every answer the library had read (`bridge.rs`, `kill_answers`), but one it had not read whole
+/// when the connection ended is never seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyFailure {
@@ -1489,8 +1489,9 @@ pub struct Stop {
     /// no kill request, their number being of no request still waited for (`bridge.rs`,
     /// `kill_answers`): a count, no byte of them. Only when there are any. (Fix round 3) The
     /// answers this program saw before its reading ended (every request answered, the wait
-    /// passed, or the reads after a failed one having taken what the library held); one that came
-    /// later, or that the library had not read whole when the connection ended, is not counted.
+    /// passed, a read failed, or after the connection's end the reads having taken what the
+    /// library held); one that came later, or that the library had not read whole when the
+    /// connection ended, is not counted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpaired_replies: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

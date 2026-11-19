@@ -1519,18 +1519,28 @@ async fn send_kills(
 /// request's number: [`FIRST_KILL_NUMBER`]), never by its place among the answers, so an answer
 /// that is missing, late or out of order is given to no other pid, and an answer whose number is
 /// of no request still waited for is given to none and (fix round 2) counted, by nothing but its
-/// count. (Fix round 3) A failed read does not end the reading. The library's reader of the
-/// connection puts each message it reads in its channel's queue before it reads the next, and
-/// marks the connection closed only at the read that fails (idevice 0.1.68,
-/// `services/dvt/remote_server.rs` 861-885, 1062-1086); a read begun after a message was queued
-/// takes it, the queue being looked at before the closed mark (836-844), but a read already
-/// waiting when an answer and the end come together returns whichever of the two its
-/// `tokio::select!` checks first, a branch picked at random (846-849), the answer left queued. So
-/// after the first failed read each read takes the next answer the library still holds, until a
-/// read fails again; none of them waits (the connection marked closed, a mark nothing takes back,
-/// or the channel gone, the library answers a read at once: 842-844, 830-833), and nothing is
-/// sent. Every answer the library read before the end is so paired, whichever came first to the
-/// waiting read. In the order of `sent`, each request's: its answer, when one came; else, when a
+/// count. (Fix round 3) A failed read of the connection's end does not end the reading. The
+/// library's reader of the connection puts each message it reads in its channel's queue before
+/// it reads the next, and marks the connection closed only at the read that fails (idevice
+/// 0.1.68, `services/dvt/remote_server.rs` 861-885, 1062-1086); a read begun after a message was
+/// queued takes it, the queue being looked at before the closed mark (836-844), but a read
+/// already waiting when an answer and the end come together returns whichever of the two its
+/// `tokio::select!` checks first, a branch picked at random (846-849), the answer left queued.
+/// What follows the first failed read is decided by its [`reply_failure`], one way per kind:
+///
+/// - `reader_stopped` (the closed mark's error, `closed_error`, 1245-1250): the library gives it
+///   only once the mark is set (843; or 848, its notice sent only after the mark is stored:
+///   880-881, 1030-1031), and nothing takes the mark back (it is only ever stored true). So each
+///   read after it is answered at once, the queue's next message (837-839) or the same error
+///   (842-844), and the reading goes on, with no deadline, until a read fails again: every answer
+///   the library read before the end is so paired, whichever came first to the waiting read.
+/// - `channel_cancelled` (`UnknownChannel`, 833): the phone cancelled the channel and the library
+///   dropped its queue with it (1234-1239): nothing is left to take, and the reading ends there.
+/// - `other`: the library's read gives no such error (828-851), so the connection's state is not
+///   known, and the reading ends there, as before fix round 3.
+///
+/// No read after the first failed one is made but after the connection's end, and nothing is
+/// sent. In the order of `sent`, each request's: its answer, when one came; else, when a
 /// read failed, a failed request of the first failed read's kind and its [`reply_failure`] (the
 /// connection ended before this program saw an answer to it, which does not say that the phone
 /// sent none: README); else, the wait having passed, `not_in_time`. Then how many answers were
@@ -1549,8 +1559,8 @@ async fn kill_answers(
             Some(until) if failed.is_none() => tokio::time::timeout_at(until, next_answer(control))
                 .await
                 .ok(),
-            // (Fix round 3) After a failed read the library answers each read at once: no
-            // deadline cuts the taking of the answers it holds.
+            // (Fix round 3) Only after the connection's end (`reader_stopped`, below), when the
+            // library answers each read at once: no deadline cuts the taking of what it holds.
             _ => Some(next_answer(control).await),
         };
         match next {
@@ -1565,9 +1575,16 @@ async fn kill_answers(
                     None => unpaired += 1,
                 }
             }
-            // (Fix round 3) The first failed read: the reads after it take what the library holds.
-            Some(Err(error)) if failed.is_none() => failed = Some(error),
-            // A read after it failing too (the library holds no more), or the wait passed.
+            // (Fix round 3) The first failed read: read on only after the connection's end, to
+            // take what the library holds; after any other kind, end the reading here.
+            Some(Err(error)) if failed.is_none() => {
+                let ended = reply_failure(&error) == ReplyFailure::ReaderStopped;
+                failed = Some(error);
+                if !ended {
+                    break;
+                }
+            }
+            // A read after the end failing too (the library holds no more), or the wait passed.
             Some(Err(_)) | None => break,
         }
     }
@@ -3239,8 +3256,8 @@ mod tests {
     /// connection decide either way (stopped, status 0). (Fix round 3) The server writes its
     /// answers before it ends the connection, so the library has read them all when it marks the
     /// connection closed; whichever of an answer and the end the waiting read is handed first,
-    /// the reads after a failed one take every answer it holds (`kill_answers`): no order can
-    /// change either line. And the reason of a failed wait comes
+    /// the reads after the connection's end take every answer it holds (`kill_answers`): no
+    /// order can change either line. And the reason of a failed wait comes
     /// from the library's error value alone: the socket error of the kind `BrokenPipe` it makes
     /// once its reader has stopped (`services/dvt/remote_server.rs` 1245-1250) is `reader_stopped`,
     /// its `UnknownChannel` `channel_cancelled`, any other error `other`.

@@ -663,9 +663,9 @@ answer, error text or log line.
   is given to none and (fix round 2) counted, in `unpaired_replies` (only when there are any; no
   byte of such an answer is read or kept). A request whose answer did not come in time is
   `not_in_time`. (Fix round 3) `unpaired_replies` counts the answers this program saw before
-  its reading ended (every request answered, the wait passed, or the reading after a failed
-  read done, below): one that came later, or that the library had not read whole when the
-  connection ended, is not counted.
+  its reading ended (every request answered, the wait passed, a read failed, or after the
+  connection's end the reading of what the library held done, below): one that came later, or
+  that the library had not read whole when the connection ended, is not counted.
 
   **Reading the answers to their end (fix round 3).** The library's reader of the connection puts
   each message it reads in its channel's queue before it reads the next, and marks the connection
@@ -677,10 +677,15 @@ answer, error text or log line.
   its first branch at random: the error may come first, the answer left in the queue. Up to fix
   round 2 `stop` ended its reading at the first failed read, so an answer that had reached this
   computer just before the end could be named `reader_stopped` (two tests did so on CI, and the
-  run at 15:17 may have, above). Since fix round 3 a failed read does not end the reading: each
-  read after it takes the next answer the library still holds, at once, until a read fails
-  again, and only then is a request still without its answer a failed one. These reads send
-  nothing and wait for nothing: what `stop` sends, and when, is as before.
+  run at 15:17 may have, above). Since fix round 3 a failed read whose error is the connection's
+  end (`reader_stopped`, the one error the library gives only once its closed mark is set, a
+  mark it never takes back) does not end the reading: each read after it takes the next answer
+  the library still holds, at once, until a read fails again, and only then is a request still
+  without its answer a failed one. **It reads on only after the connection's end.** After
+  `channel_cancelled` (the library dropped the channel's queue with it, `remote_server.rs`
+  1234-1239: nothing is left to take) or `other` (the connection's state is not known) the
+  reading ends at that first failure, as before. These reads send nothing and wait for nothing:
+  what `stop` sends, and when, is as before.
 
   **When the wait for an answer fails (fix round 1).** The reason is named in `reply_failure`,
   beside the failed request's pid and `error_kind`, from the library's error value alone (its
