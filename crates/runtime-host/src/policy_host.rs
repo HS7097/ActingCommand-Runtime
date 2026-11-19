@@ -4538,6 +4538,46 @@ impl PolicyHost {
                 HostLocation::ResolveActivityWindow,
             )
         })?;
+        // #484 IDLE-W2 fix round 2 (the host test of a restart; production 0.12.74 on 11-19 at
+        // 08:36, the deploy's restart, where the first cycle under a restored pause woke an
+        // application closed as idle): a start withholds the availability of each instance it
+        // prepares until its self-check passes and prepares none whose restored pause released
+        // it, which stays unavailable until the resume's reconnect proves it again. The
+        // evaluation blocks each candidate of an unavailable instance past its trigger at
+        // placement, before the order of the deferrals, so the look ahead above never read it,
+        // and the idle plan counted it due (no wake of its own) or took its trigger's next time
+        // as its wake. On an instance the idle action closed, while a hold of it (positions 1
+        // and 2) holds it too, such a candidate cannot be dispatched before that hold ends and
+        // the availability is proven again, a time nothing names: for the idle plan alone it
+        // counts as held back by a later position that names no time (not due, no wake of its
+        // own). Once the hold is gone the evaluation reads it as before; nothing a dispatch
+        // decides reads this.
+        for decision in &evaluation.decisions {
+            let Some(alias) = decision.instance_id.as_deref() else {
+                continue;
+            };
+            if decision.task_id != FACT_REFRESH_TASK_ID
+                && decision.state == SchedulingDecisionState::Blocked
+                && decision.eligibility == EligibilityState::True
+                && fact_refresh.idle_closed.contains_key(alias)
+                && instances
+                    .get(alias)
+                    .is_some_and(|instance| !instance.available)
+                && crate::fact_refresh::member_hold(
+                    alias,
+                    &control_gates(alias),
+                    switch_cooldowns.get(alias).copied(),
+                    device_group_holds.get(alias),
+                    instance_occupancy(alias),
+                )
+                .is_some()
+            {
+                held_ahead
+                    .entry(alias.to_owned())
+                    .or_default()
+                    .insert(decision.task_id.clone(), None);
+            }
+        }
         self.explanation.record_gated(
             &evaluation,
             active.compiled.catalog_hash(),

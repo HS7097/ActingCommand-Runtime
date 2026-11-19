@@ -56,6 +56,14 @@
 //!   give: an evaluation inside a start's own preparation, which runs inside `RuntimeHost::start`
 //!   before it returns (and is skipped for an instance whose pause the start restored); a
 //!   client's lease after the resume stands for it.
+//!
+//! Fix round 2 (CI of fix round 1): the restart's first evaluation under the restored pause queued
+//! a wake, `planned_time_reached`. The start had withheld the instance's availability and skipped
+//! its preparation, so the evaluation blocked the task at placement (`instance_unavailable`) before
+//! any hold, the look ahead never read it and the plan took its trigger's next time as its wake. The
+//! restart test is the proof of the fix (`PolicyHost::evaluate`: such a candidate of an instance
+//! the idle action closed, under a hold, counts as held back with no time); its record lists and
+//! those of the close's test print the outcome code and operation of each record they found.
 
 use super::gate_369_s6c::{connectivity, head};
 use super::gate_372k2::{SlotTask, Slots, at, slot_sources};
@@ -658,7 +666,9 @@ const X_ALIAS: &str = "idle_w2.instance.x";
 const HOST_NOW_UNIX_MS: u64 = 1_000;
 /// X's next due task in its plan: four hours away, past `idle.min_gap_ms`'s default.
 const HOST_NEXT_DUE_UNIX_MS: u64 = HOST_NOW_UNIX_MS + 4 * HOUR_MS;
-const WAIT: Duration = Duration::from_secs(60);
+/// Every bounded wait of this file (test plan v2.2 §2.1 guard 3: a gate file waits only with the
+/// constant of this name); it only bounds a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(60);
 
 fn instance_text(instance: InstanceId) -> String {
     match serde_json::to_value(instance).expect("an instance id encodes") {
@@ -796,6 +806,15 @@ fn idle_records(
         .collect()
 }
 
+/// Fix round 2: what an assertion on a list of [`idle_records`] prints of the records it found,
+/// each one's outcome code and operation, no more.
+fn codes_and_operations(records: &[(String, Option<String>, Option<String>)]) -> Vec<String> {
+    records
+        .iter()
+        .map(|(operation, _, _)| format!("{} {operation}", IdleCode::Taken.as_str()))
+        .collect()
+}
+
 #[test]
 fn idle_w2_host_a_held_instance_queues_no_wake_and_a_due_task_queues_one_that_names_it() {
     let fixture = host_fixture();
@@ -807,7 +826,7 @@ fn idle_w2_host_a_held_instance_queues_no_wake_and_a_due_task_queues_one_that_na
         .check_idle_instances_for_test(&x_plan(HOST_NOW_UNIX_MS, false))
         .expect("the idle check");
     assert_eq!(
-        fixture.host.await_idle_action_ends_for_test(1, WAIT),
+        fixture.host.await_idle_action_ends_for_test(1, GATE_WAIT),
         Some(1),
         "X's idle action ended"
     );
@@ -1429,7 +1448,7 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
                 .send(())
                 .expect("the test waits for the close's end");
             go_rx
-                .recv_timeout(WAIT)
+                .recv_timeout(GATE_WAIT)
                 .expect("the test lets the close's claim release the key");
         }))
         .expect("the hook");
@@ -1440,7 +1459,7 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
     let reset = deferred_by(&own.cycle(closed_at), HostCode::PolicyBudgetExhausted)
         .expect("the budget names its reset");
     entered
-        .recv_timeout(WAIT)
+        .recv_timeout(GATE_WAIT)
         .expect("the close ended and its claim still holds the key");
     assert_eq!(
         own.state
@@ -1471,16 +1490,18 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
     );
     go.send(()).expect("the close's claim waits");
     assert_eq!(
-        own.host.await_idle_action_ends_for_test(1, WAIT),
+        own.host.await_idle_action_ends_for_test(1, GATE_WAIT),
         Some(1),
         "the close ended"
     );
     let closed: (String, Option<String>, Option<String>) =
         (IdleLocation::Action.as_str().to_owned(), None, None);
+    let after_claim = own.records(before);
     assert_eq!(
-        own.records(before),
-        [closed.clone()],
-        "the close, and no wake inside its own claim"
+        after_claim,
+        std::slice::from_ref(&closed),
+        "the close, and no wake inside its own claim: {:?}",
+        codes_and_operations(&after_claim)
     );
     assert_eq!(
         kept_rows(&own.host),
@@ -1522,10 +1543,12 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
         Some(reset),
         "free, the budget defers the task to its reset"
     );
+    let after_run = own.records(before);
     assert_eq!(
-        own.records(before),
-        [closed.clone()],
-        "no wake under the client's run or after it"
+        after_run,
+        std::slice::from_ref(&closed),
+        "no wake under the client's run or after it: {:?}",
+        codes_and_operations(&after_run)
     );
     *own.state
         .foreground_script
@@ -1542,8 +1565,9 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
         Some(TASK.to_owned()),
         "the plan names the task"
     );
+    let after_due = own.records(before);
     assert_eq!(
-        own.records(before),
+        after_due,
         [
             closed,
             (
@@ -1552,7 +1576,8 @@ fn idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_tas
                 Some(TASK.to_owned()),
             ),
         ],
-        "one close, then one wake that names its cause and its task"
+        "one close, then one wake that names its cause and its task: {:?}",
+        codes_and_operations(&after_due)
     );
     own.close();
 }
@@ -1567,7 +1592,7 @@ fn idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes
     let reset = deferred_by(&own.cycle(at(1, 6, 30)), HostCode::PolicyBudgetExhausted)
         .expect("the budget names its reset");
     assert_eq!(
-        own.host.await_idle_action_ends_for_test(1, WAIT),
+        own.host.await_idle_action_ends_for_test(1, GATE_WAIT),
         Some(1),
         "the close ended"
     );
@@ -1588,18 +1613,24 @@ fn idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes
         "the start restored the application closed with its wake"
     );
 
-    // The first evaluation after the start, under the restored pause (the start withholds the
-    // instance's availability until the resume's reconnect proves it again, so no candidate of
-    // it is due in any case).
+    // The first evaluation after the start, under the restored pause. The start withholds the
+    // instance's availability and skips its preparation under the released pause, until the
+    // resume's reconnect proves it again, so the evaluation blocks the task at placement
+    // (`instance_unavailable`, before the order of the deferrals), its wake its trigger's next
+    // time, a millisecond away. Fix round 2: the idle plan counts such a candidate of a closed
+    // instance under a hold as held back with no time, so its trigger's time is no wake (on the
+    // code of fix round 1 the wake came here, `planned_time_reached`).
     own.cycle(started + 1_000);
     let under_pause = own.plan();
     assert!(
         !under_pause.due_now,
         "nothing due under the pause: {under_pause:?}"
     );
+    let under_pause_records = own.records(after_start);
     assert!(
-        own.records(after_start).is_empty(),
-        "no wake under the restored pause"
+        under_pause_records.is_empty(),
+        "no wake under the restored pause: {:?}",
+        codes_and_operations(&under_pause_records)
     );
 
     // The resume, then a claim on the key, as a start's preparation holds it.
@@ -1622,9 +1653,11 @@ fn idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes
         Some(reset),
         "free, the budget defers the task to its reset"
     );
+    let after_start_records = own.records(after_start);
     assert!(
-        own.records(after_start).is_empty(),
-        "no wake after the start"
+        after_start_records.is_empty(),
+        "no wake after the start: {:?}",
+        codes_and_operations(&after_start_records)
     );
     assert_eq!(kept_rows(&own.host), kept, "the planned wake is kept");
     own.close();

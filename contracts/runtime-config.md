@@ -1368,7 +1368,14 @@ plan counts it due and wakes the instance, as before this rule. A client's run o
 closed application as before (whether it should wake it first is not this rule's). So after a
 restart and after a resume, too: the first evaluation after a start reads a restored pause and a
 claim on the key as any hold, and an application closed as idle stays closed until its planned
-wake, with the same exception.
+wake, with the same exception. That includes a candidate the evaluation blocks before the order
+of the deferrals because its instance is unavailable (fix round 2): a start withholds the
+availability of each instance it prepares until its self-check passes, and prepares none whose
+restored pause is released, which stays unavailable until the resume's reconnect proves it again.
+On an instance the action closed, while a hold of positions 1 or 2 holds it too, such a candidate
+counts for the idle plan as held back by a later position that names no time: not due, and its
+trigger's next time is no wake; once the hold has ended and the availability is proven again, the
+evaluation reads it as any other.
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

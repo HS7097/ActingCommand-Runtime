@@ -41,7 +41,10 @@ pub(crate) type IdleHeldBack = BTreeMap<String, Option<u64>>;
 /// member of its device) while a later position would hold them back as well, each with the time
 /// that position lets it through (none: it names no time). The policy host reads the later
 /// positions for the idle plan alone (`PolicyHost::evaluate`, its look ahead); a candidate no later
-/// position holds back is not here, and nothing a dispatch decides reads it.
+/// position holds back is not here, and nothing a dispatch decides reads it. Fix round 2: here
+/// too, with no time, is each candidate of an instance the idle action closed that the evaluation
+/// blocked because the instance is unavailable while such a hold holds it (a pause a start
+/// restored, which skipped its preparation, until the resume's reconnect proves it again).
 pub(crate) type IdleHeldAhead = BTreeMap<String, BTreeMap<String, Option<u64>>>;
 
 /// What the idle plan reads beside an evaluation, which only the idle plan reads; the rows stay the

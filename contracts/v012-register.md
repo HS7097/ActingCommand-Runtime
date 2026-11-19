@@ -41684,6 +41684,22 @@ the close carried out and a person's pause, then a seeding and a loading start, 
 from the ledger: the first evaluation under the restored pause, one under a client's lease after the
 resume and one free queue no wake, and `host.idle_state` keeps the planned wake.
 
+**Fix round 2** (coordinator work order `rd-1119/brief-484-idle-w2-fix2.md`, after CI of fix
+round 1, whose restart test found a wake under the restored pause). The start withholds the
+availability of each instance it prepares until its self-check passes and prepares none whose
+restored pause is released (`prepare_physical_instances_on_start`), so the first evaluation
+blocks the task at placement (`instance_unavailable`, before the order of the deferrals) with its
+trigger's next time as its wake; the look ahead never reads it, and the idle plan took that time
+(or, with none, counted the task due), so the planner woke the application at once
+(`planned_time_reached`): the window production met at the deploy's restart of 0.12.74. Now, on
+an instance the idle action closed (`idle_closed`), while a hold of positions 1 or 2 holds it,
+such a candidate (blocked, eligible, not the fact refresh) is put in `IdleHeldAhead` with no time
+(`PolicyHost::evaluate`): not due, no wake of its own; once the hold has ended and the
+availability is proven again, the evaluation reads it as any other, and a task really due then
+wakes at once. Nothing a dispatch decides reads it. The restart test is the proof; the record
+lists of the two host tests print each found record's code and operation; the file's waits take
+`GATE_WAIT` (test plan v2.2 §2.1 guard 3) and its slices `std::slice::from_ref` (clippy).
+
 **What is not changed.** When an application is closed as idle; every dispatch decision, the
 order, the budgets, what a pause or a held key does to a dispatch; IDLE-WG's time-bound gates and
 UPD-1's hold in the plan; the start's restore of `host.idle_state` and its owed wake; a wake's
