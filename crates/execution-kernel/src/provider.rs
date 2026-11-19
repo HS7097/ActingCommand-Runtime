@@ -869,6 +869,8 @@ impl RecognitionVisionProvider for VisionFfiProvider {
     ) -> Result<OcrProviderResult, VisionProviderError> {
         let frame = borrow_frame(request.frame)?;
         let region = vision_rect(request.region);
+        // Workflow #463 SEL-GRID G1: a shared read's served name boxes reach the engine as they are.
+        let served = served_rects(request.served);
         let (result, _) = self.call_ocr(
             request.model_ref,
             request.model_sha256,
@@ -880,6 +882,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     languages: request.languages,
                     timeout_ms,
                     blocks: ocr_block_mode(request.blocks),
+                    served: &served,
                 })
             },
         )?;
@@ -894,6 +897,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
     ) -> Result<OcrProviderObservation, VisionProviderError> {
         let frame = borrow_frame(request.frame)?;
         let region = vision_rect(request.region);
+        let served = served_rects(request.served);
         let (output, identity) = self.call_ocr(
             request.model_ref,
             request.model_sha256,
@@ -905,6 +909,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     languages: request.languages,
                     timeout_ms,
                     blocks: ocr_block_mode(request.blocks),
+                    served: &served,
                 })
             },
         )?;
@@ -1068,6 +1073,11 @@ fn vision_rect(region: PackRect) -> VisionRect {
     }
 }
 
+/// Workflow #463 SEL-GRID G1: a request's served name boxes at the vision boundary.
+fn served_rects(served: &[PackRect]) -> Vec<VisionRect> {
+    served.iter().copied().map(vision_rect).collect()
+}
+
 fn deadline_after(
     started: Instant,
     timeout_ms: u64,
@@ -1173,6 +1183,7 @@ fn map_ocr_result(result: OcrInferenceResult) -> OcrProviderResult {
         detection: result.detection.map(|count| OcrProviderDetection {
             detected: count.detected,
             limit: count.limit,
+            served: count.served,
         }),
         ppocr_diagnostics: result.ppocr_diagnostics,
         text: result.text,
@@ -2178,6 +2189,7 @@ mod tests {
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
                 blocks: OcrProviderBlocks::Implicit,
+                served: &[],
             },
         )
         .expect("canonical ROI accepted");
@@ -2270,6 +2282,7 @@ mod tests {
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
                 blocks: OcrProviderBlocks::Implicit,
+                served: &[],
             },
         )
         .expect_err("provider warning remains fail-closed");
@@ -2299,6 +2312,7 @@ mod tests {
             model_ref: "PP-OCRv6_medium",
             model_sha256: &model_sha256,
             blocks: OcrProviderBlocks::Implicit,
+            served: &[],
         };
         let test_double = VisionFfiProvider::new(
             Some((
@@ -2361,6 +2375,7 @@ mod tests {
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
                 blocks: OcrProviderBlocks::Implicit,
+                served: &[],
             },
         )
         .expect_err("timeout remains typed");
@@ -2392,6 +2407,7 @@ mod tests {
             model_ref: "PP-OCRv6_medium",
             model_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             blocks: OcrProviderBlocks::Implicit,
+            served: &[],
         }
     }
 

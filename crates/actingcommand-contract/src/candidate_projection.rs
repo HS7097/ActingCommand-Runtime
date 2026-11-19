@@ -154,6 +154,18 @@ impl CandidateRect {
             && i64::from(self.x) + i64::from(self.width) <= i64::from(frame.width)
             && i64::from(self.y) + i64::from(self.height) <= i64::from(frame.height)
     }
+
+    /// Whether the centre `(x + floor(width / 2), y + floor(height / 2))` of `block` lies in this
+    /// rectangle, its left and top edges inside and its right and bottom edges outside. Workflow
+    /// #463 SEL-GRID G1: the one rule by which a layout's shared read gives a text block to a
+    /// target it serves (the recognition pack) and by which the text provider keeps the blocks of
+    /// the name boxes such a read serves (the vision boundary), written here once for both.
+    pub fn holds_centre_of(self, block: CandidateRect) -> bool {
+        let x = i64::from(block.x) + i64::from(block.width) / 2;
+        let y = i64::from(block.y) + i64::from(block.height) / 2;
+        (i64::from(self.x)..i64::from(self.x) + i64::from(self.width)).contains(&x)
+            && (i64::from(self.y)..i64::from(self.y) + i64::from(self.height)).contains(&y)
+    }
 }
 
 /// One feature value of one candidate.

@@ -116,6 +116,7 @@ impl VisionProvider for ScriptedOcr {
                 Some(OcrProviderDetection {
                     detected: 65,
                     limit: 64,
+                    served: None,
                 }),
             )),
             Answer::Reads => Ok(read(NAME, None)),

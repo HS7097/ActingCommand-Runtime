@@ -652,6 +652,13 @@ pub struct OcrProviderRequest<'a> {
     pub model_sha256: &'a str,
     /// How the region is cut into blocks (Workflow #396 REC-1).
     pub blocks: OcrProviderBlocks,
+    /// Workflow #463 SEL-GRID G1: the name boxes a layout's shared read serves on its frame, in
+    /// the coordinates of `frame`: the provider recognizes, and counts against the model folder's
+    /// `max_boxes`, only the detected blocks that lie in one (by
+    /// `actingcommand_contract::candidate_projection::CandidateRect::holds_centre_of`), and
+    /// reports their number as [`OcrProviderDetection::served`]. Empty for every other read, which
+    /// the provider answers as before.
+    pub served: &'a [PackRect],
 }
 
 #[derive(Debug, Clone, PartialEq)]

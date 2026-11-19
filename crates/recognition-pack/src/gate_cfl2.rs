@@ -843,6 +843,7 @@ fn cfl2_t8_a_shared_read_serves_only_its_own_chain_and_counts_each_target_over_i
         read.detection = Some(OcrProviderDetection {
             detected: 3,
             limit: 64,
+            served: None,
         });
         read
     });
@@ -903,6 +904,7 @@ fn cfl2_t8_a_shared_read_serves_only_its_own_chain_and_counts_each_target_over_i
             rect: SHARED,
             detected: Some(3),
             limit: Some(64),
+            served: None,
             kept_milli: Some(whole.kept_milli),
             threshold_value: None,
         })
@@ -914,6 +916,7 @@ fn cfl2_t8_a_shared_read_serves_only_its_own_chain_and_counts_each_target_over_i
         read.detection = Some(OcrProviderDetection {
             detected: 65,
             limit: 64,
+            served: None,
         });
         read
     });

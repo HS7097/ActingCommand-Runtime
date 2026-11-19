@@ -269,7 +269,10 @@ byte for byte as before.
    pixels are the processed values `(v, v, v)`, with the region `(0, 0, w, h)` and an explicit
    block mode: `Implicit` (an OCR target without `locate`) becomes `Region`, which reads the
    region as one block as an `Implicit` read of a part of the frame did; `Region` and `Detect`
-   stay.
+   stay. Workflow #463 SEL-GRID G1 (since 0.12.76): a layout's shared read sends the name boxes it
+   serves moved onto the region's origin the other way, with checked subtractions, so that the
+   provider holds them in the small frame's coordinates ([selection-graph.md](selection-graph.md),
+   "Shared OCR read", "What the read recognizes"); without a chain they go in the frame's own.
 4. Every block that comes back is moved back onto the region's origin with checked additions
    (a coordinate that leaves the `i32` range is `recognition_pack_provider_response_invalid`,
    unreachable in practice) and then checked against the region in frame coordinates, as

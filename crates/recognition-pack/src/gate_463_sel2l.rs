@@ -652,6 +652,7 @@ fn sel2l_a_region_short_of_the_band_is_refused_and_a_truncated_read_fails() {
             Some(OcrProviderDetection {
                 detected: 65,
                 limit: 64,
+                served: None,
             }),
         )
     });
