@@ -18,7 +18,8 @@
 // pinned to v0.12.71 ([3, 11]), still meets this build's [3, 12]. #480 PG-2e (register §1.485,
 // 0.12.75) raises the floor this file is about to 12: the Runtime answers the instance pause's
 // `pause_mode` and `in_the_way`, which a reader below 12 refuses, so [12, 12]; a console that reads
-// 12 pairs, one whose `max` is below 12 fails `ui_meets_next` alone (the second test, renamed).
+// 12 pairs, one whose `max` is below 12 fails `ui_meets_next` alone (the second test, renamed; fix
+// round 1 renamed the first for the range it asserts).
 
 use super::manifest::{Speaks, UiDeclaration, parse_declaration};
 use super::plan::{Edge, EdgeResult, ui_edges};
@@ -57,7 +58,7 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
-fn r0b_the_build_declares_runtime_client_three_to_four() {
+fn r0b_the_build_declares_runtime_client_12_to_12() {
     // Workflow #432 AGT-1b (register §1.246) raises `max` to 5, #407 PERF-READ (§1.280) to 6,
     // #428 S168-LB1a (§1.311) to 7, #434 LAB-6S1a (§1.287) to 8, #463 V3 (§1.383) to 9, #437
     // G1 fix round 2 (§1.433) to 10, #463 S3-8 (§1.444) to 11 and #480 PG-2c (§1.472) to 12; the

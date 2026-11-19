@@ -41180,9 +41180,10 @@ building; the brief's stop condition does not apply). 0.12.73 and 0.12.74 declar
 update from 0.12.74 passes every edge, by the live build's installer ([3, 12]) or this build's
 ([12, 12]), with no flag: `ledger_verify` false (the ledger range does not change), the notice's
 `rollback_window_bounded` false (no one-way edge), no warning of this slice's. This build's way back
-(its own installer, I [12, 12]) to 0.12.74 or 0.12.73 passes every edge too; to 0.12.72 or older it
-fails `runtime-client` `installer_meets_next` alone (the plan refuses `interface_edge`, count 1; for
-0.12.70 and older the ledger edge `previous_max_in_next` fails as well, as it did already). The
+(its own installer, I [12, 12]): to 0.12.74 and 0.12.73 it passes every edge too; to 0.12.72 and
+0.12.71 it fails `runtime-client` `installer_meets_next` only (the plan refuses `interface_edge`,
+count 1); to 0.12.70 and older it fails the ledger's edge `previous_max_in_next` as well (0.12.70
+declares `ledger` [3, 8]; that edge failed toward them already). The
 rollback window's rows (`{commit, ledger_edge_passes}`, one per kept build but the live one) read
 the ledger alone: true for 0.12.71 to 0.12.74, false for 0.12.70 and older, so a row of 0.12.72 or
 0.12.71 says true while its rollback plan is refused.
@@ -41281,7 +41282,8 @@ a status without them; the `status` and `pause` rows' parameters and `ac_status`
 schemas are unchanged. Adapted, the requirement moving what they pin:
 `gate_480_pg2c::pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members` (renamed
 `…_carries_revision_12s_members`) and `gate_429_r0b_pairing`'s two tests (the second renamed
-`r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused`), each rename's
+`r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused`; fix round 1 the first
+`r0b_the_build_declares_runtime_client_12_to_12`, for the range it asserts), each rename's
 retirement in `ci/retired-gates.toml`; actinglab-architecture's
 `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once` ([12, 12]); actingctl's
 `gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments` (the row's
@@ -41305,7 +41307,10 @@ the console pinned v0.12.73 or later and the Lab copies of 0.12.73 or later do; 
 running on an image of 0.12.72 or older (renamed aside by an earlier deploy and never restarted,
 `install status`'s `mcp_servers_on_old_images`) fails `runtime_receipt_decode_failed` on such a status and latches its
 connection, so its client reconnects to the live build. The way back closes for 0.12.72 and older
-(their tools read revision 11).
+(their tools read revision 11). For the release notes: a person's resume that takes the persist
+gate first can leave a standing pause's `scheduling_pause_settled` or
+`scheduling_pause_kept_at_shutdown` unwritten (its continuation writes them only while the pause
+still holds; the resume's own records then say what happened).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

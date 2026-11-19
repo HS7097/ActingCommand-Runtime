@@ -1461,3 +1461,11 @@ test = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_cons
 ruling = "#480 PG-2e (0.12.75; register §1.485; the coordinator's work order rd-1119/brief-480-pg2e-status-answers-the-pause.md, item 4: runtime-client min 12)"
 reason = "Renamed and adapted: the test pinned that a console speaking at most 3, 4, 9, 10 or 11 pairs with this build, the floor being 3. The floor is 12 since 0.12.75, so such a console no longer pairs and the name said the opposite."
 covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused, in the apps.toml row of Workflow #429 R-0b: a console of [3, 12] or [12, 12] pairs, one of [3, 11] or [2, 2] fails ui_meets_next alone."
+
+# apps.toml, the row of Workflow #429 R-0b (the build's runtime-client range; #480 PG-2e fix round 1).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four"
+ruling = "#480 PG-2e fix round 1 (0.12.75; register §1.485; the coordinator's work order rd-1119/brief-480-pg2e-fix1.md, item 5, after the review of #1842)"
+reason = "Renamed: the name gave the range [3, 4] the build declared at R-0b, while the test asserts [12, 12] since #480 PG-2e (runtime-client min 12), so the name said a range the build no longer declares."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_12, in the apps.toml row of Workflow #429 R-0b: the build's own declaration speaks runtime-client [12, 12]."

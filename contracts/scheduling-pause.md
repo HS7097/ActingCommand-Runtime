@@ -839,6 +839,17 @@ cannot tell it apart on a connection; the console pinned v0.12.73 before this re
   check read it before, `contained_run` among what is in the way), or for the instance's admission
   guard another party holds (a Start through its readiness wait: on the request's thread until the
   end of its caller's time, then read outside the guard; on the continuation's until it takes it).
+  Two things follow from it. **An absent `in_the_way` before `released` does not say that nothing
+  is in the way**: the drain's reading looks only at a contained run of the instance in flight, and
+  after a drain that read none the hand-back's first check waits for the instance's admission
+  guard, while another party holds it (a Start through its readiness wait), for as long as the
+  caller's time allows (the drain timeout plus `30_000` ms from the pause's start: up to
+  `330_000` ms with the Lab's `pause` row's default drain of `300_000` ms); for that time the stage
+  is `paused` and `in_the_way` is absent. A reader that wants to know whether the pause is quiet
+  reads the stage (`released`), not the absence of `in_the_way`. And **the mode is not kept across
+  a restart** (it lives in memory only, "Two modes"): every pause restored at a start answers
+  `stand`, a tool's `quiet_or_lift` hold that was in effect when the Runtime stopped included; such
+  a hold is told by its `pause_reason`.
 - The receipt's cause and the records of "A pause's life in the ledger" stay what they are: a
   receipt answers its caller at once, the records are the pause's history.
 
