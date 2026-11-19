@@ -4484,3 +4484,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_479_f2::f2_fix4_an_unbound_ios_handsets_pause_and_resume_answer_as_a_bound_ones",
 ]
 incident = ["#479 F-2"]
+
+# Workflow #485 START-1 (0.12.75; register §1.489; brief rd-1119/brief-485-start-settle-bounded.md and the coordinator's ruling B): each epoch written in-process by a host on a manual Runtime clock and closed, then started again on the same state root. The records the next start writes for the epoch's runs, compared with what 0.12.74 writes for the same ledger (pinned on that code first): a run left during its entry check (two task.evidence_indexed facts, no package admitted) and a run whose lease expired before the end (package admitted, run started) each get task.terminal_intent then task.cancelled (contained_task_recovered_after_restart) and no lease record; both in one epoch with a finished run are settled in the order of their first records and the finished run gets nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_a_run_left_during_its_entry_check_is_settled_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_a_run_whose_lease_expired_before_the_end_is_settled_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_the_runs_of_one_epoch_are_settled_as_before_in_their_order",
+]
+incident = ["#485", "START-1"]
