@@ -805,7 +805,7 @@ impl HostShared {
             HostLocation::ReadBackendSelfcheckInstance,
         )?
         .get(&instance_id)
-        .and_then(RegisteredInstance::device_system_without_backend))
+        .and_then(RegisteredInstance::device_system_without_input_backend))
     }
 
     /// Workflow #479 F-2: such a handset is unavailable with the source `device_system:<system>`;

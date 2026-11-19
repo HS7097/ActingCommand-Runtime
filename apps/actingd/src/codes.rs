@@ -78,6 +78,12 @@ actingcommand_contract::outcome_codes! {
         /// `system_mismatch`): a start registers that handset unbound, says so in one warning
         /// daemon line and starts every other instance; check-config refuses the file.
         DeviceBindingIgnored => "device_binding_ignored": warning / none,
+        /// Workflow #479 F-3a: an iOS handset is configured and `acib` is not where the Runtime
+        /// runs it from (`aliases` the iOS handsets; `program`, the install root's
+        /// `tools\acib.exe`, when the check knows an install root): a check-config note, never a
+        /// refusal; a start goes on, and those handsets' captures answer `capture_ios_failed`
+        /// `acib_missing`.
+        DeviceAcibMissing => "device_acib_missing": warning / none,
         /// Workflow #369 S6a: an instance names `start_emulator: true` but has no emulator the
         /// daemon can start: a fixture, or an instance not bound by discovery (`alias`).
         StartEmulatorRequiresDiscoveryBinding => "start_emulator_requires_discovery_binding": error / none,

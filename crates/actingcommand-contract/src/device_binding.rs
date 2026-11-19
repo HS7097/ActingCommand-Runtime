@@ -80,6 +80,14 @@ impl DeviceSystem {
     }
 }
 
+/// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): where `acib`, the
+/// project's iOS device bridge, is: `<install root>\tools\acib.exe`, the one place the Lab's
+/// listing and binding and the Runtime's capture of an iOS handset run it from. No configuration
+/// member names another place.
+pub fn acib_path(install_root: &Path) -> PathBuf {
+    install_root.join("tools").join("acib.exe")
+}
+
 /// Who wrote a binding (§3.2 `bound_via`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

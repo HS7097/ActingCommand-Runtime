@@ -35,9 +35,17 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
+// Workflow #479 F-3a: an iOS handset's frame, one `acib screenshot` child per frame.
+mod acib;
 mod nemu_input;
 // #402 RD-3: the scrcpy continuous-stream backend for real devices.
 mod scrcpy;
+pub use acib::{
+    ACIB_ANSWER_LINE_LIMIT_BYTES, ACIB_KEY_SALT_VARIABLE, ACIB_PICTURE_LIMIT_BYTES,
+    ACIB_SCREENSHOT_DEADLINE_MS, ACIB_SCREENSHOT_WAIT_MS, AcibBounds, AcibCaptureSource,
+    AcibCommand, AcibKeySalt, AcibLauncher, AcibProcess, AcibScreenCaptureBackend,
+    SystemAcibLauncher, open_acib_screen_capture,
+};
 pub use nemu_input::{
     InputCheckPhase, InputCheckStop, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuInputSupport, NemuIpcSession,
@@ -1372,6 +1380,10 @@ fn build_capture_backend(
         // #402 RD-3: no automatic order lists scrcpy; only an explicit choice opens it.
         CaptureBackendName::Scrcpy => Err(DeviceError::fatal(
             "scrcpy is never probed automatically; it opens only as an explicit choice",
+        )),
+        // Workflow #479 F-3a: an iOS handset's capture, which no configuration selects.
+        CaptureBackendName::AcibScreenCapture => Err(DeviceError::fatal(
+            "acib screen capture is never probed automatically; it opens only for an iOS handset",
         )),
     }
 }

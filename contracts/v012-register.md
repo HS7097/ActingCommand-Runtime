@@ -41312,6 +41312,212 @@ gate first can leave a standing pause's `scheduling_pause_settled` or
 `scheduling_pause_kept_at_shutdown` unwritten (its continuation writes them only while the pause
 still holds; the resume's own records then say what happened).
 
+### 1.486 #479 F-3a (0.12.75): the Runtime takes one frame of an iOS handset from `acib` (Workflow #479; the owner's rulings of 11-18 on board #479, among them that no lock state is read; the rules below are the coordinator's rulings in the work order and its disposition of the design, not the owner's words; coordinator work order `rd-1119/brief-479-f3a-ios-capture-backend.md` with its addition of 11-19 08:18 (the phone's picture is Display P3), the design `rd-1119/design-479-f3.md` and its disposition, on main `1067dfaf`)
+
+1.486 is the number the coordinator assigned this section; §1.485 and §1.487 are other slices
+dispatched with it. It ships in 0.12.75. [device-binding.md](device-binding.md), "An iOS handset",
+"The capture", is the contract.
+
+**What it is.** Since #479 F-2 (§1.482) an iOS handset was an instance the Runtime knew and could
+not reach. Now a bound one's frame is taken from `acib screenshot --out -`, one child per frame, the
+way an Android device's is taken from `adb exec-out screencap -p`, for the read-only observations
+alone: a read-only observe, a capture sequence, an observation's frames (and a Lab operation's
+look). Input, application commands, a run's capture, a monitor, a self-check and a drill stay
+refused; nothing is scheduled on it.
+
+**What the code found first (work order item 1).**
+- No ledger record carries `RuntimeCaptureBackend`: it is a member of `ReadonlyObservation`
+  (`crates/actingcommand-contract/src/runtime.rs`), which travels in receipts only. The read-only
+  observation writes `capture.requested`, `recognition.requested`, `backend.open_observed`, the
+  frame's `artifact.*` records, `capture.dedup_window`, `capture.completed` (width, height,
+  acquisition) and `recognition.completed`, or on failure `capture.failed`, the required failure
+  record and `recognition.failed` (`host/observation.rs`, `capture_observation_with_links`): none
+  names a backend by enum (the open observation's `requested` and `selected` are tokens). The device
+  layer's `CaptureBackendName`, which gains `acib_screen_capture` too, is persisted in the run's
+  geometry record (`TaskGeometryFrame.backend`, `CaptureGeometry.backend` in `event/payload.rs` and
+  `capture_geometry.rs`), written by a run's frame gate alone (`host/contained_task.rs`), which an
+  iOS handset's run capture never reaches in this slice. So no new value is written into a ledger
+  record and `ledger` stays [3, 9].
+- On the wire: `ReadonlyObservation.capture_backend` in the receipts of `ObserveReadonly`,
+  `CaptureSequence` and `ObserveContainedPage` and in a Lab operation's frames; the status's
+  capability rows name backends as text. Every reader of the closed enum refuses an unknown value:
+  `runtime-client` 13.
+- A failed capture closed its session: the kernel's worker retains the backends for the owner's
+  fenced close (`session.rs`, `run_session`, `close_retained_after_failure`) and the host closes it
+  (`finish_capture_failure_while_guarded`). One cause is answered without closing anything by a
+  mark on the device error, `FrameRefusal` (`DeviceError::with_frame_refused`), which the kernel's
+  failure context carries: the worker answers and goes on, `ExecutionSession::capture` and the
+  kernel keep the session, and the host closes nothing. No decision names a code.
+- The Runtime finds the install root's `tools` through `ac_adb::InstalledAdb` (`detect`, the
+  executable two levels below a root with `runtime\BUILD-MANIFEST.json`, the slot lock's root;
+  check-config's `--install-root`); the Lab through its own `install` and `candidate_tools`. Both
+  now take `acib` from one function, `actingcommand_contract::acib_path(<root>)` =
+  `<root>\tools\acib.exe` (the Lab's `tools_of` calls it).
+- `acib screenshot --out -` writes its one JSON line, one line feed, then exactly the line's `bytes`
+  raw bytes; a refusal is its problem line and no byte (`apps/acib/README.md`, "`--out -`";
+  `framing.rs`). A phone is selected by `--device-key <key> --key-salt-env <NAME>`, the salt the
+  value of the variable `NAME` of acib's own environment.
+
+| Part | Where |
+|---|---|
+| the backend: one `acib screenshot` child per frame, launcher (`AcibLauncher`, `AcibProcess`, `SystemAcibLauncher`), source (`AcibCaptureSource`: program, salt, bounds), the open (`open_acib_screen_capture`, no frame at open) | `crates/device/src/capture/acib.rs` |
+| the child: standard input from nowhere, pipes, `CREATE_NO_WINDOW`, the salt in `ACTINGCOMMAND_ACIB_KEY_SALT` alone, errors read and dropped, output capped (4 KiB of line, 64 MiB of picture), `--timeout-ms 8000` below a 10 s wait, a look every 25 ms, the end by `stop_child` (500 ms), an end not confirmed `acib_not_ended` with its unconfirmed resource | `acib.rs`: `take_picture`, `Readers`, `end_with`, `read_answer`; `crates/device/src/adb.rs`: `wait_for_child_exit` now `pub(crate)` |
+| the picture: chunks before `IDAT` read here (`IHDR`, `sRGB`, `cICP`), the colour space from `cICP` else `sRGB`, RGB 8 or 16 bits, 16-to-8 rounding, P3-D65 to sRGB through linear light by the derived matrix, clip, sRGB curve, two tables made once | `crates/device/src/capture/acib/picture.rs`: `to_srgb8`, `p3_d65_to_bt709`, `Conversion` |
+| the black picture: `FrameRefusal::AllBlack`, the session kept | `acib.rs`, `frame_of`; `crates/device/src/error.rs`; `crates/execution-kernel/src/session.rs`, `kernel.rs`; `crates/runtime-host/src/host/resource_close.rs`, `finish_capture_failure_while_guarded` |
+| the causes: `IosCaptureFailure` on the device error, the kernel's failure context, `capture_ios_failed` with `ios_capture_problem`, `acib_problem`, `acib_stage` | `crates/device/src/codes.rs` (three vocabularies); `crates/execution-kernel/src/error.rs`; `crates/runtime-host/src/error.rs`, `ios_capture_cause` |
+| the registry: an iOS handset's capture opens through `acib` (`open_ios_capture`), unbound answers `device_endpoint_unbound`, every other path refused as F-2 left it; the capability row of the frame | `crates/runtime-host/src/provider.rs`: `with_ios_capture`, `open_capture`, `unbound_handset_refusal`, `device_system_capability_profile` |
+| the host's predicate split: `DeviceOperation::{Capture, RunCapture, MonitorCapture}` and `has_backend_on`; `device_system_without_input_backend` for the inert skips | `host/lease.rs`; `host.rs`; `host/contained_task.rs`, `host/monitor_control.rs`, `host/idle.rs`, `host/policy_dispatch.rs`, `host/resource_close.rs`, `host/runtime_facts.rs` |
+| the enums: `CaptureBackendName::AcibScreenCapture`, `RuntimeCaptureBackend::AcibScreenCapture` (`acib_screen_capture`) and their maps | `crates/actingcommand-contract/src/capture_geometry.rs`, `runtime.rs`; `host/observation.rs`, `host/lab_operation.rs`; `apps/actinglab/src/runtime_capture_backend.rs` |
+| where `acib` is: `acib_path`; actingd gives each iOS handset's registration its source (the install root of its adb, the installation's secret); check-config's note `device_acib_missing` | `crates/actingcommand-contract/src/device_binding.rs`; `crates/lab-ops/src/devices.rs`, `tools_of`; `apps/actingd/src/config.rs` (`assemble_noting`, `ios_registration`, `AcibMissing`), `config/ac_adb.rs`, `check_config.rs` |
+| `runtime-client` 13, joined (§1.487, #479 F-3b, opened revision 13 in the same release; the range [12, 13], `min` as §1.485 set it, is §1.487's) | [component-interfaces.md](component-interfaces.md) row 13, F-3a's sentences; `tools/actinglab-architecture/tests/component_interfaces.rs`'s comment |
+
+**The frame of a 750×1334 picture.** No turn is made: a frame of 750 by 1334, 8-bit RGB, its producer
+geometry unknown (`producer_observation_absent`), as an Android screencap frame's. Its evaluation
+against a package's base is the display adapter's (§1.487's slice, F-3b); a run's capture is F-3d's.
+
+**The conversion's cost per frame** (the coordinator's addition on Display P3): the PNG decoded once; for
+P3, per pixel three lookups in a table of 65 536 linear values, nine multiplications, three clips and
+three lookups in a table of 65 536 encoded codes; no power per sample (the tables are made once for
+the process). The stored artifact is the converted 8-bit sRGB picture (`Frame::from_pixels`, no
+original), so the Lab and a run read the same bytes.
+
+**Codes and words.** Added: `capture_ios_failed` (runtime-host, error, ladder class
+`environment_fault`, a cause only: required `ios_capture_problem`, optional `acib_problem`,
+`acib_stage`); `capture_frame_all_black` (runtime-host, error, ladder class `none`, a cause only:
+the session kept, nothing fenced, nothing stored); `device_acib_missing` (actingd, warning, a
+check-config note: `aliases`, `program`; never a refusal, exit 0); the keys and vocabularies
+`ios_capture_problem` (19 words since fix round 1, one cause each: `ios_device_not_listed`,
+`ios_device_service_unreachable`, `ios_not_paired`, `ios_tunnel_failed`, `ios_screen_capture_failed`,
+`acib_deadline_passed`, `acib_call_refused`, `acib_no_answer_in_time`, `acib_answer_incomplete`,
+`acib_answer_unreadable`, `acib_errors_unreadable`, `acib_answer_too_long`, `acib_state_unreadable`,
+`acib_not_ended`, `ios_picture_unreadable`, `ios_picture_color_space_unsupported`, `acib_missing`,
+`acib_not_started`, `acib_readers_not_started`), `acib_problem` (acib's 25 words for a screenshot) and `acib_stage` (its five
+stages). Beyond the design's table, by the code's facts: `acib_call_refused` (acib's
+`command_line_invalid`, `key_salt_unusable`, `async_runtime_failed`, which no other word holds),
+`acib_answer_too_long` (the caps), `acib_state_unreadable` (F-2's one word for a state that cannot be
+read), `ios_picture_color_space_unsupported` (the addition on Display P3). Changed: the texts of
+`device_system_backend_missing`, which no longer name a capture. The outcome code index is
+regenerated. No decision reads a code: the session is kept by the device error's mark, the cause
+comes from the error's evidence.
+
+**Tests.** `crates/device/src/capture/acib/gate_479_f3a.rs` (exec "#479 F-3a"): the picture's
+rounding, the 8-bit artifact, the derived matrix, neutral P3 greys exact, P3 colours back within 1
+and clipped outside, the colour space's own cause; the black picture and the next capture; each of
+acib's words and each way of the child; the caps; the salt, the command line and the errors; a real
+child (this test executable started again on an ignored entry that waits forever) ended and its end
+confirmed. `crates/runtime-host/src/tests/gate_479_f3a.rs` (host "#479 F-3a"): through the host on
+the registry's own registration, the observe and the sequence on `acib_screen_capture`, the status
+rows, the refusals of a tap, a launch, a self-check and a drill, the black picture through the host,
+a child that cannot be ended fencing its handset alone beside another that observes, a refusal of
+`acib` with its cause and its errors in no record or receipt; fix round 1 adds the capture of
+`ObserveContainedPage`, the refusals of a run's capture and of a monitor and an unbound handset
+(below). Adapted, the requirement changing what they
+pin: `gate_479_f2::f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_opens`
+(no capture), `f2_fix1_a_tap_a_key_a_swipe_a_capture_and_a_launch_are_refused_at_the_hosts_front` (no
+observe), `status_says_no_backend` of `f2_fix1_a_start_attempts_no_ios_handset_…` (the frame row);
+`runtime_backend_mapping_is_closed_and_lossless` (the new pair). The tests that pin
+`runtime-client`'s range (`gate_429_r0b_pairing`, §1.485's `gate_480_pg2e`, the architecture's
+`component_interfaces`) are §1.487's since the merge of main: it raised `max` to 13 and renamed the
+two that name the range, with their retirements. The existing capture tests of the emulators and of
+Android stand unchanged (the device crate's `capture.rs` tests, `scrcpy` tests and `gate_381b`; the
+host's `online_observation`, `gate_hs5`, `gate_411_lab_l5`). No golden changes; no test of this
+slice leaves a gate map.
+
+**Fix round 1** (coordinator work order `rd-1119/brief-479-f3a-fix1.md`, after the review of pull
+request #1844; on main `20656bcb`, which holds §1.485 and §1.487).
+- The merge of main: §1.487 (#479 F-3b) opened revision 13 of `runtime-client` in the same release
+  and the range [12, 13] (`min` as §1.485 set it), with the tests that pin it; this slice joins that
+  revision, its sentences added to revision 13's row of
+  [component-interfaces.md](component-interfaces.md) beside F-3b's (one row, two changes), and
+  takes no revision of its own.
+- It compiles: `ios_capture_cause` stood between the documentation and the derive of
+  `NemuAppIndexProblemToken` and the struct (`crates/runtime-host/src/error.rs`); it stands above
+  them.
+- `read_answer` (`crates/device/src/capture/acib.rs`) answers its cause alone,
+  `IosCaptureFailure` (a few bytes), not a `Refused` beside an unconfirmed device error it never
+  sets (the size clippy's `result_large_err` counts); no other `Result` of the slice in that crate
+  carries a large error of its own.
+- The geometry record refuses the value: `TaskGeometryObservation::validate`
+  (`crates/actingcommand-contract/src/event/payload.rs`) refuses a record that names
+  `acib_screen_capture` as its frame's, its producer's or its observation's backend,
+  `invalid_task_semantic_payload` (the reader's generic code for a refused task fact). The writer
+  runs it before it writes, and every reader of the ledger runs it over every record it decodes in
+  full (`LedgerEventMetadata`'s validation, `invalid_typed_payload`): refusing a value no record
+  holds is safe, because no build before this one has the value (its reader refuses it as an
+  unknown variant) and this one refuses to write it, so no ledger holds a record it would now
+  refuse. The slice that lets a run capture from an iOS handset removes the refusal together with
+  the ledger revision that admits the value.
+- The mark that closes nothing: the kernel (`kernel.rs`, `finish_session_operation`), the
+  session (`session.rs`, `ExecutionSession::capture` and the worker's capture) and the host's close
+  (`resource_close.rs`, `finish_capture_failure_while_guarded`) keep the session only when the
+  failure carries `FrameRefusal` and leaves no resource unconfirmed, one test of the kernel's
+  (`ExecutionKernelError::frame_refused_holding_nothing`); a failure that carries both is an
+  unconfirmed resource.
+- One word, one cause: acib's `service_unreachable` is `ios_screen_capture_failed` (no longer
+  `ios_tunnel_failed`; what that cause covers is said in fix round 2, below);
+  standard error that cannot be read is `acib_errors_unreadable` (no longer
+  `acib_answer_unreadable`), and readers the system did not start `acib_readers_not_started` (which
+  had no `ios_capture_problem` at all), the child ended at each. The vocabulary's catalog texts and
+  [device-binding.md](device-binding.md)'s mapping follow; no code is added, so the outcome code
+  index does not change.
+- Texts: the time of the coordinator's addition is 08:18 (it was written 08:25 in four places);
+  the test helper's comment says the `eXIf` chunk it writes and no `iCCP` chunk.
+- Tests added: device gate (exec "#479 F-3a") `f3a_t1_sixteen_bit_samples_are_read_high_byte_first`
+  (samples whose two bytes differ), `f3a_t1_a_picture_with_alpha_or_a_palette_is_unreadable`, and a
+  case of `f3a_t3_each_way_the_child_fails_is_its_one_cause` (errors unreadable); host gate (host
+  "#479 F-3a") `f3a_fix1_h6_…` (a run's capture refused, no `task.geometry_observed`), `f3a_fix1_h7_…`
+  (a monitor's configuration refused), `f3a_fix1_h8_…` (the capture of `ObserveContainedPage` on
+  `acib`), `f3a_fix1_h9_…` (an unbound iOS handset answers as an unbound Android handset),
+  `f3a_fix1_h10_…` (the mark beside an unconfirmed resource is an unconfirmed resource); contract
+  gate `crates/actingcommand-contract/src/event/gate_479_f3a.rs` (contract "#479 F-3a": the writer
+  and the reader refuse the value in a geometry record); actingd gate
+  `apps/actingd/src/config/gate_479_f3a.rs` (apps "#479 F-3a": check-config notes
+  `device_acib_missing` and passes, exit 0).
+
+**Fix round 2** (coordinator work order `rd-1119/brief-479-f3a-fix2.md`, after the second review of
+pull request #1844: every test job green, the lint job red on two clippy errors).
+- The two lints (clippy `chunks_exact_to_as_chunks`, `-D warnings`): the two `.chunks_exact(3)` of
+  the P3 conversion (`crates/device/src/capture/acib/picture.rs`, the 8-bit and the 16-bit
+  samples) are `.as_chunks::<3>().0.iter()`, each closure taking the array (`pixel.map(widened)`,
+  `*pixel`); what is computed is unchanged. The rest of the slice's change was read for the lints
+  clippy has not run on it yet (`execution-kernel`, `runtime-host`, `actingd`, the contract crate,
+  the Lab, `lab-ops`); nothing else was found to change.
+- `service_unreachable`, said as it is: `acib` answers it both for the screenshot's own service
+  and for a service the tunnel opens (its README lists it beside "those of the session and the
+  tunnel"), and the Runtime cannot tell the two apart. So `ios_screen_capture_failed` is described
+  as the screen capture service or its picture request failed, or a service of the tunnel or the
+  screen capture service could not be reached (the vocabulary's catalog text,
+  [device-binding.md](device-binding.md)'s mapping), and fix round 1's reason, acib's README, is
+  taken out; the mapping stays. **For a later slice:** telling the two apart needs a change of
+  `acib`.
+- `capture_frame_all_black`'s texts (the fragment's description, the code table's): it closes no
+  session and fences nothing unless the same failure also left a resource unconfirmed, which is
+  then handled as any unconfirmed resource (fix round 1's `frame_refused_holding_nothing`). No code
+  or word is added; the outcome code index is current and unchanged.
+- Tests: `f3a_fix1_h9_…` also asserts the answer itself: each observe's one `capture.failed`
+  record names `device_endpoint_unbound` as its diagnostic detail's stage (the receipt carries no
+  stage), so two equal wrong answers cannot pass. Added on the kernel's own fake provider, with one
+  flag of its state (`refuse_capture`):
+  `f3a_fix2_a_refused_picture_keeps_its_session_and_its_backends` (`execution-kernel`, exec "#479
+  F-3a"): through `ExecutionKernel::capture`, which runs `ExecutionSession::capture` and then
+  `finish_session_operation`, a picture refused as no frame fails with its mark, closes neither
+  backend and keeps the session, and the next capture gives its frame from the same capture
+  backend (one open, two captures, no close until the kernel closes).
+
+**What is not changed.** Android's and the emulators' capture, byte for byte (`build_capture_backend`
+only gains a refusal of the new name); `apps/acib`; the ledger's record kinds, members and range;
+`actingd-config` [5, 34] (no `acib_path`, no member); what an iOS handset's pause and resume answer;
+its policy availability (withdrawn: the scheduler never plans it); no state file; no identifier of a
+phone in any record, log line, error text or `Debug` (its key is its only name; the salt's `Debug`
+is withheld).
+
+**At deploy.** The release's archives and manifests do not carry `acib` in this slice (a separate
+step that waits for the owner): until then a configured iOS handset's captures answer `acib_missing`
+and check-config notes `device_acib_missing`. **For the release notes' author: every console and Lab
+must speak `runtime-client` 13 before an iOS handset is configured** (a reader of 12 fails to decode an
+observation of `acib_screen_capture`). Nothing to configure. Rollback: a Runtime of 0.12.74 refuses
+every capture of an iOS handset again, as before.
+
 ### 1.487 Slice #479 F-3b (0.12.75): a display within a pixel of the base's shape is the base's display scaled (Workflow #479; the rule below is the coordinator's ruling in the work order, not the owner's words; coordinator work order `rd-1119/brief-479-f3b-near-ratio-pure-scale.md`, after the read-only design `rd-1119/design-479-f3.md`, its section 3 and the coordinator's disposition, item 6; on main `1067dfaf`)
 
 This section takes 1.487, the number the work order gives (1.485 and 1.486 are other slices'). It

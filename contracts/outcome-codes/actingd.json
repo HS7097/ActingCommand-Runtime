@@ -2200,6 +2200,23 @@
       "common_causes": "A handset's device.system changed in the configuration while its old binding stayed, or a binding written for another instance of the same alias.",
       "handling": "Unbind the handset and bind it again with the Lab (devices unbind, devices bind), then restart."
     },
+    "device_acib_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "aliases": "required",
+        "program": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.75",
+      "description": "check-config's note that the configuration names an iOS handset (aliases, in configuration order) and acib, the project's iOS device bridge, is not where those handsets' captures run it from: the install root's tools\\acib.exe (program, when the check knows an install root; none when it is judged from no install root). A note, never a refusal: the configuration passes and a start goes on, and those handsets' captures answer capture_ios_failed acib_missing. Workflow #479 F-3a, contracts/device-binding.md \"An iOS handset\".",
+      "common_causes": "A release that does not carry acib yet, or an install root whose tools folder lost it.",
+      "handling": "Lay acib at the install root's tools\\acib.exe; nothing else is configured. Until then the iOS handsets are configured and bound, and their captures fail."
+    },
     "start_emulator_requires_discovery_binding": {
       "category": "error",
       "ladder_class": "none",

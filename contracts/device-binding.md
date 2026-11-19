@@ -442,7 +442,9 @@ configuration tools of #387 D1b):
 iPhone is scheduled like any instance; the release may carry `acib`; the phone's frames may be kept
 in the state root); the rest are the coordinator's rulings in the work order. `acib`, the
 project's iOS device bridge (`apps/acib`), is a program of its own, as adb is the Android one.
-This build captures nothing and presses nothing on an iOS handset: capture is the next slice.
+Since Workflow #479 F-3a (0.12.75, [v012-register.md](v012-register.md) §1.486) this build takes
+a bound iOS handset's frames through `acib` for the read-only observations ("The capture", below);
+it presses nothing on it, and nothing else runs on it.
 
 - **The configuration.** `"device": {"kind": "handset", "system": "ios"}`. `system` is a closed
   pair, `android` or `ios`; absent means `android`; beside another kind, or another word, it is
@@ -454,9 +456,10 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   `minitouch_local_path`, `push_touch_tool`, `handshake_timeout_ms`, `shutdown_timeout_ms`,
   `tap_hold_ms`) is refused, `adb_member_with_ios`, never ignored. The configuration names no path
   of `acib` (fix round 1: the member that did, which nothing read, went): the Lab runs the install
-  root's `tools\acib.exe`, the one place one function names, and the slice that first runs `acib`
-  from the Runtime adds the member with what resolves it. A configuration written before this
-  slice loads unchanged.
+  root's `tools\acib.exe`, the one place one function names. Workflow #479 F-3a: the Runtime runs
+  the same one (the contract's `acib_path`, the Lab's and the Runtime's one function), and no
+  member is added (`actingd-config` stays 34). A configuration written before this slice loads
+  unchanged.
 - **The private row.** `{alias, system: "ios", device_key, bound_at_unix_ms, bound_via}` ("The
   private binding file", above): the key `acib` makes of the phone's identifier under the
   installation's own `secret_fingerprint_salt`, by the function the ledger fingerprints a handset's
@@ -566,6 +569,109 @@ This build captures nothing and presses nothing on an iOS handset: capture is th
   capability table names no backend, every row unsupported and unavailable, its source
   `device_system:ios`, its failure semantics why. No adb device-link watch or device-state read
   concerns it.
+- **The capture** (Workflow #479 F-3a, since 0.12.75, `runtime-client` 13; the design
+  `rd-1119/design-479-f3.md` and the coordinator's disposition of 11-19; where it differs, this
+  replaces what is said above of a capture). A bound iOS handset's frame is taken from `acib` the
+  way an Android device's is taken from `adb exec-out screencap -p`: one child per frame.
+  - **What opens, what stays refused.** A read-only observe (`ObserveReadonly`: the Lab's frame,
+    the capture of `detect-page` and `current-page`), a capture sequence (`CaptureSequence`, the
+    Lab's frames) and the frames of an observation (`ObserveContainedPage`) open, and so does the
+    look of a Lab operation under a lease; their observations answer `capture_backend`
+    `acib_screen_capture`. An input, an application command, a self-check, a drill, a run's capture
+    and a monitor's configuration stay refused at the front of the host's admission with their own
+    failure codes caused by `device_system_backend_missing`, whose one cause is still "this build
+    has no backend of that operation for that device system". The predicate is split: the
+    capture's (`DeviceOperation::has_backend_on`) and the input's, which keeps such a handset inert
+    (the start's preparation and the idle planner skip it, its policy availability stays withdrawn
+    under `device_system:ios`, nothing is ever scheduled on it, and its pause and resume answer as
+    above). An unbound iOS handset's capture answers what an unbound handset's does (the stage
+    `device_endpoint_unbound`). The status's capability table: the frame's row
+    (`EmulatorCapability::CaptureFrame`) is implemented by `acib_screen_capture`, not verified;
+    every other row is unsupported and unavailable from `device_system:ios`.
+  - **The child.** `<install root>\tools\acib.exe screenshot --device-key <the stored key>
+    --key-salt-env ACTINGCOMMAND_ACIB_KEY_SALT --out - --via screen_capture --timeout-ms 8000`, the
+    salt (the installation's own `secret_fingerprint_salt`, under which the stored key was made) a
+    variable of that one child's environment, never an argument, a log line or a record; standard
+    input from nowhere, pipes for its output and errors, no console window. Its errors are read and
+    dropped unread; its output is read up to a line of 4 KiB and a picture of 64 MiB (the frame size
+    cap of the other backends), the line then exactly `bytes` bytes, as `apps/acib/README.md`
+    states. `acib`'s own deadline (8 s) is below the Runtime's wait (10 s), so a child left behind
+    ends by itself. Past the wait the child is ended and its end confirmed as the `adb` runner's (a
+    kill, then up to 500 ms for its exit); **a child whose end cannot be confirmed leaves the
+    capture's resources unconfirmed, which fences that instance and no other**, and only a restart
+    of the Runtime lifts that fence in this slice. The backend holds nothing between frames, so its
+    open takes no frame and every frame is an operation's (`capture_backend_operation_failed`).
+  - **The causes.** A capture that takes no frame is `capture_backend_operation_failed` (or
+    `capture_backend_open_failed` when the registration knows no `acib` at all) caused by
+    `capture_ios_failed`, with the existing failure records, its one cause the required
+    `ios_capture_problem` and, beside it, `acib`'s own word (`acib_problem`) and stage
+    (`acib_stage`) where it answered them: `ios_device_not_listed`,
+    `ios_device_service_unreachable`, `ios_not_paired`, `ios_tunnel_failed`,
+    `ios_screen_capture_failed`, `acib_deadline_passed`, `acib_call_refused` (words of `acib`'s),
+    `acib_no_answer_in_time`, `acib_answer_incomplete`, `acib_answer_unreadable`,
+    `acib_errors_unreadable`, `acib_answer_too_long`, `acib_state_unreadable`, `acib_not_ended`,
+    `ios_picture_unreadable`, `ios_picture_color_space_unsupported`, `acib_missing`,
+    `acib_not_started`, `acib_readers_not_started` (what the Runtime saw); never `acib`'s error
+    text, its standard error, a session number or the command line. `acib`'s words map to the
+    cause their step names (the vocabulary's texts in `contracts/outcome-codes/catalog.json` list
+    each cause's words): `device_key_unknown`, `device_not_listed` → `ios_device_not_listed`;
+    `usbmuxd_unreachable`, `usbmuxd_list_failed`, `pair_record_unreadable` →
+    `ios_device_service_unreachable`; `not_paired` → `ios_not_paired`; `lockdown_unreachable`,
+    `lockdown_read_failed`, `lockdown_value_unexpected`, `session_refused`, `service_refused`,
+    `tunnel_failed`, `rsd_unreachable`, `rsd_handshake_failed` → `ios_tunnel_failed`;
+    `service_not_listed`, `service_unreachable`, `service_handshake_failed`, `channel_refused`,
+    `screenshot_failed` → `ios_screen_capture_failed`, the screen capture service or its picture
+    request failed, or a service of the tunnel or the screen capture service could not be reached
+    (fix round 2: `acib` answers `service_unreachable` both for the screenshot's own service and
+    for a service the tunnel opens, and the Runtime cannot tell the two apart); `deadline_passed` →
+    `acib_deadline_passed`; `picture_header_truncated`, `picture_header_unknown` →
+    `ios_picture_unreadable`; `command_line_invalid`, `async_runtime_failed`, `key_salt_unusable`
+    → `acib_call_refused`. Of the Runtime's own (fix round 1): an output that cannot be read is
+    `acib_answer_unreadable`, standard error that cannot be read `acib_errors_unreadable` (the
+    answer is not taken), and readers the system did not start `acib_readers_not_started`, the
+    child ended at each.
+  - **The frame.** The picture is decoded and becomes an **8-bit sRGB** frame (RGB, 3 bytes a pixel),
+    and no original is kept, so the store writes the 8-bit picture and the Lab and a run read the
+    same bytes. Its colour space is read from the picture, never guessed: a `cICP` chunk decides
+    when present (primaries 1 or 12, transfer 13, matrix 0, full range), else an `sRGB` chunk means
+    sRGB; neither, or other `cICP` numbers, is `ios_picture_color_space_unsupported`. `iCCP` is not
+    parsed and `eXIf` is not read. RGB of 8 or 16 bits only (else `ios_picture_unreadable`). sRGB of
+    8 bits passes as it is; of 16 bits each sample `v` becomes `(v·255 + 32767) / 65535`, which maps
+    every `257·k` to `k`. Primaries 12 (P3-D65): each sample to [0, 1], decoded by the sRGB curve to
+    linear light, multiplied by the matrix from P3-D65 to BT.709 derived from the chromaticities
+    ITU-T H.273 gives for code points 12 (R 0.680, 0.320; G 0.265, 0.690; B 0.150, 0.060; white
+    0.3127, 0.3290) and 1 (R 0.640, 0.330; G 0.300, 0.600; B 0.150, 0.060; the same white), each `M`
+    the RGB-to-XYZ matrix whose columns are the primaries' XYZ at luminance 1 scaled to make RGB
+    (1, 1, 1) the white: `M709⁻¹ · MP3` = [1.2249401763, −0.2249401763, 0; −0.0420569547,
+    1.0420569547, 0; −0.0196375546, −0.0786360456, 1.0982736001], each row summing to 1; each
+    channel clipped to [0, 1], encoded by the sRGB curve and rounded to 8 bits; a neutral sample is
+    the same grey in both and takes the 16-to-8 rounding exactly. No turn is made: the picture is
+    passed in the orientation it comes in, so a 750×1334 picture is a frame of 750 by 1334 whose
+    producer geometry is unknown (`producer_observation_absent`), as an Android screencap frame's.
+  - **The black picture** (the coordinator's ruling 3 on #479 F-3). A picture whose every byte is
+    zero once converted is never passed on as a frame: `capture_backend_operation_failed` caused by
+    `capture_frame_all_black`, with the capture's failure records. It **closes no session, fences
+    nothing and stores no picture**: the backend refuses the frame and stays open, the kernel keeps
+    the session, and the next capture uses the same backend. No lock state is ever read. Fix round
+    1: the kernel, the session's worker and the host's close keep the session only for a failure
+    that carries that mark (`FrameRefusal`) and leaves no resource unconfirmed
+    (`ExecutionKernelError::frame_refused_holding_nothing`); one that carries the mark beside an
+    unconfirmed resource is an unconfirmed resource: its session is closed and its instance fenced.
+  - **Where `acib` is.** `<install root>\tools\acib.exe` under the install root the Runtime takes
+    its adb from, by the one function the Lab's listing and binding use (`acib_path`); no
+    configuration member. When the file is not there (or the Runtime runs from no install root),
+    that handset's captures answer `acib_missing`; a start is not refused, and check-config says it
+    as a note, `device_acib_missing` (`aliases`, `program`), never a refusal: a configuration that
+    names an iOS handset passes while the release does not carry the program. No `version` command
+    is asked. The release's archives and manifests do not carry `acib` in this slice.
+  - **Nothing persisted changes.** No ledger record carries a capture backend's value on the
+    read-only path; the run's geometry record, which names a frame's backend, is not written for an
+    iOS handset, whose run capture stays refused, and (fix round 1) its check refuses
+    `acib_screen_capture` as its frame's, its producer's or its observation's backend, on the
+    write and on the read, until the slice that lets a run capture from such a handset, which
+    removes that refusal together with the ledger revision that admits the value. So `ledger`
+    stays [3, 9]; the receipts and the status carry `acib_screen_capture`, which a reader of
+    `runtime-client` 12 or lower refuses.
 
 ## Later slices
 
