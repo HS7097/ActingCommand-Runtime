@@ -201,7 +201,9 @@ board #480: a pause a person asked for closes the gate at once and stands until 
 it; the Runtime never lifts it by itself, not for a timeout, not for something in the way, not at
 a shutdown, not for an error of its own). An instance pause carries the mode its request named.
 The mode lives in the Runtime's memory only: the persisted row (`host.scheduling_pause`) is as
-before, and a restored pause (stage `released`, where the mode changes nothing) has none.
+before, and a restored pause (stage `released`, where the mode changes nothing) has none. Since
+0.12.75 (#480 PG-2e) the status answers the mode of every instance pause, `stand` for a pause no
+request set ("Status" below).
 
 - **`stand`** (a person's or an agent's pause: the console, `actingctl pause` and its MCP, the
   Lab's `pause` row and `ac_pause`; the absent member). The gate closes at once and the stages run
@@ -218,7 +220,7 @@ before, and a restored pause (stage `released`, where the mode changes nothing) 
     `pause_obstacle`, each word once: `contained_run`, `policy_run`, `lease`, `automatic_start`,
     `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`, `close_unconfirmed`,
     `check_failed`), read from the host's state at that moment and kept with the pause in the
-    Runtime's memory (the status does not answer it in this release: "Status" below). One code
+    Runtime's memory (the status answers it since 0.12.75: "Status" below). One code
     whatever is in the way: the consequence is the same. When the caller's time ends while another
     party holds the instance's admission guard, what is in the way is read outside the guard: an
     empty or absent list in a stage before `released` means that nothing was in the way at that read
@@ -723,10 +725,10 @@ try:
 | Moment | Outcome (severity) | Written by |
 |---|---|---|
 | a `stand` pause's caller's time ended with something in the way (also an unconfirmed close, which ends it at once) | `scheduling_pause_standing` (info): the receipt's own cause, the same code with `pause_stage`, `in_the_way` and, for `check_failed`, the failure as its cause | the request, before it answers and before its continuation starts; under the persist gate, only while the pause still holds (fix round 1) |
-| that pause later became quiet by itself (stage `released`) | `scheduling_pause_settled` (info, no member) | the continuation |
+| that pause later became quiet by itself (stage `released`) | `scheduling_pause_settled` (info, no member) | the continuation; since #480 PG-2e (0.12.75) under the persist gate, only while the pause still holds, as the request writes its own |
 | a person's resume lifted a `stand` pause in `draining` or `paused` without a reconnect | `scheduling_resume_without_reconnect` (info): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it |
 | Workflow #479 F-2 ([device-binding.md](device-binding.md), "An iOS handset"): an instance whose device system has no backend in this build (an iOS handset, bound or not) is resumed, a person's resume or a tool's, its pause in stage `released` (a restored one and a start's hold included) or, fenced, in any stage or none, and no reconnect is attempted (a pause held again with `instance.added` writes none) | `scheduling_resume_without_backend` (info, no member): the resume's receipt's own cause | the resume, after the lift, under the persist gate with it; under the pause request's links, else (no request set the pause, or none holds) the instance's own under fresh system links |
-| a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time (as it writes the standing record: under the persist gate, only while the pause still holds), else the continuation |
+| a shutdown kept a `stand` pause before `released` | `scheduling_pause_kept_at_shutdown` (info, `pause_stage`): the cause its request answers, or would have answered | the request within its caller's time (as it writes the standing record: under the persist gate, only while the pause still holds), else the continuation (since #480 PG-2e the same way) |
 | a `quiet_or_lift` hold was lifted without its instance having become quiet: its caller's time ended first (its drain past the checkpoint grace, `scheduling_pause_drain_incomplete`; its hand-back past the grace, `scheduling_pause_release_busy`, the admission guard still taken by another party included) or, since fix round 1 (the coordinator's ruling: every lift of a hold without quiet is recorded), a queued entry refused its hand-back (`lease_transfer_not_safe`) or the scheduler refused its close lease (another member's entry ahead, the takeover cooldown, a holder: `lease_busy`, `lease_cooldown`) | `scheduling_pause_lifted_not_quiet` (warning): `pause_reason` the hold's reason, `in_the_way` what was in the way (what its last check read, or what is read outside the guard another party holds, which may be empty; for a refusing entry what that check read, `queued_entry` among it; for a refused close lease `close_refused`), that failure as its cause | the request, after the lift |
 
 Nothing else of a pause writes one: a pause quiet within its caller's time (its receipt and its stage
@@ -744,20 +746,28 @@ already `released` and of a fenced instance ([device-binding.md](device-binding.
 handset"): its resume runs no reconnect, its receipt has the cause
 `scheduling_resume_without_backend` and it writes that row's record.
 
-**The order of a pause's records** (fix round 1; what the code guarantees, no more). The request's
-own record of a pause that still holds (`scheduling_pause_standing`, or
-`scheduling_pause_kept_at_shutdown` within its caller's time) is decided and written under the
-persist gate, only while the pause is still held at its revision; every lift takes that gate, and
-the resume's `scheduling_resume_without_reconnect` is written under it with its lift. So the
-request's record never comes after the record of the resume that lifted its pause: a pause lifted
-(or held again with `instance.added`) before the request took the gate writes none, and the
-resume's records say what happened. The standing record is written before the thread that carries
-the stages on starts, so it comes before every record of that thread. That thread's records
-(`scheduling_pause_settled`, `scheduling_pause_kept_at_shutdown`) are written after their moment and
-outside the gate, so a resume can come in between: a resume of the pause once `released` (the
-reconnect's path) can put its lift's fact record and the reconnect's records before the settled
-record, and a resume already running when a shutdown came can put its own record before the kept
-record. A hold's `scheduling_pause_lifted_not_quiet` comes after its lift's fact record.
+**The order of a pause's records** (#480 PG-2e, since 0.12.75, after PG-2d's fix round 1; what the
+code guarantees, no more). Every record that says a pause still holds is decided and written under
+the persist gate, only while the pause is still held at its revision (`record_held_pause_moment`):
+its request's (`scheduling_pause_standing`, or `scheduling_pause_kept_at_shutdown` within its
+caller's time) and, since PG-2e, its continuation's (`scheduling_pause_settled`, or
+`scheduling_pause_kept_at_shutdown` after the caller's time). Every lift takes that gate, and a
+person's resume writes its `scheduling_resume_without_reconnect` under it with its lift. So no
+such record comes after the lift of its pause (the fact record without it) or after the resume's
+record: a pause lifted (or held again with `instance.added`) before the writer took the gate writes
+none, and the lift's records say what happened. The standing record is written before the thread
+that carries the stages on starts, so it comes before every record of that thread. In particular:
+a resume of the pause once it is `released` (the reconnect's path) takes the gate either after the
+settled record, which then comes before the lift's fact record and the reconnect's records, or
+before it, and no settled record is written; inside the multi-Nemu gate, a person's resume that
+marks its lift (`Lifting`) and lifts in one hold of the gate, while the hand-back reaches
+`released` (there it closes nothing and does not ask the mark) and its stage moves to `released`
+before the lift, leaves its `scheduling_resume_without_reconnect` as the pause's last record: the
+continuation finds the pause lifted when it takes the gate, and writes no settled record; a resume
+already running when a shutdown came either comes after the kept record or leaves it unwritten. A
+hold's `scheduling_pause_lifted_not_quiet` comes after its lift's fact record. The resume's record
+is written inside the gate, after its lift, so it also comes before every record of whoever holds
+the gate next (a later pause of the same instance, its request's records among them).
 
 The links of a pause's request are kept with the pause in the Runtime's memory until it is lifted,
 so the record a person's resume writes carries them too; a pause no request set (a restored pause, a
@@ -791,17 +801,57 @@ refuses a status that carries either (its client fails `runtime_receipt_decode_f
 the connection), and the Runtime cannot tell a client's revision on a connection (request v4 and
 receipt v2 keep their schema strings; [component-interfaces.md](component-interfaces.md), the
 `runtime-client` row of revision 4). So, as Workflow #437 G1 carried `device_held` over (revision
-10, register §1.433), **no Runtime of 0.12.73 answers either member**: the status of every pause is
-the four members above, which the console pinned to v0.12.71 (revision 11) reads, and `min` stays 3.
-The release whose Runtime first answers them raises `runtime-client`'s `min` to 12; **the console
-must pin v0.12.73 or later before that release**. #480 PG-2d (register §1.481): until a Runtime
-answers the two members, a console learns what is in the way of its own pause from that pause's
-receipt's cause (`scheduling_pause_standing` with `pause_stage` and `in_the_way`), and any observer
-(a second console, the Lab, the same console after a restart) learns a pause's stage from `stage`
-(`draining` or `paused` while the host carries it on), what still uses the instance from
-`activity`, `lease_active` and `queued_request_count`, and what happened to the pause from the
-records of "A pause's life in the ledger" above; once a Runtime answers the members, the status is
-the source of what is in the way.
+10, register §1.433), **no Runtime of 0.12.73 or 0.12.74 answers either member**: the status of
+every pause there is the four members above, which the console pinned to v0.12.71 (revision 11)
+reads, and `min` stays 3. The release whose Runtime first answers them raises `runtime-client`'s
+`min` to 12; **the console must pin v0.12.73 or later before that release**. #480 PG-2d (register
+§1.481): until a Runtime answers the two members, a console learns what is in the way of its own
+pause from that pause's receipt's cause (`scheduling_pause_standing` with `pause_stage` and
+`in_the_way`), and any observer (a second console, the Lab, the same console after a restart)
+learns a pause's stage from `stage` (`draining` or `paused` while the host carries it on), what
+still uses the instance from `activity`, `lease_active` and `queued_request_count`, and what
+happened to the pause from the records of "A pause's life in the ledger" above.
+
+#480 PG-2e (since 0.12.75; register §1.485): **the Runtime answers both members, and
+`runtime-client`'s `min` is 12** ([component-interfaces.md](component-interfaces.md), the row of
+revision 12: a reader below 12 refuses a status that carries an instance pause, and the Runtime
+cannot tell it apart on a connection; the console pinned v0.12.73 before this release). Since
+0.12.75 the status is the source of a pause's mode and of what is in its way, for every observer.
+- `pause_mode` is answered for every instance pause in every stage: the mode its request set; a
+  pause no request set (restored at a start, held at a first start, held again with
+  `instance.added` at a release) answers `stand`, the mode the Runtime treats it as (the Runtime
+  never lifts it by itself). The global pause has no stages and gains nothing.
+- `in_the_way` is what the pause's own latest check read, kept with the pause in memory: in stage
+  (b) the drain's, at every poll (a contained run of the instance in flight, `contained_run`, or
+  nothing), then the hand-back's; on the request's thread within its caller's time, afterwards on
+  the continuation's. When the caller's time of a `stand` pause ends it is the very reading the
+  receipt's `scheduling_pause_standing` and its record carry, word for word; after a check that
+  failed and is tried again it is `check_failed`, the standing cause's word for it, not the reading
+  before the failure. It is absent before the first check (from the gate's closing to the drain's
+  first read, on the request's thread with no wait between them), when the latest check found
+  nothing, and always in stage `released`; an iOS handset's pause is `released` at once, so it
+  answers its mode and no `in_the_way`.
+- A status request runs no check of its own: it reads a copy of the pause table taken under the
+  table's lock, as before, takes no other lock and waits on nothing a check waits on. So
+  `in_the_way` is as old as the pause's latest check: it can be as old as the continuation's retry
+  interval (`SCHEDULING_PAUSE_RETRY_INTERVAL`, `10` s, while the whole check rests after a failed
+  check), and older while a check itself waits: for a run it drains again during the hand-back (the
+  check read it before, `contained_run` among what is in the way), or for the instance's admission
+  guard another party holds (a Start through its readiness wait: on the request's thread until the
+  end of its caller's time, then read outside the guard; on the continuation's until it takes it).
+  Two things follow from it. **An absent `in_the_way` before `released` does not say that nothing
+  is in the way**: the drain's reading looks only at a contained run of the instance in flight, and
+  after a drain that read none the hand-back's first check waits for the instance's admission
+  guard, while another party holds it (a Start through its readiness wait), for as long as the
+  caller's time allows (the drain timeout plus `30_000` ms from the pause's start: up to
+  `330_000` ms with the Lab's `pause` row's default drain of `300_000` ms); for that time the stage
+  is `paused` and `in_the_way` is absent. A reader that wants to know whether the pause is quiet
+  reads the stage (`released`), not the absence of `in_the_way`. And **the mode is not kept across
+  a restart** (it lives in memory only, "Two modes"): every pause restored at a start answers
+  `stand`, a tool's `quiet_or_lift` hold that was in effect when the Runtime stopped included; such
+  a hold is told by its `pause_reason`.
+- The receipt's cause and the records of "A pause's life in the ledger" stay what they are: a
+  receipt answers its caller at once, the records are the pause's history.
 
 ## Relation to the player hold
 

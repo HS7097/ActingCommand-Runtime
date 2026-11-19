@@ -585,7 +585,10 @@ impl HostShared {
                 .get(&instance.instance_alias)
                 .cloned();
             let game_id = configured_games.get(&instance.instance_alias).cloned();
-            let pause = scheduling_pause.instance_state(&instance.instance_alias);
+            // #480 PG-2e (register §1.485): the instance's pause with its mode and, before stage
+            // `released`, what its own latest check noted in its way, from the copy of the pause
+            // table read above: no check runs here and no other lock is taken.
+            let pause = scheduling_pause.answered_instance_state(&instance.instance_alias);
             let resource_fence = resource_fences.get(&instance_id).cloned();
             let device_held = device_holds.remove(&instance_id).map(|alias| {
                 actingcommand_contract::InstanceDeviceHeld {

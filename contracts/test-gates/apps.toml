@@ -1157,12 +1157,12 @@ tests = [
 ]
 incident = ["#429 R-15a"]
 
-# Workflow #429 R-0b (0.12.36; register §1.238; contracts/component-interfaces.md, the runtime-client revision-3 row): this build's own declaration (the file its manifests carry) speaks runtime-client [3, 4]; as R*, it pairs with a console of [3, 3], [3, 4] (the UI's v0.12.0 and v0.12.1) and [4, 4] with no failed edge, and refuses a console whose max is 2 with the existing failed ui_meets_next row, both sides named with their source and range, the only failed edge
+# Workflow #429 R-0b (0.12.36; register §1.238; contracts/component-interfaces.md, the runtime-client revision-3 row): this build's own declaration (the file its manifests carry) speaks runtime-client [3, 4]; as R*, it pairs with a console of [3, 3], [3, 4] (the UI's v0.12.0 and v0.12.1) and [4, 4] with no failed edge, and refuses a console whose max is 2 with the existing failed ui_meets_next row, both sides named with their source and range, the only failed edge. #480 PG-2e (0.12.75; register §1.485): the floor is 12, the declaration [12, 12]; a console of [3, 12] or [12, 12] pairs with no failed edge, one of [3, 11] or [2, 2] fails ui_meets_next alone (both tests renamed for it, the first in fix round 1 for the range it asserts, their retirements in ci/retired-gates.toml)
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four",
-    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused",
+    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_12",
+    "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused",
 ]
 incident = ["#429 R-0b"]
 
@@ -2899,3 +2899,16 @@ tests = [
     "actingcommand-lab-ops::lib::gate_479_f2::f2_t7_acib_is_called_with_its_deadline_and_ended_past_the_labs_wait_or_its_cap",
 ]
 incident = ["#479 F-2"]
+
+# #480 PG-2e (0.12.75; register §1.485; brief rd-1119/brief-480-pg2e-status-answers-the-pause.md, items 4 and 5, tests 4 and 5; contracts/component-interfaces.md, the runtime-client row of revision 12): runtime-client is [12, 12] in this build's declaration (the file its Runtime and Tools manifests carry) and the interfaces document's row of revision 12 says declares [12, 12]; on that declaration, with ledger [3, 9], runtime-outcomes [1, 1] and install-control [0, 0] as 0.12.71 to 0.12.74 declare them and no placed pack, the installer's edges (plan::interface_edges, made visible to the gate, unchanged) of the update from a build of [3, 12] (0.12.73, 0.12.74) by its installer and by this build's, and of this build's way back to such a build, fail nothing without --accept-ledger-one-way (the ledger's one_way row passes); its way back to a build whose runtime-client ends at 11 (0.12.72 and older) fails runtime-client installer_meets_next alone, I [12, 12] declaration and R* [3, 11] manifest. The overview's instance row (overview::instance_row, the row of actinglab status, the Lab's ac_status, actingctl overview and ac_overview; made pub(crate), unchanged) passes the pause's pause_mode and in_the_way through as the status answers them (stand with lease and queued_entry in paused, quiet_or_lift with contained_run in draining, stand alone at released) and is the three members it had for a status that answers neither; the operation table's status row takes instance (positional, an instance) and sections (an option, list<string>), its pause row instance, reason (required in mcp) and drain (default 300s); the Lab MCP server's ac_status lists exactly instance (a string) and sections (an array), none required, and ac_pause exactly drain, instance and reason, reason alone required. Adapted, the requirement moving the shipped range from [3, 12] to [12, 12]: gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four (its body, [12, 12]; fix round 1 renamed it r0b_the_build_declares_runtime_client_12_to_12, its retirement in ci/retired-gates.toml) and r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused, renamed r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused (its retirement in ci/retired-gates.toml); actinglab-architecture's component_interfaces::the_runtime_declares_each_v0120_interface_revision_once (contract.toml); and, the row's pause now carrying pause_mode, actingctl's gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments (its pause members, pause_mode stand)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_12_and_its_row_says_so",
+    "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_update_from_0_12_74_and_the_way_back_to_0_12_74_and_0_12_73_pass",
+    "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_way_back_to_a_build_whose_tools_end_at_11_is_refused_installer_meets_next",
+    "actingcommand-lab-ops::lib::gate_480_pg2e::pg2e_an_overview_row_passes_the_pauses_mode_and_what_is_in_its_way",
+    "actingcommand-lab-ops::lib::gate_480_pg2e::pg2e_the_status_and_pause_rows_keep_their_parameters",
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_480_pg2e::pg2e_ac_status_and_ac_pause_take_the_parameters_they_took",
+]
+incident = ["#480", "PG-2e"]

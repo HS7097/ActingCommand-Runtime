@@ -189,6 +189,10 @@ mod gate_398_db2;
 // scripted `acib` (register §1.482).
 #[cfg(test)]
 mod gate_479_f2;
+// Test-only: #480 PG-2e, an overview row passes the instance pause's mode and what is in its way
+// through; the `status` and `pause` rows keep their parameters (register §1.485).
+#[cfg(test)]
+mod gate_480_pg2e;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]

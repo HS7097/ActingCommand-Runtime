@@ -1046,7 +1046,7 @@ pub fn run_block(
     }
 }
 
-fn instance_row(
+pub(crate) fn instance_row(
     instance: &RuntimeInstanceStatus,
     monitor: Option<&RuntimeMonitorInstanceStatus>,
 ) -> Value {
@@ -1068,6 +1068,14 @@ fn instance_row(
         members.insert("revision".to_owned(), json!(pause.revision));
         members.insert("stage".to_owned(), json!(pause.stage));
         members.insert("pause_reason".to_owned(), json!(pause.pause_reason));
+        // #480 PG-2e (register §1.485): the pause's mode and what is in its way, as the Runtime
+        // answers them (since 0.12.75; each absent when the status leaves it out).
+        if let Some(mode) = pause.pause_mode {
+            members.insert("pause_mode".to_owned(), json!(mode));
+        }
+        if !pause.in_the_way.is_empty() {
+            members.insert("in_the_way".to_owned(), json!(pause.in_the_way));
+        }
         row.insert("pause".to_owned(), Value::Object(members));
     }
     // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person;
