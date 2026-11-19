@@ -847,12 +847,15 @@ struct Tools {
 }
 
 /// The tools of the install root `install_root`: `<install root>\tools\platform-tools\adb.exe`
-/// and `<install root>\tools\acib.exe`.
+/// and `<install root>\tools\acib.exe`. Workflow #479 F-3a: the acib is the contract's one
+/// place (`acib_path`), the one the Runtime's capture of an iOS handset runs too.
 fn tools_of(install_root: &Path) -> Tools {
-    let tools = install_root.join("tools");
     Tools {
-        adb: tools.join("platform-tools").join("adb.exe"),
-        acib: tools.join("acib.exe"),
+        adb: install_root
+            .join("tools")
+            .join("platform-tools")
+            .join("adb.exe"),
+        acib: actingcommand_contract::acib_path(install_root),
     }
 }
 

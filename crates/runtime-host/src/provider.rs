@@ -20,13 +20,13 @@ use actingcommand_contract::{
     InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
-    DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceLocation,
-    DeviceResult, DeviceTarget, InputBackend, MumuApplicationState, MumuDiscoveryReport,
-    NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig, NemuIpcSession,
-    NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice,
-    TouchBackendConfig, create_touch_backend_for_fenced_input, discover_mumu_instances,
-    mumu_state_wait,
+    AcibCaptureSource, Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig,
+    DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
+    DeviceLocation, DeviceResult, DeviceTarget, InputBackend, MumuApplicationState,
+    MumuDiscoveryReport, NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig,
+    NemuIpcSession, NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan,
+    TouchBackendChoice, TouchBackendConfig, create_touch_backend_for_fenced_input,
+    discover_mumu_instances, mumu_state_wait,
 };
 use actingcommand_device::{AdbDeviceStateShell, DeviceStateShell};
 use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
@@ -222,6 +222,10 @@ pub struct ExecutionBackendRegistration {
     nemu_app_index: Option<NemuAppIndex>,
     /// Workflow #398 RD-1b: the handset behind the targets; `None` for an emulator.
     handset: Option<HandsetEndpoint>,
+    /// Workflow #479 F-3a: where an iOS handset's frames are taken from (`acib`); `None` for
+    /// every other registration, and for an iOS handset whose registration names none (its
+    /// capture then answers `acib_missing`).
+    ios_capture: Option<AcibCaptureSource>,
 }
 
 impl ExecutionBackendRegistration {
@@ -276,6 +280,7 @@ impl ExecutionBackendRegistration {
             provider_profile: None,
             nemu_app_index: None,
             handset: None,
+            ios_capture: None,
         })
     }
 
@@ -284,6 +289,14 @@ impl ExecutionBackendRegistration {
     /// unbound stand-in serial and the registry refuses every session on it.
     pub fn with_handset(mut self, handset: HandsetEndpoint) -> Self {
         self.handset = Some(handset);
+        self
+    }
+
+    /// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): where an iOS
+    /// handset's frames are taken from: the install root's `acib` and the salt of the handset's
+    /// key. Only an iOS handset's registration reads it.
+    pub fn with_ios_capture(mut self, source: AcibCaptureSource) -> Self {
+        self.ios_capture = Some(source);
         self
     }
 
@@ -417,6 +430,8 @@ struct ExecutionBackendEntry {
     /// (re)binds a discovery-bound entry and (#402 HS-2) a backend switch replaces its backends.
     /// Every guarded section only copies plain data.
     endpoint: Mutex<EntryEndpoint>,
+    /// Workflow #479 F-3a: where an iOS handset's frames are taken from (the registration's).
+    ios_capture: Option<AcibCaptureSource>,
 }
 
 struct EntryEndpoint {
@@ -473,9 +488,10 @@ impl EntryEndpoint {
     /// The typed refusal of every session-opening path while the port is unknown, and of a
     /// handset the private binding file has no serial for (Workflow #398 RD-1b, model-398 §3.6):
     /// no adb command runs against it. Workflow #479 F-2: first, of an iOS handset, bound or not:
-    /// this build has no backend for any capture, input or application operation on its device
-    /// system, so nothing is opened or run for it (`device_system_backend_missing`, the stage
-    /// `device_system_unsupported`).
+    /// this build has no backend for any input or application operation on its device system,
+    /// so nothing is opened or run for it (`device_system_backend_missing`, the stage
+    /// `device_system_unsupported`). Workflow #479 F-3a: its capture opens through `acib`
+    /// (`open_ios_capture`) before this is asked.
     fn require_bound(&self, operation: impl Into<Location>) -> DeviceResult<()> {
         let operation: Location = operation.into();
         if self
@@ -497,18 +513,7 @@ impl EntryEndpoint {
             ));
         }
         if self.handset() == Some(&HandsetEndpoint::Unbound) {
-            return Err(DeviceError::fatal(
-                "device binding missing: the private binding file binds no device to this handset instance; bind one and restart",
-            )
-            .with_diagnostic(
-                DeviceErrorCategory::Protocol,
-                HostLocation::DeviceEndpointUnbound,
-            )
-            .with_diagnostic_context(
-                "execution_backend_registry",
-                operation,
-                DeviceErrorSensitivity::Sensitive,
-            ));
+            return Err(unbound_handset_refusal(operation));
         }
         if self.state.is_pending() {
             return Err(DeviceError::fatal(
@@ -525,6 +530,15 @@ impl EntryEndpoint {
             ));
         }
         Ok(())
+    }
+
+    /// Workflow #479 F-3a: the binding of an iOS handset behind the endpoint, `Some(None)` while it
+    /// is unbound; `None` for every other endpoint.
+    fn ios_binding(&self) -> Option<Option<KeyedHandsetBinding>> {
+        match self.handset() {
+            Some(HandsetEndpoint::Ios(binding)) => Some(binding.clone()),
+            _ => None,
+        }
     }
 
     /// CAP-IDX (since 0.12.27): a discovery-bound entry's capture takes its MuMu index from the
@@ -589,6 +603,24 @@ struct NemuOpenReads<'a> {
     instance_state: &'a InstanceStateReader,
     application_state: &'a ApplicationStateReader,
     open: &'a NemuSessionOpener,
+}
+
+/// Workflow #398 RD-1b: the refusal of every session-opening path of a handset the private binding
+/// file binds no device to, at `operation`: no command runs against it. Workflow #479 F-3a: an
+/// unbound iOS handset's capture answers it too.
+fn unbound_handset_refusal(operation: impl Into<Location>) -> DeviceError {
+    DeviceError::fatal(
+        "device binding missing: the private binding file binds no device to this handset instance; bind one and restart",
+    )
+    .with_diagnostic(
+        DeviceErrorCategory::Protocol,
+        HostLocation::DeviceEndpointUnbound,
+    )
+    .with_diagnostic_context(
+        "execution_backend_registry",
+        operation,
+        DeviceErrorSensitivity::Sensitive,
+    )
 }
 
 /// The backend-open report of a capture open, before the backend is selected.
@@ -671,6 +703,7 @@ impl ExecutionBackendEntry {
             provider_profile: registration.provider_profile,
             nemu_app_index: registration.nemu_app_index,
             endpoint: Mutex::new(endpoint),
+            ios_capture: registration.ios_capture,
         })
     }
 
@@ -785,6 +818,13 @@ impl ExecutionBackendEntry {
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
         reader: &InstanceStateReader,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        // Workflow #479 F-3a: an iOS handset's capture is `acib`'s, whatever stand-ins its
+        // registration holds: bound, one `acib screenshot` child per frame; unbound, what an
+        // unbound handset answers.
+        let ios = self.endpoint().ios_binding();
+        if let Some(binding) = ios {
+            return self.open_ios_capture(binding);
+        }
         let capture = self.capture_for_open(reader)?;
         let report = capture_open_report(&capture);
         actingcommand_device::create_capture_backend_with_memory(capture, memory)
@@ -796,6 +836,28 @@ impl ExecutionBackendEntry {
                 )
             })
             .map_err(|error| actingcommand_device::observe_open_failure(report, error))
+    }
+
+    /// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): the capture of an
+    /// iOS handset bound by its key (`binding`), one `acib screenshot` child per frame from the
+    /// registration's source; it holds nothing between frames, so this open takes no frame. An
+    /// unbound one is refused as every unbound handset is; a registration that names no source
+    /// knows no `acib` (`acib_missing`).
+    fn open_ios_capture(
+        &self,
+        binding: Option<KeyedHandsetBinding>,
+    ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
+        let binding = binding.ok_or_else(|| unbound_handset_refusal(HostLocation::OpenCapture))?;
+        let source = self.ios_capture.as_ref().ok_or_else(|| {
+            DeviceError::fatal("acib screenshot gave no frame: acib_missing")
+                .with_ios_capture_failure(actingcommand_device::IosCaptureFailure::of(
+                    actingcommand_device::IosCaptureProblem::AcibMissing,
+                ))
+        })?;
+        Ok(actingcommand_device::open_acib_screen_capture(
+            source,
+            binding.device_key().as_str(),
+        ))
     }
 
     fn open_nemu_session(
@@ -1326,9 +1388,10 @@ fn entry_capability_profile(
 }
 
 /// Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): the capability
-/// table of a handset of the device system `system`, for which this build has no backend: every
-/// row unsupported and unavailable, its source the device system (`device_system:<system>`) and
-/// its failure semantics why; no row names a backend, since none is there.
+/// table of a handset of the device system `system`: every row this build has no backend of
+/// unsupported and unavailable, its source the device system (`device_system:<system>`) and its
+/// failure semantics why. Workflow #479 F-3a: an iOS handset's frame row is implemented by
+/// `acib_screen_capture`, not verified, as every implemented row of the registry's own.
 fn device_system_capability_profile(
     system: actingcommand_contract::DeviceSystem,
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
@@ -1343,10 +1406,21 @@ fn device_system_capability_profile(
     let evidence = EmulatorCapability::ALL
         .into_iter()
         .map(|capability| {
+            if capability == EmulatorCapability::CaptureFrame
+                && system == actingcommand_contract::DeviceSystem::Ios
+            {
+                return EmulatorCapabilityEvidence::new(
+                    capability,
+                    EmulatorCapabilityAvailability::Unverified,
+                    "Implementation selected: one acib screenshot child per frame, from the install root's tools\\acib.exe, for the read-only observations alone (a run's capture and a monitor are refused). Version, assets, connection and device availability have not been verified. Execution requires the existing Runtime admission and backend checks.",
+                    actingcommand_device::CaptureBackendName::AcibScreenCapture.as_str(),
+                )?
+                .with_implementation(EmulatorCapabilityImplementation::Supported);
+            }
             EmulatorCapabilityEvidence::new(
                 capability,
                 EmulatorCapabilityAvailability::Unavailable,
-                "This build has no backend for the instance's device system: every capture, input and application operation on it is refused before anything is opened (device_system_backend_missing).",
+                "This build has no backend of this operation for the instance's device system: it is refused before anything is opened (device_system_backend_missing).",
                 source.as_str(),
             )?
             .with_implementation(EmulatorCapabilityImplementation::Unsupported)

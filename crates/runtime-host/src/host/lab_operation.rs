@@ -2261,6 +2261,7 @@ pub(super) fn capture_backend_name(backend: RuntimeCaptureBackend) -> CaptureBac
         RuntimeCaptureBackend::DroidcastRaw => CaptureBackendName::DroidcastRaw,
         RuntimeCaptureBackend::NemuIpc => CaptureBackendName::NemuIpc,
         RuntimeCaptureBackend::Scrcpy => CaptureBackendName::Scrcpy,
+        RuntimeCaptureBackend::AcibScreenCapture => CaptureBackendName::AcibScreenCapture,
     }
 }
 

@@ -535,6 +535,13 @@ outcome_keys! {
     device_row_problem: vocab(device_row_problem),
     // Workflow #479 F-2: why `acib` gave no list of iOS phones.
     ios_list_problem: vocab(ios_list_problem),
+    // ---- Workflow #479 F-3a (an iOS handset's frame through `acib`, contracts/device-binding.md
+    // "An iOS handset"): begin. Why `capture_ios_failed` took no frame, `acib`'s own word for it
+    // and, beside its `deadline_passed`, the step it was waiting in. ----
+    ios_capture_problem: vocab(ios_capture_problem),
+    acib_problem: vocab(acib_problem),
+    acib_stage: vocab(acib_stage),
+    // ---- Workflow #479 F-3a: end ----
     // ---- Workflow #385 P-m (the shadow measurement's codes, PERF §11): begin ----
     pacing_stage_from: vocab(pacing_stage),
     pacing_stage_to: vocab(pacing_stage),

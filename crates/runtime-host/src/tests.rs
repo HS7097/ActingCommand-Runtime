@@ -553,6 +553,9 @@ mod gate_398_rd5b;
 // its key, never available to policy, and refused every capture, input and application operation
 // before anything opens.
 mod gate_479_f2;
+// Workflow #479 F-3a (0.12.75): a bound iOS handset's read-only observations take its frames from
+// a scripted `acib`; its inputs, application commands, self-check, drill and monitor stay refused.
+mod gate_479_f3a;
 // STORE-FG-2 (0.12.29): a store update package's store tap goes to exactly its allowed store;
 // every other input expects the assigned application.
 mod gate_store_fg2;
@@ -747,6 +750,9 @@ mod gate_453_s12;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;
+// Workflow #485 START-1 (0.12.75, register §1.489): the start's settlement of earlier epochs'
+// direct runs reads the finished runs by type alone, and the start log times every stage.
+mod gate_485_start1;
 // #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`
 // after each Lab observation), so its closes do not grow with them.
 mod gate_411_p51;

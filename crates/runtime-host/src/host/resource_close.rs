@@ -1539,6 +1539,14 @@ impl HostShared {
         {
             return Ok(primary);
         }
+        // Workflow #479 F-3a: the backend refused the picture it took as no frame (an all-black
+        // picture) and stays open holding nothing; the kernel kept the session, so nothing is
+        // closed and nothing is fenced. Fix round 1: only when nothing of the failure is
+        // unconfirmed (the kernel's own test); else the retained session is closed as after every
+        // failed capture and its unconfirmed resource fences the instance.
+        if primary.frame_refused_holding_nothing() {
+            return Ok(primary);
+        }
         let Some(instance_id) = primary.instance_id() else {
             return Ok(primary);
         };
@@ -1659,7 +1667,7 @@ impl HostShared {
             (
                 instance.instance_alias.clone(),
                 instance.instance_id,
-                instance.device_system_without_backend().is_some(),
+                instance.device_system_without_input_backend().is_some(),
             )
         })
         .collect::<Vec<_>>();

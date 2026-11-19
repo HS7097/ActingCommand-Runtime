@@ -620,6 +620,10 @@ impl ExecutionSession {
     pub fn capture(&self) -> ExecutionKernelResult<Frame> {
         match self.capture_retained() {
             Ok(frame) => Ok(frame),
+            // Workflow #479 F-3a: a picture its backend refused as no frame leaves the backend
+            // open and holding nothing; the session stays for the next capture. Fix round 1: only
+            // when nothing of the failure is unconfirmed.
+            Err(primary) if primary.frame_refused_holding_nothing() => Err(primary),
             Err(primary) => Err(
                 match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                     Ok(_) => primary,
@@ -1226,6 +1230,27 @@ fn run_session(
                             DeviceCloseAuthority::LocalOnly,
                         )
                     })?,
+                    // Workflow #479 F-3a (the coordinator's ruling 3 on #479 F-3): the backend
+                    // refused the picture it took as no frame (an all-black picture) and stays
+                    // open holding nothing, so the session goes on: nothing is marked for close
+                    // or retained, and the next capture uses the same backend. Fix round 1: only
+                    // when nothing of the failure is unconfirmed; one that carries the mark beside
+                    // an unconfirmed resource takes the arm below, as every failed capture does.
+                    Err(error) if error.frame_refused_holding_nothing() => {
+                        response.send(Err(error.clone())).map_err(|_| {
+                            close_after_failure(
+                                backends.take(),
+                                ExecutionKernelError::merge(
+                                    error,
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
+                                ),
+                                ResourceCloseOrder::CaptureFirst,
+                                DeviceCloseAuthority::LocalOnly,
+                            )
+                        })?
+                    }
                     Err(error) => {
                         // Workflow #191 H: marked first; the Host may end the lease on this reply.
                         needs_close.store(true, Ordering::Release);

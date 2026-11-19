@@ -1858,6 +1858,29 @@ impl DurableStorage for SqliteStorage {
             .collect()
     }
 
+    fn run_starts(
+        &self,
+        (after, through): (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::LedgerRunStart>> {
+        let connection = self
+            .database
+            .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+        read_rows_bound(
+            &connection,
+            RUN_STARTS,
+            &[
+                SqlValue::Integer(encode(after)),
+                SqlValue::Integer(encode(through)),
+            ],
+            None,
+            &mut 0,
+            false,
+        )?
+        .into_iter()
+        .map(run_start)
+        .collect()
+    }
+
     fn latest_timestamp(&self) -> GlobalLedgerResult<Option<u64>> {
         let connection = self
             .database
@@ -5135,6 +5158,28 @@ fn scope_extent(row: SqlRow) -> GlobalLedgerResult<ScopeExtent> {
     })
 }
 
+/// Workflow #485 START-1 (`contracts/ledger-store.md`, "The runs of a range"): the runs of the link
+/// rows with a sequence in `?1 < sequence <= ?2`, each with its first sequence there, in the order
+/// of those sequences. The link table is read through its integer primary key alone: `NOT INDEXED`
+/// keeps every index from driving the statement (the run link's index would serve the grouping by
+/// walking every row of the history), so the statement reads the range's link rows and nothing
+/// else; no record row is read.
+const RUN_STARTS: &str = "SELECT run_id, MIN(sequence) AS first_sequence FROM ledger_links NOT INDEXED WHERE sequence>?1 AND sequence<=?2 AND run_id IS NOT NULL GROUP BY run_id ORDER BY first_sequence";
+
+/// Workflow #485 START-1: one row of `RUN_STARTS`.
+fn run_start(row: SqlRow) -> GlobalLedgerResult<super::LedgerRunStart> {
+    let Ok([SqlValue::Text(run), SqlValue::Integer(first)]) = <[SqlValue; 2]>::try_from(row) else {
+        return Err(failure(
+            LedgerCode::InvalidEventLink.code(),
+            LedgerLocation::ReadLedgerView.location(),
+        ));
+    };
+    Ok(super::LedgerRunStart {
+        run_id: id_from_text(&run)?,
+        first_sequence: decode(first),
+    })
+}
+
 /// An identifier from its stored text (its serialization).
 fn id_from_text<T: serde::de::DeserializeOwned>(text: &str) -> GlobalLedgerResult<T> {
     serde_json::from_value(Value::String(text.to_owned())).map_err(|_| {
@@ -5995,3 +6040,9 @@ mod gate_qp1;
 #[cfg(test)]
 #[path = "sqlite/gate_rl1c_fix3.rs"]
 mod gate_rl1c_fix3;
+
+// Workflow #485 START-1 fix round 1: the runs of a range across spans of two sequences, its two
+// ends, and the plan of `RUN_STARTS`.
+#[cfg(test)]
+#[path = "sqlite/gate_485_start1.rs"]
+mod gate_485_start1;

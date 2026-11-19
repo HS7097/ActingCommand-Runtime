@@ -91,6 +91,9 @@ struct FakeState {
     fail_close: bool,
     panic_input: bool,
     panic_capture: bool,
+    /// Workflow #479 F-3a fix round 2: the capture refuses its picture as no frame
+    /// (`FrameRefusal::AllBlack`) and holds nothing.
+    refuse_capture: bool,
 }
 
 #[test]
@@ -744,6 +747,10 @@ impl CaptureBackend for FakeCapture {
         if state.fail_capture {
             return Err(DeviceError::transient("private capture failure detail"));
         }
+        if state.refuse_capture {
+            return Err(DeviceError::transient("private refused picture detail")
+                .with_frame_refused(actingcommand_device::FrameRefusal::AllBlack));
+        }
         let selection = state.capture_selection.clone();
         drop(state);
         let mut frame = Frame::from_pixels(
@@ -1069,6 +1076,53 @@ fn capture_failure_returns_original_error_then_later_capture_uses_fresh_session(
     drop(snapshot);
     kernel.close().expect("close replacement session");
     assert_eq!(state.lock().expect("state").capture_closes, 2);
+}
+
+// Workflow #479 F-3a fix round 2 (register §1.486): a picture its backend refused as no frame,
+// holding nothing (`FrameRefusal`), keeps its session through `ExecutionSession::capture` (which
+// closes nothing) and the kernel's `finish_session_operation` (which retires nothing): the capture
+// fails with the mark, no backend is closed, and the next capture takes its frame from the same
+// capture backend of the same session.
+#[test]
+fn f3a_fix2_a_refused_picture_keeps_its_session_and_its_backends() {
+    let state = Arc::new(Mutex::new(FakeState {
+        refuse_capture: true,
+        ..FakeState::default()
+    }));
+    let id = instance();
+    let kernel = kernel(Arc::clone(&state), &[("node.a", id, "private-a")]);
+    kernel
+        .input("node.a", InputAction::Reset, step_witness())
+        .expect("open input");
+    let error = kernel.capture("node.a").expect_err("a refused picture");
+    assert_eq!(error.code().as_str(), "capture_backend_operation_failed");
+    assert_eq!(
+        error.failure_context().frame_refused(),
+        Some(actingcommand_device::FrameRefusal::AllBlack)
+    );
+    assert!(kernel.has_session(id).expect("the session"));
+    {
+        let mut snapshot = state.lock().expect("state");
+        assert_eq!((snapshot.input_closes, snapshot.capture_closes), (0, 0));
+        snapshot.refuse_capture = false;
+    }
+    let frame = kernel
+        .capture("node.a")
+        .expect("the next capture on the same backend");
+    assert_eq!((frame.width, frame.height), (2, 1));
+    let snapshot = state.lock().expect("state");
+    assert_eq!((snapshot.input_opens, snapshot.input_closes), (1, 0));
+    assert_eq!(
+        (
+            snapshot.capture_opens,
+            snapshot.capture_calls,
+            snapshot.capture_closes
+        ),
+        (1, 2, 0)
+    );
+    drop(snapshot);
+    kernel.close().expect("close the kept session");
+    assert_eq!(state.lock().expect("state").capture_closes, 1);
 }
 
 #[test]

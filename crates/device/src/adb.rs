@@ -1234,9 +1234,9 @@ fn run_raw_with_boundary(
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Workflow #191 E2: blocks until the child exits or `wait` elapses; the caller's loop
-/// re-reads the exit through `try_wait`.
+/// re-reads the exit through `try_wait`. Workflow #479 F-3a: `acib`'s runner waits the same way.
 #[cfg(windows)]
-fn wait_for_child_exit(child: &Child, wait: Duration) -> io::Result<()> {
+pub(crate) fn wait_for_child_exit(child: &Child, wait: Duration) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -1255,7 +1255,7 @@ fn wait_for_child_exit(child: &Child, wait: Duration) -> io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn wait_for_child_exit(_child: &Child, wait: Duration) -> io::Result<()> {
+pub(crate) fn wait_for_child_exit(_child: &Child, wait: Duration) -> io::Result<()> {
     // Non-Windows keeps the 25 ms polling.
     thread::sleep(wait.min(COMMAND_POLL_INTERVAL));
     Ok(())

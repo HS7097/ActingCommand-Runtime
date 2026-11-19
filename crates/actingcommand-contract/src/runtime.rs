@@ -103,7 +103,11 @@ pub use goals::*;
 // request member `PauseScheduling.pause_mode` (`SchedulingPauseMode`) and the status members
 // `InstancePauseState.pause_mode` and `.in_the_way` (`PauseObstacle`), which no Runtime of 0.12.73
 // answers, declared [3, 12]. #480 PG-2e (since 0.12.75): the Runtime answers both status members,
-// which a reader below 12 refuses, so `min` is 12: declared [12, 12].
+// which a reader below 12 refuses, so `min` is 12: declared [12, 12]. Revision 13 (since 0.12.75;
+// opened by #479 F-3b, a projection frame reduced from a display within a pixel of its base's
+// shape, joined by Workflow #479 F-3a): the value `acib_screen_capture` of
+// `RuntimeCaptureBackend`, which only a configured iOS handset's observation carries and a reader
+// of 12 or lower refuses; `min` stays 12, declared [12, 13].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1319,6 +1323,10 @@ pub enum RuntimeCaptureBackend {
     NemuIpc,
     /// #402 RD-3: the scrcpy continuous stream (real devices only).
     Scrcpy,
+    /// Workflow #479 F-3a (`runtime-client` 13): an iOS handset's frame, one `acib screenshot`
+    /// child per frame. Only a configured iOS handset's observation carries it; a reader whose
+    /// `runtime-client` revision is below 13 refuses a receipt or a status that carries it.
+    AcibScreenCapture,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2405,7 +2413,8 @@ impl SchedulingPauseState {
 /// `device_held` (register §1.433), no Runtime of 0.12.73 answers them: they are filled from the
 /// release that raises `runtime-client`'s `min` to 12, which the console must have pinned before.
 /// #480 PG-2e (register §1.485): that release is 0.12.75, which answers `pause_mode` for every
-/// instance pause and `in_the_way` before stage `released`, and declares [12, 12].
+/// instance pause and `in_the_way` before stage `released`, and declares `min` 12 ([12, 13] with
+/// revision 13 of the same release).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstancePauseState {

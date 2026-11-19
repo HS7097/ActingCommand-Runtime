@@ -51,7 +51,10 @@ pub use adb::*;
 pub use adb_bounds_diagnostic::*;
 pub use backend_open::*;
 pub use capture::*;
-pub use codes::{DeviceLocation, NemuResolutionReason, StreamCaptureCode};
+pub use codes::{
+    AcibProblem, AcibStage, DeviceLocation, IosCaptureProblem, NemuResolutionReason,
+    StreamCaptureCode,
+};
 pub use device_serial::{DeviceSerial, handset_label};
 pub use device_state::*;
 pub use discovery::*;

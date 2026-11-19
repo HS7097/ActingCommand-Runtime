@@ -1989,6 +1989,18 @@
       "type": "vocab:ios_list_problem",
       "description": "Why acib, the project's iOS device bridge, gave no list of iOS phones (Workflow #479 F-2)."
     },
+    "ios_capture_problem": {
+      "type": "vocab:ios_capture_problem",
+      "description": "Why an iOS handset's capture through acib screenshot took no frame, the one cause beside capture_ios_failed (Workflow #479 F-3a)."
+    },
+    "acib_problem": {
+      "type": "vocab:acib_problem",
+      "description": "acib's own word for a refused or failed screenshot, kept beside the cause it maps to; never its error text (Workflow #479 F-3a)."
+    },
+    "acib_stage": {
+      "type": "vocab:acib_stage",
+      "description": "The step acib screenshot was waiting in when its own deadline passed, its stage beside deadline_passed (Workflow #479 F-3a)."
+    },
     "device_row_problem": {
       "type": "vocab:device_row_problem",
       "description": "Why a device row adb lists cannot be bound to a handset instance (#398 DB-2)."
@@ -7340,6 +7352,168 @@
         },
         "state_unreadable": {
           "description": "The Lab could not read whether acib had ended, so it ended it, and ending it succeeded: it runs no more, and what it answered is not known (Workflow #479 F-2 fix round 2)."
+        }
+      }
+    },
+    "ios_capture_problem": {
+      "description": "Why an iOS handset's capture through acib screenshot took no frame, the one cause beside capture_ios_failed: a word of acib's mapped to the cause its step names, or what the Runtime saw of the child, each word one cause (Workflow #479 F-3a, contracts/device-binding.md, An iOS handset).",
+      "tokens": {
+        "ios_device_not_listed": {
+          "description": "No phone usbmuxd lists has the handset's key (acib: device_key_unknown, device_not_listed): it is not plugged in, or not seen."
+        },
+        "ios_device_service_unreachable": {
+          "description": "Apple's device service (usbmuxd) gave no usable answer: no connection, or its device list or the phone's pairing record unreadable (acib: usbmuxd_unreachable, usbmuxd_list_failed, pair_record_unreadable)."
+        },
+        "ios_not_paired": {
+          "description": "This host holds no pairing record of the phone (acib: not_paired)."
+        },
+        "ios_tunnel_failed": {
+          "description": "The lockdown session, the service that starts the tunnel, the tunnel or its remote service discovery failed (acib: lockdown_unreachable, lockdown_read_failed, lockdown_value_unexpected, session_refused, service_refused, tunnel_failed, rsd_unreachable, rsd_handshake_failed)."
+        },
+        "ios_screen_capture_failed": {
+          "description": "The screen capture service or its picture request failed, or a service of the tunnel or the screen capture service could not be reached (acib: service_not_listed, service_unreachable, service_handshake_failed, channel_refused, screenshot_failed; acib answers service_unreachable both for the screenshot's own service and for a service the tunnel opens, which the Runtime cannot tell apart, fix round 2)."
+        },
+        "acib_deadline_passed": {
+          "description": "acib's own deadline passed (acib: deadline_passed, with the stage it was waiting in as acib_stage)."
+        },
+        "acib_no_answer_in_time": {
+          "description": "The Runtime's wait (10 s, above the 8 s deadline it gives acib) passed before acib ended with its answer; the Runtime ended it and its end is confirmed."
+        },
+        "acib_answer_incomplete": {
+          "description": "The answer was cut short: acib ended without its whole answer (ended by another party), or fewer bytes followed its line than it announced."
+        },
+        "acib_answer_unreadable": {
+          "description": "The answer line is not one of acib screenshot's answers: not JSON of its shape, no picture announced on the standard output, a word of none of its answers, or an output that could not be read."
+        },
+        "acib_errors_unreadable": {
+          "description": "The Runtime could not read the child's standard error to its end (a read of its pipe failed); not the answer's fault: the answer is not taken and the child is ended (fix round 1)."
+        },
+        "acib_answer_too_long": {
+          "description": "The answer is over the Runtime's caps: a line of more than 4 KiB, a picture announced or sent over 64 MiB, or more bytes than its line announced; the child ended."
+        },
+        "acib_state_unreadable": {
+          "description": "The Runtime could not read whether acib had ended, so it ended it, and its end is confirmed: what it answered is not known."
+        },
+        "acib_not_ended": {
+          "description": "The Runtime asked acib to end and could not confirm its end: it may still run, the capture's resources are unconfirmed, and that instance alone is fenced until the Runtime restarts."
+        },
+        "acib_call_refused": {
+          "description": "acib refused the call itself before it asked the phone: its command line, the salt of the key or its own asynchronous runtime (acib: command_line_invalid, key_salt_unusable, async_runtime_failed)."
+        },
+        "ios_picture_unreadable": {
+          "description": "The picture cannot be decoded, or is of a form the conversion to 8-bit sRGB does not cover (not RGB of 8 or 16 bits per sample), or acib could not read its header (acib: picture_header_truncated, picture_header_unknown)."
+        },
+        "ios_picture_color_space_unsupported": {
+          "description": "The picture names no colour space this build converts: neither a cICP chunk nor an sRGB chunk, or a cICP chunk of other numbers than primaries 1 or 12, transfer 13, matrix 0 and full range."
+        },
+        "acib_missing": {
+          "description": "No acib where the Runtime runs it from: no tools\\acib.exe under the install root, or the Runtime runs from no install root."
+        },
+        "acib_not_started": {
+          "description": "The file is there but the system could not start it."
+        },
+        "acib_readers_not_started": {
+          "description": "The child started but the system did not start the Runtime's readers of its output and errors: the child is ended and nothing of it is read (fix round 1)."
+        }
+      }
+    },
+    "acib_problem": {
+      "description": "acib's own word for a refused or failed screenshot (apps/acib/README.md, The commands), kept beside the cause it maps to; a word of none of these is an answer the Runtime does not read (acib_answer_unreadable) (Workflow #479 F-3a).",
+      "tokens": {
+        "command_line_invalid": {
+          "description": "acib refused its command line."
+        },
+        "async_runtime_failed": {
+          "description": "acib's asynchronous runtime could not be built."
+        },
+        "deadline_passed": {
+          "description": "acib's own deadline passed; acib_stage names the step it was waiting in."
+        },
+        "key_salt_unusable": {
+          "description": "The salt acib was given for the key is unusable."
+        },
+        "device_key_unknown": {
+          "description": "No device usbmuxd lists has the key under the salt."
+        },
+        "usbmuxd_unreachable": {
+          "description": "No connection to usbmuxd."
+        },
+        "usbmuxd_list_failed": {
+          "description": "usbmuxd did not answer the device list."
+        },
+        "device_not_listed": {
+          "description": "usbmuxd lists no device of the session number."
+        },
+        "lockdown_unreachable": {
+          "description": "No connection to the device's lockdown service."
+        },
+        "lockdown_read_failed": {
+          "description": "A lockdown value could not be read."
+        },
+        "lockdown_value_unexpected": {
+          "description": "A lockdown value is not of the type its key has."
+        },
+        "pair_record_unreadable": {
+          "description": "usbmuxd's answer to the pairing record request could not be read."
+        },
+        "not_paired": {
+          "description": "usbmuxd holds no pairing record of this host for the device."
+        },
+        "session_refused": {
+          "description": "The device refused the lockdown session with this host's pairing record."
+        },
+        "service_refused": {
+          "description": "The device refused to start the service."
+        },
+        "service_unreachable": {
+          "description": "The started service, or a remote service's port inside the tunnel, could not be connected to."
+        },
+        "tunnel_failed": {
+          "description": "The CoreDeviceProxy tunnel or the TCP stack inside acib failed."
+        },
+        "rsd_unreachable": {
+          "description": "The remote service discovery port inside the tunnel could not be connected to."
+        },
+        "rsd_handshake_failed": {
+          "description": "The remote service discovery handshake failed."
+        },
+        "service_not_listed": {
+          "description": "The remote service discovery handshake lists no screen capture service."
+        },
+        "service_handshake_failed": {
+          "description": "The screen capture service took the connection but its own first exchange failed."
+        },
+        "channel_refused": {
+          "description": "The instruments server did not open its screenshot channel."
+        },
+        "screenshot_failed": {
+          "description": "The service did not answer the screenshot request with a picture."
+        },
+        "picture_header_truncated": {
+          "description": "The picture ends before its header gives its size."
+        },
+        "picture_header_unknown": {
+          "description": "The picture does not start with a header acib reads."
+        }
+      }
+    },
+    "acib_stage": {
+      "description": "The step acib screenshot was waiting in when its own deadline passed (apps/acib/README.md, The commands) (Workflow #479 F-3a).",
+      "tokens": {
+        "session": {
+          "description": "usbmuxd's device list, the pairing record and the lockdown session that starts the tunnel's service."
+        },
+        "tunnel": {
+          "description": "The tunnel and the remote service discovery handshake."
+        },
+        "service_handshake": {
+          "description": "The connection to the screen capture service and its own handshake."
+        },
+        "server_first_message": {
+          "description": "The instruments server's first message (only the instruments way waits in it)."
+        },
+        "picture_request": {
+          "description": "The picture's request."
         }
       }
     },
