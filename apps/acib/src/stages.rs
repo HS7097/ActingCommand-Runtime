@@ -32,6 +32,11 @@ impl Steps {
         self.current.map(|(stage, _)| stage)
     }
 
+    /// (ACIB-3d) Whether the command has entered `stage`: it is in it, or finished it.
+    pub fn reached(&self, stage: Stage) -> bool {
+        self.current() == Some(stage) || self.finished.iter().any(|(done, _)| *done == stage)
+    }
+
     /// The times of the stages finished so far, not of the one the command is in; `None` when
     /// it entered none (a command other than `running`, `launch` and `stop`).
     pub fn finished(&self) -> Option<StageTimes> {
@@ -64,7 +69,7 @@ mod tests {
     const BRIDGE: &str = include_str!("bridge.rs");
 
     /// Every stage of [`Stage`], to read a stage's name in the code by.
-    const ALL_STAGES: [Stage; 14] = [
+    const ALL_STAGES: [Stage; 16] = [
         Stage::Session,
         Stage::Tunnel,
         Stage::ServiceHandshake,
@@ -78,17 +83,23 @@ mod tests {
         Stage::ProcessList,
         Stage::LaunchRequest,
         Stage::KillRequests,
+        Stage::KillReplies,
+        Stage::LookConnection,
         Stage::LooksAfterKills,
     ];
 
     /// (ACIB-3c) The helpers `running`, `launch` and `stop` call, each by its call as the three
     /// write it and by its function's name: the installation proxy's lookup, then the tunnel and
-    /// the instruments server.
-    const OPENINGS: [(&str, &str); 2] = [
+    /// the instruments server; (ACIB-3d) and `stop`'s steps from its first look on.
+    const OPENINGS: [(&str, &str); 3] = [
         ("looked_up(target, bundle, context)", "looked_up"),
         (
             "instruments_server(&device, &record, context)",
             "instruments_server",
+        ),
+        (
+            "stopped(client, looks, asked, &directories, way, wait, context)",
+            "stopped",
         ),
     ];
 
@@ -226,6 +237,9 @@ mod tests {
     /// and the instruments server's first message), and none of the screenshot's words that
     /// means something else here (`session`, `tunnel`, `service_handshake`) is. (ACIB-3c) The
     /// name is the gate map's of ACIB-3b, when these were the application service's commands.
+    /// (ACIB-3d) `stop`'s way, the longest (a way that asks for answers), goes on after its first
+    /// look through `kill_requests`, `kill_replies`, `look_connection` and `looks_after_kills`,
+    /// read from `stopped`, which `stop` calls.
     #[test]
     fn each_stage_of_the_application_service_is_reached_and_named_by_its_deadline() {
         let opening: Vec<Stage> = entered("looked_up")
@@ -293,6 +307,8 @@ mod tests {
             "process_list",
             "launch_request",
             "kill_requests",
+            "kill_replies",
+            "look_connection",
             "looks_after_kills",
         ]
         .iter()

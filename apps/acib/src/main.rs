@@ -79,6 +79,8 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
         timeout_ms,
     } = invocation;
     let (command, device, via) = (request.name(), request.device(), request.via());
+    // (ACIB-3d) A line of `stop` names the way of its kill requests, a refusal too.
+    let stop_way = request.stop_way();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -86,7 +88,8 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
         Ok(runtime) => runtime,
         Err(error) => {
             let failure = Failure::library(Problem::AsyncRuntimeFailed, &error);
-            return Printed::line(Line::refused_on(Some(command), device, via, failure));
+            let line = Line::refused_on(Some(command), device, via, failure);
+            return Printed::line(line.on_stop_way(stop_way));
         }
     };
     let deadline = Duration::from_millis(timeout_ms);
@@ -100,13 +103,14 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
                 // A screenshot keeps its stage in `stage`, `running`, `launch` and `stop` in
                 // `steps`; no command sets both.
                 let steps = context.steps.borrow();
-                Printed::line(Line::deadline_passed(
+                let line = Line::deadline_passed(
                     command,
                     device.or(context.device.get()),
                     via,
                     context.stage.get().or(steps.current()),
                     steps.finished(),
-                ))
+                );
+                Printed::line(line.on_stop_way(stop_way))
             })
     })
 }
