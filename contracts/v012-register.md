@@ -42247,7 +42247,9 @@ self-checks, the resource repositories' CI and production would have to change t
   for every target the read gives text to, on every actionable instance and for every sample of
   that frame, the region the read then gives the target its blocks by: the one placement of a
   served target (`SceneEvaluation::shared_target`, which `layout_shared_text` uses too), moved to
-  the slot or the instance, scaled with the match, shifted by the jitter. An anchor's score and an
+  the slot or the instance (on a `repeated_anchor` layout to the feature's `offset` from the
+  match, scaled with the factor the match hit, while the region keeps the size it declares),
+  shifted by the jitter. An anchor's score and an
   icon identity read no text target, and an instance that is not actionable has no box. When a
   served target's region is `template_relative` (known only on the frame) or a target cannot be
   placed or resolved (its own evaluation fails the projection with that error, as before), the
