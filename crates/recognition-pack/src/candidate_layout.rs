@@ -284,7 +284,8 @@ fn space_rect(space: PackCoordinateSpace) -> PackRect {
 /// One frame's shared read: its blocks in the sorted order, each block's index in the provider's
 /// order, and the PP-OCR reports, which go with the first target the read serves. Workflow #428
 /// CFL-2: also its rectangle, the detector's count, and with a chain its evidence and processed
-/// region, from which each served target's evidence is counted.
+/// region, from which each served target's evidence is counted. Workflow #463 SEL-GRID G1: and the
+/// name boxes it was sent, in frame coordinates (empty: none, every detected block recognized).
 #[derive(Debug, Clone)]
 pub(crate) struct SharedTextRead {
     blocks: Vec<crate::OcrTextEvidence>,
@@ -294,6 +295,28 @@ pub(crate) struct SharedTextRead {
     detection: Option<crate::OcrProviderDetection>,
     preprocess: Option<OcrPreprocessEvidence>,
     processed: Option<std::sync::Arc<Vec<u8>>>,
+    name_boxes: Vec<PackRect>,
+}
+
+/// Workflow #463 SEL-GRID G1: a frame's shared read as a layout makes it: the read, the layout's
+/// kind, and the name boxes the read serves on the frame, placed before its first call
+/// ([`SceneEvaluation::served_name_boxes`]); `None` sends the provider no box, so that it
+/// recognizes every detected block, as every shared read did before G1.
+#[derive(Clone, Copy)]
+struct SharedReadPlan<'p> {
+    shared: &'p CandidateSharedOcr,
+    kind: CandidateLayoutKind,
+    name_boxes: Option<&'p [PackRect]>,
+}
+
+/// Workflow #463 SEL-GRID G1: a target a frame's shared read serves, as
+/// [`SceneEvaluation::shared_target`] places it: the OCR target placed and sampled, the region it
+/// takes its blocks from and that region's evidence, and the read's rectangle.
+struct SharedTarget {
+    target: OcrTarget,
+    region: PackRect,
+    region_evidence: actingcommand_contract::OcrRegionEvidence,
+    shared_rect: PackRect,
 }
 
 /// How a `repeated_anchor` layout numbers its instances: `top_to_bottom` by (`y`, `x`),
@@ -785,6 +808,18 @@ impl SceneEvaluation<'_> {
         let mut evaluations = BTreeMap::<SampleKey, TargetEvaluation>::new();
         // Workflow #396 REC-8: the layout's shared read, once per frame.
         let mut shared_reads = BTreeMap::<u8, RecognitionPackResult<SharedTextRead>>::new();
+        // Workflow #463 SEL-GRID G1: before any read, the name boxes each frame's read serves; a
+        // region depends on its frame alone, so each frame's context places them.
+        let name_boxes = match &layout.shared_ocr {
+            None => Vec::new(),
+            Some(shared) => contexts
+                .iter()
+                .zip(0_u8..)
+                .map(|(context, frame)| {
+                    context.served_name_boxes(layout, shared, &instances, frame)
+                })
+                .collect::<Vec<_>>(),
+        };
         let mut evidence = Vec::new();
         let mut candidates = Vec::with_capacity(instances.len());
         for (index, instance) in instances.iter().enumerate() {
@@ -818,25 +853,36 @@ impl SceneEvaluation<'_> {
                         let in_frame = std::ptr::eq(scenes[frame_index], self.scene);
                         // Workflow #396 REC-8: a target inside the shared read takes its blocks;
                         // Workflow #463 SEL-2L: on a `repeated_anchor` layout, every target the
-                        // read gives text to.
+                        // read gives text to. Workflow #463 SEL-GRID G1: the read is sent the
+                        // name boxes it serves on the sample's frame.
                         let shared = match &layout.shared_ocr {
                             None => Ok(None),
-                            Some(shared) if in_frame => self.layout_shared_text(
-                                layout.kind,
-                                shared,
-                                target_id,
-                                at,
-                                *sample,
-                                &mut shared_reads,
-                            ),
-                            Some(shared) => contexts[frame_index].layout_shared_text(
-                                layout.kind,
-                                shared,
-                                target_id,
-                                at,
-                                *sample,
-                                &mut shared_reads,
-                            ),
+                            Some(shared) => {
+                                let plan = SharedReadPlan {
+                                    shared,
+                                    kind: layout.kind,
+                                    name_boxes: name_boxes
+                                        .get(frame_index)
+                                        .and_then(Option::as_deref),
+                                };
+                                if in_frame {
+                                    self.layout_shared_text(
+                                        plan,
+                                        target_id,
+                                        at,
+                                        *sample,
+                                        &mut shared_reads,
+                                    )
+                                } else {
+                                    contexts[frame_index].layout_shared_text(
+                                        plan,
+                                        target_id,
+                                        at,
+                                        *sample,
+                                        &mut shared_reads,
+                                    )
+                                }
+                            }
                         };
                         let mut result = match (shared, at) {
                             (Err(error), _) => Err(error),
@@ -1387,7 +1433,8 @@ impl SceneEvaluation<'_> {
         }
     }
 
-    /// Workflow #396 REC-8: `layout_shared_text` of a `fixed_slots` layout's read.
+    /// Workflow #396 REC-8: `layout_shared_text` of a `fixed_slots` layout's read, sent no name
+    /// box (Workflow #463 SEL-GRID G1), as every shared read was before G1.
     #[cfg(test)]
     pub(crate) fn shared_text(
         &self,
@@ -1398,8 +1445,11 @@ impl SceneEvaluation<'_> {
         reads: &mut BTreeMap<u8, RecognitionPackResult<SharedTextRead>>,
     ) -> RecognitionPackResult<Option<TargetEvaluation>> {
         self.layout_shared_text(
-            CandidateLayoutKind::FixedSlots,
-            shared,
+            SharedReadPlan {
+                shared,
+                kind: CandidateLayoutKind::FixedSlots,
+                name_boxes: None,
+            },
             target_id,
             placement,
             sample,
@@ -1408,28 +1458,30 @@ impl SceneEvaluation<'_> {
     }
 
     /// Workflow #396 REC-8: the evaluation of `target_id` from the shared read of this frame of a
-    /// layout of `kind`, when `target_id` is an OCR target the read gives text to and its region,
-    /// moved to `placement` and shifted by the sample, lies inside the read's region; `None` for
-    /// any other target, which reads on its own. The frame's read calls the provider once; its
-    /// result, an error too, is kept in `reads` under the sample's frame. Workflow #463 SEL-2L:
-    /// on a `repeated_anchor` layout, whose read covers its readable band (`validate_shared_ocr`)
-    /// and whose features are read only on an instance inside the band, every target the read
-    /// gives text to takes it from the read, so no instance falls back to a read of its own (a
-    /// region placed at a scaled match may reach past the band, where the read holds no block);
-    /// the blocks it takes, their order, their joining and their confidence are a slot's.
+    /// layout of `plan.kind`, when `target_id` is an OCR target the read gives text to and its
+    /// region, moved to `placement` and shifted by the sample, lies inside the read's region;
+    /// `None` for any other target, which reads on its own. The frame's read calls the provider
+    /// once; its result, an error too, is kept in `reads` under the sample's frame. Workflow #463
+    /// SEL-2L: on a `repeated_anchor` layout, whose read covers its readable band
+    /// (`validate_shared_ocr`) and whose features are read only on an instance inside the band,
+    /// every target the read gives text to takes it from the read, so no instance falls back to a
+    /// read of its own (a region placed at a scaled match may reach past the band, where the read
+    /// holds no block); the blocks it takes, their order, their joining and their confidence are a
+    /// slot's. Workflow #463 SEL-GRID G1: the frame's read is sent `plan.name_boxes`, the regions
+    /// of every target it serves on the frame, and a target whose region is not among the boxes a
+    /// read was sent fails loud, since the read recognized no block outside them.
     fn layout_shared_text(
         &self,
-        kind: CandidateLayoutKind,
-        shared: &CandidateSharedOcr,
+        plan: SharedReadPlan<'_>,
         target_id: &str,
         placement: Option<PackPoint>,
         sample: CandidateSampleVariant,
         reads: &mut BTreeMap<u8, RecognitionPackResult<SharedTextRead>>,
     ) -> RecognitionPackResult<Option<TargetEvaluation>> {
-        let declared = self.evaluator.target(target_id)?;
-        if !matches!(declared, RecognitionTarget::Ocr(target) if shared.reads_text_of(target)) {
+        let shared = plan.shared;
+        let Some(declared) = self.served_target(shared, target_id)? else {
             return Ok(None);
-        }
+        };
         if self
             .sample_deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -1438,24 +1490,21 @@ impl SceneEvaluation<'_> {
                 "recognition sample deadline exceeded before target evaluation",
             ));
         }
-        let placed = match placement {
-            Some(origin) => placed_target(declared, origin)?,
-            None => declared.clone(),
-        };
-        let RecognitionTarget::Ocr(target) = sample.target(&placed)? else {
-            return Err(RecognitionPackError::fatal(format!(
-                "OCR target '{target_id}' changed its kind when sampled"
-            )));
-        };
-        let (region, region_evidence) = self.ocr_region(&target)?;
-        let shared_rect = provider_region(self.scene, target_id, &shared.region)?;
-        if kind == CandidateLayoutKind::FixedSlots && !rect_is_within(region, shared_rect) {
+        let Some(SharedTarget {
+            target,
+            region,
+            region_evidence,
+            shared_rect,
+        }) = self.shared_target(plan.kind, shared, declared, target_id, placement, sample)?
+        else {
             return Ok(None);
-        }
+        };
         let first = !reads.contains_key(&sample.frame);
         let read = reads
             .entry(sample.frame)
-            .or_insert_with(|| self.read_shared_text(shared, shared_rect, target_id))
+            .or_insert_with(|| {
+                self.read_shared_text(shared, shared_rect, target_id, plan.name_boxes)
+            })
             .clone();
         let mut read = match read {
             Ok(read) => read,
@@ -1466,6 +1515,13 @@ impl SceneEvaluation<'_> {
                 return Err(error.with_region(&region_evidence));
             }
         };
+        if !read.name_boxes.is_empty() && !read.name_boxes.contains(&region) {
+            return Err(RecognitionPackError::fatal(format!(
+                "the shared read of frame {} was not sent the name box of target '{target_id}'",
+                sample.frame
+            ))
+            .with_region(&region_evidence));
+        }
         if !first {
             read.diagnostics = Vec::new();
         }
@@ -1488,6 +1544,7 @@ impl SceneEvaluation<'_> {
             rect: read.rect,
             detected: read.detection.map(|detection| detection.detected),
             limit: read.detection.map(|detection| detection.limit),
+            served: read.detection.and_then(|detection| detection.served),
             kept_milli: read.preprocess.as_ref().map(|evidence| evidence.kept_milli),
             threshold_value: read
                 .preprocess
@@ -1547,11 +1604,16 @@ impl SceneEvaluation<'_> {
     /// Workflow #396 REC-8: the one provider call of a shared read on this frame, for the
     /// target `served` it serves first. A read whose detector found more boxes than the model
     /// folder's `max_boxes` fails with `text_read_blocks_truncated`: a slot may lack its blocks.
+    /// Workflow #463 SEL-GRID G1: the read is sent `name_boxes`, in the picture the provider is
+    /// given (the hand-over's conversion), and the provider recognizes and counts only the blocks
+    /// that lie in one; the read then fails only when those blocks are more than `max_boxes`, and
+    /// the outcome names their number as `requested` beside the detected `count`.
     fn read_shared_text(
         &self,
         shared: &CandidateSharedOcr,
         rect: PackRect,
         served: &str,
+        name_boxes: Option<&[PackRect]>,
     ) -> RecognitionPackResult<SharedTextRead> {
         if self.sample_deadline.is_some_and(|deadline| {
             Duration::from_millis(shared.timeout_ms)
@@ -1583,25 +1645,36 @@ impl SceneEvaluation<'_> {
         if hand_over.preprocessed() {
             self.recheck_sample_budget(shared.timeout_ms)?;
         }
+        let boxes = name_boxes.unwrap_or_default().to_vec();
+        let picture_boxes = hand_over.in_picture(&boxes)?;
         let result = provider
-            .read_text(hand_over.request(
-                &shared.languages,
-                shared.timeout_ms,
-                &shared.model_ref,
-                &shared.model_sha256,
-            ))
+            .read_text(crate::OcrProviderRequest {
+                served: &picture_boxes,
+                ..hand_over.request(
+                    &shared.languages,
+                    shared.timeout_ms,
+                    &shared.model_ref,
+                    &shared.model_sha256,
+                )
+            })
             .map_err(|error| provider_error(served, "ocr", error))?;
         let result = hand_over.restore(result)?;
         let (preprocess, processed) = hand_over.into_shared();
         let detection = result.detection;
         let ocr = validate_ocr_result(result, rect)?;
         if let Some(detection) = detection.filter(|detection| detection.truncated()) {
+            let outcome = Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)
+                .target_id(served)
+                .count(detection.detected)
+                .limit_count(detection.limit);
+            // Workflow #463 SEL-GRID G1: the blocks the read was to recognize, the count over the
+            // cap, when it served name boxes.
+            let outcome = match detection.served {
+                Some(count) => outcome.requested(count),
+                None => outcome,
+            };
             return Err(RecognitionPackError::text_read(
-                Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)
-                    .target_id(served)
-                    .count(detection.detected)
-                    .limit_count(detection.limit)
-                    .stage(RecognitionPackLocation::TextReadShared),
+                outcome.stage(RecognitionPackLocation::TextReadShared),
             )
             .with_ppocr_diagnostics(ocr.ppocr_diagnostics));
         }
@@ -1611,18 +1684,133 @@ impl SceneEvaluation<'_> {
             diagnostics: ocr.ppocr_diagnostics,
             rect,
             detection,
+            name_boxes: boxes,
             preprocess,
             processed,
         })
     }
+
+    /// Workflow #463 SEL-GRID G1 (#396 REC-8's first test of `layout_shared_text`): the declared
+    /// `target_id` when it is an OCR target the read `shared` gives text to (`reads_text_of`),
+    /// `None` for any other target, which reads on its own.
+    fn served_target(
+        &self,
+        shared: &CandidateSharedOcr,
+        target_id: &str,
+    ) -> RecognitionPackResult<Option<&RecognitionTarget>> {
+        let declared = self.evaluator.target(target_id)?;
+        Ok(
+            matches!(declared, RecognitionTarget::Ocr(target) if shared.reads_text_of(target))
+                .then_some(declared),
+        )
+    }
+
+    /// Workflow #463 SEL-GRID G1 (#396 REC-8's placement in `layout_shared_text`): the target
+    /// `declared`, which the read `shared` gives text to, as this frame's read serves it for
+    /// `sample`: moved to `placement` and shifted by the sample's jitter, its region resolved on
+    /// this frame, and the read's rectangle; `None` on a `fixed_slots` layout when the region does
+    /// not lie inside the read's, so that the target reads on its own. The one placement of a
+    /// served target, for the read and for the name boxes it is sent.
+    fn shared_target(
+        &self,
+        kind: CandidateLayoutKind,
+        shared: &CandidateSharedOcr,
+        declared: &RecognitionTarget,
+        target_id: &str,
+        placement: Option<PackPoint>,
+        sample: CandidateSampleVariant,
+    ) -> RecognitionPackResult<Option<SharedTarget>> {
+        let placed = match placement {
+            Some(origin) => placed_target(declared, origin)?,
+            None => declared.clone(),
+        };
+        let RecognitionTarget::Ocr(target) = sample.target(&placed)? else {
+            return Err(RecognitionPackError::fatal(format!(
+                "OCR target '{target_id}' changed its kind when sampled"
+            )));
+        };
+        let (region, region_evidence) = self.ocr_region(&target)?;
+        let shared_rect = provider_region(self.scene, target_id, &shared.region)?;
+        if kind == CandidateLayoutKind::FixedSlots && !rect_is_within(region, shared_rect) {
+            return Ok(None);
+        }
+        Ok(Some(SharedTarget {
+            target,
+            region,
+            region_evidence,
+            shared_rect,
+        }))
+    }
+
+    /// Workflow #463 SEL-GRID G1: the name boxes the shared read `shared` of `layout` serves on
+    /// frame `frame`, placed before the frame's first read: the region of every target the read
+    /// gives text to, on every actionable instance and for each sample of the instance's
+    /// features on that frame, as [`Self::shared_target`] places it for the read itself (an
+    /// anchor's score reads no target and an icon identity its template pool, as the projection
+    /// reads them). `None` when such a target's region is known only on the frame by its anchor
+    /// (`template_relative`), or when a target cannot be placed or resolved, an error its own
+    /// evaluation then fails the projection with, as before: the read is then sent no box and
+    /// recognizes every detected block, as before G1.
+    fn served_name_boxes(
+        &self,
+        layout: &CandidateLayout,
+        shared: &CandidateSharedOcr,
+        instances: &[LayoutInstance<'_>],
+        frame: u8,
+    ) -> Option<Vec<PackRect>> {
+        let mut boxes = Vec::new();
+        for instance in instances.iter().filter(|instance| instance.actionable) {
+            for feature in &layout.features {
+                let icons = feature.identity.as_ref().is_some_and(|identity| {
+                    matches!(
+                        identity.recognition,
+                        CandidateIdentityRecognition::IconTemplates { .. }
+                    )
+                });
+                if feature.value == CandidateFeatureValue::AnchorMilli || icons {
+                    continue;
+                }
+                let Some(target_id) = feature.target.as_ref().or_else(|| {
+                    instance
+                        .slot
+                        .and_then(|slot| slot.targets.get(&feature.name))
+                }) else {
+                    continue;
+                };
+                let Some(declared) = self.served_target(shared, target_id).ok()? else {
+                    continue;
+                };
+                if let RecognitionTarget::Ocr(target) = declared
+                    && matches!(target.region, PackRegion::TemplateRelative(_))
+                {
+                    return None;
+                }
+                let placement = layout
+                    .feature_placement(feature, instance.origin, instance.scale_milli)
+                    .ok()?;
+                for sample in layout
+                    .feature_samples(feature)
+                    .into_iter()
+                    .filter(|sample| sample.frame == frame)
+                {
+                    if let Some(served) = self
+                        .shared_target(layout.kind, shared, declared, target_id, placement, sample)
+                        .ok()?
+                    {
+                        boxes.push(served.region);
+                    }
+                }
+            }
+        }
+        Some(boxes)
+    }
 }
 
-/// Whether the center `(x + floor(w/2), y + floor(h/2))` of `block` lies in `region`.
+/// Whether the center `(x + floor(w/2), y + floor(h/2))` of `block` lies in `region`: the one rule
+/// of the contract crate (Workflow #463 SEL-GRID G1, `CandidateRect::holds_centre_of`), by which
+/// the text provider keeps the blocks of the name boxes a shared read serves.
 fn center_is_within(block: PackRect, region: PackRect) -> bool {
-    let x = i64::from(block.x) + i64::from(block.width) / 2;
-    let y = i64::from(block.y) + i64::from(block.height) / 2;
-    (i64::from(region.x)..i64::from(region.x) + i64::from(region.width)).contains(&x)
-        && (i64::from(region.y)..i64::from(region.y) + i64::from(region.height)).contains(&y)
+    candidate_rect(region).holds_centre_of(candidate_rect(block))
 }
 
 #[cfg(test)]
@@ -3253,3 +3441,9 @@ mod anchor_search_tests;
 #[cfg(test)]
 #[path = "gate_463_sel2l.rs"]
 mod gate_463_sel2l;
+
+// Workflow #463 SEL-GRID G1: a shared read recognizes and counts only the blocks of the name boxes
+// it serves.
+#[cfg(test)]
+#[path = "gate_463_g1.rs"]
+mod gate_463_g1;

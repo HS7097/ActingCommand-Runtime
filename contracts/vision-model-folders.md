@@ -273,7 +273,7 @@ built-in behaviour, so a model without `model.json` reads exactly as before.
 | `detector.threshold` | 0.3 | (0, 1) | text probability of a map cell |
 | `detector.min_area` | 4 | >= 1 | fewest cells of a text component |
 | `detector.box_padding` | 16 | 0..=256 | frame pixels added around a box |
-| `detector.max_boxes` | 64 | 1..=1024 | most boxes recognized per request |
+| `detector.max_boxes` | 64 | 1..=1024 | most boxes recognized per request: of every box detected, or (since 0.12.76) for a layout's shared read that names its name boxes of the boxes those hold |
 | `detector.merge_min_overlap_percent` | 35 | 0..=100 | vertical overlap for merging boxes on a line |
 | `detector.merge_gap_factor` | 3 | 0..=16 | horizontal gap allowed, in box heights |
 | `detector.merge_min_height` | 24 | 0..=1024 | box height counted at least this |
@@ -287,6 +287,17 @@ reads with the detector: a `full_frame` region of an OCR target without `locate`
 `detect` request's `line_merge` replaces `detector.merge_gap_factor` (`{"gap_factor": n}`)
 or merges no boxes (`"none"`); every other detector parameter is the folder's. A `detect`
 read reports how many boxes the detector found before `max_boxes` kept the first of them.
+
+Workflow #463 SEL-GRID G1 (since 0.12.76): a candidate layout's shared read
+([selection-graph.md](selection-graph.md), "Shared OCR read", "What the read recognizes") names
+with its `detect` request the name boxes it serves, in the request's frame. The engine then keeps,
+after the line merge and before `max_boxes`, only the boxes whose centre
+`(x + floor(w/2), y + floor(h/2))` lies in one of them (left and top edges inside, right and
+bottom edges outside, the rule the kernel gives a block to a target by), recognizes the first
+`max_boxes` of those and reports their number (`served`) beside the boxes found (`detected`), so
+that for such a read `max_boxes` counts the blocks of its name boxes. Every other request, a
+located text's among them, names none and is read and counted as before. A request that names
+name boxes without `detect` is refused as an invalid request.
 
 ## Identity
 

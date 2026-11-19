@@ -460,6 +460,7 @@ fn truncated_detection_refuses_a_miss_and_records_a_hit() {
                 Some(OcrProviderDetection {
                     detected: 65,
                     limit: 64,
+                    served: None,
                 }),
             )
         })

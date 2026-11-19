@@ -51,6 +51,9 @@ mod gate_e1_failure_frames;
 // #463 RG-1: `recognize` answers the box of a text it located.
 mod gate_463_rg1;
 
+// Workflow #463 SEL-GRID G1: a shared read's name boxes through the vision boundary.
+mod gate_463_g1;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {

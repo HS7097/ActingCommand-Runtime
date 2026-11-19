@@ -135,6 +135,7 @@ fn read_detecting(
         blocks: OcrBlockMode::Detect {
             line_merge: OcrLineMerge::Never,
         },
+        served: &[],
     };
     let mut ran = InvocationRoles::default();
     let result = read_request(

@@ -395,6 +395,7 @@ fn a_truncated_shared_read_fails_with_text_read_blocks_truncated() {
             Some(OcrProviderDetection {
                 detected: 65,
                 limit: 64,
+                served: None,
             }),
         )
     });

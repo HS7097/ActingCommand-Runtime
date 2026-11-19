@@ -290,10 +290,12 @@ share (and, since 0.12.74, a `repeated_anchor` layout one that its instances sha
   `line_merge`'s `gap_factor`, so that the provider joins the two before the order is applied.
 - One projection calls the provider once for each frame whose read serves a target; the read's
   PP-OCR reports go with the first target it serves.
-- When the detector found more boxes than the model folder's `max_boxes`, the projection fails
-  with `candidate_feature_failed`, whose cause is the evaluation error
+- When the read had more blocks to recognize than the model folder's `max_boxes` (since 0.12.76
+  only the blocks of the name boxes it serves: "What the read recognizes" below), the projection
+  fails with `candidate_feature_failed`, whose cause is the evaluation error
   `text_read_blocks_truncated` (stage `text_read_shared`, `count` boxes detected, `limit_count`
-  the folder's `max_boxes`): a slot may lack its blocks.
+  the folder's `max_boxes`, and `requested` the served blocks when the read named name boxes): a
+  slot may lack its blocks.
 - The read counts as one provider evaluation for each frame it serves, and a target it serves
   counts none ([candidate-projection.md](candidate-projection.md), section Budgets). Admission
   knows a target's region before the frame unless it is `template_relative`; such a target
@@ -330,8 +332,9 @@ The read may declare `preprocess`, the chain of
   "Hand-over") and the processed region is kept for the projection. After the chain the sample
   deadline is checked again, as before the read.
 - **Evidence.** Every evaluation the read serves carries `shared_read`: the read's `rect`, the
-  detector's `detected` and `limit` when the provider gives them, and with a chain the read's
-  own `kept_milli` and `threshold_value`. With a chain its `preprocess` evidence has `scope`
+  detector's `detected` and `limit` when the provider gives them (since 0.12.76 also `served`, the
+  blocks of the name boxes the read served), and with a chain the read's own `kept_milli` and
+  `threshold_value`. With a chain its `preprocess` evidence has `scope`
   `shared`, `rect` the target's own region and `source_rect` the read's; its `kept_milli` is
   counted over the target's own region of the kept processed region, without running the chain
   again, and equals what the target would report on its own. Both are read-only and Lab
@@ -395,6 +398,56 @@ card's title box is read by the detector rather than as one block:
   `package` revision 20 ([component-interfaces.md](component-interfaces.md)): a Runtime before
   0.12.74 refuses it at its declaration gate (`UnknownField` at
   `/candidate_layouts/<i>/shared_ocr`).
+
+#### What the read recognizes (Workflow #463 SEL-GRID G1, since 0.12.76)
+
+A card list of several columns holds far more text than names: prices, limits, print on the
+covers, buy keys. The read detects once over its region, as before, and then recognizes and counts
+only the blocks of the regions it serves, so that the model folder's `max_boxes` bounds the names a
+frame shows, not every text on its cards. Nothing is declared for it, in a package or a recording.
+
+- **The name boxes.** Before the first shared read of a frame the kernel places the regions the
+  read serves on that frame: for every target the read gives text to, on every actionable
+  instance (a `repeated_anchor` layout's placed cards, a `fixed_slots` layout's slots whose target
+  lies inside the read) and for every sample of that frame, its region exactly as the read then
+  gives the target its blocks by: moved to the slot or the instance (on a `repeated_anchor` layout
+  to the feature's `offset` from the match, which scales with the factor the match hit, while the
+  region keeps its own declared size: Workflow #404 FS-1 above), shifted by the sample's jitter.
+  These are the read's name boxes. An instance that is not actionable, a card the readable band
+  cuts among them, has none; nothing new decides where a box lies.
+- **The request.** The read sends the provider its name boxes with the request, in the coordinates
+  of the picture the provider is given: the frame's (the package's base when the frame was reduced
+  to it) without a chain, moved onto the processed region's origin with one
+  ([recognition-preprocess.md](recognition-preprocess.md), "Hand-over"). Every other read (a
+  located text, an OCR target read on its own, a page's, a guard's or a field's text) sends none,
+  and the provider answers it as before, its cap included.
+- **What the provider recognizes.** The detector runs over the read's region and merges its boxes
+  into lines as before; then, before the model folder's `max_boxes`, the provider keeps only the
+  boxes whose center `(x + floor(w/2), y + floor(h/2))` lies in a name box, its left and top edges
+  inside and its right and bottom edges outside: the rule by which the read gives a block to a
+  target, written once for both (in the contract crate,
+  `CandidateRect::holds_centre_of`). It recognizes the first `max_boxes` of the boxes it kept, each
+  on its own, and answers `detected`, every box found, and `served`, the boxes kept.
+- **Every name reads as before**, byte for byte: the detection, its padding and the merge come
+  before the name boxes and do not depend on them; a box is recognized on its own whatever else is
+  recognized; and a target takes exactly the blocks whose center its region holds, each of which
+  lies in a name box. What the read no longer recognizes, no target took.
+- **Truncation**: the read fails only when its served blocks are more than `max_boxes`:
+  `text_read_blocks_truncated`, its one cause, more blocks to recognize than the folder's cap,
+  with `count` the boxes detected and `requested` the served ones, the count that was over. A frame
+  that failed before because its boxes, not its names, passed the cap now reads.
+- **Evidence.** `shared_read` gains `served`; `block_source_order` is the order the provider
+  returned, now among the served blocks. Names, decisions and codes are unchanged; the ledger's
+  records keep their shape.
+- **When the read is sent no box.** When a target the read serves has a `template_relative` region
+  (known only on the frame, by its anchor), or a target cannot be placed or resolved (an error its
+  own evaluation fails the projection with, as before), the frame's read is sent no box and
+  recognizes every detected block, as before. A target the read serves whose region is not among
+  the boxes the read was sent fails its evaluation rather than read without its blocks.
+- **Unchanged**: every member of a package and the `package` range [3, 20]; what a recording
+  generates and how the Lab's self-checks call the kernel; a located target's own rule
+  ([ocr-fields.md](ocr-fields.md), section Located text) and every read that is not a layout's
+  shared read; the model folder's parameters.
 
 ### Rules
 
