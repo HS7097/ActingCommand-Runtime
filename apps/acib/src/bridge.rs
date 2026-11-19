@@ -1,23 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The eleven commands against the device, through the `idevice` library (board #479, ACIB-0 to
-//! ACIB-3b).
+//! ACIB-3c).
 //!
 //! (ACIB-3b, second round) `probe` asks the application service each way of [`ProbeWay::ALL`]
 //! on a connection of its own, each read through `tap.rs`, and answers per way only a word, an
-//! error's kind, a count and counts of what the phone sent. The list of applications of
-//! `running`, `launch` and `stop` is asked the way the service itself names among its features
-//! in the discovery handshake ([`Listing`]). (ACIB-3b, third round) `probe` also asks the two
-//! lists in the form of the screenshot's request, which the phone answers (the library's
-//! `invoke_with_plist_action`, with the action the screenshot's rule gives: [`action_of`]); and
-//! `running`, `launch` and `stop` read their connections through a tap too ([`Watched`]), so that
-//! an error after the phone ended the connection has a word of its own, `connection_closed`.
+//! error's kind, a count and counts of what the phone sent. (ACIB-3b, third round) `probe` also
+//! asks the two lists in the form of the screenshot's request, which the phone answers (the
+//! library's `invoke_with_plist_action`, with the action the screenshot's rule gives:
+//! [`action_of`]).
+//!
+//! (ACIB-3c) `running`, `launch` and `stop` no longer ask the application service, which
+//! answered none of seven read-only requests on a phone with iOS 27.0.1 while the instruments
+//! server answered there at once: they look the one bundle up in the installation proxy
+//! ([`looked_up`]), and ask the instruments server inside the tunnel ([`instruments_server`]) for
+//! its list of running processes (its device information channel, `runningProcesses`), to launch
+//! (its process control's `launch_app`) and to kill (`kill_app`). Only `probe` asks the
+//! application service.
 //!
 //! Everything here only reads, but for `launch`, which launches one application, and `stop`,
-//! which ends one application's own processes (ACIB-3). Of the application service's lists of
-//! applications and processes nothing leaves this module but whether the one bundle asked for
-//! is installed and the pids of its own processes, the application's and its extensions'
-//! (`matching.rs`), and of its errors only their kind ([`service_error_kind`]). usbmuxd is reached where the library finds it on this platform
+//! which ends one application's own processes (ACIB-3); the library's process control client is
+//! made only by them ([`launched`], [`kill`]). Of the installation proxy's record and of the
+//! instruments server's list of processes nothing leaves this module but whether the one bundle
+//! asked for is installed and the pids of its own processes, the application's and its
+//! extensions' (`matching.rs`), (fix round 1) of the list a count and a word ([`Look`]), and of
+//! the errors only their kind ([`service_error_kind`]).
+//! usbmuxd is reached where the library finds it on this platform
 //! (on Windows the TCP port 27015 of 127.0.0.1, which Apple's device service serves). The
 //! pairing record usbmuxd holds is asked for, kept in memory for the command and never shown.
 //! The tunnel of iOS 17.4 and later is the lockdown service CoreDeviceProxy with the library's
@@ -30,16 +38,16 @@
 //! kept nowhere else.
 
 use crate::answer::{
-    Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind, Failure, ImageQuery,
-    ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted, Orientation,
-    Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay, Problem, Reader, Reading, Running,
-    Screenshot, ServiceDetail, ServiceEntry, ServiceLine, Services, SignalError, Signals, Stage,
-    Stop, Way, whole_milliseconds,
+    ApplicationLocated, Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind,
+    Failure, ImageQuery, ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted,
+    Orientation, Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay, Problem, Reader,
+    Reading, Running, Screenshot, ServiceDetail, ServiceEntry, ServiceLine, Services, SignalError,
+    Signals, Stage, Stop, Way, whole_milliseconds,
 };
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
 use crate::key::{DeviceKey, Salt};
-use crate::matching::{self, Application, Installation, Pids, Process};
+use crate::matching::{self, Application, Installation, Look};
 use crate::out_file::{self, NotWritten};
 use crate::redact;
 use crate::stages::Steps;
@@ -52,7 +60,8 @@ use idevice::services::core_device::{
     ScreenCaptureServiceClient,
 };
 use idevice::services::core_device_proxy::CoreDeviceProxy;
-use idevice::services::dvt::remote_server::RemoteServerClient;
+use idevice::services::dvt::process_control::ProcessControlClient;
+use idevice::services::dvt::remote_server::{Channel, RemoteServerClient};
 use idevice::services::dvt::screenshot::ScreenshotClient;
 use idevice::services::installation_proxy::InstallationProxyClient;
 use idevice::services::lockdown::LockdownClient;
@@ -80,10 +89,23 @@ const AMFI_DOMAIN: &str = "com.apple.security.mac.amfi";
 const IMAGE_KINDS: [&str; 2] = ["Personalized", "Developer"];
 /// The application type the installation proxy is asked for: the user's own applications.
 const USER_APPLICATIONS: &str = "User";
-/// The signal `stop` sends each process of the application: SIGKILL, which a process can neither
-/// catch nor ignore (SIGTERM, 15, can be caught and ignored), so the look after it tells whether
-/// the processes ended and not whether the application chose to.
-const KILL: u32 = 9;
+/// (ACIB-3c) The application type of the installation proxy's lookup of one bundle in `running`,
+/// `launch` and `stop`: every type ("Any" for all applications, the library's default:
+/// idevice 0.1.68, `services/installation_proxy.rs` 65-68, 92), so that an application a person
+/// installed and one the phone comes with are both found.
+const ANY_APPLICATION: &str = "Any";
+/// (ACIB-3c) The member of the installation proxy's record that holds the on-device path of the
+/// application's bundle, as the library's own reader of such a record names it
+/// (`services/dvt/xctest/mod.rs` 106 and 184, "On-device path of the runner app bundle").
+const APPLICATION_PATH: &str = "Path";
+/// (ACIB-3c) The instruments server's device information channel and its one request this
+/// program sends, which takes no argument (idevice 0.1.68, `services/dvt/device_info.rs` 27-31
+/// and 41-46: the library's `DeviceInfoClient`, under a feature `acib` does not turn on, sends
+/// it so; `acib` sends the same through the library's public channel of the `dvt` feature).
+const DEVICE_INFO_CHANNEL: &str = "com.apple.instruments.server.services.deviceinfo";
+const RUNNING_PROCESSES: &str = "runningProcesses";
+/// (ACIB-3c) The instruments server's root channel, on which it sends its first message.
+const ROOT_CHANNEL: i32 = 0;
 
 /// The client of CoreDevice's application service inside the tunnel.
 type AppService = AppServiceClient<Box<dyn ReadWrite>>;
@@ -96,6 +118,15 @@ type Xpc = RemoteXpcClient<Box<dyn ReadWrite>>;
 /// service's), public with its `invoke_with_plist_action` (idevice 0.1.68,
 /// `services/core_device/mod.rs` 46-82).
 type CoreDevice = CoreDeviceServiceClient<Box<dyn ReadWrite>>;
+/// (ACIB-3c) The instruments server's client on a connection inside the tunnel
+/// (`com.apple.instruments.dtservicehub`: idevice 0.1.68, `services/dvt/mod.rs` 37-46).
+type Instruments = RemoteServerClient<Box<dyn ReadWrite>>;
+/// (ACIB-3c) A channel of the instruments server, opened by a request of its own and borrowing
+/// the client while it is held (`services/dvt/remote_server.rs` 425-458, 1298-1355).
+type ServerChannel<'a> = Channel<'a, Box<dyn ReadWrite>>;
+/// (ACIB-3c) The tunnel, which stays open while it is held, and the instruments server's client
+/// in it, or the kind of the error its first message failed with.
+type ServerConnection = (AdapterHandle, Result<Instruments, ErrorKind>);
 
 /// (ACIB-3b, third round) The prefixes of a CoreDevice feature's identifier and of an action's.
 /// The screenshot the phone answers is asked for by the feature
@@ -116,9 +147,9 @@ const LIST_PROCESSES_FEATURE: &str = "com.apple.coredevice.feature.listprocesses
 /// `list_processes` reads it (`services/core_device/app_service.rs` 308-311).
 const PROCESS_TOKENS: &str = "processTokens";
 
-/// (ACIB-3b, second round) The feature the application service names, among its features in the
-/// discovery handshake, when it offers the streamed list of applications (idevice 0.1.68,
-/// `services/core_device/app_service.rs` 209).
+/// (ACIB-3b, second round) The feature of the streamed list of applications, as the application
+/// service names it among its features in the discovery handshake and `probe`'s `stream_apps`
+/// asks for it (idevice 0.1.68, `services/core_device/app_service.rs` 209).
 const STREAMED_LIST_FEATURE: &str = "com.apple.coredevice.feature.streamapplist";
 /// The member of a streamed answer that holds the stream's status (`services/core_device/mod.rs`
 /// 252-253).
@@ -132,10 +163,10 @@ const CORE_DEVICE_VERSION_COMPONENTS: [u64; 2] = [629, 3];
 const XPC_OBJECT_MAGIC: u32 = 0x4213_3742;
 const XPC_OBJECT_VERSION: u32 = 0x0000_0005;
 const XPC_UUID_TYPE: u32 = 0x0000_a000;
-/// The flags of the list of applications, in the library's order (`app_list_options` in
-/// `services/core_device/app_service.rs` 381-398): App Clips, removable, hidden, internal and
-/// default applications asked as `list_apps` is asked here, then the three keys the library adds,
-/// each `false`.
+/// The flags of the application service's list of applications, in the library's order
+/// (`app_list_options` in `services/core_device/app_service.rs` 381-398): App Clips, removable,
+/// hidden, internal and default applications asked as `probe` asks `list_apps`, then the three
+/// keys the library adds, each `false`.
 const LIST_OPTIONS: [(&str, bool); 8] = [
     ("includeAppClips", false),
     ("includeRemovableApps", true),
@@ -147,86 +178,31 @@ const LIST_OPTIONS: [(&str, bool); 8] = [
     ("requireContainerAccess", false),
 ];
 
-/// (ACIB-3b, second round) How the application service's list of applications is asked for: the
-/// way the service names among its features in the discovery handshake, as the library's own tool
-/// chooses (idevice's repository, `tools/src/app_service.rs`, commit 6e1222075e of 2026-08-15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Listing {
-    /// The library's `list_apps` on the service's client: the feature `listapps`, its answer read
-    /// on the reply channel. When the service names no streamed list.
-    ListApps,
-    /// The streamed list, on a connection of its own to the service: the feature
-    /// `streamapplist`, its answer read on the root channel. When the service names it.
-    StreamAppList,
+/// (ACIB-3c) What `running`, `launch` and `stop` know once the installation proxy has been asked
+/// about the bundle: the device, this host's pairing record for it (kept in memory for the
+/// command, never shown), and what the lookup says of the bundle, or the kind of the error it
+/// failed with.
+struct LookedUp {
+    device: UsbmuxdDevice,
+    record: PairingFile,
+    installation: Result<Installation, ErrorKind>,
 }
 
-impl Listing {
-    /// The way of the service whose features the handshake names as `features`.
-    fn advertised(features: Option<&[String]>) -> Self {
-        let streamed = features.is_some_and(|features| {
-            features
-                .iter()
-                .any(|feature| feature == STREAMED_LIST_FEATURE)
-        });
-        if streamed {
-            Self::StreamAppList
-        } else {
-            Self::ListApps
-        }
-    }
-}
-
-/// A device's number, the tunnel to it, the application service's port in it and the way its list
-/// of applications is asked for, and the service's client, or the kind of the error the service's
-/// handshake failed with; (ACIB-3b, third round) and what the phone sent on the client's
-/// connection, which tells the kinds of its errors.
-struct AppConnection {
-    device: u32,
-    /// The tunnel, which stays open while it is held.
-    tunnel: AdapterHandle,
-    port: u16,
-    listing: Listing,
-    client: Result<AppService, ErrorKind>,
-    watch: Watched,
-}
-
-/// (ACIB-3b, third round) A connection of `running`, `launch` or `stop` to the application
-/// service, read through a [`Tapped`] stream as `probe` reads its connections (every byte passed
-/// on unchanged, only counted): an error on it is [`ErrorKind::ConnectionClosed`] once the phone
-/// ended the connection or reset a stream of it (`tap.rs`, [`tap::kind_after`]), whatever the
-/// library made of that, and otherwise the kind the library's error tells
-/// ([`service_error_kind`]). So `answer_unreadable` is never a closed connection in these three.
-#[derive(Default)]
-struct Watched(Arc<Mutex<Seen>>);
-
-impl Watched {
-    /// `stream`, its reads counted by this watch.
-    fn tapped(&self, stream: Box<dyn ReadWrite>) -> Box<dyn ReadWrite> {
-        Box::new(Tapped::new(stream, Arc::clone(&self.0)))
-    }
-
-    /// The kind of `error`, an error of the library on this connection.
-    fn kind(&self, error: &IdeviceError) -> ErrorKind {
-        self.after(service_error_kind(error))
-    }
-
-    /// `kind`, or `connection_closed` when the phone ended this connection or reset a stream of
-    /// it.
-    fn after(&self, kind: ErrorKind) -> ErrorKind {
-        tap::kind_after(&tap::summary_of(&self.0), kind)
-    }
-}
-
-/// One application of a list, as `matching.rs` reads it: its bundle identifier and its path.
-struct ListedApplication {
-    bundle_identifier: String,
-    path: String,
+/// (ACIB-3c) What `running`, `launch` or `stop` does after a step whose answer decides it
+/// ([`running_after_lookup`], [`launch_after_lookup`], [`stop_after_lookup`],
+/// [`stop_after_first_look`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Then<T> {
+    /// The command answers this line now: nothing more is asked of the phone or sent to it.
+    Answer(Line),
+    /// The command goes on with this.
+    GoOn(T),
 }
 
 /// What a command keeps while it runs, for the line of a deadline that passes in it: the
 /// command's deadline and start, the stage a screenshot is in (no other command sets it), the
-/// stages of a command of the application service (`stages.rs`; no other command enters one)
-/// and the number of the device once it is found (a device named by its key has none before).
+/// stages of `running`, `launch` and `stop` (`stages.rs`; no other command enters one) and the
+/// number of the device once it is found (a device named by its key has none before).
 pub struct Context {
     /// When the command's deadline passes (`None`: further than the clock reaches).
     pub deadline: Option<tokio::time::Instant>,
@@ -250,13 +226,13 @@ impl Context {
         }
     }
 
-    /// (ACIB-3b) A command of the application service enters `stage` now.
+    /// (ACIB-3b) `running`, `launch` or `stop` enters `stage` now.
     fn enter(&self, stage: Stage) {
         self.steps.borrow_mut().enter(stage, self.started.elapsed());
     }
 
-    /// (ACIB-3b) The line of a command of the application service that ends now, with how long
-    /// each of its stages took.
+    /// (ACIB-3b) The line of `running`, `launch` or `stop` that ends now, with how long each of
+    /// its stages took.
     fn timed(&self, line: Line) -> Line {
         let times = self.steps.borrow_mut().end(self.started.elapsed());
         line.timed(times)
@@ -612,7 +588,7 @@ async fn ask(
             let applications = streamed_applications(&mut client)
                 .await
                 .map_err(Asked::Request)?;
-            Ok(Some(applications.len()))
+            Ok(Some(applications))
         }
         ProbeWay::ListProcesses => {
             let mut client = <AppService as RsdService>::from_stream(tapped)
@@ -902,330 +878,455 @@ fn reported(orientation: InterfaceOrientation) -> Orientation {
 }
 
 /// `running`, read-only: whether `bundle` is installed, whether the application itself runs,
-/// and the pids of its processes and, apart, of its extensions'. The application service is
-/// asked for its list of applications and, when the bundle is in it, its list of processes;
-/// nothing is changed on the phone.
+/// and the pids of its processes and, apart, of its extensions'. (ACIB-3c) The installation proxy
+/// looks the one bundle up ([`looked_up`]); when it holds the bundle with a readable path, the
+/// instruments server inside the tunnel is asked for its list of running processes
+/// ([`instruments_server`], [`look`]), and its answer read ([`running_after_look`]). Nothing is
+/// changed on the phone: the process control channel is not opened.
 async fn running(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
-    let AppConnection {
-        device: number,
-        mut tunnel,
-        port,
-        listing,
-        client: service,
-        watch,
-    } = app_service(target, context).await?;
-    let asked = Running::asked(number, bundle);
-    let mut client = match service {
+    let LookedUp {
+        device,
+        record,
+        installation,
+    } = looked_up(target, bundle, context).await?;
+    let asked = Running::asked(device.device_id, bundle);
+    let (asked, directories) = match running_after_lookup(asked, installation) {
+        Then::Answer(line) => return Ok(line),
+        Then::GoOn(going_on) => going_on,
+    };
+    let (_tunnel, server) = instruments_server(&device, &record, context).await?;
+    let mut client = match server {
         Ok(client) => client,
         Err(kind) => {
             let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
             return Ok(Line::Running(failed));
         }
     };
-    context.enter(Stage::ApplicationList);
-    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
-    let answer = match listed {
-        Err(kind) => asked.failed(Problem::ApplicationListFailed, Some(kind)),
-        Ok(Installation::NotInstalled) => asked.not_installed(),
-        Ok(Installation::PathUnreadable) => asked
-            .installed()
-            .failed(Problem::BundlePathUnreadable, None),
-        Ok(Installation::Installed(directories)) => {
-            context.enter(Stage::ProcessList);
-            match pids_of(&mut client, &watch, &directories).await {
-                Ok(pids) => asked.found(pids),
-                Err(kind) => asked
-                    .installed()
-                    .failed(Problem::ProcessListFailed, Some(kind)),
-            }
-        }
-    };
-    Ok(Line::Running(answer))
+    context.enter(Stage::ProcessList);
+    let looked = look(&mut client, &directories).await;
+    Ok(Line::Running(running_after_look(asked, looked)))
 }
 
-/// `launch`: the application service's list of applications is asked first, as `running` and
-/// `stop` ask it; a bundle it does not hold answers `not_installed` and no launch is sent. Then
-/// the service launches `bundle` and answers the pid of its process. Without `relaunch` an
-/// application that runs is not ended first (`terminateExisting` false; what the phone then does
-/// the library does not say); with it, it is ended and started anew. Of the request's members
-/// `acib` chooses these: the application is not stopped at its start, with no argument, no
-/// environment, no platform option and no standard input, output or error of its own; the
-/// library fixes the rest (the active user, pseudo-terminals for standard I/O; README).
+/// `launch`: (ACIB-3c) the installation proxy looks the one bundle up first, as for `running`
+/// and `stop`; a bundle it does not hold answers `not_installed`, and no launch is sent and the
+/// instruments server is not asked. Then the instruments server's process control launches
+/// `bundle` and answers its pid ([`launched`]). Without `relaunch` an application that runs is
+/// not ended first (`KillExisting` false; what the phone then does the library does not say);
+/// with it, it is ended and started anew. Of the request's members `acib` chooses these: the
+/// bundle, the application not started suspended (`StartSuspendedKey` false), `KillExisting`;
+/// it passes no environment and no argument, which the library sends as an empty dictionary and
+/// an empty list, and the library fixes the device path, an empty text (README).
 async fn launch(
     target: &Target,
     bundle: &str,
     relaunch: bool,
     context: &Context,
 ) -> Result<Line, Failure> {
-    let AppConnection {
-        device: number,
-        mut tunnel,
-        port,
-        listing,
-        client: service,
-        watch,
-    } = app_service(target, context).await?;
-    let asked = Launch::asked(number, bundle, relaunch);
-    let mut client = match service {
+    let LookedUp {
+        device,
+        record,
+        installation,
+    } = looked_up(target, bundle, context).await?;
+    let asked = Launch::asked(device.device_id, bundle, relaunch);
+    let asked = match launch_after_lookup(asked, installation) {
+        Then::Answer(line) => return Ok(line),
+        Then::GoOn(asked) => asked,
+    };
+    let (_tunnel, server) = instruments_server(&device, &record, context).await?;
+    let mut client = match server {
         Ok(client) => client,
         Err(kind) => {
             let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
             return Ok(Line::Launch(failed));
         }
-    };
-    // Where the bundle lies is not needed to launch it: a path read as no place is installed.
-    context.enter(Stage::ApplicationList);
-    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
-    let asked = match listed {
-        Err(kind) => {
-            let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
-            return Ok(Line::Launch(failed));
-        }
-        Ok(Installation::NotInstalled) => return Ok(Line::Launch(asked.not_installed())),
-        Ok(Installation::PathUnreadable | Installation::Installed(_)) => asked.installed(),
     };
     context.enter(Stage::LaunchRequest);
-    let launched = client
-        .launch_application(bundle, &[], relaunch, false, None, None, None)
-        .await;
-    Ok(Line::Launch(match launched {
-        Ok(process) => asked.launched(process.pid),
-        Err(error) => asked.failed(Problem::LaunchFailed, Some(watch.kind(&error))),
-    }))
+    Ok(Line::Launch(
+        match launched(&mut client, bundle, relaunch).await {
+            Ok(pid) => asked.launched(pid),
+            Err(kind) => asked.failed(Problem::LaunchFailed, Some(kind)),
+        },
+    ))
 }
 
-/// `stop`: the application's own processes the first look lists (its executable directly in
-/// the bundle's directory, `matching.rs`) are each sent [`KILL`] through the application
-/// service's `send_signal`, one after the other; its extensions' processes are sent nothing.
-/// Then the list of processes is read at once, and again every [`LOOK_INTERVAL`] while it lists
-/// a process the command signalled and the next look starts before the command's deadline
-/// (`stopping.rs` decides; a look the deadline cuts leaves the verdict of the one before it).
-/// The verdict comes from the looks whatever the signals answered: a signal's error is carried
-/// beside it by its kind. An application that does not run, or is not installed, is answered
-/// at the first look and sent nothing. A deadline that passes before the first look after the
-/// signals has answered is the command's `deadline_passed`, as for every command.
+/// `stop`: (ACIB-3c) the installation proxy looks the one bundle up first; a bundle it does not
+/// hold is answered as not running and nothing is sent. Then the application's own processes the
+/// instruments server's first look lists (its executable directly in the bundle's directory,
+/// `matching.rs`) are each sent a kill request through the server's process control
+/// (`killPid:`, [`kill`]), one after the other; its extensions' processes are sent nothing. Then
+/// the list of processes is read at once, on a device information channel of its own, and again
+/// every [`LOOK_INTERVAL`] while it lists a process the command signalled and the next look
+/// starts before the command's deadline (`stopping.rs` decides; a look the deadline cuts leaves
+/// the verdict of the one before it). The verdict comes from the looks whatever became of the
+/// requests: a request's error is carried beside it by its kind. An application that does not
+/// run is answered at the first look and sent nothing. (Fix round 1) A look that locates no
+/// process (no entry of the list with a location read as a place) tells nothing of the bundle:
+/// at the first look no kill request is sent ([`stop_after_first_look`]), and a look after the
+/// kills ends the looks with no verdict (`Stop::looked`); both answer `process_paths_unreadable`.
+/// (Fix round 2) A first look that locates the application's entries both at the bundle's
+/// directory and directly in it does not tell which entry is the application itself: no kill
+/// request is sent, and the line answers `application_entry_ambiguous`. A look after the kills
+/// that does so sends nothing more, as no look after them does: the kills went to the pids a
+/// first look told apart, and that look is read as any other, `application_located` `both`.
+/// A deadline that passes before the first look after the kills has answered is the command's
+/// `deadline_passed`, as for every command.
 async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
-    let AppConnection {
-        device: number,
-        mut tunnel,
-        port,
-        listing,
-        client: service,
-        watch,
-    } = app_service(target, context).await?;
-    let asked = Stop::asked(number, bundle);
-    let mut client = match service {
+    let LookedUp {
+        device,
+        record,
+        installation,
+    } = looked_up(target, bundle, context).await?;
+    let asked = Stop::asked(device.device_id, bundle);
+    let (asked, directories) = match stop_after_lookup(asked, installation) {
+        Then::Answer(line) => return Ok(line),
+        Then::GoOn(going_on) => going_on,
+    };
+    let (_tunnel, server) = instruments_server(&device, &record, context).await?;
+    let mut client = match server {
         Ok(client) => client,
         Err(kind) => {
             let failed = asked.failed(Problem::ServiceHandshakeFailed, Some(kind));
             return Ok(Line::Stop(failed));
         }
     };
-    context.enter(Stage::ApplicationList);
-    let listed = installation(&mut client, &watch, &mut tunnel, port, listing, bundle).await;
-    let directories = match listed {
-        Err(kind) => {
-            let failed = asked.failed(Problem::ApplicationListFailed, Some(kind));
-            return Ok(Line::Stop(failed));
-        }
-        Ok(Installation::NotInstalled) => {
-            return Ok(Line::Stop(asked.nothing_ran(false, Vec::new())));
-        }
-        Ok(Installation::PathUnreadable) => {
-            let failed = asked
-                .installed()
-                .failed(Problem::BundlePathUnreadable, None);
-            return Ok(Line::Stop(failed));
-        }
-        Ok(Installation::Installed(directories)) => directories,
-    };
     context.enter(Stage::ProcessList);
-    let first = match pids_of(&mut client, &watch, &directories).await {
-        Ok(pids) => pids,
+    let first = match look(&mut client, &directories).await {
+        Ok(first) => first,
         Err(kind) => {
-            let failed = asked
-                .installed()
-                .failed(Problem::ProcessListFailed, Some(kind));
+            let failed = asked.failed(Problem::ProcessListFailed, Some(kind));
             return Ok(Line::Stop(failed));
         }
     };
-    if first.application.is_empty() {
-        return Ok(Line::Stop(asked.nothing_ran(true, first.extensions)));
-    }
-    context.enter(Stage::KillSignals);
-    let mut errors = Vec::new();
-    for &pid in &first.application {
-        if let Err(error) = client.send_signal(pid, KILL).await {
-            errors.push(SignalError {
-                pid,
-                error_kind: watch.kind(&error),
-            });
-        }
-    }
-    let signals = Signals {
-        signalled: first.application,
-        errors,
+    let (asked, application) = match stop_after_first_look(asked, first) {
+        Then::Answer(line) => return Ok(line),
+        Then::GoOn(going_on) => going_on,
     };
-    context.enter(Stage::LooksAfterSignals);
-    let mut last = match pids_of(&mut client, &watch, &directories).await {
-        Ok(pids) => pids,
+    context.enter(Stage::KillRequests);
+    let signals = kill(&mut client, application).await;
+    context.enter(Stage::LooksAfterKills);
+    let mut channel = match device_info(&mut client).await {
+        Ok(channel) => channel,
         Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
     };
+    let mut last = match processes_on(&mut channel, &directories).await {
+        Ok(look) => look,
+        Err(kind) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
+    };
+    // A look that locates no process lists none of the application's, so the looks end at it;
+    // `Stop::looked` then answers `process_paths_unreadable` for it, with no verdict.
     let verdict = loop {
         let time_left = context
             .deadline
             .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()));
         if let Next::Done(verdict) =
-            stopping::after_look(&signals.signalled, &last.application, time_left)
+            stopping::after_look(&signals.signalled, &last.pids.application, time_left)
         {
             break verdict;
         }
         tokio::time::sleep(LOOK_INTERVAL).await;
-        match look_within(&mut client, &watch, &directories, context.deadline).await {
-            Some(Ok(pids)) => last = pids,
+        match look_within(&mut channel, &directories, context.deadline).await {
+            Some(Ok(look)) => last = look,
             Some(Err(kind)) => return Ok(Line::Stop(asked.look_failed(signals, kind))),
             // The deadline passed during the look: the last look inside it is `last`.
-            None => break stopping::verdict(&signals.signalled, &last.application),
+            None => break stopping::verdict(&signals.signalled, &last.pids.application),
         }
     };
     Ok(Line::Stop(asked.looked(signals, last, verdict)))
 }
 
-/// A look at the processes of `directories` that ends by `deadline`: `None` when the deadline
-/// passes before the service answers it.
-async fn look_within(
-    client: &mut AppService,
-    watch: &Watched,
-    directories: &[String],
-    deadline: Option<tokio::time::Instant>,
-) -> Option<Result<Pids, ErrorKind>> {
-    match deadline {
-        Some(deadline) => tokio::time::timeout_at(deadline, pids_of(client, watch, directories))
-            .await
-            .ok(),
-        None => Some(pids_of(client, watch, directories).await),
+/// (ACIB-3c) `running` after the installation proxy's lookup: the line answered at once (the
+/// lookup failed: `application_lookup_failed` with its kind; the bundle is not installed:
+/// `installed` false and `running` false, no process looked for; its path cannot be read:
+/// `bundle_path_unreadable`), or the answer so far (`installed`) and the bundle's directories.
+fn running_after_lookup(
+    asked: Running,
+    lookup: Result<Installation, ErrorKind>,
+) -> Then<(Running, Vec<String>)> {
+    match lookup {
+        Err(kind) => Then::Answer(Line::Running(
+            asked.failed(Problem::ApplicationLookupFailed, Some(kind)),
+        )),
+        Ok(Installation::NotInstalled) => Then::Answer(Line::Running(asked.not_installed())),
+        Ok(Installation::PathUnreadable) => Then::Answer(Line::Running(
+            asked
+                .installed()
+                .failed(Problem::BundlePathUnreadable, None),
+        )),
+        Ok(Installation::Installed(directories)) => Then::GoOn((asked.installed(), directories)),
     }
 }
 
-/// The device `target` names and a connection to its application service
-/// (`com.apple.coredevice.appservice`) inside the tunnel of iOS 17.4 and later, with the tunnel,
-/// which stays open while it is held, the service's port and the way its list of applications is
-/// asked for ([`Listing`], from the features the handshake names for it). A step before the
-/// service's own handshake fails as every command's does (its problem word, the library's text
-/// cut as `redact.rs` cuts it); the service's handshake failing is its [`ErrorKind`] alone.
-/// (ACIB-3b) Each step enters its stage first: `session`, `proxy_tunnel`, `discovery_handshake`,
-/// `service_connection`, `service_xpc_handshake`.
-async fn app_service(target: &Target, context: &Context) -> Result<AppConnection, Failure> {
-    context.enter(Stage::Session);
+/// (ACIB-3c) `launch` after the installation proxy's lookup: the line answered at once, no launch
+/// sent and the instruments server not asked (the lookup failed: `application_lookup_failed`; the
+/// bundle is not installed: `not_installed`, as `running` and `stop` answer it), or the answer so
+/// far (`installed`) to send the launch with. Where the bundle lies is not needed to launch it:
+/// a path read as no place is installed.
+fn launch_after_lookup(asked: Launch, lookup: Result<Installation, ErrorKind>) -> Then<Launch> {
+    match lookup {
+        Err(kind) => Then::Answer(Line::Launch(
+            asked.failed(Problem::ApplicationLookupFailed, Some(kind)),
+        )),
+        Ok(Installation::NotInstalled) => Then::Answer(Line::Launch(asked.not_installed())),
+        Ok(Installation::PathUnreadable | Installation::Installed(_)) => {
+            Then::GoOn(asked.installed())
+        }
+    }
+}
+
+/// (ACIB-3c) `stop` after the installation proxy's lookup: the line answered at once, nothing
+/// sent (the lookup failed: `application_lookup_failed`; the bundle is not installed: as nothing
+/// ran, `installed` false; its path cannot be read: `bundle_path_unreadable`), or the answer so
+/// far (`installed`) and the bundle's directories.
+fn stop_after_lookup(
+    asked: Stop,
+    lookup: Result<Installation, ErrorKind>,
+) -> Then<(Stop, Vec<String>)> {
+    match lookup {
+        Err(kind) => Then::Answer(Line::Stop(
+            asked.failed(Problem::ApplicationLookupFailed, Some(kind)),
+        )),
+        Ok(Installation::NotInstalled) => Then::Answer(Line::Stop(asked.not_installed())),
+        Ok(Installation::PathUnreadable) => Then::Answer(Line::Stop(
+            asked
+                .installed()
+                .failed(Problem::BundlePathUnreadable, None),
+        )),
+        Ok(Installation::Installed(directories)) => Then::GoOn((asked.installed(), directories)),
+    }
+}
+
+/// (ACIB-3c) `stop` after its first look `first`: (fix round 1) when it locates no process (no
+/// entry of the list has a location read as a place), the line answered at once,
+/// `process_paths_unreadable`, no kill sent: what cannot be told is not "does not run"; when the
+/// application itself does not run, the line answered at once, no kill sent (its extensions'
+/// pids and `located` named); (fix round 2) when it locates the application's entries both at
+/// the bundle's directory and directly in it (`both`), which no way of naming explains, the line
+/// answered at once, `application_entry_ambiguous`, no kill sent: the list does not tell which
+/// entry is the application itself, and `stop` ends only that; else the answer so far and the
+/// application's pids to send a kill request for. Only these pids are ever sent one
+/// ([`stop`]).
+fn stop_after_first_look(asked: Stop, first: Look) -> Then<(Stop, Vec<u32>)> {
+    if first.located == 0 {
+        Then::Answer(Line::Stop(
+            asked.failed(Problem::ProcessPathsUnreadable, None),
+        ))
+    } else if first.pids.application.is_empty() {
+        Then::Answer(Line::Stop(asked.not_running(first)))
+    } else if first.application_located == Some(ApplicationLocated::Both) {
+        Then::Answer(Line::Stop(
+            asked.failed(Problem::ApplicationEntryAmbiguous, None),
+        ))
+    } else {
+        Then::GoOn((asked, first.pids.application))
+    }
+}
+
+/// (ACIB-3c, fix round 1) `running` after its look: the line it answers. The look failed:
+/// `process_list_failed` with its kind. It locates no process: `process_paths_unreadable`, never
+/// `running` false ([`Running::found`]). Else whether the application itself runs, the pids by
+/// kind, `located` and how the application was located.
+fn running_after_look(asked: Running, look: Result<Look, ErrorKind>) -> Running {
+    match look {
+        Ok(look) => asked.found(look),
+        Err(kind) => asked.failed(Problem::ProcessListFailed, Some(kind)),
+    }
+}
+
+/// (ACIB-3c) The device `target` names, this host's pairing record for it, and what the
+/// installation proxy's lookup of the one bundle `bundle` answers: a lockdown session with the
+/// record starts the installation proxy (as `apps` starts it), which is asked for that bundle
+/// alone, of every application type (`Lookup` with `ApplicationType` [`ANY_APPLICATION`] and
+/// `BundleIDs` the one bundle: idevice 0.1.68, `services/installation_proxy.rs` 87-112). Of its
+/// answer each entry's identifier and its record's [`APPLICATION_PATH`] are read, and nothing
+/// else; an entry without a path is one whose path is read as no place. A step before the lookup
+/// fails as every command's does (its problem word, the library's text cut as `redact.rs` cuts
+/// it); the lookup failing is its [`ErrorKind`] alone. Each step enters its stage first:
+/// `usbmuxd`, `application_lookup`.
+async fn looked_up(target: &Target, bundle: &str, context: &Context) -> Result<LookedUp, Failure> {
+    context.enter(Stage::Usbmuxd);
     let device = locate(target, context).await?;
     let record = paired_record(&device).await?;
-    let proxy = proxy_service(&device, &record).await?;
-    context.enter(Stage::ProxyTunnel);
-    let (mut tunnel, handshake) =
-        open_tunnel(proxy, || context.enter(Stage::DiscoveryHandshake)).await?;
-    context.enter(Stage::ServiceConnection);
-    let name: &str = &<AppService as RsdService>::rsd_service_name();
-    let port = port_of(&handshake, name)?;
-    let listing = Listing::advertised(
-        handshake
-            .services
-            .get(name)
-            .and_then(|listed| listed.features.as_deref()),
-    );
-    let stream = tunnel
-        .connect_to_service_port(port)
+    context.enter(Stage::ApplicationLookup);
+    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+    let connection = open_service(
+        &provider,
+        &record,
+        <InstallationProxyClient as IdeviceService>::service_name(),
+    )
+    .await?;
+    let mut proxy = InstallationProxyClient::new(connection);
+    let installation = proxy
+        .get_apps(Some(ANY_APPLICATION), Some(vec![bundle.to_owned()]))
         .await
-        .map_err(|error| Failure::library(Problem::ServiceUnreachable, &error))?;
-    context.enter(Stage::ServiceXpcHandshake);
-    // (ACIB-3b, third round) The client's connection is read through a tap, as `probe` reads its
-    // own: the kinds of its errors tell a connection the phone ended apart (`Watched`).
-    let watch = Watched::default();
-    let client = <AppService as RsdService>::from_stream(watch.tapped(stream))
-        .await
-        .map_err(|error| watch.kind(&error));
-    Ok(AppConnection {
-        device: device.device_id,
-        tunnel,
-        port,
-        listing,
-        client,
-        watch,
+        .map(|records| {
+            matching::installation(
+                bundle,
+                records.iter().map(|(identifier, record)| Application {
+                    bundle_identifier: identifier,
+                    path: record
+                        .as_dictionary()
+                        .and_then(|members| members.get(APPLICATION_PATH))
+                        .and_then(|path| path.as_string())
+                        .unwrap_or_default(),
+                }),
+            )
+        })
+        .map_err(|error| service_error_kind(&error));
+    Ok(LookedUp {
+        device,
+        record,
+        installation,
     })
 }
 
-/// What the application service's list of applications says of `bundle`. The list stays in
-/// this function. The list is asked for by five flags, one per category of application: the
-/// library's `list_apps` names them by the request's keys (`includeAppClips`,
-/// `includeRemovableApps`, `includeHiddenApps`, `includeInternalApps`, `includeDefaultApps`) and
-/// documents none of them, so what each category holds is read here from the key's name alone,
-/// not from any description. Three are asked for (the coordinator's rulings on board #479): the
-/// removable and the default ones, by their names the applications a person can remove, as one
-/// they installed, and those the phone comes with; and the hidden ones, so that an application
-/// a person installed and then hid is not left out should the phone list it only when they are
-/// asked for. App Clips and internal applications are not asked for (ask the phone for less).
-/// A bundle the list does not hold, for the categories asked, is [`Installation::NotInstalled`],
-/// whether or not the phone has it under another category: `running` and `stop` answer it
-/// `installed` false and `stop` sends it nothing, `launch` answers `not_installed` and sends
-/// nothing. An entry the library cannot read fails the whole list (`answer_unreadable`): the
-/// library's behaviour, and the same of an element of the streamed list without a bundle
-/// identifier or a path. (ACIB-3b, second round) The list is asked the way `listing` names: the
-/// library's `list_apps` on `client`, or the streamed list on a connection of its own to `port`
-/// through `tunnel`, with the same flags. (ACIB-3b, third round) An error's kind is told by what
-/// the phone sent on the connection it came on: `watch`, the client's, or the streamed list's own.
-async fn installation(
-    client: &mut AppService,
-    watch: &Watched,
-    tunnel: &mut AdapterHandle,
-    port: u16,
-    listing: Listing,
-    bundle: &str,
-) -> Result<Installation, ErrorKind> {
-    let applications: Vec<ListedApplication> = match listing {
-        // The library's order of the flags: App Clips, removable, hidden, internal, default.
-        Listing::ListApps => client
-            .list_apps(false, true, true, false, true)
-            .await
-            .map_err(|error| watch.kind(&error))?
-            .into_iter()
-            .map(|application| ListedApplication {
-                bundle_identifier: application.bundle_identifier,
-                path: application.path,
-            })
-            .collect(),
-        Listing::StreamAppList => streamed_list(tunnel, port).await?,
-    };
-    Ok(matching::installation(
-        bundle,
-        applications.iter().map(|application| Application {
-            bundle_identifier: &application.bundle_identifier,
-            path: &application.path,
-        }),
-    ))
+/// (ACIB-3c) The tunnel of iOS 17.4 and later to `device` and, inside it, the instruments server
+/// (`com.apple.instruments.dtservicehub`, as the remote service discovery handshake lists it)
+/// with its first message read (the capabilities it publishes, read before anything is asked of
+/// it, as the screenshot's `instruments` way and the library's own tools read it), or the kind of
+/// the error that first message failed with. A step before it fails as every command's does.
+/// Each step enters its stage first: `proxy_tunnel`, `discovery_handshake`,
+/// `service_connection`, `server_first_message`.
+async fn instruments_server(
+    device: &UsbmuxdDevice,
+    record: &PairingFile,
+    context: &Context,
+) -> Result<ServerConnection, Failure> {
+    context.enter(Stage::ProxyTunnel);
+    let proxy = proxy_service(device, record).await?;
+    let (mut tunnel, handshake) =
+        open_tunnel(proxy, || context.enter(Stage::DiscoveryHandshake)).await?;
+    context.enter(Stage::ServiceConnection);
+    let stream = remote_service(
+        &mut tunnel,
+        &handshake,
+        &<Instruments as RsdService>::rsd_service_name(),
+    )
+    .await?;
+    let client = <Instruments as RsdService>::from_stream(stream).await;
+    context.enter(Stage::ServerFirstMessage);
+    Ok((tunnel, first_message(client).await))
 }
 
-/// The streamed list of applications on a connection of its own to the application service's
-/// `port` through `tunnel`: the connection, the library's RemoteXPC handshake on it, then
-/// [`streamed_applications`]. Each failure is its [`ErrorKind`] alone, (ACIB-3b, third round)
-/// told by what the phone sent on this connection ([`Watched`]).
-async fn streamed_list(
-    tunnel: &mut AdapterHandle,
-    port: u16,
-) -> Result<Vec<ListedApplication>, ErrorKind> {
-    let watch = Watched::default();
-    let stream = tunnel
-        .connect_to_service_port(port)
-        .await
-        .map_err(|error| watch.kind(&error))?;
-    let mut client = Xpc::new(watch.tapped(stream))
-        .await
-        .map_err(|error| watch.kind(&error))?;
+/// (ACIB-3c) The instruments server's client `client` once its first message is read on its root
+/// channel (and dropped unread), or the kind of the error.
+async fn first_message(
+    client: Result<Instruments, IdeviceError>,
+) -> Result<Instruments, ErrorKind> {
+    let mut client = client.map_err(|error| service_error_kind(&error))?;
     client
-        .do_handshake()
+        .read_message(ROOT_CHANNEL)
         .await
-        .map_err(|error| watch.kind(&error))?;
-    streamed_applications(&mut client)
+        .map_err(|error| service_error_kind(&error))?;
+    Ok(client)
+}
+
+/// (ACIB-3c) A device information channel of the instruments server `client`, opened by its own
+/// request (`_requestChannelWithCode:identifier:` with [`DEVICE_INFO_CHANNEL`]: idevice 0.1.68,
+/// `services/dvt/remote_server.rs` 425-458).
+async fn device_info(client: &mut Instruments) -> Result<ServerChannel<'_>, ErrorKind> {
+    client
+        .make_channel(DEVICE_INFO_CHANNEL)
         .await
-        .map_err(|kind| watch.after(kind))
+        .map_err(|error| service_error_kind(&error))
+}
+
+/// (ACIB-3c) One look, on a device information channel of its own: the pids of the processes
+/// whose executable lies inside one of `directories`, the application's and its extensions'
+/// apart, and (fix round 1) `located` and how the application was located ([`Look`]).
+async fn look(client: &mut Instruments, directories: &[String]) -> Result<Look, ErrorKind> {
+    let mut channel = device_info(client).await?;
+    processes_on(&mut channel, directories).await
+}
+
+/// (ACIB-3c) The instruments server's list of running processes, asked on the device information
+/// channel `channel` (`runningProcesses`, no argument, an answer asked for: the library's
+/// `Channel::call_method`, then its `read_message` on the channel, as its `DeviceInfoClient`
+/// does: `services/dvt/device_info.rs` 34-46), and of it the pids of the processes whose
+/// executable lies inside one of `directories`, the application's and its extensions' apart
+/// (`matching.rs`), with (fix round 1) the count of the list's entries whose location is read
+/// as a place and how the application was located. The list stays in this function; an answer
+/// that is no list of entries with a pid is `answer_unreadable`.
+async fn processes_on(
+    channel: &mut ServerChannel<'_>,
+    directories: &[String],
+) -> Result<Look, ErrorKind> {
+    channel
+        .call_method(Some(RUNNING_PROCESSES), None, true)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    let reply = channel
+        .read_message()
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    let processes = matching::listed_processes(&reply).ok_or(ErrorKind::AnswerUnreadable)?;
+    Ok(matching::pids_inside(directories, processes))
+}
+
+/// A look at the processes of `directories` on `channel` that ends by `deadline`: `None` when
+/// the deadline passes before the server answers it.
+async fn look_within(
+    channel: &mut ServerChannel<'_>,
+    directories: &[String],
+    deadline: Option<tokio::time::Instant>,
+) -> Option<Result<Look, ErrorKind>> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, processes_on(channel, directories))
+            .await
+            .ok(),
+        None => Some(processes_on(channel, directories).await),
+    }
+}
+
+/// (ACIB-3c) `launch`'s request: the instruments server's process control channel (opened by its
+/// own request, `com.apple.instruments.server.services.processcontrol`) and the library's
+/// `launch_app` on it (idevice 0.1.68, `services/dvt/process_control.rs` 132-218), which sends
+/// `launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:` with
+/// the device path an empty text, `bundle`, an empty environment, an empty list of arguments and
+/// the options `StartSuspendedKey` false and `KillExisting` `relaunch`, and answers the pid the
+/// server answered. A pid that does not fit in 32 bits is `answer_unreadable`.
+async fn launched(
+    client: &mut Instruments,
+    bundle: &str,
+    relaunch: bool,
+) -> Result<u32, ErrorKind> {
+    let mut control = ProcessControlClient::new(client)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    // No environment, no argument; not started suspended; ended first only with `--relaunch`.
+    let pid = control
+        .launch_app(bundle, None, None, false, relaunch)
+        .await
+        .map_err(|error| service_error_kind(&error))?;
+    u32::try_from(pid).map_err(|_| ErrorKind::AnswerUnreadable)
+}
+
+/// (ACIB-3c) `stop`'s kill requests: the instruments server's process control channel and, for
+/// each of `pids` in turn, the library's `kill_app` (`killPid:` with the pid, no answer asked
+/// for: idevice 0.1.68, `services/dvt/process_control.rs` 275-296, "doesn't wait for
+/// confirmation"; the library does not name the signal). A request that fails is carried by its
+/// pid and kind; the channel not opened fails the request of every pid with its kind.
+async fn kill(client: &mut Instruments, pids: Vec<u32>) -> Signals {
+    let mut errors = Vec::new();
+    match ProcessControlClient::new(client).await {
+        Ok(mut control) => {
+            for &pid in &pids {
+                if let Err(error) = control.kill_app(u64::from(pid)).await {
+                    errors.push(SignalError {
+                        pid,
+                        error_kind: service_error_kind(&error),
+                    });
+                }
+            }
+        }
+        Err(error) => {
+            let error_kind = service_error_kind(&error);
+            errors.extend(pids.iter().map(|&pid| SignalError { pid, error_kind }));
+        }
+    }
+    Signals {
+        signalled: pids,
+        errors,
+    }
 }
 
 /// The streamed list of applications, asked on `client` as the library's `stream_apps` asks it
@@ -1234,18 +1335,19 @@ async fn streamed_list(
 /// the library reads it (`parse_stream_response`, 248-282): a message whose stream status names
 /// `pushing` holds elements, one that names `finishStreaming` ends the list, one that names
 /// `receivedError`, or that holds `CoreDevice.error` and no status, is the phone's refusal
-/// (`device_refused`), and any other is `answer_unreadable`. Of each element only its bundle
-/// identifier and its path are kept, in memory for the command; one without either is
-/// `answer_unreadable`. The library's own `stream_apps` gives a `futures` stream, which this
-/// program cannot read without a crate of its own: the request is made here and sent through the
-/// library's RemoteXPC client.
-async fn streamed_applications(client: &mut Xpc) -> Result<Vec<ListedApplication>, ErrorKind> {
+/// (`device_refused`), and any other is `answer_unreadable`. Each element is counted when it
+/// holds a bundle identifier and a path, as texts, and nothing of it is kept (ACIB-3c: only
+/// `probe` asks this list, and answers its count); one without either is `answer_unreadable`.
+/// The library's own `stream_apps` gives a `futures` stream, which this program cannot read
+/// without a crate of its own: the request is made here and sent through the library's
+/// RemoteXPC client.
+async fn streamed_applications(client: &mut Xpc) -> Result<usize, ErrorKind> {
     let request = streamed_list_request().ok_or(ErrorKind::Other)?;
     client
         .send_object(request, true)
         .await
         .map_err(|error| service_error_kind(&error))?;
-    let mut listed = Vec::new();
+    let mut listed = 0;
     loop {
         let response = client
             .recv_root()
@@ -1276,19 +1378,16 @@ async fn streamed_applications(client: &mut Xpc) -> Result<Vec<ListedApplication
             .ok_or(ErrorKind::AnswerUnreadable)?;
         for element in elements {
             let entry = element.as_dictionary();
-            let text = |key: &str| {
+            let holds_text = |key: &str| {
                 entry
                     .and_then(|entry| entry.get(key))
                     .and_then(|value| value.as_string())
-                    .map(str::to_owned)
+                    .is_some()
             };
-            match (text("bundleIdentifier"), text("path")) {
-                (Some(bundle_identifier), Some(path)) => listed.push(ListedApplication {
-                    bundle_identifier,
-                    path,
-                }),
-                _ => return Err(ErrorKind::AnswerUnreadable),
+            if !(holds_text("bundleIdentifier") && holds_text("path")) {
+                return Err(ErrorKind::AnswerUnreadable);
             }
+            listed += 1;
         }
     }
 }
@@ -1402,36 +1501,12 @@ fn uuid_object(bytes: [u8; 16]) -> Option<XPCObject> {
     XPCObject::decode(&encoded).ok()
 }
 
-/// The pids of the processes the application service lists whose executable lies inside one
-/// of `directories`, the application's and its extensions' apart. The list stays in this
-/// function. An error's kind is told by what the phone sent on the client's connection
-/// (`watch`).
-async fn pids_of(
-    client: &mut AppService,
-    watch: &Watched,
-    directories: &[String],
-) -> Result<Pids, ErrorKind> {
-    let processes = client
-        .list_processes()
-        .await
-        .map_err(|error| watch.kind(&error))?;
-    Ok(matching::pids_inside(
-        directories,
-        processes.iter().map(|process| Process {
-            pid: process.pid,
-            executable: process
-                .executable_url
-                .as_ref()
-                .map(|location| location.relative.as_str()),
-        }),
-    ))
-}
-
-/// The kind of an error of the application service: what the library's error tells apart, and
-/// [`ErrorKind::Other`] for the rest. Its text is never read: the service's own refusal
-/// (`CoreDevice(DeviceError)`) carries the debug text of the phone's error dictionary, which
-/// can name other applications. The library maps no refusal to a locked phone, so there is no
-/// kind for one.
+/// The kind of an error of the library: what it tells apart, and [`ErrorKind::Other`] for the
+/// rest; of `probe`, an error of the application service, and (ACIB-3c) of `running`, `launch`
+/// and `stop`, one of the installation proxy's lookup or of the instruments server. Its text is
+/// never read: the application service's own refusal (`CoreDevice(DeviceError)`) carries the
+/// debug text of the phone's error dictionary, which can name other applications. The library
+/// maps no refusal to a locked phone, so there is no kind for one.
 fn service_error_kind(error: &IdeviceError) -> ErrorKind {
     match error {
         IdeviceError::CoreDevice(CoreDeviceError::DeviceError(_)) => ErrorKind::DeviceRefused,
@@ -1724,6 +1799,8 @@ fn refused_with(error: &IdeviceError) -> Option<String> {
 mod tests {
     use super::*;
     use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
+    use crate::matching::Pids;
+    use crate::stopping::Verdict;
     use std::net::{IpAddr, Ipv4Addr};
 
     /// The identifier of another phone than the test vector's.
@@ -1888,7 +1965,7 @@ mod tests {
         let lines = [
             Line::Running(
                 Running::asked(3, "com.example.app")
-                    .failed(Problem::ApplicationListFailed, Some(kind)),
+                    .failed(Problem::ApplicationLookupFailed, Some(kind)),
             ),
             Line::Running(
                 Running::asked(3, "com.example.app")
@@ -1920,6 +1997,331 @@ mod tests {
         }
     }
 
+    /// (ACIB-3c) What `launch` and `stop` (and `running`) do for an application the installation
+    /// proxy's lookup does not hold, and for one that does not run, decided before anything more
+    /// is asked or sent. Not installed, each answers at once: `launch` `not_installed` (status 1),
+    /// no launch sent and the instruments server not asked; `stop` as nothing ran, `installed`
+    /// false (status 0), nothing sent; `running` `installed` and `running` false. The lookup
+    /// failing, each answers `application_lookup_failed` with its kind. A path read as no place:
+    /// `running` and `stop` answer `bundle_path_unreadable`, `launch` goes on (it needs no path).
+    /// Installed, each goes on, `running` and `stop` with the bundle's directories, `launch` to
+    /// send its launch. At `stop`'s first look an application that does not run is answered at
+    /// once (status 0), its extensions named and no kill sent; one that runs goes on to the kills
+    /// of its own pids alone, not of its extensions'. (Fix round 1) The first look's `located` is
+    /// named in that answer.
+    #[test]
+    fn launch_and_stop_send_nothing_for_an_application_not_installed_or_not_running() {
+        const BUNDLE: &str = "com.example.app";
+        let directories =
+            || vec!["/var/containers/Bundle/Application/TESTUUID-0001/Example.app".to_owned()];
+        let running = || Running::asked(3, BUNDLE);
+        let launch = || Launch::asked(3, BUNDLE, false);
+        let stop = || Stop::asked(3, BUNDLE);
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+
+        let Then::Answer(not_installed) =
+            launch_after_lookup(launch(), Ok(Installation::NotInstalled))
+        else {
+            panic!("launch answers a bundle not installed at once");
+        };
+        assert_eq!(not_installed, Line::Launch(launch().not_installed()));
+        assert_eq!(
+            shown(&not_installed),
+            r#"{"command":"launch","device":3,"bundle":"com.example.app","relaunch":false,"installed":false,"problem":"not_installed"}"#
+        );
+        assert!(!not_installed.answered());
+        let Then::Answer(nothing_sent) = stop_after_lookup(stop(), Ok(Installation::NotInstalled))
+        else {
+            panic!("stop answers a bundle not installed at once");
+        };
+        assert_eq!(
+            shown(&nothing_sent),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":false,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[]}"#
+        );
+        assert!(nothing_sent.answered());
+        assert_eq!(
+            running_after_lookup(running(), Ok(Installation::NotInstalled)),
+            Then::Answer(Line::Running(running().not_installed()))
+        );
+
+        for kind in [
+            ErrorKind::AnswerUnreadable,
+            ErrorKind::ConnectionFailed,
+            ErrorKind::Other,
+        ] {
+            let failed = Some(kind);
+            assert_eq!(
+                launch_after_lookup(launch(), Err(kind)),
+                Then::Answer(Line::Launch(
+                    launch().failed(Problem::ApplicationLookupFailed, failed)
+                ))
+            );
+            assert_eq!(
+                stop_after_lookup(stop(), Err(kind)),
+                Then::Answer(Line::Stop(
+                    stop().failed(Problem::ApplicationLookupFailed, failed)
+                ))
+            );
+            assert_eq!(
+                running_after_lookup(running(), Err(kind)),
+                Then::Answer(Line::Running(
+                    running().failed(Problem::ApplicationLookupFailed, failed)
+                ))
+            );
+        }
+
+        assert_eq!(
+            launch_after_lookup(launch(), Ok(Installation::PathUnreadable)),
+            Then::GoOn(launch().installed())
+        );
+        assert_eq!(
+            stop_after_lookup(stop(), Ok(Installation::PathUnreadable)),
+            Then::Answer(Line::Stop(
+                stop()
+                    .installed()
+                    .failed(Problem::BundlePathUnreadable, None)
+            ))
+        );
+        assert_eq!(
+            running_after_lookup(running(), Ok(Installation::PathUnreadable)),
+            Then::Answer(Line::Running(
+                running()
+                    .installed()
+                    .failed(Problem::BundlePathUnreadable, None)
+            ))
+        );
+
+        assert_eq!(
+            launch_after_lookup(launch(), Ok(Installation::Installed(directories()))),
+            Then::GoOn(launch().installed())
+        );
+        assert_eq!(
+            stop_after_lookup(stop(), Ok(Installation::Installed(directories()))),
+            Then::GoOn((stop().installed(), directories()))
+        );
+        assert_eq!(
+            running_after_lookup(running(), Ok(Installation::Installed(directories()))),
+            Then::GoOn((running().installed(), directories()))
+        );
+
+        // (Fix round 1) A look locating 180 processes; how the application was located when it
+        // runs.
+        let look = |application: &[u32], extensions: &[u32]| Look {
+            pids: Pids {
+                application: application.to_vec(),
+                extensions: extensions.to_vec(),
+            },
+            located: 180,
+            application_located: (!application.is_empty())
+                .then_some(ApplicationLocated::DirectlyInside),
+        };
+        for extensions in [Vec::new(), vec![530]] {
+            assert_eq!(
+                stop_after_first_look(stop().installed(), look(&[], &extensions)),
+                Then::Answer(Line::Stop(stop().not_running(look(&[], &extensions))))
+            );
+        }
+        let Then::Answer(not_running) =
+            stop_after_first_look(stop().installed(), look(&[], &[530]))
+        else {
+            panic!("stop answers an application that does not run at once");
+        };
+        assert_eq!(
+            shown(&not_running),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[530],"located":180}"#
+        );
+        assert!(not_running.answered());
+        assert_eq!(
+            stop_after_first_look(stop().installed(), look(&[412, 413], &[530])),
+            Then::GoOn((stop().installed(), vec![412, 413]))
+        );
+    }
+
+    /// (ACIB-3c, fix round 1) What cannot be told is never "does not run". A list whose entries
+    /// have no location read as a place (bare names, the bundle's executable's and its bundle's
+    /// among them, a relative path, no `realAppName`, one that is no text) and an empty list
+    /// locate no process: from them `running` answers `process_paths_unreadable` (status 1), not
+    /// `running` false, and `stop` answers it at its first look and goes on to no kill request
+    /// (its decision answers at once). A look after `stop`'s kills that locates none answers it
+    /// too, keeping what was signalled, with no verdict. One entry with an absolute location, of
+    /// another application, is enough for `running` false and for `stop` to answer that nothing
+    /// ran, each with `located` 1.
+    #[test]
+    fn a_list_that_locates_no_process_is_never_an_application_that_does_not_run() {
+        use crate::matching::tests::{answer, at, listed};
+        const BUNDLE: &str = "com.example.app";
+        let directories =
+            ["/var/containers/Bundle/Application/TESTUUID-0001/Example.app".to_owned()];
+        let unlocated = || {
+            vec![
+                at(300, "Example"),
+                at(301, "Example.app"),
+                at(
+                    302,
+                    "var/containers/Bundle/Application/TESTUUID-0001/Example.app/Example",
+                ),
+                listed(XPCObject::UInt64(303), None),
+                listed(XPCObject::UInt64(304), Some(XPCObject::UInt64(9))),
+            ]
+        };
+        let look_at = |reply: &idevice::services::dvt::message::Message| {
+            let processes = matching::listed_processes(reply).expect("a list");
+            matching::pids_inside(&directories, processes)
+        };
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let running = || Running::asked(3, BUNDLE).installed();
+        let stop = || Stop::asked(3, BUNDLE).installed();
+
+        for reply in [answer(unlocated()), answer(Vec::new())] {
+            let look = look_at(&reply);
+            assert_eq!(look.located, 0);
+            let line = Line::Running(running_after_look(running(), Ok(look.clone())));
+            assert_eq!(
+                shown(&line),
+                r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#
+            );
+            assert!(!line.answered());
+            let Then::Answer(stopped) = stop_after_first_look(stop(), look) else {
+                panic!("stop sends no kill request for a list that locates no process");
+            };
+            assert_eq!(
+                shown(&stopped),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#
+            );
+            assert!(!stopped.answered());
+        }
+
+        let after_kills = Line::Stop(Stop::asked(3, BUNDLE).looked(
+            Signals {
+                signalled: vec![412],
+                errors: Vec::new(),
+            },
+            look_at(&answer(unlocated())),
+            Verdict::Stopped,
+        ));
+        assert_eq!(
+            shown(&after_kills),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_paths_unreadable"}"#
+        );
+        assert!(!after_kills.answered());
+
+        let mut one_located = unlocated();
+        one_located.push(at(
+            201,
+            "/var/containers/Bundle/Application/TESTUUID-0002/Other.app/Other",
+        ));
+        let look = look_at(&answer(one_located));
+        let line = Line::Running(running_after_look(running(), Ok(look.clone())));
+        assert_eq!(
+            shown(&line),
+            r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":false,"pids":[],"extension_pids":[],"located":1}"#
+        );
+        assert!(line.answered());
+        let Then::Answer(nothing_ran) = stop_after_first_look(stop(), look) else {
+            panic!("stop answers an application that does not run at once");
+        };
+        assert_eq!(
+            shown(&nothing_ran),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[],"located":1}"#
+        );
+        assert!(nothing_ran.answered());
+    }
+
+    /// (ACIB-3c, fix round 2) A first look that locates the application's entries both at the
+    /// bundle's directory and directly in it (`both`) fits neither way a list names the
+    /// application: from it `stop` answers `application_entry_ambiguous` (status 1) at once and
+    /// its decision gives no pid to send a kill request for (`stop` sends kill requests only for
+    /// the pids [`stop_after_first_look`] goes on with, so none is sent); `running` on the same
+    /// list answers `running` true with the pids of both entries and `application_located`
+    /// `both` (status 0). A list that names the application either way alone goes on to the
+    /// kills of its pids.
+    #[test]
+    fn stop_sends_no_kill_request_when_the_list_does_not_tell_which_entry_is_the_application() {
+        use crate::matching::tests::{answer, at};
+        const BUNDLE: &str = "com.example.app";
+        const DIRECTORY: &str = "/var/containers/Bundle/Application/TESTUUID-0001/Example.app";
+        let directories = [DIRECTORY.to_owned()];
+        let look_at = |reply: &idevice::services::dvt::message::Message| {
+            let processes = matching::listed_processes(reply).expect("a list");
+            matching::pids_inside(&directories, processes)
+        };
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let stop = || Stop::asked(3, BUNDLE).installed();
+
+        let both = look_at(&answer(vec![
+            at(413, &format!("{DIRECTORY}/Example")),
+            at(412, DIRECTORY),
+            at(530, &format!("{DIRECTORY}/PlugIns/Widget.appex/Widget")),
+            at(
+                201,
+                "/var/containers/Bundle/Application/TESTUUID-0002/Other.app/Other",
+            ),
+        ]));
+        assert_eq!(both.application_located, Some(ApplicationLocated::Both));
+        let Then::Answer(stopped) = stop_after_first_look(stop(), both.clone()) else {
+            panic!("stop sends no kill request when the list does not tell the application");
+        };
+        assert_eq!(
+            shown(&stopped),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"application_entry_ambiguous"}"#
+        );
+        assert!(!stopped.answered());
+        let line = Line::Running(running_after_look(
+            Running::asked(3, BUNDLE).installed(),
+            Ok(both),
+        ));
+        assert_eq!(
+            shown(&line),
+            r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[530],"located":4,"application_located":"both"}"#
+        );
+        assert!(line.answered());
+
+        for (entry, pids) in [
+            (at(413, &format!("{DIRECTORY}/Example")), vec![413]),
+            (at(412, DIRECTORY), vec![412]),
+        ] {
+            assert_eq!(
+                stop_after_first_look(stop(), look_at(&answer(vec![entry]))),
+                Then::GoOn((stop(), pids))
+            );
+        }
+    }
+
+    /// (ACIB-3c, fix round 1) The README's item on `running` opens with what a person sees when
+    /// the match fails and what it means, then the failure of a list that locates nothing, before
+    /// the command's own line; and it reads each outcome of `running` on a phone, in this order.
+    /// Pinned as the README's lists of stages are (`stages.rs`): its text, every run of blanks
+    /// read as one space.
+    #[test]
+    fn the_readme_says_first_what_a_failed_match_looks_like_and_how_to_read_running() {
+        const FIRST: &str = "**A failed match looks like an application that does not run: `installed` true, `running` false, `pids` and `extension_pids` empty (and `located` above 0); of an application open on the phone it means only that `acib` matched none of the list's entries to it, for a cause it does not tell apart, not that the application does not run.**";
+        const UNLOCATED: &str = "Where no entry of the list has a location read as a path, nothing can be matched: `running` then answers `process_paths_unreadable` (status 1), never `running` false.";
+        const READING: &str = "**Reading `running` on a phone**, each outcome and what it means:";
+        const OUTCOMES: [&str; 8] = [
+            "`running` true with `pids`: a process of the application itself is listed, in front or in the background (which application is in front `acib` cannot tell); `application_located` says how its entry was found: `directly_inside` (an executable directly in the bundle's directory), `at_directory` (the directory itself) or `both`.",
+            r#"An installed application that is open answered `installed` true, `running` false, `pids` and `extension_pids` empty (`located` above 0): it was not matched, and why is not told apart (its entry's location lies outside the bundle's directory, its entry carries a bare name where others carry paths, or the list does not hold it); it is not "does not run"."#,
+            "`running` false with `extension_pids`: processes deeper in the bundle's directory are listed and none of the application itself: only an extension runs, or the application's own entry was not matched (as above).",
+            "`installed` false: the installation proxy's lookup of the bundle, as written, does not hold it (an identifier written wrong; whether one written in another case than the phone's is found has not been seen); `stage_ms` names only `usbmuxd` and `application_lookup`: no tunnel was built.",
+            "`process_paths_unreadable`: the list was read, but no entry of it has a location read as a path (an empty list, bare names, no `realAppName`): nothing could be matched, and whether the application runs is not told.",
+            "`process_list_failed` with `answer_unreadable`: the device information channel's request was answered with a payload, or the list is of another shape; the two are not told apart. With `connection_failed`: the connection failed, or the library could not read a message the phone sent. With `other`: another error of the library, for example a channel the phone cancelled before `acib` read it (`services/dvt/remote_server.rs` 938-960).",
+            "`deadline_passed` at `server_first_message`: the phone sent on the root channel no message the library hands on (none, or capabilities it could not decode); at `process_list`: the channel's request or the list was not answered in time.",
+            "`service_handshake_failed`: the connection to the instruments server failed before or while its first message was read.",
+        ];
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        let flat = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        let opening =
+            format!("- {FIRST} {UNLOCATED} `acib running --device <n> --bundle <id>`, read-only:");
+        assert!(
+            flat.contains(&opening),
+            "the README's item on running lacks: {opening}"
+        );
+        let reading = std::iter::once(READING.to_owned())
+            .chain(OUTCOMES.iter().map(|outcome| format!("- {outcome}")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(flat.contains(&reading), "the README lacks: {reading}");
+    }
+
     /// Whether a text is a UUID of version 4 written as its text.
     fn is_uuid_text(text: &str) -> bool {
         let bytes = text.as_bytes();
@@ -1932,40 +2334,15 @@ mod tests {
             && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
     }
 
-    /// (ACIB-3b, second round) The list is asked the way the service names among its features:
-    /// streamed only when it names `streamapplist`. The streamed list's request is, member for
-    /// member and in the library's order, the one the library's `stream_apps` sends
-    /// (`services/core_device/mod.rs` 117-144) with the flags of `list_apps` as `running` asks
-    /// them; its identifiers are random UUIDs made for it, each written as a UUID's text, the
-    /// side channel an XPC UUID; and the request encodes.
+    /// (ACIB-3b, second round) The streamed list's request is, member for member and in the
+    /// library's order, the one the library's `stream_apps` sends (`services/core_device/mod.rs`
+    /// 117-144) with the flags of `list_apps` as `probe` asks them; its identifiers are random
+    /// UUIDs made for it, each written as a UUID's text, the side channel an XPC UUID; and the
+    /// request encodes. (ACIB-3c) The name is the gate map's of ACIB-3b: the choice between the
+    /// two lists by the service's features, which it also held, went with `running`, `launch`
+    /// and `stop` no longer asking the service; only `probe`'s `stream_apps` asks this list now.
     #[test]
     fn the_list_is_streamed_only_when_the_service_names_it_as_the_library_streams_it() {
-        fn named(features: &[&str]) -> Vec<String> {
-            features
-                .iter()
-                .map(|feature| (*feature).to_owned())
-                .collect()
-        }
-        let nothing = named(&[]);
-        let listed_only = named(&["com.apple.coredevice.feature.listapps"]);
-        let both = named(&[
-            "com.apple.coredevice.feature.listapps",
-            STREAMED_LIST_FEATURE,
-        ]);
-        assert_eq!(Listing::advertised(None), Listing::ListApps);
-        assert_eq!(
-            Listing::advertised(Some(nothing.as_slice())),
-            Listing::ListApps
-        );
-        assert_eq!(
-            Listing::advertised(Some(listed_only.as_slice())),
-            Listing::ListApps
-        );
-        assert_eq!(
-            Listing::advertised(Some(both.as_slice())),
-            Listing::StreamAppList
-        );
-
         let Some(XPCObject::Dictionary(request)) = streamed_list_request() else {
             panic!("the request is a dictionary");
         };
