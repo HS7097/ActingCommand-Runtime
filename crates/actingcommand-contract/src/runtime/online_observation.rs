@@ -292,9 +292,10 @@ pub struct ContainedPageObservation {
 /// the frame), whose scale frame is exactly that size. The check knows the two sizes and not the
 /// package: it cannot know the package's base, so it takes any base of the frame's ratio no larger
 /// than the frame, and a scale whose presses the adapter does not send (5/4: the observation stands,
-/// a press is refused at its input) as well. Workflow #479 F-3b: "of the frame's ratio" is the
-/// adapter's own test, [`crate::CaptureExtent::has_shape_of`], so a base within a pixel of the
-/// frame's shape (1334x750 or 1366x768 reduced to 1280x720) is taken as the adapter maps it.
+/// a press is refused at its input) as well. Workflow #479 F-3b (`runtime-client` 13): "of the
+/// frame's ratio" is the adapter's own test, [`crate::CaptureExtent::has_shape_of`], so a base
+/// within a pixel of the frame's shape (1334x750 or 1366x768 reduced to 1280x720) is taken as the
+/// adapter maps it; a client library of 12 or lower refuses such a projection frame.
 pub(super) fn reduced_to(device: (u32, u32), projected: (u32, u32)) -> bool {
     projected.0 > 0
         && projected.1 > 0

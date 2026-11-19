@@ -16,6 +16,11 @@
 // - the way back to 0.12.74 and to 0.12.73, by this build's installer, passes every edge too;
 // - the way back to a build whose tools end at 11 fails `runtime-client` `installer_meets_next`
 //   alone, both parties named with their source and range; the ledger's edges pass.
+// #479 F-3b fix round 1 (0.12.75; register §1.487; the `runtime-client` row of revision 13) raises
+// `max` to 13 in the same release: this build declares [12, 13]. The first test, renamed for the
+// range it asserts, reads it and the two rows that state it (revision 12 its floor, revision 13
+// the range); the other two ask the same edges on [12, 13] (I [12, 13] in the refused row), and
+// the update from 0.12.74 and the way back to 0.12.74 and 0.12.73 still pass without a flag.
 // No Runtime, no clock.
 
 use super::manifest::{Speaks, parse_declaration};
@@ -73,19 +78,28 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-#[test]
-fn pg2e_the_build_declares_runtime_client_12_to_12_and_its_row_says_so() {
-    assert_eq!(own().get(CLIENT), Some(&[12, 12]));
-    let twelve = INTERFACES_DOC
+/// The `runtime-client` row of the interfaces document for `revision`.
+fn client_row(revision: u64) -> &'static str {
+    let head = format!("| | | | {revision} |");
+    INTERFACES_DOC
         .lines()
         .skip_while(|line| !line.starts_with("| `runtime-client` |"))
         .skip(1)
         .take_while(|line| line.starts_with("| | | | "))
-        .find(|line| line.starts_with("| | | | 12 |"))
-        .expect("the runtime-client row of revision 12");
+        .find(|line| line.starts_with(&head))
+        .unwrap_or_else(|| panic!("the runtime-client row of revision {revision}"))
+}
+
+#[test]
+fn pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so() {
+    assert_eq!(own().get(CLIENT), Some(&[12, 13]));
     assert!(
-        twelve.contains("declares [12, 12]"),
-        "the row of revision 12 states the range"
+        client_row(12).contains("`min` is 12"),
+        "the row of revision 12 states the floor"
+    );
+    assert!(
+        client_row(13).contains("declares [12, 13]"),
+        "the row of revision 13 states the range"
     );
 }
 
@@ -133,7 +147,7 @@ fn pg2e_the_way_back_to_a_build_whose_tools_end_at_11_is_refused_installer_meets
             "check": "installer_meets_next",
             "result": "fail",
             "parties": [
-                {"party": "I", "source": "declaration", "range": [12, 12]},
+                {"party": "I", "source": "declaration", "range": [12, 13]},
                 {"party": "R*", "source": "manifest", "range": [3, 11]},
             ],
         })

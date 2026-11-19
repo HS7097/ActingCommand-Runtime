@@ -534,7 +534,8 @@ nothing changes, byte for byte.
   client's check of the receipt and of a Lab operation record's projections) takes a projection
   frame that is the observation frame itself, or of its ratio, no larger and with no side of zero
   (fix round 1: a zero side was taken before; Workflow #479 F-3b: "of its ratio" is the adapter's
-  own test, `CaptureExtent::has_shape_of`, exactly or within a pixel, section 13): what a pure
+  own test, `CaptureExtent::has_shape_of`, exactly or within a pixel, section 13, `runtime-client`
+  13): what a pure
   scale brings that frame to. It knows the
   two sizes and not the package, so it cannot know the package's base: any base of the frame's
   ratio no larger than the frame passes, and so does a scale whose presses the input side does not
@@ -697,6 +698,17 @@ declare a rule for them. This is a fact about displays, not about a game.
   1335×750 is not such a display. On a landscape base the second test admits nothing the first
   does not (it asks `|W·Hb − H·Wb|` at most `H / 2`, the first at most `W / 2`), on a portrait base
   the reverse; either suffices.
+- **Its limits** (fix round 1). The rule is for real displays, whose bases are hundreds of pixels
+  on a side. Its tolerance is the rounding to a whole pixel of the base, half a base pixel whatever
+  the base's size, so on a very small base it admits shapes far from the base's: against an 8×4
+  base it admits 9×5 (36 against 40; scaled by its width, 5 · 8 / 9 = 4.44 rows, so 4). A display
+  one of whose sides is the base's own length is not of the base's shape, whatever its other side;
+  on a base about twice as wide as it is high or wider that guard refuses a size the rounding
+  would admit (one pixel more across passes the test by the width when `Wb ≥ 2 · Hb − 1`; on a
+  base as tall, one pixel more down the test by the height): against 2400×1080, 2401×1080 (scaled
+  by its width, 1080 · 2400 / 2401 = 1079.55 rows, so 1080) is `layout_undeclared`. On 1280×720
+  the guard decides nothing: no display with one side of the base's length meets either test. The
+  code is as this section says for every base, these too.
 - **How far a point can be off.** A base point goes to `(round_half_up(x · sx), round_half_up(y ·
   sy))`, the nearest device pixel of the point scaled by its own axis's factor (half a device
   pixel, as under every pure scale), and a device point goes back by the same two factors,
@@ -723,6 +735,15 @@ declare a rule for them. This is a fact about displays, not about a game.
   at `display_input_map`), with nothing sent, as on a 5/4 display (it was `layout_undeclared` at
   `display_map_build`); `device_input` converts it by the two factors (a length down, a brake, by
   `sy`) for the slice that draws the points in the device box.
+- **The interface revision** (fix round 1; [component-interfaces.md](component-interfaces.md), the
+  `runtime-client` row of revision 13). The client's check of a projection frame
+  (`ContainedPageObservation::validate`, `reduced_to`) asks the same function, so it takes a frame
+  reduced from such a display, which a client library of revision 12 or lower refuses: there the
+  receipt of an `ObserveContainedPage` or a `RunContainedLabOperation` that carries one is
+  `runtime_receipt_invalid`, and the library's connection latches. It shows only on a display of
+  such a size. So this is `runtime-client` 13: the Runtime declares [12, 13], `min` where it was,
+  and a console and a Lab pinned beside it are built from a build of revision 13 before such a
+  display is observed. `ledger` does not move.
 - **What is unchanged.** A declared rule decides first, as before: 1334×750 by width is the rule's
   pure scale with one factor, 667/640, on both axes; by height the rule's translation onto 1281
   columns, `translation_unsupported`. An exactly proportional display maps as before, byte for
@@ -732,7 +753,8 @@ declare a rule for them. This is a fact about displays, not about a game.
   display's (`kind` `scale`, `scale_num` and `scale_den` the width's factor, `scale_width` and
   `scale_height` the base, `scale_by` `width`, `declared` false); the height's factor is the frame's
   height over the base's. No record, receipt, status member or package gains a member or a value, no
-  closed list gains a word, no code is added and no interface revision moves. A recording is still
+  closed list gains a word and no code is added; the one interface revision that moves is
+  `runtime-client`'s, to 13 (above). A recording is still
   made at the base size only: `record start`'s display check and the first frame's judgement refuse
   such a display `record_display_not_base`, and `record stop` such frames `record_size_not_base`
   (section 12). Two paths that ask the map whether a size is the base scaled count these sizes too:

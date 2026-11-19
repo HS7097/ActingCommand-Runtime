@@ -902,9 +902,12 @@ impl DisplayMap {
     }
 
     /// A length in base pixels (a brake, `cross_px`, `delta`, `min_segment_px`) in device-frame
-    /// pixels, to the nearest; the caller then holds it to its own bounds. Workflow #479 F-3b: a
-    /// length across, by `s`; a length down takes the height's factor, the same but on a display
-    /// within a pixel of the base's shape with no rule.
+    /// pixels, to the nearest; the caller then holds it to its own bounds. It takes the width's
+    /// factor `s` ([`Self::scale`]) alone, whichever way the length runs. Workflow #479 F-3b: on a
+    /// display within a pixel of the base's shape with no rule the height's factor
+    /// ([`Self::height_scale`]) differs from `s`, and this function does not use it; a length down
+    /// that [`Self::device_input`] converts (the vertical brake, the drag's brake) takes the
+    /// height's factor there.
     pub fn device_length(&self, length: i64) -> i64 {
         self.scale.up_nearest(length)
     }
