@@ -213,6 +213,19 @@ write, so this costs one full read on those starts. An open with fewer than two 
 reads every owner record. Nothing is written: an older build opens the same root
 unchanged.
 
+The runs of a range (Workflow #485 START-1, 0.12.75, register §1.489):
+`GlobalLedger::run_starts_between(after, through)` answers the runs that have a record with
+a sequence after `after` through `through`, each with the sequence of its first record there,
+in that order. It reads the link rows alone: one statement per span of
+`ledger_observer.history_scan_rows` sequences reads `ledger_links` through its integer primary
+key (`NOT INDEXED`, so the run link's index, which would serve the grouping by walking the whole
+history, never drives it), groups the rows that name a run and orders them by their first
+sequence; no record row is read, decoded or authenticated, and the read budget does not stop it
+(a span is bounded by its sequences, as the open's scope extents are). Each span is one writer
+command of kind `Query`; the spans follow each other to `through` or the head. Nothing is
+written and no table, index, schema or record changes: the link rows are those every record
+already has.
+
 `LedgerStore` is private, `Send` and owned by one writer. It exposes append,
 scheduled settlement, query, query page, replay page, latest sequence, commit
 statistics and consuming close. Projection, request validation and subscription

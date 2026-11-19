@@ -256,6 +256,11 @@ pub(super) trait DurableStorage: Send + 'static {
         range: (u64, u64),
     ) -> GlobalLedgerResult<Vec<super::history::ScopeExtent>>;
 
+    /// Workflow #485 START-1 (`contracts/ledger-store.md`, "The runs of a range"): the runs with a
+    /// link row whose sequence lies in `range.0 < sequence <= range.1`, each with its first such
+    /// sequence, in the order of those sequences. Read from the link rows alone: no record is read.
+    fn run_starts(&self, range: (u64, u64)) -> GlobalLedgerResult<Vec<super::LedgerRunStart>>;
+
     /// Workflow #422 LN-4 (`contracts/ledger-observer.md` §11.5 step 1): the `ledger_index` rows
     /// of `role` whose key starts with one of `prefixes`, each with the hash of the ledger row its
     /// sequence names; `None` for a store that keeps no index.
@@ -2121,6 +2126,25 @@ impl DurableStorage for SegmentStorage {
         Ok(super::history::scope_extents(self.events.iter().filter(
             |event| (from..=through).contains(&event.sequence()),
         )))
+    }
+
+    fn run_starts(
+        &self,
+        (after, through): (u64, u64),
+    ) -> GlobalLedgerResult<Vec<super::LedgerRunStart>> {
+        let mut known = std::collections::BTreeSet::new();
+        Ok(self
+            .events
+            .iter()
+            .filter(|event| event.sequence() > after && event.sequence() <= through)
+            .filter_map(|event| {
+                let run_id = *event.links().run_id()?;
+                known.insert(run_id).then_some(super::LedgerRunStart {
+                    run_id,
+                    first_sequence: event.sequence(),
+                })
+            })
+            .collect())
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {

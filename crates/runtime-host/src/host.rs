@@ -318,7 +318,9 @@ mod task_timing;
 // Workflow #434 LAB-6S3: the UI list on the `ui` channel, the gate's decision there.
 pub(crate) mod ui_gate;
 
-use crate::recovery_timing::{StartupRecoveryTiming, duration_ms, elapsed_ms, timed};
+use crate::recovery_timing::{
+    StartStage, StartStages, StartupRecoveryTiming, duration_ms, elapsed_ms, timed,
+};
 use agent_control::reconcile_agent_wakes;
 use contained_task::{
     ContainedRunControl, RuntimeArtifactEventSink, RuntimeContainedTask, task_outcome_event_type,
@@ -609,6 +611,10 @@ pub struct RuntimeHostConfig {
     /// #411 A51: how long a caller waits for one ledger writer reply, when not the ledger's
     /// default; only a test sets it.
     ledger_reply_timeout: Option<Duration>,
+    /// Workflow #485 START-1 (register §1.489): when the process began, which `actingd` names, so
+    /// that `actingd start_stages` counts its first stage (`daemon_ms`) from there; without it the
+    /// stages count from the host's start and `daemon_ms` is `-`.
+    process_started_at: Option<Instant>,
     /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
     /// refuses as the ledger would.
     #[cfg(test)]
@@ -735,6 +741,7 @@ impl RuntimeHostConfig {
             runtime_commit: None,
             daemon_reporter: None,
             ledger_reply_timeout: None,
+            process_started_at: None,
             #[cfg(test)]
             settlement_refusal_for_test: None,
             #[cfg(test)]
@@ -1265,6 +1272,14 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Workflow #485 START-1 (register §1.489): the instant the process began, from which the
+    /// start's stages are counted (`actingd start_stages`, its member `daemon_ms` the time until
+    /// the host's start).
+    pub fn with_process_started_at(mut self, started_at: Instant) -> Self {
+        self.process_started_at = Some(started_at);
+        self
+    }
+
     /// Workflow #453 S11 (`contracts/state-root-installation.md`): the installation root the
     /// Runtime runs from. A start checks the state root's installation record before it writes
     /// anything and claims an unrecorded state root under the owner lock; `unlock-owner` and a
@@ -1503,6 +1518,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("standard_pack_schedule", &self.standard_pack_schedule)
             .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
             .field("runtime_commit", &self.runtime_commit)
+            .field("process_started_at", &self.process_started_at)
             .finish()
     }
 }
@@ -1536,6 +1552,9 @@ pub struct RuntimeHost {
     /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
     #[cfg(test)]
     startup_recovery: StartupRecoveryTiming,
+    /// Workflow #485 START-1: the stages this start printed as `actingd start_stages`.
+    #[cfg(test)]
+    start_stages: crate::recovery_timing::StartStageTimes,
 }
 
 impl RuntimeHost {
@@ -1635,11 +1654,31 @@ impl RuntimeHost {
         Self::start_with_provider(config, |_| Ok(provider))
     }
 
+    /// Workflow #485 START-1 (register §1.489): the start, then the stdout line `actingd
+    /// start_stages key=value …` with the time of each of its stages, whether it reached
+    /// readiness or not (`crate::recovery_timing::StartStage`).
     pub fn start_with_provider(
         config: RuntimeHostConfig,
         assemble: impl FnOnce(
             &mut crate::ProviderStartup<'_>,
         ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
+    ) -> RuntimeHostResult<Self> {
+        let process_started_at = config.process_started_at;
+        let mut stages = StartStages::since(process_started_at.unwrap_or_else(Instant::now));
+        if process_started_at.is_some() {
+            stages.end(StartStage::Daemon);
+        }
+        let started = Self::start_staged(config, assemble, &mut stages);
+        println!("actingd start_stages {}", stages.times());
+        started
+    }
+
+    fn start_staged(
+        config: RuntimeHostConfig,
+        assemble: impl FnOnce(
+            &mut crate::ProviderStartup<'_>,
+        ) -> RuntimeHostResult<Arc<dyn ExecutionBackendProvider>>,
+        stages: &mut StartStages,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
         let lifecycle_admission = installation::LifecycleAdmission::starting();
@@ -1729,6 +1768,7 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeHalted,
             ));
         }
+        stages.end(StartStage::Owner);
         // Workflow #361 B1: the owner before this one, named by a restored pause.
         let previous_owner_epoch = journal.last().map(|record| record.owner_epoch);
         let mut fresh_storage = true;
@@ -1846,6 +1886,7 @@ impl RuntimeHost {
                 RuntimeErrorCode::LedgerFailure,
             ));
         }
+        stages.end(StartStage::Storage);
         // Workflow #375 H1: the open's phases, also when the open fails (never a Ledger event).
         // Workflow #378 A6a (model section 7.4, N1): they are the values of `ledger_opened`,
         // which actingd writes as its daemon line; a failed open carries them as a `note` link
@@ -1877,6 +1918,7 @@ impl RuntimeHost {
                 timeout_ms,
             ))
         })?;
+        stages.end(StartStage::LedgerOpen);
         // #422 LN-7c O: the open read every owner record of the history, not those of the two
         // latest owner epochs: it could not place a retained owner in a start's epoch
         // (`owner_in_no_start_epoch`), or a dump an earlier run left was present
@@ -1925,6 +1967,7 @@ impl RuntimeHost {
             }
             return Err(original);
         }
+        stages.end(StartStage::FrameRetention);
         // Workflow #383 AO-7: the capacity monitor's records raise wakes too.
         let policy_wakes = Arc::new(PolicyWakeSignal::default());
         let performance = (|| {
@@ -1970,6 +2013,7 @@ impl RuntimeHost {
                 return Err(original);
             }
         };
+        stages.end(StartStage::Capacity);
         let prior_epoch_recovery = limits
             .deadline()
             .map_err(|error| {
@@ -2013,6 +2057,7 @@ impl RuntimeHost {
             }
             return Err(original);
         }
+        stages.end(StartStage::PriorEpochs);
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::RuntimeBindFailed,
@@ -2116,6 +2161,7 @@ impl RuntimeHost {
             config.clock.sample()?.unix_ms,
             ledger.history_page_events(),
         )?;
+        stages.end(StartStage::Facts);
         // Workflow #375 R5d: with the frame cleaner off, the developer log says so once.
         if !config.frame_retention_enabled {
             println!("actingd frame_retention disabled");
@@ -2309,6 +2355,10 @@ impl RuntimeHost {
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
             #[cfg(test)]
+            contained_settlement_reads_for_test: Mutex::new(
+                contained_task::ContainedSettlementReads::default(),
+            ),
+            #[cfg(test)]
             idle_state_unkept_for_test: config.idle_state_unkept_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
@@ -2477,6 +2527,8 @@ impl RuntimeHost {
             pack_admission_thread: None,
             #[cfg(test)]
             startup_recovery: StartupRecoveryTiming::default(),
+            #[cfg(test)]
+            start_stages: crate::recovery_timing::StartStageTimes::default(),
         };
         let prepared = (|| {
             // #411 A34: from here on an Artifact admission re-samples a stale capacity fact.
@@ -2537,6 +2589,7 @@ impl RuntimeHost {
                     })?,
             );
             shared.check_install_preparation()?;
+            stages.end(StartStage::Shared);
             let preparation_boundary = || shared.check_install_preparation();
             let provider = assemble(&mut crate::ProviderStartup {
                 ledger: &shared.ledger,
@@ -2557,6 +2610,7 @@ impl RuntimeHost {
             let registered_instances =
                 initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
             drop(provider);
+            stages.end(StartStage::Provider);
             let startup_packages = startup_package::resolve_startup_packages(
                 &config.startup_packages,
                 &registered_instances,
@@ -2582,6 +2636,7 @@ impl RuntimeHost {
             // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
             // no marker; read before this start's own start record.
             let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
+            stages.end(StartStage::Resolve);
             // Workflow #381 R6: each recovery step is timed, and the line is printed whether
             // the recovery succeeds or fails.
             let recovery_started = Instant::now();
@@ -2766,6 +2821,7 @@ impl RuntimeHost {
                 unsettled_dispatches,
             ) = recovered?;
             shared.note_start_recovery(startup_recovery.recovery_ms)?;
+            stages.end(StartStage::Recovery);
             if let Some(agent_config) = &config.agent_dispatcher {
                 reconcile_agent_wakes(
                     &mut agent_dispatcher,
@@ -2791,6 +2847,7 @@ impl RuntimeHost {
                 config.device_diagnostic_mode,
             )?;
             append_instance_binding_events(&shared.ledger, &shared.events, &registered_instances)?;
+            stages.end(StartStage::StartEvent);
             if tagged_start == TaggedStart::Seed {
                 seed_tagged_state(
                     &shared,
@@ -2882,10 +2939,12 @@ impl RuntimeHost {
                     .record_policy_planning_signal(signal)
                     .map_err(RuntimeHostError::into_fatal)?;
             }
+            stages.end(StartStage::Configure);
             // The scheduler reconciliation above precedes direct-run settlement; both
             // complete before background execution or root admission (#351 / #352).
             // #405 N-2: the start anchors the idle record is bound to.
             let start_anchors = shared.settle_previous_epoch_contained_runs()?;
+            stages.end(StartStage::Settlement);
             shared.expire_agent_sessions()?;
             shared.check_install_preparation()?;
             host.scheduling_pause_restore =
@@ -2920,6 +2979,7 @@ impl RuntimeHost {
             // prepared; one a pause of another reason holds keeps that pause and is not applied
             // (fix 1: the release of that pause holds it). Nothing without the member.
             shared.hold_start_paused_instances()?;
+            stages.end(StartStage::Restore);
             // Workflow #369 W-2: the instance workers exist before the daemon-start preparation,
             // so a failed preparation's ladder already has one.
             host_claims::spawn_instance_workers(&shared)?;
@@ -2930,6 +2990,7 @@ impl RuntimeHost {
             // #422 QR-1: a ledger without its reader pool is said as a warning.
             shared.report_ledger_reader_pool_fallback();
             shared.check_install_preparation()?;
+            stages.end(StartStage::Instances);
             // W2-B (0.12.26; review W1-6 M1): each startup package the restored idle record keeps
             // as queued behind a pause (the Runtime stop dropped its claim) is queued again, after
             // the daemon-start preparation, behind the restored pause.
@@ -3027,6 +3088,7 @@ impl RuntimeHost {
             shared.note_start_ready(shared.clock.sample()?.unix_ms)?;
             shared.finish_install_preparation()?;
             publish_runtime_info(&host.info_path, &host.info)?;
+            stages.end(StartStage::Publish);
             Ok::<_, RuntimeHostError>(())
         })();
         if let Err(mut original) = prepared {
@@ -3042,6 +3104,10 @@ impl RuntimeHost {
                     .with_related_failure("startup_cleanup", &cleanup);
             }
             return Err(original);
+        }
+        #[cfg(test)]
+        {
+            host.start_stages = stages.times();
         }
         Ok(host)
     }
@@ -3116,6 +3182,25 @@ impl RuntimeHost {
     #[cfg(test)]
     pub(crate) const fn startup_recovery_for_test(&self) -> StartupRecoveryTiming {
         self.startup_recovery
+    }
+
+    /// Workflow #485 START-1: the stages this start printed as `actingd start_stages`.
+    #[cfg(test)]
+    pub(crate) const fn start_stages_for_test(&self) -> crate::recovery_timing::StartStageTimes {
+        self.start_stages
+    }
+
+    /// Workflow #485 START-1: what this start's settlement of the direct runs of earlier epochs
+    /// read, as `actingd contained_settlement` printed it (all zero when it did not run).
+    #[cfg(test)]
+    pub(crate) fn contained_settlement_reads_for_test(
+        &self,
+    ) -> RuntimeHostResult<contained_task::ContainedSettlementReads> {
+        let shared = self.shared_ref(HostLocation::StartRuntimeHost)?;
+        Ok(*lock(
+            &shared.contained_settlement_reads_for_test,
+            HostLocation::StartRuntimeHost,
+        )?)
     }
 
     /// Workflow #381 R4a: the Agent Dispatcher state rebuilt from the current Ledger, from
@@ -7040,6 +7125,10 @@ struct HostShared {
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]
     contained_settlement_unrecorded_for_test: bool,
+    /// Workflow #485 START-1, test only: what this start's settlement of the direct runs of
+    /// earlier epochs read (`actingd contained_settlement`).
+    #[cfg(test)]
+    contained_settlement_reads_for_test: Mutex<contained_task::ContainedSettlementReads>,
     /// #405 IDLE-1P (review M-2), test only: see
     /// [`RuntimeHostConfig::with_idle_state_unkept_for_test`].
     #[cfg(test)]
