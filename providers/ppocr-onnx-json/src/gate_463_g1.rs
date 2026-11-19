@@ -5,7 +5,9 @@
 // rd-1119/brief-463-g1-shared-read-serves-name-boxes.md, its tests 2 and 6 and the provider's side
 // of tests 3 and 5): a `Detect` request that names served name boxes keeps, between the merge of
 // boxes into lines and the folder's `max_boxes`, only the boxes whose centre lies in one,
-// recognizes those and counts them apart; a request that names none reads as before.
+// recognizes those and counts them apart; a request that names none reads as before. Fix round 1
+// (the review of pull request #1848): a request that names name boxes and does not detect is
+// refused.
 //
 // No ONNX Runtime and no clock: the request runs the engine's own path (`read_request`) over a fake
 // whose detector finds the boxes a test gives it and whose recognizer reads each box it is asked
@@ -150,7 +152,7 @@ fn name_box((x, y): (i32, i32)) -> VisionRect {
 
 /// A card's name: two lines at 14..29 and 31..46 on an even card, one at 22..38 on an odd one.
 fn name_lines(index: usize, (x, y): (i32, i32)) -> Vec<VisionRect> {
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         vec![rect(x + 8, y + 14, 60, 15), rect(x + 8, y + 31, 50, 15)]
     } else {
         vec![rect(x + 10, y + 22, 70, 16)]
@@ -328,4 +330,58 @@ fn g1_t6_the_provider_keeps_a_box_exactly_when_the_kernel_gives_it_to_the_target
             served: Some(9),
         })
     );
+}
+
+/// A request over the whole of `frame` that cuts it as `blocks` and names the name boxes `served`.
+fn request_view<'a>(
+    frame: &'a VisionFrame,
+    languages: &'a [String],
+    blocks: OcrBlockMode,
+    served: &'a [VisionRect],
+) -> OcrInferenceRequestView<'a> {
+    OcrInferenceRequestView {
+        frame: frame.view(),
+        region: rect(0, 0, 420, 260),
+        languages,
+        timeout_ms: TIMEOUT_MS,
+        blocks,
+        served,
+    }
+}
+
+// The request's guard (fix round 1; the review of pull request #1848, its point 4): only a
+// `Detect` read has detected boxes to keep, so a request that names name boxes and does not detect
+// (a request that does not choose, or a region read as one block) is refused `InvalidRequest` by
+// the request's check, which the engine runs before it reads (`read_text_with_attestation_view`).
+// The same reads without boxes, and the boxes on a `Detect` read, are valid. No read sends such a
+// request today: a layout's shared read always detects.
+#[test]
+fn g1_guard_name_boxes_on_a_read_that_does_not_detect_are_refused() {
+    let frame = frame();
+    let languages = vec!["en".to_string()];
+    let served = [name_box(cards()[0])];
+
+    for blocks in [OcrBlockMode::Implicit, OcrBlockMode::Region] {
+        let error = request_view(&frame, &languages, blocks, &served)
+            .validate()
+            .expect_err("name boxes on a read that does not detect");
+        assert_eq!(
+            error.code(),
+            VisionFfiErrorCode::InvalidRequest,
+            "{blocks:?}"
+        );
+        request_view(&frame, &languages, blocks, &[])
+            .validate()
+            .unwrap_or_else(|error| panic!("{blocks:?} without name boxes: {error:?}"));
+    }
+    request_view(
+        &frame,
+        &languages,
+        OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::GapFactor(0),
+        },
+        &served,
+    )
+    .validate()
+    .expect("name boxes on a Detect read");
 }

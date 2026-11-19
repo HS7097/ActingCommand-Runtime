@@ -6,7 +6,8 @@
 // first shared read the kernel places the name boxes the read serves there, and the read sends
 // them to the text provider, which recognizes and counts only the blocks whose centre lies in one.
 // A frame with many more texts than names reads; served blocks over the cap still fail; a located
-// text sends no box; a card the band cuts sends none.
+// text sends no box; a card the band cuts sends none. Fix round 1 (the review of pull request
+// #1848): what `block_source_order` holds now, and the read's guard.
 //
 // Every expected value comes from those rules and the fixtures below, never from the code. The
 // frames are synthetic: gray 30 with one noise icon, the anchor, at the top-left corner of each
@@ -21,7 +22,7 @@
 
 use crate::*;
 use actingcommand_contract::CandidateFeature;
-use actingcommand_contract::candidate_projection::CandidateProjection;
+use actingcommand_contract::candidate_projection::{CandidateLayoutKind, CandidateProjection};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -402,13 +403,18 @@ fn evaluator(pack: Value, provider: Arc<Provider>) -> RecognitionPackResult<Reco
     )
 }
 
-// The projection of the cards on `scene`, and the shared read's evidence each name evaluation
-// carries, in card order.
+// The projection of the cards on `scene`, and the shared read's evidence and the
+// `block_source_order` each name evaluation carries, in card order.
 fn project(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
-) -> (CandidateProjection, Vec<OcrSharedReadEvidence>) {
+) -> (
+    CandidateProjection,
+    Vec<OcrSharedReadEvidence>,
+    Vec<Vec<usize>>,
+) {
     let mut reads = Vec::new();
+    let mut orders = Vec::new();
     let projection = evaluator
         .scene_context(scene)
         .project_candidates_with_samples(LAYOUT, &[scene], &mut |target, result, _, _| {
@@ -422,11 +428,19 @@ fn project(
                         .and_then(|ocr| ocr.shared_read)
                         .expect("the name's shared read evidence"),
                 );
+                orders.push(
+                    evaluation
+                        .ocr
+                        .as_ref()
+                        .expect("the name's OCR evidence")
+                        .block_source_order
+                        .clone(),
+                );
             }
             Ok(())
         })
         .expect("the cards project");
-    (projection, reads)
+    (projection, reads, orders)
 }
 
 // The `member` identity of each actionable card, `None` where it is Unknown.
@@ -502,7 +516,7 @@ fn g1_t1_ten_cards_among_seventy_five_texts_read_every_name_from_their_boxes() {
     );
 
     // This slice's read: the ten name boxes, every name read.
-    let (projection, reads) = project(&evaluator, &scene);
+    let (projection, reads, orders) = project(&evaluator, &scene);
 
     let seen = provider.seen();
     assert_eq!(seen.len(), 2, "one request for the projection");
@@ -543,6 +557,21 @@ fn g1_t1_ten_cards_among_seventy_five_texts_read_every_name_from_their_boxes() {
             }
         );
     }
+    // Fix round 1 (the review of pull request #1848): `block_source_order` holds each block's
+    // place in the provider's answer, which now lists the served blocks alone, the 15 name lines
+    // card by card; so each card's lines hold the next places of those 15, not their places among
+    // the 75 detected blocks (contracts/selection-graph.md, "What the read recognizes", Evidence).
+    let mut served_places = 0..;
+    let in_served_order = list_names()
+        .into_iter()
+        .map(|(_, lines)| {
+            served_places
+                .by_ref()
+                .take(lines.len())
+                .collect::<Vec<usize>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(orders, in_served_order);
 }
 
 // Test 3: when the served blocks themselves are more than the cap (15 over a cap of 10), the read
@@ -762,7 +791,7 @@ fn g1_t8_cards_the_band_cuts_send_no_name_box() {
     .expect("a band that cuts two rows is admitted");
     let scene = scene(GRID_WIDTH, GRID_HEIGHT, &cards);
 
-    let (projection, reads) = project(&evaluator, &scene);
+    let (projection, reads, _) = project(&evaluator, &scene);
 
     assert_eq!(projection.candidates().len(), cards.len());
     for (index, candidate) in projection.candidates().iter().enumerate() {
@@ -794,6 +823,77 @@ fn g1_t8_cards_the_band_cuts_send_no_name_box() {
         assert_eq!(read.detected, Some(16));
         assert_eq!(read.served, Some(8));
     }
+}
+
+// The read's guard (fix round 1; the review of pull request #1848, its point 4): a target the read
+// serves whose region is not among the name boxes the read was sent fails its evaluation loud,
+// since the read recognized no block outside them: `recognition_pack_invalid`, with the target's
+// region, which the projection carries as `candidate_feature_failed` (it wraps every error of a
+// target's evaluation by `CandidateProjectionFailure::feature`). No package reaches it today: the
+// boxes are placed by the placement the read itself uses (`shared_target`). Here the frame's read
+// is sent the name boxes of every card but the first, and the first card's name is evaluated; with
+// its own box among those sent, the same evaluation reads the card's name.
+#[test]
+fn g1_guard_a_served_target_whose_name_box_was_not_sent_fails_its_evaluation() {
+    let provider = Provider::new(list_blocks(), MAX_BOXES);
+    let evaluator = evaluator(list_pack(), provider.clone())
+        .expect("ten cards with a shared read over the frame are admitted");
+    let scene = scene(LIST_WIDTH, LIST_HEIGHT, &LIST);
+    let shared = evaluator.pack().candidate_layouts[0]
+        .shared_ocr
+        .clone()
+        .expect("the shared read");
+    let boxes = LIST.iter().map(|card| name_box(*card)).collect::<Vec<_>>();
+    let first = boxes[0];
+    let read = |name_boxes: &[PackRect]| {
+        evaluator.scene_context(&scene).layout_shared_text(
+            super::SharedReadPlan {
+                shared: &shared,
+                kind: CandidateLayoutKind::RepeatedAnchor,
+                name_boxes: Some(name_boxes),
+            },
+            NAME,
+            Some(PackPoint {
+                x: first.x,
+                y: first.y,
+            }),
+            first_frame(),
+            &mut BTreeMap::new(),
+        )
+    };
+
+    let error = read(&boxes[1..]).expect_err("the first card's name box was not sent");
+
+    assert_eq!(error.code(), RecognitionPackErrorCode::InvalidPackage);
+    assert_eq!(error.code().code().as_str(), "recognition_pack_invalid");
+    assert!(error.outcome().is_none());
+    assert_eq!(
+        error.region().and_then(|region| region.roi),
+        Some(OcrRegionRect::from(first))
+    );
+    assert_eq!(
+        provider.seen(),
+        [Seen {
+            frame: (LIST_WIDTH, LIST_HEIGHT),
+            region: rect(0, 0, LIST_WIDTH as i32, LIST_HEIGHT as i32),
+            blocks: DETECT,
+            served: boxes[1..].to_vec(),
+        }]
+    );
+    let failure = CandidateProjectionFailure::feature(NAME, error);
+    assert_eq!(failure.code().as_str(), "candidate_feature_failed");
+    assert_eq!(
+        failure.cause().map(RecognitionPackError::code),
+        Some(RecognitionPackErrorCode::InvalidPackage)
+    );
+
+    let evaluation = read(boxes.as_slice())
+        .expect("its own name box among those sent")
+        .expect("the read serves the first card's name");
+    assert_eq!(
+        evaluation.ocr.as_ref().map(|ocr| ocr.text.as_str()),
+        Some("ALPHA\nBRAVO")
+    );
 }
 
 // An uncompressed RGB PNG.

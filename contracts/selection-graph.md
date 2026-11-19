@@ -410,10 +410,11 @@ frame shows, not every text on its cards. Nothing is declared for it, in a packa
   read serves on that frame: for every target the read gives text to, on every actionable
   instance (a `repeated_anchor` layout's placed cards, a `fixed_slots` layout's slots whose target
   lies inside the read) and for every sample of that frame, its region exactly as the read then
-  gives the target its blocks by: moved to the slot or the instance, scaled with the instance's
-  match, shifted by the sample's jitter. These are the read's name boxes. An instance that is not
-  actionable, a card the readable band cuts among them, has none; nothing new decides where a box
-  lies.
+  gives the target its blocks by: moved to the slot or the instance (on a `repeated_anchor` layout
+  to the feature's `offset` from the match, which scales with the factor the match hit, while the
+  region keeps its own declared size: Workflow #404 FS-1 above), shifted by the sample's jitter.
+  These are the read's name boxes. An instance that is not actionable, a card the readable band
+  cuts among them, has none; nothing new decides where a box lies.
 - **The request.** The read sends the provider its name boxes with the request, in the coordinates
   of the picture the provider is given: the frame's (the package's base when the frame was reduced
   to it) without a chain, moved onto the processed region's origin with one
