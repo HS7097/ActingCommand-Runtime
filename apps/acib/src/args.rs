@@ -63,10 +63,11 @@ pub const STANDARD_OUTPUT: &str = "-";
 const RELAUNCH: &str = "--relaunch";
 /// How long `probe` waits for each way when `--wait-ms` does not say.
 pub const DEFAULT_WAIT_MS: u64 = 4_000;
-/// (ACIB-3d) The way `stop` sends its kill requests when `--via` does not say: the pid archived
-/// as a number, its answer waited for (the README says why it is the likeliest to end the
-/// application on the phone where the library's own form did not).
-pub const DEFAULT_STOP_WAY: StopWay = StopWay::Archived;
+/// (ACIB-3d, fix round 1) The way `stop` sends its kill requests when `--via` does not say: the
+/// form that is known, the library's own (the pid as a 32-bit number), its answer waited for.
+/// `archived` is sent only when `--via` names it: how the phone reads that form the library's
+/// source does not show (README).
+pub const DEFAULT_STOP_WAY: StopWay = StopWay::Primitive;
 /// (ACIB-3d) How long `stop` waits for the answers to its kill requests, of a way that asks for
 /// them, when `--wait-ms` does not say.
 pub const DEFAULT_KILL_WAIT_MS: u64 = 5_000;
@@ -1261,7 +1262,8 @@ mod tests {
     /// `running`, `launch` and `stop` take a device (by its number or by its key) and
     /// `--bundle`, in any order, with `--timeout-ms`; `launch` takes `--relaunch`, a flag
     /// without a value, anywhere among its options; each names its command and its device.
-    /// (ACIB-3d) `stop` takes `--via` with a word of [`StopWay`] (without it: `archived`) and
+    /// (ACIB-3d) `stop` takes `--via` with a word of [`StopWay`] (without it, fix round 1:
+    /// `primitive`, the known form; `archived` only when named) and
     /// `--wait-ms` of 1 to [`MAX_WAIT_MS`] (without it: [`DEFAULT_KILL_WAIT_MS`]), in any order,
     /// and names its way; no other command has a way of `stop`.
     #[test]
@@ -1290,7 +1292,7 @@ mod tests {
                 request: Request::Stop {
                     device: Target::Number(4),
                     bundle: BUNDLE.to_owned(),
-                    via: StopWay::Archived,
+                    via: StopWay::Primitive,
                     wait_ms: DEFAULT_KILL_WAIT_MS,
                 },
                 timeout_ms: 9_000,

@@ -20,11 +20,14 @@
 //!
 //! (ACIB-3d) On a phone with iOS 27.0.1 the library's `kill_app` ended nothing, and the look made
 //! right after it, on the same connection, failed at once. `stop` sends its kill requests the way
-//! `--via` names ([`StopWay`]: the pid archived as a number or as a 32-bit number, each with its
-//! answer asked for and waited for, or the library's `kill_app` unchanged; [`stopped`]), and makes
-//! the looks after the kills on a connection of its own to the instruments server, inside the same
-//! tunnel ([`instruments_again`]): whatever the kills did to the first connection, the looks do
-//! not depend on it, and a look that still fails names its stage.
+//! `--via` names ([`StopWay`]: the pid as a 32-bit number, the default, or archived as a number,
+//! each with its answer asked for and waited for, or the library's `kill_app` unchanged;
+//! [`stopped`]), and makes the looks after the kills on a connection of its own to the instruments
+//! server, inside the same tunnel ([`instruments_again`]): whatever the kills did to the first
+//! connection, the looks do not depend on it, and a look that still fails names its stage. (Fix
+//! round 1) Each answer to a kill request is paired with its request by its number
+//! ([`kill_answers`]), and a wait for one that failed names why, as far as the library's error
+//! value tells ([`reply_failure`]).
 //!
 //! Everything here only reads, but for `launch`, which launches one application, and `stop`,
 //! which ends one application's own processes (ACIB-3); the library's process control client is
@@ -50,8 +53,9 @@ use crate::answer::{
     ApplicationLocated, Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind,
     Failure, ImageQuery, ImageQueryName, Images, Info, KillAnswer, KillReply, Launch, Line, Link,
     ListedImage, Mounted, Orientation, Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay,
-    Problem, Reached, Reader, Reading, Running, Screenshot, ServiceDetail, ServiceEntry,
-    ServiceLine, Services, SignalError, Signals, Stage, Stop, StopWay, Way, whole_milliseconds,
+    Problem, Reached, Reader, Reading, ReplyFailure, Running, Screenshot, ServiceDetail,
+    ServiceEntry, ServiceLine, Services, SignalError, Signals, Stage, Stop, StopWay, Way,
+    whole_milliseconds,
 };
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
@@ -69,6 +73,7 @@ use idevice::services::core_device::{
     ScreenCaptureServiceClient,
 };
 use idevice::services::core_device_proxy::CoreDeviceProxy;
+use idevice::services::dvt::errors::DvtError;
 use idevice::services::dvt::message::{AuxValue, Message};
 use idevice::services::dvt::process_control::ProcessControlClient;
 use idevice::services::dvt::remote_server::{Channel, RemoteServerClient};
@@ -122,6 +127,19 @@ const ROOT_CHANNEL: i32 = 0;
 /// answers send themselves, through the library's public channel.
 const PROCESS_CONTROL_CHANNEL: &str = "com.apple.instruments.server.services.processcontrol";
 const KILL_PID: &str = "killPid:";
+/// (ACIB-3d, fix round 1) The number the library gives the first kill request of a way that asks
+/// for answers, on the connection of `stop`'s first look. The library numbers the messages it
+/// sends on a connection 1, 2, 3, … in the order it sends them (its `current_message`, from 0, one
+/// added before each request is written: idevice 0.1.68, `services/dvt/remote_server.rs` 249, 791
+/// and 804); its reader's own replies to the phone take the number of what they answer, not one of
+/// its own (1020-1032, 1110-1130, 1281-1295, `services/dvt/message.rs` 728-779), and making the
+/// client sends nothing (`services/dvt/mod.rs` 43-45). Before the kills `acib` sends on that
+/// connection three requests: the first look's channel request and its `runningProcesses`
+/// ([`look`]), then the process control channel's request; each kill request after the first is
+/// numbered one above the one before ([`send_kills`]). The server answers a request with the
+/// request's number (the library pairs every answer it waits for by it: `remote_server.rs`
+/// 1138-1161), so [`kill_answers`] pairs each answer with its request by it.
+const FIRST_KILL_NUMBER: u32 = 4;
 
 /// The client of CoreDevice's application service inside the tunnel.
 type AppService = AppServiceClient<Box<dyn ReadWrite>>;
@@ -148,6 +166,14 @@ type ServerConnection = (AdapterHandle, u16, Result<Instruments, ErrorKind>);
 /// it: `service_unreachable` (the connection) or `service_handshake_failed` (its first message),
 /// with the error's kind.
 type Reconnected = Result<Instruments, (Problem, ErrorKind)>;
+
+/// (ACIB-3d, fix round 1) A kill request written: the pid it is for and the number the library gave
+/// it on its connection ([`FIRST_KILL_NUMBER`]), which the server's answer to it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KillSent {
+    pid: u32,
+    number: u32,
+}
 
 /// (ACIB-3b, third round) The prefixes of a CoreDevice feature's identifier and of an action's.
 /// The screenshot the phone answers is asked for by the feature
@@ -1030,11 +1056,12 @@ async fn stop(
 /// `stop` from its first look on, on the instruments server's connection `client`: the first
 /// look (`matching.rs`); then the application's own processes it lists (its executable directly
 /// in the bundle's directory) are each sent a kill request on the server's process control
-/// channel, one after the other, the way `way` names (ACIB-3d; README): `archived` and `primitive`
+/// channel, one after the other, the way `way` names (ACIB-3d; README): `primitive` and `archived`
 /// open the channel ([`PROCESS_CONTROL_CHANNEL`]), send each `killPid:` with its argument in the
 /// way's form ([`kill_argument`]) and an answer asked for ([`send_kills`]), and then read the
-/// answers, all within `wait` ([`kill_answers`]); `library` sends the library's `kill_app`
-/// unchanged ([`kill_by_library`]). Its extensions' processes are sent nothing. Then the
+/// answers, all within `wait`, (fix round 1) each paired with its request by its number
+/// ([`kill_answers`]); `library` sends the library's `kill_app` unchanged ([`kill_by_library`]).
+/// Its extensions' processes are sent nothing. Then the
 /// connection `looks` makes (another connection to the server, made only now) is looked on: the
 /// list of processes is read at once, on a device information channel of its own, and again
 /// every [`LOOK_INTERVAL`] while it lists a process the command signalled and the next look starts
@@ -1418,10 +1445,7 @@ async fn kill_by_library(client: &mut Instruments, pids: &[u32]) -> Vec<SignalEr
             let mut errors = Vec::new();
             for &pid in pids {
                 if let Err(error) = control.kill_app(u64::from(pid)).await {
-                    errors.push(SignalError {
-                        pid,
-                        error_kind: service_error_kind(&error),
-                    });
+                    errors.push(SignalError::request(pid, service_error_kind(&error)));
                 }
             }
             errors
@@ -1433,7 +1457,7 @@ async fn kill_by_library(client: &mut Instruments, pids: &[u32]) -> Vec<SignalEr
 /// The failed request of each of `pids`, all of `error_kind`.
 fn every_pid_failed(pids: &[u32], error_kind: ErrorKind) -> Vec<SignalError> {
     pids.iter()
-        .map(|&pid| SignalError { pid, error_kind })
+        .map(|&pid| SignalError::request(pid, error_kind))
         .collect()
 }
 
@@ -1454,43 +1478,50 @@ fn kill_argument(way: StopWay, pid: u32) -> AuxValue {
 /// `control`: for each of `pids` in turn, `killPid:` with its argument in the way's form
 /// ([`kill_argument`]) and an answer asked for, through the library's public channel
 /// (`Channel::call_method`, which writes and flushes the request and waits for nothing:
-/// `services/dvt/remote_server.rs` 1334-1343, 784-795, 712-748, 1273-1279). The requests that
-/// could not be written, each by its pid and kind, and the pids of those written, in their order.
+/// `services/dvt/remote_server.rs` 1334-1343, 784-795, 712-748, 1273-1279). (Fix round 1) Each
+/// request takes the library's next number on the connection, the first [`FIRST_KILL_NUMBER`], one
+/// that could not be written too (the library counts a request before it writes it: 791). The
+/// requests that could not be written, each by its pid and kind, and those written, each with its
+/// number, in their order.
 async fn send_kills(
     control: &mut ServerChannel<'_>,
     pids: &[u32],
     way: StopWay,
-) -> (Vec<SignalError>, Vec<u32>) {
+) -> (Vec<SignalError>, Vec<KillSent>) {
     let (mut errors, mut sent) = (Vec::new(), Vec::with_capacity(pids.len()));
+    let mut number = FIRST_KILL_NUMBER;
     for &pid in pids {
         let argument = kill_argument(way, pid);
         match control
             .call_method(Some(KILL_PID), Some(vec![argument]), true)
             .await
         {
-            Ok(()) => sent.push(pid),
-            Err(error) => errors.push(SignalError {
-                pid,
-                error_kind: service_error_kind(&error),
-            }),
+            Ok(()) => sent.push(KillSent { pid, number }),
+            Err(error) => errors.push(SignalError::request(pid, service_error_kind(&error))),
         }
+        number = number.wrapping_add(1);
     }
     (errors, sent)
 }
 
-/// (ACIB-3d) The answers to the kill requests of `sent`, in their order, each the next answer the
-/// server sends on the process control channel `control` ([`next_answer`]), all of them within
-/// `wait`. A pid whose answer has not come by then is `not_in_time`; once a read fails (the
-/// library's reader of the connection has stopped: `services/dvt/remote_server.rs` 828-851,
-/// 1245-1250) no answer can come, and each pid still waiting is a failed request of that kind.
+/// (ACIB-3d) The answers to the kill requests `sent`, all of them within `wait`, read on the
+/// process control channel `control` ([`next_answer`]); (fix round 1) each answer is paired with
+/// its request by the number it carries ([`message_number`]; the server answers a request with the
+/// request's number: [`FIRST_KILL_NUMBER`]), never by its place among the answers, so an answer
+/// that is missing, late or out of order is given to no other pid, and an answer whose number is
+/// of no request still waited for is given to none. In the order of `sent`, each request's: its
+/// answer, when one came; else, when a read failed (no answer can come after: the library's reader
+/// of the connection stops for good, `services/dvt/remote_server.rs` 853-896), a failed request of
+/// the error's kind and its [`reply_failure`]; else, the wait having passed, `not_in_time`.
 async fn kill_answers(
     control: &mut ServerChannel<'_>,
-    sent: &[u32],
+    sent: &[KillSent],
     wait: Duration,
 ) -> (Vec<KillReply>, Vec<SignalError>) {
     let until = tokio::time::Instant::now().checked_add(wait);
-    let (mut replies, mut errors) = (Vec::with_capacity(sent.len()), Vec::new());
-    for (index, &pid) in sent.iter().enumerate() {
+    let mut answers: Vec<Option<KillReply>> = vec![None; sent.len()];
+    let mut failed = None;
+    while answers.iter().any(Option::is_none) {
         let next = match until {
             Some(until) => tokio::time::timeout_at(until, next_answer(control))
                 .await
@@ -1498,23 +1529,62 @@ async fn kill_answers(
             None => Some(next_answer(control).await),
         };
         match next {
-            Some(Ok(answer)) => replies.push(kill_reply(pid, &answer)),
+            Some(Ok(answer)) => {
+                let number = message_number(&answer);
+                let waiting = sent
+                    .iter()
+                    .zip(answers.iter_mut())
+                    .find(|(request, answered)| request.number == number && answered.is_none());
+                if let Some((request, answered)) = waiting {
+                    *answered = Some(kill_reply(request.pid, &answer));
+                }
+            }
             Some(Err(error)) => {
-                let kind = service_error_kind(&error);
-                errors.extend(every_pid_failed(&sent[index..], kind));
+                failed = Some(error);
                 break;
             }
-            None => {
-                replies.extend(sent[index..].iter().map(|&waiting| KillReply {
-                    pid: waiting,
-                    reply: KillAnswer::NotInTime,
-                    message_type: None,
-                }));
-                break;
-            }
+            None => break,
+        }
+    }
+    let (mut replies, mut errors) = (Vec::with_capacity(sent.len()), Vec::new());
+    for (request, answer) in sent.iter().zip(answers) {
+        match (answer, &failed) {
+            (Some(reply), _) => replies.push(reply),
+            (None, Some(error)) => errors.push(SignalError::reply(
+                request.pid,
+                service_error_kind(error),
+                reply_failure(error),
+            )),
+            (None, None) => replies.push(KillReply {
+                pid: request.pid,
+                reply: KillAnswer::NotInTime,
+                message_type: None,
+            }),
         }
     }
     (replies, errors)
+}
+
+/// (ACIB-3d, fix round 1) Why the wait for a kill request's answer failed with the library's error
+/// `error`, from that error alone (its variant and, of a socket error, its kind; never its text,
+/// never a byte of a message, nothing of the device or of another application). Waiting on a
+/// channel (`Channel::read_message`: idevice 0.1.68, `services/dvt/remote_server.rs` 1317-1319,
+/// 828-851) the library answers two errors of its own: `UnknownChannel` (833) when the channel is
+/// no longer its own, which it makes so only when the phone cancels the channel (938-960,
+/// 1234-1239); and, once its reader of the connection has stopped, one socket error of the kind
+/// `BrokenPipe`, "remote server connection closed" (842-849, 1245-1250), whatever stopped it. The
+/// reader stops at the first error of a message it reads (853-896: the stream's end, a reset or
+/// another failed read, a message it cannot read, `services/dvt/message.rs` 585-665), traces that
+/// error at warning level (878) and keeps nothing of it: the one error stands for all of these, and
+/// `reader_stopped` cannot be divided further from what the library gives a caller (README).
+fn reply_failure(error: &IdeviceError) -> ReplyFailure {
+    match error {
+        IdeviceError::Socket(socket) if socket.kind() == std::io::ErrorKind::BrokenPipe => {
+            ReplyFailure::ReaderStopped
+        }
+        IdeviceError::Dvt(DvtError::UnknownChannel(_)) => ReplyFailure::ChannelCancelled,
+        _ => ReplyFailure::Other,
+    }
 }
 
 /// (ACIB-3d) The next answer on `control`: the next message of an odd conversation index (the
@@ -1534,9 +1604,23 @@ async fn next_answer(control: &mut ServerChannel<'_>) -> Result<Message, Idevice
 /// `MessageHeader::serialize`, bytes 20 to 23: `services/dvt/message.rs` 531-545; its reader of
 /// it is the crate's own); 0 if the header were shorter.
 fn conversation_index(message: &Message) -> u32 {
+    header_word(message, 20)
+}
+
+/// (ACIB-3d, fix round 1) The number of `message` (its identifier: of an answer, the number of the
+/// request it answers), as its header holds it (bytes 16 to 19 of `MessageHeader::serialize`:
+/// `services/dvt/message.rs` 531-545, and as the library reads it, 597; its reader of it is the
+/// crate's own); 0 if the header were shorter.
+fn message_number(message: &Message) -> u32 {
+    header_word(message, 16)
+}
+
+/// The little-endian 32-bit word at byte `at` of `message`'s header as the library writes it; 0 if
+/// the header were shorter.
+fn header_word(message: &Message, at: usize) -> u32 {
     let header = message.message_header.serialize();
     header
-        .get(20..24)
+        .get(at..at + 4)
         .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
         .map_or(0, u32::from_le_bytes)
 }
@@ -2237,11 +2321,12 @@ mod tests {
             ),
             Line::Stop(Stop::asked(3, "com.example.app").look_failed(
                 Signals {
-                    signalled: vec![412],
-                    errors: vec![SignalError {
-                        pid: 412,
-                        error_kind: kind,
-                    }],
+                    signalled: vec![412, 413],
+                    errors: vec![
+                        SignalError::request(412, kind),
+                        // Fix round 1: the reason of a failed wait is the error's variant alone.
+                        SignalError::reply(413, kind, reply_failure(&error)),
+                    ],
                 },
                 kind,
             )),
@@ -2596,6 +2681,14 @@ mod tests {
         Nothing,
         /// Ends the connection.
         End,
+        /// (Fix round 1) Answers it later, without a payload, if [`Act::Last`] says so.
+        Hold,
+        /// (Fix round 1) Answers it with this payload, then (`then_held`) each request held
+        /// before, in the order held, and ends the connection.
+        Last {
+            payload: Option<XPCObject>,
+            then_held: bool,
+        },
     }
 
     /// The value the archive `archive` holds, as the library's own reader of a message decodes a
@@ -2642,6 +2735,8 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut reader, mut writer) = tokio::io::split(theirs);
             let mut read = Vec::new();
+            // The identifier and channel of each request held, in the order held.
+            let mut held = Vec::new();
             while let Ok(message) = Message::from_reader(&mut reader).await {
                 let header = message.message_header.serialize();
                 let word = |at: usize| {
@@ -2672,23 +2767,50 @@ mod tests {
                 read.push(sent);
                 match act {
                     Act::Answer(data) => {
-                        let answer = Message::new(
-                            MessageHeader::new(0, 1, identifier, 1, channel, false),
-                            PayloadHeader::new(),
-                            None,
-                            data.map(|value| value.to_plist()),
-                        );
-                        if writer.write_all(&answer.serialize()).await.is_err() {
+                        if writer
+                            .write_all(&answer_to(identifier, channel, data))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
                     Act::Nothing => {}
                     Act::End => break,
+                    Act::Hold => held.push((identifier, channel)),
+                    Act::Last { payload, then_held } => {
+                        let mut answers = vec![answer_to(identifier, channel, payload)];
+                        if then_held {
+                            answers.extend(
+                                held.iter()
+                                    .map(|&(earlier, on)| answer_to(earlier, on, None)),
+                            );
+                        }
+                        for answer in answers {
+                            if writer.write_all(&answer).await.is_err() {
+                                break;
+                            }
+                        }
+                        break;
+                    }
                 }
             }
             read
         });
         (Instruments::new(ours), server)
+    }
+
+    /// The bytes of the scripted server's answer to the request `identifier` on `channel`, with
+    /// the payload `data` (as the library numbers an answer: the request's identifier, the
+    /// conversation index one above, the request's channel).
+    fn answer_to(identifier: u32, channel: i32, data: Option<XPCObject>) -> Vec<u8> {
+        Message::new(
+            MessageHeader::new(0, 1, identifier, 1, channel, false),
+            PayloadHeader::new(),
+            None,
+            data.map(|value| value.to_plist()),
+        )
+        .serialize()
     }
 
     /// `future` run to its end on a current-thread runtime of its own, as `main` runs a command.
@@ -2748,6 +2870,83 @@ mod tests {
     /// The looks' server, ending the connection at the first request it reads.
     fn ends_at_once(_: &Sent) -> Act {
         Act::End
+    }
+
+    /// (Fix round 1) The application's second process, its executable directly in the bundle's
+    /// directory too (a helper beside the main executable).
+    const SECOND_PID: u64 = 414;
+
+    /// (Fix round 1) The first connection's server for an application of two processes: it opens
+    /// each channel asked for and lists both (beside another application's process and the
+    /// bundle's extension).
+    fn lists_two_processes(sent: &Sent) -> Act {
+        use crate::matching::tests::at;
+        match sent.selector.as_deref() {
+            Some(REQUEST_CHANNEL) => Act::Answer(None),
+            Some(RUNNING_PROCESSES) => Act::Answer(Some(XPCObject::Array(vec![
+                at(OTHER_PID, OTHER_EXECUTABLE),
+                at(
+                    EXTENSION_PID,
+                    &format!("{BUNDLE_DIRECTORY}/PlugIns/Widget.appex/Widget"),
+                ),
+                at(APPLICATION_PID, &format!("{BUNDLE_DIRECTORY}/Example")),
+                at(SECOND_PID, &format!("{BUNDLE_DIRECTORY}/Helper")),
+            ]))),
+            _ => Act::Nothing,
+        }
+    }
+
+    /// (Fix round 1) Whether `sent` is a kill request of the application's first process, its pid
+    /// in either form.
+    fn kills_the_first(sent: &Sent) -> bool {
+        sent.selector.as_deref() == Some(KILL_PID)
+            && matches!(
+                sent.arguments.as_slice(),
+                [Argument::Number(412) | Argument::ArchivedNumber(412)]
+            )
+    }
+
+    /// (Fix round 1) As [`lists_two_processes`]; of the kill requests it holds the first's (412's)
+    /// and, at the second's, answers the second with a payload, then the first without one (an
+    /// answer late and out of order), and ends the connection.
+    fn answers_the_second_kill_then_the_first(sent: &Sent) -> Act {
+        match sent.selector.as_deref() {
+            Some(KILL_PID) if kills_the_first(sent) => Act::Hold,
+            Some(KILL_PID) => Act::Last {
+                payload: Some(XPCObject::UInt64(1)),
+                then_held: true,
+            },
+            _ => lists_two_processes(sent),
+        }
+    }
+
+    /// (Fix round 1) As [`answers_the_second_kill_then_the_first`], but the first's answer never
+    /// comes: at the second's, the server answers it with a payload and ends the connection.
+    fn answers_only_the_second_kill(sent: &Sent) -> Act {
+        match sent.selector.as_deref() {
+            Some(KILL_PID) if kills_the_first(sent) => Act::Hold,
+            Some(KILL_PID) => Act::Last {
+                payload: Some(XPCObject::UInt64(1)),
+                then_held: false,
+            },
+            _ => lists_two_processes(sent),
+        }
+    }
+
+    /// (Fix round 1) The first connection's server whose list names the application's entries
+    /// both at the bundle's directory and directly in it (`both`): it opens each channel asked for
+    /// and answers the list, and nothing else.
+    fn lists_an_ambiguous_application(sent: &Sent) -> Act {
+        use crate::matching::tests::at;
+        match sent.selector.as_deref() {
+            Some(REQUEST_CHANNEL) => Act::Answer(None),
+            Some(RUNNING_PROCESSES) => Act::Answer(Some(XPCObject::Array(vec![
+                at(OTHER_PID, OTHER_EXECUTABLE),
+                at(APPLICATION_PID, BUNDLE_DIRECTORY),
+                at(SECOND_PID, &format!("{BUNDLE_DIRECTORY}/Example")),
+            ]))),
+            _ => Act::Nothing,
+        }
     }
 
     /// The library's request opening the channel `name` as channel `code`
@@ -2886,8 +3085,10 @@ mod tests {
 
     /// (ACIB-3d) A kill request whose connection the phone ends as soon as it has read it (as the
     /// next request on the kill's connection failed at once on a phone with iOS 27.0.1). Of a way
-    /// that asks for an answer, its pid is a failed request, `connection_failed`, beside the
-    /// verdict; `library`, which waits for nothing, names none. The looks after the kills are made
+    /// that asks for an answer, its pid is a failed request, `connection_failed`, (fix round 1)
+    /// with the reason `reader_stopped`, the library's error once its reader of the connection has
+    /// stopped, beside the verdict; `library`, which waits for nothing, names none. The looks
+    /// after the kills are made
     /// on a connection of their own all the same, and its list decides: stopped, status 0. When
     /// the looks' server ends that connection too, at its first request, the look fails there:
     /// `process_list_failed` with `connection_failed`, `looks_after_kills` reached, and nothing
@@ -2899,7 +3100,7 @@ mod tests {
         let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
         for way in StopWay::ALL {
             let errors = if way.asks_answers() {
-                r#""signal_errors":[{"pid":412,"error_kind":"connection_failed"}],"#
+                r#""signal_errors":[{"pid":412,"error_kind":"connection_failed","reply_failure":"reader_stopped"}],"#
             } else {
                 ""
             };
@@ -2946,6 +3147,120 @@ mod tests {
                 format!(
                     r#"{opening}"reached":{{"kill_requests":true,{replies}"look_connection":true,"looks_after_kills":false}},"problem":"service_unreachable","error_kind":"connection_failed"}}"#
                 ),
+                "{way:?}"
+            );
+            assert!(!line.answered(), "{way:?}");
+        }
+    }
+
+    /// (ACIB-3d, fix round 1) The answers to the kill requests are paired with their requests by
+    /// the number each carries, never by their place. Of an application of two processes (412 and
+    /// 414, both executables directly in the bundle's directory), each way that asks for answers
+    /// sends, after the first look and the process control channel's request, the two kill
+    /// requests, 412's first, each in its form and asking for an answer. The server answering
+    /// 414's first, with a payload, and 412's after it, without one: each pid has its own answer
+    /// (414 `with_payload`, 412 `without_payload`). The server answering only 414's and then ending
+    /// the connection: 414 has its answer, and 412, whose answer never came, is a failed request,
+    /// `connection_failed` with `reader_stopped`, never 414's answer. The looks on their own
+    /// connection decide either way (stopped, status 0). And the reason of a failed wait comes
+    /// from the library's error value alone: the socket error of the kind `BrokenPipe` it makes
+    /// once its reader has stopped (`services/dvt/remote_server.rs` 1245-1250) is `reader_stopped`,
+    /// its `UnknownChannel` `channel_cancelled`, any other error `other`.
+    #[test]
+    fn the_answers_to_the_kills_are_paired_by_number_and_a_failed_wait_names_its_reason() {
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let opening = r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412,414],"#;
+        let closing = r#""remaining":[],"running":false,"extension_pids":[530],"located":2,"reached":{"kill_requests":true,"kill_replies":true,"look_connection":true,"looks_after_kills":true}}"#;
+        for way in StopWay::ALL.into_iter().filter(|way| way.asks_answers()) {
+            let kill = |pid: u32| {
+                let argument = match way {
+                    StopWay::Archived => Argument::ArchivedNumber(u64::from(pid)),
+                    StopWay::Primitive | StopWay::Library => Argument::Number(pid),
+                };
+                kill_request(2, argument, true)
+            };
+            let requests = [
+                channel_request(1, DEVICE_INFO_CHANNEL),
+                list_request(1),
+                channel_request(2, PROCESS_CONTROL_CHANNEL),
+                kill(412),
+                kill(414),
+            ];
+
+            let (line, first, again) = stopped_on(
+                way,
+                answers_the_second_kill_then_the_first,
+                Some(lists_no_application),
+            );
+            assert_eq!(first, requests, "{way:?}");
+            assert_eq!(again.len(), 2, "{way:?}");
+            assert_eq!(
+                shown(&line),
+                format!(
+                    r#"{opening}"replies":[{{"pid":412,"reply":"without_payload","message_type":0}},{{"pid":414,"reply":"with_payload","message_type":0}}],{closing}"#
+                ),
+                "{way:?}"
+            );
+            assert!(line.answered(), "{way:?}");
+
+            let (line, first, _) = stopped_on(
+                way,
+                answers_only_the_second_kill,
+                Some(lists_no_application),
+            );
+            assert_eq!(first, requests, "{way:?}");
+            assert_eq!(
+                shown(&line),
+                format!(
+                    r#"{opening}"signal_errors":[{{"pid":412,"error_kind":"connection_failed","reply_failure":"reader_stopped"}}],"replies":[{{"pid":414,"reply":"with_payload","message_type":0}}],{closing}"#
+                ),
+                "{way:?}"
+            );
+            assert!(line.answered(), "{way:?}");
+        }
+
+        let closed = IdeviceError::Socket(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "remote server connection closed",
+        ));
+        assert_eq!(reply_failure(&closed), ReplyFailure::ReaderStopped);
+        assert_eq!(service_error_kind(&closed), ErrorKind::ConnectionFailed);
+        assert_eq!(
+            reply_failure(&IdeviceError::Dvt(DvtError::UnknownChannel(2))),
+            ReplyFailure::ChannelCancelled
+        );
+        for other in [
+            IdeviceError::Socket(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+            IdeviceError::Socket(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)),
+            IdeviceError::UnexpectedResponse("unexpected response".to_owned()),
+        ] {
+            assert_eq!(reply_failure(&other), ReplyFailure::Other, "{other:?}");
+        }
+    }
+
+    /// (ACIB-3d, fix round 1) Against a scripted instruments server whose first look lists the
+    /// application's entries both at the bundle's directory and directly in it, each way of `stop`
+    /// answers `application_entry_ambiguous` (status 1) and sends no kill: the first connection's
+    /// server reads the first look alone (the device information channel and its list), and no
+    /// process control channel's request and no `killPid:`; the looks' connection is asked
+    /// nothing.
+    #[test]
+    fn stop_sends_no_kill_to_a_server_whose_list_does_not_tell_which_entry_is_the_application() {
+        for way in StopWay::ALL {
+            let (line, first, again) = stopped_on(
+                way,
+                lists_an_ambiguous_application,
+                Some(lists_no_application),
+            );
+            assert_eq!(
+                first,
+                [channel_request(1, DEVICE_INFO_CHANNEL), list_request(1)],
+                "{way:?}"
+            );
+            assert!(again.is_empty(), "{way:?}");
+            assert_eq!(
+                serde_json::to_string(&line).expect("a line serializes"),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"application_entry_ambiguous"}"#,
                 "{way:?}"
             );
             assert!(!line.answered(), "{way:?}");
