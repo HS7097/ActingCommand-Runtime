@@ -567,6 +567,27 @@ impl<B: DurableStorage> EventStore<B> {
         Ok(Some(events))
     }
 
+    /// Workflow #485 START-1 (`contracts/ledger-store.md`, "The runs of a range"): the runs with a
+    /// link row in the span of `history_scan_rows` sequences after `after` (through `through`, and
+    /// the store's head, at most), each with the sequence of its first row in the span, in that
+    /// order, and the sequence the span ends at; `after` when nothing is left to read. One
+    /// statement of the store reads the span's link rows; no record is read.
+    pub(super) fn run_starts(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> GlobalLedgerResult<(Vec<super::LedgerRunStart>, u64)> {
+        let through = through.min(self.backend.head());
+        if after >= through {
+            return Ok((Vec::new(), after));
+        }
+        let span = u64::try_from(self.history_scan_rows)
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let end = after.saturating_add(span).min(through);
+        Ok((self.backend.run_starts((after, end))?, end))
+    }
+
     /// #422 LN-7c C (`rd-1026/ln7c/final-query.md` §4): whether the store holds the capture frame
     /// an evidence read confirmation names: the frame's own `artifact.verified` record, selected
     /// by the `artifact_id` index, or for a run one such record among the run's, selected by its

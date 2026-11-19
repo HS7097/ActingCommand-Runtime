@@ -1390,6 +1390,18 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
     }
 }
 
+/// Workflow #485 START-1 (`contracts/ledger-store.md`, "The runs of a range"): one run with a link
+/// row in a range of sequences, and the sequence of its first such row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerRunStart {
+    pub run_id: actingcommand_contract::RunId,
+    pub first_sequence: u64,
+}
+
+/// The writer's answer to one span of [`GlobalLedger::run_starts_between`]: the runs with a link
+/// row in the span, each with its first one there, and the sequence the span ends at.
+type RunStartsReply = GlobalLedgerResult<(Vec<LedgerRunStart>, u64)>;
+
 /// The writer's answer to a view page read: the page and the read's observation.
 type ProjectViewReply = (
     GlobalLedgerResult<RuntimeEventQueryPage>,
@@ -1481,6 +1493,15 @@ enum WriterCommand {
         artifacts: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
         through_sequence: u64,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    /// Workflow #485 START-1: the runs with a link row in one span of
+    /// `ledger_observer.history_scan_rows` sequences after `after` (through `through` at most),
+    /// read from the link rows alone. Its writer command kind is `Query`, so task timing records
+    /// keep their closed set of command kinds.
+    RunStarts {
+        after: u64,
+        through: u64,
+        response: SyncSender<RunStartsReply>,
     },
     ProjectViewPage {
         query: EventQuery,
@@ -1837,6 +1858,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ArtifactRecords { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::RunStarts { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ProjectViewPage { response, .. } => {
@@ -3076,6 +3100,51 @@ impl GlobalLedger {
         )?
     }
 
+    /// Workflow #485 START-1 (`contracts/ledger-store.md`, "The runs of a range"; register
+    /// §1.489): the runs that have a record with a sequence after `after` through `through`, each
+    /// with the sequence of its first record there, in that order. They are read from the link
+    /// rows alone (the run link of each row of the range); no record is read or authenticated. One
+    /// writer command reads one span of `ledger_observer.history_scan_rows` sequences, and the
+    /// spans follow each other until `through` (or the ledger's head) is reached.
+    pub fn run_starts_between(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> GlobalLedgerResult<Vec<LedgerRunStart>> {
+        let mut starts = Vec::new();
+        let mut known = std::collections::BTreeSet::new();
+        let mut cursor = after;
+        while cursor < through {
+            let (response, receiver) = mpsc::sync_channel(1);
+            let sender = self.sender.as_ref().ok_or_else(|| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::QueryEvents.location(),
+                )
+            })?;
+            send_command(
+                sender,
+                WriterCommand::RunStarts {
+                    after: cursor,
+                    through,
+                    response,
+                },
+                LedgerLocation::QueryEvents.location(),
+            )?;
+            let (span, ended) = receive_response(
+                receiver,
+                LedgerLocation::QueryEvents.location(),
+                self.reply_timeout,
+            )??;
+            starts.extend(span.into_iter().filter(|start| known.insert(start.run_id)));
+            if ended <= cursor {
+                break;
+            }
+            cursor = ended;
+        }
+        Ok(starts)
+    }
+
     pub fn project_view_page(
         &self,
         query: EventQuery,
@@ -3676,9 +3745,9 @@ fn command_operation(command: &WriterCommand) -> Location {
         WriterCommand::QueryPage { .. } => LedgerLocation::QueryEventPage.location(),
         WriterCommand::IndexRecords { .. } => LedgerLocation::LedgerIndexRows.location(),
         WriterCommand::TaggedState { .. } => LedgerLocation::LedgerIndexRows.location(),
-        WriterCommand::EvidenceTarget { .. } | WriterCommand::ArtifactRecords { .. } => {
-            LedgerLocation::QueryEvents.location()
-        }
+        WriterCommand::EvidenceTarget { .. }
+        | WriterCommand::ArtifactRecords { .. }
+        | WriterCommand::RunStarts { .. } => LedgerLocation::QueryEvents.location(),
         WriterCommand::ProjectViewPage { .. } => LedgerLocation::ProjectLedgerViewPage.location(),
         WriterCommand::ProjectSchedulingOutcomes { .. } => {
             LedgerLocation::ProjectSchedulingOutcomes.location()
@@ -3712,6 +3781,7 @@ const fn is_read_command(command: &WriterCommand) -> bool {
             | WriterCommand::TaggedState { .. }
             | WriterCommand::EvidenceTarget { .. }
             | WriterCommand::ArtifactRecords { .. }
+            | WriterCommand::RunStarts { .. }
             | WriterCommand::ProjectViewPage { .. }
             | WriterCommand::ProjectSchedulingOutcomes { .. }
             | WriterCommand::LatestSequence { .. }
@@ -3799,10 +3869,12 @@ fn writer_commands<S: LedgerStore>(
             }
             // #422 LN-7c C: the evidence target read is a read too; #419 LN-WS-F: so is the read
             // of an artifact set's records.
+            // Workflow #485 START-1: so is the read of the runs of a range.
             WriterCommand::Query { .. }
             | WriterCommand::TaggedState { .. }
             | WriterCommand::EvidenceTarget { .. }
-            | WriterCommand::ArtifactRecords { .. } => LedgerWriterCommandKind::Query,
+            | WriterCommand::ArtifactRecords { .. }
+            | WriterCommand::RunStarts { .. } => LedgerWriterCommandKind::Query,
             WriterCommand::QueryPage { .. } => LedgerWriterCommandKind::QueryPage,
             // Workflow #422 LN-4: the index read is a read; the set of command kinds that task
             // timing records name stays closed.
@@ -4142,6 +4214,16 @@ fn writer_commands<S: LedgerStore>(
                     LedgerLocation::QueryEvents.location(),
                 );
                 read_events = result.as_ref().map_or(0, Vec::len);
+                command_succeeded = result.is_ok();
+                command_observation.replied(response.send(result).is_ok());
+            }
+            // Workflow #485 START-1: link rows only; no record is read, so `read_events` stays 0.
+            WriterCommand::RunStarts {
+                after,
+                through,
+                response,
+            } => {
+                let result = store.run_starts(after, through);
                 command_succeeded = result.is_ok();
                 command_observation.replied(response.send(result).is_ok());
             }

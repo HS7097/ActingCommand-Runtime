@@ -156,6 +156,15 @@ pub(super) trait LedgerStore: Send + 'static {
         work: &ReadWork,
         operation: Location,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>>;
+    /// Workflow #485 START-1: the runs with a link row in one span of `history_scan_rows`
+    /// sequences after `after` (through `through` at most), each with the sequence of its first row
+    /// in the span, in that order, and the sequence the span ends at (`after` when nothing is left
+    /// to read).
+    fn run_starts(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> GlobalLedgerResult<(Vec<super::LedgerRunStart>, u64)>;
     fn project_view_page(
         &self,
         query: &EventQuery,
@@ -348,6 +357,14 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         Self::read_artifact_records(self, artifacts, (0, through), work)?
             .ok_or_else(|| ReadWork::exceeded(operation))
+    }
+
+    fn run_starts(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> GlobalLedgerResult<(Vec<super::LedgerRunStart>, u64)> {
+        Self::run_starts(self, after, through)
     }
 
     fn project_view_page(

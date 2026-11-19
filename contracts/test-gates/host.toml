@@ -4485,12 +4485,16 @@ tests = [
 ]
 incident = ["#479 F-2"]
 
-# Workflow #485 START-1 (0.12.75; register §1.489; brief rd-1119/brief-485-start-settle-bounded.md and the coordinator's ruling B): each epoch written in-process by a host on a manual Runtime clock and closed, then started again on the same state root. The records the next start writes for the epoch's runs, compared with what 0.12.74 writes for the same ledger (pinned on that code first): a run left during its entry check (two task.evidence_indexed facts, no package admitted) and a run whose lease expired before the end (package admitted, run started) each get task.terminal_intent then task.cancelled (contained_task_recovered_after_restart) and no lease record; both in one epoch with a finished run are settled in the order of their first records and the finished run gets nothing
+# Workflow #485 START-1 (0.12.75; register §1.489; brief rd-1119/brief-485-start-settle-bounded.md and the coordinator's ruling B): each epoch written in-process by a host on a manual Runtime clock and closed, then started again on the same state root. The records the next start writes for the epoch's runs, compared with what 0.12.74 writes for the same ledger (pinned on that code first): a run left during its entry check (two task.evidence_indexed facts, no package admitted) and a run whose lease expired before the end (package admitted, run started) each get task.terminal_intent then task.cancelled (contained_task_recovered_after_restart) and no lease record; both in one epoch with a finished run are settled in the order of their first records and the finished run gets nothing. Then, on the settlement that reads the runs of the range from the ledger's link rows and the finished runs by type alone: the payload records it reads (the host's count, actingd contained_settlement) are the same with and without a page's worth of the finished run's own records and as many client actions (records of no run), one run finished and one read (1); an epoch whose one run is finished reads that run's terminal and package admission and nothing else (3); on a scripted clock actingd start_stages names every stage, its members add up to total_ms exactly, a stage not ended prints - and the first stage ended counts from the origin (4); a host's start that reached readiness ended every stage but the daemon's and its members add up to its total. No clock read in the gate file
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_a_run_left_during_its_entry_check_is_settled_as_before",
     "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_a_run_whose_lease_expired_before_the_end_is_settled_as_before",
     "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_the_runs_of_one_epoch_are_settled_as_before_in_their_order",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_the_records_read_do_not_grow_with_records_of_finished_runs_or_of_none",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_an_epoch_without_an_unfinished_run_reads_next_to_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_the_start_log_names_every_stage_and_the_stages_add_up_to_the_whole",
+    "actingcommand-runtime-host::lib::tests::gate_485_start1::start1_a_start_that_reached_readiness_ended_every_stage_after_the_daemons",
 ]
 incident = ["#485", "START-1"]

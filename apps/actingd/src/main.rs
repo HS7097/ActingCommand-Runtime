@@ -129,6 +129,8 @@ const POLICY_EVENT_WAIT_MS: u64 = 250;
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {
+    // Workflow #485 START-1 (register §1.489): the daemon's start counts its stages from here.
+    let process_started_at = Instant::now();
     let arguments: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
     let installed = |purpose| {
         actingcommand_contract::process_installation_for(purpose)
@@ -210,7 +212,7 @@ fn main() -> ExitCode {
                 installed(candidate).and_then(|()| vision_report::run(arguments)),
             )
         }
-        _ => run_daemon(arguments),
+        _ => run_daemon(arguments, process_started_at),
     };
     ExitCode::from(category.exit_code())
 }
@@ -471,7 +473,7 @@ fn report_line(
 /// is a daemon line, and the last one is the terminal outcome: `runtime_stopped` on a requested
 /// stop, else `runtime_stopped` followed by the stopping condition. The process exits by the
 /// terminal outcome's category.
-fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
+fn run_daemon(arguments: Vec<std::ffi::OsString>, process_started_at: Instant) -> Category {
     // WD-MT (Workflow #421, INV-1119): before anything can start a child process, the daemon's
     // own stdout and stderr (its log) are made not inheritable, so no adb server, MuMuManager or
     // PowerShell it starts, directly or through another child, keeps the log open. A failure is
@@ -488,7 +490,7 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
     let install_root = installation.map(actingcommand_contract::InstalledProcess::root);
     // Workflow #434 LAB-6S4a (0.12.63): a starting Runtime answers a shutdown request busy, so no
     // start ends as a requested stop any more (`install_startup_shut_down`, retired).
-    let (host, policy) = match start_daemon(arguments) {
+    let (host, policy) = match start_daemon(arguments, process_started_at) {
         Ok(started) => started,
         Err(error) => return start_refused(&error, install_root),
     };
@@ -642,6 +644,7 @@ fn append_fallback_log(
 /// `check-config` checks them. A refusal here is a start refusal (model section 8.2).
 fn start_daemon(
     arguments: Vec<std::ffi::OsString>,
+    process_started_at: Instant,
 ) -> Result<(RuntimeHost, Option<PolicyBootstrap>), ActingdError> {
     let config_path = parse_arguments(arguments)?;
     let file = config::load(&config_path).map_err(ActingdError::config)?;
@@ -728,6 +731,8 @@ fn start_daemon(
         Some(root) => host.with_installation_root(root),
         None => host,
     };
+    // Workflow #485 START-1: `actingd start_stages` counts `daemon_ms` from the process's start.
+    let host = host.with_process_started_at(process_started_at);
     let host =
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(state_root_refusal)?;

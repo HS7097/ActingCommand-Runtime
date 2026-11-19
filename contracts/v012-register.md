@@ -41118,6 +41118,171 @@ one read of every anchor per screen, a bound the shared read only lowers).
 blocks needs a Runtime of 0.12.74 or later, and its bundle declares `package` [20, 20], which
 `standard-pack build` computes.
 
+### 1.489 Slice #485 START-1 (0.12.75): the start does not read every record of the last run; the start log times every stage (Workflow #485, a defect found in production; the rules below are the coordinator's rulings in the work order and its ruling B after the implementer stopped at the work order's item 1, not the owner's words; coordinator work order `rd-1119/brief-485-start-settle-bounded.md`, after the read-only study `rd-1119/study-idle-close-wake.md`, part B; on main `8133894c`)
+
+**What it is.** The start settles the direct contained runs the earlier epochs left unfinished
+(#411 A65, `host.contained_settlement`). Until 0.12.74 `settle_contained_runs_between` read every
+record of the range, of every kind, page by page, to find each request's first task semantic
+fact; then, for each request found, its records by request, by run and by lease. The time grew with
+the length of the previous run (about 0.11 ms a record, some two seconds for each hour the run
+lasted); the watchdog waits 180 s for a start. Production, the baseline (seconds; the front is
+spawn to the first instance's `runtime.instance_bound`, the back from there to readiness):
+
+| Start | Build | ready | front | of it timed: recovery / ledger open | untimed | back | previous epoch |
+|---|---|---|---|---|---|---|---|
+| 11-18 09:49 | 0.12.72 | 19.0 | 15.0 | 3.4 / 1.2 | 10.3 | 4.1 | 29.4k records, 5.5 h |
+| 11-18 18:04 | 0.12.73 | 35.6 | 30.0 | 3.1 / 1.5 | 25.4 | 5.6 | 50.5k records, 8.3 h |
+| 11-19 08:35 | 0.12.74 | 52.7 | 18.2 | 4.6 / 4.7 | 8.9 | 34.5 | 308.0k records, 14.5 h |
+
+**Why the whole range was read, and why no existing read gave the same result.** A run's first
+semantic fact is its `PackageAdmitted` only when its package declares no required entry; with one,
+the host checks the entry first and records the capture's `task.evidence_indexed` and the
+kernel's `task.recognition_started` before the main package is admitted, so a run the process left
+during its entry check has no package admission and no entry record, and the settlement settles
+it (no package admitted is accepted). A run whose lease the sweep expired before the process
+ended has a lease terminal and is settled too (its terminal, no release). The ledger has no index
+of open runs (`ledger_index`'s `open` rows are intents) and no "first semantic fact of each
+request". The coordinator ruled B: one read-only query of the link rows, the finished runs by type.
+
+**What is built.**
+
+- The ledger: `GlobalLedger::run_starts_between(after, through)`, the runs that have a record in
+  the range with the sequence of the first, in that order, from the link rows alone
+  ([ledger-store.md](ledger-store.md), "The runs of a range"): one statement per span of
+  `ledger_observer.history_scan_rows` sequences on `ledger_links` by its integer primary key
+  (`NOT INDEXED`), one writer command of kind `Query` each. No table, index, schema, record or
+  range changes.
+- The settlement: the range's semantic terminals (`task.completed`, `task.failed`,
+  `task.cancelled`) and package admissions (`task.requested`), read by the type index, counted per
+  run. A run with exactly one terminal and at most one package admission is finished: it needs no
+  settlement and is not read. Every other run of the query's answer is read: its records of the
+  range by its run link, the first semantic fact being the run's first fact; then, unchanged, its
+  records by request, by run and by lease, the checks, the terminal intent, the cancellation and
+  the lease's release (`settle_previous_epoch_contained_run`). The runs read are settled in the
+  order of their first facts, once a request; a semantic fact of a run read that lacks the run's
+  whole identity stops the start at its place in that order, as before. On a sound ledger the
+  runs settled, the records written and their order are those of the whole read.
+- The developer line `actingd contained_settlement runs=<n> finished=<n> read=<n> records=<n>`
+  (stdout, once the settlement completed): the runs the link rows named, the finished ones not
+  read, the ones read, and the payload records all its reads returned.
+- The comment of `settle_previous_epoch_contained_runs` (#411 A65 R3) that said "one paged scan
+  reads the task semantic events" says what the code reads.
+
+**The checks on finished runs.** Each failure below fails the start (fatal, `runtime_halted`): it
+is written nowhere but the daemon's terminal outcome, the start records no anchor, so every later
+start reads the same range and fails the same way; nothing is recorded in the ledger.
+
+| Check (code) | Until 0.12.74 | Since 0.12.75 |
+|---|---|---|
+| Two package admissions of one request (`contained_task_request_package_reused`) | every request of the range | kept for every run: the admissions read by type; a run with two or more is read and checked as before |
+| Two terminals of one request (`contained_task_terminal_state_inconsistent`) | every request of the range | kept for every run: the terminals read by type; a run with two or more is read and checked as before |
+| Lease terminals of a settled run (`contained_task_lease_terminal_state_inconsistent`) | runs without a terminal | unchanged (those runs are read) |
+| A semantic fact without the whole identity (`contained_task_identity_missing`) | every semantic fact of the range | kept for the runs read; dropped for the finished runs' facts and for a semantic fact that carries no run link (the link rows cannot name its run) |
+| The identity across the request's records, one lease (`contained_task_recovery_identity_invalid`) | every request of the range | kept for the runs read; dropped for the finished runs (it needs every record of the request) |
+
+What finds such a ledger instead: a record changed after it was written, its links included, fails
+its integrity tag in `ledger-maintenance verify --full` and in the writer's background scrub
+(which latches a fatal failure); a finished run the Runtime itself wrote so is refused when its
+request comes again (`recover_contained_task`: `contained_task_request_identity_reused`,
+`contained_task_recovery_identity_invalid`, `contained_task_request_package_reused`,
+`contained_task_terminal_state_inconsistent`). A finished run needs no settlement; verifying it is
+not the start's work.
+
+**The cost.** It follows the link rows of the range (one primary-key row each, a few short text
+columns, grouped in SQLite; no record decoded or authenticated, the code shows nothing more; the
+estimate is of the order of a microsecond a row), plus two records a run read by type (the
+terminal and the package admission, each decoded and authenticated as any record, about 0.11 ms),
+plus the unfinished runs' own records (read four times: by run in the range, then by request, by
+run and by lease). A run with no semantic record at all (a Lab debug context's run, whose terminal
+is not semantic) is read once, its own records. The estimate for the baseline's three starts, with
+one run a few hundred records and one or two runs unfinished: about 0.1 s, 0.2 s and 1 s for the
+settlement where the back took 4.1 s, 5.6 s and 34.5 s; the link rows' part grows with the
+previous run's length at about a microsecond a record instead of 0.11 ms.
+
+**The start log.** A new stdout line `actingd start_stages <member>=<ms> … total_ms=<ms>`,
+printed when the start ends, ready or not (the line `actingd startup_recovery` and its members
+unchanged). Its members, in order: `daemon_ms` (actingd before the host: its arguments, the
+configuration and its checks, the install root's adb, the resource packages' validation, the
+recognition bindings; `-` for a host started without `with_process_started_at`), `owner_ms`,
+`storage_ms`, `ledger_open_ms`, `frame_retention_ms`, `capacity_ms`, `prior_epochs_ms` (the closes
+of the earlier owner epochs), `facts_ms` (the instance and runtime fact stores), `shared_ms`,
+`provider_ms` (the provider's assembly, the start's discovery), `resolve_ms`, `recover_ms` (the
+recovery of `actingd startup_recovery`), `start_event_ms`, `configure_ms`, `settle_ms` (this
+settlement and the held records' ends), `restore_ms`, `instances_ms` (the instance workers and each
+instance's preparation), `publish_ms`. A member is the whole milliseconds from the end of the
+stage before it, so the members add up to `total_ms` exactly. `total_ms` runs from actingd's
+`main` to the publication of the Runtime's information; the installer's `ready_ms` (spawn to the
+readiness poll that found the owner answering) is larger by the process's creation (not measured)
+and up to one readiness poll (500 ms): `total_ms` ≤ `ready_ms` ≤ `total_ms` + 0.6 s. The study's
+untimed parts are `daemon_ms`, `owner_ms`, `storage_ms`, `frame_retention_ms`, `capacity_ms`,
+`prior_epochs_ms`, `facts_ms`, `shared_ms`, `provider_ms`, `resolve_ms` and `start_event_ms`
+before the first binding, and the back's stages after it. What reads the start log today: the
+watchdog and the installer read its last `OUTCOME actingd:` line (the terminal outcome) or its last
+line (`watchdog::start::last_log_line`, `install::launch::terminal_of`); the installer's rollback
+gate reads the `ledger_opened` `OUTCOME actingd:` line (`install::update::start_logs`);
+`lean_scale`'s child reads the line that holds `actingd startup_recovery `; the deploy's summary
+reads the start report over IPC, not the log. None of them reads the new lines, and both new lines
+are stdout lines written before the terminal outcome.
+
+**`index_ms` (not changed).** The open's `index` phase (`sqlite::open_formal`) reads the retention
+state (`EventStore::open_retention`): the starts, bindings and eviction records of the whole
+history by type (rare records), the owner records (`OWNER_TYPES`, among them `command.validated` and
+the monitor's probes) of the last two owner epochs (`owner_read`), and, for each retained owner,
+one grouping of every record of its epochs (`SCOPE_EXTENTS`) and their `lease.released`. It
+therefore follows the length of the last two runs, is computed again at each start and does not
+grow without bound; within one long run it grows with that run (0.9 s to 4.5 s over the three
+starts above; the last two runs before the second start held about 80k records, before the
+third about 358k). A fix that leaves the index's
+content identical needs owner changes and scopes kept in an index of their own; it is not small and
+is not this slice.
+
+**The follow-up (option A, not this slice).** The better end state is one row per run in the
+ledger's index (`ledger_index`, written in the record's own batch transaction as the `open` rows
+are: added at a request's first task semantic fact, removed at its `TerminalCommitted`), so that
+the start reads the open runs' rows and their records and nothing of the finished runs, with every
+check of today kept for the runs it settles. It changes what is on disk (a new row role, which the
+table's `role` check does not admit today, and a backfill of every ledger once) and needs its own
+design for the way back (a build without the role opening a ledger that has it).
+
+**Codes and words.** None added. The two stdout lines are developer lines, not outcomes.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The ledger's query | `crates/ledger/src/global.rs`: `LedgerRunStart`, `WriterCommand::RunStarts`, `GlobalLedger::run_starts_between`; `global/store.rs`, `global/history.rs`: `run_starts`; `global/storage.rs`: `DurableStorage::run_starts` (the Segment medium); `global/sqlite.rs`: `RUN_STARTS`, `run_start` |
+| The settlement | `crates/runtime-host/src/host/contained_task.rs`: `settle_contained_runs_between`, `semantic_facts_by_run`, `SettlementStep`, `ContainedSettlementReads`; `settle_previous_epoch_contained_run` counts its reads |
+| The start log | `crates/runtime-host/src/recovery_timing.rs`: `StartStage`, `StartStageTimes`, `StartStages`; `crates/runtime-host/src/host.rs`: `start_with_provider`, `start_staged`, `RuntimeHostConfig::with_process_started_at`; `apps/actingd/src/main.rs` (the process's instant) |
+| Texts | [ledger-store.md](ledger-store.md) ("The runs of a range"); [runtime-fact-store.md](runtime-fact-store.md) (`host.contained_settlement`) |
+
+**Tests** (`crates/runtime-host/src/tests/gate_485_start1.rs`, host gate map row "#485 START-1";
+each epoch written in-process by a host on a manual Runtime clock and closed, then started again
+on the same state root; no clock read in the gate file). Pinned first on the code of 0.12.74 (the
+slice's first commit), then kept: a run left during its entry check (two `task.evidence_indexed`,
+no package admitted) and a run whose lease expired before the end (package admitted, run started)
+each get `task.terminal_intent` then `task.cancelled` (`contained_task_recovered_after_restart`)
+and no lease record; both in one epoch with a finished run are settled in the order of their first
+records, the finished run nothing (2). On the new settlement: the payload records it reads are the
+same with and without a page's worth of the finished run's own records and as many client actions,
+one run finished and one read (1); an epoch whose one run is finished reads that run's terminal and
+package admission and nothing else (3); on a scripted clock `actingd start_stages` names every
+stage, its members add up to `total_ms`, a stage not ended prints `-` and the first stage ended
+counts from the origin, and a host's start that reached readiness ended every stage but the
+daemon's (4). The run whose granted lease is still open is gate_epoch_close's gate 2 and #411 A65's
+gates (the open lease released, the old ledger without the anchor, the start that failed after its
+start event), unchanged (5). No existing test touched.
+
+**What is not changed.** What the start recovers or settles on a sound ledger, record for record;
+the ledger's records, kinds, members and range; its tables, indexes and schema; the order of the
+start's steps; every interface revision and the start report over IPC; the watchdog's limit; the
+line `actingd startup_recovery` and the daemon lines.
+
+**At deploy.** Nothing to configure. Release note: the start no longer reads every record of the
+last run to settle its unfinished runs (it reads the runs from the ledger's links and the finished
+ones by type), so its time no longer grows with the last run's length; the first start on this
+build prints the new lines `actingd start_stages` and `actingd contained_settlement` in its start
+log. In the release notes' language: 启动结算上一轮没跑完的任务时，不再读上一轮的全部记录（从账本的链接行找出这一段的任务，已结束的只按类型读它的终态和包），启动时间不再随上一轮运行的长短增长；这一版的第一次启动起，启动日志多出 `actingd start_stages`（每一段的用时）和 `actingd contained_settlement` 两行。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

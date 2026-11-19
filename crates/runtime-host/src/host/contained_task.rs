@@ -56,6 +56,55 @@ pub(super) struct StartAnchors {
     pub(super) current: Option<u64>,
 }
 
+/// Workflow #485 START-1 (register §1.489): what one start's settlement of the direct runs of
+/// earlier epochs read, printed as the developer line `actingd contained_settlement runs=<n>
+/// finished=<n> read=<n> records=<n>` once the settlement has completed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ContainedSettlementReads {
+    /// The runs with a record in the range, from the ledger's link rows.
+    pub(crate) runs: u64,
+    /// Of them, the runs with one terminal and at most one package admission in the range,
+    /// finished and not read.
+    pub(crate) finished: u64,
+    /// The runs read: their records of the range, then those the settlement reads of them.
+    pub(crate) read: u64,
+    /// The payload records the settlement read: the terminals and package admissions by type,
+    /// and every record of every read of the runs read (each read counted).
+    pub(crate) records: u64,
+}
+
+impl std::fmt::Display for ContainedSettlementReads {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "runs={} finished={} read={} records={}",
+            self.runs, self.finished, self.read, self.records
+        )
+    }
+}
+
+/// Workflow #485 START-1: one step of the settlement, at the ledger sequence it sorts by: a run's
+/// first semantic fact, settled there; or a semantic fact of a run read that lacks the run's
+/// identity, where the settlement stops (`contained_task_identity_missing`).
+enum SettlementStep {
+    Settle(Box<PersistedEvent>),
+    IdentityMissing(u64),
+}
+
+impl SettlementStep {
+    fn sequence(&self) -> u64 {
+        match self {
+            Self::Settle(event) => event.sequence(),
+            Self::IdentityMissing(sequence) => *sequence,
+        }
+    }
+}
+
+/// A number of records as the settlement counts them.
+fn record_count(records: usize) -> u64 {
+    u64::try_from(records).unwrap_or(u64::MAX)
+}
+
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -11126,11 +11175,12 @@ impl HostShared {
     ///   settlement, which `host.contained_settlement` names; a start that failed after
     ///   appending its own start event recorded no such fact, so the epochs before it are
     ///   scanned again. Without the fact (an old ledger no start of this build settled, also
-    ///   when its first start of this build failed before it settled) one paged scan reads the
-    ///   task semantic events of the whole ledger, never only the last two starts' epoch
-    ///   (Codex's counterexample on #420), and the fact is then written. The scan ends before
-    ///   this start's start event (the last one). A run settled once has its terminal, so a
-    ///   later scan that reaches it again leaves it.
+    ///   when its first start of this build failed before it settled) the range is the whole
+    ///   ledger, never only the last two starts' epoch (Codex's counterexample on #420), and the
+    ///   fact is then written. The range ends before this start's start event (the last one). A
+    ///   run settled once has its terminal, so a later start whose range reaches it again leaves
+    ///   it. Until 0.12.74 the range was read whole, every record of every kind, page by page;
+    ///   since #485 START-1 only the runs it needs ([`Self::settle_contained_runs_between`]).
     /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
     ///   smaller ([`LedgerPages`]).
     /// - R2: a ledger failure keeps the ledger's own failure as its cause.
@@ -11269,47 +11319,166 @@ impl HostShared {
 
     /// The direct contained runs whose first task semantic fact lies after the event at
     /// `previous` (a start event, or 0 for the ledger's start) and before the start event at
-    /// `current`, settled in ledger order, the range read page by page.
+    /// `current`, settled in the order of those facts.
+    ///
+    /// Workflow #485 START-1 (register §1.489, the coordinator's ruling B): the range is not read
+    /// whole any more. The runs that have a record in it come from the ledger's link rows alone
+    /// ([`actingcommand_ledger::GlobalLedger::run_starts_between`]); the range's semantic
+    /// terminals (`task.completed`, `task.failed`, `task.cancelled`) and package admissions
+    /// (`task.requested`) are read by the type index, a record or two a run. A run with one
+    /// terminal and at most one package admission there is finished: it needs no settlement and
+    /// its other records are not read. Every other run (no terminal, or two terminals or package
+    /// admissions) is read: its records of the range by its run link, whose first semantic fact
+    /// is the run's first fact and whose semantic facts must carry the run's whole identity
+    /// (`contained_task_identity_missing`, as before), then exactly as before
+    /// ([`Self::settle_previous_epoch_contained_run`]), in the order of the runs' first facts and
+    /// once a request. On a sound ledger the runs settled, the records written and their order
+    /// are those of the read of the whole range. What a finished run is no longer checked for at
+    /// the start (its identity across its request's records, and that each of its semantic facts
+    /// carries the whole identity) is §1.489's list.
     fn settle_contained_runs_between(&self, previous: u64, current: u64) -> RuntimeHostResult<()> {
-        let mut pages = LedgerPages::new(
-            &self.ledger,
-            EventQuery {
-                from_sequence: Some(previous.saturating_add(1)),
-                to_sequence: Some(current - 1),
-                ..EventQuery::default()
-            },
-            previous,
-            current - 1,
-            RECOVERY_PAGE_EVENTS,
-        );
-        let mut requests = BTreeSet::new();
-        while let Some(page) = pages
-            .next_page()
-            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?
-        {
-            for event in &page {
+        let through = current - 1;
+        let read_failure = |error: actingcommand_ledger::GlobalLedgerError| {
+            ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error)
+        };
+        let runs = self
+            .ledger
+            .run_starts_between(previous, through)
+            .map_err(read_failure)?;
+        let mut reads = ContainedSettlementReads {
+            runs: record_count(runs.len()),
+            ..ContainedSettlementReads::default()
+        };
+        let terminals = self.semantic_facts_by_run(
+            (previous, through),
+            &[
+                EventType::TaskCompleted,
+                EventType::TaskFailed,
+                EventType::TaskCancelled,
+            ],
+            |fact| matches!(fact, TaskSemanticFact::TerminalCommitted { .. }),
+            &mut reads.records,
+        )?;
+        let packages = self.semantic_facts_by_run(
+            (previous, through),
+            &[EventType::TaskRequested],
+            |fact| matches!(fact, TaskSemanticFact::PackageAdmitted { .. }),
+            &mut reads.records,
+        )?;
+        let mut steps = Vec::new();
+        for start in &runs {
+            let ended = terminals.get(&start.run_id).copied().unwrap_or(0);
+            let admitted = packages.get(&start.run_id).copied().unwrap_or(0);
+            if ended == 1 && admitted <= 1 {
+                reads.finished += 1;
+                continue;
+            }
+            reads.read += 1;
+            let events = LedgerPages::new(
+                &self.ledger,
+                EventQuery {
+                    run_id: Some(start.run_id),
+                    from_sequence: Some(previous.saturating_add(1)),
+                    to_sequence: Some(through),
+                    ..EventQuery::default()
+                },
+                previous,
+                through,
+                RECOVERY_PAGE_EVENTS,
+            )
+            .read_all()
+            .map_err(read_failure)?;
+            reads.records = reads.records.saturating_add(record_count(events.len()));
+            let mut first = true;
+            for event in events {
                 if !matches!(
                     event.payload(),
                     EventPayload::Task(TaskPayload::Semantic(_))
                 ) {
                     continue;
                 }
-                let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
-                    .ok_or_else(|| {
-                        RuntimeHostError::fatal(
-                            HostCode::ContainedTaskIdentityMissing,
-                            PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
-                            RuntimeErrorCode::RuntimeHalted,
-                        )
-                    })?;
-                if !requests.insert(identity.request_id) {
-                    continue;
+                if TaskRunIdentity::from_semantic_event(event.payload(), event.links()).is_none() {
+                    steps.push(SettlementStep::IdentityMissing(event.sequence()));
+                    break;
                 }
-                self.settle_previous_epoch_contained_run(event)
-                    .map_err(|failure| *failure.error)?;
+                if first {
+                    first = false;
+                    steps.push(SettlementStep::Settle(Box::new(event)));
+                }
             }
         }
+        steps.sort_by_key(SettlementStep::sequence);
+        let identity_missing = || {
+            RuntimeHostError::fatal(
+                HostCode::ContainedTaskIdentityMissing,
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        };
+        let records = std::cell::Cell::new(reads.records);
+        let mut requests = BTreeSet::new();
+        for step in steps {
+            let event = match step {
+                SettlementStep::IdentityMissing(_) => return Err(identity_missing()),
+                SettlementStep::Settle(event) => event,
+            };
+            let identity = TaskRunIdentity::from_semantic_event(event.payload(), event.links())
+                .ok_or_else(identity_missing)?;
+            if !requests.insert(identity.request_id) {
+                continue;
+            }
+            self.settle_previous_epoch_contained_run(&event, &records)
+                .map_err(|failure| *failure.error)?;
+        }
+        reads.records = records.get();
+        println!("actingd contained_settlement {reads}");
+        #[cfg(test)]
+        {
+            *lock(
+                &self.contained_settlement_reads_for_test,
+                PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
+            )? = reads;
+        }
         Ok(())
+    }
+
+    /// Workflow #485 START-1: per run, the records of `event_types` with a sequence in the range
+    /// `(after, through]` whose semantic fact `kept` keeps, read by the type index page by page;
+    /// the records read are added to `records`.
+    fn semantic_facts_by_run(
+        &self,
+        (after, through): (u64, u64),
+        event_types: &[EventType],
+        kept: fn(&TaskSemanticFact) -> bool,
+        records: &mut u64,
+    ) -> RuntimeHostResult<BTreeMap<RunId, u64>> {
+        let mut facts = BTreeMap::new();
+        for event_type in event_types {
+            let events = LedgerPages::new(
+                &self.ledger,
+                EventQuery {
+                    event_type: Some(*event_type),
+                    from_sequence: Some(after.saturating_add(1)),
+                    to_sequence: Some(through),
+                    ..EventQuery::default()
+                },
+                after,
+                through,
+                RECOVERY_PAGE_EVENTS,
+            )
+            .read_all()
+            .map_err(|error| ledger_error_caused_by(PREVIOUS_EPOCH_SETTLEMENT_OPERATION, &error))?;
+            *records = records.saturating_add(record_count(events.len()));
+            for event in &events {
+                if let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload()
+                    && kept(payload.fact())
+                    && let Some(run_id) = event.links().run_id()
+                {
+                    *facts.entry(*run_id).or_insert(0_u64) += 1;
+                }
+            }
+        }
+        Ok(facts)
     }
 
     /// #411 A65 (R3): the start event sequence `host.contained_settlement` names, the start
@@ -11368,9 +11537,12 @@ impl HostShared {
         .map(|_| ())
     }
 
+    /// The settlement of the run whose first semantic fact of the range is `first_fact`, unchanged
+    /// by #485 START-1 but for `records`, which counts the records its reads return.
     fn settle_previous_epoch_contained_run(
         &self,
         first_fact: &PersistedEvent,
+        records: &std::cell::Cell<u64>,
     ) -> Result<(), RequestFailure> {
         let identity_missing = || {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -11387,7 +11559,8 @@ impl HostShared {
         let run_id = *links.run_id().ok_or_else(identity_missing)?;
         // #411 A65: each read is paged on one index (R1) and keeps the ledger's cause (R2).
         let read = |query: EventQuery| -> Result<Vec<PersistedEvent>, RequestFailure> {
-            self.ledger
+            let events = self
+                .ledger
                 .latest_sequence()
                 .and_then(|through| {
                     LedgerPages::new(&self.ledger, query, 0, through, RECOVERY_PAGE_EVENTS)
@@ -11398,7 +11571,9 @@ impl HostShared {
                         PREVIOUS_EPOCH_SETTLEMENT_OPERATION,
                         &error,
                     ))
-                })
+                })?;
+            records.set(records.get().saturating_add(record_count(events.len())));
+            Ok(events)
         };
         let events = read(EventQuery {
             request_id: Some(request_id),

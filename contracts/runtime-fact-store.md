@@ -639,7 +639,28 @@ the backend self-check facts (source `device-proxy` or `capture`).
   the earlier epochs' runs to the next start. Without the fact a start
   settles the runs of the epoch before its own. A value that is not the
   Runtime's integer or names no earlier start event fails the start with
-  `contained_settlement_anchor_invalid`.
+  `contained_settlement_anchor_invalid`. Since 0.12.75 (Workflow #485
+  START-1, register §1.489) the settlement does not read the range whole: the
+  runs with a record in it come from the ledger's link rows alone
+  ([ledger-store.md](ledger-store.md), "The runs of a range"), its semantic
+  terminals (`task.completed`, `task.failed`, `task.cancelled`) and package
+  admissions (`task.requested`) are read by type, and a run with one terminal
+  and at most one package admission there is finished and not read. Every
+  other run is read: its records of the range by its run link (the first
+  semantic fact is the run's, and a semantic fact without the run's whole
+  identity fails the start with `contained_task_identity_missing`), then as
+  before by its request, its run and its lease, in the order of the runs'
+  first facts. On a sound ledger the runs settled, the records written and
+  their order are those of the whole read. A finished run is no longer checked
+  at the start for its identity across its request's records
+  (`contained_task_recovery_identity_invalid`) or for the identity of each of
+  its semantic facts (`contained_task_identity_missing`): §1.489 says what
+  finds such a ledger instead. The double package admission
+  (`contained_task_request_package_reused`) and the double terminal
+  (`contained_task_terminal_state_inconsistent`) are found by those reads by
+  type and the run is then read and checked as before. The developer line
+  `actingd contained_settlement runs=<n> finished=<n> read=<n> records=<n>`
+  says what one settlement read.
 - `host.idle_state` (#405 IDLE-1P, 0.12.20) — runtime scope, `record_list`,
   no lifetime: the instances the idle action closed, or is closing. The first
   row names the writer, `start_anchor` alone (an integer, since 0.12.25, #405
