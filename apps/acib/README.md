@@ -338,11 +338,17 @@ whose location is the directory itself: only it counts for `running`, and only i
 `stop`. (A list that names bundles in place of executables names the application by its
 directory and its extensions deeper, by theirs; a list that names executables names no process
 by the directory: neither is misread, and `application_located` says which way the application
-was found: `directly_inside`, `at_directory`, or `both` when it has entries of each.) A process
-whose executable lies deeper (an app extension in `PlugIns/`, a helper inside a nested bundle) is
-the bundle's but is not the application running: a widget the system runs for it does not make
-the application run. Its pid is named apart, in `extension_pids`. A process's `name` is never
-read, so a process of another application with the same name is not the bundle's. Paths are
+was found: `directly_inside`, `at_directory`, or `both` when it has entries of each.) **A known
+limit** (ACIB-3c, fix round 2; not an observation): an entry at the bundle's directory is read
+rightly as the application itself only while a list keeps to one way of naming. Were a phone to
+record an extension at its host's directory while the application itself does not run, `running`
+would answer that the application runs (`application_located` `at_directory`) and `stop` would
+send that extension a kill request; no phone has shown such a list (the one looked at names
+executables). A process whose executable lies deeper (an app extension in `PlugIns/`, a helper
+inside a nested bundle) is the bundle's but is not the application running: a widget the system
+runs for it does not make the application run. Its pid is named apart, in `extension_pids`. A
+process's `name` is never read, so a process of another application with the same name is not
+the bundle's. Paths are
 compared exactly, case included (iOS's file system is case-sensitive); a location given as a
 `file://` URL is read as its percent-decoded path, `/private/var/…` as `/var/…`, and one that is
 no absolute path is of no application. A process of another application whose path merely starts
@@ -411,6 +417,14 @@ answer, error text or log line.
     channel's request or the list was not answered in time.
   - `service_handshake_failed`: the connection to the instruments server failed before or while
     its first message was read.
+
+  **Reading `both`** (ACIB-3c, fix round 2): the application's entries were located both at the
+  bundle's directory and directly in it. Neither way of naming explains such a list (one that
+  names bundles has no entry one level inside the directory, one that names executables none at
+  the directory itself); the likeliest cause is an extension recorded at its host's directory.
+  The application runs either way, so `running` answers `running` true, its `pids` those of the
+  entries of both kinds, and the word shows the oddity: which entry is the application itself
+  the list does not tell, and `stop` then sends nothing (`application_entry_ambiguous`, below).
 - `acib launch --device <n> --bundle <id> [--relaunch]`: first the lookup, as `running` and `stop`
   ask it: a bundle it does not hold answers `installed` false, as they do, with `not_installed`
   (status 1), and no launch is sent. Then the instruments server's process control launches the
@@ -468,9 +482,16 @@ answer, error text or log line.
   first look's `located` named (none when the lookup does not hold it: nothing was looked at).
   (ACIB-3c, fix round 1) A first look that locates no process answers `process_paths_unreadable`
   (status 1) and sends no kill request: what cannot be told is not "does not run". A look after
-  the kills that locates none answers the same word, keeping `signalled`, with no verdict:
-  whether the processes ended cannot be told. **The verdict comes from the looks, never from the
-  requests**: when the last look inside the deadline still lists a process the command
+  the kills that locates none answers the same word, keeping `signalled`, with no verdict: a
+  `signalled` that is not empty means kill requests were sent to those pids, and only whether
+  the processes ended could not be seen. (Fix round 2) A first look that locates the
+  application's entries both at the bundle's directory and directly in it (`both`, as `running`
+  reads it, above) answers `application_entry_ambiguous` (status 1) and sends no kill request:
+  the list does not tell which entry is the application itself, and `stop` ends only that. A
+  look after the kills that meets `both` sends nothing more, as no look after the kills does: the
+  kills went to the pids of a first look that told the application apart, and that look is read
+  as any other, its `application_located` `both`. **The verdict comes from the looks, never from
+  the requests**: when the last look inside the deadline still lists a process the command
   signalled, the line answers `still_running` (status 1); when it lists none of them, the
   application is stopped (status 0). A kill request that failed (the process control channel not
   opened, or the request not written) is a fact beside the verdict: its pid and the error's kind
@@ -688,7 +709,8 @@ The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_pas
 `service_handshake_failed`, `channel_refused`, `screenshot_failed`, `picture_header_truncated`,
 `picture_header_unknown`, `key_salt_unusable`, `binding_salt_unusable`, `device_key_unknown`,
 `orientation_failed`, `application_lookup_failed`, `process_list_failed`,
-`bundle_path_unreadable`, `launch_failed`, `still_running`, `not_installed`. The error kinds:
+`bundle_path_unreadable`, `process_paths_unreadable`, `application_entry_ambiguous`,
+`launch_failed`, `still_running`, `not_installed`. The error kinds:
 `device_refused`, `answer_unreadable`, `connection_failed`, `xpc_failed`, `other` (each named,
 with its cause, where `probe`'s ways and `running`, `launch` and `stop` are described above).
 

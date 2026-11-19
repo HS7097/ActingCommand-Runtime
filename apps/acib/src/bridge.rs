@@ -38,11 +38,11 @@
 //! kept nowhere else.
 
 use crate::answer::{
-    Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind, Failure, ImageQuery,
-    ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted, Orientation,
-    Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay, Problem, Reader, Reading, Running,
-    Screenshot, ServiceDetail, ServiceEntry, ServiceLine, Services, SignalError, Signals, Stage,
-    Stop, Way, whole_milliseconds,
+    ApplicationLocated, Apps, Candidate, CommandName, DeviceEntry, Devices, Elapsed, ErrorKind,
+    Failure, ImageQuery, ImageQueryName, Images, Info, Launch, Line, Link, ListedImage, Mounted,
+    Orientation, Orientations, Probe, ProbeOutcome, ProbeResult, ProbeWay, Problem, Reader,
+    Reading, Running, Screenshot, ServiceDetail, ServiceEntry, ServiceLine, Services, SignalError,
+    Signals, Stage, Stop, Way, whole_milliseconds,
 };
 use crate::args::{KeyVariables, Out, Request, Target};
 use crate::framing::Printed;
@@ -963,6 +963,11 @@ async fn launch(
 /// process (no entry of the list with a location read as a place) tells nothing of the bundle:
 /// at the first look no kill request is sent ([`stop_after_first_look`]), and a look after the
 /// kills ends the looks with no verdict (`Stop::looked`); both answer `process_paths_unreadable`.
+/// (Fix round 2) A first look that locates the application's entries both at the bundle's
+/// directory and directly in it does not tell which entry is the application itself: no kill
+/// request is sent, and the line answers `application_entry_ambiguous`. A look after the kills
+/// that does so sends nothing more, as no look after them does: the kills went to the pids a
+/// first look told apart, and that look is read as any other, `application_located` `both`.
 /// A deadline that passes before the first look after the kills has answered is the command's
 /// `deadline_passed`, as for every command.
 async fn stop(target: &Target, bundle: &str, context: &Context) -> Result<Line, Failure> {
@@ -1094,8 +1099,12 @@ fn stop_after_lookup(
 /// entry of the list has a location read as a place), the line answered at once,
 /// `process_paths_unreadable`, no kill sent: what cannot be told is not "does not run"; when the
 /// application itself does not run, the line answered at once, no kill sent (its extensions'
-/// pids and `located` named); else the answer so far and the application's pids to send a kill
-/// request for.
+/// pids and `located` named); (fix round 2) when it locates the application's entries both at
+/// the bundle's directory and directly in it (`both`), which no way of naming explains, the line
+/// answered at once, `application_entry_ambiguous`, no kill sent: the list does not tell which
+/// entry is the application itself, and `stop` ends only that; else the answer so far and the
+/// application's pids to send a kill request for. Only these pids are ever sent one
+/// ([`stop`]).
 fn stop_after_first_look(asked: Stop, first: Look) -> Then<(Stop, Vec<u32>)> {
     if first.located == 0 {
         Then::Answer(Line::Stop(
@@ -1103,6 +1112,10 @@ fn stop_after_first_look(asked: Stop, first: Look) -> Then<(Stop, Vec<u32>)> {
         ))
     } else if first.pids.application.is_empty() {
         Then::Answer(Line::Stop(asked.not_running(first)))
+    } else if first.application_located == Some(ApplicationLocated::Both) {
+        Then::Answer(Line::Stop(
+            asked.failed(Problem::ApplicationEntryAmbiguous, None),
+        ))
     } else {
         Then::GoOn((asked, first.pids.application))
     }
@@ -1785,7 +1798,6 @@ fn refused_with(error: &IdeviceError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::answer::ApplicationLocated;
     use crate::key::tests::{VECTOR_IDENTIFIER, VECTOR_KEY, VECTOR_SALT, salt};
     use crate::matching::Pids;
     use crate::stopping::Verdict;
@@ -2213,6 +2225,66 @@ mod tests {
             r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":false,"signalled":[],"remaining":[],"running":false,"extension_pids":[],"located":1}"#
         );
         assert!(nothing_ran.answered());
+    }
+
+    /// (ACIB-3c, fix round 2) A first look that locates the application's entries both at the
+    /// bundle's directory and directly in it (`both`) fits neither way a list names the
+    /// application: from it `stop` answers `application_entry_ambiguous` (status 1) at once and
+    /// its decision gives no pid to send a kill request for (`stop` sends kill requests only for
+    /// the pids [`stop_after_first_look`] goes on with, so none is sent); `running` on the same
+    /// list answers `running` true with the pids of both entries and `application_located`
+    /// `both` (status 0). A list that names the application either way alone goes on to the
+    /// kills of its pids.
+    #[test]
+    fn stop_sends_no_kill_request_when_the_list_does_not_tell_which_entry_is_the_application() {
+        use crate::matching::tests::{answer, at};
+        const BUNDLE: &str = "com.example.app";
+        const DIRECTORY: &str = "/var/containers/Bundle/Application/TESTUUID-0001/Example.app";
+        let directories = [DIRECTORY.to_owned()];
+        let look_at = |reply: &idevice::services::dvt::message::Message| {
+            let processes = matching::listed_processes(reply).expect("a list");
+            matching::pids_inside(&directories, processes)
+        };
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let stop = || Stop::asked(3, BUNDLE).installed();
+
+        let both = look_at(&answer(vec![
+            at(413, &format!("{DIRECTORY}/Example")),
+            at(412, DIRECTORY),
+            at(530, &format!("{DIRECTORY}/PlugIns/Widget.appex/Widget")),
+            at(
+                201,
+                "/var/containers/Bundle/Application/TESTUUID-0002/Other.app/Other",
+            ),
+        ]));
+        assert_eq!(both.application_located, Some(ApplicationLocated::Both));
+        let Then::Answer(stopped) = stop_after_first_look(stop(), both.clone()) else {
+            panic!("stop sends no kill request when the list does not tell the application");
+        };
+        assert_eq!(
+            shown(&stopped),
+            r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"application_entry_ambiguous"}"#
+        );
+        assert!(!stopped.answered());
+        let line = Line::Running(running_after_look(
+            Running::asked(3, BUNDLE).installed(),
+            Ok(both),
+        ));
+        assert_eq!(
+            shown(&line),
+            r#"{"command":"running","device":3,"bundle":"com.example.app","installed":true,"running":true,"pids":[412,413],"extension_pids":[530],"located":4,"application_located":"both"}"#
+        );
+        assert!(line.answered());
+
+        for (entry, pids) in [
+            (at(413, &format!("{DIRECTORY}/Example")), vec![413]),
+            (at(412, DIRECTORY), vec![412]),
+        ] {
+            assert_eq!(
+                stop_after_first_look(stop(), look_at(&answer(vec![entry]))),
+                Then::GoOn((stop(), pids))
+            );
+        }
     }
 
     /// (ACIB-3c, fix round 1) The README's item on `running` opens with what a person sees when

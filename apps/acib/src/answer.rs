@@ -49,8 +49,11 @@ pub enum CommandName {
 }
 
 /// Why a command was refused or failed: this program's own words, not Runtime outcome codes.
-/// Each word has one cause.
+/// Each word has one cause. (ACIB-3c, fix round 2) The tests alone derive a reader of it, from
+/// which they take the closed list of these words (`tests::every_problem_word`); nothing reads
+/// a word in the program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(rename_all = "snake_case")]
 pub enum Problem {
     /// The command line is not one of the eleven commands with their options.
@@ -155,6 +158,13 @@ pub enum Problem {
     /// `stop`, at its first look, sends no kill request, and at a look after its kills gives no
     /// verdict.
     ProcessPathsUnreadable,
+    /// (ACIB-3c, fix round 2) `stop`'s first look locates the application's own entries both at
+    /// the bundle's directory and directly in it (what `running` answers as `application_located`
+    /// `both`): no way of naming explains that (a list that names bundles has no entry one level
+    /// inside the directory, one that names executables none at the directory itself; likeliest,
+    /// an extension recorded at its host's directory), so the list does not tell which entry is
+    /// the application itself, and no kill request is sent.
+    ApplicationEntryAmbiguous,
     /// (ACIB-3c) The instruments server's process control did not answer the launch with a pid
     /// (its channel, or the launch on it); the line names the error's [`ErrorKind`]. Of any kind
     /// the application may have been started all the same (the library tells a refusal from no
@@ -1056,7 +1066,9 @@ pub enum ApplicationLocated {
     DirectlyInside,
     /// Each of its entries is the bundle's directory itself (the list names bundles).
     AtDirectory,
-    /// It has entries of both kinds.
+    /// It has entries of both kinds. (Fix round 2) No way of naming explains that: `running`
+    /// answers it (the application runs either way); `stop`, at its first look, sends nothing and
+    /// answers `application_entry_ambiguous`.
     Both,
 }
 
@@ -1067,8 +1079,10 @@ pub enum ApplicationLocated {
 /// the pids of those processes, ascending (`pids`), and apart the pids of the bundle's
 /// extensions' processes (`extension_pids`, which do not make it run; `matching.rs`); (fix
 /// round 1) how many entries of the list have a location read as a place (`located`, at least 1
-/// in every answer: a list with none is `process_paths_unreadable`, never `running` false), and
-/// how the application's entries were located when it runs (`application_located`). A line
+/// wherever it is named: a list with none is `process_paths_unreadable`, never `running` false;
+/// fix round 2: the line of a bundle that is not installed, which was not looked for, and a line
+/// stopped by a problem name none), and how the application's entries were located when it runs
+/// (`application_located`). A line
 /// stopped by a problem keeps what was read before it (`installed`), and names the error's kind
 /// where the service gave an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1270,8 +1284,10 @@ pub struct SignalError {
 /// nothing and leaves them, which is no failure), and (fix round 1) of that look, as `running`
 /// names them, `located` and `application_located`. A look that locates no process (no entry
 /// with a location read as a place) is `process_paths_unreadable` (status 1): at the first look
-/// no kill request is sent, after the kills there is no verdict. An application that does not
-/// run (or is not installed) is answered at the first look: no signal, `signalled` and
+/// no kill request is sent, after the kills there is no verdict. (Fix round 2) A first look that
+/// locates the application's entries both at the bundle's directory and directly in it is
+/// `application_entry_ambiguous` (status 1), and no kill request is sent. An application that
+/// does not run (or is not installed) is answered at the first look: no signal, `signalled` and
 /// `remaining` empty. The
 /// last look inside the deadline still listing a process it signalled is `still_running`
 /// (status 1), whatever became of the requests; a process it lists that was not signalled (one
@@ -2270,6 +2286,17 @@ mod tests {
                 r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"process_paths_unreadable"}"#,
                 false,
             ),
+            // Fix round 2: a first look that does not tell which entry is the application, no
+            // kill.
+            (
+                Line::Stop(
+                    stop()
+                        .installed()
+                        .failed(Problem::ApplicationEntryAmbiguous, None),
+                ),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"problem":"application_entry_ambiguous"}"#,
+                false,
+            ),
             (
                 Line::Stop(stop().look_failed(signals(&[412], &[]), ErrorKind::Other)),
                 r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"problem":"process_list_failed","error_kind":"other"}"#,
@@ -2721,6 +2748,10 @@ mod tests {
             (Problem::ProcessListFailed, "process_list_failed"),
             (Problem::BundlePathUnreadable, "bundle_path_unreadable"),
             (Problem::ProcessPathsUnreadable, "process_paths_unreadable"),
+            (
+                Problem::ApplicationEntryAmbiguous,
+                "application_entry_ambiguous",
+            ),
             (Problem::LaunchFailed, "launch_failed"),
             (Problem::StillRunning, "still_running"),
             (Problem::NotInstalled, "not_installed"),
@@ -2737,6 +2768,84 @@ mod tests {
             );
             assert!(seen.insert(word), "{word} is one word for one cause");
         }
+    }
+
+    /// (ACIB-3c, fix round 2) The program's own closed list of problem words: every word of
+    /// [`Problem`], as the reader the tests derive for it names them. Serde hands the reader of an
+    /// enum the names of all its variants, each as it is written (`Deserializer::deserialize_enum`
+    /// and its `variants`), so a word added to [`Problem`] is in this list with nothing more
+    /// written; each is named once.
+    fn every_problem_word() -> BTreeSet<String> {
+        // A reader that reads nothing and keeps the names of the variants it is handed.
+        struct Variants<'a>(&'a mut &'static [&'static str]);
+
+        impl<'de> serde::Deserializer<'de> for Variants<'_> {
+            type Error = serde::de::value::Error;
+
+            fn deserialize_any<V: serde::de::Visitor<'de>>(
+                self,
+                _visitor: V,
+            ) -> Result<V::Value, Self::Error> {
+                Err(serde::de::Error::custom("only an enum's names are read"))
+            }
+
+            fn deserialize_enum<V: serde::de::Visitor<'de>>(
+                self,
+                _name: &'static str,
+                variants: &'static [&'static str],
+                _visitor: V,
+            ) -> Result<V::Value, Self::Error> {
+                *self.0 = variants;
+                Err(serde::de::Error::custom("its names are kept"))
+            }
+
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+                byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+                struct identifier ignored_any
+            }
+        }
+
+        let mut variants: &'static [&'static str] = &[];
+        let read: Result<Problem, _> = serde::Deserialize::deserialize(Variants(&mut variants));
+        assert!(read.is_err(), "no word is read");
+        let words: BTreeSet<String> = variants.iter().map(|word| (*word).to_owned()).collect();
+        assert_eq!(words.len(), variants.len(), "each word is named once");
+        assert!(!words.is_empty(), "the list names the words");
+        words
+    }
+
+    /// (ACIB-3c, fix round 2) The README's table of problem words ("The problem words:", up to the
+    /// sentence on the error kinds) is the program's closed list ([`every_problem_word`]): it
+    /// names every word the program can answer, each once, and no other, each written
+    /// `` `word` `` and joined by ", ". Read as the README's other lists are (`stages.rs`): its
+    /// text, every run of blanks read as one space.
+    #[test]
+    fn the_readmes_table_of_problem_words_is_the_programs_closed_list() {
+        const TABLE: &str = "The problem words: ";
+        const END: &str = ". The error kinds: ";
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        let flat = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+        let start = flat
+            .find(TABLE)
+            .expect("the README has its table of problem words")
+            + TABLE.len();
+        let length = flat[start..]
+            .find(END)
+            .expect("the table ends before the error kinds");
+        let table: Vec<String> = flat[start..start + length]
+            .split(", ")
+            .map(|entry| {
+                entry
+                    .strip_prefix('`')
+                    .and_then(|rest| rest.strip_suffix('`'))
+                    .unwrap_or_else(|| panic!("{entry} is written as a word"))
+                    .to_owned()
+            })
+            .collect();
+        let named: BTreeSet<String> = table.iter().cloned().collect();
+        assert_eq!(named.len(), table.len(), "each word once: {table:?}");
+        assert_eq!(named, every_problem_word());
     }
 
     #[test]
@@ -3253,7 +3362,8 @@ mod tests {
     /// way the application was located), every member of `stage_ms` a stage's word, and every
     /// number a device's number, a pid of the bundle's own processes, (ACIB-3b) a stage's
     /// milliseconds or (fix round 1) `located`, a count of the list's entries. The new failure,
-    /// `process_paths_unreadable`, is among the lines, and holds only these.
+    /// `process_paths_unreadable`, is among the lines, and holds only these; (fix round 2) so is
+    /// `stop`'s `application_entry_ambiguous`.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
         // ACIB-3b: `stage_ms`, whose members are the stages' words, and `stage` beside a
@@ -3305,6 +3415,7 @@ mod tests {
                 Problem::ProcessListFailed,
                 Problem::BundlePathUnreadable,
                 Problem::ProcessPathsUnreadable,
+                Problem::ApplicationEntryAmbiguous,
                 Problem::LaunchFailed,
                 Problem::StillRunning,
                 Problem::NotInstalled,
