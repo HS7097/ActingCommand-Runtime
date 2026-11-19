@@ -6040,3 +6040,9 @@ mod gate_qp1;
 #[cfg(test)]
 #[path = "sqlite/gate_rl1c_fix3.rs"]
 mod gate_rl1c_fix3;
+
+// Workflow #485 START-1 fix round 1: the runs of a range across spans of two sequences, its two
+// ends, and the plan of `RUN_STARTS`.
+#[cfg(test)]
+#[path = "sqlite/gate_485_start1.rs"]
+mod gate_485_start1;

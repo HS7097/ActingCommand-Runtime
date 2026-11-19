@@ -654,11 +654,24 @@ the backend self-check facts (source `device-proxy` or `capture`).
   their order are those of the whole read. A finished run is no longer checked
   at the start for its identity across its request's records
   (`contained_task_recovery_identity_invalid`) or for the identity of each of
-  its semantic facts (`contained_task_identity_missing`): §1.489 says what
-  finds such a ledger instead. The double package admission
-  (`contained_task_request_package_reused`) and the double terminal
-  (`contained_task_terminal_state_inconsistent`) are found by those reads by
-  type and the run is then read and checked as before. The developer line
+  its semantic facts (`contained_task_identity_missing`). A double package
+  admission (`contained_task_request_package_reused`) or a double terminal
+  (`contained_task_terminal_state_inconsistent`) is found at the start only
+  when both records lie in the range on one run's link: those reads by type
+  count them by run, and such a run is read and checked as before. A pair
+  across the anchor is not found at the start, and was not before 0.12.75
+  either (a request with a semantic fact before the range is left before
+  those checks). Neither `ledger-maintenance verify --full` nor the
+  background scrub finds what the start no longer checks: they find a record
+  changed after it was written, not one the Runtime itself wrote wrongly.
+  Only a later request naming the run's request reads its records again: a
+  direct run sent again with that request id refuses two package admissions
+  or another correlation or instance (`Denied`), and on two terminals,
+  another task, run or lease, or a semantic fact without the whole identity
+  it is `poison_without_terminal`, which latches the running Runtime; a
+  cancellation of that request latches it on two terminals or a terminal
+  without its lease link. Nothing else finds them (register §1.489). The
+  developer line
   `actingd contained_settlement runs=<n> finished=<n> read=<n> records=<n>`
   says what one settlement read.
 - `host.idle_state` (#405 IDLE-1P, 0.12.20) — runtime scope, `record_list`,

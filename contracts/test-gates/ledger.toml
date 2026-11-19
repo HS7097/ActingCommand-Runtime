@@ -1000,3 +1000,14 @@ tests = [
     "actingcommand-ledger::lib::global::tests::acib2_the_device_key_test_vector_is_the_device_serial_fingerprint",
 ]
 incident = ["#479 ACIB-2"]
+
+# Workflow #485 START-1 fix round 1 (0.12.75; register §1.489; brief rd-1119/brief-485-start1-fix1.md, after the review of pull request #1846): GlobalLedger::run_starts_between, which the start's settlement of the earlier epochs reads, on a SQLite writer whose statements span two sequences (with_history_scan_rows(2)), on twelve records of three runs and of none (AB-A--CB-AC-). The whole history is read in at least one writer command per span and answers each run once, with its first record, in the order of those records; the range after the third record answers the two runs whose first records lie before it with their first records in it, ordered by those (L1). The range is the old settlement read's (from_sequence previous + 1, to_sequence current - 1): the record at the lower bound is outside, the one at the upper bound inside, and for every range of the history and past its head the answer is the runs of the records that read's query returns, each with its first one, in their order (L2). Records without a run link answer no run, an empty range answers nothing, and a range whose upper bound lies past the ledger's head answers the runs through the head and does not fail (L3). By the crate's plan check (plan_check::check_plan) RUN_STARTS breaks no rule and reads ledger_links by a range of its row id, with no scan of the table and no index, the run link's ledger_links_run among them (L4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_485_start1::start1_l1_a_run_across_several_spans_is_answered_once_with_its_first_record_in_the_range",
+    "actingcommand-ledger::lib::global::sqlite::gate_485_start1::start1_l2_the_lower_bound_is_outside_and_the_upper_bound_inside_as_the_old_read_took_them",
+    "actingcommand-ledger::lib::global::sqlite::gate_485_start1::start1_l3_records_without_a_run_and_an_empty_range_answer_nothing_past_the_head_no_failure",
+    "actingcommand-ledger::lib::global::sqlite::gate_485_start1::start1_l4_the_statement_reads_the_link_rows_by_their_row_id_and_breaks_no_plan_rule",
+]
+incident = ["#485", "START-1"]
