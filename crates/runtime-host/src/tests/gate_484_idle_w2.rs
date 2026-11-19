@@ -64,6 +64,10 @@
 //! restart test is the proof of the fix (`PolicyHost::evaluate`: such a candidate of an instance
 //! the idle action closed, under a hold, counts as held back with no time); its record lists and
 //! those of the close's test print the outcome code and operation of each record they found.
+//!
+//! Fix round 3 (review-1845-b): the restart test asserts that the first evaluation under the
+//! restored pause blocks the task at placement with `instance_unavailable`, so its plan is the one
+//! fix round 2's path reads.
 
 use super::gate_369_s6c::{connectivity, head};
 use super::gate_372k2::{SlotTask, Slots, at, slot_sources};
@@ -84,7 +88,8 @@ use actingcommand_contract::{
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_policy::{
-    DecisionReason, EligibilityState, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
+    DecisionReason, EligibilityState, PolicyCode, PolicyEvaluation, SchedulingDecisionState,
+    TaskDecision,
 };
 use actingcommand_runtime_config::{
     DefaultsFile, IdleAction, IdleConfig, annotate_settable, mechanism_rows, render_parameters,
@@ -1619,8 +1624,19 @@ fn idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes
     // (`instance_unavailable`, before the order of the deferrals), its wake its trigger's next
     // time, a millisecond away. Fix round 2: the idle plan counts such a candidate of a closed
     // instance under a hold as held back with no time, so its trigger's time is no wake (on the
-    // code of fix round 1 the wake came here, `planned_time_reached`).
-    own.cycle(started + 1_000);
+    // code of fix round 1 the wake came here, `planned_time_reached`). Fix round 3: the decision
+    // is the placement's block for the unavailable instance, so the plan below is the new path's.
+    let under_pause_cycle = own.cycle(started + 1_000);
+    let blocked = decision(&under_pause_cycle);
+    assert!(
+        blocked.state == SchedulingDecisionState::Blocked
+            && blocked.eligibility == EligibilityState::True
+            && blocked
+                .reasons
+                .iter()
+                .any(|reason| reason.outcome.is(PolicyCode::InstanceUnavailable)),
+        "the placement blocks the task, its instance unavailable: {blocked:#?}"
+    );
     let under_pause = own.plan();
     assert!(
         !under_pause.due_now,

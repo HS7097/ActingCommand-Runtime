@@ -41533,7 +41533,10 @@ idle plan behind a hold").
   when either names none). A hold with a time of its own (a cooldown) lets the candidate through no
   earlier than its end: the later of the cooldown's end and that release, none when either names
   none (fix round 1). Only a candidate no later position holds back is due, and it still wakes
-  the application at once, under the hold too (IDLE-WG's case B, unchanged).
+  the application at once, under the hold too (IDLE-WG's case B, unchanged). *Amended in fix round
+  3* (the coordinator's ruling, below): so while the instance is available (a held key, an
+  occupancy, a cooldown, a pause that still stands on an available instance); on an instance a
+  hold holds and whose availability is withdrawn, no task wakes it until the hold ends.
 - *The look ahead is read only and serves the idle plan alone.* In the evaluation's eligibility
   closure, where positions 1 and 2 return a hold, the policy host also reads positions 3 to 8 for
   the candidate (not for the fact refresh), each through its own function and in the order's order:
@@ -41572,7 +41575,9 @@ can really be dispatched or its planned wake comes, whatever claims, Lab runs, r
 pauses come in between, and across a restart, except behind a later position that names no time of
 its own (a suspended package, a paused task): once the hold ends, the evaluation without it defers
 such a candidate with no wake and the plan counts it due and wakes the instance, as before this
-slice (fix round 1); a wake's record names why it came. A client's run on
+slice (fix round 1), and except an instance that is unavailable and under no hold (its emulator
+stopped by the idle action itself, a reconnect that failed), still woken as before this slice
+(fix round 3); a wake's record names why it came. A client's run on
 a closed application still meets it closed (whether such a run should wake it first is the study's
 separate question, not this slice's).
 
@@ -41694,11 +41699,74 @@ trigger's next time as its wake; the look ahead never reads it, and the idle pla
 (`planned_time_reached`): the window production met at the deploy's restart of 0.12.74. Now, on
 an instance the idle action closed (`idle_closed`), while a hold of positions 1 or 2 holds it,
 such a candidate (blocked, eligible, not the fact refresh) is put in `IdleHeldAhead` with no time
-(`PolicyHost::evaluate`): not due, no wake of its own; once the hold has ended and the
-availability is proven again, the evaluation reads it as any other, and a task really due then
-wakes at once. Nothing a dispatch decides reads it. The restart test is the proof; the record
-lists of the two host tests print each found record's code and operation; the file's waits take
-`GATE_WAIT` (test plan v2.2 §2.1 guard 3) and its slices `std::slice::from_ref` (clippy).
+(`PolicyHost::evaluate`): not due, no wake of its own; once no hold of positions 1 or 2 stands,
+the evaluation reads it as before this round, whether or not the instance is available (so said
+in fix round 3: the code reads only whether a hold stands), and a task really due on an instance
+available again then wakes at once. Nothing a dispatch decides reads it. The restart test is the
+proof; the record lists of the two host tests print each found record's code and operation; the
+file's waits take `GATE_WAIT` (test plan v2.2 §2.1 guard 3) and its slices
+`std::slice::from_ref` (clippy).
+
+**Fix round 3** (coordinator work order `rd-1119/brief-484-idle-w2-fix3.md`, after the second
+independent review `rd-1119/review-1845-b.md`, which found that fix round 2 can neither make an
+instance sleep through work that could be dispatched nor make it sleep for ever, and that the
+texts said more than the code does).
+- *The texts say what the code does.* Fix round 2's sentences said that such a candidate is read
+  as any other once the hold has ended and the availability is proven again. The code reads only
+  whether a hold of positions 1 or 2 stands: the moment none stands, the candidate is read as
+  before fix round 2, whether or not the instance is available. So an instance still unavailable
+  when the hold ends (its emulator stopped by the idle action itself, a reconnect that failed) is
+  woken at its trigger's next time, or at once, as before this slice, a spent budget included.
+  *What this slice leaves:* an instance the idle action closed that is unavailable and under no
+  hold is still woken for a task that cannot be dispatched, as the look ahead never reads a
+  candidate the placement blocks; it is an issue of its own (`runtime-config.md`,
+  `scheduling-blackout.md`, the paragraph above).
+- *A due task under a hold that let go of the instance* (the coordinator's ruling, not the
+  owner's words; it amends the slice's ruling 2, "The rule" above). While the instance is
+  available (a held key, an occupancy, a cooldown, a pause that still stands on an available
+  instance): unchanged, a really due task wakes at once, the wake queued behind the holder. On an
+  instance a hold holds and whose availability is withdrawn, no task wakes it until the hold
+  ends: a hold that made the Runtime let go of the instance means hands off, the Runtime starts no
+  application there, and nothing could be dispatched before the hold ends anyway. The wake comes
+  with the hold's end: after a resume whose reconnect and self-check pass, the first evaluation
+  wakes at once for a task really due, one cold start later than before fix round 2. A wake whose
+  time has come, a switched action and the start's owed wake still come (`idle_action::wake`).
+  Which holds leave an instance unavailable, from the code: every instance pause a start restores
+  (`restore_scheduling_pauses`) or holds itself (`hold_unsettled_dispatches`,
+  `hold_skipped_settlement_fact_instances`, `hold_start_paused_instances`), each `released`, as
+  `prepare_physical_instances_on_start` withholds the availability of every instance it prepares
+  (`withhold_policy_instance_availability`) and prepares none such a pause holds, until the
+  resume's reconnect and its self-check prove it again (a resume that holds the instance again
+  with `instance.added` reconnects nothing); and a #403 resource fence, whose fencing withholds it
+  until the passing preparation that lifts the fence. A pause made on a running Runtime does not,
+  in either mode (`stand`, `quiet_or_lift`) and at no stage, `released` included: its hand-back
+  (`release_paused_instance`) keeps the device session inside the multi-Nemu gate or closes it
+  outside (`close_retained_instance_with`), and neither drops the self-check facts or the
+  availability, so the instance stays available under it; only a close left unconfirmed fences
+  the instance, and that fence withholds it. The global pause does not either: a start prepares
+  its instances under it.
+- *The condition names the block's reason* (the review's suggestion, taken). The loop of fix
+  round 2 also asks that the decision carry the reason `instance_unavailable`, read as
+  `set_availability_words` reads it. The review found the condition equivalent today (a blocked,
+  eligible decision comes from the placement alone, whose first check is the availability); said
+  outright, it stays so when the placement gains another block.
+- *The test proves the path* (taken).
+  `idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes_nothing` asserts
+  that the first evaluation under the restored pause blocks the task, eligible, with
+  `instance_unavailable`, before it asserts that the plan has nothing due and that no wake is
+  recorded, which would pass with the instance available as well.
+- *Stacked on #485 START-1* (§1.489; pull request #1846's head `a7fcf229`, which holds main
+  `fc90a13b`), merged into this branch, §1.489 after this section. Where the two meet: this
+  slice's restart tests start a host and start it again twice on one state root, and START-1
+  changed what a start reads of the previous epoch (the runs from the link rows, the finished ones
+  by type) and added two stdout lines. Nothing they set up is settled differently: they leave no
+  run unfinished on purpose and write no task semantic fact without its run link, and their
+  ledgers are written in-process by the host; a finished run needed no settlement before and is
+  not read now, an unfinished one is read by its run link and settled as before (on a sound ledger
+  the same runs, records and order, §1.489), and their policy dispatches (admitted, completed,
+  released) stay `reconcile_policy_dispatches`'s; the two lines go to stdout, not to the tests'
+  daemon reporter. START-1's seven host gate tests evaluate no policy cycle and configure no idle
+  action, so this slice's change of the evaluation does not reach them.
 
 **What is not changed.** When an application is closed as idle; every dispatch decision, the
 order, the budgets, what a pause or a held key does to a dispatch; IDLE-WG's time-bound gates and

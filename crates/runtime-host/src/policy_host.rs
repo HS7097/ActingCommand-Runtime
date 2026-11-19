@@ -4550,8 +4550,11 @@ impl PolicyHost {
         // and 2) holds it too, such a candidate cannot be dispatched before that hold ends and
         // the availability is proven again, a time nothing names: for the idle plan alone it
         // counts as held back by a later position that names no time (not due, no wake of its
-        // own). Once the hold is gone the evaluation reads it as before; nothing a dispatch
-        // decides reads this.
+        // own). Once no such hold stands the evaluation reads it as before, whether or not the
+        // instance is available again; nothing a dispatch decides reads this. Fix round 3: the
+        // decision is blocked because the instance is unavailable (its `instance_unavailable`
+        // reason, read as `set_availability_words` reads it), so another block the placement
+        // gains is not taken for this one.
         for decision in &evaluation.decisions {
             let Some(alias) = decision.instance_id.as_deref() else {
                 continue;
@@ -4559,6 +4562,11 @@ impl PolicyHost {
             if decision.task_id != FACT_REFRESH_TASK_ID
                 && decision.state == SchedulingDecisionState::Blocked
                 && decision.eligibility == EligibilityState::True
+                && decision.reasons.iter().any(|reason| {
+                    reason
+                        .outcome
+                        .is(actingcommand_policy::PolicyCode::InstanceUnavailable)
+                })
                 && fact_refresh.idle_closed.contains_key(alias)
                 && instances
                     .get(alias)

@@ -1351,7 +1351,11 @@ time-bound gate as well, the later of the two). A hold with a time of its own, a
 the candidate through no earlier than its end: its wake is the later of the cooldown's end and
 that position's release, none when either names none (fix round 1). Only a candidate no later
 position holds back is due, and it still wakes the instance at once, under the hold too (the case
-above, unchanged). Each position is read as the evaluation reads it, read only: no lift check runs
+above, unchanged) while the instance is available: a held key, an occupancy, a cooldown, a pause
+that stands on an available instance. The exception (fix round 3, the coordinator's ruling): on an
+instance a hold holds and whose availability is withdrawn, no task wakes it until the hold ends
+(below; a wake whose time has come, a switched action and the start's owed wake still come, as
+above). Each position is read as the evaluation reads it, read only: no lift check runs
 (a suspended package and a paused task count as standing until the evaluation without the hold
 checks them), nothing is copied, drawn (the random delay of position 9 is not read) or noted for a
 clock slot. A position that cannot answer there leaves the candidate counted as before, due, and
@@ -1369,13 +1373,30 @@ closed application as before (whether it should wake it first is not this rule's
 restart and after a resume, too: the first evaluation after a start reads a restored pause and a
 claim on the key as any hold, and an application closed as idle stays closed until its planned
 wake, with the same exception. That includes a candidate the evaluation blocks before the order
-of the deferrals because its instance is unavailable (fix round 2): a start withholds the
-availability of each instance it prepares until its self-check passes, and prepares none whose
-restored pause is released, which stays unavailable until the resume's reconnect proves it again.
-On an instance the action closed, while a hold of positions 1 or 2 holds it too, such a candidate
-counts for the idle plan as held back by a later position that names no time: not due, and its
-trigger's next time is no wake; once the hold has ended and the availability is proven again, the
-evaluation reads it as any other.
+of the deferrals because its instance is unavailable (`instance_unavailable`, fix round 2), which
+reaches no position of that order: on an instance the action closed, while a hold of positions 1
+or 2 holds it too, such a candidate counts for the idle plan as held back by a later position that
+names no time: not due, and its trigger's next time is no wake. That is the exception above, the
+rule since fix round 3 (the coordinator's ruling): a hold under which the Runtime let go of the
+instance means hands off, the Runtime starts no application there, and nothing could be dispatched
+before the hold ends anyway. The holds that leave an instance unavailable themselves: every
+instance pause a start restores or holds itself (each is `released`; the start withholds the
+availability of every instance it prepares until its self-check passes, and prepares none such a
+pause holds), until the resume's reconnect and its self-check prove it again (a resume that holds
+the instance again with `instance.added` reconnects nothing); and a resource fence, until the
+passing preparation that lifts it. A pause made on a running Runtime does not, in either mode and
+at no stage, `released` included: its hand-back keeps the device session or closes it and leaves
+the availability as it was (but for a close left unconfirmed, whose fence withholds it), so the
+instance stays available under it and the case above applies; nor does the global pause, under
+which a start prepares as before. The wake comes with the hold's end: once no hold of positions 1
+or 2 stands, the evaluation reads the candidate as before fix round 2, whether or not the instance
+is available; after a resume whose reconnect and self-check pass, the first evaluation wakes the
+instance at once for a task really due, one cold start later than before fix round 2. What this
+slice leaves: an instance the action closed that is unavailable and under no hold (its emulator
+stopped by the idle action itself, a reconnect that failed, a hold that ended before the
+availability came back) is still woken for a task that cannot be dispatched, at its trigger's next
+time or at once as before this slice, a spent budget included: the look ahead never reads a
+candidate the placement blocks. That is an issue of its own.
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

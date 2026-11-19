@@ -369,10 +369,17 @@ the Runtime ends the evaluation, any other goes to the daemon's log as a skipped
 reason and wake each deferral answers, the not-run explanation, the clock-slot records of Workflow
 #372 K2 and the budgets' accounting are what they were. A position added to the order is added to
 the look ahead (`PolicyHost::evaluate`, `look_ahead`). A candidate that the evaluation blocks
-before this order because its instance is unavailable (a start withholds the availability until
-its self-check, and a restored pause keeps it withheld until the resume's reconnect) reaches no
-position, so on an instance the idle action closed, while positions 1 or 2 hold the instance as
-well, the idle plan counts it as held back with no time: not due and no wake (fix round 2).
+before this order because its instance is unavailable (`instance_unavailable`: a start withholds
+the availability until its self-check, and a pause a start restored keeps it withheld until the
+resume's reconnect) reaches no position, so on an instance the idle action closed, while positions
+1 or 2 hold the instance as well, the idle plan counts it as held back with no time: not due and
+no wake (fix round 2), and no task wakes such an instance before that hold ends (fix round 3, the
+coordinator's ruling; which holds withdraw the availability: [runtime-config.md](runtime-config.md),
+"What wakes an idle instance"). Once no hold of positions 1 or 2 stands, the plan reads the
+candidate as before fix round 2, whether or not the instance is available again: an instance the
+idle action closed that is unavailable and under no hold is still woken for a task that cannot be
+dispatched, a spent budget included, as the look ahead never reads a candidate the placement
+blocks (what this slice leaves, an issue of its own).
 
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
 lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,
