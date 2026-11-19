@@ -47,6 +47,9 @@
 //!   task file's candidate layout of the kind `repeated_anchor` that declares `shared_ocr`, a
 //!   member a row finds only beside its layout's `kind`, so read on its own
 //!   ([`anchored_shared_read`]).
+//! - **The lines of a shared read's name boxes**, 21 (Workflow #463 SEL-GRID G2, register §1.491):
+//!   a task file's `shared_ocr` that declares `lines`, of a layout of either kind, a row of
+//!   [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -122,6 +125,9 @@ const END: &str = "end";
 /// reads `candidate_layouts`, `kind` and the value `repeated_anchor` by the same constants, and
 /// not `shared_ocr`.
 const ANCHORED_SHARED_READ_REVISION: u64 = 20;
+/// Revision 21: the lines of a shared read's name boxes (Workflow #463 SEL-GRID G2), the member
+/// `lines` of a `shared_ocr` (a row of [`ROWS`]).
+const SHARED_LINES_REVISION: u64 = 21;
 const CANDIDATE_LAYOUTS: &str = "candidate_layouts";
 const KIND: &str = "kind";
 const REPEATED_ANCHOR: &str = "repeated_anchor";
@@ -246,11 +252,12 @@ const fn when(
     }
 }
 
-/// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17 and (Workflow
-/// #463 INT-1) 19 and the register sections they cite, and the B train's sections, put into a
-/// revision: each with its file, its place, what it holds, its condition and its revision
-/// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
-const ROWS: [Row; 48] = [
+/// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
+/// INT-1) 19 and (Workflow #463 SEL-GRID G2) 21 and the register sections they cite, and the B
+/// train's sections, put into a revision: each with its file, its place, what it holds, its
+/// condition and its revision (`contracts/resource-verify.md`, "The `package` revision", lists
+/// them with their sources).
+const ROWS: [Row; 49] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -455,6 +462,16 @@ const ROWS: [Row; 48] = [
         Place::Under("interrupts"),
         Holds::Text("environment_reset"),
         19,
+    ),
+    // 21, Workflow #463 SEL-GRID G2 (§1.491; contracts/selection-graph.md, "The lines of a name
+    // box"): a layout's shared read that declares `lines`, of either kind, which every Runtime
+    // before it refuses at its declaration gate (`UnknownField` at
+    // `/candidate_layouts/<i>/shared_ocr/lines`), in a pack of any execution mode.
+    row(
+        TASK,
+        "lines",
+        Place::Under(SHARED_OCR),
+        SHARED_LINES_REVISION,
     ),
 ];
 

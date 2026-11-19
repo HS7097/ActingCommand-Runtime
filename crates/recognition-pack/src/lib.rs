@@ -81,6 +81,8 @@ pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
     CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, MAX_IDENTITY_TEMPLATES, normalize_name,
 };
+// Workflow #463 SEL-GRID G2: why a name read no identity, in a select's refusal's words.
+pub use candidate_identity::CandidateUnreadCause;
 
 pub use codes::{
     RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget, ValueOp,
@@ -93,6 +95,8 @@ pub use candidate_layout::{
     CandidateLayout, CandidateOrder, CandidateProjectionFailure, CandidateSharedOcr, CandidateSlot,
     TargetSearch, UnknownIdentityHandling,
 };
+// Workflow #463 SEL-GRID G2: the lines of a shared read's name boxes, and what a name's read saw.
+pub use candidate_layout::{CandidateNameBlock, CandidateNameRead, CandidateSharedLines};
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
 
@@ -668,6 +672,29 @@ pub struct OcrProviderTextBlock {
     pub confidence: Option<f32>,
 }
 
+/// Workflow #463 SEL-GRID G2 (`contracts/selection-graph.md`, "The lines of a name box"): the
+/// lines the name boxes of a layout's shared read hold, as [`VisionProvider::read_text_lines`] is
+/// given them: at most `max` lines of `line_height` pixels of the picture the provider is given
+/// (the package's base, which every frame is brought to before recognition, a chain's processed
+/// region moving it and never scaling it), as the layout declares them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OcrProviderLines {
+    pub max: u8,
+    pub line_height: u32,
+}
+
+/// Workflow #463 SEL-GRID G2: a provider's answer to a read with lines: the result as
+/// [`VisionProvider::read_text`] gives it, each block's strips beside it (`strips[i]` those of
+/// `result.blocks[i]`, top to bottom; empty for a block read whole) and the served blocks lower
+/// than half a line, not read (`below_floor`). The detection's `served` counts recognitions: a
+/// block read whole one, a cut block its strips, a block below the floor none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrProviderLinesResult {
+    pub result: OcrProviderResult,
+    pub strips: Vec<Vec<OcrProviderTextBlock>>,
+    pub below_floor: Vec<PackRect>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OcrProviderResult {
     pub ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
@@ -839,6 +866,23 @@ pub trait VisionProvider: fmt::Debug + Send + Sync {
                 result,
                 execution: None,
             })
+    }
+
+    /// Workflow #463 SEL-GRID G2 (`contracts/selection-graph.md`, "The lines of a name box"): a
+    /// shared read whose name boxes declare `lines`, sent with its served name boxes: each served
+    /// block lower than half a line is not read, one at least 1.25 lines high is cut into its
+    /// lines and each strip recognized on its own, every other block read as by `read_text`. A
+    /// provider that cannot cut refuses (`Unavailable`), so that such a read never silently reads
+    /// two lines as one.
+    fn read_text_lines(
+        &self,
+        _request: OcrProviderRequest<'_>,
+        _lines: OcrProviderLines,
+    ) -> Result<OcrProviderLinesResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "this vision provider cannot cut a block into the lines of a name box",
+        ))
     }
 
     fn classify(
@@ -1147,10 +1191,29 @@ pub struct OcrEvaluation {
     /// for a target that read on its own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_read: Option<OcrSharedReadEvidence>,
+    /// Workflow #463 SEL-GRID G2: of a shared read whose name boxes declare `lines`, the served
+    /// blocks whose centre lies in the target's region and that were lower than half a line: not
+    /// read, so in no text of the target, and counted here. Absent otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub below_floor: Vec<PackRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OcrTextEvidence {
+    pub text: String,
+    pub rect: PackRect,
+    pub confidence: Option<f32>,
+    /// Workflow #463 SEL-GRID G2: of a block a shared read with `lines` cut into its lines, the
+    /// strips that read a text, top to bottom, each recognized on its own; the block's `text` is
+    /// theirs joined as the blocks of a name box are and its `confidence` the lowest of theirs.
+    /// Absent for every other block.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub strips: Vec<OcrStripEvidence>,
+}
+
+/// Workflow #463 SEL-GRID G2: one strip of a cut block (`OcrTextEvidence::strips`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OcrStripEvidence {
     pub text: String,
     pub rect: PackRect,
     pub confidence: Option<f32>,
@@ -1543,6 +1606,7 @@ pub(crate) fn anchor_not_matched(
             located: None,
             preprocess: None,
             shared_read: None,
+            below_floor: Vec::new(),
         })),
         nn: None,
         color_digest: None,
@@ -2672,6 +2736,7 @@ impl RecognitionEvaluator {
                     located: None,
                     preprocess,
                     shared_read: None,
+                    below_floor: Vec::new(),
                 })),
                 nn: None,
                 color_digest: None,
@@ -4293,6 +4358,7 @@ fn validate_ocr_result(
                     text: block.text,
                     rect: block.rect,
                     confidence: block.confidence,
+                    strips: Vec::new(),
                 },
             ));
         }

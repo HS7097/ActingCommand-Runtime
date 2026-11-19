@@ -478,6 +478,21 @@ impl OcrHandOver<'_> {
         Ok(result)
     }
 
+    /// Workflow #463 SEL-GRID G2: one rectangle of the picture the provider was given (a cut
+    /// block's strip, a block below the floor) in frame coordinates, moved back as [`Self::restore`]
+    /// moves a block, with checked additions.
+    pub(crate) fn restored(&self, rect: PackRect) -> RecognitionPackResult<PackRect> {
+        let Some(origin) = self.origin else {
+            return Ok(rect);
+        };
+        match (rect.x.checked_add(origin.x), rect.y.checked_add(origin.y)) {
+            (Some(x), Some(y)) => Ok(PackRect { x, y, ..rect }),
+            _ => Err(invalid_provider_response(
+                "an OCR strip or floor block leaves the i32 range when moved onto the region",
+            )),
+        }
+    }
+
     /// The chain's evidence; `None` without a chain.
     pub(crate) fn into_evidence(self) -> Option<OcrPreprocessEvidence> {
         self.evidence

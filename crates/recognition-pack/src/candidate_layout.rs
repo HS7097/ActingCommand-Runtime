@@ -43,8 +43,9 @@ use actingcommand_contract::candidate_projection::{
     CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS, CandidateFeature, CandidateFeatureMap,
     CandidateFrame, CandidateLayoutKind, CandidateProjection, CandidateProjectionError,
     CandidateRecognitionEvidence, CandidateRecognitionInput, CandidateRecognitionSample,
-    CandidateRect, CandidateUnknownReason, INVALID_CANDIDATE_PROJECTION, ProjectedCandidate,
-    candidate_id, validate_candidate_feature_name, validate_candidate_layout_id,
+    CandidateRect, CandidateUnknownReason, INVALID_CANDIDATE_PROJECTION, NAME_BOX_LINE_HEIGHT_MIN,
+    NAME_BOX_LINES_MAX, ProjectedCandidate, candidate_id, validate_candidate_feature_name,
+    validate_candidate_layout_id,
 };
 use actingcommand_contract::outcome::{Code, Outcome};
 use serde::{Deserialize, Serialize};
@@ -133,7 +134,11 @@ const SHARED_OCR_FIELDS: &[&str] = &[
     "line_merge",
     // Workflow #428 CFL-2.
     "preprocess",
+    // Workflow #463 SEL-GRID G2.
+    "lines",
 ];
+/// Workflow #463 SEL-GRID G2: the members of a shared read's `lines`.
+const SHARED_OCR_LINES_FIELDS: &[&str] = &["max", "line_height"];
 /// The longest OCR timeout a shared read declares, as for an OCR target.
 const MAX_SHARED_OCR_TIMEOUT_MS: u64 = 60_000;
 
@@ -214,9 +219,35 @@ pub struct CandidateSharedOcr {
     /// absent means the frame itself.
     #[serde(default)]
     pub preprocess: Option<OcrPreprocess>,
+    /// Workflow #463 SEL-GRID G2 (`contracts/selection-graph.md`, "The lines of a name box"): the
+    /// lines the read's name boxes hold. With them the provider cuts a served block too tall for
+    /// one line into its lines before it recognizes it, and does not read one lower than half a
+    /// line; absent, every block is read as before.
+    #[serde(default)]
+    pub lines: Option<CandidateSharedLines>,
+}
+
+/// Workflow #463 SEL-GRID G2: a shared read's `lines`: its name boxes hold at most `max` lines (1 to
+/// 3) of `line_height` pixels of the package's base (at least 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateSharedLines {
+    pub max: u8,
+    pub line_height: u32,
 }
 
 impl CandidateSharedOcr {
+    /// Workflow #463 SEL-GRID G2: the read's lines as the provider is given them: the declared
+    /// line height, in the package's base, is in the picture the provider is given, which is the
+    /// base (every frame is brought to it before recognition) or a chain's processed region of it
+    /// (moved, never scaled), as the name boxes are.
+    fn provider_lines(&self) -> Option<crate::OcrProviderLines> {
+        self.lines.map(|lines| crate::OcrProviderLines {
+            max: lines.max,
+            line_height: lines.line_height,
+        })
+    }
+
     /// Whether the read gives `target` its text: an OCR target without `locate` whose model,
     /// languages and (Workflow #428 CFL-2) chain are the read's, both without a chain or with
     /// equal chains. Its region decides whether it lies inside the read.
@@ -286,6 +317,8 @@ fn space_rect(space: PackCoordinateSpace) -> PackRect {
 /// CFL-2: also its rectangle, the detector's count, and with a chain its evidence and processed
 /// region, from which each served target's evidence is counted. Workflow #463 SEL-GRID G1: and the
 /// name boxes it was sent, in frame coordinates (empty: none, every detected block recognized).
+/// Workflow #463 SEL-GRID G2: with `lines`, each cut block carries its strips, and the served
+/// blocks below the floor, not read, are kept in frame coordinates.
 #[derive(Debug, Clone)]
 pub(crate) struct SharedTextRead {
     blocks: Vec<crate::OcrTextEvidence>,
@@ -296,6 +329,129 @@ pub(crate) struct SharedTextRead {
     preprocess: Option<OcrPreprocessEvidence>,
     processed: Option<std::sync::Arc<Vec<u8>>>,
     name_boxes: Vec<PackRect>,
+    below_floor: Vec<PackRect>,
+}
+
+/// Workflow #463 SEL-GRID G2: what a read with lines answered beside its blocks: the lines it was
+/// given, each block's strips in the provider's order of its blocks, and the served blocks below
+/// the floor.
+struct ReadCuts {
+    lines: crate::OcrProviderLines,
+    strips: Vec<Vec<crate::OcrProviderTextBlock>>,
+    below_floor: Vec<PackRect>,
+}
+
+impl ReadCuts {
+    /// The strips and the blocks below the floor in frame coordinates, as `hand_over` moves a
+    /// block back ([`crate::ocr_preprocess::OcrHandOver::restored`]).
+    fn restored(
+        self,
+        hand_over: &crate::ocr_preprocess::OcrHandOver<'_>,
+    ) -> RecognitionPackResult<Self> {
+        let strips = self
+            .strips
+            .into_iter()
+            .map(|cut| {
+                cut.into_iter()
+                    .map(|strip| {
+                        Ok(crate::OcrProviderTextBlock {
+                            rect: hand_over.restored(strip.rect)?,
+                            ..strip
+                        })
+                    })
+                    .collect::<RecognitionPackResult<Vec<_>>>()
+            })
+            .collect::<RecognitionPackResult<Vec<_>>>()?;
+        let below_floor = self
+            .below_floor
+            .into_iter()
+            .map(|rect| hand_over.restored(rect))
+            .collect::<RecognitionPackResult<Vec<_>>>()?;
+        Ok(Self {
+            lines: self.lines,
+            strips,
+            below_floor,
+        })
+    }
+
+    /// Gives each cut block of `ocr` (its blocks sorted, `block_source_order` their places in the
+    /// provider's answer) its strips, and returns the blocks below the floor. A cut block's text
+    /// and confidence are its strips' by the one join and the one lowest confidence of a name box
+    /// ([`joined_text`], [`lowest_confidence`]): a block whose text or confidence is not, a strip
+    /// outside its block or before the strip above it, more strips than the lines, strips for
+    /// another number of blocks, or a block below the floor outside the read's rectangle `rect`
+    /// is the provider's invalid response.
+    fn apply(
+        self,
+        ocr: &mut crate::ValidatedOcrResult,
+        rect: PackRect,
+    ) -> RecognitionPackResult<Vec<PackRect>> {
+        if self.strips.len() != ocr.blocks.len() {
+            return Err(crate::invalid_provider_response(format!(
+                "OCR read with lines answered the strips of {} blocks for {} blocks",
+                self.strips.len(),
+                ocr.blocks.len()
+            )));
+        }
+        let mut strips = self.strips.into_iter().map(Some).collect::<Vec<_>>();
+        for (block, source) in ocr.blocks.iter_mut().zip(&ocr.block_source_order) {
+            let cut = strips
+                .get_mut(*source)
+                .and_then(Option::take)
+                .ok_or_else(|| {
+                    crate::invalid_provider_response(format!(
+                        "OCR block[{source}] of a read with lines has no strips of its own"
+                    ))
+                })?;
+            if cut.is_empty() {
+                continue;
+            }
+            let ordered = cut.windows(2).all(|pair| {
+                i64::from(pair[0].rect.y) + i64::from(pair[0].rect.height)
+                    <= i64::from(pair[1].rect.y)
+            });
+            if cut.len() > usize::from(self.lines.max)
+                || !ordered
+                || cut
+                    .iter()
+                    .any(|strip| !rect_is_within(strip.rect, block.rect))
+            {
+                return Err(crate::invalid_provider_response(format!(
+                    "OCR block[{source}] holds strips outside it, out of order or more than {} lines",
+                    self.lines.max
+                )));
+            }
+            let text = joined_text(
+                &cut.iter()
+                    .map(|strip| strip.text.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            let confidence = lowest_confidence(cut.iter().map(|strip| strip.confidence));
+            if text != block.text || confidence != block.confidence {
+                return Err(crate::invalid_provider_response(format!(
+                    "OCR block[{source}] is not the text and confidence of its strips"
+                )));
+            }
+            block.strips = cut
+                .into_iter()
+                .map(|strip| crate::OcrStripEvidence {
+                    text: strip.text,
+                    rect: strip.rect,
+                    confidence: strip.confidence,
+                })
+                .collect();
+        }
+        if self
+            .below_floor
+            .iter()
+            .any(|floor| !rect_is_within(*floor, rect))
+        {
+            return Err(crate::invalid_provider_response(
+                "OCR block below the floor lies outside the shared read",
+            ));
+        }
+        Ok(self.below_floor)
+    }
 }
 
 /// Workflow #463 SEL-GRID G1: a frame's shared read as a layout makes it: the read, the layout's
@@ -653,6 +809,42 @@ impl SceneEvaluation<'_> {
             Instant,
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
+    ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
+        self.project_reading(layout_id, scenes, record, &mut Vec::new())
+    }
+
+    /// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`):
+    /// [`Self::project_candidates`] on this context's scene, and beside the projection what the
+    /// OCR read of each actionable instance's identity feature saw ([`CandidateNameRead`]), in the
+    /// order the projection reads them. The projection is the same one, byte for byte; the reads
+    /// enter no hash and no record.
+    pub fn project_candidates_read(
+        &self,
+        layout_id: &str,
+    ) -> Result<(CandidateProjection, Vec<CandidateNameRead>), CandidateProjectionFailure> {
+        let mut reads = Vec::new();
+        let (projection, _) = self.project_reading(
+            layout_id,
+            &[self.scene],
+            &mut |_, _, _, _| Ok(()),
+            &mut reads,
+        )?;
+        Ok((projection, reads))
+    }
+
+    /// [`Self::project_candidates_placed_with_samples`], and (Workflow #463 SEL-GRID G2) into
+    /// `reads` what the OCR read of each actionable instance's identity feature saw.
+    fn project_reading(
+        &self,
+        layout_id: &str,
+        scenes: &[&crate::Scene],
+        record: &mut impl FnMut(
+            &str,
+            &RecognitionPackResult<TargetEvaluation>,
+            Instant,
+            Instant,
+        ) -> Result<(), CandidateProjectionFailure>,
+        reads: &mut Vec<CandidateNameRead>,
     ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
         let evaluator = self.evaluator;
         let layout = evaluator.candidate_layout(layout_id).ok_or_else(|| {
@@ -1020,6 +1212,17 @@ impl SceneEvaluation<'_> {
                     }) {
                         let evaluation = evaluate(target_id, placement)?;
                         let value = feature_value(feature, &evaluation)?;
+                        // Workflow #463 SEL-GRID G2: what the identity's read saw, for a select's
+                        // refusal; nothing of the projection depends on it.
+                        if let (Some(identity), Some(ocr)) =
+                            (&feature.identity, evaluation.ocr.as_deref())
+                        {
+                            reads.push(name_read(
+                                (instance_index, feature.name.as_str(), sample.frame),
+                                identity,
+                                ocr,
+                            ));
+                        }
                         let input = if feature.identity.is_some() || feature.integer.is_some() {
                             let ocr = evaluation.ocr.as_deref().ok_or_else(|| {
                                 CandidateProjectionFailure::unmeasurable(
@@ -1557,17 +1760,21 @@ impl SceneEvaluation<'_> {
             .zip(read.source_order)
             .filter(|(block, _)| center_is_within(block.rect, region))
             .unzip();
-        let text = blocks
+        // Workflow #463 SEL-GRID G2: the served blocks below the floor that the region holds, by
+        // the same rule; in no text.
+        let below_floor = read
+            .below_floor
             .iter()
-            .map(|block| block.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        // The lowest confidence of the blocks; none without blocks or when one has none.
-        let confidence = blocks
-            .iter()
-            .map(|block| block.confidence)
-            .reduce(|lowest, confidence| lowest.zip(confidence).map(|(a, b)| a.min(b)))
-            .flatten();
+            .copied()
+            .filter(|rect| center_is_within(*rect, region))
+            .collect::<Vec<_>>();
+        let text = joined_text(
+            &blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<Vec<_>>(),
+        );
+        let confidence = lowest_confidence(blocks.iter().map(|block| block.confidence));
         let (matched_expected, passed, message) = ocr_verdict(&target, &text, confidence);
         Ok(Some(TargetEvaluation {
             id: target_id.to_owned(),
@@ -1588,6 +1795,7 @@ impl SceneEvaluation<'_> {
                 located: None,
                 preprocess,
                 shared_read: Some(shared_read),
+                below_floor,
             })),
             nn: None,
             color_digest: None,
@@ -1647,21 +1855,56 @@ impl SceneEvaluation<'_> {
         }
         let boxes = name_boxes.unwrap_or_default().to_vec();
         let picture_boxes = hand_over.in_picture(&boxes)?;
-        let result = provider
-            .read_text(crate::OcrProviderRequest {
-                served: &picture_boxes,
-                ..hand_over.request(
-                    &shared.languages,
-                    shared.timeout_ms,
-                    &shared.model_ref,
-                    &shared.model_sha256,
-                )
-            })
-            .map_err(|error| provider_error(served, "ocr", error))?;
+        let request = crate::OcrProviderRequest {
+            served: &picture_boxes,
+            ..hand_over.request(
+                &shared.languages,
+                shared.timeout_ms,
+                &shared.model_ref,
+                &shared.model_sha256,
+            )
+        };
+        // Workflow #463 SEL-GRID G2: a read whose name boxes declare lines, sent its boxes, has its
+        // too tall blocks cut and its blocks below the floor left unread; a read sent no box (none
+        // could be placed: the evaluation of the target that lacks one fails the projection, and
+        // admission refuses lines on a read that serves a `template_relative` target) reads as
+        // before.
+        let (result, cuts) = match shared
+            .provider_lines()
+            .filter(|_| !picture_boxes.is_empty())
+        {
+            None => (
+                provider
+                    .read_text(request)
+                    .map_err(|error| provider_error(served, "ocr", error))?,
+                None,
+            ),
+            Some(lines) => {
+                let read = provider
+                    .read_text_lines(request, lines)
+                    .map_err(|error| provider_error(served, "ocr", error))?;
+                let cuts = ReadCuts {
+                    lines,
+                    strips: read.strips,
+                    below_floor: read.below_floor,
+                };
+                (read.result, Some(cuts))
+            }
+        };
         let result = hand_over.restore(result)?;
+        let cuts = cuts
+            .map(|cuts| cuts.restored(&hand_over))
+            .transpose()
+            .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
         let (preprocess, processed) = hand_over.into_shared();
         let detection = result.detection;
-        let ocr = validate_ocr_result(result, rect)?;
+        let mut ocr = validate_ocr_result(result, rect)?;
+        let below_floor = match cuts {
+            None => Vec::new(),
+            Some(cuts) => cuts
+                .apply(&mut ocr, rect)
+                .map_err(|error| error.with_ppocr_diagnostics(ocr.ppocr_diagnostics.clone()))?,
+        };
         if let Some(detection) = detection.filter(|detection| detection.truncated()) {
             let outcome = Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)
                 .target_id(served)
@@ -1687,6 +1930,7 @@ impl SceneEvaluation<'_> {
             name_boxes: boxes,
             preprocess,
             processed,
+            below_floor,
         })
     }
 
@@ -1811,6 +2055,91 @@ impl SceneEvaluation<'_> {
 /// the text provider keeps the blocks of the name boxes a shared read serves.
 fn center_is_within(block: PackRect, region: PackRect) -> bool {
     candidate_rect(region).holds_centre_of(candidate_rect(block))
+}
+
+/// The text of the blocks a name box holds, in their order (top, then left): their texts joined by
+/// line feeds. Workflow #463 SEL-GRID G2: the one join, of the blocks of a name box and of the
+/// strips of a cut block alike, so that a name read through a cut is the name read when its lines
+/// were detected apart.
+fn joined_text(texts: &[&str]) -> String {
+    texts.join("\n")
+}
+
+/// The lowest of the confidences of the blocks a name box holds; none without blocks or when one
+/// has none. Workflow #463 SEL-GRID G2: and of the strips of a cut block.
+fn lowest_confidence(confidences: impl Iterator<Item = Option<f32>>) -> Option<f32> {
+    confidences
+        .reduce(|lowest, confidence| lowest.zip(confidence).map(|(a, b)| a.min(b)))
+        .flatten()
+}
+
+/// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`):
+/// what the OCR read of one actionable instance's identity feature saw on one sample: the text and
+/// the confidence its identity was mapped from, the blocks its region held (a cut block with its
+/// strips), the served blocks below the floor its region held, and, when it named no identity,
+/// why ([`crate::CandidateIdentityDeclaration::map_ocr_with_cause`], the mapping itself). Not part
+/// of the projection: it enters no hash and no record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateNameRead {
+    pub instance_index: u32,
+    pub feature: String,
+    pub frame_index: u8,
+    pub text: String,
+    pub confidence_milli: Option<u16>,
+    pub blocks: Vec<CandidateNameBlock>,
+    pub below_floor: Vec<PackRect>,
+    pub unread: Option<crate::CandidateUnreadCause>,
+}
+
+/// Workflow #463 SEL-GRID G2: one block a name's read held, or one strip of a cut block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateNameBlock {
+    pub rect: PackRect,
+    pub text: String,
+    pub confidence_milli: Option<u16>,
+    /// A cut block's strips, top to bottom; empty for a block read whole and for a strip.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub strips: Vec<CandidateNameBlock>,
+}
+
+/// Workflow #463 SEL-GRID G2: the read `ocr` of the identity feature `feature` of the instance
+/// `instance_index`, on the sample's frame `frame_index`, mapped by `identity`.
+fn name_read(
+    (instance_index, feature, frame_index): (u32, &str, u8),
+    identity: &CandidateIdentityDeclaration,
+    ocr: &OcrEvaluation,
+) -> CandidateNameRead {
+    let confidence_milli = actingcommand_contract::ocr_confidence_milli(ocr.confidence);
+    CandidateNameRead {
+        instance_index,
+        feature: feature.to_owned(),
+        frame_index,
+        text: ocr.text.clone(),
+        confidence_milli,
+        blocks: ocr
+            .blocks
+            .iter()
+            .map(|block| CandidateNameBlock {
+                rect: block.rect,
+                text: block.text.clone(),
+                confidence_milli: actingcommand_contract::ocr_confidence_milli(block.confidence),
+                strips: block
+                    .strips
+                    .iter()
+                    .map(|strip| CandidateNameBlock {
+                        rect: strip.rect,
+                        text: strip.text.clone(),
+                        confidence_milli: actingcommand_contract::ocr_confidence_milli(
+                            strip.confidence,
+                        ),
+                        strips: Vec::new(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        below_floor: ocr.below_floor.clone(),
+        unread: identity.map_ocr_with_cause(&ocr.text, confidence_milli).1,
+    }
 }
 
 #[cfg(test)]
@@ -3006,6 +3335,38 @@ fn validate_shared_ocr(
             "{pointer}/timeout_ms must be in 1..={MAX_SHARED_OCR_TIMEOUT_MS}"
         ));
     }
+    // Workflow #463 SEL-GRID G2: the lines of the name boxes, which the read sends with the name
+    // boxes it places before the frame's read, so no target it gives text to may be placed only on
+    // the frame (`template_relative`), whose box is never sent.
+    if let Some(lines) = shared.lines {
+        if !(1..=NAME_BOX_LINES_MAX).contains(&lines.max) {
+            errors.push(format!(
+                "{pointer}/lines/max must be in 1..={NAME_BOX_LINES_MAX}"
+            ));
+        }
+        if lines.line_height < NAME_BOX_LINE_HEIGHT_MIN {
+            errors.push(format!(
+                "{pointer}/lines/line_height must be at least {NAME_BOX_LINE_HEIGHT_MIN}"
+            ));
+        }
+        let placed_on_frame = sample_calls(layout, pack.defaults.match_metric)
+            .into_keys()
+            .filter(|key| {
+                matches!(
+                    targets.get(key.4.as_str()).copied(),
+                    Some(RecognitionTarget::Ocr(target))
+                        if shared.reads_text_of(target)
+                            && matches!(target.region, PackRegion::TemplateRelative(_))
+                )
+            })
+            .map(|key| key.4)
+            .collect::<BTreeSet<_>>();
+        for target_id in placed_on_frame {
+            errors.push(format!(
+                "{pointer}/lines: the read gives text to '{target_id}', whose region is template_relative; a read that declares lines sends the name boxes it places before the frame, which such a region is not"
+            ));
+        }
+    }
     // Workflow #428 CFL-2: a target serves only with the read's chain.
     let (served, _) = shared_calls(
         layout,
@@ -3326,7 +3687,7 @@ fn validate_repeated_anchor(
 fn validate_shared_ocr_wire(value: &Value, pointer: &str) -> RecognitionPackResult<()> {
     let shared = wire_object(value, SHARED_OCR_FIELDS, pointer)?;
     if let Some(field) = SHARED_OCR_FIELDS.iter().find(|field| {
-        !matches!(**field, "line_merge" | "preprocess") && !shared.contains_key(**field)
+        !matches!(**field, "line_merge" | "preprocess" | "lines") && !shared.contains_key(**field)
     }) {
         return Err(declaration(
             format!("{pointer}/{field}"),
@@ -3380,6 +3741,30 @@ fn validate_shared_ocr_wire(value: &Value, pointer: &str) -> RecognitionPackResu
             &format!("{pointer}/preprocess"),
             true,
         )?;
+    }
+    // Workflow #463 SEL-GRID G2: `{"max": m, "line_height": h}`, both unsigned integers.
+    if let Some(lines) = shared.get("lines") {
+        let lines_pointer = format!("{pointer}/lines");
+        let lines = wire_object(lines, SHARED_OCR_LINES_FIELDS, &lines_pointer)?;
+        for field in SHARED_OCR_LINES_FIELDS {
+            match lines.get(*field) {
+                None => {
+                    return Err(declaration(
+                        format!("{lines_pointer}/{field}"),
+                        ResourceDeclarationReason::MissingField,
+                        format!("{lines_pointer} lacks {field}"),
+                    ));
+                }
+                Some(value) if !value.is_u64() => {
+                    return Err(declaration(
+                        format!("{lines_pointer}/{field}"),
+                        ResourceDeclarationReason::InvalidType,
+                        format!("{lines_pointer}/{field} must be an unsigned integer"),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
     }
     Ok(())
 }
@@ -3447,3 +3832,8 @@ mod gate_463_sel2l;
 #[cfg(test)]
 #[path = "gate_463_g1.rs"]
 mod gate_463_g1;
+
+// Workflow #463 SEL-GRID G2: a shared read may declare the lines of its name boxes.
+#[cfg(test)]
+#[path = "gate_463_g2.rs"]
+mod gate_463_g2;

@@ -496,7 +496,11 @@ Every member is written by the pack; there is no Runtime default.
   `det.onnx` fails a `detect` read as a provider failure, never as "not found".
 - `line_merge`: required with `detect`, refused with `region`. `"none"` merges no boxes;
   `{"gap_factor": n}` (0..=16) applies the folder's line merge with `n` in place of
-  `detector.merge_gap_factor` (`vision-model-folders.md`).
+  `detector.merge_gap_factor` (`vision-model-folders.md`). Workflow #463 SEL-GRID G2 (since
+  0.12.76): a select's shared read, which takes `blocks` and `line_merge` in these words, may also
+  declare the `lines` of its name boxes ([selection-graph.md](selection-graph.md), "The lines of a
+  name box"); a locate target takes no `lines` (`UnknownField` at `…/locate/lines`), and a located
+  text reads every block whole, as before.
 - `cells` (optional): a grid relative to the region's top-left corner, cell
   `k = row * columns + column` from 0; `x`, `y` >= 0, `width`, `height` >= 1,
   `pitch_x` >= `width`, `pitch_y` >= `height`, 1 to 64 cells, the whole grid inside the

@@ -428,6 +428,7 @@ impl RecognitionEvaluator {
                     located,
                     preprocess,
                     shared_read: None,
+                    below_floor: Vec::new(),
                 })),
                 nn: None,
                 color_digest: None,

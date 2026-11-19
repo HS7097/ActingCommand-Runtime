@@ -831,7 +831,8 @@ fn interrupt(entry: &Value) -> Entry {
 /// `variables`, for row 15; 15, Workflow #463 KP-1 fix round 1, by an ending page of a
 /// `linear_steps` pack, for row 17; 17, Workflow #463 S2-9b, by a key step of a `linear_steps`
 /// pack, for row 18; 18, Workflow #463 INT-1, by a select step's scan without an end, for row 19;
-/// 19, Workflow #463 SEL-2L, by an `interrupts.json` entry without handlers, for row 20). No
+/// 19, Workflow #463 SEL-2L, by an `interrupts.json` entry without handlers, for row 20; 20,
+/// Workflow #463 SEL-GRID G2, by a `repeated_anchor` layout's shared read, for row 21). No
 /// content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
@@ -897,6 +898,11 @@ fn base(revision: u64) -> Vec<Entry> {
                 "max_per_run": 1
             }]}),
         )],
+        20 => vec![base_task(json!({"candidate_layouts": [{
+            "id": "layout/base",
+            "kind": "repeated_anchor",
+            "shared_ocr": {"blocks": "detect", "line_merge": {"gap_factor": 0}}
+        }]}))],
         _ => panic!("no base for revision {revision}"),
     }
 }
@@ -1945,5 +1951,40 @@ fn p2_revision_20_a_shared_read_of_a_repeated_anchor_layout() {
         revision_of(3, &[layout("fixed_slots", true)]),
         3,
         "a fixed_slots layout's shared read, as before"
+    );
+}
+
+// Row 21 (Workflow #463 SEL-GRID G2, register §1.491; contracts/component-interfaces.md, the
+// `package` row 21): a layout's shared read that declares `lines` needs 21 over entries that need 20
+// (a `repeated_anchor` layout's shared read in another pack), a `fixed_slots` layout's as a
+// `repeated_anchor` layout's; the same reads without it stay at 20; over entries that need nothing a
+// `fixed_slots` layout's read with it needs 21 and without it is computed as before, 3. So `standard-pack
+// build` declares [21, 21] for a bundle whose pack declares the lines, which the `package` edge of an
+// installer whose range ends below 21 refuses, and keeps the revision of a bundle that does not.
+#[test]
+fn p2_revision_21_the_lines_of_a_shared_read() {
+    let layout = |kind: &str, lines: bool| {
+        let mut shared = json!({"blocks": "detect", "line_merge": {"gap_factor": 0}});
+        if lines {
+            shared["lines"] = json!({"max": 2, "line_height": 21});
+        }
+        task(&json!({"candidate_layouts": [{
+            "id": "layout/cards",
+            "kind": kind,
+            "shared_ocr": shared
+        }]}))
+    };
+    for kind in ["fixed_slots", "repeated_anchor"] {
+        assert_row(21, &[layout(kind, true)], &[layout(kind, false)]);
+    }
+    assert_eq!(
+        revision_of(3, &[layout("fixed_slots", true)]),
+        21,
+        "a fixed_slots layout's lines"
+    );
+    assert_eq!(
+        revision_of(3, &[layout("fixed_slots", false)]),
+        3,
+        "a fixed_slots layout's shared read without them, as before"
     );
 }

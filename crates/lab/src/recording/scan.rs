@@ -1800,11 +1800,15 @@ pub(crate) fn check_scan_select(
                 continue;
             }
         };
+        // #463 SEL-GRID G2: each row with what its read saw.
         for (instance, cause) in unread_rows(&decided) {
             reject(
                 &mut rejections,
                 NAME_UNREAD,
-                json!({"frame_id": frame_id, "row": instance, "cause": cause}),
+                decided.with_blocks(
+                    json!({"frame_id": frame_id, "row": instance, "cause": cause}),
+                    instance,
+                ),
             );
         }
         let actionable = decided
@@ -2185,12 +2189,16 @@ fn judge_live_frame(
     };
     let unread = unread_rows(&default);
     if !unread.is_empty() {
+        // #463 SEL-GRID G2: each row with what its read saw.
         return Ok(Err(unread
             .into_iter()
             .map(|(row, cause)| {
                 (
                     NAME_UNREAD,
-                    json!({"frame_id": frame_id, "row": row, "cause": cause}),
+                    default.with_blocks(
+                        json!({"frame_id": frame_id, "row": row, "cause": cause}),
+                        row,
+                    ),
                 )
             })
             .collect()));
@@ -2454,6 +2462,7 @@ pub(crate) fn scan_select_checks(
                 )?;
             }
             Ok(decided) => {
+                // #463 SEL-GRID G2: each row with what its read saw.
                 for (row, cause) in unread_rows(&decided) {
                     failures.fail(
                         on(ids).with_target(&target_id(plan, step, NAME)),
@@ -2461,7 +2470,7 @@ pub(crate) fn scan_select_checks(
                             step,
                             frame_id,
                             NAME_UNREAD,
-                            json!({"row": row, "cause": cause}),
+                            decided.with_blocks(json!({"row": row, "cause": cause}), row),
                         ),
                     )?;
                 }

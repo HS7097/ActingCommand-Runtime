@@ -1075,11 +1075,15 @@ pub(crate) fn select_checks(
                 for (slot, cause) in &default.unread {
                     failures.fail(
                         on().with_target(&plan.select_slot_target_id(step, *slot as usize)),
+                        // #463 SEL-GRID G2: with what the slot's read saw.
                         select_mismatch(
                             step,
                             frame,
                             NAME_UNREAD,
-                            json!({"slot": slot, "cause": cause, "default": default.kind}),
+                            default.with_blocks(
+                                json!({"slot": slot, "cause": cause, "default": default.kind}),
+                                *slot,
+                            ),
                         ),
                     )?;
                 }
