@@ -35,6 +35,12 @@
 //! a pause and a brake the device performs with the same events, its brake scaled
 //! (`vertical_brake_as_paused_drag`, in [`DisplayMap::device_input`]); under a scale of 1 it
 //! leaves as the kind it is.
+//!
+//! Workflow #479 F-3b (`contracts/display-adapter.md` section 13): without a declared rule a
+//! display within a pixel of the base's shape (`CaptureExtent::has_shape_of`, 1334x750 or 1366x768
+//! for 1280x720) is the base's display scaled, each axis by its own factor: the width's
+//! ([`DisplayMap::scale`]) across and the height's ([`DisplayMap::height_scale`]) down. Every other
+//! map has one factor, the same on both axes, as before.
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -57,6 +63,9 @@ mod gate_392_da3;
 mod gate_392_da3b;
 #[cfg(test)]
 mod gate_392_da5ab;
+// Workflow #479 F-3b: a display within a pixel of the base's shape is the base's display scaled.
+#[cfg(test)]
+mod gate_479_f3b;
 
 /// A point in one of the adapter's spaces, in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -546,7 +555,11 @@ pub struct DisplayMap {
     base: CaptureExtent,
     frame: CaptureExtent,
     turn: Option<QuarterTurn>,
+    /// `s`, the factor across (the x axis).
     scale: Scale,
+    /// Workflow #479 F-3b: the factor down (the y axis). `scale` itself on every map but that of a
+    /// display within a pixel of the base's shape with no rule, where it is the height's own.
+    height_scale: Scale,
     scale_extent: CaptureExtent,
     anchor_area: Rect,
     frame_offset: Point,
@@ -563,9 +576,12 @@ impl DisplayMap {
     /// - The layout is measured on the logical display when the frame is a crop of it, else on
     ///   the upright frame, which must show its display.
     /// - Without a rule only a pure scale of the base with no insets in use maps; with one, `s`
-    ///   is the scale area's height or width over the base's.
-    /// - `s` below 1 is refused. The scale space is the layout's size divided by `s`, to the
-    ///   nearest; insets and the crop's offset are divided the same way.
+    ///   is the scale area's height or width over the base's. Workflow #479 F-3b: without a rule
+    ///   a layout of the base's shape, exactly or within a pixel (`CaptureExtent::has_shape_of`),
+    ///   is a pure scale with a factor of its own per axis, the layout's width over the base's
+    ///   across and its height over the base's down; exactly proportional, the two are one.
+    /// - `s` below 1 is refused (either factor). The scale space is the layout's size divided by
+    ///   each axis's factor, to the nearest; insets and the crop's offset are divided the same way.
     pub fn build(
         base: CaptureExtent,
         observation: DisplayObservation,
@@ -604,12 +620,18 @@ impl DisplayMap {
             _ => return Err(DisplayMapError::FrameDisplayMismatch),
         };
         let insets_in_use = observation.insets.is_some_and(|insets| insets != NO_INSETS);
-        let (scale, anchor_insets) = match rule {
+        let (scale, height_scale, anchor_insets) = match rule {
             None => {
-                if insets_in_use || !same_aspect(source, base) {
+                if insets_in_use || !source.has_shape_of(base) {
                     return Err(refuse(DisplayProblem::LayoutUndeclared));
                 }
-                (Scale::reduced(source.width(), base.width()), NO_INSETS)
+                // Workflow #479 F-3b: each axis by its own factor; of exactly the base's shape the
+                // two reduce to one fraction, the map as before.
+                (
+                    Scale::reduced(source.width(), base.width()),
+                    Scale::reduced(source.height(), base.height()),
+                    NO_INSETS,
+                )
             }
             Some(rule) => {
                 let collapsed = refuse(DisplayProblem::Collapsed);
@@ -634,20 +656,21 @@ impl DisplayMap {
                     ),
                 };
                 let measured = measured.filter(|side| *side > 0).ok_or(collapsed)?;
-                (Scale::reduced(measured, base_side), anchor_insets)
+                let scale = Scale::reduced(measured, base_side);
+                (scale, scale, anchor_insets)
             }
         };
-        if scale.num < scale.den {
+        if scale.num < scale.den || height_scale.num < height_scale.den {
             return Err(refuse(DisplayProblem::ScaleBelowBase));
         }
         let scale_width = scale.down_nearest(i64::from(source.width()));
-        let scale_height = scale.down_nearest(i64::from(source.height()));
+        let scale_height = height_scale.down_nearest(i64::from(source.height()));
         let scale_extent = extent_of(scale_width, scale_height)
             .ok_or_else(|| refuse(DisplayProblem::Collapsed))?;
         let left = scale.down_nearest(i64::from(anchor_insets.left));
-        let top = scale.down_nearest(i64::from(anchor_insets.top));
+        let top = height_scale.down_nearest(i64::from(anchor_insets.top));
         let right = scale.down_nearest(i64::from(anchor_insets.right));
-        let bottom = scale.down_nearest(i64::from(anchor_insets.bottom));
+        let bottom = height_scale.down_nearest(i64::from(anchor_insets.bottom));
         let anchor_area = Rect::new(
             left,
             top,
@@ -661,10 +684,10 @@ impl DisplayMap {
             Some(crop) => (
                 Point::new(
                     scale.down_nearest(i64::from(crop.x)),
-                    scale.down_nearest(i64::from(crop.y)),
+                    height_scale.down_nearest(i64::from(crop.y)),
                 ),
                 scale.down_nearest(i64::from(crop.width)),
-                scale.down_nearest(i64::from(crop.height)),
+                height_scale.down_nearest(i64::from(crop.height)),
             ),
             None => (Point::new(0, 0), scale_width, scale_height),
         };
@@ -673,7 +696,7 @@ impl DisplayMap {
         let base_area = Rect::new(0, 0, i64::from(base.width()), i64::from(base.height()));
         let kind = if scale_extent != base || anchor_area != base_area {
             DisplayMapKind::Translate
-        } else if scale.is_one() {
+        } else if scale.is_one() && height_scale.is_one() {
             DisplayMapKind::Identity
         } else {
             DisplayMapKind::Scale
@@ -684,6 +707,7 @@ impl DisplayMap {
             frame: observation.frame,
             turn,
             scale,
+            height_scale,
             scale_extent,
             anchor_area,
             frame_offset,
@@ -712,8 +736,15 @@ impl DisplayMap {
         self.turn
     }
 
+    /// `s`, the factor across: the layout's width over the base's without a rule.
     pub const fn scale(&self) -> Scale {
         self.scale
+    }
+
+    /// Workflow #479 F-3b: the factor down. [`Self::scale`] itself, but on a display within a
+    /// pixel of the base's shape with no rule, where it is the layout's height over the base's.
+    pub const fn height_scale(&self) -> Scale {
+        self.height_scale
     }
 
     /// The scale space: the whole layout (the logical display of a crop) divided by `s`.
@@ -774,7 +805,9 @@ impl DisplayMap {
     /// The map as a task geometry record's `display_map` (Workflow #392 DA-2a, register §1.25
     /// X7): its kind, `s`, the scale space, the base, and the rule it was measured by. Without a
     /// declaration that is the rule the map was built by: the width over the base's, on the
-    /// screen, the anchors on the screen. A rule that measures on the safe area names a
+    /// screen, the anchors on the screen (Workflow #479 F-3b: so a display within a pixel of the
+    /// base's shape names the width's factor; its height's is the frame's height over the base's,
+    /// and no member is added). A rule that measures on the safe area names a
     /// declaration as its insets' source: Workflow #392 DA-4b-D (Alice's ruling 69) reads no
     /// device's cutout, so the only insets a frame's geometry carries are the declared ones (an
     /// emulator's 0 included).
@@ -859,16 +892,22 @@ impl DisplayMap {
         }
     }
 
-    /// A scale-frame point in device-frame pixels, to the nearest (model 392 §4.6).
+    /// A scale-frame point in device-frame pixels, to the nearest (model 392 §4.6); each axis by
+    /// its own factor (Workflow #479 F-3b).
     pub fn device_point(&self, point: Point) -> Point {
         Point::new(
             self.scale.up_nearest(point.x),
-            self.scale.up_nearest(point.y),
+            self.height_scale.up_nearest(point.y),
         )
     }
 
     /// A length in base pixels (a brake, `cross_px`, `delta`, `min_segment_px`) in device-frame
-    /// pixels, to the nearest; the caller then holds it to its own bounds.
+    /// pixels, to the nearest; the caller then holds it to its own bounds. It takes the width's
+    /// factor `s` ([`Self::scale`]) alone, whichever way the length runs. Workflow #479 F-3b: on a
+    /// display within a pixel of the base's shape with no rule the height's factor
+    /// ([`Self::height_scale`]) differs from `s`, and this function does not use it; a length down
+    /// that [`Self::device_input`] converts (the vertical brake, the drag's brake) takes the
+    /// height's factor there.
     pub fn device_length(&self, length: i64) -> i64 {
         self.scale.up_nearest(length)
     }
@@ -878,9 +917,9 @@ impl DisplayMap {
     /// when less than one pixel of width or height is left.
     pub fn device_input_box(&self, rect: Rect) -> Result<Rect, DisplayMapUnresolved> {
         let left = self.scale.up_ceil(rect.x);
-        let top = self.scale.up_ceil(rect.y);
+        let top = self.height_scale.up_ceil(rect.y);
         let right = self.scale.up_floor(rect.right());
-        let bottom = self.scale.up_floor(rect.bottom());
+        let bottom = self.height_scale.up_floor(rect.bottom());
         if right <= left || bottom <= top {
             return Err(self.unresolved(DisplayProblem::Collapsed, DisplayLocation::InputMap));
         }
@@ -891,26 +930,27 @@ impl DisplayMap {
     /// left and top edges down, the right and bottom edges up, so it covers what it found.
     pub fn device_evidence_box(&self, rect: Rect) -> Rect {
         let left = self.scale.up_floor(rect.x);
-        let top = self.scale.up_floor(rect.y);
+        let top = self.height_scale.up_floor(rect.y);
         let right = self.scale.up_ceil(rect.right());
-        let bottom = self.scale.up_ceil(rect.bottom());
+        let bottom = self.height_scale.up_ceil(rect.bottom());
         Rect::new(left, top, right - left, bottom - top)
     }
 
-    /// A device-frame point back in the scale frame, to the nearest (the reverse mapping).
+    /// A device-frame point back in the scale frame, to the nearest (the reverse mapping), each
+    /// axis by its own factor.
     pub fn scale_frame_point(&self, point: Point) -> Point {
         Point::new(
             self.scale.down_nearest(point.x),
-            self.scale.down_nearest(point.y),
+            self.height_scale.down_nearest(point.y),
         )
     }
 
     /// A device-frame box back in the scale frame, each edge to the nearest.
     pub fn scale_frame_box(&self, rect: Rect) -> Rect {
         let left = self.scale.down_nearest(rect.x);
-        let top = self.scale.down_nearest(rect.y);
+        let top = self.height_scale.down_nearest(rect.y);
         let right = self.scale.down_nearest(rect.right());
-        let bottom = self.scale.down_nearest(rect.bottom());
+        let bottom = self.height_scale.down_nearest(rect.bottom());
         Rect::new(left, top, right - left, bottom - top)
     }
 
@@ -944,13 +984,15 @@ impl DisplayMap {
     /// Every refusal is at stage `display_input_map`, with the frame's and the base's sizes.
     /// Workflow #392 DA-3b: the answer is the same for every kind of input. A vertical-brake drag
     /// under an admitted scale other than 1 is no longer refused for its brake: it leaves as a
-    /// drag with a pause and a brake ([`Self::device_input`]).
+    /// drag with a pause and a brake ([`Self::device_input`]). Workflow #479 F-3b: the test holds
+    /// for each axis's factor; a display within a pixel of the base's shape whose factors' doubles
+    /// are not whole (1334x750: 667/640 and 25/24) refuses every input `input_scale_unsupported`.
     pub fn admit_input(&self, _action: &InputAction) -> Result<(), DisplayMapUnresolved> {
         let problem = if self.turn.is_some() {
             Some(DisplayProblem::OrientationMismatch)
         } else if self.kind == DisplayMapKind::Translate || self.crop.is_some() {
             Some(DisplayProblem::TranslationUnsupported)
-        } else if !self.scale.doubled_is_whole() {
+        } else if !self.scale.doubled_is_whole() || !self.height_scale.doubled_is_whole() {
             Some(DisplayProblem::InputScaleUnsupported)
         } else {
             None
@@ -1087,7 +1129,9 @@ impl DisplayMap {
                 }
                 let start = self.device_input_point(*x1, *y1, self.drawn_box(boxes, 0)?)?;
                 let corner = self.device_input_point(*x2, *y2, self.drawn_box(boxes, 1)?)?;
-                let brake = self.device_length(i64::from(*brake_distance_px));
+                // The brake runs along the frame's height: the height's factor (Workflow #479
+                // F-3b; `s` itself on every map but a display within a pixel of the base's shape).
+                let brake = self.height_scale.up_nearest(i64::from(*brake_distance_px));
                 let end = Point::new(corner.x, corner.y - brake);
                 if !self.in_device_frame(end) {
                     return Err(InputMapError::OutOfBounds);
@@ -1095,7 +1139,7 @@ impl DisplayMap {
                 let (x1, y1) = self.sent_point(start, coordinates)?;
                 let (x2, y2) = self.sent_point(corner, coordinates)?;
                 let (x3, y3) = self.sent_point(end, coordinates)?;
-                if self.scale.is_one() {
+                if self.scale.is_one() && self.height_scale.is_one() {
                     InputAction::SingleTouchDragWithVerticalBrakeV1 {
                         x1,
                         y1,
@@ -1136,8 +1180,8 @@ impl DisplayMap {
                 let start = self.device_input_point(*x1, *y1, self.drawn_box(boxes, 0)?)?;
                 let end = self.device_input_point(*x2, *y2, self.drawn_box(boxes, 1)?)?;
                 let brake = Point::new(
-                    end.x + self.device_offset(i64::from(*x3) - i64::from(*x2)),
-                    end.y + self.device_offset(i64::from(*y3) - i64::from(*y2)),
+                    end.x + signed_length(self.scale, i64::from(*x3) - i64::from(*x2)),
+                    end.y + signed_length(self.height_scale, i64::from(*y3) - i64::from(*y2)),
                 );
                 if !self.in_device_frame(brake) {
                     return Err(InputMapError::OutOfBounds);
@@ -1252,13 +1296,6 @@ impl DisplayMap {
         } else {
             Err(InputMapError::OutOfBounds)
         }
-    }
-
-    /// A signed length in base pixels in device-frame pixels: its size to the nearest, its sign
-    /// kept.
-    fn device_offset(&self, length: i64) -> i64 {
-        let size = self.device_length(length.abs());
-        if length < 0 { -size } else { size }
     }
 
     /// A device-frame point in the coordinates the backend takes.
@@ -1392,6 +1429,13 @@ fn crop_shows(crop: CaptureFrameCrop, frame: CaptureExtent, display: CaptureExte
 /// Whether `point` lies in `rect`, its right and bottom edges open.
 fn rect_contains(rect: Rect, point: Point) -> bool {
     (rect.x..rect.right()).contains(&point.x) && (rect.y..rect.bottom()).contains(&point.y)
+}
+
+/// A signed length in base pixels in device-frame pixels by the factor of its axis, `scale`: its
+/// size to the nearest, its sign kept.
+fn signed_length(scale: Scale, length: i64) -> i64 {
+    let size = scale.up_nearest(length.abs());
+    if length < 0 { -size } else { size }
 }
 
 /// A device coordinate as an input's `i32`; one that does not fit lies outside every frame.

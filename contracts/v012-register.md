@@ -41312,6 +41312,185 @@ gate first can leave a standing pause's `scheduling_pause_settled` or
 `scheduling_pause_kept_at_shutdown` unwritten (its continuation writes them only while the pause
 still holds; the resume's own records then say what happened).
 
+### 1.487 Slice #479 F-3b (0.12.75): a display within a pixel of the base's shape is the base's display scaled (Workflow #479; the rule below is the coordinator's ruling in the work order, not the owner's words; coordinator work order `rd-1119/brief-479-f3b-near-ratio-pure-scale.md`, after the read-only design `rd-1119/design-479-f3.md`, its section 3 and the coordinator's disposition, item 6; on main `1067dfaf`)
+
+This section takes 1.487, the number the work order gives (1.485 and 1.486 are other slices'). It
+ships in 0.12.75. It changes the display adapter (`crates/display-adapter`), one function of the
+contract crate and the contract crate's check of a projection frame; the kernel's frame gate, the
+Lab and the host call them unchanged.
+
+**Why.** Without a declared rule a display of another size than its package's base mapped to it only
+when its shape was exactly the base's, `W · Hb = H · Wb`. A handset's 1334×750 (960480 against
+960000) and a 1366×768 display (983520 against 983040) failed by a third of a pixel and were
+`layout_undeclared`: the Lab, which never has a rule, could not read a frame of them, and every game
+would have had to declare a rule for a display that is its base's shape. That is a fact about
+displays, not about a game.
+
+**What it rests on** (read in the code at `1067dfaf`; the design's lines verified). Every place that
+decides "this display is the base's shape" or builds a map without a rule, and what each answered for
+1334×750 and 1366×768 against 1280×720 before this slice:
+
+| Place | Without a rule | With a rule |
+|---|---|---|
+| The adapter, `DisplayMap::build` (`crates/display-adapter/src/lib.rs`, its `None` arm and `same_aspect`) | `layout_undeclared` | by width a pure scale, 667/640 (683/640), scale space 1280×720; by height a translation onto 1281×720 |
+| The run's frame gate, `Resolution::frame_map` and `validate_pixels` (`crates/execution-kernel/src/contained_task/display_gate.rs`), and the host's run geometry (`host/contained_task.rs`, the map of its `display_map` record) | `display_map_unresolved` (`layout_undeclared`) at `display_map_build` | by width the scale, resampled to 1280×720; by height `translation_unsupported` |
+| The Lab's live frames, `lab_scene_on_base` (the kernel's `on_base` of an online observation; actinglab's `--capture` forms and frame files) | `display_map_unresolved` (`layout_undeclared`) | the Lab has no rule |
+| The Lab's stored scenes, `scene_in_base` (`crates/lab/src/display_base.rs`; every offline command, a regression case) | `lab_scene_size_unsupported` (`layout_undeclared`) | the Lab has no rule |
+| A Lab press, `lab_display_map` then `DisplayMap::send_input` (`host/lab_operation.rs`, actinglab's `sent_on_scene`), a run's press, `send_input` (`host/contained_task.rs`) | `display_map_unresolved` (`layout_undeclared`, `display_map_build`) | by width `input_scale_unsupported`; by height `translation_unsupported` |
+| The client's check of a projection frame, `reduced_to` in `ContainedPageObservation::validate` (`crates/actingcommand-contract/src/runtime/online_observation.rs`) | 1366×768 to 1280×720 refused (its gate pinned it) | — |
+| The task evidence's pairing, `sent_as_asked` (`crates/ledger-forensics/src/input_pairing.rs`), and a recording's checks that ask the map (`larger_display_of_base_ratio`, `scaled_to_recording`) | build the map with no rule | — |
+
+A pure scale lets the frame gate resample the frame once to the base (`resample_pixels` takes the
+target's size, so each axis by its own ratio), the Lab answer `frame_coordinates` in its base form
+(no factor named), and a press leave through `send_input`, whose `admit_input` sends only under a
+factor whose double is whole. **What is written**: a run's `task.geometry_observed` names a map that
+is not the plain identity as `display_map` (`TaskGeometryDisplayMap`: `kind` of the closed list
+`identity`, `scale`, `translate`, `scale_num`, `scale_den`, the scale space, the base, the rule, its
+`validate` requiring a reduced factor above 1 and the base's size for `scale`); no receipt, status
+member, fact or package names a map's kind or factor (an observation's projection frame is the base's
+size, `frame_coordinates` names the two sizes, the display facts the frame's extent). Making such a
+display a pure scale writes `kind` `scale` and the width's factor, a value every exactly proportional
+display writes, so no closed list on the wire or in the ledger gains a value. The client's check takes
+a projection frame it refused before, which a client library of revision 12 or lower refuses: that is
+`runtime-client` 13, [12, 13] (fix round 1, below; the first round said no range moved and took
+DA-5ab's widening for one without a revision, citing §1.436, but that widening was revision 10, as
+§1.436, "An installer of 0.12.66", and the row of revision 10 say). The work order's stop condition
+held for that range; the coordinator's ruling after the review is revision 13.
+
+**The rule** (`contracts/display-adapter.md` section 13).
+- *The one function.* `CaptureExtent::has_shape_of(base)` (`crates/actingcommand-contract/src/capture_geometry.rs`):
+  `W · Hb = H · Wb`; or, neither of its sides the base's own length, `round_half_up(H · Wb / W) = Hb`
+  or `round_half_up(W · Hb / H) = Wb`. `DisplayMap::build` asks it without a rule, and the contract's
+  `reduced_to` asks it (the contract crate is below the adapter, so the function lives there). The
+  frame gate, `lab_scene_on_base`, `lab_display_map`, `scene_in_base`, the presses, the pairing and the
+  recording's two checks reach it through `build`.
+- *The map.* Such a display is a pure scale, each axis by its own factor: `DisplayMap` holds a second
+  factor (`height_scale`, `H / Hb` reduced) beside `s` (`scale`, `W / Wb`), and every value down (the
+  scale space's height, an inset or a crop's offset back, a point, a box's top and bottom, a brake)
+  takes it; under a rule, and of exactly the base's shape, the two are one fraction and the map is the
+  one before, member for member. The kind is `identity` only when both factors are 1, `scale`
+  otherwise on the base's scale space; a factor below 1 is `scale_below_base`. `admit_input` asks both
+  factors. `record()` names the width's factor, as for every map without a rule (`scale_by` `width`).
+- *The bound.* A base point goes to its own axis's factor's nearest device pixel and comes back by the
+  same two factors to itself (both factors above 1). Against a picture of the base at one factor, the
+  two-factor placement lies at most `|W·Hb − H·Wb| / Hb` device pixels across and `/ Wb` down: 0.667
+  and 0.375 device pixel for both sizes (0.640 and 0.360 base pixel on 1334×750, 0.625 and 0.352 on
+  1366×768), beyond the half pixel of rounding; over every display the rule admits for 1280×720, at
+  most 8/9 of a base pixel across and 720 / 1439 down.
+- *Decisions of the implementer.* A display with one side of the base's own length and the other not
+  is not of its shape (that side is not scaled; admitting it would record `scale` with a factor of 1,
+  which `TaskGeometryDisplayMap::validate` refuses; on 1280×720 no such display meets either test, so
+  nothing the rule names is lost). A display of the base's shape within a pixel but smaller (1279×719)
+  is `scale_below_base`, as a smaller display of the exact shape is, where it was `layout_undeclared`.
+
+**What is not changed.** A declared rule decides first (1334×750 by width is the rule's scale with
+one factor 667/640, by height its translation, `translation_unsupported`); every map of an exactly
+proportional display, byte for byte; `layout_undeclared`, `translation_unsupported` and
+`orientation_mismatch` for every size the rule does not name; the frame–display check (a frame against
+its own display) stays exact; every closed list, and every interface range but `runtime-client`'s
+`max` (13, fix round 1); nothing under `apps/acib`. A recording is still made at the base size
+only: `record start` (`is_base_size`, actinglab's `commands/record_hold.rs`), the first frame (`admit_recording_frame`, `record_display_not_base`) and
+`record stop` (`recording_not_base`, `record_size_not_base`), all in `crates/lab/src/display_base.rs`,
+are left as they are. Two paths that ask the map count these sizes as it does: a recording whose
+header names no base size (made before 0.12.67) holding frames of such a size is now
+`record_size_not_base`, as one of 1920×1080 frames is, and an ending's frame of such a size is now
+converted to its recording's size (#463 R2), as one of twice its size is.
+
+**Codes and words.** None added, none removed. No decision reads a code or a word.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The one function | `crates/actingcommand-contract/src/capture_geometry.rs`: `CaptureExtent::has_shape_of`, `rounds_half_up_to` |
+| The map | `crates/display-adapter/src/lib.rs`: `DisplayMap::build` (its `None` arm), the field and accessor `height_scale`, `device_point`, `device_input_box`, `device_evidence_box`, `scale_frame_point`, `scale_frame_box`, `admit_input`, the vertical brake and the drag's brake in `device_input` (`signed_length`) |
+| The client's check | `crates/actingcommand-contract/src/runtime/online_observation.rs`: `reduced_to` |
+| The range (fix round 1) | `distribution/windows/component-interfaces.json`: `runtime-client` [12, 13] |
+| Texts | `contracts/display-adapter.md` (the slice table, sections 2.3, 5, 11, 12 and the new 13; fix round 1: section 13's "Its limits" and "The interface revision"); fix round 1: [component-interfaces.md](component-interfaces.md) (the `runtime-client` row of revision 13, and in the row of revision 12 the range from row 13 on); `device_length`'s comment |
+
+**Tests.** `crates/display-adapter/src/gate_479_f3b.rs` and `crates/lab/src/gate_479_f3b.rs`, exec
+gate map row "#479 F-3b"; every expected value worked out by hand; no clock is read.
+`f3b_a_display_within_a_pixel_of_the_base_is_its_display_scaled_by_two_factors`: 1334×750 and
+1366×768 with no rule are `scale` with 667/640 and 25/24, 683/640 and 16/15, the base as scale space,
+scale frame and anchor area, recorded as an exactly proportional display; every base column and row
+goes to its axis's nearest pixel, inside the frame, back to itself and within the bound of the other
+axis's factor; the centre maps to (667, 375) and (683, 384); the input side refuses
+`input_scale_unsupported` (1). `f3b_a_display_beyond_a_pixel_of_the_base_shape_is_layout_undeclared`:
+1335×750, 1280×719 and 2400×1080 (2). `f3b_an_exactly_proportional_display_maps_as_before_member_for_member`:
+1280×720, 1920×1080 and 2560×1440, the whole map and the records (3).
+`f3b_a_declared_rule_for_1334x750_still_decides`: by width one factor on both axes (the row 83 at 87,
+86 without the rule), by height the translation onto 1281×720 (4).
+`f3b_the_frame_gate_brings_a_frame_within_a_pixel_of_the_base_to_the_base`: through
+`lab_scene_on_base` both sizes reduce to 1280×720 in one resample, and `lab_display_map` is that map
+(1). `f3b_a_stored_scene_of_1334x750_answers_on_the_base_and_a_recording_still_refuses_it`:
+`scene_in_base` answers on 1280×720 with the base form of `frame_coordinates`; `record start`'s check
+and `record_frame_check` refuse 1334×750, `record_display_not_base` (5). Adapted, the requirement
+taking a frame within a pixel of the base's shape: the contract gate's
+`da5ab_fix1_a_projection_frame_is_its_device_frame_or_that_frame_reduced_by_a_pure_scale` (1366×768 to
+1280×720 moved from refused to taken; 1334×750 taken and 1335×750 refused added). No golden
+re-recorded.
+
+**At deploy.** Nothing to configure. A frame of 1334×750 or 1366×768 reaches the map only from a
+display of that size; iOS captures come with F-3a, whose runs stay refused. Fix round 1: every
+client that observes such a display reads `runtime-client` 13, so the console and the Lab copies
+pinned beside it are built from a build of revision 13 before an instance whose display is of such
+a size is observed; a client of revision 12 (0.12.73, 0.12.74) refuses such a receipt
+`runtime_receipt_invalid` and latches its connection. The update from 0.12.74 needs no flag, and
+the way back to 0.12.74 and 0.12.73 stays open (below).
+
+**Fix round 1** (coordinator work order `rd-1119/brief-479-f3b-fix1.md`, after the independent review
+of #1843 and the coordinator's disposition; main `54b1d770` merged in first, which holds #1842, #480
+PG-2e, §1.485, and its `runtime-client` [12, 12]; this section stands after §1.485, and the gate
+maps hold both sides' rows whole). The rule and its code are unchanged.
+- *`runtime-client` 13* (the review's must-fix; the coordinator's ruling). A client library of
+  revision 12 or lower checks a projection frame by the exact product, so it judges a projection
+  reduced from a display within a pixel of the base's shape invalid: the receipt of
+  `ObserveContainedPage`, and of `RunContainedLabOperation` with its projections before and after
+  the operation (whose arrival samples the library checks again when it verifies the operation's
+  record, `verify_lab_operation_evidence`), fails `ContainedPageObservation::validate`, so
+  `receipt.validate()` fails, and the client answers `runtime_receipt_invalid` and latches its
+  connection (`crates/runtime-client/src/client.rs`, the exchange's receipt check). The declaration
+  is [12, 13], `min` where #480 PG-2e set it; [component-interfaces.md](component-interfaces.md)
+  gains the row of revision 13, written as the row of revision 10 writes DA-5ab's widening, and
+  the row of revision 12 says [12, 13] from row 13 on, the same release (as the `package` row 14
+  says of row 15).
+- *The deploy from 0.12.74 and the way back* (`plan::interface_edges`, asked as #480 PG-2e's gate
+  asks them; 0.12.73 and 0.12.74 declare `runtime-client` [3, 12], every build from 0.12.71 on
+  `ledger` [3, 9]). The update from 0.12.74 passes every edge with no flag, by the live build's
+  installer (I [3, 12]: I ∩ Rp [3, 12], I ∩ R\* [12, 12]) and by this build's (I [12, 13]: I ∩ Rp
+  [12, 12], I ∩ R\* [12, 13]); the ledger does not move, so its one-way edge passes without
+  `--accept-ledger-one-way`. This build's way back to 0.12.74 and to 0.12.73 passes every edge
+  (I ∩ Rp [12, 13], I ∩ R\* [12, 12]); to 0.12.72 and older it fails `installer_meets_next`, as
+  under [12, 12]. The work order's stop conditions do not hold.
+- *The rule's limits* (display-adapter.md section 13, "Its limits"): the tolerance is half a base
+  pixel whatever the base's size (an 8×4 base admits 9×5), so the rule is for real displays; the
+  guard on a side of the base's own length refuses, on a base about twice as wide as high or wider,
+  a size the rounding admits (2401×1080 against 2400×1080). The code stays as it is.
+- *`device_length`'s comment* says what the function does: the width's factor alone, whichever way
+  the length runs; the vertical brake and the drag's brake take the height's factor in
+  `device_input`.
+- *Tests* (`crates/lab/src/gate_479_f3b.rs`, exec gate map row "#479 F-3b"; its bench, a started
+  recording, now shared by its tests, test 5's assertions unchanged).
+  `f3b_a_recording_without_a_base_size_holding_frames_of_1334x750_is_record_size_not_base`: a
+  recording whose header names no base size, a 1334×750 frame attached as `capture --record`
+  attaches it, is refused `record_size_not_base` by `record_size_check` and by `record_frame_check`
+  of its own size, with 1334×750 and 1280×720 in its values.
+  `f3b_an_endings_frame_of_1334x750_is_converted_to_its_recordings_1280x720`: a stopped 1280×720
+  recording (#463 R2's two steps at that size) takes an ending whose frame is a 1334×750 screen,
+  kept at 1280×720 with `scaled_from` 1334×750, its colour mark self-tested, the stored PNG the
+  square's gray at the base's square. Adapted, the requirement raising `max` to 13:
+  `gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_12` (renamed
+  `r0b_the_build_declares_runtime_client_12_to_13`) and the refused row of
+  `r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused` (R\* [12, 13]);
+  `gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_12_and_its_row_says_so` (renamed
+  `pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so`: the row of revision 12
+  states the floor, the row of revision 13 the range) and the refused row of
+  `pg2e_the_way_back_to_a_build_whose_tools_end_at_11_is_refused_installer_meets_next` (I
+  [12, 13]); each rename's retirement in `ci/retired-gates.toml`; actinglab-architecture's
+  `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once` ([12, 13]).
+  `pg2e_the_update_from_0_12_74_and_the_way_back_to_0_12_74_and_0_12_73_pass` asks its edges on
+  [12, 13] unchanged. No golden re-recorded.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

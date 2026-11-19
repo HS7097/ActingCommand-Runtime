@@ -167,6 +167,12 @@ mod gate_463_sel2l_a;
 // gains the shared read over its band.
 #[cfg(test)]
 mod gate_463_sel2l_rows;
+
+// Workflow #479 F-3b: a frame within a pixel of the base's shape is brought to the base by the
+// frame gate; a stored scene of it answers on the base; a recording on it is refused as before;
+// fix round 1: the two recording paths that ask the map count such a size as the map does.
+#[cfg(test)]
+mod gate_479_f3b;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
