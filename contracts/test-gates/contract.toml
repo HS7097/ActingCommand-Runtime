@@ -933,7 +933,7 @@ tests = [
 ]
 incident = ["#437 G1"]
 
-# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; contracts/display-adapter.md section 11, "The projection's frame"; the coordinator's work order of 11-16 after the review of pull request #1780, point 2): the client's check of an observation's projection frame (ContainedPageObservation::validate) takes the device frame itself and the device frame reduced to a base of its ratio no larger than it (1920x1080 and 3840x2160 to 1280x720, 3x3 to 2x2, 1600x900 to 1280x720, 1280x720 to 640x360: it cannot know the package's base); it refuses a frame with a side of zero (0x0 on 0x0 too), a frame larger than the device frame and a frame of another ratio
+# Workflow #392 DA-5ab fix round 1 (0.12.67; register §1.436; contracts/display-adapter.md section 11, "The projection's frame"; the coordinator's work order of 11-16 after the review of pull request #1780, point 2): the client's check of an observation's projection frame (ContainedPageObservation::validate) takes the device frame itself and the device frame reduced to a base of its ratio no larger than it (1920x1080 and 3840x2160 to 1280x720, 3x3 to 2x2, 1600x900 to 1280x720, 1280x720 to 640x360: it cannot know the package's base); it refuses a frame with a side of zero (0x0 on 0x0 too), a frame larger than the device frame and a frame of another ratio. Adapted by Workflow #479 F-3b (0.12.75; register §1.487; contracts/display-adapter.md section 13): 1366x768 and 1334x750 to 1280x720, within a pixel of its shape by the adapter's own test (CaptureExtent::has_shape_of), are taken; 1335x750 to 1280x720 is refused
 [[gate]]
 coverage = "Y"
 tests = [

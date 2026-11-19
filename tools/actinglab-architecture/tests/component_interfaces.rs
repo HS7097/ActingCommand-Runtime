@@ -203,11 +203,13 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   reader of 11 or lower refuses and no Runtime of 0.12.73 answers, so `min` stays: [3, 12].
 ///   #480 PG-2e (0.12.75, register §1.485) raises `min` to 12: the Runtime answers both status
 ///   members for every instance pause, which a reader below 12 refuses and which the Runtime
-///   cannot withhold from one (it cannot tell a client's revision), so [12, 12].
-///   Workflow #479 F-3a (0.12.75, register §1.486) raises `max` to 13: the value
-///   `acib_screen_capture` of `RuntimeCaptureBackend`, which a reader of 12 or lower refuses and
-///   only a configured iOS handset's observation carries; no request changes and `min` stays as
-///   PG-2e left it, so [12, 13].
+///   cannot withhold from one (it cannot tell a client's revision), so [12, 12]. #479 F-3b fix
+///   round 1 (0.12.75, register §1.487) raises `max` to 13: an observation's projection frame
+///   reduced from a display within a pixel of its base's shape, which a client library of 12 or
+///   lower judges invalid; no request changes and `min` stays, so [12, 13]. Workflow #479 F-3a
+///   (0.12.75, register §1.486) joins revision 13: the value `acib_screen_capture` of
+///   `RuntimeCaptureBackend`, which a reader of 12 or lower refuses and only a configured iOS
+///   handset's observation carries; the range stays [12, 13].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 34]),

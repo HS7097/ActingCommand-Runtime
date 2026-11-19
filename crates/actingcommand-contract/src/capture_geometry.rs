@@ -27,6 +27,31 @@ impl CaptureExtent {
     pub const fn height(self) -> u32 {
         self.height.get()
     }
+
+    /// Workflow #479 F-3b (`contracts/display-adapter.md` section 13): whether a display of this
+    /// size is `base`'s display scaled, with no declared rule: of exactly the base's shape (width ×
+    /// base height = height × base width), or within a pixel of it: scaled to the base by its width
+    /// it comes out at the base's height, or scaled by its height at the base's width, each rounded
+    /// to whole pixels (halves up), while neither of its sides is the base's own length (that side
+    /// would not be scaled at all). The display adapter's map without a rule and the client's check
+    /// of a projection frame reduced to a base both ask this one function.
+    pub fn has_shape_of(self, base: CaptureExtent) -> bool {
+        let (width, height) = (u128::from(self.width()), u128::from(self.height()));
+        let (base_width, base_height) = (u128::from(base.width()), u128::from(base.height()));
+        if width * base_height == height * base_width {
+            return true;
+        }
+        width != base_width
+            && height != base_height
+            && (rounds_half_up_to(height * base_width, width, base_height)
+                || rounds_half_up_to(width * base_height, height, base_width))
+    }
+}
+
+/// Whether `numerator / denominator` (a positive denominator) rounded to the nearest whole number,
+/// halves up, is `target`.
+fn rounds_half_up_to(numerator: u128, denominator: u128, target: u128) -> bool {
+    (numerator * 2 + denominator) / (denominator * 2) == target
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
