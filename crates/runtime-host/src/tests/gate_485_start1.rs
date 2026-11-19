@@ -239,7 +239,8 @@ fn terminal_code(event: &PersistedEvent) -> Option<String> {
 }
 
 /// What `host`'s start wrote after its own start event: the records of the epoch's runs, in ledger
-/// order, and how many records of the unfinished runs' lease.
+/// order, and how many lease records of the unfinished runs' lease (a grant, a release, an
+/// expiry and the like; a run's terminal records carry its lease link too, and are the first).
 fn written_by_the_start(host: &RuntimeHost, epoch: &Epoch) -> (Vec<Written>, usize) {
     let events = host
         .query_persisted_events_for_test(EventQuery::default())
@@ -278,7 +279,16 @@ fn written_by_the_start(host: &RuntimeHost, epoch: &Epoch) -> (Vec<Written>, usi
     let lease_records = after
         .iter()
         .filter(|event| {
-            epoch
+            matches!(
+                event.event_type(),
+                EventType::LeaseGranted
+                    | EventType::LeaseTransferred
+                    | EventType::LeaseRenewed
+                    | EventType::LeaseReleased
+                    | EventType::LeaseExpired
+                    | EventType::LeaseTransitionIntent
+                    | EventType::LeaseTransitionFailed
+            ) && epoch
                 .runs
                 .lease
                 .is_some_and(|lease| event.links().lease_id() == Some(&lease))
