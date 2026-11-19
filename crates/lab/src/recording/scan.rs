@@ -2378,7 +2378,8 @@ fn mismatch(step: &PlanStep, frame_id: Option<&str>, reason: &str, detail: Value
 /// pressed name's run stops early ([`decided_coverage`]); without an end mark no name no screen
 /// shows is run, and the wanted default is a name read on the first screen or one after a forward
 /// swipe (`scan_default_not_shown`): a run with the package's default values could only find it
-/// beyond the recorded screens, where no offline entry can follow it.
+/// beyond the recorded screens, where no offline entry can follow it. #463 PRIV-SCAN: beside the
+/// entry it fills, what a public recording's provenance records of the select ([`ScanRecord`]).
 pub(crate) fn scan_select_checks(
     prepared: &PreparedContainedTask,
     plan: &Plan,
@@ -2386,7 +2387,7 @@ pub(crate) fn scan_select_checks(
     cache: &FrameCache,
     failures: &mut Failures,
     item: &mut Value,
-) -> LabResult<()> {
+) -> LabResult<ScanRecord> {
     let spec = &select.declaration;
     let (_, scan) = rows_and_scan(spec)?;
     let operation = plan.operation_id(step);
@@ -2437,7 +2438,8 @@ pub(crate) fn scan_select_checks(
             Ok(live) => decisions.push(json!(live.decision)),
         }
     }
-    item["frames"] = json!(decisions);
+    let frames = json!(decisions);
+    item["frames"] = frames.clone();
 
     let mut screens = Vec::with_capacity(state.screens.len());
     // #463 S2-9b: the names read on the first screen and those after a forward swipe.
@@ -2490,6 +2492,8 @@ pub(crate) fn scan_select_checks(
         .map(|screen| loaded_of(cache, &screen.frame))
         .collect::<LabResult<Vec<_>>>()?;
     let mut result = json!({"screens": screens});
+    // #463 PRIV-SCAN: what a public recording's provenance records of the scan, built apart.
+    let mut kept = json!({});
     match offline_entry(
         prepared,
         &operation,
@@ -2515,6 +2519,8 @@ pub(crate) fn scan_select_checks(
             result["positions"] = json!(run.positions);
             result["pressed"] = json!(run.decision);
             result["steps"] = json!(content_steps(&state.screens, &run.offsets));
+            kept["coverage"] = json!(run.coverage);
+            kept["pressed"] = public_decision(&run.decision);
         }
     }
     // Fix round 1: the mark-time self-test's judgement of the absent name, one function (#463
@@ -2531,6 +2537,11 @@ pub(crate) fn scan_select_checks(
             failures.fail(on(ids.as_slice()), mismatch(step, first_id, reason, detail))?;
         }
         if let Some(run) = judged.run {
+            kept["absent"] = json!({
+                "name": run.name,
+                "coverage": run.coverage,
+                "decision": public_decision(&run.decision)
+            });
             result["absent"] = json!(run);
         }
     }
@@ -2548,7 +2559,30 @@ pub(crate) fn scan_select_checks(
         )?;
     }
     item["scan"] = result;
-    Ok(())
+    Ok(ScanRecord { frames, scan: kept })
+}
+
+/// #463 PRIV-SCAN (`contracts/lab-recording.md`, "What a public recording records of a select";
+/// the coordinator's ruling of 11-19 after the owner's rule of 11-18 that what an account holds
+/// does not enter a repository): what a public recording's provenance records of a scrolling
+/// select beside the answers' entry, built apart from it of named members only: the decisions on
+/// the step's own live frames (`frames`) and, of its scan (`scan`), whether the scan covered the
+/// list (`coverage`, a closed word), the pressed name's decision by its kind and name without its
+/// position (`pressed`), and the run for the name no screen shows (`absent`: that name, its
+/// coverage and its decision so). Never the names each screen showed, how many positions or screens
+/// the scan read, nor the content step of a swipe.
+pub(crate) struct ScanRecord {
+    pub(crate) frames: Value,
+    pub(crate) scan: Value,
+}
+
+/// #463 PRIV-SCAN: a decision of the offline entry as a public recording records it: its kind, and
+/// the name a `selected` one chose, without the name's position in the list.
+fn public_decision(decision: &ScanDecision) -> Value {
+    match decision {
+        ScanDecision::Selected { name, .. } => json!({"result": "selected", "name": name}),
+        other => json!(other),
+    }
 }
 
 /// `record_artifact_admission_failed` at the stage `first_decision`.

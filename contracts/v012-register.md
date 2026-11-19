@@ -42331,6 +42331,104 @@ self-check again on this build and reads `elapsed_us` of a shared read with twen
 blocks: the cost of one recognition has no number in the code (the design's section 1). In the
 release notes' language: 多列卡片列表上，选择的共享读字只识别、只计数落在它服务的名字框里的块，卡面上别的字（价格、限购、封面印字、购买键）不再占模型文件夹 `max_boxes` 的名额；每个名字的读数逐字节不变；被服务的块本身超过上限时仍以 `text_read_blocks_truncated` 结束，并多报 `requested`（被服务的块数）。
 
+### 1.492 Slice #463 PRIV-SCAN (0.12.76): a public recording's provenance records a select's entry of named members only (board #463, work order #482; met on 11-19 by the channel that keeps the resource repositories: a package choosing from a roster carried, before it merged, the names its scan read screen by screen and a count of them in its task file; the owner's rule of 11-18 that whatever goes to GitHub is public, a private repository too, and that what an account holds does not enter a repository; the rules below are the coordinator's rulings in the work order and in its ruling of 11-19 after the implementer stopped on the work order's third stop condition, not the owner's words; coordinator work order `rd-1119/brief-463-priv-scan-record.md`, on main `1e2eb789`)
+
+This section takes 1.492 (1.491 is SEL-GRID G2's, on its own branch). It ships in 0.12.76.
+[lab-recording.md](lab-recording.md) ("What a public recording records of a select", and the two
+places that name the self-check `selects`) is the contract; [standard-pack-authoring.md](standard-pack-authoring.md)
+("The trial and the two warnings") says what adoption's review reads.
+
+**The map** (read in the code). The self-check `selects` (`recording/crosscheck.rs`
+`select_checks`, a scrolling select's part in `recording/scan.rs` `scan_select_checks`) builds one
+entry per select step: `step`, `record_index`, `op`, `layout`, `wanted`, `pressed`, `on_empty_key`,
+`frames` and, of a scrolling select, `scan {screens[{frame_id, step, role, names}], coverage,
+positions, pressed {result, name, position}, steps[{step, content_step_px}], absent? {name,
+coverage, decision}}`. `record stop` answers the list as `lab.selects` and inside `lab.cross_check`,
+and before this slice the package's entry task (`resources/operations/<task>/task.json`) recorded
+the same value as `provenance.cross_check.selects` (`recording_api.rs` `package_checks`, the
+generator's `render` copying the cross-check whole). No reader of a package reads it: adoption's
+review reads `source`, `record_id`, `cross_check.status`, `warnings[].code` and each step's
+`needs_review`; admission asks `provenance` to be an object or null; `standard-pack check`, the
+regression runner and `lab_run` read nothing of it. The mark-time self-test the step's provenance
+records (`steps[].select.self_test`) holds the frames' decisions alone.
+
+**The stop and the ruling.** The work order's third stop condition held: the count of the
+demonstration's forward screens reaches the same task file by the select's declaration, which the
+kernel runs by (below, "What is not changed"), and could not be taken out of the provenance alone.
+The coordinator narrowed the slice to the record and had the rest written down as a known
+remainder; its ruling replaced the work order's item 2 and its second "must hold" by: a public
+record never carries a member that is not on the named list.
+
+**The rule.**
+- *A public recording* (`Plan::destination`, PRIV-3's mark, which `package_checks` holds where the
+  provenance is assembled) records each select entry as a new object of named members only
+  (`crosscheck::public_select_record`), built beside the answers' entry from what built it and
+  never from it: `step`, `record_index`, `op`, `layout`, `wanted`, `pressed`, `on_empty_key`,
+  `frames` and, of a scrolling select, `scan` as `scan::ScanRecord` keeps it: `coverage`, `pressed`
+  by its kind and name without `position` (`scan::public_decision`) and `absent` with its decision
+  the same way. Left out: `scan.screens`, `scan.positions`, `scan.steps`, `scan.pressed.position`
+  and every member a later build gives the answers' entry (the answers of SEL-GRID G2 among them,
+  should one ever sit there). The entries of a public recording's fixed-slot and not evaluated
+  selects hold the same members and values as before.
+- *A local recording* records the answers' entries: the code path is today's, byte for byte.
+- *The answers* (`lab.selects`, `lab.cross_check`, `record ready`, `record review`) and the
+  recording's own state are not narrowed; nor are refusals, which no package holds.
+- *The cross-check's other members and the provenance's `warnings`* are recorded as before: every
+  warning names steps, pages, outcome keys and frames of a step's own (`live_frames`, transition
+  frames, an ending's), never a scan's screen, a name read from a list or a count of one.
+- *Codes.* None added; no decision reads a code; no interface revision moves (the record is a
+  member of `provenance`, which admission takes as any object).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The entry of a public record | `crates/lab/src/recording/crosscheck.rs`: `SelectChecks::records`, `public_select_record`, the three paths of `select_checks` |
+| A scrolling select's part | `crates/lab/src/recording/scan.rs`: `ScanRecord`, `public_decision`, `scan_select_checks` |
+| The destination decides | `crates/lab/src/recording_api.rs`: `package_checks`, where the provenance is assembled |
+| Texts | [lab-recording.md](lab-recording.md) ("What a public recording records of a select"; "A scrolling choice: reading the list to its end", the self-checks; "Self-checks", item 8); [standard-pack-authoring.md](standard-pack-authoring.md) ("The trial and the two warnings") |
+
+**Tests** (`crates/lab/src/gate_463_priv_scan.rs`, exec gate map row "#463 PRIV-SCAN"; recordings
+made as S2-9a's gate makes them, on its synthetic list and stand-in name reader; no frame or name
+of a game; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `privscan_a_public_package_holds_none_of_the_left_out_members` (1) | A public recording of "three forward, two back, press": the answers still carry 11 positions, 6 screens, 3 steps and `delta` at position 3; the entry task records `scan {coverage, pressed {selected, delta}, absent {lima, complete, empty}}` and the entry's other members as answered; no file of the package and no case beside it holds `"screens":`, `"positions":`, `"content_step_px":` or `"position":`, searched in every file's bytes |
+| `privscan_a_local_package_records_the_answers_entries_as_before` (2) | The same recording stopped with `--destination local` generates again; its answers are the public stop's; its entry task records the answers' entries (`positions` 11 among them) beside `provenance.destination: "local"`; every other file is the public package's byte for byte, the entry task the public one's but for the generation time, the mark and the select entries |
+| `privscan_adopt_its_check_and_regression_pass_the_public_package` (3) | The public package adopted by its path into a made-up checkout as held, the adoption running `standard-pack check` on the tree as it would be written: adopted, its review `recorded` with cross-check `passed`, the adopted record without `screens`; every case `record stop` wrote, run by the one runner on the adopted package as `resource regression` runs a checkout's case, passes |
+| `privscan_the_self_check_refuses_the_same_case_public_and_local` (4) | S2-9b's refusal (the default `lima` on no screen, `india` pressed): `record_step_self_mismatch` with `scan_default_not_shown`, public and then with `--destination local`, the same step, serial number, frame, reason and default, nothing written |
+| `privscan_a_public_record_holds_no_member_off_the_named_list` (5) | The coordinator's test: every member of the public record's entry, at every depth, is on the named list, so a member a later slice adds to the answers' entry fails here the day it reaches the record; the same walk over the answers' entry finds `/scan/screens`, `/scan/positions`, `/scan/steps` and `/scan/pressed/position` |
+
+Adapted: none. No golden re-recorded. The gates of S2-9a, S2-9b, SEL-2L-rows and the 0.12.70 train
+read the answers or compare a package with itself, and stand as they are.
+
+**What is not changed.** The answers; a local recording's files; every self-check's verdict; the
+members and the bytes of every package but a public recording's select entries; packages recorded
+before, which keep what they have (nothing refuses a package for its record); the `package` range
+and every interface revision. **A known remainder**, written down and not changed (the
+coordinator's ruling; a later slice decides how a public recording gets these bounds without
+measuring the account): the numbers a scan is generated with follow the recorded list and land in a
+public package because the kernel runs by them: `select.scan.bounds.max_viewports` (`2V`, `2V + 2`
+without an end mark), `max_reposition_viewports` (`2V`) and `max_ms` built from them, `V` the
+demonstration's forward screens; the default task timeout (`control.json` and the entry task's
+`timeout_ms`), which adds `max_ms`, and `task_timeout_clamped`'s `computed_ms` when it is clamped;
+the layout's `max_instances` (the most anchors a screen showed plus 2), which counts the rows of a
+list shorter than a screen; `select.scan.track.spacing.max_trailing_gap_px`, how far the last
+forward screen is filled; and the gaps between the step numbers a package names (`record_index` in
+the provenance's steps and its targets' provenance, a case's `source.step`), which count the swipes
+folded between two steps. The ruling also named the `measured` value beside a number given in
+`scan.numbers`: read in the code, it stays in the recording (`SelectScanState::numbers`) and in
+`record review`'s sheet, and no package file holds it (the declaration carries the given value
+alone). The contract adds one sentence for authors: the names a public package's select over an
+account's list declares come from the game's public catalogue, never from one account's screen
+(every row read must read a declared name, so names taken from a screen would declare the holdings).
+
+**At deploy.** Nothing to configure. The offline Lab the resource repositories pin must be of this
+build before the resource channel stops taking `scan.screens` and `scan.positions` out of a task
+file by hand; packages recorded before keep what they have. In the release notes' language:
+公开去向的录制，任务文件来源记录里每个选择只按点名的成员新写一份：滚动选择的扫描只留覆盖情况、按下的名字（不带位置）和没找到的名字，不再写逐屏读到的名字、读到的位置数、每次滑动的步长；本地去向逐字节不变；录制时的回答不收窄。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -1556,7 +1556,9 @@ scan"; [linear-steps.md](linear-steps.md), "Select steps"). This is the first ki
   frame of a select step; a row's name unread is `select_name_unread` about the target
   `select/step_ii/name`), and the offline entry for the pressed name and for a name no screen shows,
   as at mark time; each failure `record_step_self_mismatch` with its `reason`; `lab.selects[]` adds
-  `scan {screens, coverage, positions, pressed, steps, absent?}`. The regression case of the step
+  `scan {screens, coverage, positions, pressed, steps, absent?}` (#463 PRIV-SCAN: of which a public
+  recording's provenance records `coverage`, `pressed` without its `position` and `absent` alone,
+  "What a public recording records of a select"). The regression case of the step
   is made on its first screen, where a run meets its page; the other screens are judged by the
   offline entry, not by cases (one case per step, as for every step).
 - **The readers.** `record review`'s sheet of the step adds `scan {rows, scan, screens, numbers,
@@ -3043,6 +3045,76 @@ local recording, and nothing for a public one: no mark means public, as
 an object or null, so no package revision moves; a local recording's files are byte for byte what a
 recording made before this section generates, but for that one member. Refusing a local package in a
 public repository, at adoption and in a repository's CI, is built by a later slice.
+
+### What a public recording records of a select
+
+#463 PRIV-SCAN (0.12.76; the owner's rule of 11-18 that whatever goes to GitHub is public, a private
+repository too, and that what an account holds, which characters, ships or items and how many, does
+not enter a repository; the rules below are the coordinator's rulings of 11-19). The self-check
+`selects` ("Self-checks", item 8) answers one entry per select step, in `lab.selects` and in the
+cross-check's `selects` (`lab.cross_check.selects`), and the package's entry task records the
+cross-check in its provenance (`provenance.cross_check`). Of a scrolling select the answers' entry
+says what the scan read: the names each screen showed, in the order of its rows
+(`scan.screens[].names`), how many positions it read (`scan.positions`), the content step of each
+forward swipe (`scan.steps`) and the pressed name's position in the list
+(`scan.pressed.position`). Over a list an account holds, these say what it holds, in what order and
+how many.
+
+- **A public recording** records each select entry as a new object, built apart from the answers'
+  entry and of these named members only: `step`, `record_index`, `op`, `layout`, `wanted`,
+  `pressed`, `on_empty_key`, `frames` (the decisions on the step's own live frames, `{frame_id,
+  pressed, default}` each by its kind, or `{frame_id, result: "undetermined"}` without an OCR
+  model) and, of a scrolling select, `scan` with only `coverage`, `pressed` and `absent`, each when
+  the offline entry gave it. Every other member is left out, today's and any a later build gives the
+  answers' entry: nothing copies the answers' entry into the record and takes members out of it.
+
+  | Member of the answers' entry | Public record | Why |
+  |---|---|---|
+  | `step`, `record_index`, `op`, `layout`, `on_empty_key` | kept | the package's own numbers and names |
+  | `wanted` (`{name, default}`), `pressed` | kept | names the package declares |
+  | `frames` | kept | the kind of each decision on the step's own frames and the row of that screen it chose: no length of the list follows from them |
+  | `scan.coverage` | kept | a closed word: whether the scan covered the list (`complete`, `early_stopped`, …), never a number |
+  | `scan.pressed` | `{result, name}` | the kind of the decision and the name pressed, which the package declares; its `position` in the list is left out |
+  | `scan.absent` | `{name, coverage, decision}`, the decision as `pressed`'s | the name the scan looked for and did not find, which the package declares, and closed words |
+  | `scan.screens` | left out | the names each screen showed, in order: what the account holds; its length counts the screens |
+  | `scan.positions` | left out | how many positions the scan read: the length of the list |
+  | `scan.steps` | left out | one entry per forward swipe: its length counts the screens |
+
+- **A local recording** records the answers' entries, byte for byte as before this section.
+- **What is not narrowed.** The answers (`lab.selects`, `lab.cross_check`, `record ready`, `record
+  review`) say what the scan read, as before: an agent recording sees it at record time. The
+  recording's own state (`recording.json`'s `select.scan`, with its screens and numbers) and every
+  refusal's details stay on the machine. The other members of the cross-check and the provenance's
+  `warnings` are recorded as before: their details name steps, pages, outcome keys and the frames of
+  a step's own, never a screen of a scan, a name read from a list or a count of one.
+- **Readers.** No reader of a package reads the cross-check's `selects`: adoption's review reads of
+  the provenance `source`, `record_id`, `cross_check.status`, `warnings[].code` and each step's
+  `click` and `key` `needs_review` ([standard-pack-authoring.md](standard-pack-authoring.md), "The
+  trial and the two warnings"); admission asks of `provenance` only that it is an object or null;
+  `standard-pack check`, a regression case and the Lab's own reads of a package (`lab_run`) read
+  nothing of it. A public package passes each as before, and no self-check's verdict changes: what
+  it refused it refuses, for a public and a local recording alike.
+- **Packages recorded before** keep what they have: nothing refuses a package for the members its
+  record holds.
+- **What is not changed yet** (a known remainder, which a later slice decides: how a public
+  recording gets the bounds of its scan without measuring the account). The numbers a scan is
+  generated with follow the recorded list, and a public package carries them because the kernel
+  runs by them: `select.scan.bounds.max_viewports` (`2V`; `2V + 2` without an end mark, "A
+  scrolling choice: straight to the wanted item"), `max_reposition_viewports` (`2V`) and `max_ms`
+  built from them, `V` the screens the demonstration showed going forward; the default task timeout
+  (`control.json` and the entry task's `timeout_ms`), which adds `max_ms`, and the warning
+  `task_timeout_clamped`'s `computed_ms` when it is clamped; the layout's `max_instances`, the most
+  anchors a screen showed plus 2, which counts the rows of a list shorter than a screen;
+  `select.scan.track.spacing.max_trailing_gap_px`, how far the last forward screen is filled; and
+  the gaps between the recording's step numbers a package names (`record_index` in the
+  provenance's steps and in its targets' provenance, a case's `source.step`), which count the
+  swipes folded between two steps. The value the Lab measured beside a number given in
+  `scan.numbers` (`measured`) stays in the recording and in `record review`'s sheet: the
+  declaration carries the given value alone, and no package file holds it.
+- **For authors.** Every row a scan reads must read a declared name (`select_name_unread`), so the
+  names a select declares are the whole of what a list may show: for a select over a list an
+  account holds, the names a public package declares come from the game's public catalogue, never
+  from what one account's screen shows.
 
 ## A recording's size
 
@@ -5163,7 +5235,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      frames of its page transition are the ones judged).
 
    The result is the cross-check's `selects` (as `lab.selects`, each frame's decisions by their
-   kind), present only with a select step; without an OCR model nothing is called, each frame is
+   kind; #463 PRIV-SCAN: a public recording's provenance records each entry of named members only,
+   "What a public recording records of a select"), present only with a select step; without an OCR
+   model nothing is called, each frame is
    `undetermined`, the status `partially_evaluated` and `selects_not_evaluated` lists the steps
    (nor is the other way round judged then).
 9. **Endings** (#463 R2, "Endings"; checked after the cross-check, items 4 to 7, and before item 8,
