@@ -609,9 +609,25 @@ it presses nothing on it, and nothing else runs on it.
     `ios_device_service_unreachable`, `ios_not_paired`, `ios_tunnel_failed`,
     `ios_screen_capture_failed`, `acib_deadline_passed`, `acib_call_refused` (words of `acib`'s),
     `acib_no_answer_in_time`, `acib_answer_incomplete`, `acib_answer_unreadable`,
-    `acib_answer_too_long`, `acib_state_unreadable`, `acib_not_ended`, `ios_picture_unreadable`,
-    `ios_picture_color_space_unsupported`, `acib_missing`, `acib_not_started` (what the Runtime saw);
-    never `acib`'s error text, its standard error, a session number or the command line.
+    `acib_errors_unreadable`, `acib_answer_too_long`, `acib_state_unreadable`, `acib_not_ended`,
+    `ios_picture_unreadable`, `ios_picture_color_space_unsupported`, `acib_missing`,
+    `acib_not_started`, `acib_readers_not_started` (what the Runtime saw); never `acib`'s error
+    text, its standard error, a session number or the command line. `acib`'s words map to the
+    cause their step names (the vocabulary's texts in `contracts/outcome-codes/catalog.json` list
+    each cause's words): `device_key_unknown`, `device_not_listed` → `ios_device_not_listed`;
+    `usbmuxd_unreachable`, `usbmuxd_list_failed`, `pair_record_unreadable` →
+    `ios_device_service_unreachable`; `not_paired` → `ios_not_paired`; `lockdown_unreachable`,
+    `lockdown_read_failed`, `lockdown_value_unexpected`, `session_refused`, `service_refused`,
+    `tunnel_failed`, `rsd_unreachable`, `rsd_handshake_failed` → `ios_tunnel_failed`;
+    `service_not_listed`, `service_unreachable`, `service_handshake_failed`, `channel_refused`,
+    `screenshot_failed` → `ios_screen_capture_failed` (fix round 1: `service_unreachable` is, by
+    `apps/acib/README.md`, a word of the screenshot's own service); `deadline_passed` →
+    `acib_deadline_passed`; `picture_header_truncated`, `picture_header_unknown` →
+    `ios_picture_unreadable`; `command_line_invalid`, `async_runtime_failed`, `key_salt_unusable`
+    → `acib_call_refused`. Of the Runtime's own (fix round 1): an output that cannot be read is
+    `acib_answer_unreadable`, standard error that cannot be read `acib_errors_unreadable` (the
+    answer is not taken), and readers the system did not start `acib_readers_not_started`, the
+    child ended at each.
   - **The frame.** The picture is decoded and becomes an **8-bit sRGB** frame (RGB, 3 bytes a pixel),
     and no original is kept, so the store writes the 8-bit picture and the Lab and a run read the
     same bytes. Its colour space is read from the picture, never guessed: a `cICP` chunk decides
@@ -634,7 +650,11 @@ it presses nothing on it, and nothing else runs on it.
     zero once converted is never passed on as a frame: `capture_backend_operation_failed` caused by
     `capture_frame_all_black`, with the capture's failure records. It **closes no session, fences
     nothing and stores no picture**: the backend refuses the frame and stays open, the kernel keeps
-    the session, and the next capture uses the same backend. No lock state is ever read.
+    the session, and the next capture uses the same backend. No lock state is ever read. Fix round
+    1: the kernel, the session's worker and the host's close keep the session only for a failure
+    that carries that mark (`FrameRefusal`) and leaves no resource unconfirmed
+    (`ExecutionKernelError::frame_refused_holding_nothing`); one that carries the mark beside an
+    unconfirmed resource is an unconfirmed resource: its session is closed and its instance fenced.
   - **Where `acib` is.** `<install root>\tools\acib.exe` under the install root the Runtime takes
     its adb from, by the one function the Lab's listing and binding use (`acib_path`); no
     configuration member. When the file is not there (or the Runtime runs from no install root),
@@ -644,8 +664,12 @@ it presses nothing on it, and nothing else runs on it.
     is asked. The release's archives and manifests do not carry `acib` in this slice.
   - **Nothing persisted changes.** No ledger record carries a capture backend's value on the
     read-only path; the run's geometry record, which names a frame's backend, is not written for an
-    iOS handset, whose run capture stays refused. So `ledger` stays [3, 9]; the receipts and the
-    status carry `acib_screen_capture`, which a reader of `runtime-client` 12 or lower refuses.
+    iOS handset, whose run capture stays refused, and (fix round 1) its check refuses
+    `acib_screen_capture` as its frame's, its producer's or its observation's backend, on the
+    write and on the read, until the slice that lets a run capture from such a handset, which
+    removes that refusal together with the ledger revision that admits the value. So `ledger`
+    stays [3, 9]; the receipts and the status carry `acib_screen_capture`, which a reader of
+    `runtime-client` 12 or lower refuses.
 
 ## Later slices
 

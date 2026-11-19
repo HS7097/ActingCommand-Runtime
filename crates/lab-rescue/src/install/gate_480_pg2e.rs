@@ -87,7 +87,7 @@ fn pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so() {
             .skip_while(|line| !line.starts_with("| `runtime-client` |"))
             .skip(1)
             .take_while(|line| line.starts_with("| | | | "))
-            .find(|line| line.starts_with(&head))
+            .find(|line| line.starts_with(head.as_str()))
             .unwrap_or_else(|| panic!("the runtime-client row of revision {revision}"))
     };
     assert!(

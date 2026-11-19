@@ -703,6 +703,15 @@ impl ExecutionKernelError {
     pub const fn resource_quiescence(&self) -> Option<ResourceQuiescence> {
         self.resource_quiescence
     }
+    /// Workflow #479 F-3a fix round 1: whether this failure is a picture its backend refused as no
+    /// frame ([`ExecutionFailureContext::frame_refused`]) and leaves no resource unconfirmed. Only
+    /// such a failure keeps its session and closes nothing (the kernel, the session's worker and
+    /// the host's close read this one test); one that carries the mark beside an unconfirmed
+    /// resource is an unconfirmed resource and is handled as one.
+    pub fn frame_refused_holding_nothing(&self) -> bool {
+        self.lifecycle.frame_refused().is_some()
+            && self.resource_quiescence != Some(ResourceQuiescence::Unconfirmed)
+    }
     pub const fn resource_count(&self) -> u16 {
         self.resource_count
     }

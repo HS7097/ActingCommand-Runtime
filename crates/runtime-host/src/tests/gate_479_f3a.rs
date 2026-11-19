@@ -10,26 +10,36 @@
 // fences its instance alone while another instance observes; a refusal of `acib` answers its cause
 // and its errors reach no record or receipt. The scripted child's time is its own, so no clock is
 // read here. The key is a neutral fake; no identifier of a phone exists anywhere here.
+//
+// Fix round 1 (rd-1119/brief-479-f3a-fix1.md, items 3 and 5; the review's must-fix 3): a run's
+// capture on a bound iOS handset is refused with `device_system_backend_missing` before it is
+// requested, so no geometry record is written; a monitor's configuration is refused the same way;
+// the capture of `ObserveContainedPage` opens on `acib`; an unbound iOS handset's observe answers
+// what an unbound Android handset's does; a capture failure that carries the mark of a refused
+// picture beside an unconfirmed resource is an unconfirmed resource (its session is closed, its
+// instance fenced). The run and the last test are on the host's fake provider (a run's capture is
+// refused before any provider is asked; the fake answers a failure the test builds).
 
 use super::gate_369_s6c::{instance_status, send};
+use super::gate_398_rd1b::resolved_handset;
 use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::codes::{DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::{
-    CaptureSequenceSpec, DeviceBoundVia, EmulatorCapability, EmulatorCapabilityAvailability,
-    EmulatorCapabilityImplementation, RecoveryDrillMode, Sha256Fingerprint,
+    CaptureSequenceSpec, ContainedObservationRequest, DeviceBoundVia, EmulatorCapability,
+    EmulatorCapabilityAvailability, EmulatorCapabilityImplementation, RecoveryDrillMode,
+    Sha256Fingerprint,
 };
 use actingcommand_device::{
     AcibBounds, AcibCaptureSource, AcibCommand, AcibKeySalt, AcibLauncher, AcibProcess, AdbConfig,
     CaptureBackendChoice, CaptureBackendConfig, DeviceResourceCloseOutcome,
     DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceSerial,
-    DeviceTarget, MaaTouchConfig, TouchBackendChoice, TouchBackendConfig,
+    DeviceTarget, FrameRefusal, MaaTouchConfig, TouchBackendChoice, TouchBackendConfig,
 };
-use std::collections::VecDeque;
-use std::io::{Cursor, Read};
+// `VecDeque`, `Cursor`, `AtomicUsize`, `Ordering`, `Duration`, `Arc` and the test support come
+// from the parent's imports.
+use std::io::Read;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::time::Duration;
 
 const KEY: &str = "sha256:479f3a00000000000000000000000000000000000000000000000000000f3a02";
 const SALT: &str = "neutral-installation-secret-f3a";
@@ -43,13 +53,10 @@ fn bound_ios() -> HandsetEndpoint {
     )))
 }
 
-/// The registration of the bound iOS handset `alias`, as actingd registers one (stand-in backends
-/// that open nothing), its frames from `launcher`.
-fn ios_registration(
-    alias: &str,
-    instance_id: InstanceId,
-    launcher: Arc<ScriptedAcib>,
-) -> ExecutionBackendRegistration {
+/// The registration of the handset `alias` with stand-in backends on the stand-in target of an
+/// unbound handset and an adb of a neutral name that never runs, as actingd registers an iOS
+/// handset, or an Android handset the private binding file binds no device to.
+fn stand_in_registration(alias: &str, instance_id: InstanceId) -> ExecutionBackendRegistration {
     let target = DeviceTarget {
         serial: Some(DeviceSerial::unbound_handset(alias)),
         port: 0,
@@ -60,6 +67,35 @@ fn ios_registration(
         adb_path: "neutral-adb".to_owned(),
         ..AdbConfig::default()
     };
+    ExecutionBackendRegistration::new(
+        alias,
+        instance_id,
+        "neutral.application",
+        TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
+            .with_requested(TouchBackendChoice::AdbShellInput),
+        CaptureBackendConfig::new(adb, target).with_requested(CaptureBackendChoice::Adb),
+    )
+    .expect("handset registration")
+}
+
+/// The registration of the bound iOS handset `alias`, as actingd registers one (stand-in backends
+/// that open nothing), its frames from `launcher`.
+fn ios_registration(
+    alias: &str,
+    instance_id: InstanceId,
+    launcher: Arc<ScriptedAcib>,
+) -> ExecutionBackendRegistration {
+    ios_registration_as(alias, instance_id, bound_ios(), launcher)
+}
+
+/// The registration of the iOS handset `alias` as `handset` (bound or not), its frames from
+/// `launcher`.
+fn ios_registration_as(
+    alias: &str,
+    instance_id: InstanceId,
+    handset: HandsetEndpoint,
+    launcher: Arc<ScriptedAcib>,
+) -> ExecutionBackendRegistration {
     let source = AcibCaptureSource::new(
         Some(std::env::current_exe().expect("an existing file as the program")),
         AcibKeySalt::new(SALT),
@@ -69,17 +105,9 @@ fn ios_registration(
         ..AcibBounds::runtime()
     })
     .with_launcher(launcher);
-    ExecutionBackendRegistration::new(
-        alias,
-        instance_id,
-        "neutral.application",
-        TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
-            .with_requested(TouchBackendChoice::AdbShellInput),
-        CaptureBackendConfig::new(adb, target).with_requested(CaptureBackendChoice::Adb),
-    )
-    .expect("iOS handset registration")
-    .with_handset(bound_ios())
-    .with_ios_capture(source)
+    stand_in_registration(alias, instance_id)
+        .with_handset(handset)
+        .with_ios_capture(source)
 }
 
 // ---- a PNG written by the format's rules: RGB, 8 bits, an sRGB chunk ----
@@ -618,4 +646,339 @@ fn f3a_h5_a_refusal_of_acib_answers_its_cause_and_its_errors_reach_nothing() {
         assert!(!recorded.contains(STDERR_MARKER), "{recorded}");
         assert!(!recorded.contains(SALT), "{recorded}");
     }
+}
+
+// ---- fix round 1 ----
+
+/// Whether `outcome` is `code` or names it among its causes, at any depth.
+fn names(outcome: &actingcommand_contract::outcome::Outcome, code: &str) -> bool {
+    outcome.code().as_str() == code
+        || outcome
+            .causes()
+            .iter()
+            .any(|link| names(link.outcome(), code))
+}
+
+/// The codes of `outcome`'s causes, at every depth, in order.
+fn cause_codes(outcome: &actingcommand_contract::outcome::Outcome) -> Vec<String> {
+    outcome
+        .causes()
+        .iter()
+        .flat_map(|link| {
+            std::iter::once(link.outcome().code().as_str().to_owned())
+                .chain(cause_codes(link.outcome()))
+        })
+        .collect()
+}
+
+/// Fix round 1, item 3 (test 6): a run's capture on a bound iOS handset is refused with
+/// `capture_backend_open_failed` caused by `device_system_backend_missing` before the capture is
+/// requested: the run fails, nothing is captured, and no geometry record is written. This refusal
+/// is what keeps `acib_screen_capture` out of a run's geometry record in the ledger.
+#[test]
+fn f3a_fix1_h6_a_runs_capture_on_a_bound_ios_handset_is_refused() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    let package = super::gate_369s5::direct_run_package(&root, &state);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(
+            FakeProvider::one(ALIAS, instance_id, Arc::clone(&state))
+                .with_resolved_for(ALIAS, resolved_handset(ALIAS, instance_id, bound_ios())),
+        ),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+
+    let run = send(
+        &host,
+        RuntimeOperation::run_contained_task(
+            ALIAS,
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package).expect("task request"),
+        ),
+        4810,
+    );
+    assert_eq!(run.state(), RuntimeReceiptState::Failed, "{run:?}");
+    assert!(
+        names(
+            run.outcome(),
+            DeviceSelfCheckFailure::CaptureBackendOpenFailed
+                .code()
+                .as_str()
+        ),
+        "{run:?}"
+    );
+    assert!(
+        names(run.outcome(), HostCode::DeviceSystemBackendMissing.as_str()),
+        "{run:?}"
+    );
+    assert_eq!(
+        state.capture_count.load(Ordering::Acquire),
+        0,
+        "nothing was captured"
+    );
+    let events = events_of(&host);
+    assert_eq!(count(&events, EventType::CaptureRequested), 0);
+    assert_eq!(count(&events, EventType::TaskGeometryObserved), 0);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Fix round 1, item 3 (test 6): a monitor's configuration on a bound iOS handset is refused with
+/// `capture_backend_open_failed` caused by `device_system_backend_missing` (a monitor captures on
+/// its own at each probe), and no child is started.
+#[test]
+fn f3a_fix1_h7_a_monitors_configuration_on_a_bound_ios_handset_is_refused() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let acib = ScriptedAcib::with(Vec::new());
+    let host = host_of(
+        &root,
+        vec![ios_registration(ALIAS, instance_id(), Arc::clone(&acib))],
+    );
+
+    let configured = send(
+        &host,
+        RuntimeOperation::ConfigureMonitor {
+            instance_alias: ALIAS.to_owned(),
+            policy: RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy"),
+        },
+        4811,
+    );
+    refused_without_backend(
+        &configured,
+        DeviceSelfCheckFailure::CaptureBackendOpenFailed
+            .code()
+            .as_str(),
+    );
+    assert_eq!(acib.launches(), 0, "nothing was started");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// An observation package with one page, `neutral/home`, recognised by the colour `home` of the
+/// frame's first pixel, written into `root`.
+fn observation_package(root: &TempDir, home: [u8; 3]) -> PathBuf {
+    let entries = [
+        (
+            "control.json",
+            serde_json::json!({"game": "neutral", "server": "test", "package_id": "neutral.f3a",
+                               "entry_task_id": "task"}),
+        ),
+        (
+            "resources/manifest.json",
+            serde_json::json!({"entry_task_id": "task"}),
+        ),
+        (
+            "resources/operations/task/task.json",
+            serde_json::json!({"task_id": "task"}),
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            serde_json::json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": [{"type": "color", "id": "page/home",
+                             "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                             "expected": home}],
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            serde_json::json!({"schema_version": "0.6",
+                               "pages": [{"id": "neutral/home", "required": ["page/home"]}]}),
+        ),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            serde_json::json!({"navigation": []}),
+        ),
+    ];
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, value) in &entries {
+        zip.start_file(*path, FileOptions::default())
+            .expect("zip entry");
+        zip.write_all(&serde_json::to_vec(value).expect("JSON"))
+            .expect("zip bytes");
+    }
+    let path = root.path().join("observation.zip");
+    fs::write(&path, zip.finish().expect("finish zip").into_inner()).expect("write package");
+    path
+}
+
+/// Fix round 1, item 3 (test 6): the capture of `ObserveContainedPage` on a bound iOS handset
+/// opens on `acib`: the observation is answered, its frame of `acib_screen_capture`, one child for
+/// its one frame.
+#[test]
+fn f3a_fix1_h8_the_capture_of_a_contained_page_observation_opens_on_acib() {
+    const ALIAS: &str = "neutral.iphone";
+    let root = TempDir::new().expect("tempdir");
+    let package = observation_package(&root, [10, 20, 30]);
+    let acib = ScriptedAcib::with(vec![Child::answering(
+        answer(&picture([10, 20, 30, 40, 50, 60])),
+        true,
+    )]);
+    let host = host_of(
+        &root,
+        vec![ios_registration(ALIAS, instance_id(), Arc::clone(&acib))],
+    );
+
+    let observed = send(
+        &host,
+        RuntimeOperation::ObserveContainedPage {
+            instance_alias: ALIAS.to_owned(),
+            request: ContainedObservationRequest::new(package.display().to_string(), Vec::new())
+                .expect("observation request"),
+        },
+        4812,
+    );
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Observed,
+        "{observed:?}"
+    );
+    let Some(RuntimeResult::ContainedPageObserved { observation }) = observed.result() else {
+        panic!("a page observation: {observed:?}");
+    };
+    assert_eq!(
+        observation.frame.capture_backend(),
+        RuntimeCaptureBackend::AcibScreenCapture
+    );
+    assert_eq!(acib.launches(), 1, "one child for its one frame");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Fix round 1, item 3 (test 6): an unbound iOS handset's read-only observe answers what an
+/// unbound Android handset's answers on the same host (the state, the code, the codes of its
+/// causes, its stage and its capture open cause), and no child is started.
+#[test]
+fn f3a_fix1_h9_an_unbound_ios_handset_answers_what_an_unbound_handset_answers() {
+    const IPHONE: &str = "neutral.iphone";
+    const PHONE: &str = "neutral.phone";
+    let root = TempDir::new().expect("tempdir");
+    let acib = ScriptedAcib::with(Vec::new());
+    let registry = ExecutionBackendRegistry::new([
+        ios_registration_as(
+            IPHONE,
+            instance_id(),
+            HandsetEndpoint::Ios(None),
+            Arc::clone(&acib),
+        ),
+        stand_in_registration(PHONE, instance_id()).with_handset(HandsetEndpoint::Unbound),
+    ])
+    .expect("the registry");
+    // The Android handset's start preparation fails before anything runs (it is bound to no
+    // device); no ladder climbs meanwhile, as Workflow #398 RD-1b's T8 starts a handset whose adb
+    // never runs. The iOS handset is not prepared at all (it is inert).
+    let no_ladder = BTreeMap::from([(
+        PHONE.to_owned(),
+        actingcommand_contract::InstanceStuckRecovery {
+            enabled: false,
+            cooldown_secs: 600,
+        },
+    )]);
+    let host = RuntimeHost::start(
+        config(&root).with_stuck_recovery(no_ladder),
+        Arc::new(registry),
+    )
+    .expect("runtime host");
+    let answer_of = |alias: &str| {
+        let receipt = observe(&host, alias);
+        let outcome = receipt.outcome();
+        (
+            receipt.state(),
+            outcome.code().as_str().to_owned(),
+            cause_codes(outcome),
+            outcome.value("stage").cloned(),
+            outcome.value("capture_open_cause").cloned(),
+        )
+    };
+
+    let iphone = answer_of(IPHONE);
+    assert_ne!(iphone.0, RuntimeReceiptState::Completed, "{iphone:?}");
+    assert_eq!(iphone, answer_of(PHONE));
+    assert_eq!(acib.launches(), 0, "no child of an unbound handset");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Fix round 1, item 5: a capture failure that carries the mark of a picture its backend refused
+/// (`FrameRefusal`) beside an unconfirmed resource is an unconfirmed resource: the kernel does not
+/// keep the session and the host closes it (its capture backend's close is asked), the instance is
+/// fenced, and the Runtime goes on. The fake answers that failure at its first capture after an
+/// input.
+#[test]
+fn f3a_fix1_h10_a_refused_picture_beside_an_unconfirmed_resource_is_an_unconfirmed_resource() {
+    const ALIAS: &str = "neutral.node";
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    *state
+        .capture_error_after_input
+        .lock()
+        .expect("capture error after input") = Some(
+        actingcommand_device::DeviceError::transient(
+            "neutral refused picture beside a reader that did not end",
+        )
+        .with_frame_refused(FrameRefusal::AllBlack)
+        .with_resource_close_cause(
+            DeviceResourceKind::PipeReader,
+            DeviceResourceClosePhase::WorkerJoin,
+            "neutral",
+            None,
+            None,
+            DeviceResourceQuiescence::Unconfirmed,
+            1,
+        ),
+    );
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let lease = send(
+        &host,
+        RuntimeOperation::acquire_lease(ALIAS, ids.mint_holder_id().expect("holder")),
+        4813,
+    );
+    let Some(RuntimeResult::LeaseGranted { token }) = lease.result() else {
+        panic!("a lease: {lease:?}");
+    };
+    let token = token.clone();
+    let reset = send(
+        &host,
+        RuntimeOperation::Input {
+            token: token.clone(),
+            action: InputAction::Reset,
+            frame: None,
+        },
+        4813,
+    );
+    assert_eq!(reset.state(), RuntimeReceiptState::Completed, "{reset:?}");
+    let released = send(&host, RuntimeOperation::ReleaseLease { token }, 4813);
+    assert_eq!(
+        released.state(),
+        RuntimeReceiptState::Completed,
+        "{released:?}"
+    );
+    let closes_before = state.capture_close_count.load(Ordering::Acquire);
+
+    let failed = observe(&host, ALIAS);
+    assert_ne!(failed.state(), RuntimeReceiptState::Completed, "{failed:?}");
+    assert!(
+        state.capture_close_count.load(Ordering::Acquire) > closes_before,
+        "the session was not kept: its capture backend was closed"
+    );
+    assert!(
+        instance_status(&host, ALIAS).resource_fence().is_some(),
+        "the unconfirmed resource fences the instance"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
 }

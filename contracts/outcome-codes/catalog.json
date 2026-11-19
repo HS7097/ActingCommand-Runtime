@@ -7364,10 +7364,10 @@
           "description": "This host holds no pairing record of the phone (acib: not_paired)."
         },
         "ios_tunnel_failed": {
-          "description": "The lockdown session, the service that starts the tunnel, the tunnel or its remote service discovery failed (acib: lockdown_unreachable, lockdown_read_failed, lockdown_value_unexpected, session_refused, service_refused, service_unreachable, tunnel_failed, rsd_unreachable, rsd_handshake_failed)."
+          "description": "The lockdown session, the service that starts the tunnel, the tunnel or its remote service discovery failed (acib: lockdown_unreachable, lockdown_read_failed, lockdown_value_unexpected, session_refused, service_refused, tunnel_failed, rsd_unreachable, rsd_handshake_failed)."
         },
         "ios_screen_capture_failed": {
-          "description": "The screen capture service or its picture request failed (acib: service_not_listed, service_handshake_failed, channel_refused, screenshot_failed)."
+          "description": "The screen capture service or its picture request failed (acib: service_not_listed, service_unreachable, service_handshake_failed, channel_refused, screenshot_failed; service_unreachable is, by acib's README, a word of the screenshot's own service, fix round 1)."
         },
         "acib_deadline_passed": {
           "description": "acib's own deadline passed (acib: deadline_passed, with the stage it was waiting in as acib_stage)."
@@ -7380,6 +7380,9 @@
         },
         "acib_answer_unreadable": {
           "description": "The answer line is not one of acib screenshot's answers: not JSON of its shape, no picture announced on the standard output, a word of none of its answers, or an output that could not be read."
+        },
+        "acib_errors_unreadable": {
+          "description": "The Runtime could not read the child's standard error to its end (a read of its pipe failed); not the answer's fault: the answer is not taken and the child is ended (fix round 1)."
         },
         "acib_answer_too_long": {
           "description": "The answer is over the Runtime's caps: a line of more than 4 KiB, a picture announced or sent over 64 MiB, or more bytes than its line announced; the child ended."
@@ -7404,6 +7407,9 @@
         },
         "acib_not_started": {
           "description": "The file is there but the system could not start it."
+        },
+        "acib_readers_not_started": {
+          "description": "The child started but the system did not start the Runtime's readers of its output and errors: the child is ended and nothing of it is read (fix round 1)."
         }
       }
     },

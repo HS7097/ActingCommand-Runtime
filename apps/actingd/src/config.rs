@@ -99,6 +99,9 @@ mod gate_453_s2;
 // registration, which opens nothing.
 #[cfg(test)]
 mod gate_479_f2;
+// Test-only: Workflow #479 F-3a fix round 1, check-config's note `device_acib_missing`.
+#[cfg(test)]
+mod gate_479_f3a;
 // Test-only: Workflow #452, the real assembly judges the candidate the Lab's rescue module's
 // `instance add` composes (its fixture, crates/lab-rescue/tests/fixtures/inst5-application-id.json).
 #[cfg(test)]

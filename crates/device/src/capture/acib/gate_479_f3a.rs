@@ -2,13 +2,18 @@
 
 // Workflow #479 F-3a (register §1.486; contracts/device-binding.md, "An iOS handset"; work order
 // rd-1119/brief-479-f3a-ios-capture-backend.md, its tests 1 to 5 and 7, with the coordinator's
-// addition of 08:25 on the phone's Display P3 pictures). `acib` is scripted as a child behind the
+// addition of 08:18 on the phone's Display P3 pictures). `acib` is scripted as a child behind the
 // launcher (`AcibLauncher`), as F-2 scripted it in the Lab; the scripted child's time is its own
 // (`pause` adds to `elapsed`), so no clock is read here. The real child of test 7 is this test
 // executable started again on an ignored entry that waits forever. Pictures are written here as
 // PNG files by the format's own rules (stored deflate blocks, big-endian 16-bit samples), so the
 // samples are exactly the test's. No identifier of a phone exists anywhere here: the key is a
 // neutral fake.
+//
+// Fix round 1 (rd-1119/brief-479-f3a-fix1.md, items 6 and 7): `service_unreachable` is the screen
+// capture service's cause; standard error that cannot be read is a cause of its own; 16-bit
+// samples whose two bytes differ are read with their high byte first; a picture with an alpha
+// channel or a palette is unreadable, as a grey one is.
 
 use super::picture::{self, PictureProblem};
 use super::*;
@@ -82,8 +87,8 @@ enum Space {
 }
 
 /// An RGB PNG of `width` x `height` of `bit_depth` (8 or 16) whose samples are `samples`, row by
-/// row, with the colour chunk `space` (and an `iCCP`-named and an `eXIf` chunk that the reader
-/// skips, as the phone's pictures carry).
+/// row, with the colour chunk `space` and an `eXIf` chunk, which the reader skips, as the phone's
+/// pictures carry one (no `iCCP` chunk is written).
 fn png(width: u32, height: u32, bit_depth: u8, samples: &[u16], space: Space) -> Vec<u8> {
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut header = width.to_be_bytes().to_vec();
@@ -125,10 +130,12 @@ enum End {
     Unconfirmed,
 }
 
-/// One scripted `acib`: what it prints, how it ends, whether its state can be read.
+/// One scripted `acib`: what it prints, how it ends, whether its state and (fix round 1) its
+/// errors can be read.
 struct Script {
     output: Vec<u8>,
     errors: Vec<u8>,
+    errors_fail: bool,
     status: Option<bool>,
     state_fails: bool,
     end: End,
@@ -139,10 +146,20 @@ impl Script {
         Self {
             output,
             errors: STDERR_MARKER.as_bytes().to_vec(),
+            errors_fail: false,
             status: Some(success),
             state_fails: false,
             end: End::Confirmed,
         }
+    }
+}
+
+/// Fix round 1: a stream whose every read fails, as a broken pipe's.
+struct FailingRead;
+
+impl Read for FailingRead {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("scripted read failure"))
     }
 }
 
@@ -191,6 +208,7 @@ impl AcibLauncher for ScriptedLauncher {
         Ok(Box::new(ScriptedProcess {
             output: Some(script.output),
             errors: Some(script.errors),
+            errors_fail: script.errors_fail,
             status: script.status,
             state_fails: script.state_fails,
             end: script.end,
@@ -204,6 +222,7 @@ impl AcibLauncher for ScriptedLauncher {
 struct ScriptedProcess {
     output: Option<Vec<u8>>,
     errors: Option<Vec<u8>>,
+    errors_fail: bool,
     status: Option<bool>,
     state_fails: bool,
     end: End,
@@ -220,9 +239,14 @@ impl AcibProcess for ScriptedProcess {
     }
 
     fn errors(&mut self) -> Option<Box<dyn Read + Send>> {
-        self.errors
-            .take()
-            .map(|bytes| Box::new(Cursor::new(bytes)) as Box<dyn Read + Send>)
+        let errors_fail = self.errors_fail;
+        self.errors.take().map(|bytes| {
+            if errors_fail {
+                Box::new(FailingRead) as Box<dyn Read + Send>
+            } else {
+                Box::new(Cursor::new(bytes)) as Box<dyn Read + Send>
+            }
+        })
     }
 
     fn ended(&mut self) -> io::Result<Option<bool>> {
@@ -473,6 +497,65 @@ fn f3a_t1_an_srgb_picture_is_not_converted_and_an_unknown_space_is_its_own_cause
     );
 }
 
+/// The 8-bit sample of the 16-bit sample `v` by the work order's own rule,
+/// `(v·255 + 32767) / 65535`.
+fn rounded_by_the_rule(v: u16) -> u8 {
+    u8::try_from((u32::from(v) * 255 + 32_767) / 65_535).expect("at most 255")
+}
+
+/// Fix round 1, item 7: 16-bit samples whose two bytes differ are read as PNG stores them, high
+/// byte first: each comes out the rounding of its own value, and each would come out otherwise
+/// were its bytes read the other way round (the 257·k samples, whose two bytes are equal, cannot
+/// tell).
+#[test]
+fn f3a_t1_sixteen_bit_samples_are_read_high_byte_first() {
+    let samples: [u16; 6] = [0xFF00, 0x00FF, 0x0100, 0x8000, 0x1234, 0xFEDC];
+    for sample in samples {
+        assert_ne!(
+            rounded_by_the_rule(sample),
+            rounded_by_the_rule(sample.swap_bytes()),
+            "{sample:#06x} tells the two byte orders apart"
+        );
+    }
+    let converted = picture::to_srgb8(&png(2, 1, 16, &samples, SRGB)).expect("a picture");
+    assert_eq!(converted.pixels, samples.map(rounded_by_the_rule));
+    assert_eq!(converted.pixels, [254, 1, 1, 128, 18, 254]);
+}
+
+/// `png` with its header's colour type set to `color_type` and the header's CRC made again.
+fn with_color_type(mut png: Vec<u8>, color_type: u8) -> Vec<u8> {
+    // The signature (8 bytes), then IHDR's length (4), its name (4) and its 13 bytes, the colour
+    // type the tenth of them; its CRC covers the name and the data.
+    png[25] = color_type;
+    let crc = crc32(&png[12..29]);
+    png[29..33].copy_from_slice(&crc.to_be_bytes());
+    png
+}
+
+/// Fix round 1, item 7: among "anything else is unreadable", colour types other than grey: RGB
+/// with an alpha channel, a palette, and grey with an alpha channel, at 8 and 16 bits, each a
+/// well-formed header, are unreadable, never a guess.
+#[test]
+fn f3a_t1_a_picture_with_alpha_or_a_palette_is_unreadable() {
+    for (color_type, form) in [
+        (6, "RGB with alpha"),
+        (3, "a palette"),
+        (4, "grey with alpha"),
+    ] {
+        for bit_depth in [8, 16] {
+            let bytes = with_color_type(
+                png(2, 1, bit_depth, &[1, 2, 3, 4, 5, 6], Space::SrgbChunk),
+                color_type,
+            );
+            assert_eq!(
+                picture::to_srgb8(&bytes).err(),
+                Some(PictureProblem::Unreadable),
+                "{form}, {bit_depth} bits"
+            );
+        }
+    }
+}
+
 // ---- 2: the black picture ----
 
 /// Test 2: an all-zero picture is no frame, `capture_frame_all_black` (`FrameRefusal::AllBlack`),
@@ -527,10 +610,11 @@ fn f3a_t3_each_word_of_acib_maps_to_its_one_cause() {
         ("lockdown_value_unexpected", Cause::IosTunnelFailed),
         ("session_refused", Cause::IosTunnelFailed),
         ("service_refused", Cause::IosTunnelFailed),
-        ("service_unreachable", Cause::IosTunnelFailed),
         ("tunnel_failed", Cause::IosTunnelFailed),
         ("rsd_unreachable", Cause::IosTunnelFailed),
         ("rsd_handshake_failed", Cause::IosTunnelFailed),
+        // Fix round 1: a word of the screenshot's own service (`apps/acib/README.md`).
+        ("service_unreachable", Cause::IosScreenCaptureFailed),
         ("service_not_listed", Cause::IosScreenCaptureFailed),
         ("service_handshake_failed", Cause::IosScreenCaptureFailed),
         ("channel_refused", Cause::IosScreenCaptureFailed),
@@ -588,7 +672,15 @@ fn f3a_t3_each_way_the_child_fails_is_its_one_cause() {
     let mut state_fails = Script::answering(answer(&picture), true);
     state_fails.status = None;
     state_fails.state_fails = true;
+    let mut errors_fail = Script::answering(answer(&picture), true);
+    errors_fail.errors_fail = true;
     let cases: Vec<(&str, io::Result<Script>, Cause)> = vec![
+        // Fix round 1: its errors could not be read; its answer, whole, is not taken.
+        (
+            "errors unreadable",
+            Ok(errors_fail),
+            Cause::AcibErrorsUnreadable,
+        ),
         (
             "not started",
             Err(io::Error::new(io::ErrorKind::NotFound, "scripted")),

@@ -110,11 +110,13 @@ actingcommand_contract::outcome_vocabulary! {
         IosNotPaired => "ios_not_paired",
         /// The lockdown session, the service that starts the tunnel, the tunnel or its remote
         /// service discovery failed (`lockdown_unreachable`, `lockdown_read_failed`,
-        /// `lockdown_value_unexpected`, `session_refused`, `service_refused`,
-        /// `service_unreachable`, `tunnel_failed`, `rsd_unreachable`, `rsd_handshake_failed`).
+        /// `lockdown_value_unexpected`, `session_refused`, `service_refused`, `tunnel_failed`,
+        /// `rsd_unreachable`, `rsd_handshake_failed`).
         IosTunnelFailed => "ios_tunnel_failed",
         /// The screen capture service or its picture request failed (`service_not_listed`,
-        /// `service_handshake_failed`, `channel_refused`, `screenshot_failed`).
+        /// `service_unreachable`, `service_handshake_failed`, `channel_refused`,
+        /// `screenshot_failed`). Fix round 1: `service_unreachable` is, by `apps/acib/README.md`,
+        /// a word of the screenshot's own service, so it is this cause's.
         IosScreenCaptureFailed => "ios_screen_capture_failed",
         /// `acib`'s own deadline passed (`deadline_passed`, with the stage it was waiting in).
         AcibDeadlinePassed => "acib_deadline_passed",
@@ -128,6 +130,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// picture announced on the standard output, a word of none of its answers, or an output
         /// that could not be read.
         AcibAnswerUnreadable => "acib_answer_unreadable",
+        /// Fix round 1: the Runtime could not read the child's standard error to its end (a read
+        /// of its pipe failed). Not its answer's fault: the answer is not taken and the child is
+        /// ended.
+        AcibErrorsUnreadable => "acib_errors_unreadable",
         /// The answer is over the Runtime's caps: a line of more than 4 KiB, a picture announced
         /// or sent over 64 MiB, or more bytes than its line announced; the child ended.
         AcibAnswerTooLong => "acib_answer_too_long",
@@ -154,6 +160,9 @@ actingcommand_contract::outcome_vocabulary! {
         AcibMissing => "acib_missing",
         /// The file is there but the system could not start it.
         AcibNotStarted => "acib_not_started",
+        /// Fix round 1: the child started but the system did not start the Runtime's readers of
+        /// its output and errors: the child is ended and nothing of it is read.
+        AcibReadersNotStarted => "acib_readers_not_started",
     }
 }
 

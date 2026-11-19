@@ -6,7 +6,7 @@
 //! bytes.
 //!
 //! **The colour space is read from the picture, never guessed** (the coordinator's ruling of 11-19
-//! 08:25): a `cICP` chunk decides when present, and this build reads primaries 1 (BT.709, the sRGB
+//! 08:18): a `cICP` chunk decides when present, and this build reads primaries 1 (BT.709, the sRGB
 //! primaries) or 12 (P3 with a D65 white), transfer function 13 (the sRGB curve), matrix
 //! coefficients 0 (RGB) and full range 1; without one, an `sRGB` chunk means sRGB. A picture with
 //! neither, or with other `cICP` numbers, is [`PictureProblem::ColorSpaceUnsupported`]. An `iCCP`

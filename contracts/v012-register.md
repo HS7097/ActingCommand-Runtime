@@ -41312,7 +41312,7 @@ gate first can leave a standing pause's `scheduling_pause_settled` or
 `scheduling_pause_kept_at_shutdown` unwritten (its continuation writes them only while the pause
 still holds; the resume's own records then say what happened).
 
-### 1.486 #479 F-3a (0.12.75): the Runtime takes one frame of an iOS handset from `acib` (Workflow #479; the owner's rulings of 11-18 on board #479, among them that no lock state is read; the rules below are the coordinator's rulings in the work order and its disposition of the design, not the owner's words; coordinator work order `rd-1119/brief-479-f3a-ios-capture-backend.md` with its addition of 11-19 08:25 (the phone's picture is Display P3), the design `rd-1119/design-479-f3.md` and its disposition, on main `1067dfaf`)
+### 1.486 #479 F-3a (0.12.75): the Runtime takes one frame of an iOS handset from `acib` (Workflow #479; the owner's rulings of 11-18 on board #479, among them that no lock state is read; the rules below are the coordinator's rulings in the work order and its disposition of the design, not the owner's words; coordinator work order `rd-1119/brief-479-f3a-ios-capture-backend.md` with its addition of 11-19 08:18 (the phone's picture is Display P3), the design `rd-1119/design-479-f3.md` and its disposition, on main `1067dfaf`)
 
 1.486 is the number the coordinator assigned this section; §1.485 and §1.487 are other slices
 dispatched with it. It ships in 0.12.75. [device-binding.md](device-binding.md), "An iOS handset",
@@ -41375,7 +41375,7 @@ refused; nothing is scheduled on it.
 geometry unknown (`producer_observation_absent`), as an Android screencap frame's. Its evaluation
 against a package's base is the display adapter's (§1.487's slice, F-3b); a run's capture is F-3d's.
 
-**The conversion's cost per frame** (the coordinator's addition of 08:25): the PNG decoded once; for
+**The conversion's cost per frame** (the coordinator's addition on Display P3): the PNG decoded once; for
 P3, per pixel three lookups in a table of 65 536 linear values, nine multiplications, three clips and
 three lookups in a table of 65 536 encoded codes; no power per sample (the tables are made once for
 the process). The stored artifact is the converted 8-bit sRGB picture (`Frame::from_pixels`, no
@@ -41386,16 +41386,16 @@ original), so the Lab and a run read the same bytes.
 `acib_stage`); `capture_frame_all_black` (runtime-host, error, ladder class `none`, a cause only:
 the session kept, nothing fenced, nothing stored); `device_acib_missing` (actingd, warning, a
 check-config note: `aliases`, `program`; never a refusal, exit 0); the keys and vocabularies
-`ios_capture_problem` (17 words, one cause each: `ios_device_not_listed`,
+`ios_capture_problem` (19 words since fix round 1, one cause each: `ios_device_not_listed`,
 `ios_device_service_unreachable`, `ios_not_paired`, `ios_tunnel_failed`, `ios_screen_capture_failed`,
 `acib_deadline_passed`, `acib_call_refused`, `acib_no_answer_in_time`, `acib_answer_incomplete`,
-`acib_answer_unreadable`, `acib_answer_too_long`, `acib_state_unreadable`, `acib_not_ended`,
-`ios_picture_unreadable`, `ios_picture_color_space_unsupported`, `acib_missing`,
-`acib_not_started`), `acib_problem` (acib's 25 words for a screenshot) and `acib_stage` (its five
+`acib_answer_unreadable`, `acib_errors_unreadable`, `acib_answer_too_long`, `acib_state_unreadable`,
+`acib_not_ended`, `ios_picture_unreadable`, `ios_picture_color_space_unsupported`, `acib_missing`,
+`acib_not_started`, `acib_readers_not_started`), `acib_problem` (acib's 25 words for a screenshot) and `acib_stage` (its five
 stages). Beyond the design's table, by the code's facts: `acib_call_refused` (acib's
 `command_line_invalid`, `key_salt_unusable`, `async_runtime_failed`, which no other word holds),
 `acib_answer_too_long` (the caps), `acib_state_unreadable` (F-2's one word for a state that cannot be
-read), `ios_picture_color_space_unsupported` (the addition of 08:25). Changed: the texts of
+read), `ios_picture_color_space_unsupported` (the addition on Display P3). Changed: the texts of
 `device_system_backend_missing`, which no longer name a capture. The outcome code index is
 regenerated. No decision reads a code: the session is kept by the device error's mark, the cause
 comes from the error's evidence.
@@ -41409,10 +41409,9 @@ confirmed. `crates/runtime-host/src/tests/gate_479_f3a.rs` (host "#479 F-3a"): t
 the registry's own registration, the observe and the sequence on `acib_screen_capture`, the status
 rows, the refusals of a tap, a launch, a self-check and a drill, the black picture through the host,
 a child that cannot be ended fencing its handset alone beside another that observes, a refusal of
-`acib` with its cause and its errors in no record or receipt. The capture of `ObserveContainedPage`
-and the refusals of a run's capture and of a monitor are not exercised here (the first takes the
-same path as the observe, `capture_readonly_transaction`; the two others are one line each,
-`DeviceOperation::RunCapture` and `MonitorCapture`). Adapted, the requirement changing what they
+`acib` with its cause and its errors in no record or receipt; fix round 1 adds the capture of
+`ObserveContainedPage`, the refusals of a run's capture and of a monitor and an unbound handset
+(below). Adapted, the requirement changing what they
 pin: `gate_479_f2::f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_opens`
 (no capture), `f2_fix1_a_tap_a_key_a_swipe_a_capture_and_a_launch_are_refused_at_the_hosts_front` (no
 observe), `status_says_no_backend` of `f2_fix1_a_start_attempts_no_ios_handset_…` (the frame row);
@@ -41421,6 +41420,57 @@ observe), `status_says_no_backend` of `f2_fix1_a_start_attempts_no_ios_handset_�
 device crate's `capture.rs` tests, `scrcpy` tests and `gate_381b`; the host's `online_observation`,
 `gate_hs5`, `gate_411_lab_l5`). No golden changes; the two tests renamed above leave the gate map
 under their old names, each with its retirement.
+
+**Fix round 1** (coordinator work order `rd-1119/brief-479-f3a-fix1.md`, after the review of pull
+request #1844; on main `54b1d770`, which holds §1.485).
+- The merge of main: `runtime-client` [12, 13], `min` as §1.485 set it and `max` 13, in the
+  declaration and in every test that pins it (above); revision 13's row of
+  [component-interfaces.md](component-interfaces.md) is this slice's own sentences, so a second
+  change can join it; revision 12's row gains a parenthesis that revision 13 makes it [12, 13] in
+  the same release.
+- It compiles: `ios_capture_cause` stood between the documentation and the derive of
+  `NemuAppIndexProblemToken` and the struct (`crates/runtime-host/src/error.rs`); it stands above
+  them.
+- `read_answer` (`crates/device/src/capture/acib.rs`) answers its cause alone,
+  `IosCaptureFailure` (a few bytes), not a `Refused` beside an unconfirmed device error it never
+  sets (the size clippy's `result_large_err` counts); no other `Result` of the slice in that crate
+  carries a large error of its own.
+- The geometry record refuses the value: `TaskGeometryObservation::validate`
+  (`crates/actingcommand-contract/src/event/payload.rs`) refuses a record that names
+  `acib_screen_capture` as its frame's, its producer's or its observation's backend,
+  `invalid_task_semantic_payload` (the reader's generic code for a refused task fact). The writer
+  runs it before it writes, and every reader of the ledger runs it over every record it decodes in
+  full (`LedgerEventMetadata`'s validation, `invalid_typed_payload`): refusing a value no record
+  holds is safe, because no build before this one has the value (its reader refuses it as an
+  unknown variant) and this one refuses to write it, so no ledger holds a record it would now
+  refuse. The slice that lets a run capture from an iOS handset removes the refusal together with
+  the ledger revision that admits the value.
+- The mark that closes nothing: the kernel (`kernel.rs`, `finish_session_operation`), the
+  session (`session.rs`, `ExecutionSession::capture` and the worker's capture) and the host's close
+  (`resource_close.rs`, `finish_capture_failure_while_guarded`) keep the session only when the
+  failure carries `FrameRefusal` and leaves no resource unconfirmed, one test of the kernel's
+  (`ExecutionKernelError::frame_refused_holding_nothing`); a failure that carries both is an
+  unconfirmed resource.
+- One word, one cause: acib's `service_unreachable` is, by `apps/acib/README.md`, a word of the
+  screenshot's own service, so `ios_screen_capture_failed` (no longer `ios_tunnel_failed`);
+  standard error that cannot be read is `acib_errors_unreadable` (no longer
+  `acib_answer_unreadable`), and readers the system did not start `acib_readers_not_started` (which
+  had no `ios_capture_problem` at all), the child ended at each. The vocabulary's catalog texts and
+  [device-binding.md](device-binding.md)'s mapping follow; no code is added, so the outcome code
+  index does not change.
+- Texts: the time of the coordinator's addition is 08:18 (it was written 08:25 in four places);
+  the test helper's comment says the `eXIf` chunk it writes and no `iCCP` chunk.
+- Tests added: device gate (exec "#479 F-3a") `f3a_t1_sixteen_bit_samples_are_read_high_byte_first`
+  (samples whose two bytes differ), `f3a_t1_a_picture_with_alpha_or_a_palette_is_unreadable`, and a
+  case of `f3a_t3_each_way_the_child_fails_is_its_one_cause` (errors unreadable); host gate (host
+  "#479 F-3a") `f3a_fix1_h6_…` (a run's capture refused, no `task.geometry_observed`), `f3a_fix1_h7_…`
+  (a monitor's configuration refused), `f3a_fix1_h8_…` (the capture of `ObserveContainedPage` on
+  `acib`), `f3a_fix1_h9_…` (an unbound iOS handset answers as an unbound Android handset),
+  `f3a_fix1_h10_…` (the mark beside an unconfirmed resource is an unconfirmed resource); contract
+  gate `crates/actingcommand-contract/src/event/gate_479_f3a.rs` (contract "#479 F-3a": the writer
+  and the reader refuse the value in a geometry record); actingd gate
+  `apps/actingd/src/config/gate_479_f3a.rs` (apps "#479 F-3a": check-config notes
+  `device_acib_missing` and passes, exit 0).
 
 **What is not changed.** Android's and the emulators' capture, byte for byte (`build_capture_backend`
 only gains a refusal of the new name); `apps/acib`; the ledger's record kinds, members and range;

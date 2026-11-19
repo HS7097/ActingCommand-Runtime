@@ -1243,9 +1243,6 @@ impl VocabularyToken for CaptureOpenCauseToken {
     }
 }
 
-/// #402 HS-3: why a paired Nemu open found no application index, as a token of the catalog
-/// vocabulary `nemu_app_index_problem`.
-#[derive(Clone, Copy)]
 /// Workflow #479 F-3a: the cause of an iOS handset's capture through `acib` that took no frame:
 /// `capture_ios_failed` with its one cause, `acib`'s word and its stage where it answered them.
 fn ios_capture_cause(failure: actingcommand_device::IosCaptureFailure) -> Outcome {
@@ -1260,6 +1257,9 @@ fn ios_capture_cause(failure: actingcommand_device::IosCaptureFailure) -> Outcom
     }
 }
 
+/// #402 HS-3: why a paired Nemu open found no application index, as a token of the catalog
+/// vocabulary `nemu_app_index_problem`.
+#[derive(Clone, Copy)]
 struct NemuAppIndexProblemToken(actingcommand_device::NemuAppIndexProblem);
 
 impl VocabularyToken for NemuAppIndexProblemToken {

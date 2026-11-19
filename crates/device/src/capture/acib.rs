@@ -397,24 +397,19 @@ struct Refused {
     unconfirmed: Option<DeviceError>,
 }
 
-impl Refused {
-    fn of(problem: IosCaptureProblem) -> Self {
+impl From<IosCaptureFailure> for Refused {
+    /// `failure`, with nothing left unconfirmed.
+    fn from(failure: IosCaptureFailure) -> Self {
         Self {
-            failure: IosCaptureFailure::of(problem),
+            failure,
             unconfirmed: None,
         }
     }
+}
 
-    /// `acib`'s word `problem` (and its stage), as the cause its step names.
-    fn answered(problem: AcibProblem, stage: Option<AcibStage>) -> Self {
-        Self {
-            failure: IosCaptureFailure {
-                problem: cause_of(problem),
-                acib_problem: Some(problem),
-                acib_stage: stage,
-            },
-            unconfirmed: None,
-        }
+impl Refused {
+    fn of(problem: IosCaptureProblem) -> Self {
+        Self::from(IosCaptureFailure::of(problem))
     }
 
     /// The device error: a fixed text naming the cause and `acib`'s word, never its error text,
@@ -439,7 +434,18 @@ impl Refused {
     }
 }
 
-/// The cause the step of `acib`'s word `problem` names.
+/// `acib`'s word `problem` (and its stage), as the cause its step names.
+const fn answered(problem: AcibProblem, stage: Option<AcibStage>) -> IosCaptureFailure {
+    IosCaptureFailure {
+        problem: cause_of(problem),
+        acib_problem: Some(problem),
+        acib_stage: stage,
+    }
+}
+
+/// The cause the step of `acib`'s word `problem` names. Fix round 1: `service_unreachable` is,
+/// by `apps/acib/README.md` ("The commands", `screenshot`), a word of the way's own service, the
+/// screen capture service, so it is that service's cause, not the tunnel's.
 const fn cause_of(problem: AcibProblem) -> IosCaptureProblem {
     match problem {
         AcibProblem::DeviceKeyUnknown | AcibProblem::DeviceNotListed => {
@@ -454,11 +460,11 @@ const fn cause_of(problem: AcibProblem) -> IosCaptureProblem {
         | AcibProblem::LockdownValueUnexpected
         | AcibProblem::SessionRefused
         | AcibProblem::ServiceRefused
-        | AcibProblem::ServiceUnreachable
         | AcibProblem::TunnelFailed
         | AcibProblem::RsdUnreachable
         | AcibProblem::RsdHandshakeFailed => IosCaptureProblem::IosTunnelFailed,
         AcibProblem::ServiceNotListed
+        | AcibProblem::ServiceUnreachable
         | AcibProblem::ServiceHandshakeFailed
         | AcibProblem::ChannelRefused
         | AcibProblem::ScreenshotFailed => IosCaptureProblem::IosScreenCaptureFailed,
@@ -577,15 +583,16 @@ impl Readers {
         self.output.is_some() && self.errors.is_some()
     }
 
-    /// The cause a stream gives on its own: the output over its cap, or a stream that could not
-    /// be read.
+    /// The cause a stream gives on its own: the output over its cap, the output that could not
+    /// be read (its answer cannot be read), or, fix round 1, the errors that could not be read,
+    /// which is no answer's fault: a cause of its own.
     fn stream_problem(&self) -> Option<IosCaptureProblem> {
-        if matches!(self.output, Some(StreamRead::TooLong)) {
-            return Some(IosCaptureProblem::AcibAnswerTooLong);
+        match (&self.output, &self.errors) {
+            (Some(StreamRead::TooLong), _) => Some(IosCaptureProblem::AcibAnswerTooLong),
+            (Some(StreamRead::Failed), _) => Some(IosCaptureProblem::AcibAnswerUnreadable),
+            (_, Some(StreamRead::Failed)) => Some(IosCaptureProblem::AcibErrorsUnreadable),
+            _ => None,
         }
-        (matches!(self.output, Some(StreamRead::Failed))
-            || matches!(self.errors, Some(StreamRead::Failed)))
-        .then_some(IosCaptureProblem::AcibAnswerUnreadable)
     }
 }
 
@@ -651,16 +658,15 @@ fn take_picture(source: &AcibCaptureSource, device_key: &str) -> DeviceResult<Ve
         .line_limit
         .saturating_add(1)
         .saturating_add(bounds.picture_limit);
-    let mut readers = match Readers::start(output, errors, output_limit) {
-        Ok(readers) => readers,
-        Err(error) => {
-            let started =
-                DeviceError::fatal(format!("failed to start an acib stream reader: {error}"));
-            return Err(match process.end() {
-                Ok(_) => started,
-                Err(cleanup) => started.merge_resource_cleanup(cleanup),
-            });
-        }
+    // Fix round 1: a reader the system did not start is a cause of its own, the child ended as
+    // at every other cause (`acib_not_ended` when its end cannot be confirmed).
+    let Ok(mut readers) = Readers::start(output, errors, output_limit) else {
+        return Err(end_with(
+            &mut *process,
+            None,
+            Refused::of(IosCaptureProblem::AcibReadersNotStarted),
+        )
+        .into_error());
     };
     let success = loop {
         readers.poll();
@@ -708,9 +714,8 @@ fn take_picture(source: &AcibCaptureSource, device_key: &str) -> DeviceResult<Ve
         return Err(Refused::of(problem).into_error());
     }
     match readers.output.take() {
-        Some(StreamRead::Ended(answer)) => {
-            read_answer(answer, success, &bounds).map_err(Refused::into_error)
-        }
+        Some(StreamRead::Ended(answer)) => read_answer(answer, success, &bounds)
+            .map_err(|failure| Refused::from(failure).into_error()),
         _ => Err(Refused::of(IosCaptureProblem::AcibAnswerUnreadable).into_error()),
     }
 }
@@ -728,55 +733,58 @@ struct AcibScreenshotLine {
 }
 
 /// The picture of the answer `answer` of a child that ended with status 0 when `success`: its
-/// line, one line feed and exactly the line's `bytes` bytes.
+/// line, one line feed and exactly the line's `bytes` bytes. Fix round 1: it reads a whole answer
+/// of a child that ended, so it never leaves anything unconfirmed, and its failure is the cause
+/// alone (`IosCaptureFailure`, a few bytes; not the device error the caller makes of it).
 fn read_answer(
     mut answer: Vec<u8>,
     success: bool,
     bounds: &AcibBounds,
-) -> Result<Vec<u8>, Refused> {
+) -> Result<Vec<u8>, IosCaptureFailure> {
+    let failed = IosCaptureFailure::of;
     let Some(end) = answer
         .iter()
         .take(bounds.line_limit.saturating_add(1))
         .position(|byte| *byte == b'\n')
     else {
-        return Err(Refused::of(if answer.len() > bounds.line_limit {
+        return Err(failed(if answer.len() > bounds.line_limit {
             IosCaptureProblem::AcibAnswerTooLong
         } else {
             IosCaptureProblem::AcibAnswerIncomplete
         }));
     };
     let line = serde_json::from_slice::<AcibScreenshotLine>(&answer[..end])
-        .map_err(|_| Refused::of(IosCaptureProblem::AcibAnswerUnreadable))?;
+        .map_err(|_| failed(IosCaptureProblem::AcibAnswerUnreadable))?;
     if let Some(word) = line.problem.as_deref() {
         let problem = AcibProblem::ALL
             .iter()
             .copied()
             .find(|known| known.as_str() == word)
-            .ok_or_else(|| Refused::of(IosCaptureProblem::AcibAnswerUnreadable))?;
+            .ok_or_else(|| failed(IosCaptureProblem::AcibAnswerUnreadable))?;
         let stage = line.waited_in.as_deref().and_then(|stage| {
             AcibStage::ALL
                 .iter()
                 .copied()
                 .find(|known| known.as_str() == stage)
         });
-        return Err(Refused::answered(problem, stage));
+        return Err(answered(problem, stage));
     }
     if !success {
         // It ended otherwise than with its answer (ended by another party).
-        return Err(Refused::of(IosCaptureProblem::AcibAnswerIncomplete));
+        return Err(failed(IosCaptureProblem::AcibAnswerIncomplete));
     }
     let announced = match (line.out.as_deref(), line.bytes) {
         (Some(STANDARD_OUTPUT), Some(bytes)) => bytes,
-        _ => return Err(Refused::of(IosCaptureProblem::AcibAnswerUnreadable)),
+        _ => return Err(failed(IosCaptureProblem::AcibAnswerUnreadable)),
     };
     if announced > bounds.picture_limit as u64 {
-        return Err(Refused::of(IosCaptureProblem::AcibAnswerTooLong));
+        return Err(failed(IosCaptureProblem::AcibAnswerTooLong));
     }
     let picture = answer.split_off(end + 1);
     match (picture.len() as u64).cmp(&announced) {
-        std::cmp::Ordering::Less => Err(Refused::of(IosCaptureProblem::AcibAnswerIncomplete)),
-        std::cmp::Ordering::Greater => Err(Refused::of(IosCaptureProblem::AcibAnswerTooLong)),
+        std::cmp::Ordering::Less => Err(failed(IosCaptureProblem::AcibAnswerIncomplete)),
+        std::cmp::Ordering::Greater => Err(failed(IosCaptureProblem::AcibAnswerTooLong)),
         std::cmp::Ordering::Equal if line.format.as_deref() == Some(PNG_FORMAT) => Ok(picture),
-        std::cmp::Ordering::Equal => Err(Refused::of(IosCaptureProblem::IosPictureUnreadable)),
+        std::cmp::Ordering::Equal => Err(failed(IosCaptureProblem::IosPictureUnreadable)),
     }
 }
