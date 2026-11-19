@@ -4484,3 +4484,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_479_f2::f2_fix4_an_unbound_ios_handsets_pause_and_resume_answer_as_a_bound_ones",
 ]
 incident = ["#479 F-2"]
+
+# #484 IDLE-W2 (0.12.75; register §1.488; brief rd-1119/brief-484-idle-wake-only-when-dispatchable.md; production 0.12.74 on 11-19 08:00 to 08:12: an application the idle check had closed was started cold again half a second later, seven times in twelve minutes, because a pause or a held key hid the budget that held its only candidate back): on gate_372k2's fixture instance (one task whose trigger is always true, daily_limit 2, a manual Runtime clock), the task's budget spent, the idle check closes the application with its wake at the budget's reset less the lead, and while a client holds the instance's key the evaluation defers the task dispatch_instance_held with no wake while the idle plan counts it not due, its wake at the reset: no wake follows the close (the reproduction, red on the code of 0.12.74). No clock read in the gate file
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_484_idle_w2::idle_w2_a_held_key_does_not_make_a_task_whose_budget_is_spent_due",
+]
+incident = ["#484 IDLE-W2"]
