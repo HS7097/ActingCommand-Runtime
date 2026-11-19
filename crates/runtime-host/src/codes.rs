@@ -3665,3 +3665,24 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #463 U1b fix round 3: end ----
+
+// ---- #484 IDLE-W2 (register §1.488): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why an idle instance's wake was queued (vocabulary `idle_wake_cause`, since 0.12.75): the
+    /// value of `instance_idle_action` with `operation` `queue_idle_wake`, the first that holds in
+    /// this order (`idle_action::IdlePlanner`'s wake).
+    pub enum IdleWakeCause: "idle_wake_cause" {
+        /// The scheduler's latest plan shows a task of the instance due that can be dispatched now
+        /// (its `task_id` beside the word).
+        TaskDue => "task_due",
+        /// The idle action in effect is no longer the one taken on the instance.
+        ActionChanged => "action_changed",
+        /// The start owed the wake: the instance was restored woken, or with no usable record of
+        /// what the idle action left.
+        OwedAtStart => "owed_at_start",
+        /// The planned wake time (the next due task's time less the action's wake lead) was
+        /// reached.
+        PlannedTimeReached => "planned_time_reached",
+    }
+}
+// ---- #484 IDLE-W2: end ----

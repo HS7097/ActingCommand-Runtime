@@ -1332,8 +1332,44 @@ those gates in the order of the deferrals (a scheduling pause, `dispatch_instanc
 on the instance's key such as a resume's reconnect). Such a task moves the wake only to the time
 the gates let it through, the blackout's end and then the next opening of the activity window,
 minus the action's wake lead, and an earlier wake in effect stays. The evaluation's decisions and
-the not-run explanation are unchanged; only the plan the idle check reads counts the gates. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
-or `queue_idle_wake`, `idle_action` naming the action). An instance whose action in effect cannot
+the not-run explanation are unchanged; only the plan the idle check reads counts the gates.
+
+The same holds for every gate a hold of the instance hides (#484 IDLE-W2, since 0.12.75,
+[v012-register.md](v012-register.md) §1.488; production 0.12.74 on 11-19 from 08:00 to 08:12: an
+application the action had closed, its next work ten hours away, was started cold again half a
+second later, seven times in twelve minutes, because the evaluation that fell inside the close's
+own claim, a Lab run or a start's preparation deferred the only candidate `dispatch_instance_held`
+with no wake while its budget was spent). A candidate that a hold of its instance defers (positions
+1 and 2 of [scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals": a control
+gate such as a pause, a claim on its key, a cooldown, a wait for another member of its device) is
+counted, for the idle plan only, as positions 3 to 8 of that order would answer it once the hold is
+gone: a suspended package, a blackout, a client update, a closed pack schedule, an owed rerun's
+pacing, the quiet before a blackout or the day boundary, a remedy round, a spent budget, a backoff,
+the activity interval, a closed activity window or a task pause make it not due, and its wake is
+that position's own release (none when it names none) less the action's wake lead (with a
+time-bound gate as well, the later of the two). Only a candidate no later position holds back is
+due, and it still wakes the instance at once, under the hold too (the case above, unchanged). Each
+position is read as the evaluation reads it, read only: no lift check runs (a suspended package and
+a paused task count as standing until the evaluation without the hold checks them), nothing is
+copied, drawn (the random delay of position 9 is not read) or noted for a clock slot,
+and a position that cannot answer there leaves the candidate counted as before (its failure is the
+evaluation's own once no hold comes first). Nothing a dispatch decides changes: the order, each
+deferral's code and wake, the not-run explanation, the clock-slot records and the budgets are the
+evaluation's as before. What a person watching an instance sees: an application closed as idle
+stays closed until work can really be dispatched (or its planned wake), whatever claims, Lab runs
+or pauses come in between; a client's run on it meets the closed application as before (whether it
+should wake it first is not this rule's). So after a restart and after a resume, too: the first
+evaluation after a start reads a restored pause and a start's preparation on the key as any hold,
+and an application closed as idle stays closed until its planned wake.
+
+Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
+or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484
+IDLE-W2, since 0.12.75): `idle_wake_cause`, the first that holds of `task_due` (a task of the
+instance due that can be dispatched now; the record names it as `task_id`, a catalog task's id,
+nothing of an account), `action_changed` (the action in effect is no longer the one taken),
+`owed_at_start` (the start's owed wake: an instance restored woken, or with no usable record) and
+`planned_time_reached` (its planned time came). The value is optional on a pending code of the
+catalog, and a record without it reads as before. An instance whose action in effect cannot
 bring it back (its `instances[]` entry has no `startup_package`, or for `stop_emulator` no
 `start_emulator`) never acts, and the first idle check that finds it records one
 `instance_idle_action_unsupported` warning (`member` naming what the entry lacks, `operation`

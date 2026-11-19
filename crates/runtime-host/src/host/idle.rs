@@ -68,7 +68,13 @@
 //!   again once it is free, its emulator left as it is.
 //! - **Records.** One `instance_idle_action` record per action and per wake (`operation`
 //!   `run_idle_action` or `queue_idle_wake`, `idle_action` naming the action), a
-//!   `device_state_observed` record under the instance and the same report line. An instance
+//!   `device_state_observed` record under the instance and the same report line. #484 IDLE-W2
+//!   (0.12.75): a wake's record says why it came (`idle_wake_cause`: `task_due` with the due task's
+//!   `task_id`, `action_changed`, `owed_at_start`, `planned_time_reached`), and a task is due only
+//!   when it can be dispatched now: one a pause or a held key defers while a later gate (a spent
+//!   budget, a backoff, the activity interval among them) would hold it back wakes nothing, so an
+//!   evaluation inside the action's own claim, a client's run or a start's preparation no longer
+//!   wakes the application the action just closed. An instance
 //!   whose action in effect cannot bring it back (no startup package, or for `stop_emulator` no
 //!   configured emulator start) never acts and gets one `instance_idle_action_unsupported`
 //!   warning (`member` naming what it lacks) per action in effect, not a silent skip.
@@ -142,7 +148,7 @@ use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
-use crate::codes::{HostCode, HostLocation, IdleCode, IdleLocation};
+use crate::codes::{HostCode, HostLocation, IdleCode, IdleLocation, IdleWakeCause};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, KeptState,
     REST_DECLARATION_MEMBER, REST_IDLE_ACTION, WakeWork,
@@ -301,6 +307,26 @@ fn idle_outcome(
     }
 }
 
+/// #484 IDLE-W2 (register §1.488): a wake's `instance_idle_action` (`queue_idle_wake`) for `alias`
+/// after `action`, with why it was queued (`idle_wake_cause`) and, for a task due, the task it is
+/// for (`task_id`, a catalog task's id, nothing of an account).
+fn wake_outcome(
+    alias: &str,
+    action: IdleAction,
+    cause: Option<IdleWakeCause>,
+    due_task: Option<&str>,
+) -> Outcome {
+    let outcome = idle_outcome(alias, action.as_str(), IdleLocation::Wake, None, None);
+    let Some(cause) = cause else {
+        return outcome;
+    };
+    let outcome = outcome.idle_wake_cause(cause);
+    match due_task.filter(|_| cause == IdleWakeCause::TaskDue) {
+        Some(task_id) => outcome.task_id(task_id),
+        None => outcome,
+    }
+}
+
 /// A failure of one instance's idle action, `code` at `operation`, with `detail` as its foreign
 /// cause.
 fn idle_error(
@@ -322,18 +348,20 @@ impl HostShared {
     /// instance is contained to it and the next instance goes on; only a failure the Runtime does
     /// not survive is the error.
     pub(super) fn check_idle_instances(&self, from_sweep: bool) -> RuntimeHostResult<()> {
-        self.check_idle(from_sweep, None, None)
+        self.check_idle(from_sweep, None, None, None)
     }
 
     /// [`Self::check_idle_instances`]; `plans`, when given (tests), stand for the scheduler's
     /// latest plan of the instances they name, and an instance they leave out has none;
     /// `identities`, when given (tests, IDLE-2), stand for the game and the server the policy
-    /// identities name, by alias.
+    /// identities name, by alias; `due_tasks`, beside `plans` (tests, #484 IDLE-W2), for the task
+    /// each plan counts due, by alias.
     fn check_idle(
         &self,
         from_sweep: bool,
         plans: Option<&BTreeMap<String, IdlePlan>>,
         identities: Option<&BTreeMap<String, (String, String)>>,
+        due_tasks: Option<&BTreeMap<String, String>>,
     ) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() || self.lifecycle_draining()? {
             return Ok(());
@@ -390,8 +418,9 @@ impl HostShared {
             return Ok(());
         }
         // The scheduler's latest plan of each configured instance (IDLE-1P: its tasks and its
-        // fact-refresh reading apart) and (IDLE-3, #447) whether it fails to count the end of a run
-        // the policy dispatched on the instance, both read under one policy guard.
+        // fact-refresh reading apart), (IDLE-3, #447) whether it fails to count the end of a run
+        // the policy dispatched on the instance and (#484 IDLE-W2) the task it counts due, all
+        // read under one policy guard.
         let latest = {
             let read = |policy: &crate::policy_host::PolicyHost| {
                 configured
@@ -399,7 +428,11 @@ impl HostShared {
                     .map(|(_, alias, _, _)| {
                         (
                             alias.clone(),
-                            (policy.idle_plan(alias), !policy.idle_runs_counted(alias)),
+                            (
+                                policy.idle_plan(alias),
+                                !policy.idle_runs_counted(alias),
+                                policy.idle_due_task(alias),
+                            ),
                         )
                     })
                     .collect::<BTreeMap<_, _>>()
@@ -425,9 +458,16 @@ impl HostShared {
             }
             // PAUSE-AUTO (0.12.34): whether an automatic start may start the emulator now.
             let hold = self.automatic_start_hold(&alias, IdleLocation::Check)?;
-            let (latest_plan, run_uncounted) = latest.get(&alias).copied().unwrap_or((None, false));
+            let (latest_plan, run_uncounted, latest_due_task) =
+                latest.get(&alias).cloned().unwrap_or((None, false, None));
             let view = self.idle_view(instance_id, emulator_on, hold.is_some(), run_uncounted)?;
             let plan = plans.map_or(latest_plan, |given| given.get(&alias).copied());
+            // #484 IDLE-W2: the task the plan counts due, which a wake for it names.
+            let due_task = if plans.is_some() {
+                due_tasks.and_then(|given| given.get(&alias).cloned())
+            } else {
+                latest_due_task
+            };
             let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
                 continue;
             };
@@ -472,9 +512,14 @@ impl HostShared {
                     None,
                     within_ms,
                 )?),
-                IdleStep::Wake { action, work } => {
-                    self.queue_idle_wake(instance_id, &alias, action, work)
-                }
+                IdleStep::Wake { action, work } => self.queue_idle_wake(
+                    instance_id,
+                    &alias,
+                    action,
+                    work,
+                    planner.woken_by(&alias),
+                    due_task.as_deref(),
+                ),
                 // PAUSE-AUTO: the planner holds a wake only while `hold` is some.
                 IdleStep::WakeHeld => hold.map_or(Ok(()), |hold| {
                     self.skip_start_for_hold(SkippedStart::IdleWake, instance_id, &alias, hold)
@@ -755,17 +800,11 @@ impl HostShared {
                 // any pause or install hold, as after every wake), and the next plan closes it
                 // again with its proper wake. Without it, an instance whose only work waits for a
                 // status reading that expired meanwhile would get no wake at all.
+                // #484 IDLE-W2: a wake the start owes (`owed_at_start`).
                 let started_at_unix_ms = self.runtime_clock_sample()?.unix_ms;
                 for (alias, (action, wakeable)) in &configured {
                     if *action != IdleAction::None && *wakeable {
-                        planner.restore(
-                            alias,
-                            KeptIdle {
-                                action: *action,
-                                wake_at_unix_ms: Some(started_at_unix_ms),
-                                woken: false,
-                            },
-                        );
+                        planner.restore_owed(alias, *action, started_at_unix_ms);
                     }
                 }
             }
@@ -1052,19 +1091,19 @@ impl HostShared {
     /// The wake of an idle instance after `action`: its record, then `work` queued in order. The
     /// configured emulator start hands the key to the startup package itself, so nothing after
     /// it is queued here; #405 O-2 (review M-1): a wake's start that finds the emulator already
-    /// running queues the startup package itself too.
+    /// running queues the startup package itself too. #484 IDLE-W2: the record says why
+    /// (`cause`, the planner's) and, for a task due, which (`due_task`).
     fn queue_idle_wake(
         &self,
         instance_id: InstanceId,
         alias: &str,
         action: IdleAction,
         work: &[WakeWork],
+        cause: Option<IdleWakeCause>,
+        due_task: Option<&str>,
     ) -> RuntimeHostResult<()> {
         let links = self.idle_links(instance_id)?;
-        self.record_idle(
-            links.clone(),
-            idle_outcome(alias, action.as_str(), IdleLocation::Wake, None, None),
-        )?;
+        self.record_idle(links.clone(), wake_outcome(alias, action, cause, due_task))?;
         for item in work {
             match item {
                 WakeWork::EmulatorStart => {
@@ -1819,7 +1858,18 @@ impl RuntimeHost {
         plans: &BTreeMap<String, IdlePlan>,
     ) -> RuntimeHostResult<()> {
         self.shared_ref(IdleLocation::Check)?
-            .check_idle(false, Some(plans), None)
+            .check_idle(false, Some(plans), None, None)
+    }
+
+    /// #484 IDLE-W2, tests: [`Self::check_idle_instances_for_test`] with `due_tasks` standing for
+    /// the task each plan counts due, by alias (a wake for a due task names it).
+    pub(crate) fn check_idle_instances_with_due_tasks_for_test(
+        &self,
+        plans: &BTreeMap<String, IdlePlan>,
+        due_tasks: &BTreeMap<String, String>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(IdleLocation::Check)?
+            .check_idle(false, Some(plans), None, Some(due_tasks))
     }
 
     /// IDLE-2, tests: [`Self::check_idle_instances_for_test`] with `identities` standing for the
@@ -1831,7 +1881,7 @@ impl RuntimeHost {
         identities: &BTreeMap<String, (String, String)>,
     ) -> RuntimeHostResult<()> {
         self.shared_ref(IdleLocation::Check)?
-            .check_idle(false, Some(plans), Some(identities))
+            .check_idle(false, Some(plans), Some(identities), None)
     }
 
     /// IDLE-3 (#447), tests: the scheduler's latest plan of `alias` and whether it counts the end
@@ -1844,6 +1894,14 @@ impl RuntimeHost {
         let shared = self.shared_ref(IdleLocation::Check)?;
         let policy = lock(shared.policy()?, IdleLocation::Check)?;
         Ok((policy.idle_plan(alias), policy.idle_runs_counted(alias)))
+    }
+
+    /// #484 IDLE-W2, tests: the task the scheduler's latest plan of `alias` counts due
+    /// (`PolicyHost::idle_due_task`), read under the policy guard as the idle check reads it.
+    pub(crate) fn idle_due_task_for_test(&self, alias: &str) -> RuntimeHostResult<Option<String>> {
+        let shared = self.shared_ref(IdleLocation::Check)?;
+        let policy = lock(shared.policy()?, IdleLocation::Check)?;
+        Ok(policy.idle_due_task(alias))
     }
 
     /// IDLE-1, tests: the number of idle actions whose worker ended, once it reaches `ended`,

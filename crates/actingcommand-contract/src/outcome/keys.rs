@@ -926,4 +926,7 @@ outcome_keys! {
     privacy_reading: boolean,
     privacy_unseen_kind: vocab(privacy_unseen_kind),
     privacy_unseen_counts: records(privacy_unseen_kind, count),
+    // ---- #484 IDLE-W2 (register §1.488): why an idle instance's wake was queued
+    // (`instance_idle_action`, operation `queue_idle_wake`); kept in codes mode. ----
+    idle_wake_cause: vocab(idle_wake_cause),
 }

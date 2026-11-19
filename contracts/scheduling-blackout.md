@@ -354,6 +354,19 @@ B15, [remedies.md](remedies.md); written ahead of slice R4);
    operations, ladders, startup packages and emulator autostart do not pass through this
    evaluation.
 
+**The idle plan behind a hold** (#484 IDLE-W2, since 0.12.75; register §1.488). Positions 1 and 2
+defer a candidate with no wake of its own (but a cooldown's), and the decision names only them. The
+idle check's plan ([runtime-config.md](runtime-config.md), "What wakes an idle instance") counts a
+candidate due only when it can be dispatched now, so for a candidate positions 1 or 2 defer the
+policy host reads positions 3 to 8 as well, in this order and each by its own reading, read only
+(positions 3 and 8 without their lift checks, so a suspended package and a paused task count as
+standing; nothing copied, drawn or noted for a clock slot; position 9 not read): the first that would hold the candidate back makes it not due for the idle plan, with that
+position's release as its wake (a candidate a cooldown defers is not due before the cooldown's end
+in any case, and keeps that wake). This look ahead serves the idle plan alone: the order above, the
+reason and wake each deferral answers, the not-run explanation, the clock-slot records of Workflow
+#372 K2 and the budgets' accounting are what they were. A position added to the order is added to
+the look ahead (`PolicyHost::evaluate`, `look_ahead`).
+
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
 lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,
 fencing, budget) and before the ceiling of its facts' freshness (`policy_facts_stale`) and the

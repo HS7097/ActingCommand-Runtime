@@ -268,6 +268,25 @@ impl PackAdmission {
         Ok(())
     }
 
+    /// #484 IDLE-W2 (register §1.488): whether position 3 holds `intent` as the suspensions stand,
+    /// read only: its procedure locates a suspended task package. No lift check runs and nothing is
+    /// copied or recorded, so it changes nothing [`Self::deferral`] later decides; the idle plan's
+    /// look ahead behind a hold of the instance reads it.
+    pub(crate) fn suspends(
+        &self,
+        lift: &SuspensionLiftView<'_>,
+        intent: &DispatchIntent,
+    ) -> RuntimeHostResult<bool> {
+        let Some(path) = lift
+            .manifest
+            .binding(&intent.procedure_ref)
+            .and_then(ProcedureBinding::package_path)
+        else {
+            return Ok(false);
+        };
+        Ok(self.suspended_at(path)?.is_some())
+    }
+
     /// The `package_id` admission read at `path`, when that task package is suspended.
     fn suspended_at(&self, path: &str) -> RuntimeHostResult<Option<String>> {
         let state = self.state()?;
