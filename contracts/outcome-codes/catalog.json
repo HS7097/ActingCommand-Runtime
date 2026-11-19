@@ -7367,7 +7367,7 @@
           "description": "The lockdown session, the service that starts the tunnel, the tunnel or its remote service discovery failed (acib: lockdown_unreachable, lockdown_read_failed, lockdown_value_unexpected, session_refused, service_refused, tunnel_failed, rsd_unreachable, rsd_handshake_failed)."
         },
         "ios_screen_capture_failed": {
-          "description": "The screen capture service or its picture request failed (acib: service_not_listed, service_unreachable, service_handshake_failed, channel_refused, screenshot_failed; service_unreachable is, by acib's README, a word of the screenshot's own service, fix round 1)."
+          "description": "The screen capture service or its picture request failed, or a service of the tunnel or the screen capture service could not be reached (acib: service_not_listed, service_unreachable, service_handshake_failed, channel_refused, screenshot_failed; acib answers service_unreachable both for the screenshot's own service and for a service the tunnel opens, which the Runtime cannot tell apart, fix round 2)."
         },
         "acib_deadline_passed": {
           "description": "acib's own deadline passed (acib: deadline_passed, with the stage it was waiting in as acib_stage)."

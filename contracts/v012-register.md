@@ -41453,8 +41453,8 @@ request #1844; on main `20656bcb`, which holds §1.485 and §1.487).
   failure carries `FrameRefusal` and leaves no resource unconfirmed, one test of the kernel's
   (`ExecutionKernelError::frame_refused_holding_nothing`); a failure that carries both is an
   unconfirmed resource.
-- One word, one cause: acib's `service_unreachable` is, by `apps/acib/README.md`, a word of the
-  screenshot's own service, so `ios_screen_capture_failed` (no longer `ios_tunnel_failed`);
+- One word, one cause: acib's `service_unreachable` is `ios_screen_capture_failed` (no longer
+  `ios_tunnel_failed`; what that cause covers is said in fix round 2, below);
   standard error that cannot be read is `acib_errors_unreadable` (no longer
   `acib_answer_unreadable`), and readers the system did not start `acib_readers_not_started` (which
   had no `ios_capture_problem` at all), the child ended at each. The vocabulary's catalog texts and
@@ -41473,6 +41473,36 @@ request #1844; on main `20656bcb`, which holds §1.485 and §1.487).
   and the reader refuse the value in a geometry record); actingd gate
   `apps/actingd/src/config/gate_479_f3a.rs` (apps "#479 F-3a": check-config notes
   `device_acib_missing` and passes, exit 0).
+
+**Fix round 2** (coordinator work order `rd-1119/brief-479-f3a-fix2.md`, after the second review of
+pull request #1844: every test job green, the lint job red on two clippy errors).
+- The two lints (clippy `chunks_exact_to_as_chunks`, `-D warnings`): the two `.chunks_exact(3)` of
+  the P3 conversion (`crates/device/src/capture/acib/picture.rs`, the 8-bit and the 16-bit
+  samples) are `.as_chunks::<3>().0.iter()`, each closure taking the array (`pixel.map(widened)`,
+  `*pixel`); what is computed is unchanged. The rest of the slice's change was read for the lints
+  clippy has not run on it yet (`execution-kernel`, `runtime-host`, `actingd`, the contract crate,
+  the Lab, `lab-ops`); nothing else was found to change.
+- `service_unreachable`, said as it is: `acib` answers it both for the screenshot's own service
+  and for a service the tunnel opens (its README lists it beside "those of the session and the
+  tunnel"), and the Runtime cannot tell the two apart. So `ios_screen_capture_failed` is described
+  as the screen capture service or its picture request failed, or a service of the tunnel or the
+  screen capture service could not be reached (the vocabulary's catalog text,
+  [device-binding.md](device-binding.md)'s mapping), and fix round 1's reason, acib's README, is
+  taken out; the mapping stays. **For a later slice:** telling the two apart needs a change of
+  `acib`.
+- `capture_frame_all_black`'s texts (the fragment's description, the code table's): it closes no
+  session and fences nothing unless the same failure also left a resource unconfirmed, which is
+  then handled as any unconfirmed resource (fix round 1's `frame_refused_holding_nothing`). No code
+  or word is added; the outcome code index is current and unchanged.
+- Tests: `f3a_fix1_h9_…` also asserts the answer itself: each observe's one `capture.failed`
+  record names `device_endpoint_unbound` as its diagnostic detail's stage (the receipt carries no
+  stage), so two equal wrong answers cannot pass. Added on the kernel's own fake provider, with one
+  flag of its state (`refuse_capture`):
+  `f3a_fix2_a_refused_picture_keeps_its_session_and_its_backends` (`execution-kernel`, exec "#479
+  F-3a"): through `ExecutionKernel::capture`, which runs `ExecutionSession::capture` and then
+  `finish_session_operation`, a picture refused as no frame fails with its mark, closes neither
+  backend and keeps the session, and the next capture gives its frame from the same capture
+  backend (one open, two captures, no close until the kernel closes).
 
 **What is not changed.** Android's and the emulators' capture, byte for byte (`build_capture_backend`
 only gains a refusal of the new name); `apps/acib`; the ledger's record kinds, members and range;

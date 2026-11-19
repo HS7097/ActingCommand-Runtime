@@ -1692,9 +1692,10 @@ actingcommand_contract::outcome_codes! {
         CaptureIosFailed => "capture_ios_failed": error / environment_fault,
         /// Error. A capture's picture whose every byte is zero once converted to the 8-bit sRGB
         /// frame (an iOS handset's through `acib`): no frame (the coordinator's ruling 3 on #479
-        /// F-3). The `caused_by` of `capture_backend_operation_failed`; no session is closed,
-        /// nothing is fenced and no picture is stored, and the next capture uses the same backend.
-        /// No lock state is read.
+        /// F-3). The `caused_by` of `capture_backend_operation_failed`; no picture is stored, no
+        /// session is closed and nothing is fenced, and the next capture uses the same backend,
+        /// unless the same failure also left a resource unconfirmed, which is then handled as any
+        /// unconfirmed resource (fix round 2). No lock state is read.
         CaptureFrameAllBlack => "capture_frame_all_black": error / none,
         // ---- Workflow #479 F-3a: end
         // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a

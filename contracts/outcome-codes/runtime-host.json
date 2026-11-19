@@ -23936,7 +23936,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.75",
-      "description": "A capture's picture whose every byte is zero once converted to the 8-bit sRGB frame (an iOS handset's through acib) is never passed on as a frame (Workflow #479 F-3a; the coordinator's ruling 3 on #479 F-3). It is the caused_by link of capture_backend_operation_failed. No session is closed, nothing is fenced and no picture is stored; the backend stays open and the next capture uses it. No lock state is read.",
+      "description": "A capture's picture whose every byte is zero once converted to the 8-bit sRGB frame (an iOS handset's through acib) is never passed on as a frame (Workflow #479 F-3a; the coordinator's ruling 3 on #479 F-3). It is the caused_by link of capture_backend_operation_failed. No picture is stored. No session is closed and nothing is fenced: the backend stays open and the next capture uses it, unless the same failure also left a resource unconfirmed, which is then handled as any unconfirmed resource (fix round 2). No lock state is read.",
       "common_causes": "The phone's screen is locked or off; a transition the application in front draws in black.",
       "handling": "Capture again in a moment; unlock the phone or bring the application to the front if it stays black."
     },

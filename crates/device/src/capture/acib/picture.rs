@@ -153,10 +153,10 @@ pub(super) fn to_srgb8(png: &[u8]) -> Result<Rgb8Picture, PictureProblem> {
             let conversion = conversion();
             let pixels: Vec<u8> = buffer
                 .into_raw()
-                .chunks_exact(3)
-                .flat_map(|pixel| {
-                    conversion.p3_pixel([widened(pixel[0]), widened(pixel[1]), widened(pixel[2])])
-                })
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|pixel| conversion.p3_pixel(pixel.map(widened)))
                 .collect();
             (width, height, pixels)
         }
@@ -170,8 +170,10 @@ pub(super) fn to_srgb8(png: &[u8]) -> Result<Rgb8Picture, PictureProblem> {
             let conversion = conversion();
             let pixels: Vec<u8> = buffer
                 .into_raw()
-                .chunks_exact(3)
-                .flat_map(|pixel| conversion.p3_pixel([pixel[0], pixel[1], pixel[2]]))
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|pixel| conversion.p3_pixel(*pixel))
                 .collect();
             (width, height, pixels)
         }

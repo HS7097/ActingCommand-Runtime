@@ -23,7 +23,7 @@
 use super::gate_369_s6c::{instance_status, send};
 use super::gate_398_rd1b::resolved_handset;
 use super::*;
-use crate::codes::HostCode;
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::{
     CaptureSequenceSpec, ContainedObservationRequest, DeviceBoundVia, EmulatorCapability,
@@ -856,7 +856,9 @@ fn f3a_fix1_h8_the_capture_of_a_contained_page_observation_opens_on_acib() {
 
 /// Fix round 1, item 3 (test 6): an unbound iOS handset's read-only observe answers what an
 /// unbound Android handset's answers on the same host (the state, the code, the codes of its
-/// causes, its stage and its capture open cause), and no child is started.
+/// causes, its stage and its capture open cause), and no child is started. Fix round 2 (item 2):
+/// and that answer is the refusal of an unbound handset: each observe's one `capture.failed`
+/// record says it arose at `device_endpoint_unbound`, the stage of its diagnostic detail.
 #[test]
 fn f3a_fix1_h9_an_unbound_ios_handset_answers_what_an_unbound_handset_answers() {
     const IPHONE: &str = "neutral.iphone";
@@ -888,8 +890,7 @@ fn f3a_fix1_h9_an_unbound_ios_handset_answers_what_an_unbound_handset_answers() 
         Arc::new(registry),
     )
     .expect("runtime host");
-    let answer_of = |alias: &str| {
-        let receipt = observe(&host, alias);
+    let answer_of = |receipt: &RuntimeReceipt| {
         let outcome = receipt.outcome();
         (
             receipt.state(),
@@ -900,9 +901,29 @@ fn f3a_fix1_h9_an_unbound_ios_handset_answers_what_an_unbound_handset_answers() 
         )
     };
 
-    let iphone = answer_of(IPHONE);
-    assert_ne!(iphone.0, RuntimeReceiptState::Completed, "{iphone:?}");
-    assert_eq!(iphone, answer_of(PHONE));
+    let iphone = observe(&host, IPHONE);
+    let phone = observe(&host, PHONE);
+    assert_ne!(iphone.state(), RuntimeReceiptState::Completed, "{iphone:?}");
+    assert_eq!(answer_of(&iphone), answer_of(&phone));
+    let events = events_of(&host);
+    for receipt in [&iphone, &phone] {
+        let request_id = receipt.request_id();
+        let stages = events
+            .iter()
+            .filter(|event| event.links().request_id() == Some(&request_id))
+            .filter_map(|event| match event.payload() {
+                EventPayload::Capture(CapturePayload::Failed(failed)) => {
+                    Some(failed.detail().map(|detail| detail.stage()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stages,
+            [Some(HostLocation::DeviceEndpointUnbound.as_str())],
+            "{receipt:?}"
+        );
+    }
     assert_eq!(acib.launches(), 0, "no child of an unbound handset");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");

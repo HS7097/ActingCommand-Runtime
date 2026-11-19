@@ -620,8 +620,10 @@ it presses nothing on it, and nothing else runs on it.
     `lockdown_read_failed`, `lockdown_value_unexpected`, `session_refused`, `service_refused`,
     `tunnel_failed`, `rsd_unreachable`, `rsd_handshake_failed` → `ios_tunnel_failed`;
     `service_not_listed`, `service_unreachable`, `service_handshake_failed`, `channel_refused`,
-    `screenshot_failed` → `ios_screen_capture_failed` (fix round 1: `service_unreachable` is, by
-    `apps/acib/README.md`, a word of the screenshot's own service); `deadline_passed` →
+    `screenshot_failed` → `ios_screen_capture_failed`, the screen capture service or its picture
+    request failed, or a service of the tunnel or the screen capture service could not be reached
+    (fix round 2: `acib` answers `service_unreachable` both for the screenshot's own service and
+    for a service the tunnel opens, and the Runtime cannot tell the two apart); `deadline_passed` →
     `acib_deadline_passed`; `picture_header_truncated`, `picture_header_unknown` →
     `ios_picture_unreadable`; `command_line_invalid`, `async_runtime_failed`, `key_salt_unusable`
     → `acib_call_refused`. Of the Runtime's own (fix round 1): an output that cannot be read is
