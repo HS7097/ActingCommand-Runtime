@@ -297,8 +297,9 @@ fn hold_next_meeting(host: &RuntimeHost) -> (mpsc::Receiver<()>, mpsc::Sender<()
 }
 
 // `gate_480_pg2b`'s ladder fixture with its first rung run in flight, held in a capture of the fake
-// (`capture_hold_after`) until `let_the_run_go`: the run cannot reach its next checkpoint.
-fn climb_with_a_held_rung_run(
+// (`capture_hold_after`) until `let_the_run_go`: the run cannot reach its next checkpoint. #480
+// PG-2e: visible to its gate, unchanged.
+pub(super) fn climb_with_a_held_rung_run(
     configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
 ) -> Climb {
     let climb = start_climb(false, configure);
@@ -328,7 +329,7 @@ fn climb_with_a_held_rung_run(
     climb
 }
 
-fn let_the_run_go(climb: &Climb) {
+pub(super) fn let_the_run_go(climb: &Climb) {
     climb.state.capture_hold_after.store(0, Ordering::Release);
 }
 
@@ -843,12 +844,14 @@ fn pg2c_a_resume_in_draining_lifts_a_persons_pause_without_a_reconnect() {
     climb.host.close().expect("close host");
 }
 
-// Ruling 4, a reader of `runtime-client` 11: while a person's pause stands with something in the
-// way, the status answers the instance's pause with exactly the members of revision 11, so the
-// console pinned to v0.12.71 reads it (no Runtime of 0.12.73 answers `pause_mode` or `in_the_way`;
-// a reader of revision 12 reads them: the contract crate's `pg2c_status_pause_members_*`).
+// Ruling 4: while a person's pause stands with something in the way, the status answers the
+// instance's pause. Adapted and renamed by #480 PG-2e (0.12.75, register §1.485; the requirement
+// moves what it pins): before it, no Runtime answered `pause_mode` or `in_the_way` and the pause
+// carried exactly the members of revision 11; since it the pause carries revision 12's two members
+// too, its mode `stand` and what its latest check found in its way, the client's lease (a reader
+// of revision 12 reads them: the contract crate's `pg2c_status_pause_members_*`).
 #[test]
-fn pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members() {
+fn pg2c_the_status_of_a_standing_pause_carries_revision_12s_members() {
     let root = TempDir::new().expect("tempdir");
     let host = client_host(&root, true);
     let token = acquire(&host, CLIENT, 2131);
@@ -873,10 +876,19 @@ fn pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members() {
     };
     assert_eq!(
         members.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        BTreeSet::from(["pause_reason", "revision", "since_unix_ms", "stage"]),
+        BTreeSet::from([
+            "in_the_way",
+            "pause_mode",
+            "pause_reason",
+            "revision",
+            "since_unix_ms",
+            "stage"
+        ]),
         "{encoded}"
     );
     assert_eq!(members["stage"], json!("paused"));
+    assert_eq!(members["pause_mode"], json!("stand"));
+    assert_eq!(members["in_the_way"], json!(["lease"]));
     release(&host, token, 2131);
     wait_for_no_continuation(&host);
     host.close().expect("close host");

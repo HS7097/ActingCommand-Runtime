@@ -848,7 +848,10 @@ naming this file.
   `pause_stage` and what is `in_the_way` (`contained_run`, `policy_run`, `lease`,
   `automatic_start`, `recovery_ladder`, `queued_entry`, `client_reset`, `close_refused`,
   `close_unconfirmed`, `check_failed`); the Runtime carries the rest on by itself, and `ac_status`
-  shows the stage becoming `released`. A second pause of a paused instance answers
+  shows the stage becoming `released`. Since 0.12.75 (#480 PG-2e) an instance's `pause` in
+  `ac_status` also carries its `pause_mode` and, until it is `released`, what its latest check
+  found `in_the_way` (the same words; `scheduling-pause.md`, "Status"). A second pause of a paused
+  instance answers
   `scheduling_already_paused`; `ac_resume` lifts the pause in every stage. A shutdown before
   `released` answers `scheduling_pause_kept_at_shutdown`: the pause is restored at the next start. A
   tool's hold (a rescue row's, a recording's) is `quiet_or_lift`: quiet within its time, or it fails

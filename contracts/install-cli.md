@@ -422,8 +422,14 @@ edges or the gate ("Undo and resume", below).
 **Status** (done) answers the layout, the live and kept builds, the pack
 register, the committed configuration SHA-256 and whether a candidate exists, the unfinished
 operation, the last finished operations, the leftovers count, and the rollback window's cheap
-parts (the interface edges toward each kept build, whether an owner started since the live
-build's operation). `--operation <id>` answers that journal. `--check-rollback` evaluates the
+parts (`rollback_window`, one row `{commit, ledger_edge_passes}` per kept build but the live one;
+whether an owner started since the live build's operation). A row tells **the ledger's edge
+only** (the live build's `ledger` `max` within the kept build's range, as the plan's
+`previous_max_in_next`), not the other edges: a plan toward a kept build whose row is `true` can
+still be refused by another edge. So since 0.12.75 (#480 PG-2e, register §1.485) a kept build
+whose tools end below `runtime-client` 12 (0.12.72, 0.12.71) passes the ledger's edge, its row is
+`true`, and its rollback plan is refused by `installer_meets_next`. `--operation <id>` answers
+that journal. `--check-rollback` evaluates the
 whole gate toward the previous build.
 
 **Leftovers** (done, `count`) lists every kept file and folder with its

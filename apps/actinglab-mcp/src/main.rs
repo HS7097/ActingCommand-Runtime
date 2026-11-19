@@ -100,6 +100,10 @@ mod gate_434_pp1;
 // (`pg2d_ac_resume_takes_the_parameters_it_took`).
 #[cfg(test)]
 mod gate_480_pg2d;
+// Test-only: #480 PG-2e, `ac_status` and `ac_pause` take the parameters they took
+// (`pg2e_ac_status_and_ac_pause_take_the_parameters_they_took`).
+#[cfg(test)]
+mod gate_480_pg2e;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
