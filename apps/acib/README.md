@@ -492,8 +492,8 @@ answer, error text or log line.
   of a way that asks for answers, what each kill request was answered (`replies`: per pid,
   `reply` `without_payload`, `with_payload` or `not_in_time`, and of an answer that came its
   `message_type`, the first byte of its payload header; a payload is never read), and (fix round
-  2) how many answers came that were given to no kill request (`unpaired_replies`, only when
-  there are any, below); and, of each
+  2) how many answers this program saw that were given to no kill request (`unpaired_replies`,
+  only when there are any, below); and, of each
   stage after the first look, whether the command reached it (`reached`: `kill_requests`,
   `kill_replies` of a way that asks for answers, `look_connection`, `looks_after_kills`):
   `{"command":"stop","device":3,"bundle":"com.example.app","via":"primitive","installed":true,
@@ -554,7 +554,11 @@ answer, error text or log line.
     own form, its answer asked for, ends nothing: the wait for its answer failed within about two
     milliseconds, the library's reader of the connection having stopped (the reason the build of
     fix round 1 names `reader_stopped`, below). `library` was not sent again (the same bytes as at
-    13:28), and `archived` was not sent.
+    13:28), and `archived` was not sent. (Fix round 3) That build, as every build up to fix round
+    2, read nothing more after the first failed read, and the library can hand a read that is
+    already waiting the end of the connection before an answer it has just read (below): **so
+    the run does not show that the phone sent no answer to the kill before the connection ended**,
+    only that `acib` saw none.
 
   **What the library's source says of the run at 13:28**, and what it does not:
 
@@ -600,8 +604,8 @@ answer, error text or log line.
   milliseconds of the kill. Left: the form of the request; or (a cause the review of #1849
   added) a server that does not end a process its own connection did not start (`--relaunch`
   ends one by another mechanism). Either way the server ended the connection or sent a message
-  the library could not read, and the library's error does not tell which (below). The ways, by
-  `--via`:
+  the library could not read, and the library's error does not tell which (below); whether it
+  answered the kill before that, the run at 15:17 does not tell (above). The ways, by `--via`:
 
   - `primitive` (fix round 1: the default, the form that is known):
     `RemoteServerClient::make_channel` of `com.apple.instruments.server.services.processcontrol`
@@ -609,8 +613,8 @@ answer, error text or log line.
     library's own, `AuxValue::U32` of the pid, its answer asked for, then `Channel::read_message`
     for the answers, at most `--wait-ms` in all, each paired with its request by its number
     (below). The same bytes as the library's `kill_app` but for the one flag that asks for an
-    answer. On the phone at 15:17: nothing ended, the wait for the answer failing at once
-    (above).
+    answer. On the phone at 15:17: nothing ended, and no answer was seen, the wait for it
+    failing at once (above: whether one came is not known).
   - `archived`, sent only when `--via archived` names it: the same calls, the argument
     `AuxValue::archived_value` of the pid as a signed number (as `device_info.rs` 99-101 makes
     one). Not known: whether this server's `killPid:` takes an archived number, what it answers,
@@ -626,8 +630,8 @@ answer, error text or log line.
   instruments server's port, `RsdService::from_stream`, its first message read: `tcp/mod.rs`
   10-17, `services/dvt/mod.rs` 37-46) and looks on it as above. To read a run: `via` names the
   way; `reached` how far it went; `replies` (or a pid in `signal_errors`, with its
-  `reply_failure`) what became of each request, and `unpaired_replies` how many answers came that
-  were of none; `running`, `remaining` and the problem
+  `reply_failure`) what became of each request, and `unpaired_replies` how many answers it saw
+  that were of none; `running`, `remaining` and the problem
   (`still_running` or none) whether the application was ended; `stage_ms` how long each step
   took.
 
@@ -658,7 +662,25 @@ answer, error text or log line.
   of order is never given to another pid, and one whose number is of no request still waited for
   is given to none and (fix round 2) counted, in `unpaired_replies` (only when there are any; no
   byte of such an answer is read or kept). A request whose answer did not come in time is
-  `not_in_time`.
+  `not_in_time`. (Fix round 3) `unpaired_replies` counts the answers this program saw before
+  its reading ended (every request answered, the wait passed, or the reading after a failed
+  read done, below): one that came later, or that the library had not read whole when the
+  connection ended, is not counted.
+
+  **Reading the answers to their end (fix round 3).** The library's reader of the connection puts
+  each message it reads in its channel's queue before it reads the next, and marks the connection
+  closed only at the read that fails (`services/dvt/remote_server.rs` 861-885, 1062-1086). A read
+  of the channel begun after a message was queued takes it: it looks at the queue first
+  (836-839) and at the closed mark only then (842-844), and once the mark is set it answers at
+  once, never waiting. But a read already waiting when an answer and the end come together
+  returns whichever of the two its `tokio::select!` checks first (846-849), and that macro picks
+  its first branch at random: the error may come first, the answer left in the queue. Up to fix
+  round 2 `stop` ended its reading at the first failed read, so an answer that had reached this
+  computer just before the end could be named `reader_stopped` (two tests did so on CI, and the
+  run at 15:17 may have, above). Since fix round 3 a failed read does not end the reading: each
+  read after it takes the next answer the library still holds, at once, until a read fails
+  again, and only then is a request still without its answer a failed one. These reads send
+  nothing and wait for nothing: what `stop` sends, and when, is as before.
 
   **When the wait for an answer fails (fix round 1).** The reason is named in `reply_failure`,
   beside the failed request's pid and `error_kind`, from the library's error value alone (its
@@ -674,10 +696,15 @@ answer, error text or log line.
     answers the one fixed error. (Fix round 2) The same error comes, too, when the library fails
     to write its acknowledgement of a channel the phone asked to open (1020-1032): it then marks
     the connection closed (1029-1031), its reader still running. **The library gives a caller one
-    undivided error for all of these**, and `acib` does not tell them apart.
+    undivided error for all of these**, and `acib` does not tell them apart. (Fix round 3) **What
+    it says, and what not:** beside a request, `reader_stopped` says that the connection ended
+    before this program saw an answer to it (every answer the library had read is taken first,
+    above), **not that the phone sent none**: an answer still under way, cut by the end, or one
+    the library could not read as a message (which itself stops the reader) is never seen.
   - `channel_cancelled`: the library's `UnknownChannel` (`remote_server.rs` 828-833): the channel
     is no longer the library's, which it makes so only when the phone cancels it
-    (`_channelCanceled:`, 938-960, 1234-1239).
+    (`_channelCanceled:`, 938-960, 1234-1239); (fix round 3) what the library held of the channel
+    goes with it, so an answer read before the cancel and not yet taken is not seen either.
   - `other`: any other error of the library.
 
   A message whose stated lengths do not fit its bytes ends the library's reader by a panic

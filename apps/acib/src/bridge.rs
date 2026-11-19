@@ -1519,10 +1519,21 @@ async fn send_kills(
 /// request's number: [`FIRST_KILL_NUMBER`]), never by its place among the answers, so an answer
 /// that is missing, late or out of order is given to no other pid, and an answer whose number is
 /// of no request still waited for is given to none and (fix round 2) counted, by nothing but its
-/// count. In the order of `sent`, each request's: its answer, when one came; else, when a read
-/// failed (no answer can come after: the library's reader of the connection stops for good,
-/// `services/dvt/remote_server.rs` 853-896), a failed request of the error's kind and its
-/// [`reply_failure`]; else, the wait having passed, `not_in_time`. Then how many answers were
+/// count. (Fix round 3) A failed read does not end the reading. The library's reader of the
+/// connection puts each message it reads in its channel's queue before it reads the next, and
+/// marks the connection closed only at the read that fails (idevice 0.1.68,
+/// `services/dvt/remote_server.rs` 861-885, 1062-1086); a read begun after a message was queued
+/// takes it, the queue being looked at before the closed mark (836-844), but a read already
+/// waiting when an answer and the end come together returns whichever of the two its
+/// `tokio::select!` checks first, a branch picked at random (846-849), the answer left queued. So
+/// after the first failed read each read takes the next answer the library still holds, until a
+/// read fails again; none of them waits (the connection marked closed, a mark nothing takes back,
+/// or the channel gone, the library answers a read at once: 842-844, 830-833), and nothing is
+/// sent. Every answer the library read before the end is so paired, whichever came first to the
+/// waiting read. In the order of `sent`, each request's: its answer, when one came; else, when a
+/// read failed, a failed request of the first failed read's kind and its [`reply_failure`] (the
+/// connection ended before this program saw an answer to it, which does not say that the phone
+/// sent none: README); else, the wait having passed, `not_in_time`. Then how many answers were
 /// given to no request.
 async fn kill_answers(
     control: &mut ServerChannel<'_>,
@@ -1531,14 +1542,16 @@ async fn kill_answers(
 ) -> (Vec<KillReply>, Vec<SignalError>, usize) {
     let until = tokio::time::Instant::now().checked_add(wait);
     let mut answers: Vec<Option<KillReply>> = vec![None; sent.len()];
-    let mut failed = None;
+    let mut failed: Option<IdeviceError> = None;
     let mut unpaired = 0;
     while answers.iter().any(Option::is_none) {
         let next = match until {
-            Some(until) => tokio::time::timeout_at(until, next_answer(control))
+            Some(until) if failed.is_none() => tokio::time::timeout_at(until, next_answer(control))
                 .await
                 .ok(),
-            None => Some(next_answer(control).await),
+            // (Fix round 3) After a failed read the library answers each read at once: no
+            // deadline cuts the taking of the answers it holds.
+            _ => Some(next_answer(control).await),
         };
         match next {
             Some(Ok(answer)) => {
@@ -1552,11 +1565,10 @@ async fn kill_answers(
                     None => unpaired += 1,
                 }
             }
-            Some(Err(error)) => {
-                failed = Some(error);
-                break;
-            }
-            None => break,
+            // (Fix round 3) The first failed read: the reads after it take what the library holds.
+            Some(Err(error)) if failed.is_none() => failed = Some(error),
+            // A read after it failing too (the library holds no more), or the wait passed.
+            Some(Err(_)) | None => break,
         }
     }
     let (mut replies, mut errors) = (Vec::with_capacity(sent.len()), Vec::new());
@@ -1593,7 +1605,12 @@ async fn kill_answers(
 /// (`remote_server.rs` 1020-1032): it then marks the connection closed (1029-1031), its reader
 /// still running, and every wait after it answers that error. The one error stands for all of
 /// these, and `reader_stopped` cannot be divided further from what the library gives a caller
-/// (README).
+/// (README). (Fix round 3) Beside a request it says that the connection ended before this program
+/// saw an answer to it ([`kill_answers`] takes every answer the library read before the end), not
+/// that the phone sent none: an answer under way, cut by the end, or one the library could not
+/// read as a message (which itself stops the reader) is never seen. And the phone cancelling the
+/// channel drops what the library held of it (1234-1239): an answer read before the cancel and not
+/// yet taken is not seen either.
 fn reply_failure(error: &IdeviceError) -> ReplyFailure {
     match error {
         IdeviceError::Socket(socket) if socket.kind() == std::io::ErrorKind::BrokenPipe => {
@@ -3219,7 +3236,11 @@ mod tests {
     /// (414 `with_payload`, 412 `without_payload`). The server answering only 414's and then ending
     /// the connection: 414 has its answer, and 412, whose answer never came, is a failed request,
     /// `connection_failed` with `reader_stopped`, never 414's answer. The looks on their own
-    /// connection decide either way (stopped, status 0). And the reason of a failed wait comes
+    /// connection decide either way (stopped, status 0). (Fix round 3) The server writes its
+    /// answers before it ends the connection, so the library has read them all when it marks the
+    /// connection closed; whichever of an answer and the end the waiting read is handed first,
+    /// the reads after a failed one take every answer it holds (`kill_answers`): no order can
+    /// change either line. And the reason of a failed wait comes
     /// from the library's error value alone: the socket error of the kind `BrokenPipe` it makes
     /// once its reader has stopped (`services/dvt/remote_server.rs` 1245-1250) is `reader_stopped`,
     /// its `UnknownChannel` `channel_cancelled`, any other error `other`.
@@ -3304,7 +3325,9 @@ mod tests {
     /// and `unpaired_replies` counts the other. The server answering only the number of no
     /// request and then ending the connection: 412 is a failed request (`connection_failed` with
     /// `reader_stopped`), never that answer's, and `unpaired_replies` counts it. The looks on
-    /// their own connection decide either way (stopped, status 0).
+    /// their own connection decide either way (stopped, status 0). (Fix round 3) As in the test
+    /// of pairing above, the answers are written before the end and every one the library read is
+    /// taken whatever the waiting read was handed first: the count is 1 in either order.
     #[test]
     fn an_answer_whose_number_is_of_no_request_is_given_to_no_process_and_counted() {
         let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");

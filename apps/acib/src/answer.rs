@@ -1375,7 +1375,10 @@ impl SignalError {
 /// ending the connection, its reset, a read that failed, a message the library could not read and
 /// (fix round 2) its own acknowledgement of a channel the phone opened that it failed to write are
 /// that one error, `reader_stopped`; a wait whose time passed is no failure but the answer
-/// `not_in_time` ([`KillAnswer`]).
+/// `not_in_time` ([`KillAnswer`]). (Fix round 3) A word says why this program saw no answer to the
+/// request, never that the phone sent none: `stop` reads on after a failed read and takes every
+/// answer the library had read (`bridge.rs`, `kill_answers`), but one it had not read whole when
+/// the connection ended is never seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyFailure {
@@ -1384,10 +1387,16 @@ pub enum ReplyFailure {
     /// `services/dvt/remote_server.rs` 842-849, 1245-1250), for any of the reasons it stops for,
     /// which it traces and drops (853-896); (fix round 2) the same error comes, too, once the
     /// library failed to write its acknowledgement of a channel the phone asked to open
-    /// (1020-1032: it marks the connection closed, 1029-1031, its reader still running).
+    /// (1020-1032: it marks the connection closed, 1029-1031, its reader still running). (Fix
+    /// round 3) The connection ended before this program saw an answer to the request, every answer
+    /// the library read before the end taken first; not that the phone sent none (an answer under
+    /// way, cut by the end, or not readable as a message, which itself stops the reader, is never
+    /// seen).
     ReaderStopped,
     /// The channel is no longer the library's (its `UnknownChannel`: 828-833), which it removes
-    /// only when the phone cancels it (`_channelCanceled:`, 938-960, 1234-1239).
+    /// only when the phone cancels it (`_channelCanceled:`, 938-960, 1234-1239); (fix round 3)
+    /// what it held of the channel goes with it, so an answer read before the cancel and not yet
+    /// taken is not seen.
     ChannelCancelled,
     /// Any other error of the library.
     Other,
@@ -1457,7 +1466,8 @@ pub struct Reached {
 /// stage after the first look, whether it was reached (`reached`). (Fix round 1) A request whose
 /// answer could not be waited for to its end names in `signal_errors` why, as far as the library's
 /// error tells ([`ReplyFailure`]). (Fix round 2) Answers that came and were given to no kill
-/// request are counted in `unpaired_replies`, only when there are any.
+/// request are counted in `unpaired_replies`, only when there are any (fix round 3: those this
+/// program saw).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stop {
     pub command: CommandName,
@@ -1477,7 +1487,10 @@ pub struct Stop {
     pub replies: Vec<KillReply>,
     /// (ACIB-3d, fix round 2) How many answers read on the process control channel were given to
     /// no kill request, their number being of no request still waited for (`bridge.rs`,
-    /// `kill_answers`): a count, no byte of them. Only when there are any.
+    /// `kill_answers`): a count, no byte of them. Only when there are any. (Fix round 3) The
+    /// answers this program saw before its reading ended (every request answered, the wait
+    /// passed, or the reads after a failed one having taken what the library held); one that came
+    /// later, or that the library had not read whole when the connection ended, is not counted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpaired_replies: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
