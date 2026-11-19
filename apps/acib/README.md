@@ -17,7 +17,9 @@ it. With `--out -` it writes no file: the picture's bytes follow the line on the
 (below).
 
 **Two commands change what the phone runs and shows: `launch` and `stop`.** Every other
-command only reads. `launch` starts one application, through the instruments server's process
+command only reads. (ACIB-3d, fix round 2) The library's calls that would restart, shut down or
+otherwise change the phone, or install, remove or change an application, are named in "Calls this
+program never makes", below. `launch` starts one application, through the instruments server's process
 control (whether it then comes to the front the library does not say: to be observed on the
 phone); with `--relaunch` it first ends that application if it runs (what was not saved in it is
 lost). It is undone by `acib stop` with the same bundle, or by the person on the phone (the home
@@ -489,7 +491,9 @@ answer, error text or log line.
   while the application is still listed, `application_located`, as `running` names them; (ACIB-3d)
   of a way that asks for answers, what each kill request was answered (`replies`: per pid,
   `reply` `without_payload`, `with_payload` or `not_in_time`, and of an answer that came its
-  `message_type`, the first byte of its payload header; a payload is never read); and, of each
+  `message_type`, the first byte of its payload header; a payload is never read), and (fix round
+  2) how many answers came that were given to no kill request (`unpaired_replies`, only when
+  there are any, below); and, of each
   stage after the first look, whether the command reached it (`reached`: `kill_requests`,
   `kill_replies` of a way that asks for answers, `look_connection`, `looks_after_kills`):
   `{"command":"stop","device":3,"bundle":"com.example.app","via":"primitive","installed":true,
@@ -622,7 +626,8 @@ answer, error text or log line.
   instruments server's port, `RsdService::from_stream`, its first message read: `tcp/mod.rs`
   10-17, `services/dvt/mod.rs` 37-46) and looks on it as above. To read a run: `via` names the
   way; `reached` how far it went; `replies` (or a pid in `signal_errors`, with its
-  `reply_failure`) what became of each request; `running`, `remaining` and the problem
+  `reply_failure`) what became of each request, and `unpaired_replies` how many answers came that
+  were of none; `running`, `remaining` and the problem
   (`still_running` or none) whether the application was ended; `stage_ms` how long each step
   took.
 
@@ -651,7 +656,9 @@ answer, error text or log line.
   is given to the request whose number it carries (bytes 16 to 19 of its header,
   `services/dvt/message.rs` 531-545, 597) and to no other: an answer that is missing, late or out
   of order is never given to another pid, and one whose number is of no request still waited for
-  is given to none. A request whose answer did not come in time is `not_in_time`.
+  is given to none and (fix round 2) counted, in `unpaired_replies` (only when there are any; no
+  byte of such an answer is read or kept). A request whose answer did not come in time is
+  `not_in_time`.
 
   **When the wait for an answer fails (fix round 1).** The reason is named in `reply_failure`,
   beside the failed request's pid and `error_kind`, from the library's error value alone (its
@@ -664,8 +671,10 @@ answer, error text or log line.
     message it reads (853-896): the stream's end (the phone ended the connection), a reset or
     another failed read, or a message it cannot read (`services/dvt/message.rs` 585-665). It
     traces that error at warning level (878) and keeps nothing of it, and every wait after it
-    answers the one fixed error: **the library gives a caller one undivided error for all of
-    these**, and `acib` does not tell them apart.
+    answers the one fixed error. (Fix round 2) The same error comes, too, when the library fails
+    to write its acknowledgement of a channel the phone asked to open (1020-1032): it then marks
+    the connection closed (1029-1031), its reader still running. **The library gives a caller one
+    undivided error for all of these**, and `acib` does not tell them apart.
   - `channel_cancelled`: the library's `UnknownChannel` (`remote_server.rs` 828-833): the channel
     is no longer the library's, which it makes so only when the phone cancels it
     (`_channelCanceled:`, 938-960, 1234-1239).
@@ -726,7 +735,8 @@ answer, error text or log line.
     as the process, a time on the device and the signal: 78-84); `launch_application` with
     `kill_existing` (232-300: `terminateExisting` true, 255), a relaunch; `uninstall_app`
     (325-341: the feature `com.apple.coredevice.feature.uninstallapp`), which removes the
-    application and is no stop.
+    application and is no stop, and which `acib` never calls (fix round 2: "Calls this program
+    never makes", below).
   - The debug server through its proxy (`services/debug_proxy.rs`, the service
     `com.apple.internal.dt.remote.debugproxy`, 14-24, the feature `debug_proxy`, off):
     `DebugProxyClient::send_command` (92-123) sends any packet of the GDB remote serial protocol;
@@ -736,7 +746,9 @@ answer, error text or log line.
     `terminateApp` with the bundle) and `delete_session` (696-704): they need WebDriverAgent
     running on the phone, another project's program.
   - The diagnostics relay (`services/diagnostics_relay.rs`, the feature `diagnostics_relay`,
-    off): `restart`, `shutdown` and `sleep` (187, 207, 227), the whole phone, no one process.
+    off): `restart`, `shutdown` and `sleep` (187, 207, 227), the whole phone, no one process,
+    which `acib` never calls (fix round 2: below, with every other call of the library that
+    restarts, shuts down or changes a phone, or installs or removes an application).
 
   Which next: the debug server, because it is the one way that goes through neither the
   instruments server's process control (whose `killPid:`, in the form that is known, ended
@@ -826,6 +838,144 @@ the same: the deadline cuts the command there. Nothing but a stage's word and a 
 either: no identifier of the phone or of any application. A refusal of a step before the lookup or
 between it and the instruments server (`not_paired`, `session_refused`, `tunnel_failed`,
 `service_not_listed` and the like) is answered as before, with no `stage_ms`.
+
+### Calls this program never makes
+
+(ACIB-3d, fix round 2.) Of the public interface of idevice 0.1.68, these calls restart, shut down,
+put to sleep or into recovery a phone, unpair it or change its settings, install, upgrade or
+remove an application or change its data, or change what the phone has mounted, holds on its
+pasteboard or shows. **`acib` makes none of them**, in no command and under no flag. Each is named
+by its type and its name, with its file under the library's `src/` and the line its function
+starts at, and what it would do to the phone. Read for this list was the public interface of every
+module the features `acib` turns on compile in (`core_device`, `core_device_proxy`, `dvt`,
+`installation_proxy`, `mobile_image_mounter`, `rsd`, `springboardservices`, `tunnel_tcp_stack`,
+`usbmuxd`, and what they bring in: the lockdown client, always built, the XPC client, the TCP
+stack, the pairing record, the providers, the library's root); of the modules under features it
+does not turn on, the diagnostics relay and the restore service, which the reviews of #1849
+named. No call of these modules erases a phone.
+
+**The whole phone.**
+
+- `DiagnosticsRelayClient::restart` (`services/diagnostics_relay.rs` 187; the feature
+  `diagnostics_relay`, off): it asks the diagnostics relay to restart the phone (`Restart`).
+- `DiagnosticsRelayClient::shutdown` (207): it asks the diagnostics relay to shut the phone down
+  (`Shutdown`).
+- `DiagnosticsRelayClient::sleep` (227): it asks the diagnostics relay to put the phone to sleep
+  (`Sleep`).
+- `LockdownClient::enter_recovery` (`services/lockdown.rs` 568): it asks lockdown to put the phone
+  into recovery mode (`EnterRecovery`).
+- `RestoreServiceClient::enter_recovery` (`services/restore_service.rs` 39; the feature
+  `restore_service`, off): it asks the restore service to put the phone into recovery mode
+  (`recovery`).
+- `RestoreServiceClient::reboot` (78): it asks the restore service to restart the phone (`reboot`).
+
+**The pairing.**
+
+- `LockdownClient::unpair` (`services/lockdown.rs` 207): it removes this computer's pairing from
+  the phone (`Unpair`), so that the phone trusts this computer no more.
+- `UsbmuxdConnection::delete_pair_record` (`usbmuxd/mod.rs` 344): it deletes the pairing record
+  usbmuxd holds for the phone on this computer (`DeletePairRecord`).
+- `UsbmuxdConnection::save_pair_record` (320): it replaces the pairing record usbmuxd holds for
+  the phone on this computer with the one given (`SavePairRecord`).
+
+**The phone's settings.**
+
+- `LockdownClient::set_value` (`services/lockdown.rs` 135): it sets a value of the phone's
+  lockdown domains (`SetValue`; the library's own example turns on debugging over Wi-Fi).
+- `LockdownClient::remove_value` (168): it removes a value of the phone's lockdown domains
+  (`RemoveValue`).
+- `ConfigurationServiceClient::set_user_interface_style`
+  (`services/core_device/configuration_service.rs` 88): it switches the phone between its light
+  and dark appearance.
+- `ConfigurationServiceClient::set_liquid_glass_opacity` (101): it sets the opacity of the
+  system's glass material.
+- `ConfigurationServiceClient::set_color_filter` (145): it turns the accessibility colour filter on
+  or off.
+- `ConfigurationServiceClient::set_device_text_size` (191): it sets the size of the phone's
+  dynamic type.
+- `ConfigurationServiceClient::set_reduce_motion` (210): it turns Reduce Motion on or off.
+- `ConfigurationServiceClient::set_increase_contrast` (220): it turns Increase Contrast on or off.
+- `ConfigurationServiceClient::set_show_borders` (239): it turns the overlay of layout borders on
+  or off.
+- `ConfigurationServiceClient::set_reduce_transparency` (258): it turns Reduce Transparency on or
+  off.
+- `SpringBoardServicesClient::set_icon_state` (`services/springboardservices.rs` 181): it replaces
+  the layout of the phone's home screen (`setIconState`).
+- `SpringBoardServicesClient::set_icon_state_with_version` (207): it replaces the layout of the
+  home screen as `set_icon_state` does, in a format version given.
+- `RestoreServiceClient::restore_lang` (`services/restore_service.rs` 212): it asks the restore
+  service to set the phone's language to the one given (`restorelang`).
+
+**Applications and their data.**
+
+- `InstallationProxyClient::install` (`services/installation_proxy.rs` 131): it installs an
+  application on the phone from a package put there before.
+- `InstallationProxyClient::install_with_callback` (159): it installs an application as
+  `install` does, reporting its progress.
+- `InstallationProxyClient::upgrade` (198): it replaces an installed application by the one in a
+  package put on the phone before.
+- `InstallationProxyClient::upgrade_with_callback` (223): it replaces an application as `upgrade`
+  does, reporting its progress.
+- `InstallationProxyClient::uninstall` (262): it removes an application and its data from the
+  phone.
+- `InstallationProxyClient::uninstall_with_callback` (287): it removes an application and its
+  data as `uninstall` does, reporting its progress.
+- `AppServiceClient::uninstall_app` (`services/core_device/app_service.rs` 326): it removes an
+  application and its data from the phone through CoreDevice
+  (`com.apple.coredevice.feature.uninstallapp`).
+- `FileServiceClient::propose_empty_file` (`services/core_device/file_service.rs` 188): it
+  creates an empty file in the domain of its session, an application's data container among them.
+
+**What the phone has mounted, holds or shows.**
+
+- `ImageMounter::upload_image` (`services/mobile_image_mounter.rs` 116): it sends a disk image to
+  the phone's image mounter.
+- `ImageMounter::upload_image_with_progress` (141): it sends a disk image as `upload_image` does,
+  reporting its progress.
+- `ImageMounter::mount_image` (224): it mounts on the phone an image sent before (`MountImage`).
+- `ImageMounter::unmount_image` (272): it unmounts an image from the phone (`UnmountImage`), the
+  developer image among them.
+- `ImageMounter::mount_developer` (442): it sends a developer disk image to the phone and mounts
+  it.
+- `ImageMounter::roll_personalization_nonce` (412): it makes the phone roll the nonce of its
+  personalized images (`RollPersonalizationNonce`).
+- `ImageMounter::roll_cryptex_nonce` (425): it makes the phone roll its cryptex nonce
+  (`RollCryptexNonce`).
+- `PasteboardServiceClient::set_text` (`services/core_device/pasteboard_service.rs` 318): it
+  replaces what the phone's pasteboard holds with a text.
+- `PasteboardServiceClient::set_image` (346): it replaces what the phone's pasteboard holds with
+  an image.
+- `OrientationServiceClient::rotate` (`services/core_device/orientation_service.rs` 90): it turns
+  the phone's interface by 90 degrees.
+
+The image mounter's four `mount_personalized` calls (467 to 621) are built only under the
+library's feature `tss`, which `acib` does not turn on.
+
+**Not in this list, and why.** `launch`, with or without `--relaunch` (the instruments server's
+`launch_app`, its `KillExisting` false or true), and the kill requests of `stop` (`killPid:` in
+each of its three ways, the way `library` the library's `kill_app`) are this program's commands,
+each described in its own section above. The library's other calls that launch, end or signal one
+process (the application service's `send_signal` and its `launch_application` with
+`terminateExisting`, the process control's `disable_memory_limit`, the debug server's packets,
+WebDriverAgent's `terminate_app`: listed under `stop`, above) are of the kind of those two
+commands: whether one of them is ever built is decided with them, not here. Nor are the
+library's general requests in it, which send whatever they are given (`Channel::call_method` and
+`RemoteServerClient::call_method`, CoreDevice's `invoke` calls, lockdown's `start_service`, the XPC
+client's `send_object`): `acib` uses some of them, and what it sends with each is written in its
+command's section. A feature of the library turned on later is read the same way, and its calls
+of these kinds are added here and to the test.
+
+**What holds it.** A test (`main.rs`,
+`the_source_names_none_of_the_calls_this_program_never_makes`) reads every source file of `acib`
+and fails when one names a call of this list: a method call (`.name(` or `.name::<`) or a path to
+it whose segment before the name is a type's (`Type::name`, through an alias of the type or `Self`
+too, or after generic arguments, `>::name`); lines that open with `//` are comments and are not
+read, and a function of a module (`time::sleep`) is no such path. It fails, too, when this list
+and the test's own do not name the same calls in the same order. The files it reads are listed in
+it by their paths under `src/`, each with `include_str!`: a file added under `src/` fails the test,
+named by its path, until it is added to that list, and a file of the list that is gone fails its
+build. It is a tripwire for how a call is written, not a proof: what a general request carries no
+name holds.
 
 ### What the application service does with a request: `probe` (ACIB-3b, second and third rounds)
 

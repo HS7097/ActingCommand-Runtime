@@ -1372,8 +1372,9 @@ impl SignalError {
 /// own words, read from the library's error value alone (never from a message's bytes, nothing of
 /// the device or of another application: `bridge.rs`, `reply_failure`). The library hands a caller
 /// that waits on a channel one error for every way its connection can end (README): the phone
-/// ending the connection, its reset, a read that failed and a message the library could not read
-/// are that one error, `reader_stopped`; a wait whose time passed is no failure but the answer
+/// ending the connection, its reset, a read that failed, a message the library could not read and
+/// (fix round 2) its own acknowledgement of a channel the phone opened that it failed to write are
+/// that one error, `reader_stopped`; a wait whose time passed is no failure but the answer
 /// `not_in_time` ([`KillAnswer`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1381,7 +1382,9 @@ pub enum ReplyFailure {
     /// The library's reader of the connection has stopped (its `Socket` error of the kind
     /// `BrokenPipe`, "remote server connection closed": idevice 0.1.68,
     /// `services/dvt/remote_server.rs` 842-849, 1245-1250), for any of the reasons it stops for,
-    /// which it traces and drops (853-896).
+    /// which it traces and drops (853-896); (fix round 2) the same error comes, too, once the
+    /// library failed to write its acknowledgement of a channel the phone asked to open
+    /// (1020-1032: it marks the connection closed, 1029-1031, its reader still running).
     ReaderStopped,
     /// The channel is no longer the library's (its `UnknownChannel`: 828-833), which it removes
     /// only when the phone cancels it (`_channelCanceled:`, 938-960, 1234-1239).
@@ -1453,7 +1456,8 @@ pub struct Reached {
 /// answers, what each kill request was answered (`replies`, only when there are any) and, of each
 /// stage after the first look, whether it was reached (`reached`). (Fix round 1) A request whose
 /// answer could not be waited for to its end names in `signal_errors` why, as far as the library's
-/// error tells ([`ReplyFailure`]).
+/// error tells ([`ReplyFailure`]). (Fix round 2) Answers that came and were given to no kill
+/// request are counted in `unpaired_replies`, only when there are any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stop {
     pub command: CommandName,
@@ -1471,6 +1475,11 @@ pub struct Stop {
     pub signal_errors: Vec<SignalError>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub replies: Vec<KillReply>,
+    /// (ACIB-3d, fix round 2) How many answers read on the process control channel were given to
+    /// no kill request, their number being of no request still waited for (`bridge.rs`,
+    /// `kill_answers`): a count, no byte of them. Only when there are any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpaired_replies: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1505,6 +1514,7 @@ impl Stop {
             signalled: None,
             signal_errors: Vec::new(),
             replies: Vec::new(),
+            unpaired_replies: None,
             remaining: None,
             running: None,
             extension_pids: None,
@@ -1600,6 +1610,15 @@ impl Stop {
     /// its pid (none of the way `library`).
     pub fn with_replies(self, replies: Vec<KillReply>) -> Self {
         Self { replies, ..self }
+    }
+
+    /// (ACIB-3d, fix round 2) Of a way that asks for answers, how many answers came that were
+    /// given to no kill request (`count`; named only when there are any).
+    pub fn with_unpaired_replies(self, count: usize) -> Self {
+        Self {
+            unpaired_replies: (count > 0).then_some(count),
+            ..self
+        }
     }
 
     /// (ACIB-3d) Of each stage after the first look, whether the command reached it.
@@ -2720,6 +2739,32 @@ mod tests {
                 r#"{"command":"stop","device":3,"bundle":"com.example.app","via":"primitive","installed":true,"was_running":true,"signalled":[412],"signal_errors":[{"pid":412,"error_kind":"connection_failed","reply_failure":"reader_stopped"}],"remaining":[412],"running":true,"extension_pids":[],"located":179,"application_located":"directly_inside","reached":{"kill_requests":true,"kill_replies":true,"look_connection":true,"looks_after_kills":true},"problem":"still_running"}"#,
                 false,
             ),
+            // Fix round 2: an answer that came and was given to no kill request is counted.
+            (
+                Line::Stop(
+                    stop()
+                        .looked(
+                            signals(&[412], &[]),
+                            look(&[], &[530], 179),
+                            Verdict::Stopped,
+                        )
+                        .with_replies(vec![KillReply {
+                            pid: 412,
+                            reply: KillAnswer::WithoutPayload,
+                            message_type: Some(0),
+                        }])
+                        .with_unpaired_replies(1)
+                        .with_reached(Reached {
+                            kill_requests: true,
+                            kill_replies: Some(true),
+                            look_connection: true,
+                            looks_after_kills: true,
+                        }),
+                )
+                .on_stop_way(Some(StopWay::Primitive)),
+                r#"{"command":"stop","device":3,"bundle":"com.example.app","via":"primitive","installed":true,"was_running":true,"signalled":[412],"replies":[{"pid":412,"reply":"without_payload","message_type":0}],"unpaired_replies":1,"remaining":[],"running":false,"extension_pids":[530],"located":179,"reached":{"kill_requests":true,"kill_replies":true,"look_connection":true,"looks_after_kills":true}}"#,
+                true,
+            ),
             (
                 Line::Stop(
                     stop()
@@ -2926,7 +2971,8 @@ mod tests {
     /// count, `application_located` a word of [`ApplicationLocated`]; ACIB-3d: a `stop`'s `via` is a
     /// word of [`StopWay`], its `replies` pids of the bundle's own with a word of [`KillAnswer`]
     /// and a message type, its `reached` a boolean per stage, by the stage's word; fix round 1: a
-    /// failed request's `reply_failure` a word of [`ReplyFailure`]).
+    /// failed request's `reply_failure` a word of [`ReplyFailure`]; fix round 2: its
+    /// `unpaired_replies` a count).
     #[test]
     fn the_answers_hold_no_member_for_an_identifier() {
         const MEMBERS: &[&str] = &[
@@ -3025,6 +3071,7 @@ mod tests {
             "signalled",
             "stage",
             "stage_ms",
+            "unpaired_replies",
             "unreadable",
             "usbmuxd",
             "user_applications",
@@ -3727,7 +3774,7 @@ mod tests {
     /// [`StopWay`]; one past the first look the answers to its kill requests, each a pid of the
     /// bundle's own processes with a word of [`KillAnswer`] and a message type (a number of the
     /// protocol), and of each stage after the first look whether it was reached, by the stage's
-    /// word.
+    /// word; (fix round 2) the answers given to no kill request by their count alone.
     #[test]
     fn the_application_answers_hold_no_member_for_another_applications_identity() {
         // ACIB-3b: `stage_ms`, whose members are the stages' words, and `stage` beside a
@@ -3772,6 +3819,7 @@ mod tests {
             "signalled",
             "stage",
             "stage_ms",
+            "unpaired_replies",
             "via",
             "was_running",
         ];

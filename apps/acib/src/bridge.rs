@@ -1103,31 +1103,40 @@ async fn stopped(
         Then::GoOn(going_on) => going_on,
     };
     context.enter(Stage::KillRequests);
-    let (errors, replies) = if way.asks_answers() {
+    let (errors, replies, unpaired) = if way.asks_answers() {
         match client.make_channel(PROCESS_CONTROL_CHANNEL).await {
             Ok(mut control) => {
                 let (mut errors, sent) = send_kills(&mut control, &application, way).await;
                 context.enter(Stage::KillReplies);
-                let (replies, unread) = kill_answers(&mut control, &sent, wait).await;
+                let (replies, unread, unpaired) = kill_answers(&mut control, &sent, wait).await;
                 errors.extend(unread);
-                (errors, replies)
+                (errors, replies, unpaired)
             }
             Err(error) => {
                 let kind = service_error_kind(&error);
-                (every_pid_failed(&application, kind), Vec::new())
+                (every_pid_failed(&application, kind), Vec::new(), 0)
             }
         }
     } else {
-        (kill_by_library(&mut client, &application).await, Vec::new())
+        (
+            kill_by_library(&mut client, &application).await,
+            Vec::new(),
+            0,
+        )
     };
     let signals = Signals {
         signalled: application,
         errors,
     };
-    // Each line from here on names the answers and the stages reached when it is made.
+    // Each line from here on names the answers, (fix round 2) the count of those given to no
+    // request, and the stages reached when it is made.
     let done = |stop: Stop| {
         let reached = reached_after(context, way);
-        Line::Stop(stop.with_replies(replies.clone()).with_reached(reached))
+        Line::Stop(
+            stop.with_replies(replies.clone())
+                .with_unpaired_replies(unpaired)
+                .with_reached(reached),
+        )
     };
     context.enter(Stage::LookConnection);
     let mut again = match looks.await {
@@ -1509,18 +1518,21 @@ async fn send_kills(
 /// its request by the number it carries ([`message_number`]; the server answers a request with the
 /// request's number: [`FIRST_KILL_NUMBER`]), never by its place among the answers, so an answer
 /// that is missing, late or out of order is given to no other pid, and an answer whose number is
-/// of no request still waited for is given to none. In the order of `sent`, each request's: its
-/// answer, when one came; else, when a read failed (no answer can come after: the library's reader
-/// of the connection stops for good, `services/dvt/remote_server.rs` 853-896), a failed request of
-/// the error's kind and its [`reply_failure`]; else, the wait having passed, `not_in_time`.
+/// of no request still waited for is given to none and (fix round 2) counted, by nothing but its
+/// count. In the order of `sent`, each request's: its answer, when one came; else, when a read
+/// failed (no answer can come after: the library's reader of the connection stops for good,
+/// `services/dvt/remote_server.rs` 853-896), a failed request of the error's kind and its
+/// [`reply_failure`]; else, the wait having passed, `not_in_time`. Then how many answers were
+/// given to no request.
 async fn kill_answers(
     control: &mut ServerChannel<'_>,
     sent: &[KillSent],
     wait: Duration,
-) -> (Vec<KillReply>, Vec<SignalError>) {
+) -> (Vec<KillReply>, Vec<SignalError>, usize) {
     let until = tokio::time::Instant::now().checked_add(wait);
     let mut answers: Vec<Option<KillReply>> = vec![None; sent.len()];
     let mut failed = None;
+    let mut unpaired = 0;
     while answers.iter().any(Option::is_none) {
         let next = match until {
             Some(until) => tokio::time::timeout_at(until, next_answer(control))
@@ -1535,8 +1547,9 @@ async fn kill_answers(
                     .iter()
                     .zip(answers.iter_mut())
                     .find(|(request, answered)| request.number == number && answered.is_none());
-                if let Some((request, answered)) = waiting {
-                    *answered = Some(kill_reply(request.pid, &answer));
+                match waiting {
+                    Some((request, answered)) => *answered = Some(kill_reply(request.pid, &answer)),
+                    None => unpaired += 1,
                 }
             }
             Some(Err(error)) => {
@@ -1562,7 +1575,7 @@ async fn kill_answers(
             }),
         }
     }
-    (replies, errors)
+    (replies, errors, unpaired)
 }
 
 /// (ACIB-3d, fix round 1) Why the wait for a kill request's answer failed with the library's error
@@ -1575,8 +1588,12 @@ async fn kill_answers(
 /// `BrokenPipe`, "remote server connection closed" (842-849, 1245-1250), whatever stopped it. The
 /// reader stops at the first error of a message it reads (853-896: the stream's end, a reset or
 /// another failed read, a message it cannot read, `services/dvt/message.rs` 585-665), traces that
-/// error at warning level (878) and keeps nothing of it: the one error stands for all of these, and
-/// `reader_stopped` cannot be divided further from what the library gives a caller (README).
+/// error at warning level (878) and keeps nothing of it. (Fix round 2) The same error comes, too,
+/// when the library fails to write its acknowledgement of a channel the phone asked to open
+/// (`remote_server.rs` 1020-1032): it then marks the connection closed (1029-1031), its reader
+/// still running, and every wait after it answers that error. The one error stands for all of
+/// these, and `reader_stopped` cannot be divided further from what the library gives a caller
+/// (README).
 fn reply_failure(error: &IdeviceError) -> ReplyFailure {
     match error {
         IdeviceError::Socket(socket) if socket.kind() == std::io::ErrorKind::BrokenPipe => {
@@ -2689,6 +2706,11 @@ mod tests {
             payload: Option<XPCObject>,
             then_held: bool,
         },
+        /// (Fix round 2) Answers first, with a payload, the number one above the request's (on
+        /// the request's channel: an answer whose number is of no request `stop` sent when the
+        /// request is its last), then (`then_its_own`) the request itself, without one, and ends
+        /// the connection.
+        Stray { then_its_own: bool },
     }
 
     /// The value the archive `archive` holds, as the library's own reader of a message decodes a
@@ -2785,6 +2807,20 @@ mod tests {
                                 held.iter()
                                     .map(|&(earlier, on)| answer_to(earlier, on, None)),
                             );
+                        }
+                        for answer in answers {
+                            if writer.write_all(&answer).await.is_err() {
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    Act::Stray { then_its_own } => {
+                        let stray = Some(XPCObject::UInt64(1));
+                        let mut answers =
+                            vec![answer_to(identifier.wrapping_add(1), channel, stray)];
+                        if then_its_own {
+                            answers.push(answer_to(identifier, channel, None));
                         }
                         for answer in answers {
                             if writer.write_all(&answer).await.is_err() {
@@ -2930,6 +2966,27 @@ mod tests {
                 then_held: false,
             },
             _ => lists_two_processes(sent),
+        }
+    }
+
+    /// (Fix round 2) As [`answers_and_lists_the_application`]; at the kill request it answers
+    /// first a number of no request (the kill's number and one), with a payload, then the kill
+    /// itself, without one, and ends the connection.
+    fn answers_a_number_of_no_request_then_the_kill(sent: &Sent) -> Act {
+        match sent.selector.as_deref() {
+            Some(KILL_PID) => Act::Stray { then_its_own: true },
+            _ => answers_and_lists_the_application(sent),
+        }
+    }
+
+    /// (Fix round 2) As [`answers_a_number_of_no_request_then_the_kill`], but the kill's own
+    /// answer never comes: after the answer of no request the server ends the connection.
+    fn answers_only_a_number_of_no_request(sent: &Sent) -> Act {
+        match sent.selector.as_deref() {
+            Some(KILL_PID) => Act::Stray {
+                then_its_own: false,
+            },
+            _ => answers_and_lists_the_application(sent),
         }
     }
 
@@ -3235,6 +3292,66 @@ mod tests {
             IdeviceError::UnexpectedResponse("unexpected response".to_owned()),
         ] {
             assert_eq!(reply_failure(&other), ReplyFailure::Other, "{other:?}");
+        }
+    }
+
+    /// (ACIB-3d, fix round 2) An answer whose number belongs to no request is given to no process,
+    /// and counted. Each way that asks for answers sends, after the first look and the process
+    /// control channel's request, its one kill request (412's, the connection's fourth request),
+    /// in its form and asking for an answer, and nothing else. The server answering first the
+    /// number one above it (a number of no request), with a payload, and then the kill itself,
+    /// without one: 412 has its own answer (`without_payload`, not the other's `with_payload`),
+    /// and `unpaired_replies` counts the other. The server answering only the number of no
+    /// request and then ending the connection: 412 is a failed request (`connection_failed` with
+    /// `reader_stopped`), never that answer's, and `unpaired_replies` counts it. The looks on
+    /// their own connection decide either way (stopped, status 0).
+    #[test]
+    fn an_answer_whose_number_is_of_no_request_is_given_to_no_process_and_counted() {
+        let shown = |line: &Line| serde_json::to_string(line).expect("a line serializes");
+        let opening = r#"{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,"signalled":[412],"#;
+        let closing = r#""unpaired_replies":1,"remaining":[],"running":false,"extension_pids":[530],"located":2,"reached":{"kill_requests":true,"kill_replies":true,"look_connection":true,"looks_after_kills":true}}"#;
+        for way in StopWay::ALL.into_iter().filter(|way| way.asks_answers()) {
+            let kill = match way {
+                StopWay::Archived => Argument::ArchivedNumber(APPLICATION_PID),
+                StopWay::Primitive | StopWay::Library => Argument::Number(412),
+            };
+            let requests = [
+                channel_request(1, DEVICE_INFO_CHANNEL),
+                list_request(1),
+                channel_request(2, PROCESS_CONTROL_CHANNEL),
+                kill_request(2, kill, true),
+            ];
+
+            let (line, first, again) = stopped_on(
+                way,
+                answers_a_number_of_no_request_then_the_kill,
+                Some(lists_no_application),
+            );
+            assert_eq!(first, requests, "{way:?}");
+            assert_eq!(again.len(), 2, "{way:?}");
+            assert_eq!(
+                shown(&line),
+                format!(
+                    r#"{opening}"replies":[{{"pid":412,"reply":"without_payload","message_type":0}}],{closing}"#
+                ),
+                "{way:?}"
+            );
+            assert!(line.answered(), "{way:?}");
+
+            let (line, first, _) = stopped_on(
+                way,
+                answers_only_a_number_of_no_request,
+                Some(lists_no_application),
+            );
+            assert_eq!(first, requests, "{way:?}");
+            assert_eq!(
+                shown(&line),
+                format!(
+                    r#"{opening}"signal_errors":[{{"pid":412,"error_kind":"connection_failed","reply_failure":"reader_stopped"}}],{closing}"#
+                ),
+                "{way:?}"
+            );
+            assert!(line.answered(), "{way:?}");
         }
     }
 
