@@ -90,7 +90,7 @@
       "source": ["actingctl overview", "actingctl status", "actingctl monitor-status", "actingctl emulator status", "actingctl perf-status", "actingctl fact-refresh", "MCP ac_overview", "actinglab status", "actinglab session status", "actinglab lab status", "acui: workbench status and start report reads (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "#469 F1 (0.12.62): an instance row's run, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none; #463 S3-3 (0.12.63): that terminal also carries outcome_key, the key of the package's mapping the run completed on, absent when the terminal has no scheduling disposition"
+      "notes": "#469 F1 (0.12.62): an instance row's run, a brief run status, carries failure_values in its terminal beside failure_code, absent when there are none; #463 S3-3 (0.12.63): that terminal also carries outcome_key, the key of the package's mapping the run completed on, absent when the terminal has no scheduling disposition; #480 PG-2e (0.12.75): an instance row's pause carries pause_mode and, before released, in_the_way, as the Runtime answers them (absent from a Runtime before 0.12.75)"
     },
     {
       "name": "facts",

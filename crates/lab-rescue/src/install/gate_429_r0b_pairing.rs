@@ -15,9 +15,14 @@
 // Workflow #463 S3-8 (register §1.444, 0.12.68) raises `max` to 11 and keeps the floor: a console
 // that speaks at most 10 ([3, 10], the revision before) still meets this build's [3, 11]. #480
 // PG-2c (register §1.472, 0.12.73) raises `max` to 12 and keeps the floor: the console of today,
-// pinned to v0.12.71 ([3, 11]), still meets this build's [3, 12]. Workflow #479 F-3a (register
-// §1.486, 0.12.75) raises `max` to 13 and keeps the floor: a console at most 12 ([3, 12]) still
-// meets this build's [3, 13].
+// pinned to v0.12.71 ([3, 11]), still meets this build's [3, 12]. #480 PG-2e (register §1.485,
+// 0.12.75) raises the floor this file is about to 12: the Runtime answers the instance pause's
+// `pause_mode` and `in_the_way`, which a reader below 12 refuses, so [12, 12]; a console that reads
+// 12 pairs, one whose `max` is below 12 fails `ui_meets_next` alone (the second test, renamed; fix
+// round 1 renamed the first for the range it asserts). Workflow #479 F-3a (register §1.486,
+// 0.12.75) raises `max` to 13 and keeps the floor: [12, 13]; the consoles that paired still pair
+// and the ones refused are still refused (fix round 1 renamed the first test for the range it
+// asserts).
 
 use super::manifest::{Speaks, UiDeclaration, parse_declaration};
 use super::plan::{Edge, EdgeResult, ui_edges};
@@ -56,32 +61,37 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
-fn r0b_the_build_declares_runtime_client_three_to_four() {
+fn r0b_the_build_declares_runtime_client_12_to_13() {
     // Workflow #432 AGT-1b (register §1.246) raises `max` to 5, #407 PERF-READ (§1.280) to 6,
     // #428 S168-LB1a (§1.311) to 7, #434 LAB-6S1a (§1.287) to 8, #463 V3 (§1.383) to 9, #437
     // G1 fix round 2 (§1.433) to 10, #463 S3-8 (§1.444) to 11, #480 PG-2c (§1.472) to 12 and #479
-    // F-3a (§1.486) to 13; the floor this test is about stays.
-    assert_eq!(own_speaks().get("runtime-client"), Some(&[3, 13]));
+    // F-3a (§1.486) to 13; the floor this test is about stayed at 3 until #480 PG-2e (§1.485)
+    // raised it to 12.
+    assert_eq!(own_speaks().get("runtime-client"), Some(&[12, 13]));
 }
 
 #[test]
-fn r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused() {
-    // Workflow #437 G1 fix round 2: a console of the revision before the raise, at most 9, pairs
-    // too, since the floor stays at 3. Workflow #463 S3-8: and one at most 10, the revision before
-    // 11. #480 PG-2c: and one at most 11, the console of today. #479 F-3a: and one at most 12.
-    for range in [[3, 3], [3, 4], [4, 4], [3, 9], [3, 10], [3, 11], [3, 12]] {
+fn r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused() {
+    // #480 PG-2e: a console that reads revision 12 pairs ([3, 12], the console pinned to v0.12.73
+    // or later, and [12, 12]); one whose `max` is below the floor ([3, 11], the console pinned to
+    // v0.12.71, and [2, 2], the one R-0b refused) fails `ui_meets_next`, the only failed edge.
+    // #479 F-3a: the same against this build's [12, 13].
+    for range in [[3, 12], [12, 12]] {
         let edges = edges_with(range);
         assert!(
             failed(&edges).is_empty(),
             "a console at {range:?}: {edges:?}"
         );
     }
-    let refused = edges_with([2, 2]);
-    assert_eq!(
-        failed(&refused),
-        [("runtime-client", "ui_meets_next")],
-        "{refused:?}"
-    );
+    for range in [[3, 11], [2, 2]] {
+        let refused = edges_with(range);
+        assert_eq!(
+            failed(&refused),
+            [("runtime-client", "ui_meets_next")],
+            "a console at {range:?}: {refused:?}"
+        );
+    }
+    let refused = edges_with([3, 11]);
     let row = refused
         .iter()
         .find(|edge| edge.interface == "runtime-client" && edge.check == "ui_meets_next")
@@ -93,8 +103,8 @@ fn r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused() {
             "check": "ui_meets_next",
             "result": "fail",
             "parties": [
-                {"party": "U*", "source": "manifest", "range": [2, 2]},
-                {"party": "R*", "source": "manifest", "range": [3, 13]},
+                {"party": "U*", "source": "manifest", "range": [3, 11]},
+                {"party": "R*", "source": "manifest", "range": [12, 13]},
             ],
         })
     );

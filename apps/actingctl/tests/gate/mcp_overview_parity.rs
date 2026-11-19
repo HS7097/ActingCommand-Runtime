@@ -779,9 +779,17 @@ fn assert_rows(side: &str, answer: &Value) {
             && row["backend_selfcheck"].is_object(),
         "{side}: {answer}"
     );
+    // #480 PG-2e (0.12.75, register §1.485): the row's pause carries the mode the Runtime answers
+    // (`actingctl pause` sends a person's pause, `stand`); the pause is quiet (`released`), so
+    // nothing is in its way and `in_the_way` is absent.
     assert_eq!(
         members(&row["pause"]),
-        BTreeSet::from(["pause_reason", "revision", "stage"]),
+        BTreeSet::from(["pause_mode", "pause_reason", "revision", "stage"]),
+        "{side}: {answer}"
+    );
+    assert_eq!(
+        row["pause"]["pause_mode"],
+        json!("stand"),
         "{side}: {answer}"
     );
 }
