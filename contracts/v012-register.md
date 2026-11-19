@@ -41118,6 +41118,200 @@ one read of every anchor per screen, a bound the shared read only lowers).
 blocks needs a Runtime of 0.12.74 or later, and its bundle declares `package` [20, 20], which
 `standard-pack build` computes.
 
+### 1.485 Slice #480 PG-2e (0.12.75): the status answers a pause's mode and what is in its way; `runtime-client` starts at 12; PG-2d's leftovers (Workflow #480; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1119/brief-480-pg2e-status-answers-the-pause.md`, after the second review of PG-2d with the coordinator's disposition, `rd-1119/review-1834-b.md`; on main `1067dfaf`, the merge of the v0.12.74 release)
+
+This section takes 1.485. It ships in 0.12.75. [scheduling-pause.md](scheduling-pause.md)
+("Status", "Two modes", "A pause's life in the ledger") and
+[component-interfaces.md](component-interfaces.md) (the `runtime-client` row of revision 12) are
+the contract.
+
+**Why.** PG-2c (§1.472) declared the instance pause's `pause_mode` and `in_the_way` at
+`runtime-client` 12 and no Runtime answered them, because a reader of 11 or lower refuses a status
+that carries either and the Runtime cannot tell a client's revision on a connection; the release
+that first answers them raises `min` to 12, once the console pins v0.12.73 or later. The console
+does now (its interface v0.12.25 pins v0.12.73) and so do the Lab copies kept beside it. Until this
+slice an observer that is not the client that paused (a second console, the Lab, the same console
+after a restart) pieced a pause together from `stage`, `activity` and PG-2d's records (§1.481).
+
+**What was there** (read at `1067dfaf`; P is `crates/runtime-host/src/host/policy_dispatch.rs`).
+- *Who builds an instance's pause.* Three places, each with `pause_mode: None` and no `in_the_way`:
+  a request's (`pause_scheduling`, P 3835), a start's or a release's hold
+  (`SchedulingPauseTable::hold_named_instance_at_start`, P 892, the first-start hold of
+  `instance.added` and Workflow #453 S2's hold again at a release) and a restore
+  (`restore_scheduling_pauses`, `host/scheduling_pause.rs` 341). The status read them as they are
+  (`host/read_events.rs` 588, `instance_state` on a copy of the table taken under its lock, 510-514).
+- *The mode.* Held in memory only, `SchedulingPauseTable::modes` (P 722), set by the request alone
+  (P 3854: a person's `stand`, a tool's `quiet_or_lift`; an iOS handset's request too) and ended
+  with the pause (`lift_instance`, P 1003). A pause no request set has none and is treated as
+  `stand` (`mode_of`, P 1016: the resume's refusals, `check_resumable`). It is not persisted (the
+  row of `host.scheduling_pause` has no mode).
+- *What is in the way.* Kept with the pause in memory, `stage_checks` (P 730), written by every
+  check of the hand-back on the request's thread within its caller's time and on the
+  continuation's afterwards (`note_in_the_way`, P 4454: at each check under the admission guard,
+  4798; outside the guard at the end of a request's time, 4759; an unconfirmed close, 4841; a
+  refused close, 4858; a failed check `check_failed`, `note_check_failed` 4493), read for the
+  receipt and the standing record at the end of the caller's time (4653, 4891). Stage (b)'s drain
+  wrote nothing but at its grace (4156). Between two checks the reading stays as written.
+- *Readers of an instance's pause.* The client crate (`resume_scheduling_expected`'s read after a
+  dropped connection, its `revision`); `lab-ops` (`scheduling::instance_pause`, its reason; the
+  overview's `instance_row`, which printed `revision`, `stage` and `pause_reason`: the row of
+  `actinglab status`, the Lab's `ac_status`, `actingctl overview` and its `ac_overview`, whose output
+  schema types `pause` as an object); the rescue module (`install/runtime.rs`, reason and revision;
+  `runtime_start.rs`, the whole pause in the answer of `runtime start`, `up` and `restart`); the
+  recording's hold (its reason). None breaks: every reader is of this build's contract crate, which
+  knows the two members. What prints them: the overview's row (built here) and the rescue module's
+  start answer (which serializes the whole pause and so gains `pause_mode`, `stand` for the restored
+  pauses a start finds). Tests that pinned the members: `gate_480_pg2c`'s status test and actingctl's
+  overview parity test (both adapted below).
+- *Where `runtime-client`'s range is declared or compared.* Declared once,
+  `distribution/windows/component-interfaces.json`, which the exact-SHA build copies into the
+  Runtime and the Tools manifest and the rescue module compiles in as the installer's own
+  declaration (`install/host.rs`, `OWN_DECLARATION`); compared by the plan's edges
+  (`install/plan.rs`, `interface_edges`: `installer_meets_previous`, I ∩ Rp, and
+  `installer_meets_next`, I ∩ R\*), which `update plan`, `rollback plan`, `install undo` and the Lab's
+  `deploy` and `rollback` refuse by (`interface_edge`), and by `ui_meets_next` (U\* ∩ R\*), which the
+  plans do not compute yet (only its tests). Stated in component-interfaces.md's rows, pinned by
+  `gate_429_r0b_pairing` and actinglab-architecture's `component_interfaces`. The rollback window of
+  `install status` (`install/status.rs`, `rollback_window`) reads only the ledger edge.
+
+**The deploy from 0.12.74 to this build, and the way back** (by those edges, established before
+building; the brief's stop condition does not apply). 0.12.73 and 0.12.74 declare
+`runtime-client` [3, 12], 0.12.72 and older [3, 11]; 0.12.71 to this build `ledger` [3, 9]. The
+update from 0.12.74 passes every edge, by the live build's installer ([3, 12]) or this build's
+([12, 12]), with no flag: `ledger_verify` false (the ledger range does not change), the notice's
+`rollback_window_bounded` false (no one-way edge), no warning of this slice's. This build's way back
+(its own installer, I [12, 12]): to 0.12.74 and 0.12.73 it passes every edge too; to 0.12.72 and
+0.12.71 it fails `runtime-client` `installer_meets_next` only (the plan refuses `interface_edge`,
+count 1); to 0.12.70 and older it fails the ledger's edge `previous_max_in_next` as well (0.12.70
+declares `ledger` [3, 8]; that edge failed toward them already). The
+rollback window's rows (`{commit, ledger_edge_passes}`, one per kept build but the live one) read
+the ledger alone: true for 0.12.71 to 0.12.74, false for 0.12.70 and older, so a row of 0.12.72 or
+0.12.71 says true while its rollback plan is refused.
+
+**The rule** ([scheduling-pause.md](scheduling-pause.md), "Status").
+- *The status answers both members* (`SchedulingPauseTable::answered_instance_state`, read by the
+  status on the same copy of the table, so no new lock, no check and no wait): `pause_mode` for
+  every instance pause in every stage, `mode_of` (the request's mode, else `stand`); `in_the_way`
+  before stage `released`, what the pause's own latest check noted, absent when empty and always in
+  `released`. The global pause gains nothing.
+- *Stage (b) is the pause's first check.* The drain of stage (b) notes what it reads at every poll
+  (`HostShared::note_pause_drain`, from `drain_contained_runs_for_pause` with its new `noted`):
+  `contained_run` while a run of the instance is in flight, else nothing, in both modes; it decides
+  nothing. Before this slice the drain noted nothing but at its grace, so a pause in `draining`
+  would have answered nothing in its way for as long as a run kept it there; the brief's window
+  "between the gate closing and the first check" is now from the gate's closing
+  (`pause_scheduling`, under the table's lock) to the drain's first read, on the request's thread
+  with no wait between. The drain the hand-back runs again notes nothing: the check noted
+  everything it read just before it, the run among it, and the receipt's reading at a grace met in
+  that drain stays that check's.
+- *How old it can be.* As old as the latest check: the continuation's retry interval
+  (`SCHEDULING_PAUSE_RETRY_INTERVAL`, 10 s) after a failed check, and longer while a check itself
+  waits (a run drained again; the admission guard another party holds: on a request's thread until
+  its caller's time ends, on a continuation's until it takes it).
+- *What the brief's rulings meet in the code.* At the end of a `stand` pause's caller's time the
+  status's reading is the one the receipt and the standing record carry (each end of the stages
+  notes the words it answers, or answers what was noted); a failed check that is tried again leaves
+  `check_failed` until the next check (the whole check rests); an iOS handset's pause is `released`
+  at once and answers its mode alone.
+
+**The range.** `runtime-client` [12, 12] (`min` 12, `max` 12), component-interfaces.md's row of
+revision 12 saying why; no schema string and no other range moves.
+
+**PG-2d's leftovers** (`review-1834-b.md`, its three "可以改" and the coordinator's disposition).
+- *The continuation's records* (`scheduling_pause_settled`, its `scheduling_pause_kept_at_shutdown`)
+  are written as the request's are, `record_held_pause_moment` (under the persist gate, only while
+  the pause still holds at its revision), called with no lock held; nothing that holds the gate
+  waits for the continuation (its join and its reap take no gate). A lift that took the gate first
+  leaves them unwritten, so no resume's record comes before them. "The order of a pause's records"
+  is rewritten to what this guarantees, with the review's case inside the multi-Nemu gate (a resume
+  that marks `Lifting` and lifts in one hold of the gate while the hand-back reaches `released`
+  without asking the mark: the resume's record is the pause's last, no settled record).
+- *The comment at the resume's record* says the real reason it is written inside the gate: no
+  record that the pause holds can come after the lift whichever side of the gate the resume's
+  record is written on (the lift and every such record are under the gate); inside it, the record
+  comes before the records of whoever holds the gate next.
+- *§1.481's two sentences* are corrected by the dated note below, not in place: the register states
+  no rule of its own for correcting a released section, so the work order's default holds.
+- *A test that the request's decision to write is made under the gate*: none is added. The
+  decision can only be ordered against points a test observes (the hooks), and between the
+  request's hook before the gate and its decision there is only the lock call itself: a thread
+  blocked on a mutex is not observable from outside, so no test can tell a decision made just
+  before the lock from one made under it without a wait of its own, which a gate test may not do.
+  PG-2d's test (`pg2d_fix1_…`, a resume at the hook leaving no standing record) shows the decision
+  is not made before that hook; that it is made under the gate stays read (P 4051-4067).
+
+**Note of 2026-11-19 on §1.481** (#480 PG-2e, from the second review of #1834). §1.481's fix round
+1 says "Nothing a pause or a resume does changes: no decision, wait, lock order or lift differs":
+one wait differs, the request thread takes the persist gate once more, to decide and write its
+record (`record_held_pause_moment`). Its sentence that the resume's record stays inside the persist
+gate because "its place there, with the lift, is what orders it against the request's record" gives
+the wrong reason: what orders the two is that the lift and the request's decision and write are
+both under the gate; the resume's record inside the gate orders it before the records of whoever
+holds the gate next. The code's comment says so since this slice.
+
+**Codes and words.** None added, none removed; no key, vocabulary or configuration key. No decision
+reads a code or a word.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The status's two members | `host/policy_dispatch.rs`: `SchedulingPauseTable::answered_instance_state`; `host/read_events.rs`: the status projection reads it |
+| Stage (b)'s reading | `host/policy_dispatch.rs`: `HostShared::note_pause_drain`, `run_instance_pause_stages` (stage (b) passes `noted`, the hand-back's drain does not); `host/contained_task.rs`: `drain_contained_runs_for_pause` (`noted`) |
+| The continuation's records | `host/policy_dispatch.rs`: `carry_on_instance_pause` (`record_held_pause_moment`); the resume's comment in `resume_unquiet_instance_pause` |
+| The range | `distribution/windows/component-interfaces.json` |
+| The tools | `crates/lab-ops/src/overview.rs`: `instance_row` (the two members passed through) |
+| Texts | [scheduling-pause.md](scheduling-pause.md) ("Two modes", "A pause's life in the ledger", "Status"); [component-interfaces.md](component-interfaces.md) (the `runtime-client` row of revision 12); [runtime-interface.md](runtime-interface.md) (the pause's row); `contracts/lab-operations.json` (the `status` row's notes); `apps/actinglab-mcp/MANUAL.md` ("A pause stands"); the contract crate's comments on revision 12 and `InstancePauseState` |
+
+**Tests** (no clock read in a gate file). `crates/runtime-host/src/tests/gate_480_pg2e.rs` (host
+gate map "#480 PG-2e"): (1) a person's pause held by its hook after its stages ended standing
+answers `stand`, `paused`, `lease` in the status, the receipt's and the standing record's reading
+word for word, and once `released` `stand` with nothing in its way; (2) a tool's hold in `draining`
+behind a held rung run answers `quiet_or_lift` and `contained_run`; a hold quiet in its time
+`quiet_or_lift`, and the same pause restored at the next start `stand`; a first start's
+`instance.added` hold `stand`; an iOS handset's pause, both modes, its mode at `released`; none of
+them anything in its way; (3) twenty status reads while the continuation is held inside its check
+answer that check's reading and the hand-back's count of checks does not move; (7) a resume that
+lifts the pause while its continuation, `released`, waits before the gate leaves no settled record,
+the standing record before the lift's. `crates/lab-rescue/src/install/gate_480_pg2e.rs`,
+`crates/lab-ops/src/gate_480_pg2e.rs` and `apps/actinglab-mcp/src/gate_480_pg2e.rs` (apps gate map
+"#480 PG-2e"): the declaration [12, 12] and the row of revision 12; the edges of the deploy from a
+[3, 12] build and of the way back to one pass with no flag, the way back to a build ending at 11
+fails `installer_meets_next` alone; the overview's row passes the two members and is unchanged for
+a status without them; the `status` and `pause` rows' parameters and `ac_status`'s and `ac_pause`'s
+schemas are unchanged. Adapted, the requirement moving what they pin:
+`gate_480_pg2c::pg2c_the_status_of_a_standing_pause_carries_only_revision_11s_members` (renamed
+`…_carries_revision_12s_members`) and `gate_429_r0b_pairing`'s two tests (the second renamed
+`r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused`; fix round 1 the first
+`r0b_the_build_declares_runtime_client_12_to_12`, for the range it asserts), each rename's
+retirement in `ci/retired-gates.toml`; actinglab-architecture's
+`component_interfaces::the_runtime_declares_each_v0120_interface_revision_once` ([12, 12]); actingctl's
+`gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments` (the row's
+pause carries `pause_mode`). Made visible, unchanged: `plan::interface_edges` (`pub(super)`),
+`overview::instance_row` (`pub(crate)`), `gate_480_pg2c`'s `climb_with_a_held_rung_run` and
+`let_the_run_go` (`pub(super)`). No golden changes.
+
+**What is not changed.** The wire's schema strings and every range but `runtime-client`'s `min`;
+what a pause and a resume answer; the ledger's record kinds and members and the codes PG-2d
+writes (only when the continuation writes two of them); a `stand` pause is never lifted by the
+Runtime; a `quiet_or_lift` hold is all or nothing; the status takes no new lock and runs no check;
+nothing persisted (the mode is not persisted); the operation table's and the MCP tools' parameters.
+
+**Ledger and interface.** `ledger` stays [3, 9]: no record changes shape (the not-run record's own
+copy of an instance pause, `NotRunInstancePause`, keeps its four members and is built by no host
+yet). `runtime-client` [12, 12]; `runtime-outcomes` stays 1.
+
+**At deploy.** Nothing to configure. The deploy from 0.12.74 passes with no flag (above). Every
+client of this installation must read revision 12 before it reads a status with a paused instance:
+the console pinned v0.12.73 or later and the Lab copies of 0.12.73 or later do; an MCP server still
+running on an image of 0.12.72 or older (renamed aside by an earlier deploy and never restarted,
+`install status`'s `mcp_servers_on_old_images`) fails `runtime_receipt_decode_failed` on such a status and latches its
+connection, so its client reconnects to the live build. The way back closes for 0.12.72 and older
+(their tools read revision 11). For the release notes: a person's resume that takes the persist
+gate first can leave a standing pause's `scheduling_pause_settled` or
+`scheduling_pause_kept_at_shutdown` unwritten (its continuation writes them only while the pause
+still holds; the resume's own records then say what happened).
+
 ### 1.488 Slice #484 IDLE-W2 (0.12.75): an idle wake only for a task that can be dispatched now (board #484; a defect met in production on 0.12.74; the rules below are the coordinator's rulings in the work order, which make the contract's own sentences true, not the owner's words; read-only study `rd-1119/study-idle-close-wake.md`, part A; coordinator work order `rd-1119/brief-484-idle-wake-only-when-dispatchable.md`, on main `8133894c`)
 
 This section takes 1.488, the number the work order gives (1.485 to 1.487 and 1.489 are other

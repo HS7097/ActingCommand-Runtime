@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Where a command of the application service is (board #479, ACIB-3b): the stage `running`,
-//! `launch` or `stop` is in, and how long each stage it finished took, timed from the command's
+//! Where `running`, `launch` or `stop` is (board #479, ACIB-3b; ACIB-3c: the installation proxy
+//! and the instruments server in place of the application service): the stage the command is
+//! in, and how long each stage it finished took, timed from the command's
 //! start. The command enters each stage as its code takes the step ([`crate::bridge`]); when
 //! its deadline passes, its line names the stage it was waiting in and the times of those that
 //! finished before it, and when it ends, the times of all of them. Nothing but a stage's word
@@ -32,7 +33,7 @@ impl Steps {
     }
 
     /// The times of the stages finished so far, not of the one the command is in; `None` when
-    /// it entered none (a command that is not of the application service).
+    /// it entered none (a command other than `running`, `launch` and `stop`).
     pub fn finished(&self) -> Option<StageTimes> {
         (self.current.is_some() || !self.finished.is_empty())
             .then(|| StageTimes::of(&self.finished))
@@ -69,15 +70,26 @@ mod tests {
         Stage::ServiceHandshake,
         Stage::ServerFirstMessage,
         Stage::PictureRequest,
+        Stage::Usbmuxd,
+        Stage::ApplicationLookup,
         Stage::ProxyTunnel,
         Stage::DiscoveryHandshake,
         Stage::ServiceConnection,
-        Stage::ServiceXpcHandshake,
-        Stage::ApplicationList,
         Stage::ProcessList,
         Stage::LaunchRequest,
-        Stage::KillSignals,
-        Stage::LooksAfterSignals,
+        Stage::KillRequests,
+        Stage::LooksAfterKills,
+    ];
+
+    /// (ACIB-3c) The helpers `running`, `launch` and `stop` call, each by its call as the three
+    /// write it and by its function's name: the installation proxy's lookup, then the tunnel and
+    /// the instruments server.
+    const OPENINGS: [(&str, &str); 2] = [
+        ("looked_up(target, bundle, context)", "looked_up"),
+        (
+            "instruments_server(&device, &record, context)",
+            "instruments_server",
+        ),
     ];
 
     /// The stage the code names `Stage::<name>`: the one whose word is `name` in snake case.
@@ -109,35 +121,42 @@ mod tests {
     }
 
     /// The stages the function `name` of `bridge.rs` enters, in the order of its code: each
-    /// `context.enter(Stage::<name>)` in it and, where it calls `app_service`, the stages that
-    /// function enters. Each of these steps is taken in the order the code is written (no
+    /// `context.enter(Stage::<name>)` in it and, where it calls one of [`OPENINGS`], the stages
+    /// that helper enters. Each of these steps is taken in the order the code is written (no
     /// branch or loop of these functions enters a stage before one written above it).
     fn entered(name: &str) -> Vec<Stage> {
         const ENTER: &str = "context.enter(Stage::";
-        const OPENING: &str = "app_service(target, context)";
         let mut rest = body(name);
         let mut stages = Vec::new();
         loop {
-            let enter = rest.find(ENTER).unwrap_or(usize::MAX);
-            let opening = rest.find(OPENING).unwrap_or(usize::MAX);
-            if enter == usize::MAX && opening == usize::MAX {
-                break;
-            }
-            if enter < opening {
-                let after = &rest[enter + ENTER.len()..];
-                let end = after.find(')').expect("a stage's name ends");
-                stages.push(named(&after[..end]));
-                rest = &after[end..];
-            } else {
-                stages.extend(entered("app_service"));
-                rest = &rest[opening + OPENING.len()..];
+            let enter = rest.find(ENTER).map(|at| (at, None));
+            let opening = OPENINGS
+                .iter()
+                .filter_map(|opening| rest.find(opening.0).map(|at| (at, Some(*opening))))
+                .min_by_key(|(at, _)| *at);
+            let next = [enter, opening]
+                .into_iter()
+                .flatten()
+                .min_by_key(|(at, _)| *at);
+            match next {
+                None => break,
+                Some((at, None)) => {
+                    let after = &rest[at + ENTER.len()..];
+                    let end = after.find(')').expect("a stage's name ends");
+                    stages.push(named(&after[..end]));
+                    rest = &after[end..];
+                }
+                Some((at, Some((call, helper)))) => {
+                    stages.extend(entered(helper));
+                    rest = &rest[at + call.len()..];
+                }
             }
         }
         stages
     }
 
-    /// The stages of each command of the application service, the longest way through (a
-    /// bundle installed and, for `stop`, running), as its code in `bridge.rs` enters them.
+    /// The stages of `running`, `launch` and `stop`, the longest way through (a bundle installed
+    /// and, for `stop`, running), as their code in `bridge.rs` enters them.
     fn paths() -> [(CommandName, Vec<Stage>); 3] {
         [
             (CommandName::Running, entered("running")),
@@ -199,18 +218,23 @@ mod tests {
         );
     }
 
-    /// Each stage of the application service's commands is reached on a command's way, as the
-    /// code in `bridge.rs` enters them (ACIB-3b, second round: read from the code, not from a
-    /// table of its own), and a deadline in it names it, with the times of the stages before it
-    /// on that way and of no other; every stage word of these commands is reached so, each
-    /// command's way opens with the same five stages, and none of the screenshot's words that
-    /// means something else here (`tunnel`, `service_handshake`) is.
+    /// Each stage of `running`, `launch` and `stop` is reached on a command's way, as the code in
+    /// `bridge.rs` enters them (ACIB-3b, second round: read from the code, not from a table of
+    /// its own), and a deadline in it names it, with the times of the stages before it on that
+    /// way and of no other; every stage word of these commands is reached so, each command's way
+    /// opens with the same six stages (ACIB-3c: the installation proxy's lookup, then the tunnel
+    /// and the instruments server's first message), and none of the screenshot's words that
+    /// means something else here (`session`, `tunnel`, `service_handshake`) is. (ACIB-3c) The
+    /// name is the gate map's of ACIB-3b, when these were the application service's commands.
     #[test]
     fn each_stage_of_the_application_service_is_reached_and_named_by_its_deadline() {
-        let opening = entered("app_service");
-        assert_eq!(opening.len(), 5, "{opening:?}");
+        let opening: Vec<Stage> = entered("looked_up")
+            .into_iter()
+            .chain(entered("instruments_server"))
+            .collect();
+        assert_eq!(opening.len(), 6, "{opening:?}");
         for (command, path) in paths() {
-            assert_eq!(path[..5], opening[..], "{command:?}");
+            assert_eq!(path[..6], opening[..], "{command:?}");
         }
         let mut reached = BTreeSet::new();
         for (command, path) in paths() {
@@ -260,16 +284,16 @@ mod tests {
             assert_eq!(times, format!("{{{all}}}"), "{command:?}");
         }
         let expected: BTreeSet<String> = [
-            "session",
+            "usbmuxd",
+            "application_lookup",
             "proxy_tunnel",
             "discovery_handshake",
             "service_connection",
-            "service_xpc_handshake",
-            "application_list",
+            "server_first_message",
             "process_list",
             "launch_request",
-            "kill_signals",
-            "looks_after_signals",
+            "kill_requests",
+            "looks_after_kills",
         ]
         .iter()
         .map(|stage| (*stage).to_owned())
@@ -277,9 +301,9 @@ mod tests {
         assert_eq!(reached, expected);
     }
 
-    /// The README names, for each command of the application service, its stages in the order
-    /// its code takes them, as one list of words written `` `word` `` and joined by ", ", and
-    /// names each stage's word.
+    /// The README names, for each of `running`, `launch` and `stop`, its stages in the order its
+    /// code takes them, as one list of words written `` `word` `` and joined by ", ", and names
+    /// each stage's word.
     #[test]
     fn the_readme_lists_each_commands_stages_in_their_order() {
         let readme = include_str!("../README.md").replace("\r\n", "\n");
