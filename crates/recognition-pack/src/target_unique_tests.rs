@@ -662,6 +662,7 @@ fn a_hit_among_truncated_boxes_cannot_conclude_a_unique_target() {
             Some(OcrProviderDetection {
                 detected: 65,
                 limit: 64,
+                served: None,
             }),
         )
     });

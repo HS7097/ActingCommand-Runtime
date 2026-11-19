@@ -224,6 +224,7 @@
         "target_id": "required",
         "count": "required",
         "limit_count": "required",
+        "requested": "optional",
         "stage": "required",
         "operation": "optional",
         "runtime_code": "optional",
@@ -234,7 +235,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1), or a block matched and the target declares unique (Workflow #396 REC-2). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1), or a block matched and the target declares unique (Workflow #396 REC-2). A layout's shared read (stage text_read_shared, Workflow #396 REC-8) fails with it when it had more blocks to recognize than max_boxes: every detected block, or, when the read named the name boxes it serves (Workflow #463 SEL-GRID G1, since 0.12.76), only the blocks whose centre lies in one. count is the number of boxes detected, limit_count the folder's max_boxes, and requested, present only for a read that named name boxes, the number of those served blocks, the count that was over max_boxes. An evaluation error.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

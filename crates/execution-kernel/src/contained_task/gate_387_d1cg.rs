@@ -81,6 +81,7 @@ impl VisionProvider for ScriptedOcr {
                 detection: Some(OcrProviderDetection {
                     detected: 65,
                     limit: 64,
+                    served: None,
                 }),
             }),
         }

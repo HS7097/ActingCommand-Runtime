@@ -23,7 +23,7 @@ use actingcommand_vision_ffi::{
     VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView,
     VisionGpuCode, VisionModelLoader, VisionPixelFormat, VisionRect, VisionRuntimeSpec,
     enumerate_cuda_devices, establish_process_runtime_library_closure, next_ocr_invocation_id,
-    ocr_engine_binding_sha256, onnxruntime_status, onnxruntime_version_string,
+    ocr_box_is_served, ocr_engine_binding_sha256, onnxruntime_status, onnxruntime_version_string,
     ppocr_model_set_sha256, resolve_directml_adapter, sha256_file_hex, sha256_hex,
 };
 use actingcommand_vision_ffi::{
@@ -59,6 +59,9 @@ mod gate_407_gpu1e;
 // Workflow #428 VIS-LOAD-1: a model's one-time load is outside the request's deadline, over a fake.
 #[cfg(test)]
 mod gate_428_vis_load1;
+// Workflow #463 SEL-GRID G1: a shared read's served name boxes, between the merge and the cap.
+#[cfg(test)]
+mod gate_463_g1;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -1495,7 +1498,9 @@ fn read_request(
     ran.detector = true;
     let budget = remaining_inference_budget(inference_deadline, stages.clock(), "PPOCR detector")?;
     let detected = stages.detect(frame, request.region, merge_gap_factor, budget)?;
-    let (detected, count) = keep_detected_boxes(detected, max_boxes);
+    // Workflow #463 SEL-GRID G1: between the merge of boxes into lines (in `detect`) and the cap, a
+    // request that names served name boxes keeps the boxes that lie in one.
+    let (detected, count) = keep_detected_boxes(detected, max_boxes, request.served);
     let mut blocks = Vec::new();
     for detected_box in &detected {
         ran.recognizer = true;
@@ -2123,15 +2128,23 @@ fn read_route(
     }
 }
 
-/// The first `max_boxes` boxes in reading order, and how many the detector found before that
-/// cut.
+/// The boxes the request recognizes, the first `max_boxes` of them in reading order, and how many
+/// the detector found before that cut. Workflow #463 SEL-GRID G1: with served name boxes the
+/// request recognizes only the boxes that lie in one ([`ocr_box_is_served`]), and counts them
+/// apart (`served`); without, every box, as before.
 fn keep_detected_boxes(
     mut boxes: Vec<DetectedTextBox>,
     max_boxes: u32,
+    served: &[VisionRect],
 ) -> (Vec<DetectedTextBox>, OcrDetectionCount) {
+    let detected = u32::try_from(boxes.len()).unwrap_or(u32::MAX);
+    if !served.is_empty() {
+        boxes.retain(|detected_box| ocr_box_is_served(served, detected_box.rect));
+    }
     let count = OcrDetectionCount {
-        detected: u32::try_from(boxes.len()).unwrap_or(u32::MAX),
+        detected,
         limit: max_boxes,
+        served: (!served.is_empty()).then(|| u32::try_from(boxes.len()).unwrap_or(u32::MAX)),
     };
     boxes.truncate(usize::try_from(max_boxes).unwrap_or(usize::MAX));
     (boxes, count)
@@ -4313,23 +4326,25 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let (kept, count) = keep_detected_boxes(boxes(65), 64);
+        let (kept, count) = keep_detected_boxes(boxes(65), 64, &[]);
         assert_eq!(kept.len(), 64);
         assert_eq!(
             count,
             OcrDetectionCount {
                 detected: 65,
-                limit: 64
+                limit: 64,
+                served: None
             }
         );
 
-        let (kept, count) = keep_detected_boxes(boxes(64), 64);
+        let (kept, count) = keep_detected_boxes(boxes(64), 64, &[]);
         assert_eq!(kept.len(), 64);
         assert_eq!(
             count,
             OcrDetectionCount {
                 detected: 64,
-                limit: 64
+                limit: 64,
+                served: None
             }
         );
     }

@@ -372,6 +372,10 @@ pub struct OcrSharedReadEvidence {
     pub detected: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Workflow #463 SEL-GRID G1: how many of the detected boxes lay in the name boxes the read
+    /// served, the ones it recognized, when the provider gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub served: Option<u32>,
     /// With a chain only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kept_milli: Option<u32>,
@@ -415,7 +419,28 @@ impl OcrHandOver<'_> {
             model_ref,
             model_sha256,
             blocks: self.blocks,
+            served: &[],
         }
+    }
+
+    /// Workflow #463 SEL-GRID G1: `rects`, in frame coordinates, in the picture the provider is
+    /// given: as they are without a chain; with one moved onto the processed region's origin, the
+    /// inverse of [`Self::restore`], with checked subtractions.
+    pub(crate) fn in_picture(&self, rects: &[PackRect]) -> RecognitionPackResult<Vec<PackRect>> {
+        let Some(origin) = self.origin else {
+            return Ok(rects.to_vec());
+        };
+        rects
+            .iter()
+            .map(
+                |rect| match (rect.x.checked_sub(origin.x), rect.y.checked_sub(origin.y)) {
+                    (Some(x), Some(y)) => Ok(PackRect { x, y, ..*rect }),
+                    _ => Err(RecognitionPackError::fatal(
+                        "a served name box leaves the i32 range when moved onto the processed region",
+                    )),
+                },
+            )
+            .collect()
     }
 
     /// Whether the read runs a chain.

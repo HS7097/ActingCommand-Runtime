@@ -1361,6 +1361,7 @@ mod tests {
             rect: rect(40, 120, 600, 480),
             detected: Some(3),
             limit: Some(64),
+            served: None,
             kept_milli: Some(183),
             threshold_value: None,
         });

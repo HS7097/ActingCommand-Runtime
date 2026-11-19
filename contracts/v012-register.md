@@ -42194,6 +42194,141 @@ ones by type), so its time no longer grows with the last run's length; the first
 build prints the new lines `actingd start_stages` and `actingd contained_settlement` in its start
 log. In the release notes' language: 启动结算上一轮没跑完的任务时，不再读上一轮的全部记录（从账本的链接行找出这一段的任务，已结束的只按类型读它的终态和包），启动时间不再随上一轮运行的长短增长；这一版的第一次启动起，启动日志多出 `actingd start_stages`（每一段的用时）和 `actingd contained_settlement` 两行。
 
+### 1.490 Slice #463 SEL-GRID G1 (0.12.76): a select's shared read recognizes and counts only the blocks of the name boxes it serves (Workflow #463, work order board #482; met on 11-19 by the channel that keeps the resource repositories: card lists of several columns in four games showed 65 to 100 detected blocks a screen, at most 28 of them names, over the model folder's cap of 64, so that one package is blocked and some ten wait behind it; the rules below are the coordinator's rulings in the work order and in the last section of the read-only design, not the owner's words; coordinator work order `rd-1119/brief-463-g1-shared-read-serves-name-boxes.md`, after the design `rd-1119/design-463-selgrid.md`, its section 2, "(b)", and section 1; on main `40504bc9`)
+
+This section takes 1.490. It ships in 0.12.76. It changes the recognition pack's shared read, the
+request and the answer at the vision boundary (`crates/recognition-pack`, `crates/vision-ffi`,
+`crates/execution-kernel`'s adapter, the PP-OCR engine) and one rule of the contract crate; nothing
+of a package, a recording, the Lab or the ledger.
+
+**Why.** A select that reads its cards' names by detected blocks (`blocks: "detect"`; §1.479,
+§1.480, §1.484) makes one shared read of the layout's region a frame. The engine kept at most the
+model folder's `detector.max_boxes` blocks (64 by default) and recognized each, and the kernel
+refused the whole frame (`text_read_blocks_truncated`) when the detector found more, before any
+block was given to a card. On a list of several columns the region holds far more text than names
+(prices, limits, print on the covers, buy keys). Of the ways out the design compared, the
+coordinator took (b): detect once over the region as before, then recognize and count only the
+blocks that lie in a name box the read serves. Raising `max_boxes` on production is not done, not
+even for a time (the design's (c)): it is one setting of the whole machine that the Lab's
+self-checks, the resource repositories' CI and production would have to change together.
+
+**What it rests on** (read in the code; the design's line numbers were of an older tree).
+- *The order* (`read_request` in `providers/ppocr-onnx-json/src/lib.rs`): the detector's boxes are
+  padded, clipped and merged into lines inside `detect`, then `keep_detected_boxes` cut them to
+  `max_boxes` in reading order and every kept box was recognized on its own
+  (`stages.recognize(frame, box, budget)`). Nothing before the cut depends on how many boxes are
+  kept; the recognition of one box does not depend on the others.
+- *The kernel's assignment* (`SceneEvaluation::layout_shared_text`): a target takes the blocks
+  whose centre `(x + floor(w/2), y + floor(h/2))` its region holds, sorted by
+  `(y, x, height, width, text)`, a stable sort, so a subset of the blocks keeps the order of those
+  it holds.
+- *The design's file list was short*: besides the recognition pack and the vision boundary's
+  request (`OcrInferenceRequest`), the recognition pack's own request (`OcrProviderRequest`), the
+  hand-over (`OcrHandOver`) and the Runtime's adapter (`VisionFfiProvider::read_text` and
+  `read_text_with_execution_evidence`, which build the boundary's request field by field) carry
+  the member, or the engine would never see it.
+- *What compares the evidence that changes*: nothing a package's CI runs. A regression case
+  (`crates/lab/src/regression_case.rs`) evaluates `expect.observe.page` and
+  `expect.recognize[]` (`target`, `passed`) and answers `expect.observe.candidates` `not_run`;
+  `standard-pack check` reads declarations; a recording's stored self-test holds decisions
+  (`SelectSelfTest`); `resource verify`'s steps are declarations, pins, admission, format and the
+  regression cases; `recognition-regression` compares `passed`. The task diagnostic's ledger rows
+  carry each block's `source_index` and no `shared_read` member (its own test pins that).
+- *Who links the engine*: `actingd` and the Lab link the PP-OCR crate as a library of the same
+  build (`crate-type = ["rlib"]`); the request is a Rust value, never a message. An engine of
+  another build cannot meet this kernel, and an implementation of the trait that does not read the
+  member (the tests' scripted providers) recognizes every block and reports no served count: the
+  kernel then holds the cap against the detected count, exactly as before, and every name still
+  reads as it read.
+
+**The rule.**
+- *The name boxes.* Before the first shared read of a frame
+  (`SceneEvaluation::served_name_boxes`, once for each frame of the projection) the kernel places,
+  for every target the read gives text to, on every actionable instance and for every sample of
+  that frame, the region the read then gives the target its blocks by: the one placement of a
+  served target (`SceneEvaluation::shared_target`, which `layout_shared_text` uses too), moved to
+  the slot or the instance, scaled with the match, shifted by the jitter. An anchor's score and an
+  icon identity read no text target, and an instance that is not actionable has no box. When a
+  served target's region is `template_relative` (known only on the frame) or a target cannot be
+  placed or resolved (its own evaluation fails the projection with that error, as before), the
+  frame's read is sent no box and reads as before.
+- *The request.* `OcrProviderRequest::served` and `OcrInferenceRequest::served` (with its view)
+  hold the boxes in the coordinates of the picture the provider is given: the frame's without a
+  chain (the package's base when the frame was reduced to it), and with a chain moved onto the
+  processed region's origin by the hand-over's inverse of its `restore`
+  (`OcrHandOver::in_picture`, checked subtractions). Every other read sends none; the boundary
+  refuses boxes with a block mode other than `Detect` (`InvalidRequest`).
+- *The one rule*, written once in the contract crate: `CandidateRect::holds_centre_of`, left and
+  top edges inside, right and bottom edges outside. The kernel's `center_is_within` and the
+  boundary's `ocr_box_is_served`, which the engine filters by, both call it.
+- *The engine* filters between the merge and the cap (`keep_detected_boxes`): with boxes it keeps
+  the detected boxes that lie in one, recognizes the first `max_boxes` of those, and answers
+  `OcrDetectionCount { detected, limit, served }`, `served` the boxes kept (absent without boxes).
+- *Truncation* (`OcrProviderDetection::truncated`): more served blocks than `limit` when the answer
+  carries `served`, else more detected ones, as before. The outcome stays
+  `text_read_blocks_truncated`, its one cause, with `count` the detected boxes and `limit_count`
+  the cap as before, and, for a read that named boxes, `requested` the served blocks, the count
+  that was over.
+- *A guard.* A target the read serves whose region is not among the boxes the read was sent fails
+  its evaluation (`recognition_pack_invalid`, a fatal recognition error) rather than read without
+  its blocks; the placement above leaves no such target.
+
+**Codes and words.** No code and no word added. The catalogue's `text_read_blocks_truncated`
+declares the existing key `requested` (integer, "how much of a budget a request asks for") as
+optional and its description says what it counts for a shared read; the index is unchanged (the
+first sentence it shows did not move) and its check is current. No decision reads a code or a
+word.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The rule | `crates/actingcommand-contract/src/candidate_projection.rs`: `CandidateRect::holds_centre_of` |
+| The name boxes and the read | `crates/recognition-pack/src/candidate_layout.rs`: `served_name_boxes`, `served_target`, `shared_target`, `SharedReadPlan`, `layout_shared_text`, `read_shared_text`, `center_is_within` |
+| The request and the count | `crates/recognition-pack/src/lib.rs`: `OcrProviderRequest::served`; `text_locate.rs`: `OcrProviderDetection::served`, `truncated`; `ocr_preprocess.rs`: `OcrHandOver::request`, `in_picture`, `OcrSharedReadEvidence::served` |
+| The boundary | `crates/vision-ffi/src/lib.rs`: `OcrInferenceRequest::served`, `OcrInferenceRequestView::served` and `validate`, `OcrDetectionCount::served`, `ocr_box_is_served`; `crates/execution-kernel/src/provider.rs`: `served_rects`, `map_ocr_result` |
+| The engine | `providers/ppocr-onnx-json/src/lib.rs`: `read_request`, `keep_detected_boxes` |
+| The code's text | `contracts/outcome-codes/recognition-pack.json` (`text_read_blocks_truncated`) |
+| Texts | [selection-graph.md](selection-graph.md) ("Shared OCR read": its truncation and evidence, and "What the read recognizes"); [vision-model-folders.md](vision-model-folders.md) (the `detector.max_boxes` row and the shared read's name boxes); [recognition-preprocess.md](recognition-preprocess.md) ("Hand-over", item 3) |
+
+**Tests** (exec gate map row "#463 SEL-GRID G1"; synthetic frames and blocks made as the
+recognition pack's and the engine's own tests make theirs; no frame of a game; no clock read in a
+gate file).
+
+| Test | What it shows |
+|---|---|
+| `crates/recognition-pack/src/gate_463_g1.rs` `g1_t1_ten_cards_among_seventy_five_texts_read_every_name_from_their_boxes` (1) | Ten cards in four columns, 75 detected texts, 15 of them in name boxes: the read made without boxes, as every shared read was before this slice, is `text_read_blocks_truncated` (count 75, limit 64), so the frame failed on the code before; the projection's one request carries the ten name boxes, every card reads its identity, and each name's `shared_read` is `{detected 75, limit 64, served 15}` |
+| `providers/ppocr-onnx-json/src/gate_463_g1.rs` `g1_t2_a_read_with_name_boxes_recognizes_only_the_boxes_they_hold` (2) | On the engine's own path the recognizer runs on the 15 name lines alone, not on the 75 boxes; without boxes the first 64 of 75 as before, and 64 of 64 |
+| `gate_463_g1` (recognition pack) `g1_t3_served_blocks_over_the_cap_still_fail_and_the_outcome_names_their_count`, (engine) `g1_t3_served_boxes_over_the_cap_are_cut_and_counted_whole` (3) | 15 served blocks over a cap of 10 fail `text_read_blocks_truncated` with `count` 75, `requested` 15, `limit_count` 10; the engine cuts them to 10 and counts 15 |
+| (4) | `crates/recognition-pack/src/shared_read_tests.rs`: its expectations untouched; the pull request's diff of the file adds `served: None` to one scripted answer, the struct having gained the member |
+| `g1_t5_a_located_text_sends_no_name_box_and_answers_as_before_at_and_over_the_cap` (5) | A located text and an OCR target read on its own send no box; the located text at 64 detected blocks (hit untruncated, miss `text_locate_not_found`) and at 65 (hit truncated, miss `text_read_blocks_truncated` count 65, no `requested`) |
+| (engine) `g1_t6_the_provider_keeps_a_box_exactly_when_the_kernel_gives_it_to_the_target`, `crates/execution-kernel/src/tests/gate_463_g1.rs` `g1_t6_the_engine_keeps_a_box_exactly_when_the_kernel_gives_it_to_the_target` (6) | Sixteen boxes centred on each edge and corner of a name box or a pixel past it, of even and odd sizes: the engine keeps exactly the 9 the box holds, and through `VisionFfiProvider` the boxes an engine keeps by `ocr_box_is_served` are exactly those the kernel gives to the slot's target |
+| `g1_t7_on_a_reduced_frame_the_name_boxes_are_in_the_picture_the_engine_is_given` (7) | A frame twice the base, brought to the base by `lab_scene_on_base`: the engine is given the 160 x 90 picture and the boxes in its coordinates, with a chain the 144 x 40 processed region and the boxes moved onto its origin; both slots read their names |
+| `g1_t8_cards_the_band_cuts_send_no_name_box` (8) | Sixteen anchors, the band cutting the first and last rows: the read is sent the eight whole cards' boxes and no other, recognizes their eight names (served 8 of 16) and each reads its identity |
+
+Adapted, the struct gaining its member and nothing of what they assert: the engine's
+`detection_count_reports_boxes_beyond_max_boxes` (`keep_detected_boxes` with no boxes, `served`
+`None`), and the scripted answers or expected evidence of `shared_read_tests`, `gate_463_sel2l`,
+`gate_cfl2`, `target_unique_tests`, `text_locate_tests`, the kernel's `gate_387_d1cg` and
+`gate_469_d4b`, the host's `gate_469_d4b` and the task diagnostic's test (`served: None`). No golden
+re-recorded.
+
+**What is not changed.** Every name read today, byte for byte: the detection, its padding and the
+merge, the recognition of each block, the order and joining of a target's blocks and their
+confidence; every decision and every outcome code; the members of a package and the `package`
+range [3, 20]; every interface revision, the ledger's records and their shapes; what a recording
+generates and how the Lab's self-checks call the kernel; a located text, an OCR target read on its
+own and every read that is not a layout's shared read, the cap included; the model folder's
+parameters and their defaults. The evidence changes in two things only: `block_source_order`
+counts among the served blocks the provider returned, and `shared_read` gains `served`.
+
+**At deploy.** Nothing to configure. The text provider and the Runtime are of one build (the
+engine is linked into `actingd` and the Lab). A pinned offline Lab reads lists as the production
+Runtime does only when it is of this build. The resource channel runs the blocked shop's fold
+self-check again on this build and reads `elapsed_us` of a shared read with twenty and more served
+blocks: the cost of one recognition has no number in the code (the design's section 1). In the
+release notes' language: 多列卡片列表上，选择的共享读字只识别、只计数落在它服务的名字框里的块，卡面上别的字（价格、限购、封面印字、购买键）不再占模型文件夹 `max_boxes` 的名额；每个名字的读数逐字节不变；被服务的块本身超过上限时仍以 `text_read_blocks_truncated` 结束，并多报 `requested`（被服务的块数）。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

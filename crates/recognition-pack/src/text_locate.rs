@@ -124,17 +124,24 @@ pub enum OcrProviderBlocks {
     Detect { line_merge_gap_factor: Option<u32> },
 }
 
-/// A `Detect` read's box count before the model folder's `max_boxes` kept the first `limit`.
+/// A `Detect` read's box count before the model folder's `max_boxes` kept the first `limit` of
+/// the boxes it recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OcrProviderDetection {
     pub detected: u32,
     pub limit: u32,
+    /// Workflow #463 SEL-GRID G1: for a read that named served name boxes
+    /// ([`OcrProviderRequest::served`]), how many of the `detected` boxes lie in one: the boxes
+    /// it recognizes; `None` for every other read, which recognizes every detected box.
+    pub served: Option<u32>,
 }
 
 impl OcrProviderDetection {
-    /// Boxes beyond `max_boxes` were dropped unread.
+    /// Boxes the read was to recognize were dropped unread: more than `max_boxes` of them, the
+    /// served ones when the read named served name boxes (Workflow #463 SEL-GRID G1), else every
+    /// detected one.
     pub fn truncated(self) -> bool {
-        self.detected > self.limit
+        self.served.unwrap_or(self.detected) > self.limit
     }
 }
 
@@ -319,6 +326,7 @@ impl RecognitionEvaluator {
                 let detection = detection.unwrap_or(OcrProviderDetection {
                     detected: 0,
                     limit: 0,
+                    served: None,
                 });
                 return Err(RecognitionPackError::text_read(
                     Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)

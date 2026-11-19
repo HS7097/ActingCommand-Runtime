@@ -25,6 +25,8 @@ pub mod models;
 // Workflow #407 GPU-1 A: the pinned DirectML runtime of a vision root.
 pub mod runtime_pin;
 
+// Workflow #463 SEL-GRID G1: the one rule a served name box keeps a detected box by.
+use actingcommand_contract::candidate_projection::CandidateRect;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::RawSource;
 // Workflow #407 GPU-1 B1: the state `PinnedRuntimeFile::check` reports, for the engine.
@@ -360,11 +362,36 @@ pub enum OcrLineMerge {
 }
 
 /// The detected boxes of a `Detect` request before the folder's `detector.max_boxes` kept the
-/// first `limit` of them: `detected > limit` means boxes were dropped.
+/// first `limit` of the boxes it recognizes: every box, or (Workflow #463 SEL-GRID G1) with
+/// served name boxes the `served` ones. More of those than `limit` means boxes were dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OcrDetectionCount {
     pub detected: u32,
     pub limit: u32,
+    /// Workflow #463 SEL-GRID G1: for a request that names served name boxes, how many of the
+    /// `detected` boxes lie in one ([`ocr_box_is_served`]); absent for every other request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served: Option<u32>,
+}
+
+/// Workflow #463 SEL-GRID G1: whether a detected box of `rect` lies in one of the name boxes
+/// `served` of a request: its centre `(x + floor(width / 2), y + floor(height / 2))` inside one,
+/// by the rule a layout's shared read gives a block to a target by
+/// (`actingcommand_contract::candidate_projection::CandidateRect::holds_centre_of`, the one place
+/// the rule is written).
+pub fn ocr_box_is_served(served: &[VisionRect], rect: VisionRect) -> bool {
+    served
+        .iter()
+        .any(|name_box| candidate_rect(*name_box).holds_centre_of(candidate_rect(rect)))
+}
+
+fn candidate_rect(rect: VisionRect) -> CandidateRect {
+    CandidateRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,6 +401,12 @@ pub struct OcrInferenceRequest {
     pub languages: Vec<String>,
     pub timeout_ms: u64,
     pub blocks: OcrBlockMode,
+    /// Workflow #463 SEL-GRID G1: the name boxes a layout's shared read serves, in this request's
+    /// frame. A `Detect` request that names them recognizes, and counts against
+    /// `detector.max_boxes`, only the boxes that lie in one ([`ocr_box_is_served`]), between the
+    /// merge of boxes into lines and that cap; empty, every box, as before. Only a `Detect`
+    /// request names them.
+    pub served: Vec<VisionRect>,
 }
 
 impl OcrInferenceRequest {
@@ -388,6 +421,7 @@ impl OcrInferenceRequest {
             languages: &self.languages,
             timeout_ms: self.timeout_ms,
             blocks: self.blocks,
+            served: &self.served,
         }
     }
 }
@@ -400,6 +434,8 @@ pub struct OcrInferenceRequestView<'a> {
     pub languages: &'a [String],
     pub timeout_ms: u64,
     pub blocks: OcrBlockMode,
+    /// Workflow #463 SEL-GRID G1: as [`OcrInferenceRequest::served`].
+    pub served: &'a [VisionRect],
 }
 
 impl OcrInferenceRequestView<'_> {
@@ -417,6 +453,13 @@ impl OcrInferenceRequestView<'_> {
                 format!(
                     "OCR request line_merge gap_factor must be in 0..={MAX_OCR_LINE_MERGE_GAP_FACTOR}"
                 ),
+            ));
+        }
+        if !self.served.is_empty() && !matches!(self.blocks, OcrBlockMode::Detect { .. }) {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr",
+                "OCR request names served name boxes without blocks Detect",
             ));
         }
         if self.languages.is_empty() {
@@ -463,6 +506,7 @@ impl OcrInferenceRequestView<'_> {
             languages: self.languages.to_vec(),
             timeout_ms: self.timeout_ms,
             blocks: self.blocks,
+            served: self.served.to_vec(),
         })
     }
 }
@@ -835,6 +879,7 @@ mod tests {
             languages: vec!["zh_cn".to_string()],
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
+            served: Vec::new(),
         };
 
         let err = request.validate().expect_err("oversized region rejected");
@@ -852,6 +897,7 @@ mod tests {
             languages: vec!["zh_cn".to_string()],
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
+            served: Vec::new(),
         };
         let mut backend = UnavailableOcrBackend;
 
@@ -886,6 +932,7 @@ mod tests {
             languages: vec!["en".to_string()],
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
+            served: Vec::new(),
         };
         let result = OcrInferenceResult {
             ppocr_diagnostics: Vec::new(),
