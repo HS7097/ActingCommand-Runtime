@@ -5,9 +5,11 @@
 # the devices usbmuxd lists, a device's lockdown values, the remote services of the iOS 17.4
 # tunnel, what the image mounter answers about mounted images, whether a user application whose
 # bundle identifier holds a given text is installed, (ACIB-1) one picture of the screen and
-# (ACIB-2) the interface orientation; (ACIB-3) through CoreDevice's application service, under
-# the `core_device` feature already on, it tells whether one application runs, launches it and
-# stops it. Nothing of the workspace depends on it, and it depends on no crate of the workspace.
+# (ACIB-2) the interface orientation; (ACIB-3) it tells whether one application runs, launches it
+# and stops it, (ACIB-3c) through the installation proxy and the instruments server's device
+# information and process control channels, under the `installation_proxy` and `dvt` features
+# already on (CoreDevice's application service, under `core_device`, only `probe` asks). Nothing
+# of the workspace depends on it, and it depends on no crate of the workspace.
 
 [package]
 name = "actingcommand-ios-bridge"
