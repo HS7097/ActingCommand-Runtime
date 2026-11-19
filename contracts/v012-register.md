@@ -41697,6 +41697,291 @@ maps hold both sides' rows whole). The rule and its code are unchanged.
   `pg2e_the_update_from_0_12_74_and_the_way_back_to_0_12_74_and_0_12_73_pass` asks its edges on
   [12, 13] unchanged. No golden re-recorded.
 
+### 1.488 Slice #484 IDLE-W2 (0.12.75): an idle wake only for a task that can be dispatched now (board #484; a defect met in production on 0.12.74; the rules below are the coordinator's rulings in the work order, which make the contract's own sentences true, not the owner's words; read-only study `rd-1119/study-idle-close-wake.md`, part A; coordinator work order `rd-1119/brief-484-idle-wake-only-when-dispatchable.md`, on main `8133894c`)
+
+This section takes 1.488, the number the work order gives (1.485 to 1.487 and 1.489 are other
+slices'). It ships in 0.12.75. It changes the Runtime host (`crates/runtime-host`: the policy
+host's evaluation, the not-run explanation's idle plan, the idle planner and the idle glue), one
+reader of the package suspensions, the outcome catalogue and the contract crate's key table (one
+key); nothing of a dispatch decision, the ledger's shapes or any client.
+
+**Why.** On 11-19 from 08:00 to 08:12 an instance whose application the idle check had closed
+(its next work ten hours away, `next_occurrence` 18:39:53) was started cold again 0.5 to 0.8 s
+later, found nothing to do and was closed again: seven cold starts in twelve minutes and no policy
+dispatch, and one more on two instances right after the Runtime's restart at 08:36. A candidate
+past its trigger is deferred by the first reason of the order of the deferrals that applies
+([scheduling-blackout.md](scheduling-blackout.md)); a control gate (position 1, a pause) and a
+hold of the instance's key (position 2, `dispatch_instance_held`) come before the budget, the
+backoff and the interval (position 8) and defer it with no wake of its own; and the idle plan
+counted an eligible candidate with no wake of its own as due, except where a blackout or a closed
+activity window held the instance back (IDLE-WG, §1.158). So every evaluation that fell while the
+key was held (the close's own claim, a Lab run, a start's preparation) or while the instance was
+paused made due a task whose budget was spent, and the closed application was woken.
+
+**The reproduction** (the work order's first step; `gate_484_idle_w2`, its first test, pushed red
+before the fix): one task whose trigger is always true, its `daily_limit` 2 spent; free, the
+budget defers it to its reset and the idle check closes the application with its wake at the reset
+less the lead; with a client's lease on the key the evaluation defers it `dispatch_instance_held`
+with no wake, and the idle plan of 0.12.74 counts it due and a wake follows the close
+(`idle_action::wake`, `due_now`). The ledger does not record which candidate was counted due; the
+code path and the test reproduce the study's inference.
+
+**The rule** (`runtime-config.md`, "What wakes an idle instance"; `scheduling-blackout.md`, "The
+idle plan behind a hold").
+- *Due means dispatchable now, behind a hold too.* A candidate that a hold of its instance defers
+  (positions 1 and 2: a control gate, a claim on its key, a cooldown, a wait for another member of
+  its device) is counted, for the idle plan only, as positions 3 to 8 would answer it once the hold
+  is gone: one that a later position holds back (a suspended package, a blackout, a client update,
+  a closed pack schedule, an owed rerun's pacing, the quiet before a blackout or the day boundary, a
+  remedy round, a spent budget, a backoff, the activity interval, a closed activity window, a task
+  pause) is not due, and its wake is that position's own release (none when it names none) less the
+  action's wake lead; with IDLE-WG's time-bound gate as well, the later of the two releases (none
+  when either names none). A hold with a time of its own (a cooldown) lets the candidate through no
+  earlier than its end: the later of the cooldown's end and that release, none when either names
+  none (fix round 1). Only a candidate no later position holds back is due, and it still wakes
+  the application at once, under the hold too (IDLE-WG's case B, unchanged). *Amended in fix round
+  3* (the coordinator's ruling, below): so while the instance is available (a held key, an
+  occupancy, a cooldown, a pause that still stands on an available instance); on an instance a
+  hold holds and whose availability is withdrawn, no task wakes it until the hold ends.
+- *The look ahead is read only and serves the idle plan alone.* In the evaluation's eligibility
+  closure, where positions 1 and 2 return a hold, the policy host also reads positions 3 to 8 for
+  the candidate (not for the fact refresh), each through its own function and in the order's order:
+  position 3 through a new read-only reader of the suspensions (`PackAdmission::suspends`, no lift
+  check: the lift check may lift, copy or record), positions 4 to 8a through the readings the
+  closure itself calls, position 8 through the admission preview without the lift view (whose
+  check measures packages into its memory; a paused task counts as still paused) and without
+  noting the denial for a clock slot; position 9 (the random delay, which draws) is not read. The answer goes to the not-run
+  explanation's idle plan only (`IdleHeldAhead`, through `IdleGates`); the closure returns the
+  hold's deferral as before. A position that cannot answer there leaves the candidate counted as
+  before (due), and its failure is said (fix round 1): one that stops the Runtime
+  (`RuntimeHostError::halts_runtime`, its scope) ends the evaluation, as it ends the evaluation
+  that reads that position itself; any other is kept with the policy host and the cycle writes it
+  to the daemon's log as a skipped background step is (`FatalState::report_skipped`, the
+  reporter's `step_skipped`: its code and operation), so what is dispatched on every other instance
+  of the cycle does not change.
+- *Nothing a dispatch decides changes*: the order of the deferrals, each deferral's code and wake,
+  the decisions, the not-run explanation and its held records, the clock-slot records of #372 K2
+  (the closure's answer is the hold's, and the look ahead notes no budget dimension), the budgets'
+  accounting, the random delays, the suspensions. The scheduler still works by conditions, not by a
+  timer: this slice adds no clock-driven behaviour, it only stops a wake no condition called for.
+- *After a restart and after a resume* the first evaluation reads a restored pause and a claim on
+  the key as any hold, so an application closed as idle stays closed until its planned wake (with
+  the exception above). The start's owed wake (an instance restored woken, or with no usable
+  record, review N-1) is unchanged.
+- *The wake says why.* `instance_idle_action` with `operation` `queue_idle_wake` carries
+  `idle_wake_cause`, the first that holds of `task_due` (with `task_id`, the due task's catalog id:
+  the selected one, else the first due one in the evaluation's order; nothing of an account),
+  `action_changed`, `owed_at_start` and `planned_time_reached`. The planner keeps the cause with the
+  woken instance (`IdlePlanner::woken_by`) and the start's owed wake as owed
+  (`IdlePlanner::restore_owed`); the host reads the due task with the plan, under one policy guard
+  (`PolicyHost::idle_due_task`).
+
+**What a person watching an instance sees.** An application closed as idle stays closed until work
+can really be dispatched or its planned wake comes, whatever claims, Lab runs, returns home or
+pauses come in between, and across a restart, except behind a later position that names no time of
+its own (a suspended package, a paused task): once the hold ends, the evaluation without it defers
+such a candidate with no wake and the plan counts it due and wakes the instance, as before this
+slice (fix round 1), and except an instance that is unavailable and under no hold (its emulator
+stopped by the idle action itself, a reconnect that failed), still woken as before this slice
+(fix round 3); a wake's record names why it came. A client's run on
+a closed application still meets it closed (whether such a run should wake it first is the study's
+separate question, not this slice's).
+
+**Codes and words.** No code added. One key and its vocabulary: `idle_wake_cause`
+(`vocab:idle_wake_cause`; tokens `task_due`, `action_changed`, `owed_at_start`,
+`planned_time_reached`; enum `IdleWakeCause` in `crates/runtime-host/src/codes.rs`), kept in codes
+mode; `instance_idle_action` (info, pending) gains the optional values `idle_wake_cause` and
+`task_id` (an existing key) and a sentence of its description (its first sentence unchanged, so the
+index is current without regeneration). It neither refuses nor warns; the record is info and exits
+nothing. No decision reads the word: the host attaches `task_id` only beside `task_due`, which it
+built itself.
+
+**Interfaces.** The record is the existing `runtime.lifecycle_observed` (`device_state_observed`)
+whose outcome's values are open, as the idle action's other values are: a reader of this
+repository decodes an outcome's values as a free map (the contract crate's `Outcome`, received
+outcomes unchecked), so none refuses the new members, and a record without them reads as before.
+`runtime-outcomes` stays 1 (a key and a vocabulary added, append-only, as EMU-BIND-2 and R-6's
+R6-3 added theirs); `ledger`, `runtime-client`, `actingd-config` and `package` do not move.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The look ahead behind a hold | `crates/runtime-host/src/policy_host.rs`: `PolicyHost::evaluate` (`look_ahead`, `held_ahead`, fix round 1 `look_ahead_failures`), `deferred_wake`, `PolicyHost::idle_due_task`, `PolicyHost::take_idle_look_ahead_failures` |
+| Its failures said (fix round 1) | `crates/runtime-host/src/host/policy_dispatch.rs`: `HostShared::evaluate_policy_cycle_authoritative` (`FatalState::report_skipped`) |
+| Position 3 read only | `crates/runtime-host/src/pack_admission.rs`: `PackAdmission::suspends` |
+| The idle plan | `crates/runtime-host/src/schedule_explanation.rs`: `IdleHeldAhead`, `IdleGates`, `record_gated` (`record_held_back` now test-only), `IdleDraft::add`, `held_until`, `idle_due_task` |
+| The cause | `crates/runtime-host/src/idle_action.rs`: `Phase::Woken`'s `cause`, `owed_at_start`, `wake`, `woken_by`, `restore_owed`; `crates/runtime-host/src/codes.rs`: `IdleWakeCause` |
+| The record | `crates/runtime-host/src/host/idle.rs`: `check_idle` (the due task read with the plan), `queue_idle_wake`, `wake_outcome`, `restore_idle_state` (review N-1 through `restore_owed`) |
+| The word | `crates/actingcommand-contract/src/outcome/keys.rs`; `contracts/outcome-codes/catalog.json`; `contracts/outcome-codes/runtime-host.json` |
+| Texts | [runtime-config.md](runtime-config.md) ("What wakes an idle instance", the record's sentence); [scheduling-blackout.md](scheduling-blackout.md) ("The idle plan behind a hold") |
+
+**Tests** (`crates/runtime-host/src/tests/gate_484_idle_w2.rs`, host gate map row "#484 IDLE-W2";
+`gate_372k2`'s fixture instance and manual Runtime clock, the no-progress guard off, one task whose
+trigger is an interval clock of 1 ms and whose `daily_limit` is 2; a client's lease stands for every
+claim on the key, the occupancy position 2 reads whatever claims it; the plan read as the idle check
+reads it and fed to the pure planner under the production keys; no clock read).
+`idle_w2_a_held_key_does_not_make_a_task_whose_budget_is_spent_due`: the reproduction above, red on
+0.12.74 (1). `idle_w2_behind_a_hold_a_candidate_counts_as_the_later_gates_answer_it`: under a held
+key and under an instance pause, a spent budget, a backoff (a recoverable failure, 30 s) and the
+activity interval (one hour) each leave the task not due with the release the free evaluation names
+as its wake and no due task; a task nothing holds back is due behind either hold and the plan names
+it (1). `idle_w2_after_a_restart_a_restored_pause_and_a_held_key_keep_the_application_closed`: a
+pause restored by the root's seeding start and by its loading start, the application closed as a
+valid `host.idle_state` restores it, only the spent budget's candidate: the start's first check,
+the first evaluation under the pause and one under a claim after the resume queue no wake, and the
+planned wake is kept (3). `idle_w2_replay_of_the_first_timeline_closes_once_and_wakes_at_its_planned_time`:
+the study's 08:00 to 08:12 sequence (the close's own claim, a return home, Lab runs, a queued run)
+on the manual clock: one close, no wake before its planned time, and the wake then, naming
+`planned_time_reached` (4). `idle_w2_the_wake_says_why_it_came_the_first_that_holds`: `task_due`
+before a switched action and an owed wake, `action_changed`, `owed_at_start` for a start with no
+usable record and for an instance restored woken, `planned_time_reached` (the cause). And
+`idle_w2_host_a_held_instance_queues_no_wake_and_a_due_task_queues_one_that_names_it`, through the
+host with `gate_idle1_host`'s scripted emulator (X's action `stop_emulator`, so no standard pack
+application is needed; the wake's record does not depend on the action): after X's action, a check
+while a run holds X's admission guard and one after it, with nothing due, queue no wake; a task due
+queues one whose record names `task_due` and the task (2). Every existing test of the idle actions
+is unchanged; none was touched.
+
+**Fix round 1** (coordinator work order `rd-1119/brief-484-idle-w2-fix1.md`, after the independent
+review `rd-1119/review-1845.md`, which found that the slice cannot make an instance sleep through
+work, one must-fix and two smaller points; when in doubt the plan wakes, it never keeps an
+application closed past the time work can be dispatched).
+- *A cooldown behind a hold* (the must-fix). The rule above said a candidate a cooldown defers is
+  counted by the later positions' release, but `IdleDraft::add` read the look ahead only for a
+  candidate it counted due, so a cooldown kept its own end and, as a wake only moves earlier, a
+  six-second takeover cooldown or a member's switch cooldown pulled a closed application's wake to
+  its end: one more cold start for nothing. Now a decision that is not due and has a look ahead
+  takes the later of its own wake and the look ahead's release, and gives no wake when either
+  names none; the sentences above are true as they stand.
+- *A look ahead that fails is said* (the owner's first rule, a failure is never hidden): the
+  candidate still counts due; a failure that stops the Runtime ends the evaluation; any other is
+  kept by the policy host (`idle_look_ahead_failures`) and written by the cycle to the daemon's
+  log as a skipped background step is. No code added: the failure's own code and operation are
+  what the log names.
+- *The contract's sentence that said too much*: an application closed as idle stays closed until
+  work can be dispatched, except behind a later position that names no time of its own (a
+  suspended package, a paused task), where the free plan counts the candidate due once the hold
+  ends and wakes, as before this slice (`runtime-config.md`, this section,
+  `scheduling-blackout.md`).
+- *The host tests on the host's own plan and planner* (the review's third point). A test-only
+  hook (`HostShared::idle_action_finished_for_test`, `RuntimeHost::run_when_idle_action_finished_for_test`)
+  holds an idle action carried out on its worker once the planner knows its end and before its
+  claim releases the key, the moment the production evaluations of 08:00:02 met. What no fixture
+  gives: an evaluation inside a start's own preparation, which runs inside `RuntimeHost::start`
+  (`prepare_physical_instances_on_start`) before any evaluation can, and is skipped for an
+  instance whose restored pause is released (its availability withheld until the resume's
+  reconnect); a client's lease after the resume stands for it, as the occupancy of position 2 reads
+  every claim alike.
+
+Tests added to `gate_484_idle_w2` (the host gate map's row "#484 IDLE-W2"; no clock read):
+`idle_w2_fix1_a_cooldown_in_front_of_a_spent_budget_wakes_at_the_reset_not_at_its_end`: a closed
+instance, its key held, its one candidate deferred by a six-second cooldown while the look ahead
+names the spent budget: not due, no wake under the cooldown nor at its end, the wake the reset less
+the lead; with a later position that names no time, no wake from the candidate.
+`idle_w2_fix1_a_look_ahead_that_fails_is_said_and_leaves_the_candidate_due`: a test switch
+(`policy_host::LOOK_AHEAD_FAILS_FOR_TEST`) fails the look ahead behind a client's lease as a
+position that cannot answer fails: the decision is the hold's, the plan counts the task due and
+names it, and the daemon's log has the skipped step `policy_evaluation_rejected`.
+`idle_w2_fix1_host_own_plan_close_its_claim_a_refused_client_run_and_a_due_task`: on the host's own
+evaluated cycles (`RuntimeHost::evaluate_policy_cycle`, no plan handed in) with the fixture instance
+under `close_app` (emulator-controlled, its startup package, a standard pack root declaring its
+application): the close is carried out (the application's stop reaches the device); an evaluation
+inside the close's own claim defers the task `dispatch_instance_held` and queues no wake; a client's
+tap on the closed application is refused `application_not_foreground` and the evaluations under and
+after its lease queue no wake; the next day, past the reset, the task is due and one wake follows,
+naming `task_due` and the task. `idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes_nothing`:
+the close carried out and a person's pause, then a seeding and a loading start, each restoring both
+from the ledger: the first evaluation under the restored pause, one under a client's lease after the
+resume and one free queue no wake, and `host.idle_state` keeps the planned wake.
+
+**Fix round 2** (coordinator work order `rd-1119/brief-484-idle-w2-fix2.md`, after CI of fix
+round 1, whose restart test found a wake under the restored pause). The start withholds the
+availability of each instance it prepares until its self-check passes and prepares none whose
+restored pause is released (`prepare_physical_instances_on_start`), so the first evaluation
+blocks the task at placement (`instance_unavailable`, before the order of the deferrals) with its
+trigger's next time as its wake; the look ahead never reads it, and the idle plan took that time
+(or, with none, counted the task due), so the planner woke the application at once
+(`planned_time_reached`): the window production met at the deploy's restart of 0.12.74. Now, on
+an instance the idle action closed (`idle_closed`), while a hold of positions 1 or 2 holds it,
+such a candidate (blocked, eligible, not the fact refresh) is put in `IdleHeldAhead` with no time
+(`PolicyHost::evaluate`): not due, no wake of its own; once no hold of positions 1 or 2 stands,
+the evaluation reads it as before this round, whether or not the instance is available (so said
+in fix round 3: the code reads only whether a hold stands), and a task really due on an instance
+available again then wakes at once. Nothing a dispatch decides reads it. The restart test is the
+proof; the record lists of the two host tests print each found record's code and operation; the
+file's waits take `GATE_WAIT` (test plan v2.2 §2.1 guard 3) and its slices
+`std::slice::from_ref` (clippy).
+
+**Fix round 3** (coordinator work order `rd-1119/brief-484-idle-w2-fix3.md`, after the second
+independent review `rd-1119/review-1845-b.md`, which found that fix round 2 can neither make an
+instance sleep through work that could be dispatched nor make it sleep for ever, and that the
+texts said more than the code does).
+- *The texts say what the code does.* Fix round 2's sentences said that such a candidate is read
+  as any other once the hold has ended and the availability is proven again. The code reads only
+  whether a hold of positions 1 or 2 stands: the moment none stands, the candidate is read as
+  before fix round 2, whether or not the instance is available. So an instance still unavailable
+  when the hold ends (its emulator stopped by the idle action itself, a reconnect that failed) is
+  woken at its trigger's next time, or at once, as before this slice, a spent budget included.
+  *What this slice leaves:* an instance the idle action closed that is unavailable and under no
+  hold is still woken for a task that cannot be dispatched, as the look ahead never reads a
+  candidate the placement blocks; it is an issue of its own (`runtime-config.md`,
+  `scheduling-blackout.md`, the paragraph above).
+- *A due task under a hold that let go of the instance* (the coordinator's ruling, not the
+  owner's words; it amends the slice's ruling 2, "The rule" above). While the instance is
+  available (a held key, an occupancy, a cooldown, a pause that still stands on an available
+  instance): unchanged, a really due task wakes at once, the wake queued behind the holder. On an
+  instance a hold holds and whose availability is withdrawn, no task wakes it until the hold
+  ends: a hold that made the Runtime let go of the instance means hands off, the Runtime starts no
+  application there, and nothing could be dispatched before the hold ends anyway. The wake comes
+  with the hold's end: after a resume whose reconnect and self-check pass, the first evaluation
+  wakes at once for a task really due, one cold start later than before fix round 2. A wake whose
+  time has come, a switched action and the start's owed wake still come (`idle_action::wake`).
+  Which holds leave an instance unavailable, from the code: every instance pause a start restores
+  (`restore_scheduling_pauses`) or holds itself (`hold_unsettled_dispatches`,
+  `hold_skipped_settlement_fact_instances`, `hold_start_paused_instances`), each `released`, as
+  `prepare_physical_instances_on_start` withholds the availability of every instance it prepares
+  (`withhold_policy_instance_availability`) and prepares none such a pause holds, until the
+  resume's reconnect and its self-check prove it again (a resume that holds the instance again
+  with `instance.added` reconnects nothing); and a #403 resource fence, whose fencing withholds it
+  until the passing preparation that lifts the fence. A pause made on a running Runtime does not,
+  in either mode (`stand`, `quiet_or_lift`) and at no stage, `released` included: its hand-back
+  (`release_paused_instance`) keeps the device session inside the multi-Nemu gate or closes it
+  outside (`close_retained_instance_with`), and neither drops the self-check facts or the
+  availability, so the instance stays available under it; only a close left unconfirmed fences
+  the instance, and that fence withholds it. The global pause does not either: a start prepares
+  its instances under it.
+- *The condition names the block's reason* (the review's suggestion, taken). The loop of fix
+  round 2 also asks that the decision carry the reason `instance_unavailable`, read as
+  `set_availability_words` reads it. The review found the condition equivalent today (a blocked,
+  eligible decision comes from the placement alone, whose first check is the availability); said
+  outright, it stays so when the placement gains another block.
+- *The test proves the path* (taken).
+  `idle_w2_fix1_host_own_plan_a_start_restores_the_close_and_the_pause_and_wakes_nothing` asserts
+  that the first evaluation under the restored pause blocks the task, eligible, with
+  `instance_unavailable`, before it asserts that the plan has nothing due and that no wake is
+  recorded, which would pass with the instance available as well.
+- *Stacked on #485 START-1* (§1.489; pull request #1846's head `a7fcf229`, which holds main
+  `fc90a13b`), merged into this branch, §1.489 after this section. Where the two meet: this
+  slice's restart tests start a host and start it again twice on one state root, and START-1
+  changed what a start reads of the previous epoch (the runs from the link rows, the finished ones
+  by type) and added two stdout lines. Nothing they set up is settled differently: they leave no
+  run unfinished on purpose and write no task semantic fact without its run link, and their
+  ledgers are written in-process by the host; a finished run needed no settlement before and is
+  not read now, an unfinished one is read by its run link and settled as before (on a sound ledger
+  the same runs, records and order, §1.489), and their policy dispatches (admitted, completed,
+  released) stay `reconcile_policy_dispatches`'s; the two lines go to stdout, not to the tests'
+  daemon reporter. START-1's seven host gate tests evaluate no policy cycle and configure no idle
+  action, so this slice's change of the evaluation does not reach them.
+
+**What is not changed.** When an application is closed as idle; every dispatch decision, the
+order, the budgets, what a pause or a held key does to a dispatch; IDLE-WG's time-bound gates and
+UPD-1's hold in the plan; the start's restore of `host.idle_state` and its owed wake; a wake's
+claims and their order; the fact refresh's reading in the plan; every interface revision.
+
+**At deploy.** Nothing to configure. The first evaluation of a 0.12.75 Runtime reads the plan by
+this rule, a restored pause included.
+
 ### 1.489 Slice #485 START-1 (0.12.75): the start does not read every record of the last run; the start log times every stage (Workflow #485, a defect found in production; the rules below are the coordinator's rulings in the work order and its ruling B after the implementer stopped at the work order's item 1, not the owner's words; coordinator work order `rd-1119/brief-485-start-settle-bounded.md`, after the read-only study `rd-1119/study-idle-close-wake.md`, part B; on main `8133894c`; fix round 1, work order `rd-1119/brief-485-start1-fix1.md`, after the review `rd-1119/review-1846.md`: tests and texts, no behaviour changed)
 
 **What it is.** The start settles the direct contained runs the earlier epochs left unfinished

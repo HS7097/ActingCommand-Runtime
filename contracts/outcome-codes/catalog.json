@@ -2959,6 +2959,10 @@
         "count": "required"
       },
       "description": "What a rectangle check of a package cannot see, each kind with its count, in the vocabulary's order (#463 PRIV-1, contracts/privacy-zones.md \"What a rectangle cannot see\", since 0.12.74)."
+    },
+    "idle_wake_cause": {
+      "type": "vocab:idle_wake_cause",
+      "description": "Why an idle instance's wake was queued, on instance_idle_action with operation queue_idle_wake: a task of the instance due that can be dispatched now (with task_id), the idle action in effect changed, a wake the start owed, or the planned wake time reached (#484 IDLE-W2, contracts/runtime-config.md \"What wakes an idle instance\", since 0.12.75)."
     }
   },
   "vocabularies": {
@@ -11823,6 +11827,28 @@
         },
         "case_other_schema": {
           "description": "A regression case of another schema than actingcommand.resource-regression-case.v1, or of none, whose scene's rectangles were not read."
+        }
+      }
+    },
+    "idle_wake_cause": {
+      "description": "Why an idle instance's wake was queued, the value idle_wake_cause of instance_idle_action with operation queue_idle_wake, the first that holds in the vocabulary's order (#484 IDLE-W2, contracts/runtime-config.md \"What wakes an idle instance\", since 0.12.75).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "IdleWakeCause"
+      },
+      "tokens": {
+        "task_due": {
+          "description": "The scheduler's latest plan shows a task of the instance due that can be dispatched now: selected, or eligible with no wake of its own later than the evaluation and nothing after a hold of the instance holding it back; the record names it as task_id (a catalog task's id, nothing of an account)."
+        },
+        "action_changed": {
+          "description": "The idle action in effect is no longer the one taken on the instance (under auto: the tier taken is no longer one auto allows on it)."
+        },
+        "owed_at_start": {
+          "description": "The start owed the wake: the instance was restored woken whose startup package had not run, or restored closed from no usable record of what the idle action left, its wake at the start's time."
+        },
+        "planned_time_reached": {
+          "description": "The planned wake time, the next due task's time less the action's wake lead, was reached (also while a pause, an install hold or a claim held the instance, whose claims then wait behind the holder)."
         }
       }
     }

@@ -2310,6 +2310,8 @@ impl RuntimeHost {
             #[cfg(test)]
             idle_action_ended: Condvar::new(),
             #[cfg(test)]
+            idle_action_finished_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
             adb_baseline_wait_for_test: config.adb_baseline_wait_for_test,
@@ -7039,6 +7041,10 @@ struct HostShared {
     // IDLE-1, test only: notified when an idle action's worker ends.
     #[cfg(test)]
     idle_action_ended: Condvar,
+    /// #484 IDLE-W2 fix round 1, test only: the hook an idle action carried out runs once after
+    /// the planner learned its end and before its claim releases the key.
+    #[cfg(test)]
+    idle_action_finished_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
     /// EMU-BIND fix 1 (0.12.28), test only: see

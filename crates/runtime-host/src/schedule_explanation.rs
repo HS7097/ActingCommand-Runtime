@@ -35,6 +35,29 @@ use std::collections::{BTreeMap, BTreeSet};
 /// eight days its windows are searched.
 pub(crate) type IdleHeldBack = BTreeMap<String, Option<u64>>;
 
+/// #484 IDLE-W2 (0.12.75; register §1.488): by instance alias, then task id, the candidates of an
+/// evaluation that a hold of their instance deferred (positions 1 and 2 of the order of the
+/// deferrals: a control gate such as a pause, a claim on its key, a cooldown, a wait for another
+/// member of its device) while a later position would hold them back as well, each with the time
+/// that position lets it through (none: it names no time). The policy host reads the later
+/// positions for the idle plan alone (`PolicyHost::evaluate`, its look ahead); a candidate no later
+/// position holds back is not here, and nothing a dispatch decides reads it. Fix round 2: here
+/// too, with no time, is each candidate of an instance the idle action closed that the evaluation
+/// blocked because the instance is unavailable while such a hold holds it (a pause a start
+/// restored, which skipped its preparation, until the resume's reconnect proves it again).
+pub(crate) type IdleHeldAhead = BTreeMap<String, BTreeMap<String, Option<u64>>>;
+
+/// What the idle plan reads beside an evaluation, which only the idle plan reads; the rows stay the
+/// evaluation's own: the instances a time-bound gate holds back (IDLE-WG, [`IdleHeldBack`]), the
+/// candidates a hold of their instance hides a later gate of (#484 IDLE-W2, [`IdleHeldAhead`]) and
+/// the instances position 4a holds (UPD-1 fix round 1, review M1).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdleGates<'a> {
+    pub(crate) held_back: &'a IdleHeldBack,
+    pub(crate) held_ahead: &'a IdleHeldAhead,
+    pub(crate) update_hold: IdleUpdateHold<'a>,
+}
+
 const DAY_MS: i128 = 86_400_000;
 const MINUTE_MS: i128 = 60_000;
 
@@ -129,6 +152,9 @@ struct InstanceRows {
     not_running: ScheduleExplanationNotRunning,
     /// IDLE-1 (IDLE-1P, #405): the instance's plan as the idle check reads it.
     idle: IdlePlan,
+    /// #484 IDLE-W2: the task the plan counts due, which a wake for it names: the selected one,
+    /// else the first due one in the evaluation's order; none when no task is due.
+    idle_due_task: Option<String>,
 }
 
 /// IDLE-1P (#405): one instance's plan as the idle check reads it, gathered over its decisions.
@@ -144,22 +170,40 @@ struct InstanceRows {
 /// ([`IdleHeldBack`]: a blackout covers it, or its activity window is closed) no unselected task
 /// is due, whatever gate its decision names first (a hold of the instance comes before both); its
 /// wake is the time the gates let it through, not its own.
+///
+/// #484 IDLE-W2 (0.12.75; production 0.12.74 on 11-19 08:00: an application the idle check had
+/// closed was woken half a second later, seven times in twelve minutes, while the close's own claim
+/// or a Lab run held the instance's key and the only candidate's budget was spent): so is a task
+/// that a hold of the instance (a pause, a claim on its key) defers while a later position of the
+/// order would hold it back as well ([`IdleHeldAhead`]: a spent budget, a backoff, the activity
+/// interval, a suspended package among them). It is not due, and its wake is that position's
+/// release; with a time-bound gate as well, the later of the two. A task no later position holds
+/// back is due as before, also behind a hold: it wakes the instance at once. Fix round 1
+/// (review-1845): a hold with a time of its own (a cooldown) lets such a task through no earlier
+/// than that time, so its wake is the later of the cooldown's end and the later position's
+/// release, none when either names none.
 #[derive(Debug, Default)]
 struct IdleDraft {
     task_due: bool,
     task_wake: Option<u64>,
     reading_due: Option<u64>,
+    /// #484 IDLE-W2: the task a wake names when one is due, and whether it was selected: the
+    /// selected one, else the first due one in the evaluation's order.
+    due_task: Option<(String, bool)>,
 }
 
 impl IdleDraft {
     /// `held_back`: the instance's entry of [`IdleHeldBack`], when a time-bound gate holds it.
-    /// `update_held`: the instance waits for its client update and the decision is no store update
-    /// task's ([`crate::application_update::IdleUpdateHold::holds`]).
+    /// `held_ahead`: the decision's entry of [`IdleHeldAhead`], when a hold of the instance hides
+    /// a later position that holds it back. `update_held`: the instance waits for its client update
+    /// and the decision is no store update task's
+    /// ([`crate::application_update::IdleUpdateHold::holds`]).
     fn add(
         &mut self,
         decision: &TaskDecision,
         evaluated_at_unix_ms: u64,
         held_back: Option<Option<u64>>,
+        held_ahead: Option<Option<u64>>,
         update_held: bool,
     ) {
         // UPD-1 (design §4.2; fix round 1, review M1): on an instance that waits for its client
@@ -210,10 +254,29 @@ impl IdleDraft {
         if decision.task_id != FACT_REFRESH_TASK_ID
             && decision.state != SchedulingDecisionState::Selected
             && due
-            && let Some(through) = held_back
+            && let Some(through) = held_until(held_back, held_ahead)
         {
-            // IDLE-WG: not dispatchable now; it wakes the instance when the gates let it through.
+            // IDLE-WG, #484 IDLE-W2: not dispatchable now; it wakes the instance when what holds
+            // it back lets it through.
             self.task_wake = earliest(self.task_wake, through);
+            return;
+        }
+        // #484 IDLE-W2 fix round 1 (review-1845's must-fix): a candidate a hold with a time of its
+        // own defers (a cooldown) is not due before that time; when a later position would hold it
+        // back as well, it is let through at the later of the two times, and none when either
+        // names none. Its own time alone moved a closed instance's wake to the cooldown's end: a
+        // start for nothing.
+        if decision.task_id != FACT_REFRESH_TASK_ID
+            && !due
+            && let Some(release) = held_ahead
+        {
+            self.task_wake = earliest(
+                self.task_wake,
+                decision
+                    .next_wake_unix_ms
+                    .zip(release)
+                    .map(|(own, later)| own.max(later)),
+            );
             return;
         }
         if decision.task_id == FACT_REFRESH_TASK_ID {
@@ -228,6 +291,16 @@ impl IdleDraft {
         } else {
             self.task_due |= due;
             self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);
+            if due {
+                let selected = decision.state == SchedulingDecisionState::Selected;
+                if self
+                    .due_task
+                    .as_ref()
+                    .is_none_or(|(_, named_selected)| selected && !named_selected)
+                {
+                    self.due_task = Some((decision.task_id.clone(), selected));
+                }
+            }
         }
     }
 
@@ -267,18 +340,8 @@ impl ScheduleExplanationTable {
         );
     }
 
-    /// Replaces the table from an evaluated cycle's bound evaluation (`catalog_hash` its
-    /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
-    /// table it replaces while the same (instance, task) keeps the same `why` code, and the
-    /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
-    /// evaluation's time. Workflow #438 HELD-1: the three waits for one fact's refresh that name
-    /// the same `fact_key` count as one code (`same_clock`). SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
-    /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
-    /// `runs:<n>`); a row carries both. IDLE-WG (0.12.27): `held_back`, the instances a
-    /// time-bound gate holds back as the evaluation ran ([`idle_held_back`]), which only the idle
-    /// plan reads; the rows stay the evaluation's own. UPD-1 fix round 1 (review M1):
-    /// `update_hold`, the instances position 4a holds as the evaluation ran and the store update
-    /// tasks it lets through, which only the idle plan reads too.
+    /// `record_gated` with no candidate whose hold hides a later gate (#484 IDLE-W2).
+    #[cfg(test)]
     pub(crate) fn record_held_back(
         &mut self,
         evaluation: &PolicyEvaluation,
@@ -287,6 +350,40 @@ impl ScheduleExplanationTable {
         expected: &ExpectedRuntimeOf<'_>,
         held_back: &IdleHeldBack,
         update_hold: IdleUpdateHold<'_>,
+    ) {
+        self.record_gated(
+            evaluation,
+            catalog_hash,
+            evaluated_at_unix_ms,
+            expected,
+            IdleGates {
+                held_back,
+                held_ahead: &IdleHeldAhead::new(),
+                update_hold,
+            },
+        );
+    }
+
+    /// Replaces the table from an evaluated cycle's bound evaluation (`catalog_hash` its
+    /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
+    /// table it replaces while the same (instance, task) keeps the same `why` code, and the
+    /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
+    /// evaluation's time. Workflow #438 HELD-1: the three waits for one fact's refresh that name
+    /// the same `fact_key` count as one code (`same_clock`). SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
+    /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
+    /// `runs:<n>`); a row carries both. `gates`, which only the idle plan reads (the rows stay the
+    /// evaluation's own): IDLE-WG (0.12.27), the instances a time-bound gate holds back as the
+    /// evaluation ran ([`idle_held_back`]); #484 IDLE-W2 (0.12.75), the candidates a hold of their
+    /// instance deferred while a later position would hold them back ([`IdleHeldAhead`]); UPD-1 fix
+    /// round 1 (review M1), the instances position 4a holds as the evaluation ran and the store
+    /// update tasks it lets through.
+    pub(crate) fn record_gated(
+        &mut self,
+        evaluation: &PolicyEvaluation,
+        catalog_hash: &str,
+        evaluated_at_unix_ms: u64,
+        expected: &ExpectedRuntimeOf<'_>,
+        gates: IdleGates<'_>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -302,8 +399,13 @@ impl ScheduleExplanationTable {
             idle.entry(alias).or_default().add(
                 decision,
                 evaluated_at_unix_ms,
-                held_back.get(alias).copied(),
-                update_hold.holds(decision),
+                gates.held_back.get(alias).copied(),
+                gates
+                    .held_ahead
+                    .get(alias)
+                    .and_then(|tasks| tasks.get(&decision.task_id))
+                    .copied(),
+                gates.update_hold.holds(decision),
             );
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {
@@ -351,6 +453,7 @@ impl ScheduleExplanationTable {
                 earlier.map(|rows| &rows.not_running),
                 evaluated_at_unix_ms,
             );
+            let draft = idle.remove(alias).unwrap_or_default();
             instances.insert(
                 alias.to_owned(),
                 InstanceRows {
@@ -358,10 +461,8 @@ impl ScheduleExplanationTable {
                     selected: selected.remove(alias),
                     candidates,
                     not_running,
-                    idle: idle
-                        .remove(alias)
-                        .unwrap_or_default()
-                        .plan(evaluated_at_unix_ms),
+                    idle: draft.plan(evaluated_at_unix_ms),
+                    idle_due_task: draft.due_task.map(|(task_id, _)| task_id),
                 },
             );
         }
@@ -396,6 +497,18 @@ impl ScheduleExplanationTable {
             || IdleDraft::default().plan(latest.evaluated_at_unix_ms),
             |rows| rows.idle,
         ))
+    }
+
+    /// #484 IDLE-W2: the task the latest evaluation's plan for `alias` counts due, which a wake for
+    /// it names (the selected one, else the first due one in the evaluation's order); none when
+    /// none is due or before the first evaluated cycle after a start.
+    pub(crate) fn idle_due_task(&self, alias: &str) -> Option<&str> {
+        self.latest
+            .as_ref()?
+            .instances
+            .get(alias)?
+            .idle_due_task
+            .as_deref()
     }
 
     /// The answer of `ScheduleExplanation`: the entry of `instance` (none when the latest
@@ -592,6 +705,22 @@ fn same_clock(earlier: &Outcome, now: &Outcome) -> bool {
         (Some(earlier_key), Some(now_key)) => earlier_key == now_key,
         (None, None) => earlier.code() == now.code(),
         _ => false,
+    }
+}
+
+/// IDLE-WG and #484 IDLE-W2: what holds a due candidate back for the idle plan, if anything does:
+/// a time-bound gate of its instance (`held_back`) and a later position a hold of the instance hides
+/// (`held_ahead`), each with the time it lets the candidate through (none: no such time). With
+/// both, the later of the two, none when either names none.
+fn held_until(
+    held_back: Option<Option<u64>>,
+    held_ahead: Option<Option<u64>>,
+) -> Option<Option<u64>> {
+    match (held_back, held_ahead) {
+        (Some(gates), Some(later)) => {
+            Some(gates.zip(later).map(|(gate, release)| gate.max(release)))
+        }
+        (held, None) | (None, held) => held,
     }
 }
 

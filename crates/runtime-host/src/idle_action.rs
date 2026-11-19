@@ -44,8 +44,15 @@
 //!     admitted, so the reading does not meet a closed application). IDLE-WG (0.12.27): due means
 //!     dispatchable now; a task a blackout or a closed activity window holds back is not due,
 //!     also when a hold of the instance hides those gates in its decision, and it moves the wake
-//!     only to the time they let it through (minus the lead);
+//!     only to the time they let it through (minus the lead). #484 IDLE-W2 (0.12.75): so is a
+//!     task that a pause or a held key defers while a later gate of the order of the deferrals
+//!     would hold it back (a spent budget, a backoff, the activity interval among them): the
+//!     plan counts it as that gate answers it (`schedule_explanation::IdleHeldAhead`);
 //!   - at once, when the action in effect is no longer the one taken (the switch).
+//!
+//!   #484 IDLE-W2: the wake says why it came ([`IdlePlanner::woken_by`], the vocabulary
+//!   `idle_wake_cause`), the first that holds of a task due, the switch, a wake the start owed
+//!   (restored woken, or with no usable record, [`IdlePlanner::restore_owed`]) and its time.
 //!
 //!   IDLE-1P (#405): a fact-refresh reading alone neither wakes an idle instance nor sets its
 //!   wake: the scheduler holds a reading of a closed instance back until its next natural wake
@@ -114,6 +121,7 @@
 //!   under `auto` the action is switched only when the tier it took is no longer one `auto` allows
 //!   on it, so a restart that restores a closed application under `auto` does not wake it.
 
+use crate::codes::IdleWakeCause;
 use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -257,7 +265,9 @@ pub(crate) struct IdlePlan {
     /// a task that could be dispatched now is due: none while a blackout covers the instance or
     /// its activity window is closed (`schedule_explanation::idle_held_back`), even when a hold of
     /// the instance (a pause, a claim on its key) is what its decision names; such a task wakes at
-    /// the time those gates let it through (`next_wake_unix_ms`).
+    /// the time those gates let it through (`next_wake_unix_ms`). #484 IDLE-W2 (0.12.75): nor one
+    /// such a hold defers while a later gate of the order would hold it back (a spent budget, a
+    /// backoff, the activity interval among them); it wakes at that gate's release.
     pub(crate) due_now: bool,
     /// The earliest wake of the instance's tasks in the evaluation; none: no task of the instance
     /// wakes.
@@ -470,10 +480,11 @@ enum Phase {
     },
     /// #405 O-2: the wake after `action` was queued at `woken_at_unix_ms` and its claims still
     /// hold the instance: closed and woken until its startup package has run and the instance is
-    /// free. Never acted on, never woken again meanwhile.
+    /// free. Never acted on, never woken again meanwhile. #484 IDLE-W2: `cause`, why it was woken.
     Woken {
         action: IdleAction,
         woken_at_unix_ms: u64,
+        cause: IdleWakeCause,
     },
     /// The action was not performed: the instance is left as it is until work holds it again.
     Failed,
@@ -494,6 +505,9 @@ struct InstanceIdle {
     /// The action in effect last reported as unable to work on the instance: it is reported
     /// once, and again only for another action.
     unsupported: Option<IdleAction>,
+    /// #484 IDLE-W2: an idle instance owes its wake to the start that restored it (restored
+    /// woken, or with no usable record), until the wake is queued.
+    owed_at_start: bool,
 }
 
 /// The idle state of every instance, by alias. IDLE-1P (#405): the host keeps the closed
@@ -541,6 +555,7 @@ impl IdlePlanner {
                 phase: Phase::Active,
                 in_use_at_unix_ms: None,
                 unsupported: None,
+                owed_at_start: false,
             });
         let phase = entry.phase;
         match phase {
@@ -648,6 +663,7 @@ impl IdlePlanner {
         let Phase::Woken {
             action,
             woken_at_unix_ms,
+            cause,
         } = entry.phase
         else {
             return false;
@@ -656,6 +672,8 @@ impl IdlePlanner {
             action,
             wake_at_unix_ms: Some(woken_at_unix_ms),
         };
+        // #484 IDLE-W2: a wake the start owed is still the start's.
+        entry.owed_at_start = cause == IdleWakeCause::OwedAtStart;
         true
     }
 
@@ -711,6 +729,7 @@ impl IdlePlanner {
                     Phase::Woken {
                         action,
                         woken_at_unix_ms,
+                        ..
                     } => KeptIdle {
                         action,
                         wake_at_unix_ms: Some(woken_at_unix_ms),
@@ -798,8 +817,37 @@ impl IdlePlanner {
                 },
                 in_use_at_unix_ms: None,
                 unsupported: None,
+                // #484 IDLE-W2: a woken instance's wake is owed to the start.
+                owed_at_start: kept.woken,
             },
         );
+    }
+
+    /// Review N-1, #484 IDLE-W2: a start that does not know what the idle action left restores
+    /// `alias` as closed after `action`, owing its wake at the start's time `at_unix_ms`, a wake
+    /// the start owes ([`IdleWakeCause::OwedAtStart`]).
+    pub(crate) fn restore_owed(&mut self, alias: &str, action: IdleAction, at_unix_ms: u64) {
+        self.instances.insert(
+            alias.to_owned(),
+            InstanceIdle {
+                phase: Phase::Idle {
+                    action,
+                    wake_at_unix_ms: Some(at_unix_ms),
+                },
+                in_use_at_unix_ms: None,
+                unsupported: None,
+                owed_at_start: true,
+            },
+        );
+    }
+
+    /// #484 IDLE-W2: why the instance's wake was queued, while it is woken (its wake's claims hold
+    /// it); none otherwise. The host reads it as it queues the wake.
+    pub(crate) fn woken_by(&self, alias: &str) -> Option<IdleWakeCause> {
+        match self.instances.get(alias)?.phase {
+            Phase::Woken { cause, .. } => Some(cause),
+            _ => None,
+        }
     }
 
     /// The wake in effect of an idle instance (the one planned at the action, or an earlier one a
@@ -950,11 +998,23 @@ fn wake(
             };
             return Some(IdleStep::WakeHeld);
         }
+        // #484 IDLE-W2: why, the first that holds.
+        let cause = if due_now {
+            IdleWakeCause::TaskDue
+        } else if switched {
+            IdleWakeCause::ActionChanged
+        } else if entry.owed_at_start {
+            IdleWakeCause::OwedAtStart
+        } else {
+            IdleWakeCause::PlannedTimeReached
+        };
+        entry.owed_at_start = false;
         // #405 O-2: closed and woken until the wake's claims, its startup package's run among
         // them, have ended.
         entry.phase = Phase::Woken {
             action,
             woken_at_unix_ms: now_unix_ms,
+            cause,
         };
         // The wake's claims hold the instance next: an action waits for a plan made after them.
         entry.in_use_at_unix_ms = Some(now_unix_ms);

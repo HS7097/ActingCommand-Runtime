@@ -1103,6 +1103,15 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// #484 IDLE-W2 fix round 1, test builds only: while set on this thread, the idle plan's look
+    /// ahead behind a hold fails before it reads a position, as a position that cannot answer
+    /// fails (`policy_evaluation_rejected`, not fatal), so a test sees where that failure goes.
+    pub(crate) static LOOK_AHEAD_FAILS_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Workflow #437 ORD-1c: whether the order's entries run: always in a build.
 #[cfg(not(test))]
 pub(crate) const fn queue_order_on() -> bool {
@@ -1551,6 +1560,22 @@ fn daily_remaining(budget: &actingcommand_contract::PolicyBudgetReceipt) -> Opti
     [task, activity].into_iter().flatten().min()
 }
 
+/// #484 IDLE-W2: the release of a deferral a position after a hold of the instance answers, as the
+/// idle plan's look ahead reads it (none: it names none); an eligible answer, which no such
+/// position gives, names none either.
+fn deferred_wake(eligibility: &CandidateEligibility) -> Option<u64> {
+    match eligibility {
+        CandidateEligibility::Deferred {
+            next_wake_unix_ms, ..
+        }
+        | CandidateEligibility::Refresh {
+            next_wake_unix_ms, ..
+        } => *next_wake_unix_ms,
+        CandidateEligibility::Eligible
+        | CandidateEligibility::EligibleWithDailyRemaining { .. } => None,
+    }
+}
+
 /// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
 /// Eligible or Selected decisions of one evaluation; an instance without one is absent.
 fn instance_arbitration_ranks(
@@ -1700,6 +1725,11 @@ pub(crate) struct PolicyHost {
     /// `goal_value_package_unreadable` ones) the last evaluations decided and the cycle's recorder
     /// has not taken yet ([`Self::take_variable_warnings`]).
     variable_warnings: Vec<Outcome>,
+    /// #484 IDLE-W2 fix round 1 (review-1845): the failures of the idle plan's look ahead that do
+    /// not stop the Runtime, which the evaluations since the last call met and the cycle has not
+    /// taken yet ([`Self::take_idle_look_ahead_failures`]); the candidate each was read for was
+    /// counted as before, due. Memory only.
+    idle_look_ahead_failures: Vec<Outcome>,
     /// Workflow #463 V3 (register §1.383): the remedy parameters the last evaluation's remedy plan
     /// resolved, its `policy_dispatch_parameters` per (task, instance) before the variable values
     /// joined it, which the goal page shows read-only. Memory only; none before an evaluation.
@@ -2293,6 +2323,7 @@ impl PolicyHost {
             variable_warned: BTreeSet::new(),
             unread_variables_warned: BTreeSet::new(),
             variable_warnings: Vec::new(),
+            idle_look_ahead_failures: Vec::new(),
             resolved_parameters: BTreeMap::new(),
         };
         match tagged {
@@ -3634,6 +3665,12 @@ impl PolicyHost {
         self.explanation.idle_plan(alias)
     }
 
+    /// #484 IDLE-W2: the task the latest plan for `alias` counts due, which a wake for it names;
+    /// none when none is due or before the first evaluated cycle.
+    pub(crate) fn idle_due_task(&self, alias: &str) -> Option<String> {
+        self.explanation.idle_due_task(alias).map(str::to_owned)
+    }
+
     /// IDLE-3 (#447, register §1.332): the policy's own dispatches as an evaluation reads its
     /// inputs at the ledger position `through`, under the guard it projects them under: the
     /// instances on which a dispatch is still open, from its intent until its completion (or its
@@ -4034,6 +4071,91 @@ impl PolicyHost {
         // `scheduling.pool_lines` in effect gives its pools as the cycle starts; #428 S168-LB1a:
         // with the keys the projection left out for their record list's rows.
         let left_out = fact_refresh.left_out;
+        // #484 IDLE-W2 (register §1.488; `runtime-config.md`, "What wakes an idle instance"): for
+        // the idle plan alone, what positions 3 to 8 of the order of the deferrals would answer a
+        // candidate that a hold of its instance (positions 1 and 2) defers, each position's own
+        // reading, read only: no lift check of a suspended package or a paused task, nothing
+        // copied, drawn or noted for a clock slot. `Some(through)`: the first later position that would hold the
+        // candidate back, with the time it lets it through (none: it names none); `None`: none
+        // would, so the candidate could be dispatched once the hold ends. The evaluation, its
+        // decisions and the not-run explanation do not read it. Fix round 1 (review-1845): the
+        // outcomes of its failures that do not stop the Runtime (`look_ahead_failures`), which the
+        // cycle says in the daemon's log.
+        let mut held_ahead = crate::schedule_explanation::IdleHeldAhead::new();
+        let mut look_ahead_failures = Vec::new();
+        let look_ahead = |intent: &DispatchIntent| -> RuntimeHostResult<Option<Option<u64>>> {
+            // Fix round 1, tests: the look ahead fails as a position that cannot answer fails.
+            #[cfg(test)]
+            if LOOK_AHEAD_FAILS_FOR_TEST.with(std::cell::Cell::get) {
+                return Err(request(
+                    HostCode::PolicyEvaluationRejected,
+                    HostLocation::EvaluatePolicyCycle,
+                ));
+            }
+            // Position 3, without its lift check (which may lift, copy or record).
+            if pack_admission.suspends(suspension_lift, intent)? {
+                return Ok(Some(None));
+            }
+            // Position 4.
+            if let Some(covering) = blackout_holds.get(&intent.instance_id) {
+                return Ok(Some(deferred_wake(
+                    &BlackoutGate::Active(covering.clone()).eligibility(&intent.instance_id, false),
+                )));
+            }
+            // Position 4a.
+            if update_pending.contains(&intent.instance_id)
+                && !store_tasks.contains(&intent.task_id)
+            {
+                return Ok(Some(None));
+            }
+            // Positions 5 and 6.
+            if let Some(deferral) = pack_schedule
+                .deferral(intent, false)
+                .or_else(|| rerun_plan.deferral(intent))
+            {
+                return Ok(Some(deferred_wake(&deferral)));
+            }
+            // Position 7.
+            let instance = instances
+                .get(intent.instance_id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    request(
+                        HostCode::PolicyEvaluationRejected,
+                        HostLocation::EvaluatePolicyCycle,
+                    )
+                })?;
+            if let Some(gate) = blackout.quiet_gate(
+                &active.compiled,
+                instance,
+                intent,
+                time,
+                evaluation_deadline_ms(intent),
+            )? {
+                return Ok(Some(deferred_wake(
+                    &gate.eligibility(&intent.instance_id, false),
+                )));
+            }
+            // Position 8a.
+            if let Some(deferral) = remedy_plan.deferral(&intent.task_id, &intent.instance_id) {
+                return Ok(Some(deferral.next_wake_unix_ms));
+            }
+            // Position 8: budgets, the activity window and interval, the backoff, a task pause;
+            // the denial's release is its own next eligible time. Without the lift view, whose
+            // check measures packages into its memory: a paused task counts as still paused.
+            match self.control.preview_admission_lifted(
+                &active.compiled,
+                intent,
+                time.unix_ms,
+                None,
+            ) {
+                Ok(_) => Ok(None),
+                Err(error) if is_availability_denial(&error) => {
+                    Ok(Some(error.policy_rejection().next_eligible_unix_ms))
+                }
+                Err(error) => Err(error),
+            }
+        };
         // Workflow #437 MAPP-1: with one pick per device, each member of a group of several
         // keyed by its device.
         let evaluation = evaluate_with_device_groups::<RuntimeHostError>(
@@ -4078,6 +4200,26 @@ impl PolicyHost {
                     device_group_holds.get(&intent.instance_id),
                     instance_occupancy(&intent.instance_id),
                 ) {
+                    // #484 IDLE-W2: what the later positions would answer, for the idle plan
+                    // alone; the decision is the hold's, as before. Fix round 1 (review-1845): a
+                    // later position that cannot answer here leaves the candidate counted as
+                    // before (due), and its failure is said: one that stops the Runtime ends this
+                    // evaluation, as it ends the evaluation that reads that position itself; any
+                    // other goes to the cycle, which writes it to the daemon's log as a skipped
+                    // background step is written.
+                    if !refresh {
+                        match look_ahead(intent) {
+                            Ok(Some(through)) => {
+                                held_ahead
+                                    .entry(intent.instance_id.clone())
+                                    .or_default()
+                                    .insert(intent.task_id.clone(), through);
+                            }
+                            Ok(None) => {}
+                            Err(error) if error.halts_runtime() => return Err(error),
+                            Err(error) => look_ahead_failures.push(error.outcome()),
+                        }
+                    }
                     return Ok(hold.eligibility(refresh));
                 }
                 // Workflow #386 SR-3 (scheduling model §2.4 item 3; `scheduling-blackout.md`,
@@ -4224,6 +4366,9 @@ impl PolicyHost {
         // evaluation released because its pair was due for another cause is forgotten, whatever
         // the evaluation's result, so it stays released.
         self.no_progress.forget_released(&no_progress_guards);
+        // #484 IDLE-W2 fix round 1: the look ahead's failures are kept for the cycle whatever the
+        // evaluation's result, so none is lost behind a failed evaluation.
+        self.idle_look_ahead_failures.extend(look_ahead_failures);
         let mut evaluation = evaluation?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         // Workflow #411 B15 R4 (model-b15 §7.5 to §7.7): the stops, lifts and expiries the plan
@@ -4393,7 +4538,55 @@ impl PolicyHost {
                 HostLocation::ResolveActivityWindow,
             )
         })?;
-        self.explanation.record_held_back(
+        // #484 IDLE-W2 fix round 2 (the host test of a restart; production 0.12.74 on 11-19 at
+        // 08:36, the deploy's restart, where the first cycle under a restored pause woke an
+        // application closed as idle): a start withholds the availability of each instance it
+        // prepares until its self-check passes and prepares none whose restored pause released
+        // it, which stays unavailable until the resume's reconnect proves it again. The
+        // evaluation blocks each candidate of an unavailable instance past its trigger at
+        // placement, before the order of the deferrals, so the look ahead above never read it,
+        // and the idle plan counted it due (no wake of its own) or took its trigger's next time
+        // as its wake. On an instance the idle action closed, while a hold of it (positions 1
+        // and 2) holds it too, such a candidate cannot be dispatched before that hold ends and
+        // the availability is proven again, a time nothing names: for the idle plan alone it
+        // counts as held back by a later position that names no time (not due, no wake of its
+        // own). Once no such hold stands the evaluation reads it as before, whether or not the
+        // instance is available again; nothing a dispatch decides reads this. Fix round 3: the
+        // decision is blocked because the instance is unavailable (its `instance_unavailable`
+        // reason, read as `set_availability_words` reads it), so another block the placement
+        // gains is not taken for this one.
+        for decision in &evaluation.decisions {
+            let Some(alias) = decision.instance_id.as_deref() else {
+                continue;
+            };
+            if decision.task_id != FACT_REFRESH_TASK_ID
+                && decision.state == SchedulingDecisionState::Blocked
+                && decision.eligibility == EligibilityState::True
+                && decision.reasons.iter().any(|reason| {
+                    reason
+                        .outcome
+                        .is(actingcommand_policy::PolicyCode::InstanceUnavailable)
+                })
+                && fact_refresh.idle_closed.contains_key(alias)
+                && instances
+                    .get(alias)
+                    .is_some_and(|instance| !instance.available)
+                && crate::fact_refresh::member_hold(
+                    alias,
+                    &control_gates(alias),
+                    switch_cooldowns.get(alias).copied(),
+                    device_group_holds.get(alias),
+                    instance_occupancy(alias),
+                )
+                .is_some()
+            {
+                held_ahead
+                    .entry(alias.to_owned())
+                    .or_default()
+                    .insert(decision.task_id.clone(), None);
+            }
+        }
+        self.explanation.record_gated(
             &evaluation,
             active.compiled.catalog_hash(),
             time.unix_ms,
@@ -4414,13 +4607,19 @@ impl PolicyHost {
                     .dispatch_task(task_id)
                     .map(|task| (task.expected_duration_ms, "declared".to_owned())),
             },
-            &held_back,
-            // UPD-1 fix round 1 (review M1): the waiting instances and the store update tasks
-            // position 4a judged this evaluation by, so the idle plan wakes a waiting instance
-            // only for its store update task.
-            crate::application_update::IdleUpdateHold {
-                pending: &update_pending,
-                store_tasks: &store_tasks,
+            crate::schedule_explanation::IdleGates {
+                held_back: &held_back,
+                // #484 IDLE-W2: the candidates a hold of their instance deferred while a later
+                // position would hold them back, so the idle plan wakes an idle instance only for
+                // a task that can be dispatched now.
+                held_ahead: &held_ahead,
+                // UPD-1 fix round 1 (review M1): the waiting instances and the store update tasks
+                // position 4a judged this evaluation by, so the idle plan wakes a waiting instance
+                // only for its store update task.
+                update_hold: crate::application_update::IdleUpdateHold {
+                    pending: &update_pending,
+                    store_tasks: &store_tasks,
+                },
             },
         );
         // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
@@ -4859,6 +5058,13 @@ impl PolicyHost {
     /// start, for the cycle's recorder.
     pub(crate) fn take_variable_warnings(&mut self) -> Vec<Outcome> {
         std::mem::take(&mut self.variable_warnings)
+    }
+
+    /// #484 IDLE-W2 fix round 1 (review-1845): the failures of the idle plan's look ahead that the
+    /// evaluations since the last call met and that do not stop the Runtime, each as its outcome,
+    /// for the cycle, which says them in the daemon's log.
+    pub(crate) fn take_idle_look_ahead_failures(&mut self) -> Vec<Outcome> {
+        std::mem::take(&mut self.idle_look_ahead_failures)
     }
 
     /// Workflow #411 B15 R4 (model-b15 §7.8, at start): per pair of a task that declares a

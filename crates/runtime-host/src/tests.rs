@@ -242,6 +242,9 @@ mod gate_idle3;
 // IDLE-3 (#447) on a real policy host: whether the latest plan counts the end of every run the
 // policy dispatched on the instance, across a chain's dispatches and evaluated cycles.
 mod gate_idle3_host;
+// #484 IDLE-W2 (0.12.75; register §1.488): an idle wake only for a task that can be dispatched
+// now, also while a pause or a held key hides the later gates that hold it back.
+mod gate_484_idle_w2;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;
