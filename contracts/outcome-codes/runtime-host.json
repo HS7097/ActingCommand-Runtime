@@ -23859,9 +23859,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.74",
-      "description": "A capture, input or application operation on an iOS handset, bound or not, was refused before anything was opened or run: this build has no backend for that operation on that device system (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\"). Fix round 1: the host refuses it at the front of its admission, before any key table, foreground gate, ADB baseline or backend of the handset's stand-in registration is looked at, denied and recorded nowhere; the device registry refuses the same way behind it (its stage device_system_unsupported). It is the caused_by link of the operation's own failure (input_backend_open_failed, capture_backend_open_failed, application_backend_operation_failed), whichever operation it was; only that instance's operation fails, and the instance is never available to policy (availability_source device_system) nor attempted by any party that acts without a person asking. Fix round 2: the paths a person starts that would reach the stand-in registration otherwise are refused at their entry the same way, each with its own failure code: a self-check (SelfCheckInstance) input_backend_open_failed, the code its preparation ends with at its first open, before any claim or open; a drill of the recovery ladder (DrillRecoveryLadder, either mode) recovery_ladder_drill_unsupported, after its command.rejected and before any ladder is admitted. A pause and a resume are not refused: the pause is quiet at once and the resume lifts it with no reconnect (scheduling_resume_without_backend).",
-      "common_causes": "A configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it; a person's request or direct run that asked it for a capture, an input or an application action, a self-check or a drill.",
-      "handling": "Nothing was opened and nothing was pressed. An iOS handset is listed and bound in this build (actinglab devices, devices bind) and shown by status, and nothing runs on it until its capture backend ships."
+      "description": "An operation on an iOS handset, bound or not, was refused before anything was opened or run: this build has no backend of that operation for that device system (Workflow #479 F-2, contracts/device-binding.md \"An iOS handset\"). Fix round 1: the host refuses it at the front of its admission, before any key table, foreground gate, ADB baseline or backend of the handset's stand-in registration is looked at, denied and recorded nowhere; the device registry refuses the same way behind it (its stage device_system_unsupported). It is the caused_by link of the operation's own failure (input_backend_open_failed, capture_backend_open_failed, application_backend_operation_failed), whichever operation it was; only that instance's operation fails, and the instance is never available to policy (availability_source device_system) nor attempted by any party that acts without a person asking. Fix round 2: the paths a person starts that would reach the stand-in registration otherwise are refused at their entry the same way, each with its own failure code: a self-check (SelfCheckInstance) input_backend_open_failed, the code its preparation ends with at its first open, before any claim or open; a drill of the recovery ladder (DrillRecoveryLadder, either mode) recovery_ladder_drill_unsupported, after its command.rejected and before any ladder is admitted. A pause and a resume are not refused: the pause is quiet at once and the resume lifts it with no reconnect (scheduling_resume_without_backend). Workflow #479 F-3a: an iOS handset's read-only capture (a read-only observe, a capture sequence, an observation's frames) has its backend, acib, and is not refused; an input, an application command, a run's capture and a monitor's configuration still are (capture_backend_open_failed for the last two).",
+      "common_causes": "A configured iOS handset (device.system ios), which this build captures through acib for the read-only observations alone; a person's request or direct run that asked it for an input, an application action, a run's capture, a monitor, a self-check or a drill.",
+      "handling": "Nothing was opened and nothing was pressed. An iOS handset is listed and bound (actinglab devices, devices bind), shown by status and observed (a frame, a sequence of frames, a page's observation); nothing else runs on it until its slices ship."
     },
     "recovery_ladder_drill_unsupported": {
       "category": "error",
@@ -23896,6 +23896,49 @@
       "description": "A resume of an instance whose device system has no backend in this build (an iOS handset, bound or not) lifted its pause and attempted no reconnect: there is nothing to reconnect, as the start's preparation attempts none, and nothing was opened or sent (Workflow #479 F-2 fix round 2, contracts/device-binding.md \"An iOS handset\"). It is the cause of the resume's success code and one device_state_observed record under the pause's links; the answer's self-check has both sides ok false, no values and no failure_code. Nothing failed: a person's resume and a tool's (a hold's release before a deploy, a placement, an instance's addition) succeed on such an instance.",
       "common_causes": "A person or a tool resumed a configured iOS handset (device.system ios) before the slice that gives the Runtime a capture backend for it.",
       "handling": "None."
+    },
+    "capture_ios_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "ios_capture_problem": "required",
+        "acib_problem": "optional",
+        "acib_stage": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.75",
+      "description": "A capture of an iOS handset through acib, one acib screenshot child per frame, took no frame (Workflow #479 F-3a, contracts/device-binding.md \"An iOS handset\"). It is the caused_by link of capture_backend_operation_failed (the backend's open takes no frame, so every frame is an operation's), or of capture_backend_open_failed when the registration knows no acib at all, with the existing failure records (capture.failed, the required failure record, the recognition's failure). Its one cause is the required ios_capture_problem; beside it acib's own word (acib_problem) and, beside acib's deadline_passed, the stage it was waiting in (acib_stage); never acib's error text, its standard error, its session number or the command line. Only that instance's capture fails. A child whose end the Runtime cannot confirm (acib_not_ended) leaves the capture's resources unconfirmed, which fences that instance alone until the Runtime restarts.",
+      "common_causes": "The phone is not plugged in or not trusted by this host (ios_device_not_listed, ios_not_paired); Apple's device service does not answer (ios_device_service_unreachable); the tunnel or the screen capture service failed (ios_tunnel_failed, ios_screen_capture_failed); acib is not at the install root's tools\\acib.exe (acib_missing); acib did not answer in time or answered otherwise than its README says.",
+      "handling": "Capture again; if the cause stays, act on its word: plug the phone in and trust this host, start Apple's device service, lay acib at tools\\acib.exe. An instance fenced by acib_not_ended is lifted only by a restart of the Runtime."
+    },
+    "capture_frame_all_black": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.75",
+      "description": "A capture's picture whose every byte is zero once converted to the 8-bit sRGB frame (an iOS handset's through acib) is never passed on as a frame (Workflow #479 F-3a; the coordinator's ruling 3 on #479 F-3). It is the caused_by link of capture_backend_operation_failed. No session is closed, nothing is fenced and no picture is stored; the backend stays open and the next capture uses it. No lock state is read.",
+      "common_causes": "The phone's screen is locked or off; a transition the application in front draws in black.",
+      "handling": "Capture again in a moment; unlock the phone or bring the application to the front if it stays black."
     },
     "run_variable_undeclared": {
       "category": "error",

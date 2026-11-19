@@ -4303,3 +4303,23 @@ tests = [
     "actingcommand-lab::lib::gate_463_sel2l_rows::sel2l_rows_blocks_with_rows_is_gone_from_the_vocabulary",
 ]
 incident = ["#463 SEL-2L-rows"]
+
+# Workflow #479 F-3a (0.12.75; register §1.486; brief rd-1119/brief-479-f3a-ios-capture-backend.md with the coordinator's addition of 08:25; design rd-1119/design-479-f3.md and its disposition; contracts/device-binding.md, "An iOS handset"): the device crate's acib screen capture, acib scripted as a child behind its launcher and no clock read. A 16-bit sRGB picture of samples 257k becomes exactly the 8-bit picture of k, the frame 8-bit RGB with no original kept and its artifact an 8-bit RGB PNG (1); an 8-bit sRGB picture, by its sRGB chunk or cICP 1/13/0/1, passes unchanged (2); the matrix from P3-D65 to BT.709 derived from the H.273 chromaticities of code points 12 and 1 is the worked one, each row summing to 1 (3); neutral P3 samples 257k come out the grey k exactly (4); the sRGB primaries and three mixed colours, written as 16-bit P3 by the forward matrix in the test, come back within 1, and P3 green and red outside sRGB clip to (0, 255, 0) and (255, 0, 0) (5); a 16-bit sRGB picture is only rounded, a picture with neither colour chunk, with cICP 9/16/0/1 or 12/1/0/1 answers ios_picture_color_space_unsupported through the backend too, and grey or no PNG is unreadable (6); an all-zero picture, 8-bit sRGB and 16-bit P3, is no frame (FrameRefusal::AllBlack), no iOS cause, nothing unconfirmed, no child ended, and the next capture on the same backend gives its frame (7); each of acib's 25 words for a screenshot maps to its one cause by the test's own table, the word kept and deadline_passed's stage, the errors' marker in no text (8); no program and an absent file are acib_missing, a start that fails acib_not_started, a state that cannot be read acib_state_unreadable, a child ended by another party, fewer bytes than announced and a line without its end acib_answer_incomplete, a line that is no JSON, an unknown word and a picture to a file acib_answer_unreadable, a JPEG and bytes that are no PNG ios_picture_unreadable, none unconfirmed (9); a hang ends in acib_no_answer_in_time with the child ended once and confirmed, a child that cannot be ended is acib_not_ended with its resources unconfirmed (10); a line over 4 KiB, a picture announced over 64 MiB, more bytes than announced and an output over the reader's cap are acib_answer_too_long (11); the command line is screenshot --device-key <key> --key-salt-env ACTINGCOMMAND_ACIB_KEY_SALT --out - --via screen_capture --timeout-ms 8000, no argument holds the salt, the child's environment holds it under that name alone, the command's and the source's Debug withhold it, and the error's texts hold neither the salt nor the errors' marker (12); this test executable started again on an ignored entry that waits forever, through the system's own start, is ended past a 500 ms wait with its end confirmed once, acib_no_answer_in_time, nothing unconfirmed (13)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_sixteen_bit_samples_of_257k_become_the_eight_bit_picture_of_k",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_an_eight_bit_srgb_picture_passes_unchanged",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_the_derived_p3_matrix_is_the_worked_one",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_neutral_p3_samples_come_out_the_grey_exactly",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_p3_colours_come_back_as_srgb_and_outside_ones_clip",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t1_an_srgb_picture_is_not_converted_and_an_unknown_space_is_its_own_cause",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t2_an_all_black_picture_is_no_frame_and_the_next_capture_succeeds",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t3_each_word_of_acib_maps_to_its_one_cause",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t3_each_way_the_child_fails_is_its_one_cause",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t3_a_hang_is_ended_and_a_child_that_cannot_be_ended_is_unconfirmed",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t4_the_caps_catch_an_oversized_answer",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t5_the_salt_is_in_no_argument_and_the_errors_reach_no_text",
+    "actingcommand-device::lib::capture::acib::gate_479_f3a::f3a_t7_a_real_child_that_hangs_is_ended_and_its_end_confirmed",
+]
+incident = ["#479 F-3a"]

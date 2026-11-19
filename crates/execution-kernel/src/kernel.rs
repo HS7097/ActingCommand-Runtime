@@ -982,6 +982,11 @@ impl ExecutionKernel {
             Ok(value) => return Ok(value),
             Err(error) => error.with_instance_id(session.resolved().instance_id()),
         };
+        // Workflow #479 F-3a: a picture its backend refused as no frame keeps the session, whose
+        // backend stays open holding nothing.
+        if error.failure_context().frame_refused().is_some() {
+            return Err(error);
+        }
         if error.resource_quiescence()
             == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
         {

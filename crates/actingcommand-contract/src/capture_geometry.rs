@@ -40,6 +40,10 @@ pub enum CaptureBackendName {
     NemuIpc,
     /// #402 RD-3: the scrcpy continuous stream, selectable on real devices only.
     Scrcpy,
+    /// Workflow #479 F-3a: one `acib screenshot` child per frame, an iOS handset's only capture
+    /// (no configuration selects it). No ledger record of this build carries it: a run's capture,
+    /// whose geometry record names a frame's backend, stays refused on an iOS handset.
+    AcibScreenCapture,
 }
 
 impl CaptureBackendName {
@@ -52,6 +56,7 @@ impl CaptureBackendName {
             Self::DroidcastRaw => "droidcast_raw",
             Self::NemuIpc => "nemu_ipc",
             Self::Scrcpy => "scrcpy",
+            Self::AcibScreenCapture => "acib_screen_capture",
         }
     }
 }

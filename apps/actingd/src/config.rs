@@ -13,9 +13,9 @@ use actingcommand_contract::{
     RuntimeConfigManifest,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
-    DeviceSerial, DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
-    TouchBackendChoice, TouchBackendConfig,
+    AcibCaptureSource, AcibKeySalt, AdbConfig, CaptureBackendChoice, CaptureBackendConfig,
+    CaptureBackendName, DeviceKind, DeviceSerial, DeviceTarget, EnvOverrides, Frame,
+    MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::{
@@ -1213,6 +1213,11 @@ struct InstanceConfig {
     /// absent or naming that file), resolved once by `assemble` like `device_paths`.
     #[serde(skip)]
     adb: ac_adb::InstanceAdb,
+    /// Workflow #479 F-3a: an iOS handset's frames' source, set by `assemble`: the install root's
+    /// `acib` and the installation's own secret, the salt of its key. `None` for every other
+    /// instance.
+    #[serde(skip)]
+    ios_capture: Option<AcibCaptureSource>,
 }
 
 /// Same semantics as `actingctl task-run --package <locator>`: the locator (relative paths
@@ -1297,6 +1302,9 @@ pub(super) struct RuntimeAssembly {
     /// start registers them unbound and warns of each ([`binding_mismatch_warnings`]); check-config
     /// refuses the file (`device_binding_file_invalid` `system_mismatch`).
     pub(super) mismatched_handsets: Vec<String>,
+    /// Workflow #479 F-3a: the configured iOS handsets when `acib` is not where their captures run
+    /// it from (`check-config` notes it, `device_acib_missing`; a start goes on).
+    pub(super) acib_missing: Option<AcibMissing>,
     /// Workflow #369 S6a: the discovery-bound instances whose `start_emulator` is `true`, in
     /// configuration order: the daemon starts their stopped emulators at its start (S6c);
     /// `check-config` reports each instance's value.
@@ -1307,6 +1315,26 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #437 MAPP-1: the device groups the entries name, derived here and never stored;
     /// `host` holds their member → device key map, and `check-config` reports each entry's group.
     pub(super) device_groups: DeviceGroups,
+}
+
+/// Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): the configured iOS
+/// handsets, in configuration order, when `acib` is not at the install root's `tools\acib.exe`
+/// (`program`; `None` when the configuration is judged from no install root).
+pub(super) struct AcibMissing {
+    aliases: Vec<String>,
+    program: Option<PathBuf>,
+}
+
+impl AcibMissing {
+    /// check-config's note: `device_acib_missing` with the handsets (`aliases`) and, when known,
+    /// where `acib` was looked for (`program`). A note, never a refusal.
+    pub(super) fn note(&self) -> Outcome {
+        let note = Outcome::new(ActingdCode::DeviceAcibMissing).aliases(&self.aliases);
+        match &self.program {
+            Some(program) => note.program(program),
+            None => note,
+        }
+    }
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1953,6 +1981,36 @@ impl ActingdConfigFile {
             }
             (bound.unbound, bound.unused, bound.mismatched)
         };
+        // Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): an iOS handset's
+        // frames come from the install root's `acib`, the contract's one place (`acib_path`, the
+        // Lab's too), its key made under the installation's own secret; no configuration member
+        // names another place. Without the file a start goes on and its captures answer
+        // `acib_missing`; check-config notes it (`device_acib_missing`) and refuses nothing.
+        let acib = installed_adb
+            .as_ref()
+            .map(|installed| actingcommand_contract::acib_path(installed.root()));
+        let ios_handsets = handsets
+            .iter()
+            .filter(|(_, system)| *system == DeviceSystem::Ios)
+            .map(|(alias, _)| alias.clone())
+            .collect::<Vec<_>>();
+        for instance in &mut instances {
+            if ios_handsets.contains(&instance.alias) {
+                instance.ios_capture = Some(AcibCaptureSource::new(
+                    acib.clone(),
+                    AcibKeySalt::new(self.secret_fingerprint_salt.clone()),
+                ));
+            }
+        }
+        let acib_missing =
+            if !ios_handsets.is_empty() && !acib.as_deref().is_some_and(Path::is_file) {
+                Some(AcibMissing {
+                    aliases: ios_handsets,
+                    program: acib,
+                })
+            } else {
+                None
+            };
         let configured_aliases = instances
             .iter()
             .map(|instance| instance.alias.clone())
@@ -2274,6 +2332,7 @@ impl ActingdConfigFile {
             unbound_handsets,
             unused_device_bindings,
             mismatched_handsets,
+            acib_missing,
             emulator_autostart,
             process_priority,
             device_groups,
@@ -3124,6 +3183,8 @@ impl InstanceConfig {
         let touch = TouchBackendConfig::new(adb, target, MaaTouchConfig::default())
             .with_requested(TouchBackendChoice::AdbShellInput);
         let handset = self.handset;
+        // Workflow #479 F-3a: its capture's source, `acib` (the stand-ins above open nothing).
+        let ios_capture = self.ios_capture;
         ExecutionBackendRegistration::new(
             self.alias,
             self.instance_id,
@@ -3133,6 +3194,10 @@ impl InstanceConfig {
         )
         .map(|registration| match handset {
             Some(handset) => registration.with_handset(handset),
+            None => registration,
+        })
+        .map(|registration| match ios_capture {
+            Some(source) => registration.with_ios_capture(source),
             None => registration,
         })
         .map_err(|_| ActingdCode::InstanceRegistrationInvalid.code())

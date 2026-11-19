@@ -267,10 +267,11 @@ fn f2_an_ios_handset_is_never_available_and_its_facts_say_its_system_and_binding
     );
 }
 
-/// Ruling 6: on an iOS handset, bound or not, a capture, an input and an application request are
-/// each refused by the device registry before anything is opened (the registry's adb is a name
-/// that never runs, and no backend is opened), with the one cause `device_system_backend_missing`
-/// beside the operation's own code.
+/// Ruling 6: on an iOS handset, bound or not, an input and an application request are each refused
+/// by the device registry before anything is opened (the registry's adb is a name that never runs,
+/// and no backend is opened), with the one cause `device_system_backend_missing` beside the
+/// operation's own code. Workflow #479 F-3a (adapted, the requirement changing what it pins): an
+/// iOS handset's capture has its backend, `acib` (`gate_479_f3a`), so the capture left this test.
 #[test]
 fn f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_opens() {
     const ALIAS: &str = "neutral.iphone";
@@ -286,10 +287,6 @@ fn f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_
             .expect("the registry");
             ExecutionKernel::new(Arc::new(registry))
         };
-        let on_capture = kernel();
-        let capture = on_capture
-            .capture(ALIAS)
-            .expect_err("no capture opens on an iOS handset");
         let on_input = kernel();
         let input = on_input
             .input(ALIAS, InputAction::Reset, business_step(instance_id))
@@ -303,7 +300,6 @@ fn f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_
             )
             .expect_err("no application control runs on an iOS handset");
         for (location, refused) in [
-            (HostLocation::ExecuteCaptureBackend, &capture),
             (HostLocation::ExecuteInputBackend, &input),
             (HostLocation::ControlApplication, &application),
         ] {
@@ -320,7 +316,7 @@ fn f2_a_capture_an_input_and_an_application_request_are_refused_before_anything_
                 "{location:?}: {outcome:?}"
             );
         }
-        for kernel in [on_capture, on_input, on_application] {
+        for kernel in [on_input, on_application] {
             kernel
                 .close()
                 .expect("nothing was opened, so nothing is left");
@@ -433,16 +429,8 @@ fn f2_fix1_a_tap_a_key_a_swipe_a_capture_and_a_launch_are_refused_at_the_hosts_f
         "{released:?}"
     );
 
-    // A capture, as the Lab's look asks for one.
-    let observed = process(RuntimeOperation::ObserveReadonly {
-        instance_alias: ALIAS.to_owned(),
-    });
-    refused_by_device_system(
-        &observed,
-        DeviceSelfCheckFailure::CaptureBackendOpenFailed
-            .code()
-            .as_str(),
-    );
+    // Workflow #479 F-3a (adapted, the requirement changing what it pins): a read-only capture of
+    // an iOS handset has its backend, `acib`, and is no longer refused here (`gate_479_f3a`).
 
     // An application launch, on the request's own claim.
     let launched = process(RuntimeOperation::application_lifecycle(
@@ -576,6 +564,8 @@ fn active_availability(host: &RuntimeHost, instance_alias: &str, server_id: &str
 
 /// Fix round 2, item 2: `status` says what the ledger's statement says, at its read: every row of
 /// the handset's capability table is unsupported and unavailable, from `device_system:ios`.
+/// Workflow #479 F-3a (adapted, the requirement changing what it pins): but its frame row, which
+/// `acib_screen_capture` implements, not verified.
 fn status_says_no_backend(status: &actingcommand_contract::RuntimeInstanceStatus) {
     let alias = status.instance_alias();
     let table = status
@@ -583,13 +573,22 @@ fn status_says_no_backend(status: &actingcommand_contract::RuntimeInstanceStatus
         .unwrap_or_else(|| panic!("{alias}: a capability table in the status"));
     for capability in EmulatorCapability::ALL {
         let row = table.evidence(capability);
-        assert_eq!(
-            (row.evidence_ref(), row.availability(), row.implementation()),
+        let expected = if capability == EmulatorCapability::CaptureFrame {
+            (
+                "acib_screen_capture",
+                EmulatorCapabilityAvailability::Unverified,
+                Some(EmulatorCapabilityImplementation::Supported),
+            )
+        } else {
             (
                 "device_system:ios",
                 EmulatorCapabilityAvailability::Unavailable,
                 Some(EmulatorCapabilityImplementation::Unsupported),
-            ),
+            )
+        };
+        assert_eq!(
+            (row.evidence_ref(), row.availability(), row.implementation()),
+            expected,
             "{alias}: {capability:?}"
         );
     }

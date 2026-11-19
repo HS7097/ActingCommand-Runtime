@@ -102,7 +102,9 @@ pub use goals::*;
 // `ContainedTaskRequest.variables`, declared [3, 11]. Revision 12 (#480 PG-2c, since 0.12.73): the
 // request member `PauseScheduling.pause_mode` (`SchedulingPauseMode`) and the status members
 // `InstancePauseState.pause_mode` and `.in_the_way` (`PauseObstacle`), which no Runtime of 0.12.73
-// answers, declared [3, 12].
+// answers, declared [3, 12]. Revision 13 (Workflow #479 F-3a, since 0.12.75): the value
+// `acib_screen_capture` of `RuntimeCaptureBackend`, which only a configured iOS handset's
+// observation carries and a reader of 12 or lower refuses, declared [3, 13].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1318,6 +1320,10 @@ pub enum RuntimeCaptureBackend {
     NemuIpc,
     /// #402 RD-3: the scrcpy continuous stream (real devices only).
     Scrcpy,
+    /// Workflow #479 F-3a (`runtime-client` 13): an iOS handset's frame, one `acib screenshot`
+    /// child per frame. Only a configured iOS handset's observation carries it; a reader whose
+    /// `runtime-client` revision is below 13 refuses a receipt or a status that carries it.
+    AcibScreenCapture,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

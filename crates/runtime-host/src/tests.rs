@@ -546,6 +546,9 @@ mod gate_398_rd5b;
 // its key, never available to policy, and refused every capture, input and application operation
 // before anything opens.
 mod gate_479_f2;
+// Workflow #479 F-3a (0.12.75): a bound iOS handset's read-only observations take its frames from
+// a scripted `acib`; its inputs, application commands, self-check, drill and monitor stay refused.
+mod gate_479_f3a;
 // STORE-FG-2 (0.12.29): a store update package's store tap goes to exactly its allowed store;
 // every other input expects the assigned application.
 mod gate_store_fg2;

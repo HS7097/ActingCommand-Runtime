@@ -620,6 +620,9 @@ impl ExecutionSession {
     pub fn capture(&self) -> ExecutionKernelResult<Frame> {
         match self.capture_retained() {
             Ok(frame) => Ok(frame),
+            // Workflow #479 F-3a: a picture its backend refused as no frame leaves the backend
+            // open and holding nothing; the session stays for the next capture.
+            Err(primary) if primary.failure_context().frame_refused().is_some() => Err(primary),
             Err(primary) => Err(
                 match self.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                     Ok(_) => primary,
@@ -1226,6 +1229,25 @@ fn run_session(
                             DeviceCloseAuthority::LocalOnly,
                         )
                     })?,
+                    // Workflow #479 F-3a (the coordinator's ruling 3 on #479 F-3): the backend
+                    // refused the picture it took as no frame (an all-black picture) and stays
+                    // open holding nothing, so the session goes on: nothing is marked for close
+                    // or retained, and the next capture uses the same backend.
+                    Err(error) if error.failure_context().frame_refused().is_some() => {
+                        response.send(Err(error.clone())).map_err(|_| {
+                            close_after_failure(
+                                backends.take(),
+                                ExecutionKernelError::merge(
+                                    error,
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
+                                ),
+                                ResourceCloseOrder::CaptureFirst,
+                                DeviceCloseAuthority::LocalOnly,
+                            )
+                        })?
+                    }
                     Err(error) => {
                         // Workflow #191 H: marked first; the Host may end the lease on this reply.
                         needs_close.store(true, Ordering::Release);

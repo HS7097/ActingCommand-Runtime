@@ -1659,12 +1659,13 @@ actingcommand_contract::outcome_codes! {
         DeviceHeldForMemberClose => "device_held_for_member_close": error / none,
         // ---- Workflow #437 G1: end
         // ---- Workflow #479 F-2 (`contracts/device-binding.md`, "An iOS handset"): begin
-        /// Error. A capture, input or application operation on an iOS handset, bound or not,
-        /// refused by the device registry before anything was opened or run: this build has no
-        /// backend for that operation on that device system (the stage
+        /// Error. An operation on an iOS handset refused before anything was opened or run: this
+        /// build has no backend of that operation for that device system (the stage
         /// `device_system_unsupported`). The `caused_by` of the operation's own failure; only that
         /// instance's operation fails. Fix round 2: also of a person's self-check and ladder drill
-        /// on it, each refused at its entry (its pause and its resume are not refused).
+        /// on it, each refused at its entry (its pause and its resume are not refused). Workflow
+        /// #479 F-3a: its read-only capture has one (`capture_ios_failed`); an input, an
+        /// application command, a run's capture and a monitor's configuration stay refused.
         DeviceSystemBackendMissing => "device_system_backend_missing": error / declaration_error,
         /// Error. Workflow #479 F-2 fix round 2: a person's drill of the recovery ladder of an
         /// instance whose device system has no backend in this build (an iOS handset, bound or
@@ -1680,6 +1681,22 @@ actingcommand_contract::outcome_codes! {
         /// sides `ok: false`, no values and no `failure_code`. Nothing failed.
         SchedulingResumeWithoutBackend => "scheduling_resume_without_backend": info / none,
         // ---- Workflow #479 F-2: end
+        // ---- Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): begin
+        /// Error. A capture of an iOS handset through `acib screenshot` took no frame. The
+        /// `caused_by` of `capture_backend_operation_failed` (the backend's open takes no frame,
+        /// so every frame is an operation's), or of `capture_backend_open_failed` when the
+        /// registration knows no `acib` at all, with the existing failure records; its one cause
+        /// is the required `ios_capture_problem`, beside `acib`'s own word (`acib_problem`) and
+        /// stage (`acib_stage`) where it answered them. Only that instance's capture fails; a child
+        /// whose end cannot be confirmed (`acib_not_ended`) fences that instance alone.
+        CaptureIosFailed => "capture_ios_failed": error / environment_fault,
+        /// Error. A capture's picture whose every byte is zero once converted to the 8-bit sRGB
+        /// frame (an iOS handset's through `acib`): no frame (the coordinator's ruling 3 on #479
+        /// F-3). The `caused_by` of `capture_backend_operation_failed`; no session is closed,
+        /// nothing is fenced and no picture is stored, and the next capture uses the same backend.
+        /// No lock state is read.
+        CaptureFrameAllBlack => "capture_frame_all_black": error / none,
+        // ---- Workflow #479 F-3a: end
         // ---- Workflow #463 S3-8 (`contracts/runtime-interface.md`, "The variable values of a
         // contained run"): begin. Each refuses a direct run in its preparation, before any record,
         // claim or lease (keys `package_id` the run's package, `variable_name` the value's name).

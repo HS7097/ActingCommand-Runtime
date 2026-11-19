@@ -113,6 +113,8 @@ fn runtime_capture_backend(
         CaptureBackendName::DroidcastRaw => Ok(RuntimeCaptureBackend::DroidcastRaw),
         CaptureBackendName::NemuIpc => Ok(RuntimeCaptureBackend::NemuIpc),
         CaptureBackendName::Scrcpy => Ok(RuntimeCaptureBackend::Scrcpy),
+        // Workflow #479 F-3a: an iOS handset's frame (`runtime-client` 13).
+        CaptureBackendName::AcibScreenCapture => Ok(RuntimeCaptureBackend::AcibScreenCapture),
     }
 }
 
@@ -399,10 +401,11 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         // Workflow #479 F-2 fix round 1 (`contracts/device-binding.md`, "An iOS handset"): a
-        // capture of an instance whose device system has no backend in this build is refused
-        // here, before it is requested or any backend of its stand-in registration is looked at:
-        // `capture_backend_open_failed` caused by `device_system_backend_missing`, denied; nothing
-        // is recorded or changed.
+        // capture of an instance whose device system has no backend of it in this build is
+        // refused here, before it is requested or any backend of its stand-in registration is
+        // looked at: `capture_backend_open_failed` caused by `device_system_backend_missing`,
+        // denied; nothing is recorded or changed. Workflow #479 F-3a: an iOS handset's read-only
+        // capture has its backend (`acib`) and goes on.
         self.refuse_device_system_without_backend(
             instance_alias,
             super::lease::DeviceOperation::Capture,

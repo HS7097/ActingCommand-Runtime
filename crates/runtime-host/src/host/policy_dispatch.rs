@@ -5359,7 +5359,7 @@ impl HostShared {
             HostLocation::ReadInstanceRegistry,
         )?
         .get(&instance_id)
-        .is_some_and(|instance| instance.device_system_without_backend().is_some()))
+        .is_some_and(|instance| instance.device_system_without_input_backend().is_some()))
     }
 
     /// Workflow #479 F-2 fix round 2, the coordinator's follow-up (`contracts/device-binding.md`,

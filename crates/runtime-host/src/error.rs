@@ -905,6 +905,19 @@ impl RuntimeHostError {
         } else {
             runtime_error
         };
+        // Workflow #479 F-3a (`contracts/device-binding.md`, "An iOS handset"): an iOS handset's
+        // capture through `acib` that took no frame names its one cause, with `acib`'s own word
+        // and stage where it answered them; a picture refused as all black names that.
+        let runtime_error = match error.failure_context().ios_capture_failure() {
+            Some(failure) => runtime_error.with_caused_by(ios_capture_cause(failure)),
+            None => runtime_error,
+        };
+        let runtime_error = match error.failure_context().frame_refused() {
+            Some(actingcommand_device::FrameRefusal::AllBlack) => {
+                runtime_error.with_caused_by(Outcome::new(HostCode::CaptureFrameAllBlack))
+            }
+            None => runtime_error,
+        };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
             runtime_error.into_fatal()
         } else {
@@ -1233,6 +1246,20 @@ impl VocabularyToken for CaptureOpenCauseToken {
 /// #402 HS-3: why a paired Nemu open found no application index, as a token of the catalog
 /// vocabulary `nemu_app_index_problem`.
 #[derive(Clone, Copy)]
+/// Workflow #479 F-3a: the cause of an iOS handset's capture through `acib` that took no frame:
+/// `capture_ios_failed` with its one cause, `acib`'s word and its stage where it answered them.
+fn ios_capture_cause(failure: actingcommand_device::IosCaptureFailure) -> Outcome {
+    let cause = Outcome::new(HostCode::CaptureIosFailed).ios_capture_problem(failure.problem);
+    let cause = match failure.acib_problem {
+        Some(word) => cause.acib_problem(word),
+        None => cause,
+    };
+    match failure.acib_stage {
+        Some(stage) => cause.acib_stage(stage),
+        None => cause,
+    }
+}
+
 struct NemuAppIndexProblemToken(actingcommand_device::NemuAppIndexProblem);
 
 impl VocabularyToken for NemuAppIndexProblemToken {

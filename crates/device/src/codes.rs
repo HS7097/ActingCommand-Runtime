@@ -92,6 +92,117 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+// Workflow #479 F-3a: an iOS handset's frame through `acib` (begin).
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #479 F-3a (vocabulary `ios_capture_problem`; `contracts/device-binding.md`, "An
+    /// iOS handset"): why an iOS handset's capture through `acib screenshot` took no frame, the one
+    /// cause beside `capture_ios_failed`. A word of `acib`'s maps to the cause its step names;
+    /// the Runtime's own words say what it saw of the child.
+    pub enum IosCaptureProblem: "ios_capture_problem" {
+        /// No phone usbmuxd lists has the handset's key (`device_key_unknown`,
+        /// `device_not_listed`): it is not plugged in, or not seen.
+        IosDeviceNotListed => "ios_device_not_listed",
+        /// Apple's device service (usbmuxd) gave no usable answer: no connection, or its device
+        /// list or the phone's pairing record unreadable (`usbmuxd_unreachable`,
+        /// `usbmuxd_list_failed`, `pair_record_unreadable`).
+        IosDeviceServiceUnreachable => "ios_device_service_unreachable",
+        /// This host holds no pairing record of the phone (`not_paired`).
+        IosNotPaired => "ios_not_paired",
+        /// The lockdown session, the service that starts the tunnel, the tunnel or its remote
+        /// service discovery failed (`lockdown_unreachable`, `lockdown_read_failed`,
+        /// `lockdown_value_unexpected`, `session_refused`, `service_refused`,
+        /// `service_unreachable`, `tunnel_failed`, `rsd_unreachable`, `rsd_handshake_failed`).
+        IosTunnelFailed => "ios_tunnel_failed",
+        /// The screen capture service or its picture request failed (`service_not_listed`,
+        /// `service_handshake_failed`, `channel_refused`, `screenshot_failed`).
+        IosScreenCaptureFailed => "ios_screen_capture_failed",
+        /// `acib`'s own deadline passed (`deadline_passed`, with the stage it was waiting in).
+        AcibDeadlinePassed => "acib_deadline_passed",
+        /// The Runtime's wait passed before `acib` ended with its answer; the Runtime ended it and
+        /// its end is confirmed.
+        AcibNoAnswerInTime => "acib_no_answer_in_time",
+        /// The answer was cut short: `acib` ended without its whole answer (ended by another
+        /// party), or fewer bytes followed its line than it announced.
+        AcibAnswerIncomplete => "acib_answer_incomplete",
+        /// The answer line is not one of `acib screenshot`'s answers: no JSON of its shape, no
+        /// picture announced on the standard output, a word of none of its answers, or an output
+        /// that could not be read.
+        AcibAnswerUnreadable => "acib_answer_unreadable",
+        /// The answer is over the Runtime's caps: a line of more than 4 KiB, a picture announced
+        /// or sent over 64 MiB, or more bytes than its line announced; the child ended.
+        AcibAnswerTooLong => "acib_answer_too_long",
+        /// The Runtime could not read whether `acib` had ended, so it ended it, and its end is
+        /// confirmed: what it answered is not known.
+        AcibStateUnreadable => "acib_state_unreadable",
+        /// The Runtime asked `acib` to end and could not confirm its end: it may still run, and
+        /// the instance's resources are unconfirmed (the instance is fenced).
+        AcibNotEnded => "acib_not_ended",
+        /// `acib` refused the call itself before it asked the phone: its command line, the salt of
+        /// the key or its own asynchronous runtime (`command_line_invalid`, `key_salt_unusable`,
+        /// `async_runtime_failed`).
+        AcibCallRefused => "acib_call_refused",
+        /// The picture cannot be decoded, or is of a form the conversion to 8-bit sRGB does not
+        /// cover (not RGB of 8 or 16 bits per sample), or `acib` could not read its header
+        /// (`picture_header_truncated`, `picture_header_unknown`).
+        IosPictureUnreadable => "ios_picture_unreadable",
+        /// The picture names no colour space this build converts: neither a `cICP` chunk nor an
+        /// `sRGB` chunk, or a `cICP` chunk of other numbers than primaries 1 or 12, transfer 13,
+        /// matrix 0 and full range.
+        IosPictureColorSpaceUnsupported => "ios_picture_color_space_unsupported",
+        /// No `acib` where the Runtime runs it from: no `tools\acib.exe` under the install root,
+        /// or the Runtime runs from no install root.
+        AcibMissing => "acib_missing",
+        /// The file is there but the system could not start it.
+        AcibNotStarted => "acib_not_started",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #479 F-3a (vocabulary `acib_problem`): `acib`'s own word for a refused or failed
+    /// `screenshot`, kept beside the cause it maps to (`apps/acib/README.md`, "The commands"). A
+    /// word of none of these is an answer the Runtime does not read (`acib_answer_unreadable`).
+    pub enum AcibProblem: "acib_problem" {
+        CommandLineInvalid => "command_line_invalid",
+        AsyncRuntimeFailed => "async_runtime_failed",
+        DeadlinePassed => "deadline_passed",
+        KeySaltUnusable => "key_salt_unusable",
+        DeviceKeyUnknown => "device_key_unknown",
+        UsbmuxdUnreachable => "usbmuxd_unreachable",
+        UsbmuxdListFailed => "usbmuxd_list_failed",
+        DeviceNotListed => "device_not_listed",
+        LockdownUnreachable => "lockdown_unreachable",
+        LockdownReadFailed => "lockdown_read_failed",
+        LockdownValueUnexpected => "lockdown_value_unexpected",
+        PairRecordUnreadable => "pair_record_unreadable",
+        NotPaired => "not_paired",
+        SessionRefused => "session_refused",
+        ServiceRefused => "service_refused",
+        ServiceUnreachable => "service_unreachable",
+        TunnelFailed => "tunnel_failed",
+        RsdUnreachable => "rsd_unreachable",
+        RsdHandshakeFailed => "rsd_handshake_failed",
+        ServiceNotListed => "service_not_listed",
+        ServiceHandshakeFailed => "service_handshake_failed",
+        ChannelRefused => "channel_refused",
+        ScreenshotFailed => "screenshot_failed",
+        PictureHeaderTruncated => "picture_header_truncated",
+        PictureHeaderUnknown => "picture_header_unknown",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #479 F-3a (vocabulary `acib_stage`): the step `acib screenshot` was waiting in
+    /// when its own deadline passed, its `stage` beside `deadline_passed`.
+    pub enum AcibStage: "acib_stage" {
+        Session => "session",
+        Tunnel => "tunnel",
+        ServiceHandshake => "service_handshake",
+        ServerFirstMessage => "server_first_message",
+        PictureRequest => "picture_request",
+    }
+}
+// Workflow #479 F-3a (end).
+
 // Workflow #411 A36a: the vendor stdio redirect's process-wide gate (begin).
 actingcommand_contract::outcome_codes! {
     /// Workflow #411 A36a: the process-wide gate around the stdio redirect of a vendor library
