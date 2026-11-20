@@ -154,7 +154,7 @@ field:
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
 | A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
 | Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
-| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on, and (Workflow #463 SEL-2L, since 0.12.74) so may a `repeated_anchor` layout, which a Runtime before 0.12.74 refuses with `UnknownField`; an older task schema refuses it with `UnconsumedField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. Workflow #428 CFL-2: the optional `preprocess` is a chain of [recognition-preprocess.md](recognition-preprocess.md), refused at its own pointer below `…/shared_ocr/preprocess`, and a `threshold` of `"otsu"` in it is `InvalidValue` at `…/preprocess/steps/<k>/value` (section Shared OCR read, Preprocessing). | `/candidate_layouts/i/shared_ocr` and its fields | gate |
+| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on, and (Workflow #463 SEL-2L, since 0.12.74) so may a `repeated_anchor` layout, which a Runtime before 0.12.74 refuses with `UnknownField`; an older task schema refuses it with `UnconsumedField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. Workflow #428 CFL-2: the optional `preprocess` is a chain of [recognition-preprocess.md](recognition-preprocess.md), refused at its own pointer below `…/shared_ocr/preprocess`, and a `threshold` of `"otsu"` in it is `InvalidValue` at `…/preprocess/steps/<k>/value` (section Shared OCR read, Preprocessing). Workflow #463 SEL-GRID G2 (since 0.12.76): the optional `lines` is `{"max": m, "line_height": h}`, both unsigned integers (another member `UnknownField`, one left out `MissingField`, another type `InvalidType`, each at its own pointer below `…/shared_ocr/lines`), of a layout of either kind; a Runtime before 0.12.76 refuses it with `UnknownField` at `…/shared_ocr/lines` (section Shared OCR read, "The lines of a name box"). | `/candidate_layouts/i/shared_ocr` and its fields | gate |
 | Workflow #463 SEL-2L (since 0.12.74): a `repeated_anchor` layout's `shared_ocr` covers its `readable_band`, or the task's whole `coordinate_space` where it declares none: its region is `full_frame`, or a `rect` that holds the band (section Shared OCR read, "A `repeated_anchor` layout's shared read"). Otherwise `InvalidValue`. | `/candidate_layouts/i/shared_ocr/region` | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
@@ -170,7 +170,7 @@ feature, a slot and a rectangle are written in the order of the examples below; 
 `targets` keep their declared order. A feature writes `name`, `value`, `target` and `offset`,
 then `identity`, `consensus` and `integer` as declared. A layout writes its `shared_ocr` last,
 with its region in the pack's form (a rectangle or `full_frame`) and its other members as
-declared. Layouts are written in the order the tasks declare them,
+declared (since 0.12.76 its `lines`, when it declares them, last of them). Layouts are written in the order the tasks declare them,
 after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
 projection) are checked by the recognition pack when the derived pack is validated or loaded
 (section Rules).
@@ -449,6 +449,84 @@ frame shows, not every text on its cards. Nothing is declared for it, in a packa
   ([ocr-fields.md](ocr-fields.md), section Located text) and every read that is not a layout's
   shared read; the model folder's parameters.
 
+#### The lines of a name box (Workflow #463 SEL-GRID G2, since 0.12.76)
+
+On a list whose card names hold one line or two, the two lines of a name stand 3 to 4 px apart,
+and at some scroll positions the detector answers them as one block, about twice the height of a
+line. The recognizer reads a block as one line, so such a name read poorly and was unread. A
+shared read may declare the lines its name boxes hold, of a layout of either kind:
+
+```json
+"shared_ocr": {"region": {"x": 620, "y": 122, "width": 606, "height": 496},
+               "languages": ["en"], "timeout_ms": 5000,
+               "model_ref": "<model>", "model_sha256": "<64 hex>",
+               "blocks": "detect", "line_merge": {"gap_factor": 0},
+               "lines": {"max": 2, "line_height": 21}}
+```
+
+- **The member.** `max`, the most lines a name box holds, 1 to 3; `line_height`, the height of one
+  line in pixels of the package's base, at least 8 (section Rules). Absent, the read is exactly
+  what it was, byte for byte.
+- **What the read sends.** The read sends the lines with its name boxes ("What the read
+  recognizes" above), in the pixels of the picture the provider is given: every frame is brought
+  to the package's base before recognition and a chain's processed region moves the picture and
+  never scales it, so the declared height is the height in that picture, as the name boxes are its
+  rectangles. A read sent no name box is sent no lines and reads as before; admission refuses lines
+  on a read that gives text to a `template_relative` target, whose box is never placed before the
+  frame.
+- **What the provider does with them**, between the cap's count and the recognizer, for each
+  served block (the vision boundary's `ocr_name_line_plan`, which the text provider calls on the
+  picture it is given, the pixels the recognizer is given):
+  - a block lower than half a line (`height × 1000 < line_height × 500`) is **not read**: it is in
+    no text, and the provider answers it apart, below the floor;
+  - a block at least 1.25 lines high (`height × 1000 ≥ line_height × 1250`), with `max` of 2 or
+    more, is **cut** into `max(round(height / line_height), 2)` strips of its full width, each
+    recognized on its own, unless `round(height / line_height)` exceeds `max`: a block of more
+    lines than the name box declares is **not cut** and is read whole, exactly as without the
+    member, so that no strip holds a line and a half and the member reads no name worse than
+    without it; the Lab's refusal of such a name lists the block's height
+    ([lab-recording.md](lab-recording.md), "The refusal lists the blocks"), from which the author
+    sees that `max` must be raised;
+  - every other block is recognized whole, as without lines; a name of one line in a box that
+    allows two is about one line high, under the factor, and reads as without the member.
+- **Where the cut goes.** Not blindly at the equal positions `round(k × height / n)`: within a
+  quarter of `line_height` around each, the row with the least ink, the equal position when no
+  row has less, and of rows with equally least ink the closest, the upper one at the same
+  distance; the row of a cut is the first row of the lower strip. **Ink** is counted on the pixels
+  the recognizer is given, the picture inside the block: for each row, the sum of the absolute
+  differences of luma (`(299 R + 587 G + 114 B) / 1000`, a gray pixel's own value) between
+  horizontally neighbouring pixels. It does not depend on the colour of the text: a row of
+  background holds none, whatever its colour or a gradient from top to bottom, and a row through
+  letters holds their edges, dark letters on light and light ones on dark alike. A cut that would
+  make a strip lower than 8 px is not made: the block is read whole.
+- **The factors** are constants of the code, measured on 11-19 on the list that started the work: a
+  name of two lines detected as one block is 42 to 43 px high where one of its lines is 21 to 23
+  px, the lines 3 to 4 px apart. 1.25 lines lies above any one line and below the block of two;
+  half a line lies below any line of a name, so what is lower is print or a speck.
+- **The join.** A cut block's text is its strips' texts, top to bottom, joined by the one join of a
+  name box: the texts in their order joined with `\n`, the join by which the blocks of a name box
+  make a target's text (above); a strip that reads nothing is left out, as a block that reads
+  nothing is. Its confidence is the lowest of its strips' by the same rule. So a name read through
+  a cut is the name read when its lines were detected apart: the same text, the same confidence,
+  the same identity. The kernel checks it: a cut block whose text or confidence is not its strips',
+  a strip outside its block or above the one before it, or more strips than `max`, is the provider's
+  invalid response (`vision_provider_invalid_response`).
+- **The cap counts strips.** Each strip is one recognition, so a cut block counts as its strips
+  against the model folder's `max_boxes`, a block below the floor as none; `served` and the
+  outcome's `requested` are then the recognitions of the served blocks. Served blocks under the cap
+  whose strips exceed it end the read `text_read_blocks_truncated`, its one cause.
+- **Evidence.** A cut block's `blocks[]` entry carries `strips`, each strip's `text`, `rect` and
+  `confidence`, beside the block's own; a target's evaluation carries `below_floor`, the
+  rectangles of the blocks below the floor whose center its region holds (their count is its
+  length). Both are absent without the member. The ledger's records and the task diagnostic keep
+  their shape.
+- **A provider that cannot cut** refuses the read (`Unavailable`), so that no read with lines
+  silently reads two lines as one.
+- **Package.** A pack that declares the member needs `package` revision 21
+  ([component-interfaces.md](component-interfaces.md)): a Runtime before 0.12.76 refuses it at its
+  declaration gate (`UnknownField` at `/candidate_layouts/<i>/shared_ocr/lines`). A pack without it
+  keeps its revision.
+
 ### Rules
 
 The recognition pack checks every rule that needs only the pack when its evaluator is built.
@@ -472,6 +550,7 @@ Each failure message starts with the pointer of the offending field.
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
 | One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. Workflow #463 SEL-2L: a `repeated_anchor` layout's shared read is counted once for each frame it serves, apart from that product. | `/candidate_layouts/i/slots`, `…/features` |
 | Workflow #396 REC-8: a `fixed_slots` layout declares `shared_ocr`, and since 0.12.74 (Workflow #463 SEL-2L) a `repeated_anchor` layout too, whose region covers its `readable_band`, or `coordinate_space` where it declares none. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
+| Workflow #463 SEL-GRID G2 (since 0.12.76): a shared read's `lines` has `max` 1 to 3 and `line_height` of at least 8, and no OCR target it gives text to has a `template_relative` region. | `…/shared_ocr/lines/max`, `…/shared_ocr/lines/line_height`, `…/shared_ocr/lines` |
 
 `coordinate_space` is required for every pack schema, so layouts need no rule of their own for
 it.

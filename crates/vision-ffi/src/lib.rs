@@ -22,6 +22,8 @@ mod gate_407_gpu1a;
 #[cfg(test)]
 mod gate_e1;
 pub mod models;
+// Workflow #463 SEL-GRID G2: the lines of a shared read's name boxes, and the cut of a block.
+pub mod name_lines;
 // Workflow #407 GPU-1 A: the pinned DirectML runtime of a vision root.
 pub mod runtime_pin;
 
@@ -47,6 +49,7 @@ pub use artifacts::*;
 pub use codes::{GpuFallback, GpuUnavailableReason, VisionGpuCode, VisionListingCode};
 pub use ffi::*;
 pub use models::*;
+pub use name_lines::*;
 pub use runtime_pin::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -407,6 +410,14 @@ pub struct OcrInferenceRequest {
     /// merge of boxes into lines and that cap; empty, every box, as before. Only a `Detect`
     /// request names them.
     pub served: Vec<VisionRect>,
+    /// Workflow #463 SEL-GRID G2: the lines the served name boxes hold ([`OcrNameLines`]). With
+    /// them, each served box is read by its plan ([`ocr_name_line_plan`]): below the floor it is
+    /// not read and is reported in [`OcrInferenceResult::below_floor`], cut it is recognized strip
+    /// by strip and answered with its strips ([`OcrTextBlock::strips`]), otherwise whole; the cap
+    /// counts recognitions (a cut box its strips, a box below the floor none), and so does
+    /// [`OcrDetectionCount::served`]. `None`, every box as before. Only a `Detect` request that
+    /// names served name boxes names them.
+    pub lines: Option<OcrNameLines>,
 }
 
 impl OcrInferenceRequest {
@@ -422,6 +433,7 @@ impl OcrInferenceRequest {
             timeout_ms: self.timeout_ms,
             blocks: self.blocks,
             served: &self.served,
+            lines: self.lines,
         }
     }
 }
@@ -436,6 +448,8 @@ pub struct OcrInferenceRequestView<'a> {
     pub blocks: OcrBlockMode,
     /// Workflow #463 SEL-GRID G1: as [`OcrInferenceRequest::served`].
     pub served: &'a [VisionRect],
+    /// Workflow #463 SEL-GRID G2: as [`OcrInferenceRequest::lines`].
+    pub lines: Option<OcrNameLines>,
 }
 
 impl OcrInferenceRequestView<'_> {
@@ -461,6 +475,17 @@ impl OcrInferenceRequestView<'_> {
                 "ocr",
                 "OCR request names served name boxes without blocks Detect",
             ));
+        }
+        // Workflow #463 SEL-GRID G2: the lines are those of the served name boxes.
+        if let Some(lines) = self.lines {
+            if self.served.is_empty() {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    "ocr",
+                    "OCR request names lines without served name boxes",
+                ));
+            }
+            lines.validate()?;
         }
         if self.languages.is_empty() {
             return Err(VisionFfiError::fatal_with_code(
@@ -507,12 +532,26 @@ impl OcrInferenceRequestView<'_> {
             timeout_ms: self.timeout_ms,
             blocks: self.blocks,
             served: self.served.to_vec(),
+            lines: self.lines,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OcrTextBlock {
+    pub text: String,
+    pub rect: VisionRect,
+    pub confidence: Option<f32>,
+    /// Workflow #463 SEL-GRID G2: for a box a request with lines cut ([`OcrNameLinePlan::Cut`]),
+    /// its strips that read a text, top to bottom; the box's `text` is theirs joined by line
+    /// feeds and its `confidence` the lowest of theirs. Empty for every other box.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strips: Vec<OcrTextStrip>,
+}
+
+/// Workflow #463 SEL-GRID G2: one strip of a cut box, recognized on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrTextStrip {
     pub text: String,
     pub rect: VisionRect,
     pub confidence: Option<f32>,
@@ -531,6 +570,11 @@ pub struct OcrInferenceResult {
     /// every other request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detection: Option<OcrDetectionCount>,
+    /// Workflow #463 SEL-GRID G2: of a request with lines, the served boxes lower than half a
+    /// line ([`OcrNameLinePlan::BelowFloor`]), not read, in the detector's order; empty for every
+    /// other request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub below_floor: Vec<VisionRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -572,6 +616,46 @@ impl OcrInferenceResult {
                 return Err(invalid_response(format!(
                     "OCR block[{index}] is outside the requested region"
                 )));
+            }
+            // Workflow #463 SEL-GRID G2: a cut block's strips lie inside it, at most the declared
+            // lines; only a request with lines is answered with strips.
+            let most = request.lines.map_or(0, |lines| usize::from(lines.max));
+            if block.strips.len() > most {
+                return Err(invalid_response(format!(
+                    "OCR block[{index}] holds {} strips; the request allows {most}",
+                    block.strips.len()
+                )));
+            }
+            for strip in &block.strips {
+                if strip.text.len() > MAX_REQUEST_STRING_BYTES {
+                    return Err(invalid_response(format!(
+                        "OCR block[{index}] strip text exceeds {MAX_REQUEST_STRING_BYTES} bytes"
+                    )));
+                }
+                validate_optional_unit_score(
+                    strip.confidence,
+                    &format!("OCR block[{index}] strip confidence"),
+                )?;
+                validate_rect(strip.rect, request.frame.width, request.frame.height)?;
+                if !rect_contains(block.rect, strip.rect) {
+                    return Err(invalid_response(format!(
+                        "OCR block[{index}] has a strip outside the block"
+                    )));
+                }
+            }
+        }
+        // Workflow #463 SEL-GRID G2: boxes below the floor only of a request with lines.
+        if request.lines.is_none() && !self.below_floor.is_empty() {
+            return Err(invalid_response(
+                "OCR result reports boxes below the floor of lines it was not asked for",
+            ));
+        }
+        for rect in &self.below_floor {
+            validate_rect(*rect, request.frame.width, request.frame.height)?;
+            if !rect_contains(request.region, *rect) {
+                return Err(invalid_response(
+                    "OCR box below the floor is outside the requested region",
+                ));
             }
         }
         Ok(())
@@ -880,6 +964,7 @@ mod tests {
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
             served: Vec::new(),
+            lines: None,
         };
 
         let err = request.validate().expect_err("oversized region rejected");
@@ -898,6 +983,7 @@ mod tests {
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
             served: Vec::new(),
+            lines: None,
         };
         let mut backend = UnavailableOcrBackend;
 
@@ -933,6 +1019,7 @@ mod tests {
             timeout_ms: 1_000,
             blocks: OcrBlockMode::Implicit,
             served: Vec::new(),
+            lines: None,
         };
         let result = OcrInferenceResult {
             ppocr_diagnostics: Vec::new(),
@@ -941,11 +1028,13 @@ mod tests {
                 text: "invalid".to_string(),
                 rect: request.region,
                 confidence: Some(f32::NAN),
+                strips: Vec::new(),
             }],
             confidence: Some(f32::NAN),
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
             detection: None,
+            below_floor: Vec::new(),
         };
 
         let err = result

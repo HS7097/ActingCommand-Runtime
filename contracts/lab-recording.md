@@ -956,7 +956,7 @@ frame_id, …}`, checked once every mark of the step holds:
 
 | reason | when |
 |---|---|
-| `select_name_unread` | a slot's name reads no known name (nothing read, too low a confidence, a text out of the domain, two names within the margin): `slot` and the typed `cause` of the first, `unread` all of them, and `default`, the default's decision there (fix 1: `blocked` when it selects nothing) |
+| `select_name_unread` | a slot's name reads no known name (nothing read, too low a confidence, a text out of the domain, two names within the margin): `slot` and the typed `cause` of the first, `unread` all of them, and `default`, the default's decision there (fix 1: `blocked` when it selects nothing). Workflow #463 SEL-GRID G2 (since 0.12.76): the causes are the identity feature's reasons, `missing`, `out_of_domain`, `low_confidence` (no confidence, or one under `minimum_confidence_milli`), `ambiguous` and `no_consensus`, and `beyond_distance`, a reading that passed the confidence and that no alias matches within `max_distance`, which the feature, its records and its decisions keep as `low_confidence` (the kernel's mapping gives the word, `CandidateIdentityDeclaration::map_ocr_with_cause`, on the read the dry run made); and the refusal lists what the first slot's read saw ("Reading names by detecting blocks", "The refusal lists the blocks") |
 | `select_pressed_absent` | on the primary frame the pressed name selects no slot (`pressed`; `decision`, its kind) |
 | `select_press_mismatch` | the step's press was executed and lies outside the slot the pressed name selects on the primary frame (`slot`, `click_rect`, `point`) |
 | `select_other_page_passes` | fix 1: the page of another effective step the mark knows (every step before it; on a stopped recording every other step), or its page transition's page, passes on a live frame of the select step too, each of its marks evaluated as its self-test evaluates it (`step`, the other step's index; `transition`, whether it is the transition's page); the run's select would not know its page there. Pages of steps recorded later are checked by `record stop` (self-check item 8) |
@@ -1188,6 +1188,43 @@ select's layout of rows found by their anchor, whose shared read covers its read
   there, so a scene does not reproduce the read the recording made, even where every name lies
   inside its box. That does not matter today only because the case runner evaluates no candidate
   layout, so no case reads through the shared read.
+- **The lines of a name box** (Workflow #463 SEL-GRID G2, since 0.12.76, register §1.491): a read
+  that declares `blocks` and `line_merge` may declare `lines` too, `{"max": m, "line_height": h}`,
+  the words of a layout's `shared_ocr.lines` ([selection-graph.md](selection-graph.md), "The lines
+  of a name box"): at most `m` lines of `h` pixels of the package's base in a name box, so that the
+  kernel's text provider cuts a block too tall for one line into its lines before it reads them,
+  and reads a name of two lines found as one block as the name read when its lines are found apart.
+  `lines` without `blocks` is the Lab's own reading, `validation_failed` (exit 2), its message
+  saying `lines without blocks`; its bounds (`max` 1 to 3, `line_height` at least 8) are the
+  kernel's, which the Lab does not copy: another value is refused by the kernel's admission of the
+  probe at the self-test (`record_select_invalid`, `kernel_refused`). `record stop` writes it into
+  the shared read it generates, of a select of fixed slots and of a scrolling select alike, after
+  `line_merge`; the mark-time self-test, `record ready`, `record stop`'s self-checks and the fold's
+  offline entry read through the same probe, so with it. A block of more lines than `max` is not
+  cut and is read whole, as without the member; the refusal of its name lists the block with its
+  `height` ("The refusal lists the blocks"), from which the author sees that `max` must be raised.
+  Absent, the member is not written: the recording and the package are byte for byte what they
+  were, and so is the kernel's reading of the package, which sends no lines and reads every block
+  as before. A mark's answers are not all what they were, with or without the member: since
+  0.12.76 every `select_name_unread` refusal carries `blocks`, and `below_floor` when there are any
+  (below), and its `cause` is `beyond_distance` where a reading passed the confidence and matched
+  no name within `max_distance`, which it named `low_confidence` before. A package whose read
+  declares it needs `package` revision 21 ([component-interfaces.md](component-interfaces.md), row
+  21), which `standard-pack build` counts; a Runtime before 0.12.76 refuses such a package at every
+  run (`UnknownField` at `/candidate_layouts/<i>/shared_ocr/lines`).
+- **The refusal lists the blocks** (Workflow #463 SEL-GRID G2): every `select_name_unread`, of the
+  mark-time self-test and of `record ready`'s and `record stop`'s self-checks, of a slot or of a
+  row, of a select with `lines` or without, lists what that slot's or row's read saw, so that an
+  author sets the name box, the lines and the chain from what the read saw rather than adding
+  misreadings to an alias table: `blocks`, the blocks its name box held, each with its `rect`, its
+  `height` and its `text`, and a cut block with its `strips`, each with its `rect`, `height` and
+  `text`; and, when there are any, `below_floor`, the blocks lower than half a line that were not
+  read, each with its `rect` and `height`. They come from the kernel's dry run of the step, which
+  gives the evidence of each name's read beside the projection (`SelectionDryRun::name_reads`, not
+  serialized; only the dry run reads it, a run's projection makes none), and are absent for a name
+  that was not read from OCR. These members, and the cause `beyond_distance`, are answers to the
+  recording agent, in the refusal's details; they never enter a package file. No outcome code or
+  reason is added.
 
 ### Marking a choice first
 

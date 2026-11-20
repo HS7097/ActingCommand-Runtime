@@ -805,7 +805,9 @@ fn sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_ran
         other => panic!("the build's package range: {other:?}"),
     };
     let needs = [SHARED_READ_REVISION, SHARED_READ_REVISION];
-    assert_eq!(own, [3, SHARED_READ_REVISION]);
+    // Workflow #463 SEL-GRID G2 (register §1.491) raises the build's range to 21, the lines of a
+    // shared read's name boxes; 20 stays within it.
+    assert_eq!(own, [3, SHARED_READ_REVISION + 1]);
     assert!(package_edge_holds(own, needs));
     assert!(!package_edge_holds([3, SHARED_READ_REVISION - 1], needs));
     assert!(package_edge_holds(own, [3, SHARED_READ_REVISION - 1]));

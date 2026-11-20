@@ -1936,6 +1936,8 @@ impl Declaration<'_> {
                 "line_merge",
                 // Workflow #428 CFL-2.
                 "preprocess",
+                // Workflow #463 SEL-GRID G2.
+                "lines",
             ],
         )?;
         self.source_region(
@@ -1943,6 +1945,19 @@ impl Declaration<'_> {
             &child(pointer, "region"),
             false,
         )?;
+        // Workflow #463 SEL-GRID G2: `{"max": m, "line_height": h}`, both unsigned; their values
+        // are the derived recognition pack's (`contracts/selection-graph.md`, "The lines of a name
+        // box").
+        if let Some(lines) = object.get("lines") {
+            let lines_pointer = child(pointer, "lines");
+            let lines = self.object(lines, &lines_pointer, &["max", "line_height"])?;
+            for field in ["max", "line_height"] {
+                self.unsigned(
+                    self.required(lines, &lines_pointer, field)?,
+                    &child(&lines_pointer, field),
+                )?;
+            }
+        }
         if let Some(preprocess) = object.get("preprocess") {
             self.preprocess(preprocess, &child(pointer, "preprocess"), true)?;
         }
