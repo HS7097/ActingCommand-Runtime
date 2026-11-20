@@ -60,7 +60,7 @@ name: CI
 #   it. The runner kills a step that runs out of its own limit and fails it; the job is not
 #   cancelled. So `!cancelled()` holds and `steps.test.outcome` is `failure`, the two steps after
 #   it run, and the uploaded log is the log up to the kill.
-# - #71 FLK-14: in run 44827500729 (pull request #1853) host-lab's Test step was killed at its
+# - #71 FLK-17: in run 44827500729 (pull request #1853) host-lab's Test step was killed at its
 #   35-minute limit when the runtime-host library's test binary had finished 1801 of its 1816
 #   tests, and on main the passing runs of the whole job took 35m56s to 40m49s against its
 #   45-minute limit. So host-lab's job and Test limits each rose by 15 minutes; splitting the job
@@ -362,7 +362,7 @@ jobs:
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
     # #71 FLK-13: its Test step takes 20 to 23.5 minutes (one run reached 29.6 and the old
-    # 35-minute job limit). FLK-14: 60 leaves the step's 50 and 10 for setup, build, attribution,
+    # 35-minute job limit). FLK-17: 60 leaves the step's 50 and 10 for setup, build, attribution,
     # upload.
     timeout-minutes: 60
     env:
