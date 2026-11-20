@@ -2781,12 +2781,46 @@ and a ladder its failure matched could be suppressed by an open cool-down window
 schedules nothing for the window's end. Two instances stayed unavailable for 15 and 16 hours on
 11-20 although a self-check passed at once when a person ran one.
 
-- **Which instances.** One the gate holds unavailable after a device self-check that failed (its
-  `device.self_check` record with `failure_code`), while its configured seed is available and no
-  fence, device link, device state or device system holds it. It stops being one when the gate no
-  longer holds it so. One the gate holds for a self-check never made (`backend_selfcheck:unchecked`:
-  a start before its preparation, facts dropped at an emulator stop) is not taken up until a
-  self-check of it fails: the emulator watch, the idle wake and a person's resume own those.
+- **Which instances.** The unavailability probed is the device self-check's: one the backend
+  self-check gate holds unavailable (its withdrawal `backend_selfcheck:…` in effect) while its
+  configured seed is available and no fence, device link, device state or device system holds it,
+  after either (a) a device self-check that failed (its `device.self_check` record with
+  `failure_code`; `track_unavailability`, called by every decision of the gate), or (b), fix round
+  1 (the coordinator's rulings R1 and R5 of 11-20), any other failing step of a connection
+  preparation, which withdraws it as `backend_selfcheck:unchecked`: a close of the kept session, or
+  the close after the opens, that failed with its resources confirmed released; an open that failed
+  without a report (an instance with an explicit host and port and no discovery binding included,
+  which no emulator watch reads); the preparation's own lease refused
+  (`withhold_after_failed_preparation`, `runtime_facts.rs`, called by `prepare_connection_attempt`
+  and `record_connection_preparation_failure`, `resource_close.rs`). The step's code is the
+  instance's cause, the code that withdrawal already has; no word is added. From there on nothing
+  differs. No `passed` self-check stands for such an instance (R2): the same call drops its
+  `backend.selfcheck.*` facts first unless an entry says `failed`, so the next recorded self-check
+  alone makes it available, and a probe that passes publishes its own facts, its `device.self_check`
+  records and the gate's republication of the configured seed. It stops being one when the gate no
+  longer holds it so (a fenced instance is its fence's, a handset's link its link's).
+- **Which do not enter, and who owns them** (R3; their paths are unchanged). The preparation's
+  emulator status read (#411 A48, `read_emulator_status_first`) ends the check before any open,
+  and such an instance is the emulator watch's and the idle wake's (`emulator_watch.rs`; register
+  §1.493 for what bounds them):
+  - *the emulator stopped* (`instance_not_running` at `read_instance_state`; also an emulator
+    control's or an idle action's stop, which drops the facts, `invalidate_backend_selfcheck_facts`
+    in `emulator_instance.rs`): the watch restarts a configured instance (`start_emulator` on,
+    `watch_emulator` → `restart_watched_emulator`), the idle wake starts the one its action stopped,
+    and once the emulator runs with Android and an ADB port the watch recognizes it (`needs_recognition`
+    for a pending binding, `unprepared_on_reported_port` for one bound here without self-check
+    facts), each request at most `emulator_control.restart_attempts` within `restart_window_ms`
+    (`EmulatorWatch::restart_budget`);
+  - *the state that could not be read while the binding waits* (`instance_not_running` at
+    `require_bound_adb_endpoint`): the watch's own poll reads it again every `watch_interval_ms`
+    and recognizes or restarts it as above once the read answers;
+  - *a running emulator whose device is not recognized* (`emulator_device_unrecognized`): the watch
+    recognizes it once Android reports its ADB port, as above.
+
+  The daemon start's withdrawal before its preparation is decided again by that preparation (an
+  instance whose pause stands `released` at the start, by the resume's reconnect); a backend
+  switch whose restore the registration refused keeps the instance its failed candidate's
+  preparation took into the probes.
 - **The probe** is the device self-check `actingctl selfcheck` makes (a preparation on the
   instance's key: it closes a retained session, reads the emulator status first, opens the backends
   and checks capture and input), as the Runtime's own recovery preparation: no game input, no
@@ -2794,6 +2828,14 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   records. It runs on a self-check claim, which the lease sweep queues only while nothing holds or
   waits for the instance's key and no takeover cool-down runs, so it never waits in front of a
   client's, the Lab's or the scheduler's own work; it holds the key for the preparation alone.
+  Like every preparation, a probe closes a session that a keyless Lab observation kept open on the
+  instance (`prepare_connection_attempt`'s retained close, #191 h3); the instance's admission lock,
+  which the preparation holds throughout and an observation takes, serialises the two, so neither
+  meets the other halfway. A probe whose worker panics ends at the worker's root
+  (`instance_worker_loop`, `end_panicked_unavailable_probe`, fix round 1): its step waits again,
+  the next probe counts its interval from the panic's end, and the panic is recorded once, the
+  worker's `panic_caught` (failure category `run_unavailable_probe`, under the instance); the
+  panicked payload's key lapses at its TTL, as every panicked payload's does.
 - **When** (`scheduling.unavailable_probe.*`, [runtime-config.md](../runtime-config.md)):
   `first_interval_ms` after the instance became one, then after each failed probe the interval
   times `factor`, at most `max_interval_ms`; an interval counts from the latest of the probe before,
@@ -2804,11 +2846,14 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
 - **A cool-down's end.** A ladder its cool-down suppresses (`recovery_ladder_suppressed`
   `cooldown`) while the instance is one is held with it, with the `until_unix_ms` its suppression
   names. From then on (no later than the sweep's next tick) a probe is due whatever its interval:
-  passing, the instance is available and the held recovery is dropped; failing, the held recovery is
-  admitted after the probe's record as it would have been without the cool-down (every other rule of
-  its admission as for every ladder) and its claim queued. The cool-down still holds a recovery back
-  while it runs; a drill is refused to its person as before; `stuck_recovery_cooldown_secs` keeps
-  its meaning.
+  passing, the instance is available and the held recovery is dropped; failing, the instance's
+  cool-down window in force is read again (fix round 1: a later climb, or a `triggered` admission,
+  may have opened one since): while it runs, the recovery stays held until its end, the next
+  probe's time; once none does, the held recovery is admitted after the probe's record as it would
+  have been without the cool-down (every other rule of its admission as for every ladder), as a
+  new ladder of the same trigger with ids and a claim of its own, and its claim queued. The
+  cool-down still holds a recovery back while it runs; a drill is refused to its person as before;
+  `stuck_recovery_cooldown_secs` keeps its meaning.
 - **What holds the probes.** A scheduling pause of the instance or the global one, in any stage and
   mode; a fence (its own recheck owns it, and the fenced instance is not one); an emulator the idle
   action holds stopped (Workflow #486 owns its wake); a blackout that covers the instance (complete
@@ -2816,16 +2861,21 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   fence or an idle stop also drops a held recovery.
 - **A person is told** once per unavailability that lasted `attention_after_ms`:
   `instance_unavailable_awaiting_person` (a warning `runtime.failed` record under the instance,
-  handed to the daemon's log too), and the status's `unavailable.awaiting_person`. Both end when the
-  instance is available again; the probes go on meanwhile.
+  handed to the daemon's log too). It ends when the instance is available again; the probes go on
+  meanwhile.
 - **Records.** `instance_unavailable_probe_failed` (warning: the probe's number, the self-check's
   failure, the next probe's time), `instance_unavailable_probe_passed` (info: the number, how long it
   was unavailable, its cause) and `instance_unavailable_awaiting_person`, each a `runtime.failed`
   record; the probe's own preparation records what every preparation records.
-- **Status.** `RuntimeInstanceStatus.unavailable` ([runtime-interface.md](../runtime-interface.md)):
-  since when, why, the probes, the latest one's end, the next one's time and `awaiting_person`;
-  absent for every available instance. Memory only: a restart starts it again at the gate's next
-  decision.
+- **Status.** The status answers nothing of the probes in 0.12.76 (fix round 1, the coordinator's
+  ruling): `RuntimeInstanceStatus.unavailable` ([runtime-interface.md](../runtime-interface.md)) is
+  declared (`runtime-client` 14) and filled for no instance, since a reader of 0.12.75 refuses a
+  status that carries it; the release that answers it raises the floor to 14. Until then a person
+  or a tool tells such an instance by what 0.12.75 already reads: the overview row's
+  `backend_selfcheck` (an entry `failed`, its `checked_at_unix_ms`) and `not_running` (`why`
+  `instance_unavailable`, `availability_source` `self_check`) in `actingctl overview`,
+  `ac_overview`, `actinglab status` and `ac_status`, and the records above. No console shows the
+  probes yet. Memory only: a restart starts the set again at the gate's next decision.
 
 ## Runtime Boundary
 

@@ -278,6 +278,8 @@ mod saved_artifact_ocr;
 // Workflow #489 AVAIL-1: an instance its device self-check made unavailable is probed again.
 mod unavailable_probe;
 use material_read::MaterialReadContext;
+#[cfg(test)]
+pub(crate) use unavailable_probe::UnavailableForTest;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation_read;
 // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
@@ -5225,6 +5227,22 @@ impl RuntimeHost {
     pub(crate) fn unavailable_probe_tick_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::UnavailableProbeTickForTest)?
             .probe_unavailable_instances()
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1: `instance_alias` as the unavailable instances hold it
+    /// (`None` while it is not one), which no status answers in this release.
+    #[cfg(test)]
+    pub(crate) fn unavailable_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<UnavailableForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::UnavailableForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.unavailable_for_test(instance_id)
     }
 
     /// Workflow #489 AVAIL-1: opens `instance_alias`'s recovery cool-down window until

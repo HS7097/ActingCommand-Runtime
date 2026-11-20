@@ -524,6 +524,46 @@ impl HostShared {
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
+        self.withhold_policy_instance_availability_for(instance_id, None)
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (the coordinator's rulings R1 and R2 of 11-20): a step
+    /// of a connection preparation other than its emulator status read failed with `cause` (the
+    /// step's code: a close of the kept session or the close after the opens that failed with
+    /// its resources confirmed released, an open that failed without a report, the preparation's
+    /// lease refused, or an open whose self-check failed). The instance is withdrawn as
+    /// [`Self::withhold_policy_instance_availability`] withdraws it and, while the gate holds it
+    /// so (a gated instance, its seed available, no fence), enters the unavailable instances the
+    /// probes take up with `cause`, as one whose self-check failed. R2: no `passed` self-check
+    /// stands for such an instance: unless a stored self-check entry says `failed` (an open's own
+    /// failure, kept as the overview shows it), its `backend.selfcheck.*` facts are dropped here
+    /// first (`invalidate_backend_selfcheck_facts`), the one place it happens; the next recorded
+    /// self-check alone makes it available again. Every refusal is returned.
+    pub(super) fn withhold_after_failed_preparation(
+        &self,
+        instance_id: InstanceId,
+        cause: &str,
+    ) -> RuntimeHostResult<()> {
+        let gated = self
+            .gated_policy_instance(instance_id)?
+            .is_some_and(|(_, seed_available)| seed_available)
+            && !self.resource_fenced(instance_id)?;
+        if gated && !self.backend_selfcheck_failed(instance_id)? {
+            self.invalidate_backend_selfcheck_facts(instance_id)?;
+        }
+        self.withhold_policy_instance_availability_for(
+            instance_id,
+            Some(Outcome::relayed(cause).code().clone()),
+        )
+    }
+
+    /// [`Self::withhold_policy_instance_availability`], the unavailable instances told of the
+    /// decision with `failed` (`track_unavailability`).
+    fn withhold_policy_instance_availability_for(
+        &self,
+        instance_id: InstanceId,
+        failed: Option<CodeStr>,
+    ) -> RuntimeHostResult<()> {
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
             HostLocation::WithholdPolicyInstanceAvailability,
@@ -553,7 +593,7 @@ impl HostShared {
             }
             Ok(())
         })()
-        .and_then(|()| self.track_unavailability(instance_id, None));
+        .and_then(|()| self.track_unavailability(instance_id, failed));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -764,6 +804,25 @@ impl HostShared {
         let (input, capture, nemu) = (status("input"), status("capture"), status("nemu"));
         Ok(![&input, &capture, &nemu].contains(&&failed)
             && (nemu == passed || (input == passed && capture == passed)))
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (R2): whether a stored `backend.selfcheck.<entry>.status`
+    /// of the instance says `failed` (an open's own failed self-check).
+    fn backend_selfcheck_failed(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let store = lock(
+            &self.runtime_facts,
+            HostLocation::ReadBackendSelfcheckStatus,
+        )?;
+        let failed = FactValue::String("failed".to_owned());
+        Ok(["input", "capture", "nemu"].into_iter().any(|entry| {
+            store
+                .get(
+                    &scope,
+                    &format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{BACKEND_SELFCHECK_STATUS_SUFFIX}"),
+                )
+                .is_some_and(|record| record.value == failed)
+        }))
     }
 
     /// EMU-BIND fix 1 (0.12.28, review M1): whether the store holds any `backend.selfcheck.*`

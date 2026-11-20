@@ -526,8 +526,9 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 **The probes of an unavailable instance (Workflow #489 AVAIL-1, since 0.12.76; `actingd-config`
 revision 35; [scheduling/README.md](scheduling/README.md), "An unavailable instance is probed
 again").** The four `scheduling.unavailable_probe` keys are settable and read at every lease sweep
-tick while an instance is unavailable by a failed device self-check, so an instruction applies from
-the next tick; none has a per-instance form. The wait before probe *n* is `first_interval_ms`
+tick while an instance is unavailable by a failed device self-check (or, since fix round 1, by
+another failed step of a connection preparation), so an instruction applies from the next tick;
+none has a per-instance form. The wait before probe *n* is `first_interval_ms`
 times `factor` to the power *n* − 1, never above `max_interval_ms` (a first interval above the cap
 is the cap; `factor` 1 keeps every interval the first), counted from the latest of: the end of
 the probe before, the instance's latest recorded self-check or dropped self-check facts (a run's,

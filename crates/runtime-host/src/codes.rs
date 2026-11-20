@@ -2962,6 +2962,8 @@ pub(crate) mod test_spellings {
             UnavailableProbeTickForTest => "unavailable_probe_tick_for_test",
             OpenRecoveryCooldownForTest => "open_recovery_cooldown_for_test",
             HoldEmulatorStoppedForTest => "hold_emulator_stopped_for_test",
+            // Fix round 1: a test reads an instance as the unavailable instances hold it.
+            UnavailableForTest => "unavailable_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.

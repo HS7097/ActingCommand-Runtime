@@ -2050,12 +2050,48 @@ impl HostShared {
     /// waits for the instance), its claim queued; a refused admission is recorded as for every
     /// ladder. A preparation's ladder names the probe's preparation, the instance's latest, as the
     /// one it recovers from: B2 would otherwise read the probe's failed preparation as a later one
-    /// that superseded the ladder's own and suppress it at its climb.
+    /// that superseded the ladder's own and suppress it at its climb. Fix round 1 (item 7a): it is
+    /// admitted as a new ladder of the same trigger, with a request id, a causation id and a
+    /// holder of its own and its claim's request for them; a ladder suppressed on its key (B3
+    /// `queue`) had its claim granted and released under the ids it was admitted with, which
+    /// therefore name no second claim.
     pub(super) fn admit_held_recovery(
         &self,
         mut pending: PendingRecoveryLadder,
     ) -> RuntimeHostResult<()> {
         pending.respect_cooldown = false;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadRecoveryLadderInstance,
+        )?
+        .get(&pending.instance_id)
+        .cloned()
+        .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
+        let issuer = self.events.issuer();
+        let request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        pending.claim = self.ladder_claim_request(
+            &resolved,
+            request_id,
+            pending.correlation_id,
+            causation_id,
+            holder_id,
+        )?;
+        pending.links = pending
+            .links
+            .with_request_id(request_id)
+            .with_causation_id(causation_id);
+        pending.request_id = *request_id.transport();
+        pending.causation_id = causation_id;
+        pending.holder_id = holder_id;
         if pending.trigger.preparation.is_some() {
             let latest = lock(
                 &self.recovery_ladders,
@@ -2071,6 +2107,16 @@ impl HostShared {
             Some(admitted) => self.enqueue_ladder_claim(admitted),
             None => Ok(()),
         }
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (item 3): the end of `instance_id`'s cool-down window in
+    /// force now, as an admission reads it (`0` while none was opened).
+    pub(super) fn cooldown_window_until(&self, instance_id: InstanceId) -> RuntimeHostResult<u64> {
+        Ok(
+            lock(&self.recovery_ladders, HostLocation::AdmitRecoveryLadder)?
+                .get(&instance_id)
+                .map_or(0, |window| window.until_unix_ms),
+        )
     }
 
     /// Workflow #489 AVAIL-1, test builds: opens `instance_id`'s cool-down window until

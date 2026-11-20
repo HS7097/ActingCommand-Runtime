@@ -195,6 +195,15 @@ fn instance_worker_loop(
             WorkerJob::PolicyRun(run) => Some(run.lane()),
             WorkerJob::HostClaim { .. } => None,
         };
+        // Workflow #489 AVAIL-1 fix round 1 (item 4): what a panicked probe of an unavailable
+        // instance leaves behind (its instance's probe step, queued or running).
+        let probe = match &job {
+            WorkerJob::HostClaim {
+                work: HostClaimWork::UnavailableProbe(pending),
+                ..
+            } => Some((pending.instance_id, pending.probe)),
+            _ => None,
+        };
         // Fix 2 (re-review L-3): the lane is taken out first, so a failure to issue the failure
         // links (a global fault) still ends a policy run's registration, left abandoned for the
         // reconciliation, never working, and the Runtime is marked fatal.
@@ -224,6 +233,12 @@ fn instance_worker_loop(
                 // failure there cannot leave the registration working.
                 if let Some(lane) = lane {
                     shared.drop_panicked_policy_run(lane)?;
+                }
+                // Workflow #489 AVAIL-1 fix round 1 (item 4): a panicked probe's step waits again
+                // and its schedule goes on from here, before the panic's record for the same
+                // reason; the record below is its one record.
+                if let Some((instance_id, probe)) = probe {
+                    shared.end_panicked_unavailable_probe(instance_id, probe)?;
                 }
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
