@@ -35,11 +35,11 @@ use crate::recording::model::{
     CommitClickRequest, FrameView, LAB_RECORD_MARK_SCHEMA, LAB_RECORDING_MAX_NEXT_FRAME_MS,
     LAB_RECORDING_MAX_SETTLE_MS, LabRecording, LabRecordingStart, LabStatus, LabStatusView,
     MarkOutcome, MarkRequest, MarkStatusView, MarkView, NextFrameOutcome, OpaqueJson,
-    PlanApplicationRequest, PlanClickRequest, RecordPressOutcome, RecordPressRequest, RecordSize,
-    RecordStartOptions, RecordStepOutcome, RecordStepRequest, RecordStopOptions, RecordStopOutcome,
-    RecordWithheld, RecordedFrame, RecordedMark, RecordingArtifact, RecordingDefaults,
-    RecordingStep, SelfTestStatus, StepClick, StepOptionalView, StepStateView, StepTransition,
-    StepView, TransitionSpec, TransitionView,
+    PlanApplicationRequest, PlanClickRequest, RecordDestination, RecordPressOutcome,
+    RecordPressRequest, RecordSize, RecordStartOptions, RecordStepOutcome, RecordStepRequest,
+    RecordStopOptions, RecordStopOutcome, RecordWithheld, RecordedFrame, RecordedMark,
+    RecordingArtifact, RecordingDefaults, RecordingStep, SelfTestStatus, StepClick,
+    StepOptionalView, StepStateView, StepTransition, StepView, TransitionSpec, TransitionView,
 };
 use crate::recording::near::{TemplateNearThreshold, template_margin_bound};
 use crate::recording::ready::{
@@ -1425,7 +1425,18 @@ fn package_checks(
         "arrival_by_time_window".to_string(),
         json!(checks.arrival_by_time_window),
     );
-    provenance.insert("cross_check".to_string(), checks.cross_check.clone());
+    // #463 PRIV-SCAN (`contracts/lab-recording.md`, "What a public recording records of a
+    // select"): a public recording's provenance records its selects as the entries built apart of
+    // named members only, never the answers' entries; a local recording's records the answers', as
+    // before.
+    let mut recorded = checks.cross_check.clone();
+    if plan.destination == RecordDestination::Public
+        && !selects.records.is_empty()
+        && let Some(cross) = recorded.as_object_mut()
+    {
+        cross.insert("selects".to_string(), json!(selects.records));
+    }
+    provenance.insert("cross_check".to_string(), recorded);
 
     // Fix round 1: as in the first pass, rendering judges nothing (`check_error`); encoding,
     // expanding, admitting and deciding again are the staged judgement (`whole_package`).
