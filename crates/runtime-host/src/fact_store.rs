@@ -136,7 +136,39 @@ fn invalidation_scope_matches(
         ),
     }
 }
-const MAX_ACTIVE_FACTS: usize = 256;
+
+/// Workflow #498 FACT-CAP (`contracts/instance-fact-store.md`, "Capacity ledger"): the store's
+/// bound follows its scopes, never one number shared by the host. Each server scope's active facts
+/// are counted once, against a bound of their own, and so are each game scope's; each instance's
+/// own facts against the instance's. The three add up to what one `InstanceFactSnapshot` and one
+/// `InstanceFactView` hold (`MAX_FACT_RECORDS`, 256): no instance's facts, its own with its
+/// server's and its game's, ever exceed them. The host's bound is the sum over its scopes, so an
+/// instance added takes no room from another.
+pub(crate) const MAX_SERVER_FACTS: usize = 16;
+pub(crate) const MAX_GAME_FACTS: usize = 16;
+pub(crate) const MAX_INSTANCE_FACTS: usize =
+    actingcommand_contract::MAX_FACT_RECORDS - MAX_SERVER_FACTS - MAX_GAME_FACTS;
+/// Workflow #498: an instance whose own active facts reach 80% of its bound (rounded up: 180 of
+/// 224) is reported once, `fact_store_capacity_share_reached`, until it falls back under it.
+pub(crate) const FACT_CAPACITY_WARNING_FACTS: usize = (MAX_INSTANCE_FACTS * 80).div_ceil(100);
+
+/// The bound of the active facts stored under exactly `scope` (Workflow #498).
+fn scope_fact_bound(scope: &FactScope) -> usize {
+    match scope {
+        FactScope::Instance { .. } => MAX_INSTANCE_FACTS,
+        FactScope::Server { .. } => MAX_SERVER_FACTS,
+        FactScope::Game { .. } => MAX_GAME_FACTS,
+    }
+}
+
+/// The active facts stored under exactly `scope` (Workflow #498): the map is ordered by scope
+/// first, so they are one range of it.
+fn scope_fact_count<V>(active: &BTreeMap<FactIdentity, V>, scope: &FactScope) -> usize {
+    active
+        .range((scope.clone(), String::new())..)
+        .take_while(|((stored, _), _)| stored == scope)
+        .count()
+}
 
 /// The policy instance facts (Workflow #313 item 4): the evaluation's `instances` read these
 /// three keys from the fact store for every configured instance; the configuration only seeds
@@ -224,6 +256,9 @@ fn scope_specificity(scope: &FactScope) -> u8 {
         FactScope::Game { .. } => 1,
     }
 }
+/// The tombstones kept in memory per scope (Workflow #498: the same rule as the active facts; a
+/// scope's pending invalidations never outnumber its active facts, at most 256, so the oldest
+/// written one can always go).
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
 #[derive(Clone, Copy)]
@@ -462,7 +497,12 @@ impl HistoricalFactProjection {
             }
             return Ok(());
         }
-        if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
+        // Workflow #498: what the ledger holds is replayed up to what one snapshot can hold per
+        // scope; a publication never took more (a store before 0.12.76 held 256 in all).
+        if !self.active.contains_key(&identity)
+            && scope_fact_count(&self.active, &identity.0)
+                >= actingcommand_contract::MAX_FACT_RECORDS
+        {
             return Err(fact_fatal(
                 HostCode::FactStoreCapacityExceeded,
                 HostLocation::ProjectFactHistory,
@@ -525,6 +565,9 @@ pub(crate) struct InstanceFactStore {
     pending: BTreeMap<InvalidationIdentity, PendingFactInvalidation>,
     last_sequence: u64,
     state: Arc<RuntimeStateStore>,
+    /// Workflow #498: the instances (aliases) whose own active facts were reported at or past the
+    /// warning share and have not fallen back under it since; in memory only.
+    capacity_warned: BTreeSet<String>,
 }
 
 impl InstanceFactStore {
@@ -588,6 +631,7 @@ impl InstanceFactStore {
             pending: BTreeMap::new(),
             last_sequence: 0,
             state,
+            capacity_warned: BTreeSet::new(),
         }
     }
 
@@ -878,6 +922,7 @@ impl InstanceFactStore {
             pending: BTreeMap::new(),
             last_sequence: position,
             state: Arc::clone(&self.state),
+            capacity_warned: BTreeSet::new(),
         })
     }
 
@@ -1072,7 +1117,8 @@ impl InstanceFactStore {
                     ContractLocation::PublishFact,
                 ));
             }
-            if self.active.len() >= MAX_ACTIVE_FACTS {
+            // Workflow #498: a new key counts against its own scope's bound only.
+            if scope_fact_count(&self.active, &record.scope) >= scope_fact_bound(&record.scope) {
                 return Err(fact_request(
                     HostCode::FactStoreCapacityExceeded,
                     ContractLocation::PublishFact,
@@ -1123,7 +1169,12 @@ impl InstanceFactStore {
                 HostLocation::CommitFact,
             ));
         }
-        if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
+        // Workflow #498: as the history's replay, up to what one snapshot can hold per scope; the
+        // preview kept every publication within its scope's bound.
+        if !self.active.contains_key(&identity)
+            && scope_fact_count(&self.active, &identity.0)
+                >= actingcommand_contract::MAX_FACT_RECORDS
+        {
             return Err(fact_fatal(
                 HostCode::FactStoreCapacityExceeded,
                 HostLocation::CommitFact,
@@ -1189,7 +1240,7 @@ impl InstanceFactStore {
                 None => new_count += 1,
             }
             if !self
-                .latest_observed
+                .active
                 .contains_key(&(record.scope.clone(), record.key.clone()))
             {
                 new_identities += 1;
@@ -1233,7 +1284,15 @@ impl InstanceFactStore {
                 ContractLocation::PublishFacts,
             ));
         }
-        if self.latest_observed.len() + new_identities > MAX_ACTIVE_FACTS {
+        // Workflow #498: the observation's one scope takes its keys not active yet from its own
+        // bound; an invalidated key's identity holds no room (its latest observation time is kept
+        // for the rule above). An observation that brings no such key adds nothing and is never
+        // compared: a key the scope holds is replaced in place even in a scope a build before
+        // 0.12.76 filled past its bound.
+        if new_identities > 0
+            && scope_fact_count(&self.active, &first.scope) + new_identities
+                > scope_fact_bound(&first.scope)
+        {
             return Err(fact_request(
                 HostCode::FactStoreCapacityExceeded,
                 ContractLocation::PublishFacts,
@@ -1443,25 +1502,35 @@ impl InstanceFactStore {
         }))
     }
 
+    /// Keeps at most `MAX_RECENT_FACT_TOMBSTONES` tombstones of each scope in memory, dropping a
+    /// scope's oldest written one first (Workflow #498: per scope, as the active facts are
+    /// bounded; the State document's tombstone still refuses a dropped one's snapshot).
     fn trim_recent_tombstones(&mut self) -> RuntimeHostResult<()> {
-        while self.invalidated.len() > MAX_RECENT_FACT_TOMBSTONES {
-            let candidate = self
-                .invalidated
-                .iter()
-                .filter(|(_, tombstone)| {
-                    !self
-                        .pending
-                        .contains_key(&invalidation_identity(&tombstone.data))
-                })
-                .min_by_key(|(identity, tombstone)| (tombstone.sequence, *identity))
-                .map(|(identity, _)| identity.clone())
-                .ok_or_else(|| {
-                    fact_fatal(
-                        HostCode::FactTombstoneCompactionBlocked,
-                        HostLocation::CompactFactTombstones,
-                    )
-                })?;
-            self.invalidated.remove(&candidate);
+        let mut counts = BTreeMap::<FactScope, usize>::new();
+        for (identity, _) in self.invalidated.keys() {
+            *counts.entry(identity.0.clone()).or_default() += 1;
+        }
+        for (scope, count) in counts {
+            for _ in MAX_RECENT_FACT_TOMBSTONES..count {
+                let candidate = self
+                    .invalidated
+                    .iter()
+                    .filter(|((identity, _), tombstone)| {
+                        identity.0 == scope
+                            && !self
+                                .pending
+                                .contains_key(&invalidation_identity(&tombstone.data))
+                    })
+                    .min_by_key(|(identity, tombstone)| (tombstone.sequence, *identity))
+                    .map(|(identity, _)| identity.clone())
+                    .ok_or_else(|| {
+                        fact_fatal(
+                            HostCode::FactTombstoneCompactionBlocked,
+                            HostLocation::CompactFactTombstones,
+                        )
+                    })?;
+                self.invalidated.remove(&candidate);
+            }
         }
         Ok(())
     }
@@ -1852,6 +1921,33 @@ impl InstanceFactStore {
     pub(crate) fn active_count(&self) -> usize {
         self.active.len()
     }
+
+    /// Workflow #498 FACT-CAP (`contracts/instance-fact-store.md`, "Capacity ledger"): each
+    /// instance (its alias) whose own active facts reached `FACT_CAPACITY_WARNING_FACTS` since the
+    /// last call, with their count, once per episode; an instance whose count fell back under it
+    /// ends its episode, so its next rise is reported again. The episodes are kept in memory: a
+    /// start begins none, and an instance at or past the share at a start is reported once more.
+    pub(crate) fn capacity_warnings_due(&mut self) -> Vec<(String, usize)> {
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for (scope, _) in self.active.keys() {
+            if let FactScope::Instance { instance_id } = scope {
+                *counts.entry(instance_id.as_str()).or_default() += 1;
+            }
+        }
+        self.capacity_warned.retain(|alias| {
+            counts
+                .get(alias.as_str())
+                .is_some_and(|count| *count >= FACT_CAPACITY_WARNING_FACTS)
+        });
+        let mut due = Vec::new();
+        for (alias, count) in counts {
+            if count >= FACT_CAPACITY_WARNING_FACTS && self.capacity_warned.insert(alias.to_owned())
+            {
+                due.push((alias.to_owned(), count));
+            }
+        }
+        due
+    }
 }
 
 /// Builds the evaluation's manual priority offsets from active offset records (Workflow #308
@@ -2233,6 +2329,7 @@ mod tests {
             pending: BTreeMap::new(),
             last_sequence: 0,
             state,
+            capacity_warned: BTreeSet::new(),
         }
     }
 

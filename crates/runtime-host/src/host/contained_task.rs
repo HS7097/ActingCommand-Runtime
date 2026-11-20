@@ -628,6 +628,24 @@ fn refuse_resource_reading(
         draft,
         HostCode::ContainedTaskResourceReadingRejected,
         format!("{id}:{refusal}"),
+        None,
+    )
+}
+
+/// Workflow #498 FACT-CAP: [`refuse_resource_reading`] for a record the fact store itself refused
+/// with `refusal` (a full scope's `fact_store_capacity_exceeded` among them): the store's refusal
+/// is the failure's `caused_by` link, so the run's terminal record and its answer say why, not
+/// only the native detail.
+fn refuse_stored_resource_reading(
+    draft: &mut ContainedTaskTerminalDraft,
+    id: &str,
+    refusal: &RuntimeHostError,
+) -> RequestFailure {
+    refuse_resource_readings(
+        draft,
+        HostCode::ContainedTaskResourceReadingRejected,
+        format!("{id}:{}", refusal.code()),
+        Some(refusal.record_outcome()),
     )
 }
 
@@ -684,17 +702,23 @@ fn resource_reading_failure_detail(code: &str, detail: Option<&str>) -> Option<S
 
 /// Workflow #335 S5b: rewrites a successful terminal whose readings were refused to the
 /// failure `code` (as a refused settlement projection is) and returns the failure answered
-/// after that terminal, with `detail` as native detail.
+/// after that terminal, with `detail` as native detail and (Workflow #498) `cause`, the refusal
+/// behind it, as its `caused_by` link.
 fn refuse_resource_readings(
     draft: &mut ContainedTaskTerminalDraft,
     code: impl Into<Code>,
     detail: String,
+    cause: Option<Outcome>,
 ) -> RequestFailure {
     let error = RuntimeHostError::request(
         code,
         HostLocation::AppendContainedTaskTerminal,
         RuntimeErrorCode::BackendOperationFailed,
     );
+    let error = match cause {
+        Some(cause) => error.with_caused_by(cause),
+        None => error,
+    };
     draft.outcome = TaskOutcome::Failure;
     draft.final_page = None;
     draft.failure = Some(error.outcome());
@@ -12657,10 +12681,10 @@ impl HostShared {
                     return Err(RequestFailure::poison_without_terminal(error));
                 }
                 Err(error) => {
-                    return Ok(Some(refuse_resource_reading(
+                    return Ok(Some(refuse_stored_resource_reading(
                         draft,
                         &invalidation.adjustment_id,
-                        error.code(),
+                        &error,
                     )));
                 }
             }
@@ -12693,10 +12717,10 @@ impl HostShared {
                             return Err(RequestFailure::poison_without_terminal(error));
                         }
                         Err(error) => {
-                            return Ok(Some(refuse_resource_reading(
+                            return Ok(Some(refuse_stored_resource_reading(
                                 draft,
                                 operation_id,
-                                error.code(),
+                                &error,
                             )));
                         }
                     }
@@ -12770,7 +12794,7 @@ impl HostShared {
                     return Err(RequestFailure::poison_without_terminal(error));
                 }
                 Err(error) => {
-                    return Ok(Some(refuse_resource_reading(draft, id, error.code())));
+                    return Ok(Some(refuse_stored_resource_reading(draft, id, &error)));
                 }
             }
         }

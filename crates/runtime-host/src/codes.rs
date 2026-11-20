@@ -3790,3 +3790,19 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #490 ENTRY-A fix round 1: end ----
+
+// ---- #498 FACT-CAP (register §1.496; contracts/instance-fact-store.md): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of an instance whose own facts near their bound in the instance fact store
+    /// (Workflow #498). No existing code fits: `fact_store_capacity_exceeded` is the refusal of a
+    /// key the bound has no room for, and nothing was refused here.
+    pub(crate) enum FactCapacityCode {
+        /// Warning (since 0.12.76). An instance's own active facts reached 80% of its bound: one
+        /// Warning `runtime.failed` under the instance's links (`instance_id` the alias, `count`
+        /// its own active facts, `limit_count` its bound), once until the count falls back under
+        /// the share, and once more after a start that finds it at or past it. Nothing is
+        /// refused; the instance takes new keys up to its bound.
+        ShareReached => "fact_store_capacity_share_reached": warning / none,
+    }
+}
+// ---- #498 FACT-CAP: end ----

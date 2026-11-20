@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::codes::{HostCode, HostLocation};
-use crate::fact_store::{priority_offset_milli, valid_priority_offset_task_id};
+use crate::codes::{FactCapacityCode, HostCode, HostLocation};
+use crate::fact_store::{MAX_INSTANCE_FACTS, priority_offset_milli, valid_priority_offset_task_id};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     CaptureExtent, CaptureGeometryObservation, CaptureRotation, CaptureRotationObservation,
@@ -542,6 +542,9 @@ impl HostShared {
     ) -> RuntimeHostResult<FactPublication> {
         let (event_source, event_actor) = origin;
         self.synchronize_fact_store_under_gate()?;
+        // Workflow #498: an instance at or past its warning share is said so before the store can
+        // refuse it anything (once after a start, or after a change no publication made).
+        self.report_fact_capacity_under_gate()?;
         // Workflow #384 D2-S3: the adjustment's base is read and its record written in
         // this one hold of the gate.
         if let FactPublicationPurpose::ResourceAdjustment { base_sequence } = purpose {
@@ -682,12 +685,67 @@ impl HostShared {
             payload,
         )?;
         self.synchronize_fact_store_under_gate()?;
+        // Workflow #498: the publication that took an instance to its warning share says so.
+        self.report_fact_capacity_under_gate()?;
         Ok(FactPublication {
             event_id: *event.event_id(),
             sequence: event.sequence(),
             previous_version,
             replayed: false,
         })
+    }
+
+    /// Workflow #498 FACT-CAP (`contracts/instance-fact-store.md`, "Capacity ledger"): one Warning
+    /// `runtime.failed` `fact_store_capacity_share_reached` (`instance_id` the alias, `count` its
+    /// own active facts, `limit_count` its bound) under the instance's links (system links alone
+    /// for an alias no registered instance has) for each instance the store reports as having
+    /// reached its warning share, once per episode; handed to the daemon's log too. The caller
+    /// holds `fact_write_gate`: the records are appended under it and the store follows them. A
+    /// failed append fails the publication as every ledger write does.
+    fn report_fact_capacity_under_gate(&self) -> RuntimeHostResult<()> {
+        let due = lock(&self.facts, ContractLocation::PublishFacts)?.capacity_warnings_due();
+        if due.is_empty() {
+            return Ok(());
+        }
+        for (alias, count) in due {
+            let registered = lock(&self.registered_instances, HostLocation::BindFactScope)?
+                .values()
+                .find(|instance| instance.instance_alias == alias)
+                .map(RegisteredInstance::instance_id);
+            let links = match registered {
+                Some(instance_id) => self
+                    .events
+                    .system_links()?
+                    .with_instance_id(self.events.issuer().issue_registered_instance(instance_id)),
+                None => self.events.system_links()?,
+            };
+            let outcome = Outcome::new(FactCapacityCode::ShareReached)
+                .operation(ContractLocation::PublishFacts)
+                .instance_id(alias.as_str())
+                .count(u32::try_from(count).unwrap_or(u32::MAX))
+                .limit_count(u32::try_from(MAX_INSTANCE_FACTS).unwrap_or(u32::MAX));
+            self.append_event_under_fact_gate(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    outcome.clone(),
+                    DiagnosticDetailDraft::new(
+                        "instance_fact_store",
+                        HostLocation::CommitFact,
+                        "runtime_host",
+                        ContractLocation::PublishFacts.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+            self.fatal.report_warning(&outcome);
+        }
+        self.synchronize_fact_store_under_gate()
     }
 
     /// Workflow #411 B15 R6 (model-b15 §5.1): the write rule of one `session.remedy.choices`

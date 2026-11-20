@@ -21,7 +21,9 @@ invalidation binds the existing registered native instances in `scope_instances`
 Single PublishFact uses this same owner. Identical complete retries reuse the
 EventId; conflicting, invalidated, older or future observations are rejected.
 A refresh replacing members of an existing observation includes all its active
-members. Fact identities are bounded to 256 per ledger lineage.
+members. Active facts are bounded per scope (since Workflow #498, 0.12.76: 224 an instance's own,
+16 a server's, 16 a game's; `contracts/instance-fact-store.md`, "Capacity ledger"); before it fact
+identities were bounded to 256 per ledger lineage.
 
 The existing durable append owns failure and tail recovery. A failed write is
 fatal: partial raw bytes are not projected as a subset of the observation. A
