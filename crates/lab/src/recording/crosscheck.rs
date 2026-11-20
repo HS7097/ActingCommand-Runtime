@@ -13,7 +13,7 @@ use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
     ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
-    SelectFrameDecision, StepSelect,
+    SelectFrameDecision, SelectSelfTest, SelectSpec, StepSelect,
 };
 use super::near::{NearThresholdAt, Nearest, TemplateNearThreshold, TemplateScore};
 use super::select::{
@@ -918,9 +918,12 @@ fn select_first_decision(
 /// #463 R1: what the cross-check of the select steps leaves: one entry per select step (its
 /// decisions on every live frame) and the steps not evaluated without an OCR model. #463 SC-1 fix
 /// round 1: and the warnings `record_select_page_passes_after_press`, which the answers carry and
-/// the package's provenance does not.
+/// the package's provenance does not. #463 PRIV-SCAN: and, one per select step in the same order,
+/// the entry a public recording's provenance records ([`public_select_record`]), built apart from
+/// the answers' entry.
 pub(crate) struct SelectChecks {
     pub(crate) selects: Vec<Value>,
+    pub(crate) records: Vec<Value>,
     pub(crate) not_evaluated: Vec<u32>,
     pub(crate) after_press: Vec<SelectPagePassesAfterPress>,
 }
@@ -984,6 +987,7 @@ pub(crate) fn select_checks(
         ocr_available: ocr.ocr_provider().is_some(),
     };
     let mut selects = Vec::new();
+    let mut records = Vec::new();
     let mut not_evaluated = Vec::new();
     let mut after_press = Vec::new();
     for (step, select) in plan.select_steps() {
@@ -1001,19 +1005,26 @@ pub(crate) fn select_checks(
         });
         if ocr.ocr_provider().is_none() {
             not_evaluated.push(step.number);
-            item["frames"] = json!(
+            let undetermined = json!(
                 step.live_frames()
                     .iter()
                     .map(|frame| json!({"frame_id": frame.frame_id, "result": "undetermined"}))
                     .collect::<Vec<_>>()
             );
+            records.push(public_select_record(
+                (plan, step, spec),
+                &operation,
+                undetermined.clone(),
+                None,
+            ));
+            item["frames"] = undetermined;
             selects.push(item);
             continue;
         }
         // #463 S2-9a: a scrolling select is checked on its own frames and on the screens of its
         // demonstration, with the kernel's offline entry over them.
         if let Some(scan) = &select.scan {
-            super::scan::scan_select_checks(
+            let scanned = super::scan::scan_select_checks(
                 prepared,
                 plan,
                 (step, select, scan),
@@ -1028,6 +1039,12 @@ pub(crate) fn select_checks(
                 cache,
                 failures,
             )?);
+            records.push(public_select_record(
+                (plan, step, spec),
+                &operation,
+                scanned.frames,
+                Some(scanned.scan),
+            ));
             selects.push(item);
             continue;
         }
@@ -1130,12 +1147,18 @@ pub(crate) fn select_checks(
                 }
             }
             // #463 R1 fix 1: each decision by its kind, as at mark time.
-            frames.push(json!(SelectFrameDecision {
+            frames.push(SelectFrameDecision {
                 frame_id: frame.frame_id.clone(),
                 pressed,
                 default: default.kind,
-            }));
+            });
         }
+        records.push(public_select_record(
+            (plan, step, spec),
+            &operation,
+            public_frames(&frames),
+            None,
+        ));
         item["frames"] = json!(frames);
         after_press.extend(select_page_elsewhere(
             plan,
@@ -1148,9 +1171,87 @@ pub(crate) fn select_checks(
     }
     Ok(SelectChecks {
         selects,
+        records,
         not_evaluated,
         after_press,
     })
+}
+
+/// #463 PRIV-SCAN (`contracts/lab-recording.md`, "What a public recording records of a select"):
+/// the entry of the select step `step` (its declaration `spec`, its operation `operation`) that a
+/// public recording's provenance records: a new object of the named members only, built here and
+/// never from the answers' entry: the step and its serial number, its operation and layout, the
+/// wanted value (fix round 1: its `name` and `default`, each named), the pressed name, the
+/// `on_empty` key, `frames`, the decisions on its own live frames as [`public_frames`] gives them
+/// (or each frame undetermined), and, of a scrolling select, `scan`, what
+/// [`super::scan::ScanRecord`] keeps of it. A member the answers' entry has or gains is in it only
+/// when it is named here; no value in it is serialized from a type whose members are not named.
+fn public_select_record(
+    (plan, step, spec): (&Plan, &PlanStep, &SelectSpec),
+    operation: &str,
+    frames: Value,
+    scan: Option<Value>,
+) -> Value {
+    let mut record = json!({
+        "step": step.number,
+        "record_index": step.step.index,
+        "op": operation,
+        "layout": plan.select_layout_id(step),
+        "wanted": {"name": spec.wanted.name, "default": spec.wanted.default},
+        "pressed": spec.pressed_name(),
+        "on_empty_key": empty_end_key(&plan.task_id, spec),
+        "frames": frames
+    });
+    if let Some(scan) = scan {
+        record["scan"] = scan;
+    }
+    record
+}
+
+/// #463 PRIV-SCAN fix round 1 (`contracts/lab-recording.md`, "What a public recording records of a
+/// select"): the decisions on a select step's own live frames as a public recording records them,
+/// each of named members only: the frame's id and, for the pressed name and for the default, the
+/// decision's kind alone (`{result}`). Never the row a `selected` decision chose (`slot`, the row's
+/// index on the pressed screen, which, pressed on a scrolling list's first screen, is the pressed
+/// name's position in the list).
+pub(crate) fn public_frames(decisions: &[SelectFrameDecision]) -> Value {
+    Value::Array(
+        decisions
+            .iter()
+            .map(|decision| {
+                json!({
+                    "frame_id": decision.frame_id,
+                    "pressed": {"result": decision_kind(decision.pressed)},
+                    "default": {"result": decision_kind(decision.default)}
+                })
+            })
+            .collect(),
+    )
+}
+
+/// #463 PRIV-SCAN fix round 1: the mark-time self-test of a select step as a public recording's
+/// provenance records it in the step's entry (`steps[].select.self_test`), of named members only:
+/// its status, its reason when it has one, and its decisions as [`public_frames`] gives them.
+pub(crate) fn public_self_test(test: &SelectSelfTest) -> Value {
+    let mut kept = json!({"status": test.status.as_str()});
+    if let Some(reason) = &test.reason {
+        kept["reason"] = json!(reason);
+    }
+    kept["frames"] = public_frames(&test.frames);
+    kept
+}
+
+/// #463 PRIV-SCAN fix round 1: the word of a decision's kind, the tag its JSON carries, each kind
+/// named, so that a member a kind carries or gains never reaches a public record.
+fn decision_kind(decision: SelectDecision) -> &'static str {
+    match decision {
+        SelectDecision::Selected { .. } => "selected",
+        SelectDecision::Empty => "empty",
+        SelectDecision::Ambiguous => "ambiguous",
+        SelectDecision::Insufficient => "insufficient",
+        SelectDecision::Blocked => "blocked",
+        SelectDecision::Unknown => "unknown",
+    }
 }
 
 /// #463 SC-1: where a page of the package comes from, or whose frame a frame is: a step's own (its
