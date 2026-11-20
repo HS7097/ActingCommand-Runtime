@@ -4480,8 +4480,9 @@ impl HostShared {
         phase: RuntimeLifecyclePhase,
     ) -> RuntimeHostResult<()> {
         // Workflow #490 ENTRY-A (`entry_blocks.rs`): a ladder of the instance that ends recovered
-        // ends its entry block; one that ends without success, or that a blackout or an admission
-        // refusal drops, leaves it blocked and brings it to a person's attention.
+        // ends its entry block (ENTRY-A2: and is the recovery after which a marked pair's failure
+        // at its entry is its own); one that ends without success, or that a blackout or an
+        // admission refusal drops, leaves it blocked and brings it to a person's attention.
         let recovered = match &phase {
             RuntimeLifecyclePhase::RecoveryLadderFinished {
                 ladder_result:
@@ -4508,7 +4509,7 @@ impl HostShared {
             ladder_fact_payload(self.owner_epoch, pending, phase),
         )?;
         match recovered {
-            Some(true) => self.end_entry_block(pending.instance_id),
+            Some(true) => self.note_entry_recovered(pending.instance_id),
             Some(false) => self.note_entry_recovery_failed(pending.instance_id),
             None => Ok(()),
         }

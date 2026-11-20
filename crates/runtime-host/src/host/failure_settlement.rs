@@ -21,7 +21,7 @@
 //! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
 use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
-use super::entry_blocks::EntryMarks;
+use super::entry_blocks::{EntryMarks, EntrySettlement};
 use super::policy_outcome::{SettlementRead, policy_dispatch_intent};
 use super::*;
 use crate::codes::{BreakInProblem, HostCode, HostLocation};
@@ -30,7 +30,7 @@ use crate::failure_identity::{
     RERUN_ONLY_BACKEND_FAILURES, content_hash_prefix, encode_failure_base, entry_checked,
     failed_at_entry, failure_accumulates, failure_detail_fingerprint, failure_key, failure_rows,
     failure_step, identifier_text, in_restart_segment, locate_error_frame, navigation_failure_code,
-    navigation_layer_failure,
+    navigation_layer_failure, own_entry_identity,
 };
 use crate::suspension_lift::{
     LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
@@ -65,10 +65,13 @@ pub(super) struct ScheduledResolution {
 /// Workflow #490 ENTRY-A: a failed scheduled run's input for its settlement and, when the run
 /// failed at its entry (`failed_at_entry`), its failure does not accumulate and the instance's
 /// recovery ladder takes it at the task stage, what its start knew of its instance (`entry`): the
-/// settlement then settles it as a condition of the instance and blocks the instance.
+/// settlement then settles it as a condition of the instance and blocks the instance. ENTRY-A2:
+/// when that failure is its pair's own, the input is written as a failure that accumulates
+/// (`own_entry_identity`), which the settlement settles as such, blocking the instance all the
+/// same; `entry` is [`EntrySettlement::TargetStarted`] for a run whose main package started.
 pub(super) struct ScheduledFailure {
     pub(super) input: PolicyExecutionInput,
-    pub(super) entry: Option<EntryMarks>,
+    pub(super) entry: Option<EntrySettlement>,
 }
 
 impl ScheduledFailure {
@@ -693,6 +696,11 @@ impl HostShared {
             )
         };
         let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
+        // Workflow #490 ENTRY-A: the run checked its entry and its main package never started.
+        // ENTRY-A2: any other run whose chain was resolved started its main package (its entry
+        // worked), which clears its pair's mark.
+        let at_entry = main.resolved && failed_at_entry(&rows, gated);
+        let started = (main.resolved && !at_entry).then_some(EntrySettlement::TargetStarted);
         // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
         // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
         // rule in where the failure arose, so the startup recovery and the ledger read the same
@@ -729,13 +737,39 @@ impl HostShared {
             // home entry's check or its recovery package), is a condition of the instance when the
             // instance's recovery ladder takes it at the task stage, as the run's lease end judged
             // it: the settlement settles it so and blocks the instance.
-            let entry = (main.resolved
-                && failed_at_entry(&rows, gated)
+            if !(at_entry
                 && self.ladder_takes_failure(context.lease_token().instance_id(), &code)?)
-            .then_some(resolution.marks);
+            {
+                return Ok(ScheduledFailure {
+                    input: failed(Some(identity.encode())),
+                    entry: started,
+                });
+            }
+            // ENTRY-A2 ("Whose failure"): unless it is its pair's own: the pair's task's last
+            // scheduled run failed at its entry too, with the same packages, and a recovery of the
+            // instance succeeded since that run began. Such a failure is written as one that
+            // accumulates (its `F` the run's error frame, or the pair's previous identity with the
+            // same prefix), so it counts toward `escalation_threshold`.
+            let marks = resolution.marks;
+            let own = self.entry_failure_own(
+                context.instance_alias(),
+                context.catalog_task_id(),
+                marks,
+                &identity.packages(),
+            )?;
+            let failure_identity = if own {
+                let current = locate_error_frame(context.run_id(), query)?;
+                own_entry_identity(
+                    &identity,
+                    current.as_ref().map(LedgerArtifactReference::sha256),
+                    previous.as_ref().map(|(previous, _)| previous.as_str()),
+                )
+            } else {
+                identity.encode()
+            };
             return Ok(ScheduledFailure {
-                input: failed(Some(identity.encode())),
-                entry,
+                input: failed(Some(failure_identity)),
+                entry: Some(EntrySettlement::AtEntry { marks, own }),
             });
         }
         let current = if scope == "prepare" {
@@ -751,7 +785,10 @@ impl HostShared {
             })
         });
         let Some((previous_identity, previous_decision)) = previous else {
-            return Ok(ScheduledFailure::ordinary(failed(Some(identity.encode()))));
+            return Ok(ScheduledFailure {
+                input: failed(Some(identity.encode())),
+                entry: started,
+            });
         };
         let (comparison, previous_run) =
             self.compare_error_frames(&previous_decision, current.as_ref())?;
@@ -782,7 +819,10 @@ impl HostShared {
                 previous_identity
             }
         };
-        Ok(ScheduledFailure::ordinary(failed(Some(failure_identity))))
+        Ok(ScheduledFailure {
+            input: failed(Some(failure_identity)),
+            entry: started,
+        })
     }
 
     /// Workflow #373 NAV-5 (M-373 §8.5): the navigation segments of a settled failure's

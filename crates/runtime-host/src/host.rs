@@ -5253,7 +5253,40 @@ impl RuntimeHost {
     #[cfg(test)]
     pub(crate) fn settle_next_policy_run_at_entry_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::SettleAtEntryForTest)?
-            .settle_next_at_entry_for_test()
+            .settle_next_for_test(entry_blocks::SettleForTest::AtEntry)
+    }
+
+    /// Workflow #490 ENTRY-A2: the next settlement of a scheduled run settles it as a run whose
+    /// main package started (its entry worked), as the live settlement does for such a run.
+    #[cfg(test)]
+    pub(crate) fn settle_next_policy_run_past_its_entry_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::SettlePastEntryForTest)?
+            .settle_next_for_test(entry_blocks::SettleForTest::PastEntry)
+    }
+
+    /// Workflow #490 ENTRY-A2: a recovery ladder of `instance_alias` ended `recovered`, as its
+    /// finished fact tells the entry blocks.
+    #[cfg(test)]
+    pub(crate) fn recover_instance_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::RecoverInstanceForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.note_entry_recovered(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A2: the mark of `task_id` on `instance_alias`, if it is set: the
+    /// instance's successful recoveries when the run that set it began.
+    #[cfg(test)]
+    pub(crate) fn entry_mark_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::EntryMarkForTest)?
+            .entry_mark_for_test(instance_alias, task_id)
     }
 
     /// Workflow #490 ENTRY-A: `instance_alias`'s entry block, if it has one: the gate the

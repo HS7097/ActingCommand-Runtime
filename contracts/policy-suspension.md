@@ -51,7 +51,10 @@ consumes the budgets like any dispatch. A failure recorded without a failure ide
 its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
 page-graph task is rerun at once as a linear one is. Since 0.12.76 (Workflow #490 ENTRY-A) a
 failure at the run's entry is no failure of the task and is never rerun at once ("A failure at the
-entry" below): it settles as a condition, with no retry, and blocks its instance.
+entry" below): it settles as a condition, with no retry, and blocks its instance. One that is its
+pair's own (ENTRY-A2, "Whose failure" below) settles as a step failure does, its backoff included,
+and blocks its instance too: nothing reruns it before its backoff has passed and its instance's
+recovery has ended the block.
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -110,7 +113,7 @@ The live settlement of a scheduled run whose main package was admitted, as `line
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `n<I><H>` | Workflow #373 NAV-5 (M-373 §8.5): the navigation, recovery chain or interrupt layer package a navigation failure happened in (the last `EntryRecoveryFailed` of a layer with role `navigation_hop`, `recovery_chain` or `interrupt_handler`), or the package a `contained_task_navigation_package_invalid` names; `I` and `H` as above, `H` at the path the registry of the run's game gives it. Absent when the failure happened in no such layer. |
 | `g<H>` | Workflow #373 NAV-5 (M-373 §8.5): the first 12 hex digits of SHA-256 over the run's game root's `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent file adds nothing), `x` when they could not be read. Present, after `n`, on a failure whose code starts with `contained_task_navigation_` or `contained_task_interrupt_`, or that happened in such a layer; absent on every other failure. |
-| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate; since 0.12.76 (Workflow #490 ENTRY-A) `i` and the same digits for such a failure at the run's entry that the settlement settled as a condition of the instance ("A failure at the entry"); it does not accumulate either. |
+| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate; since 0.12.76 (Workflow #490 ENTRY-A) `i` and the same digits for such a failure at the run's entry that the settlement settled as a condition of the instance ("A failure at the entry"); it does not accumulate either. A failure at the entry that is its pair's own (ENTRY-A2) has the `F` of a failure that accumulates: the run's error frame or `na`, or the pair's previous identity whole when it accumulates and has the same prefix (its frames are not compared). |
 
 The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 NAV-5: was
 214 before `n` and `g`), without whitespace or control characters. A segment out of the order
@@ -227,7 +230,7 @@ the start not on the first step, `contained_task_linear_application_unconfirmed`
 backend errors, operator pause, cancellation and deadline, the task timeout and recognition
 errors. Since 0.12.76 (Workflow #490 ENTRY-A) such a failure at the run's entry that the
 instance's recovery ladder takes is not rerun either: it settles as a condition of the instance
-("A failure at the entry" below).
+("A failure at the entry" below), unless it is its pair's own (ENTRY-A2), which accumulates.
 
 The restart segment (R25-1): the run had a `launch` or `restart` application effect
 (`application.intent`) and no `StepFinished` after the last one names a main-interface page
@@ -298,7 +301,8 @@ exclusions keep `contained_task_prerequisite_*` and `contained_task_return_home_
 reconciliation settles from its terminal (its settlement was interrupted) has no failure identity
 and settles as before.
 
-**Settlement.** Such a run settles by the condition path ("Condition termination and owed
+**Settlement.** Such a run, unless its failure is its pair's own ("Whose failure" below), settles
+by the condition path ("Condition termination and owed
 reruns", "Settlement"): its record carries `condition` with `refunded` true whatever
 `scheduling.rerun.refund_counts` says, `count` 1 and the end of the window it was admitted in; it
 adds to no failure streak and no escalation (the pair's counters stay as they were), keeps the
@@ -312,8 +316,48 @@ the record says it: a replay reads `condition` and the mark from the record, owe
 never reads the configuration. No member and no word of the record is added; the record's
 outcome keeps its code.
 
-**The block.** The settlement then blocks the instance, under the policy outcome gate the
-evaluation reads the blocks under: from then on every candidate of the instance (owed reruns,
+**Whose failure (Workflow #490 ENTRY-A2, since 0.12.76).** The coordinator's ruling of 11-20
+23:57 JST, not the owner's words: a rule whose entry is itself broken (a prerequisite whose entry
+page never matches, a return-home step that cannot be done) fails at its entry from a good home
+page every time; as a condition it would be refunded, block the instance, be recovered, be the top
+candidate again and fail again, for ever, and nothing else on the instance would run. So a failure
+at the entry is the instance's condition only while nothing says it is the pair's own:
+
+- *The mark.* The Runtime keeps in its memory, per pair (instance, catalog task), whether the
+  task's last scheduled run failed at its entry (the set above, judged by the live settlement):
+  with how many recoveries of the instance had succeeded when that run began, and the packages its
+  failure identity names (the main package and each declared prerequisite and return-home layer
+  with its content hash). No record, fact or status member holds it; a restart forgets it (and
+  every block), so the first failure at the entry after a restart is a condition again.
+- *A condition.* A failure at the entry of a pair whose mark is not set settles as above (a
+  condition, counts given back, no streak, the instance blocked) and sets the mark. So does one of
+  a pair whose mark is set when no recovery of the instance succeeded since the marked run began
+  (the instance was unblocked by a pause set and lifted, or by a client's or the Lab's run that
+  succeeded) or when the packages differ (the pair's content changed).
+- *The pair's own.* A failure at the entry of a pair whose mark is set, with the same packages,
+  when a recovery of the instance succeeded since the marked run began (the run started from a
+  recovered instance), is the pair's own. Only a recovery ladder of the instance that ended
+  `recovered` or `environment_ready` counts as that recovery; a resume, a run's success and a
+  restart do not. Such a failure settles down the ordinary path of a failure that accumulates: its
+  identity is written as one ("Failure identity", `F` the run's error frame or `na`, or the pair's
+  previous identity whole when it accumulates and has the same prefix, so two in a row repeat it
+  without comparing frames), it carries no `condition`, its counts stay taken, it counts toward
+  `escalation_threshold` and `retry_limit` as a step failure does (performance pressure as for any
+  failure), its disposition is `retry_scheduled` with the rule's `retry_backoff_ms` or `paused_task`,
+  and it ends the pair's owed rerun as any ordinary failure does. The immediate rerun (R22) treats
+  it as a step failure's: nothing reruns it before its backoff has passed. It blocks the instance
+  all the same (the screen it left is not known), so its lease end's recovery follows as for every
+  failure at the entry, and it keeps the mark set.
+- *The mark's end.* A settlement of the pair's run whose main package started (its entry worked:
+  an `EntryTargetDisposition` `Started`, or a run without an entry check; whatever its end), a
+  success, and a settlement that pauses the pair clear the mark.
+
+So a pair whose entry is broken is paused after `escalation_threshold` own failures, the first
+failure of the episode (a condition) not counted; each attempt costs at most one recovery, and
+between its attempts its backoff holds it while the instance's other tasks run.
+
+**The block.** The settlement of a failure at the entry, a condition or the pair's own, then
+blocks the instance, under the policy outcome gate the evaluation reads the blocks under: from then on every candidate of the instance (owed reruns,
 immediate reruns, remedy requests and the fact refresh included) waits with
 `instance_entry_blocked` ([scheduling-blackout.md](scheduling-blackout.md), "Order of the
 deferrals", position 4b). The block ends when a recovery ladder of the instance ends `recovered`

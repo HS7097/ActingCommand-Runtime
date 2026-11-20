@@ -32,23 +32,64 @@
 //!   succeeded between the run's lease end and its settlement leaves no block; one that already
 //!   failed raises the attention with the block.
 //!
-//! Memory only: a restart starts with no block (its preparation proves the instance again and its
-//! startup package runs where one is configured).
+//! - **Whose failure (ENTRY-A2).** The coordinator's ruling of 11-20 23:57 JST: a failure at the
+//!   entry is the instance's condition only while nothing says it is the pair's own. Each pair
+//!   (instance, catalog task) keeps here whether its task's last scheduled run failed at its entry
+//!   (its mark: what that run's start knew of the instance's recoveries, and the packages its
+//!   identity names). A failure at the entry of a pair whose mark is set, with the same packages,
+//!   after a recovery of the instance succeeded since that run began, is the pair's own: it settles
+//!   as a failure that accumulates (`failure_identity::own_entry_identity`) and blocks the instance
+//!   all the same. A run of the task whose main package started, a settlement that pauses the pair
+//!   and a success clear the mark; packages that changed make it count for nothing.
+//!
+//! Memory only: a restart starts with no block and no mark (its preparation proves the instance
+//! again and its startup package runs where one is configured).
 
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::unavailable_probe::ProbeHold;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::entry_block::{EntryBlockGate, EntryBlockGates};
-use crate::failure_identity::identifier_text;
+use crate::failure_identity::{FailureIdentity, identifier_text};
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 
-/// What a scheduled run's start knew of its instance: how many blocks of it ended and how many of
-/// its recoveries ended without success since the Runtime started.
+/// What a scheduled run's start knew of its instance: how many blocks of it ended, how many of its
+/// recoveries ended without success and (ENTRY-A2) how many succeeded since the Runtime started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct EntryMarks {
     ended: u64,
     unrecovered: u64,
+    recovered: u64,
+}
+
+/// Workflow #490 ENTRY-A and A2: what a scheduled run's settlement tells its instance's block and
+/// its pair's mark. A settlement without one (a stop, a reconciled or interrupted run, a run whose
+/// chain was not resolved) leaves the mark as it is, but for a success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EntrySettlement {
+    /// The run failed at its entry (ENTRY-A's set), with what its start knew of its instance;
+    /// `own` (ENTRY-A2) when the failure is its pair's own ([`HostShared::entry_failure_own`]).
+    AtEntry { marks: EntryMarks, own: bool },
+    /// The run's main package started: its entry worked, whatever its end.
+    TargetStarted,
+}
+
+/// ENTRY-A2: a pair's mark: its task's last scheduled run failed at its entry.
+struct EntryFailureMark {
+    /// The instance's successful recoveries when that run began.
+    recovered: u64,
+    /// The packages its failure identity named ([`FailureIdentity::packages`]).
+    packages: String,
+}
+
+/// Test only: what the next settlement is armed to be.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettleForTest {
+    /// One of a run that failed at its entry, judged against the instance's marks then.
+    AtEntry,
+    /// One of a run whose main package started.
+    PastEntry,
 }
 
 /// A recovery the ladder's cool-down held back, and the end of that cool-down.
@@ -71,13 +112,17 @@ pub(super) struct EntryBlocks {
     blocked: BTreeMap<InstanceId, EntryBlock>,
     ended: BTreeMap<InstanceId, u64>,
     unrecovered: BTreeMap<InstanceId, u64>,
+    /// ENTRY-A2: the instance's recovery ladders that ended `recovered` or `environment_ready`.
+    recovered: BTreeMap<InstanceId, u64>,
+    /// ENTRY-A2: the pairs' marks, by instance alias and catalog task.
+    entry_failed: BTreeMap<(String, String), EntryFailureMark>,
     /// The latest ladder of an instance not blocked (yet) that its cool-down suppressed, with the
     /// failed run its trigger names: the settlement of that run, when it blocks the instance, takes
     /// it as its block's held recovery.
     cooled: BTreeMap<InstanceId, (RunId, HeldEntryRecovery)>,
-    /// Test only: the next settlement is one of a run that failed at its entry.
+    /// Test only: what the next settlement is armed to be.
     #[cfg(test)]
-    settle_at_entry: bool,
+    settle_for_test: Option<SettleForTest>,
 }
 
 impl EntryBlocks {
@@ -85,6 +130,7 @@ impl EntryBlocks {
         EntryMarks {
             ended: self.ended.get(&instance_id).copied().unwrap_or(0),
             unrecovered: self.unrecovered.get(&instance_id).copied().unwrap_or(0),
+            recovered: self.recovered.get(&instance_id).copied().unwrap_or(0),
         }
     }
 }
@@ -100,12 +146,91 @@ impl HostShared {
         Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.marks(instance_id))
     }
 
+    /// ENTRY-A2: whether a failure at the entry of `task_id` on `instance_alias`, whose run's start
+    /// knew `marks` and whose identity names `packages`, is the pair's own: the pair's mark is set
+    /// (its task's last scheduled run failed at its entry) with the same packages, and a recovery of
+    /// the instance succeeded since that run began. A block ended by anything else (a run's success,
+    /// a resume) is no evidence against the pair.
+    pub(super) fn entry_failure_own(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+        marks: EntryMarks,
+        packages: &str,
+    ) -> RuntimeHostResult<bool> {
+        Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
+            .entry_failed
+            .get(&(instance_alias.to_owned(), task_id.to_owned()))
+            .is_some_and(|mark| mark.packages == packages && marks.recovered > mark.recovered))
+    }
+
+    /// Workflow #490 ENTRY-A and A2: what the execution record `data`, recorded now, tells its
+    /// pair's mark and its instance's block (`entry` what the settlement knew of the run, `run_id`
+    /// the run when the settlement had its context). A success, a run whose main package started
+    /// and a settlement that paused the pair clear the mark; a failure at the entry sets it (unless
+    /// it paused the pair) and blocks the instance when it settled as a condition at the entry or
+    /// as the pair's own failure (a configured condition of `scheduling.rerun` blocks nothing, as
+    /// before ENTRY-A2).
+    pub(super) fn settle_entry(
+        &self,
+        data: &PolicyExecutionEventData,
+        entry: Option<EntrySettlement>,
+        run_id: Option<RunId>,
+    ) -> RuntimeHostResult<()> {
+        let key = (data.instance_id.clone(), data.task_id.clone());
+        let failure = match &data.outcome {
+            PolicyExecutionOutcome::Failed { failure } => Some(failure),
+            PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
+                None
+            }
+        };
+        let paused = failure.is_some_and(|failure| {
+            failure.disposition == actingcommand_contract::PolicyFailureDisposition::PausedTask
+        });
+        let succeeded = matches!(data.outcome, PolicyExecutionOutcome::Succeeded { .. });
+        let at_entry = match entry {
+            Some(EntrySettlement::AtEntry { marks, own }) => Some((marks, own)),
+            Some(EntrySettlement::TargetStarted) | None => None,
+        };
+        {
+            let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+            if succeeded || paused || entry == Some(EntrySettlement::TargetStarted) {
+                blocks.entry_failed.remove(&key);
+            } else if let Some((marks, _)) = at_entry {
+                let packages = failure
+                    .and_then(|failure| failure.failure_identity.as_deref())
+                    .and_then(FailureIdentity::parse)
+                    .map(|identity| identity.packages())
+                    .unwrap_or_default();
+                blocks.entry_failed.insert(
+                    key,
+                    EntryFailureMark {
+                        recovered: marks.recovered,
+                        packages,
+                    },
+                );
+            }
+        }
+        let (Some((marks, own)), Some(failure)) = (at_entry, failure) else {
+            return Ok(());
+        };
+        if crate::policy_control::entry_blocked(failure) || (own && failure.condition.is_none()) {
+            self.block_instance_entry(
+                data,
+                actingcommand_contract::scheduled_failure_code_str(&failure.outcome),
+                run_id,
+                marks,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Blocks the instance of `data`, a run's execution record settled now as failed at its entry
     /// (`failure_code` its failure's code, `run_id` the run when the settlement had its context,
     /// `marks` what the run's start knew of the instance). A block of the instance that ended since
     /// the run's start leaves it unblocked; a recovery that failed since then raises the attention
     /// at once; a recovery the cool-down held back for this run is the block's.
-    pub(super) fn block_instance_entry(
+    fn block_instance_entry(
         &self,
         data: &PolicyExecutionEventData,
         failure_code: CodeStr,
@@ -159,6 +284,19 @@ impl HostShared {
     /// succeeded, or a resume lifted a pause of it. Counted for a settlement still to come.
     pub(super) fn end_entry_block(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let ended = blocks.ended.entry(instance_id).or_insert(0);
+        *ended = ended.saturating_add(1);
+        blocks.blocked.remove(&instance_id);
+        Ok(())
+    }
+
+    /// A recovery ladder of `instance_id` ended `recovered` or `environment_ready`: it ends the
+    /// instance's entry block and (ENTRY-A2) is counted as the one unblocking after which a failure
+    /// at the entry of a marked pair is the pair's own.
+    pub(super) fn note_entry_recovered(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let recovered = blocks.recovered.entry(instance_id).or_insert(0);
+        *recovered = recovered.saturating_add(1);
         let ended = blocks.ended.entry(instance_id).or_insert(0);
         *ended = ended.saturating_add(1);
         blocks.blocked.remove(&instance_id);
@@ -354,21 +492,88 @@ impl HostShared {
         Ok(())
     }
 
-    /// Test only: the next settlement of a scheduled run is one of a run that failed at its entry,
-    /// judged against the instance's marks at that settlement.
+    /// Test only: the next settlement of a scheduled run is armed as `armed`.
     #[cfg(test)]
-    pub(super) fn settle_next_at_entry_for_test(&self) -> RuntimeHostResult<()> {
-        lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.settle_at_entry = true;
+    pub(super) fn settle_next_for_test(&self, armed: SettleForTest) -> RuntimeHostResult<()> {
+        lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.settle_for_test = Some(armed);
         Ok(())
     }
 
-    /// Test only: whether the next settlement was armed to be one of a run that failed at its
-    /// entry; taken once.
+    /// Test only: what the next settlement of the dispatch `decision_id`, failed or succeeded as
+    /// `input`, was armed to be; taken once. A run armed as failed at its entry is judged as the
+    /// live settlement judges one, against the instance's marks now: when it is its pair's own
+    /// (ENTRY-A2), the input returned is `input` with its identity written as a failure that
+    /// accumulates (no error frame).
     #[cfg(test)]
-    pub(super) fn take_settle_at_entry_for_test(&self) -> RuntimeHostResult<bool> {
-        Ok(std::mem::take(
-            &mut lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.settle_at_entry,
+    pub(super) fn entry_settlement_for_test(
+        &self,
+        decision_id: &str,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<(Option<EntrySettlement>, Option<PolicyExecutionInput>)> {
+        let armed = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
+            .settle_for_test
+            .take();
+        let Some(armed) = armed else {
+            return Ok((None, None));
+        };
+        if armed == SettleForTest::PastEntry {
+            return Ok((Some(EntrySettlement::TargetStarted), None));
+        }
+        let (instance_alias, task_id, previous) = {
+            let policy = lock(self.policy()?, HostLocation::InstanceEntryBlock)?;
+            let instance_alias = policy.execution_instance_id(decision_id)?.to_owned();
+            let task_id = policy.execution_task_id_for_test(decision_id)?.to_owned();
+            let previous = policy
+                .latest_failure(&task_id, &instance_alias)
+                .and_then(|(identity, _)| identity.map(str::to_owned));
+            (instance_alias, task_id, previous)
+        };
+        let instance_id = self
+            .resolve_instance(&instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let marks = self.entry_marks(instance_id)?;
+        let not_own = Some(EntrySettlement::AtEntry { marks, own: false });
+        let PolicyExecutionInput::Failed {
+            outcome,
+            failure_identity: Some(identity),
+            class,
+        } = input
+        else {
+            return Ok((not_own, None));
+        };
+        let Some(parsed) = FailureIdentity::parse(identity) else {
+            return Ok((not_own, None));
+        };
+        if !self.entry_failure_own(&instance_alias, &task_id, marks, &parsed.packages())? {
+            return Ok((not_own, None));
+        }
+        Ok((
+            Some(EntrySettlement::AtEntry { marks, own: true }),
+            Some(PolicyExecutionInput::Failed {
+                outcome: outcome.clone(),
+                failure_identity: Some(crate::failure_identity::own_entry_identity(
+                    &parsed,
+                    None,
+                    previous.as_deref(),
+                )),
+                class: *class,
+            }),
         ))
+    }
+
+    /// Test only: whether the pair of `task_id` on `instance_alias` is marked as failed at its
+    /// entry, and the instance's successful recoveries the mark holds.
+    #[cfg(test)]
+    pub(super) fn entry_mark_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
+            .entry_failed
+            .get(&(instance_alias.to_owned(), task_id.to_owned()))
+            .map(|mark| mark.recovered))
     }
 
     /// Test only: the entry block of `instance_id`, if it has one.

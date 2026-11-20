@@ -6037,6 +6037,21 @@ impl PolicyHost {
             })
     }
 
+    /// Workflow #490 ENTRY-A2, tests: the catalog task of a dispatch, as its execution record
+    /// names it.
+    #[cfg(test)]
+    pub(crate) fn execution_task_id_for_test(&self, decision_id: &str) -> RuntimeHostResult<&str> {
+        self.seen_dispatches
+            .get(decision_id)
+            .map(|dispatch| dispatch.data.task_id.as_str())
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyDispatchUnknown,
+                    HostLocation::ReadPolicyDispatchInstance,
+                )
+            })
+    }
+
     pub(crate) fn active_performance_workloads(
         &self,
     ) -> RuntimeHostResult<Vec<PerformanceControlWorkload>> {

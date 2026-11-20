@@ -451,6 +451,24 @@ impl FailureIdentity {
         matches!(self.frame, IdentityFrame::Entry(_))
     }
 
+    /// Workflow #490 ENTRY-A2: the packages the identity names with their content hashes, which a
+    /// pair's mark of a failure at its entry compares: the main package and each declared
+    /// prerequisite and return-home layer (not a navigation layer or the game root's data, which
+    /// only a failure in such a layer names).
+    pub(crate) fn packages(&self) -> String {
+        let mut packages = format!("m{}", self.main.encode());
+        for layer in self.layers.iter().filter(|layer| {
+            matches!(
+                layer,
+                IdentityLayer::Declared(_) | IdentityLayer::ReturnHome { .. }
+            )
+        }) {
+            packages.push('~');
+            packages.push_str(&layer.encode());
+        }
+        packages
+    }
+
     /// The identity a recorded failure identity string encodes, or `None` for any other text.
     pub(crate) fn parse(identity: &str) -> Option<Self> {
         let parts = identity.split('~').collect::<Vec<_>>();
@@ -500,6 +518,30 @@ pub(crate) fn entry_identity(identity: &str) -> Option<String> {
     };
     parsed.frame = IdentityFrame::Entry(digest);
     Some(parsed.encode())
+}
+
+/// Workflow #490 ENTRY-A2 (`contracts/policy-suspension.md`, "A failure at the entry", "Whose
+/// failure"): the identity of a failure at the entry that is its pair's own, written as a failure
+/// that accumulates: `identity` (built as for a failure that does not accumulate) with its `F` the
+/// run's error frame (`frame_sha256`, `na` without one); or `previous`, the pair's latest failure,
+/// when that one accumulates and has the same prefix. The error frames are not compared: the same
+/// prefix after a successful recovery is the same problem, so such failures repeat their identity
+/// and count toward `escalation_threshold`.
+pub(crate) fn own_entry_identity(
+    identity: &FailureIdentity,
+    frame_sha256: Option<&str>,
+    previous: Option<&str>,
+) -> String {
+    if let Some(previous) = previous
+        && FailureIdentity::parse(previous).is_some_and(|previous| {
+            previous.accumulates() && previous.prefix() == identity.prefix()
+        })
+    {
+        return previous.to_owned();
+    }
+    let mut own = identity.clone();
+    own.frame = IdentityFrame::of_artifact(frame_sha256);
+    own.encode()
 }
 
 /// The event types of one run that the identity reads (§12.4, R25-1): its entry facts, step
