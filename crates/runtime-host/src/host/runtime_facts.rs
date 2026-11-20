@@ -402,8 +402,11 @@ impl HostShared {
         ];
         let scope = RuntimeFactScope::Instance { instance_id };
         // Workflow #489 AVAIL-1: the code of this open's failed self-check, which makes the
-        // instance one the probes take up when the gate holds it unavailable.
+        // instance one the probes take up when the gate holds it unavailable; fix round 2 (item
+        // 3): so does an open whose self-check is `unknown` (an entry its report left `unknown`),
+        // with no code: no word is added, and its `device.self_check` record says why.
         let mut failed = None;
+        let mut unknown = false;
         let recorded: RuntimeHostResult<()> = (|| {
             let (instance_alias, self_checked) = self.selfcheck_instance(instance_id)?;
             let _gate = lock(
@@ -440,6 +443,7 @@ impl HostShared {
                 failed = check
                     .failure_code
                     .map(|failure| CodeStr::from(failure.code()));
+                unknown = check.status == DeviceSelfCheckStatus::Unknown;
                 self.append_event_under_fact_gate(
                     if check.status == DeviceSelfCheckStatus::Failed {
                         EventSeverity::Warning
@@ -461,7 +465,7 @@ impl HostShared {
                 instance_id,
                 Some((entry, report.session_generation)),
             )?;
-            self.track_unavailability(instance_id, failed)
+            self.track_unavailability(instance_id, failed, unknown)
         });
         if let Err(error) = &result
             && error.is_fatal()
@@ -507,7 +511,7 @@ impl HostShared {
         }
         let result = self
             .gate_policy_availability_on_selfcheck(instance_id, None)
-            .and_then(|()| self.track_unavailability(instance_id, None));
+            .and_then(|()| self.track_unavailability(instance_id, None, false));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -593,7 +597,7 @@ impl HostShared {
             }
             Ok(())
         })()
-        .and_then(|()| self.track_unavailability(instance_id, failed));
+        .and_then(|()| self.track_unavailability(instance_id, failed, false));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -614,7 +618,7 @@ impl HostShared {
         )?;
         let result = self
             .gate_policy_availability_on_selfcheck(instance_id, None)
-            .and_then(|()| self.track_unavailability(instance_id, None));
+            .and_then(|()| self.track_unavailability(instance_id, None, false));
         if let Err(error) = &result
             && error.is_fatal()
         {

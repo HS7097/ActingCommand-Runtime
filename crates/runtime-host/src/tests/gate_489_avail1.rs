@@ -27,12 +27,26 @@
 //!   does not know (fix round 1, item 1: the member `unavailable` is declared and not answered);
 //! - T6 (fix round 1, item 3): a recovery held back is released only once the window in force has
 //!   ended, not at the end its suppression named;
-//! - T7 (fix round 1, item 4): a probe whose worker panics ends; its next probe is due after its
-//!   interval, and the panic is recorded once;
+//! - T7 (fix round 2, item 2, the coordinator's ruling of 11-21, which replaces fix round 1's
+//!   item 4): after a probe's worker panicked nothing probes the instance again in that
+//!   unavailability, however far the clock runs; a person is told at once, once; the probes do
+//!   not mark the Runtime fatal;
 //! - T8 (fix round 1, ruling R4): a failed close of the kept session, and an open that failed
 //!   without a report on an instance with an explicit host and port, take the instance into the
 //!   probes; no `passed` self-check stands for it in between, and a passing probe makes it
-//!   available.
+//!   available;
+//! - T9 (fix round 2, item 1): with two Nemu instances, a close after the opens that fails at
+//!   every probe is one unavailability: its interval grows by the factor, one failed probe each,
+//!   one warning at `attention_after_ms`, and the instance's availability that each probe's
+//!   passing open republishes is withdrawn again inside that probe, which holds its key;
+//! - T10 (fix round 2, item 3, the coordinator's ruling 甲): an open whose report leaves an entry
+//!   `unknown` takes the instance into the probes with no cause; its probes and its warning carry
+//!   no `failure_code`, and its `device.self_check` record (status `unknown`) says why.
+//!
+//! Fix round 2 (item 6): the replay's two instances are both the policy's configured identities,
+//! as every registered instance of a real host is (`validate_policy_input_authority`): on the first
+//! fix round's head its evaluation refused the bystander, configured nowhere
+//! (`policy_instance_metadata_untrusted`).
 //!
 //! Every host runs on a manual Runtime clock that only the test moves; each sweep tick of the probes
 //! is run by the test as well as by the lease sweep, so the waits below only bound a broken run.
@@ -44,19 +58,16 @@
 use super::gate_369_s6c::{pause, resume};
 use super::gate_398_rd2::instance_facts;
 use super::gate_480_pg2b::instance_pause_as;
-use super::instance_workers::{
-    admit_ladder_run, admit_ladder_run_at, all_events, ladder_setup, phases, wait_for_ladder_end,
-    wait_until,
-};
+use super::instance_workers::{all_events, ladder_setup, phases, wait_for_ladder_end, wait_until};
 use super::*;
 use crate::codes::HostCode;
 use crate::host::UnavailableForTest;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 use actingcommand_contract::{
-    EffectiveDeviceConfiguration, FactPayload, InstanceStuckRecovery, RecoveryLadderSuppression,
-    RecoveryTriggerStage, RunId, RuntimeConfigManifest, RuntimeInstanceStatus,
-    RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseMode, SchedulingPauseScope,
-    SchedulingResumeSelfCheck,
+    DeviceSelfCheckStatus, EffectiveDeviceConfiguration, FactPayload, InstanceStuckRecovery,
+    RecoveryLadderSuppression, RecoveryTriggerStage, RunId, RuntimeConfigManifest,
+    RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseMode,
+    SchedulingPauseScope, SchedulingResumeSelfCheck,
 };
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::{
@@ -157,6 +168,35 @@ fn instance_status(host: &RuntimeHost) -> RuntimeInstanceStatus {
         .clone()
 }
 
+/// A person's self-check of the policy instance (`actingctl selfcheck`): its failure code.
+fn person_self_check(host: &RuntimeHost) -> Option<String> {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::SelfCheckInstance {
+                    instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+                },
+            ),
+            ConnectionId::new(4_890).expect("connection"),
+        )
+        .expect("self-check receipt");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let Some(RuntimeResult::InstanceSelfChecked {
+        selfcheck: SchedulingResumeSelfCheck { failure_code, .. },
+        ..
+    }) = receipt.result()
+    else {
+        panic!("a self-check result: {receipt:?}");
+    };
+    failure_code.clone()
+}
+
 /// The policy instance as the probes hold it.
 fn unavailable(host: &RuntimeHost) -> Option<UnavailableForTest> {
     host.unavailable_for_test(POLICY_INSTANCE_ALIAS)
@@ -203,6 +243,21 @@ fn recovery_preparations(host: &RuntimeHost) -> usize {
         .count()
 }
 
+/// The `recovery_ladder_suppressed` records of the host: reason, `until_unix_ms`, rule.
+fn suppressions(host: &RuntimeHost) -> Vec<(RecoveryLadderSuppression, u64, Option<String>)> {
+    phases(&all_events(host))
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+                reason,
+                until_unix_ms,
+                rule,
+            } => Some((reason, until_unix_ms, rule)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The ladders that started with the failed run `run_id` as their trigger.
 fn ladders_of(host: &RuntimeHost, run_id: RunId) -> usize {
     phases(&all_events(host))
@@ -246,26 +301,32 @@ fn probe_panics(events: &[PersistedEvent]) -> Vec<&PersistedEvent> {
         .collect()
 }
 
-/// The value of the policy instance's latest `session.instance.available` publication.
-fn last_availability(host: &RuntimeHost) -> Option<bool> {
+/// The value `event` publishes for the policy instance's `session.instance.available`, when it is
+/// such a publication.
+fn availability_published(event: &PersistedEvent) -> Option<bool> {
+    let EventPayload::Fact(FactPayload::Published(payload)) = event.payload() else {
+        return None;
+    };
+    let record = payload.record();
     let scope = FactScope::Instance {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
     };
+    if record.key != crate::fact_store::POLICY_INSTANCE_AVAILABLE_KEY || record.scope != scope {
+        return None;
+    }
+    match record.content {
+        FactContent::Inline {
+            value: ContractFactValue::Boolean(value),
+        } => Some(value),
+        _ => None,
+    }
+}
+
+/// The value of the policy instance's latest `session.instance.available` publication.
+fn last_availability(host: &RuntimeHost) -> Option<bool> {
     all_events(host)
         .iter()
-        .filter_map(|event| match event.payload() {
-            EventPayload::Fact(FactPayload::Published(payload)) => Some(payload.record().clone()),
-            _ => None,
-        })
-        .filter(|record| {
-            record.key == crate::fact_store::POLICY_INSTANCE_AVAILABLE_KEY && record.scope == scope
-        })
-        .filter_map(|record| match record.content {
-            FactContent::Inline {
-                value: ContractFactValue::Boolean(value),
-            } => Some(value),
-            _ => None,
-        })
+        .filter_map(availability_published)
         .next_back()
 }
 
@@ -344,32 +405,7 @@ impl Probed {
 
     /// A person's self-check of the instance (`actingctl selfcheck`): its failure code.
     fn self_check(&self) -> Option<String> {
-        let ids = IdentifierIssuer::new().expect("identifier issuer");
-        let receipt = self
-            .host
-            .process_request_for_test(
-                &runtime_request(
-                    &ids,
-                    RuntimeOperation::SelfCheckInstance {
-                        instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
-                    },
-                ),
-                ConnectionId::new(4_890).expect("connection"),
-            )
-            .expect("self-check receipt");
-        assert_eq!(
-            receipt.state(),
-            RuntimeReceiptState::Completed,
-            "{receipt:?}"
-        );
-        let Some(RuntimeResult::InstanceSelfChecked {
-            selfcheck: SchedulingResumeSelfCheck { failure_code, .. },
-            ..
-        }) = receipt.result()
-        else {
-            panic!("a self-check result: {receipt:?}");
-        };
-        failure_code.clone()
+        person_self_check(&self.host)
     }
 
     /// A person's self-check of the instance whose capture open fails: it names the open.
@@ -431,12 +467,119 @@ fn probe_keys(first: u64, factor: u32, max: u64, attention: u64) -> Value {
     })
 }
 
+/// Fix round 2 (item 6): the policy's facts for the two registered instances of a two-Nemu host,
+/// whose aliases the host requires the configured identities to be
+/// (`validate_policy_input_authority`): the policy instance as `policy_facts` names it, and the
+/// bystander with its static identity under its own alias, configured unavailable, so the policy
+/// has no candidate of it and the self-check gate leaves it to its seed (as
+/// `gate_429_r6b2::two_instance_facts` configures its second instance).
+fn two_instance_facts() -> EvaluationFacts {
+    let mut facts = policy_facts();
+    let mut bystander = facts.instances[0].clone();
+    bystander.instance_id = BYSTANDER_ALIAS.to_owned();
+    bystander.available = false;
+    facts.instances.push(bystander);
+    facts
+}
+
+/// The configured policy inputs of a host with both instances registered.
+fn two_instance_inputs() -> PolicyInputSnapshot {
+    PolicyInputSnapshot::new(two_instance_facts(), policy_resources())
+}
+
+/// The policy instance (`state`) and the bystander on bound device endpoints, both capturing
+/// through the Nemu IPC: each closes its session after its preparation and at every lease end
+/// (the multi-Nemu gate), so every open is afresh, as on the 11-20 host.
+fn two_nemu_provider(state: &Arc<FakeState>) -> FakeProvider {
+    let provider = FakeProvider::from_entries([
+        (
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            instance_id(),
+            Arc::clone(state),
+        ),
+        (
+            BYSTANDER_ALIAS.to_owned(),
+            instance_id(),
+            Arc::new(FakeState::default()),
+        ),
+    ])
+    .with_device_endpoints();
+    let policy = provider
+        .resolve(POLICY_INSTANCE_ALIAS)
+        .expect("the policy instance")
+        .with_configuration(nemu_configuration("TESTSERIAL0001"));
+    let bystander = provider
+        .resolve(BYSTANDER_ALIAS)
+        .expect("the bystander")
+        .with_configuration(nemu_configuration("TESTSERIAL0002"));
+    provider
+        .with_resolved_for(POLICY_INSTANCE_ALIAS, policy)
+        .with_resolved_for(BYSTANDER_ALIAS, bystander)
+}
+
+/// The policy instance's scheduled run of `request`, evaluated at `unix_ms` with the two
+/// instances' facts (fix round 2, item 6) and admitted as `instance_workers::admit_ladder_run_at`
+/// admits it; the catalog is active.
+fn admit_policy_run(
+    host: &RuntimeHost,
+    request: &ContainedTaskRequest,
+    unix_ms: u64,
+    seed: u64,
+) -> Box<PolicyRunContext> {
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &two_instance_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate policy dispatch");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("the policy instance's dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("dispatch reason chain")
+        .clone();
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(&intent, &reasons, &policy_context(host, &intent), request)
+        .expect("policy admission")
+    else {
+        panic!("expected a policy run context")
+    };
+    context
+}
+
+/// Fix round 2 (item 1): the next open's first frame and the next close of the instance's input
+/// each take a millisecond of `clock`, as a real open and close take time, so the gate's
+/// publications within one preparation (its withdrawal, the seed a passing open republishes, the
+/// withdrawal a failed close publishes) are each observed after the one before.
+fn step_open_and_close(state: &FakeState, clock: &Arc<ManualRuntimeClock>) {
+    let opened = Arc::clone(clock);
+    *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || opened.advance(1)));
+    let closed = Arc::clone(clock);
+    *state.input_close_hook.lock().expect("input close hook") =
+        Some(Box::new(move || closed.advance(1)));
+}
+
 /// T1's fixture: the ladder fixture's scheduled run on the policy instance, on a bound device
 /// endpoint, admitted while its self-check passes, then failed by its paired open (production's
 /// code, fix round 1 item 5) while the ladder's cool-down window has `cooldown_left_ms` left (the
 /// window an earlier ladder opened, opened here by the test). The policy instance and a bystander
-/// both capture through the Nemu IPC, so the run opens its backends afresh. The probes' first
-/// interval and cap are an hour, so the first probe is the cool-down's end's.
+/// both capture through the Nemu IPC, so the run opens its backends afresh; both are the policy's
+/// configured identities (fix round 2, item 6). The probes' first interval and cap are an hour,
+/// so the first probe is the cool-down's end's.
 struct Replay {
     root: TempDir,
     host: RuntimeHost,
@@ -459,38 +602,17 @@ fn replay(cooldown_left_ms: u64) -> Replay {
     // open takes time, so the two are not observed at the same instant (gate_ord1c, fix round 3).
     let stepped = Arc::clone(&clock);
     *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || stepped.advance(1)));
-    let provider = FakeProvider::from_entries([
-        (
-            POLICY_INSTANCE_ALIAS.to_owned(),
-            instance_id(),
-            Arc::clone(&state),
-        ),
-        (
-            BYSTANDER_ALIAS.to_owned(),
-            instance_id(),
-            Arc::new(FakeState::default()),
-        ),
-    ])
-    .with_device_endpoints();
-    let policy = provider
-        .resolve(POLICY_INSTANCE_ALIAS)
-        .expect("the policy instance")
-        .with_configuration(nemu_configuration("TESTSERIAL0001"));
-    let bystander = provider
-        .resolve(BYSTANDER_ALIAS)
-        .expect("the bystander")
-        .with_configuration(nemu_configuration("TESTSERIAL0002"));
-    let provider = provider
-        .with_resolved_for(POLICY_INSTANCE_ALIAS, policy)
-        .with_resolved_for(BYSTANDER_ALIAS, bystander);
     let host = RuntimeHost::start(
         host_config
             .with_runtime_clock(clock.clone())
-            .with_config_manifest(manifest(&probe_keys(3_600_000, 2, 3_600_000, 3_600_000))),
-        Arc::new(provider),
+            .with_config_manifest(manifest(&probe_keys(3_600_000, 2, 3_600_000, 3_600_000)))
+            .with_policy_inputs(two_instance_inputs()),
+        Arc::new(two_nemu_provider(&state)),
     )
     .expect("physical runtime host");
-    let context = admit_ladder_run(&host, &request);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let context = admit_policy_run(&host, &request, POLICY_NOW_UNIX_MS, 7);
     clock.advance(1);
     let until_unix_ms = now_unix_ms(&clock) + cooldown_left_ms;
     host.open_recovery_cooldown_for_test(POLICY_INSTANCE_ALIAS, until_unix_ms)
@@ -519,20 +641,8 @@ impl Replay {
     /// `task_capture_backend` until the window's end, no ladder, and the instance unavailable for
     /// its failed paired open, its next probe at the cool-down's end.
     fn assert_held_back(&self) {
-        let events = all_events(&self.host);
-        let suppressed = phases(&events)
-            .into_iter()
-            .filter_map(|(_, phase)| match phase {
-                RuntimeLifecyclePhase::RecoveryLadderSuppressed {
-                    reason,
-                    until_unix_ms,
-                    rule,
-                } => Some((reason, until_unix_ms, rule)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
-            suppressed,
+            suppressions(&self.host),
             vec![(
                 RecoveryLadderSuppression::Cooldown,
                 self.until_unix_ms,
@@ -614,13 +724,22 @@ fn avail1_t1_at_the_cooldowns_end_a_passing_self_check_makes_the_instance_availa
         (json!(1), json!(PAIRED_OPEN_FAILED))
     );
     assert_eq!(records(host, HostCode::InstanceUnavailableProbeFailed), 0);
+    // Fix round 2 (item 4): the held recovery the passing probe dropped ends in its trigger's
+    // record, `recovery_ladder_suppressed` `cooldown` once more, with the end it was held to.
+    let held_back = (
+        RecoveryLadderSuppression::Cooldown,
+        replay.until_unix_ms,
+        Some("task_capture_backend".to_owned()),
+    );
+    wait_until("the held recovery's drop", || suppressions(host).len() == 2);
+    assert_eq!(suppressions(host), vec![held_back.clone(), held_back]);
 
     // The due task is dispatched and granted at its next occurrence.
     replay
         .clock
         .advance(NEXT_DISPATCH_UNIX_MS.saturating_sub(replay.now_unix_ms()));
     replay.sample_capacity();
-    let next = admit_ladder_run_at(host, &replay.request, NEXT_DISPATCH_UNIX_MS);
+    let next = admit_policy_run(host, &replay.request, NEXT_DISPATCH_UNIX_MS, 8);
     assert_ne!(next.run_id(), replay.run_id);
     assert_eq!(
         ladders_of(host, replay.run_id),
@@ -992,10 +1111,12 @@ fn avail1_t4_the_attention_is_raised_once_and_ends_with_the_unavailability() {
     probed.close();
 }
 
-/// T5: before its self-check failed the instance is none the probes take up; after it, they hold
-/// since when, why, no probe and the next one's time; after a failed probe, one probe and the next
-/// time; and once a probe passed, the instance's status is, byte for byte, what it was before.
-/// Each read is a second after the step before it, past every takeover cool-down.
+/// T5: before its self-check failed the probes hold the instance with no cause (fix round 2, item
+/// 3: its start's opens left their entries `unknown`, the fixture's provider observing no open);
+/// after it, they hold since when, why, no probe and the next one's time; after a failed probe,
+/// one probe and the next time; and once a probe passed, the instance's status is, byte for byte,
+/// what it was before. Each read is a second after the step before it, past every takeover
+/// cool-down.
 #[test]
 fn avail1_t5_the_probe_state_says_it_and_an_available_instance_is_unchanged() {
     const FIRST_MS: u64 = 60_000;
@@ -1004,7 +1125,17 @@ fn avail1_t5_the_probe_state_says_it_and_an_available_instance_is_unchanged() {
     let since = probed.now_unix_ms();
     probed.clock.advance(1_000);
     let before = serde_json::to_vec(&instance_status(host)).expect("the status before");
-    assert_eq!(unavailable(host), None, "none before its check failed");
+    assert_eq!(
+        unavailable(host),
+        Some(UnavailableForTest {
+            since_unix_ms: since,
+            cause: None,
+            probes: 0,
+            next_probe_unix_ms: Some(since + FIRST_MS),
+            awaiting_person: false,
+        }),
+        "taken up at its start, with no cause"
+    );
     probed.fail_self_check();
     let failed_at = probed.now_unix_ms();
     assert_eq!(
@@ -1168,24 +1299,31 @@ fn avail1_t6_a_held_recovery_waits_for_the_window_in_force() {
     replay.close();
 }
 
-/// T7, fix round 1 (item 4): the worker of the first probe panics (the instance workers' injected
-/// panic). The panic is recorded once, `panic_caught` under the probe's failure category and its
-/// instance, and nothing else for it; the step waits again with its next probe one interval of the
-/// second probe after the panic's end; once the panicked payload's key lapsed at its TTL, the next
-/// probe runs when it is due and is recorded as the second.
+/// T7, fix round 2 (item 2, the coordinator's ruling of 11-21, which takes back fix round 1's
+/// "the schedule goes on"): the worker of the first probe panics (the instance workers' injected
+/// panic, before the probe's preparation). The panic is recorded once, `panic_caught` under the
+/// probe's failure category and its instance, and no probe record follows it; a person is told
+/// at once, one `instance_unavailable_awaiting_person` with `failure_code` `panic_caught`, the
+/// probe counted, and no next probe; the probes' state holds the instance waiting for a person
+/// with no next probe. Once the panicked payload's key lapsed at its TTL, and however far the
+/// clock then runs (ten caps, past `attention_after_ms`), no probe is queued or run, still one
+/// warning, and the Runtime is not fatal (`close`).
 #[test]
-fn avail1_t7_a_probe_whose_worker_panics_ends_and_the_next_is_due_after_its_interval() {
+fn avail1_t7_after_a_probe_panicked_nothing_probes_the_instance_and_a_person_is_told() {
     const FIRST_MS: u64 = 60_000;
-    let probed = Probed::start(&probe_keys(FIRST_MS, 2, 1_800_000, 3_600_000));
+    const CAP_MS: u64 = 1_800_000;
+    let probed = Probed::start(&probe_keys(FIRST_MS, 2, CAP_MS, 3_600_000));
     let host = &probed.host;
+    let since = unavailable(host).expect("unavailable").since_unix_ms;
     host.inject_instance_worker_panic_for_test()
         .expect("inject a worker panic");
     probed.advance_to_next_probe();
+    let panicked_at = probed.now_unix_ms();
+    let prepared = recovery_preparations(host);
     probed.tick();
     wait_until("the panic's record", || {
         !probe_panics(&all_events(host)).is_empty()
     });
-    let ended = probed.now_unix_ms();
     let events = all_events(host);
     let panics = probe_panics(&events);
     let [caught] = panics.as_slice() else {
@@ -1193,17 +1331,37 @@ fn avail1_t7_a_probe_whose_worker_panics_ends_and_the_next_is_due_after_its_inte
     };
     assert_eq!(caught.severity(), EventSeverity::Warning);
     assert_eq!(caught.links().instance_id(), Some(&probed.registered));
-    assert_eq!(
-        records(host, HostCode::InstanceUnavailableProbeFailed),
-        0,
-        "the panic is the probe's one record"
+    let told = failed_outcomes(&events, HostCode::InstanceUnavailableAwaitingPerson);
+    let [(event, outcome)] = told.as_slice() else {
+        panic!("one attention at the panic: {told:#?}");
+    };
+    assert!(
+        event.sequence() < caught.sequence(),
+        "told at once, before the panic's own record"
     );
-    let waiting = unavailable(host).expect("still unavailable");
-    assert_eq!(waiting.probes, 1);
+    assert_eq!(event.links().instance_id(), Some(&probed.registered));
     assert_eq!(
-        waiting.next_probe_unix_ms,
-        Some(ended + 2 * FIRST_MS),
-        "the step waits again and the next interval counts from the panic's end"
+        (
+            value(outcome, "failure_code"),
+            value(outcome, "attempts"),
+            value(outcome, "elapsed_ms"),
+            value(outcome, "next_occurrence_unix_ms"),
+        ),
+        (
+            json!("panic_caught"),
+            json!(1),
+            json!(panicked_at - since),
+            Value::Null,
+        )
+    );
+    assert_eq!(
+        unavailable(host).map(|state| (
+            state.probes,
+            state.next_probe_unix_ms,
+            state.awaiting_person
+        )),
+        Some((1, None, true)),
+        "no next probe in this unavailability"
     );
     probed.clock.advance(LEASE_TTL_MS + 1);
     host.expire_due_leases_for_test()
@@ -1214,22 +1372,28 @@ fn avail1_t7_a_probe_whose_worker_panics_ends_and_the_next_is_due_after_its_inte
             .0
             .is_none()
     });
-    probed.advance_to_next_probe();
+    probed.clock.advance(CAP_MS * 10);
     probed.tick();
-    wait_until("the next probe's record", || {
-        records(host, HostCode::InstanceUnavailableProbeFailed) == 1
-    });
-    assert!(
-        probed.now_unix_ms() >= ended + 2 * FIRST_MS,
-        "not before its interval after the panic"
+    probed.tick();
+    assert_eq!(
+        recovery_preparations(host),
+        prepared,
+        "no probe ran after it"
     );
-    let events = all_events(host);
-    let failed = failed_outcomes(&events, HostCode::InstanceUnavailableProbeFailed);
-    let [(_, next)] = failed.as_slice() else {
-        panic!("one failed probe: {failed:#?}");
-    };
-    assert_eq!(value(next, "attempts"), json!(2));
-    assert_eq!(probe_panics(&events).len(), 1);
+    assert_eq!(
+        (
+            records(host, HostCode::InstanceUnavailableProbeFailed),
+            records(host, HostCode::InstanceUnavailableProbePassed),
+            records(host, HostCode::InstanceUnavailableAwaitingPerson),
+            probe_panics(&all_events(host)).len(),
+        ),
+        (0, 0, 1, 1)
+    );
+    assert_eq!(
+        unavailable(host).map(|state| (state.probes, state.next_probe_unix_ms)),
+        Some((1, None)),
+        "nothing was queued"
+    );
     probed.close();
 }
 
@@ -1322,6 +1486,265 @@ fn avail1_t8_an_open_without_a_report_on_an_explicit_endpoint_enters_the_probes(
     wait_until("the passing probe's record", || {
         records(host, HostCode::InstanceUnavailableProbePassed) == 1
     });
+    assert_eq!(unavailable(host), None);
+    assert_eq!(last_availability(host), Some(true));
+    probed.close();
+}
+
+/// Whether `event` is the `instance_preparation_finished` of the Runtime's own recovery
+/// preparation (a probe's; a person's self-check is a connection preparation).
+fn recovery_preparation_finished(event: &PersistedEvent) -> bool {
+    matches!(
+        event.payload(),
+        EventPayload::Runtime(RuntimePayload::LifecycleObserved(observed))
+            if matches!(
+                observed.phase(),
+                RuntimeLifecyclePhase::InstancePreparationFinished {
+                    stage: RecoveryTriggerStage::RecoveryPreparation,
+                    ..
+                }
+            )
+    )
+}
+
+/// T9, fix round 2 (item 1): the replay's two Nemu instances, both configured; the policy
+/// instance's start passed, then every close of its input fails with what it held released
+/// (confirmed). A person's self-check so closes after its opens and takes the instance into the
+/// probes with the close's code. At each of three probes the opens pass (the gate republishes the
+/// seed) and the close fails again: one `instance_unavailable_probe_failed` (its number, the
+/// close's code), and the same unavailability (since, cause and count kept), the next interval
+/// 120 s, 240 s, 480 s (from 60 s, factor 2); one `instance_unavailable_awaiting_person` at
+/// `attention_after_ms` (180 s), at the second probe's tick. The instance is never answered as
+/// available to a candidate in between: each `session.instance.available` `true` a probe's
+/// passing open publishes is followed by the close's `false` before that probe's own
+/// `instance_preparation_finished`, inside the probe's preparation, which holds the instance's key
+/// from its claim's grant until after that record (a dispatch needs a free key); the last
+/// publication is `false`. The opens and closes take a millisecond each of the manual clock
+/// (`step_open_and_close`), as the start's open does in the replay.
+#[test]
+fn avail1_t9_a_close_that_fails_after_every_probe_is_one_unavailability_whose_intervals_grow() {
+    const FIRST_MS: u64 = 60_000;
+    const ATTENTION_MS: u64 = 180_000;
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.observed_open.store(true, Ordering::Release);
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let stepped = Arc::clone(&clock);
+    *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || stepped.advance(1)));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(manifest(&probe_keys(FIRST_MS, 2, 600_000, ATTENTION_MS)))
+            .with_policy_inputs(two_instance_inputs()),
+        Arc::new(two_nemu_provider(&state)),
+    )
+    .expect("physical runtime host");
+    assert_eq!(last_availability(&host), Some(true), "the start passed");
+    clock.advance(1_000);
+    *state.close_error.lock().expect("close error") = Some(confirmed_close_failure());
+    step_open_and_close(&state, &clock);
+    let failure = person_self_check(&host).expect("the close after the opens fails the self-check");
+    let entered = unavailable(&host).expect("the failed close takes the instance into the probes");
+    assert_eq!(
+        (
+            entered.cause.clone(),
+            entered.probes,
+            entered.next_probe_unix_ms
+        ),
+        (
+            Some(code(&failure)),
+            0,
+            Some(now_unix_ms(&clock) + FIRST_MS)
+        )
+    );
+    let since = entered.since_unix_ms;
+    let from = all_events(&host).len();
+    let mut ticks = Vec::new();
+    for (probe, interval_ms) in [(1_u32, 120_000_u64), (2, 240_000), (3, 480_000)] {
+        let due = unavailable(&host)
+            .and_then(|unavailable| unavailable.next_probe_unix_ms)
+            .expect("a next probe");
+        // Armed before the clock reaches the probe, which the lease sweep may queue first.
+        step_open_and_close(&state, &clock);
+        clock.advance(due.saturating_sub(now_unix_ms(&clock)));
+        ticks.push(now_unix_ms(&clock));
+        host.unavailable_probe_tick_for_test().expect("sweep tick");
+        wait_until("the failed probe's record", || {
+            records(&host, HostCode::InstanceUnavailableProbeFailed) == probe as usize
+        });
+        let after = unavailable(&host).expect("the same unavailability");
+        assert_eq!(
+            (
+                after.since_unix_ms,
+                after.cause.clone(),
+                after.probes,
+                after.next_probe_unix_ms
+            ),
+            (
+                since,
+                Some(code(&failure)),
+                probe,
+                Some(now_unix_ms(&clock) + interval_ms)
+            ),
+            "probe {probe}: one unavailability, its interval multiplied by the factor"
+        );
+    }
+    let events = all_events(&host);
+    let failed = failed_outcomes(&events, HostCode::InstanceUnavailableProbeFailed);
+    assert_eq!(
+        failed
+            .iter()
+            .map(|(_, outcome)| (value(outcome, "attempts"), value(outcome, "failure_code")))
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+            .into_iter()
+            .map(|probe| (json!(probe), json!(failure.as_str())))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(records(&host, HostCode::InstanceUnavailableProbePassed), 0);
+    let told = failed_outcomes(&events, HostCode::InstanceUnavailableAwaitingPerson);
+    let [(_, told)] = told.as_slice() else {
+        panic!("one attention: {told:#?}");
+    };
+    assert_eq!(
+        (
+            value(told, "elapsed_ms"),
+            value(told, "attempts"),
+            value(told, "failure_code"),
+            value(told, "next_occurrence_unix_ms"),
+        ),
+        (
+            json!(ticks[1] - since),
+            json!(1),
+            json!(failure.as_str()),
+            json!(ticks[1]),
+        ),
+        "at the second probe's tick, the first at which it lasted attention_after_ms"
+    );
+    let mut standing = None;
+    let mut republished = 0_usize;
+    let mut prepared = 0_usize;
+    for event in &events[from..] {
+        if let Some(available) = availability_published(event) {
+            standing = Some(available);
+            republished += usize::from(available);
+        }
+        if recovery_preparation_finished(event) {
+            prepared += 1;
+            assert_eq!(
+                standing,
+                Some(false),
+                "probe {prepared}: the seed its open republished is withdrawn again inside it"
+            );
+        }
+    }
+    assert_eq!((prepared, republished, standing), (3, 3, Some(false)));
+    *state.close_error.lock().expect("close error") = None;
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+    drop(root);
+}
+
+/// T10, fix round 2 (item 3, the coordinator's ruling 甲): the fixture's provider observes no
+/// open, so the start's opens leave their entries `unknown`; their `device.self_check` records say
+/// status `unknown` with no failure code, the gate withdraws the instance, and the probes take it
+/// up with no cause. The first probe fails the same way: one `instance_unavailable_probe_failed`
+/// with no `failure_code` and the next probe's time; at `attention_after_ms` one
+/// `instance_unavailable_awaiting_person` with no `failure_code`; once the opens pass, a probe
+/// passes, `instance_unavailable_probe_passed` with no `failure_code`, and the instance is
+/// available.
+#[test]
+fn avail1_t10_an_open_that_leaves_an_entry_unknown_enters_the_probes_with_no_cause() {
+    const FIRST_MS: u64 = 60_000;
+    const ATTENTION_MS: u64 = 120_000;
+    let probed = Probed::started(&probe_keys(FIRST_MS, 2, 1_800_000, ATTENTION_MS));
+    let host = &probed.host;
+    let checks = all_events(host)
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::DeviceSelfCheck(check)) => {
+                Some((check.status(), check.failure_code().is_some()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !checks.is_empty()
+            && checks
+                .iter()
+                .all(|check| *check == (DeviceSelfCheckStatus::Unknown, false)),
+        "the start's self-check records say unknown, with no code: {checks:?}"
+    );
+    assert_eq!(last_availability(host), Some(false));
+    let entered = unavailable(host).expect("the unknown opens take the instance into the probes");
+    assert_eq!(
+        (
+            entered.cause.clone(),
+            entered.probes,
+            entered.next_probe_unix_ms
+        ),
+        (None, 0, Some(probed.now_unix_ms() + FIRST_MS))
+    );
+    let since = entered.since_unix_ms;
+    probed.advance_to_next_probe();
+    probed.tick();
+    wait_until("the failed probe's record", || {
+        records(host, HostCode::InstanceUnavailableProbeFailed) == 1
+    });
+    let ended = probed.now_unix_ms();
+    let events = all_events(host);
+    let failed = failed_outcomes(&events, HostCode::InstanceUnavailableProbeFailed);
+    let [(_, failed)] = failed.as_slice() else {
+        panic!("one failed probe: {failed:#?}");
+    };
+    assert_eq!(
+        (
+            value(failed, "attempts"),
+            value(failed, "failure_code"),
+            value(failed, "next_occurrence_unix_ms"),
+        ),
+        (json!(1), Value::Null, json!(ended + 2 * FIRST_MS))
+    );
+    assert_eq!(
+        unavailable(host).map(|unavailable| unavailable.cause),
+        Some(None),
+        "still no cause"
+    );
+    probed
+        .clock
+        .advance((since + ATTENTION_MS).saturating_sub(probed.now_unix_ms()));
+    probed.tick();
+    wait_until("the attention's record", || {
+        records(host, HostCode::InstanceUnavailableAwaitingPerson) == 1
+    });
+    let events = all_events(host);
+    let told = failed_outcomes(&events, HostCode::InstanceUnavailableAwaitingPerson);
+    let [(_, told)] = told.as_slice() else {
+        panic!("one attention: {told:#?}");
+    };
+    assert_eq!(
+        (
+            value(told, "elapsed_ms"),
+            value(told, "attempts"),
+            value(told, "failure_code"),
+        ),
+        (json!(ATTENTION_MS), json!(1), Value::Null)
+    );
+    probed.state.observed_open.store(true, Ordering::Release);
+    probed.advance_to_next_probe();
+    probed.tick();
+    wait_until("the passing probe's record", || {
+        records(host, HostCode::InstanceUnavailableProbePassed) == 1
+    });
+    let events = all_events(host);
+    let passed = failed_outcomes(&events, HostCode::InstanceUnavailableProbePassed);
+    let [(_, passed)] = passed.as_slice() else {
+        panic!("one passing probe: {passed:#?}");
+    };
+    assert_eq!(
+        (value(passed, "attempts"), value(passed, "failure_code")),
+        (json!(2), Value::Null)
+    );
     assert_eq!(unavailable(host), None);
     assert_eq!(last_availability(host), Some(true));
     probed.close();

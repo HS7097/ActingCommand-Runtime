@@ -234,12 +234,13 @@ fn instance_worker_loop(
                 if let Some(lane) = lane {
                     shared.drop_panicked_policy_run(lane)?;
                 }
-                // Workflow #489 AVAIL-1 fix round 1 (item 4): a panicked probe's step waits again
-                // and its schedule goes on from here, before the panic's record for the same
-                // reason; the record below is its one record.
-                if let Some((instance_id, probe)) = probe {
-                    shared.end_panicked_unavailable_probe(instance_id, probe)?;
-                }
+                // Workflow #489 AVAIL-1 fix round 2 (item 2): a panicked probe ends its
+                // unavailability's probes and tells a person (`end_panicked_unavailable_probe`).
+                // A failure of that clean-up is kept, and returned only after the panic's own
+                // record and the fatal mark a second panic owes, which it never swallows.
+                let probe_ended = probe.map_or(Ok(()), |(instance_id, probe)| {
+                    shared.end_panicked_unavailable_probe(instance_id, probe)
+                });
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
@@ -247,6 +248,12 @@ fn instance_worker_loop(
                         HostLocation::RunInstanceWorker,
                         RuntimeErrorCode::RuntimeHalted,
                     );
+                    shared.fatal.mark(error.clone())?;
+                    probe_ended?;
+                    return Err(error);
+                }
+                if let Err(error) = probe_ended {
+                    let error = error.into_fatal();
                     shared.fatal.mark(error.clone())?;
                     return Err(error);
                 }
