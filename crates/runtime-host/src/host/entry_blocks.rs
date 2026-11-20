@@ -537,26 +537,25 @@ impl HostShared {
     }
 
     /// A recovery Workflow #489 AVAIL-1 held back with `instance_id` while it was unavailable,
-    /// which the instance's leaving the unavailable set lets go (`track_unavailability`): an
+    /// which the instance's leaving the unavailable set lets go (`leave_held_recovery`): an
     /// entry-blocked instance's block takes it over, to take it up at `until_unix_ms` (the window
-    /// in force read again then); for any other instance it is dropped, as AVAIL-1 drops it.
+    /// in force read again then); for any other instance it is returned, for AVAIL-1 to drop.
     pub(super) fn hand_over_held_recovery(
         &self,
         instance_id: InstanceId,
         ladder: PendingRecoveryLadder,
         until_unix_ms: u64,
-    ) -> RuntimeHostResult<()> {
-        if let Some(block) = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
-            .blocked
-            .get_mut(&instance_id)
-        {
-            block.recoveries.insert(ladder.correlation());
-            block.held = Some(HeldEntryRecovery {
-                ladder,
-                until_unix_ms,
-            });
-        }
-        Ok(())
+    ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let Some(block) = blocks.blocked.get_mut(&instance_id) else {
+            return Ok(Some(ladder));
+        };
+        block.recoveries.insert(ladder.correlation());
+        block.held = Some(HeldEntryRecovery {
+            ladder,
+            until_unix_ms,
+        });
+        Ok(None)
     }
 
     /// The lease sweep's step after the unavailable instances' probes, for each blocked instance:

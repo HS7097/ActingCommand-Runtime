@@ -1144,7 +1144,12 @@ or waits for the instance still decide it), as a new ladder of the same trigger 
 a causation id, a holder and a claim of its own (a ladder suppressed on its key under `queue` had
 its claim granted and released under its first ids), and its claim queued. The window still holds a recovery back
 while it runs; a person's drill it refuses is not held; a pause, a fence or an idle stop of the
-instance drops a held recovery. Which windows open, and when, is unchanged: a suppression never
+instance drops a held recovery. Fix round 2 (item 4): one recovery is held per instance, a later
+suppression replaces it, only a failed probe's settlement releases it, and each drop (replaced,
+the instance leaving the unavailable instances, a pause, a fence, an idle stop) writes the dropped
+ladder's own `recovery_ladder_suppressed` `cooldown` once more, its `until_unix_ms` the end it was
+held to; a trigger so ends in `recovery_ladder_started`, a suppression of another reason, or a
+second `cooldown` suppression. Which windows open, and when, is unchanged: a suppression never
 opens the window that suppressed it (the admission reads the window's end before a `triggered`
 item writes a new one), so a `cooldown` suppression names a window an earlier admitted ladder
 (`admitted`) or an earlier matched trigger (`triggered`) opened.

@@ -2271,6 +2271,30 @@ impl HostShared {
         }
     }
 
+    /// Workflow #489 AVAIL-1 fix round 2 (item 4): a recovery its cool-down held back with an
+    /// unavailable instance is dropped without being taken up (a later suppression replaced it,
+    /// the instance left the unavailable instances, or a pause, a fence or an idle stop took the
+    /// instance). Its trigger ends in a record: its own `recovery_ladder_suppressed` `cooldown`
+    /// once more (info, under the ladder's links, `until_unix_ms` the end it was held to, the
+    /// trigger item that matched): the cool-down suppressed it and nothing starts from it. No code,
+    /// word or member is added; a held recovery taken up writes `recovery_ladder_started`, and one
+    /// whose admission is refused when it is released writes that refusal's own suppression.
+    pub(super) fn record_dropped_held_recovery(
+        &self,
+        pending: &PendingRecoveryLadder,
+        until_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        self.append_recovery_ladder_fact(
+            pending,
+            EventSeverity::Info,
+            RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+                reason: RecoveryLadderSuppression::Cooldown,
+                until_unix_ms,
+                rule: pending.trigger.rule.clone(),
+            },
+        )
+    }
+
     /// Workflow #489 AVAIL-1 fix round 1 (item 3): the end of `instance_id`'s cool-down window in
     /// force now, as an admission reads it (`0` while none was opened).
     pub(super) fn cooldown_window_until(&self, instance_id: InstanceId) -> RuntimeHostResult<u64> {
