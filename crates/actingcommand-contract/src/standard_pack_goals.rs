@@ -545,7 +545,8 @@ impl IrreversiblePackages {
         !self.unreadable.is_empty() || self.package(package_id) != Some(false)
     }
 
-    /// G-R1 fix round 2, shared with the composer (G-R2s): whether a rule among `followers` (the
+    /// G-R1 fix round 2 (the composer's walk of G-R2s until G-R2x withdrew the mark, register
+    /// §1.499; the goal check's alone since): whether a rule among `followers` (the
     /// rules that follow one rule, [`GoalRule::followers`]), or a rule that follows one of them in
     /// turn, runs a package that counts as irreversible ([`Self::counts_irreversible`]) or is a
     /// rule `rule` does not know. `rule` gives a follower's package and its own followers by the

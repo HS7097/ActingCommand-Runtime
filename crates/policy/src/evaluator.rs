@@ -236,11 +236,11 @@ pub struct EvaluationFacts {
 /// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
 /// only: none of it enters a snapshot or decision identity.
 ///
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): also the instances whose resource target record the Runtime
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): also the instances whose resource target record the Runtime
 /// leaves out whole, because the scheduler workbench cannot compose their game's root
-/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
-/// candidate is, as on an instance without a target record, with the reason
+/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as on an
+/// instance without a target record, with the reason
 /// `resource_target_root_uncomposed`. Fix round 3: the void is part of the decision identity
 /// (`targets_void_decision_id`) of such a candidate on an instance that holds a target record
 /// (fix round 4: only there, where it changes the decision); it enters no snapshot.
@@ -4361,17 +4361,17 @@ struct StagedCandidate {
     target: TargetEffect,
     /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
     base: Option<crate::resource_targets::ResourceTerm>,
-    /// Workflow #455 G-R2s: the instance's target record is left out for this candidate (its
-    /// task carries the irreversible mark, or, round 2, its game's root cannot be composed), and
-    /// why: it reads its instance resolved without a record.
+    /// Workflow #455 G-R2s round 2: the instance's target record is left out for this candidate
+    /// (its game's root cannot be composed), and why: it reads its instance resolved without a
+    /// record. Workflow #455 G-R2x (register §1.499): a task's irreversible mark leaves nothing
+    /// out any more.
     left_out: Option<LeftOutWhy>,
 }
 
-/// Workflow #455 G-R2s: why a candidate's instance's target record is left out for it.
+/// Workflow #455 G-R2s round 2: why a candidate's instance's target record is left out for it.
+/// G-R2x (register §1.499) withdrew the other why, the task's irreversible mark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LeftOutWhy {
-    /// Its task carries the composer's irreversible mark.
-    Irreversible,
     /// Round 2: the Runtime cannot compose its game's root ([`LeftOutFacts::targets_void`]).
     RootUncomposed,
 }
@@ -4380,7 +4380,6 @@ impl LeftOutWhy {
     /// The candidate's one reason that says so.
     fn reason(self) -> DecisionReason {
         match self {
-            Self::Irreversible => irreversible_left_out_reason(),
             Self::RootUncomposed => uncomposed_left_out_reason(),
         }
     }
@@ -4504,15 +4503,14 @@ fn apply_priority_selection(
         .map_err(PolicyEvaluationError::invalid)?;
         instance_targets.insert(instance_id.as_str(), resolved);
     }
-    // Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
-    // something irreversible"): a goal never raises the weight of a task whose package can do
-    // something irreversible. A candidate whose task carries the composer's mark, on an instance
-    // that holds a target record, reads its instance resolved once more as without the record
-    // (its server- or game-scoped note kept), so every number of it is the one of an instance
-    // without a record; the record's own resolution, which every other candidate reads, is left
-    // as it is. Round 2: every candidate of an instance whose game's root the Runtime cannot
-    // compose ([`LeftOutFacts::targets_void`]) is computed the same way, with its own reason; it
-    // takes that reason even when its task carries the mark too.
+    // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game
+    // whose root cannot be composed"): every candidate of an instance whose game's root the
+    // Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
+    // record, reads its instance resolved once more as without the record (its server- or
+    // game-scoped note kept), so every number of it is the one of an instance without a record;
+    // the record's own resolution, which every other candidate reads, is left as it is. Workflow
+    // #455 G-R2x (register §1.499): the task's irreversible mark (`irreversible_reach`) is read
+    // no more; such a candidate reads the record's own resolution as every candidate does.
     let mut left_out = BTreeMap::<usize, LeftOutWhy>::new();
     let mut unrecorded = BTreeMap::<&str, crate::resource_targets::InstanceTargets>::new();
     for candidate in &candidates {
@@ -4524,8 +4522,6 @@ fn apply_priority_selection(
         };
         let why = if context.left_out.targets_void(&candidate.instance_id) {
             LeftOutWhy::RootUncomposed
-        } else if catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
-            LeftOutWhy::Irreversible
         } else {
             continue;
         };
@@ -8084,8 +8080,8 @@ fn deterministic_decision_id(
 /// hashes before the identity it extends.
 const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
 
-/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): the decision identity of a candidate of an instance that
+/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): the decision identity of a candidate of an instance that
 /// holds a target record, the record left out whole because its game's root cannot be composed
 /// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id`
 /// hashed once more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a
@@ -8119,28 +8115,12 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
     }
 }
 
-/// Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
-/// something irreversible"): the reason of a candidate whose task carries the composer's
-/// irreversible mark, on an instance that holds a target record: the record is left out for it.
-/// It stands where the record's policy-level reason would, after the reasons of the instance's
-/// resolution without the record and before the base term's `resource_weights`.
-fn irreversible_left_out_reason() -> DecisionReason {
-    reason(
-        PolicyCode::ResourceTargetPackageIrreversible,
-        format!(
-            "task marked {}: its package, or a rule that follows it, can do something \
-             irreversible; the instance's resource targets are left out and it is weighed as on \
-             an instance without a record",
-            crate::IRREVERSIBLE_REACH_MEMBER
-        ),
-    )
-}
-
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): the reason of a candidate of an instance whose game's root the
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): the reason of a candidate of an instance whose game's root the
 /// Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
 /// record: the record is left out for it until a composition of its game succeeds. It stands
-/// where [`irreversible_left_out_reason`] stands.
+/// where the record's policy-level reason would, after the reasons of the instance's resolution
+/// without the record and before the base term's `resource_weights`.
 fn uncomposed_left_out_reason() -> DecisionReason {
     reason(
         PolicyCode::ResourceTargetRootUncomposed,
