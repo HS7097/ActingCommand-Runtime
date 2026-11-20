@@ -275,7 +275,11 @@ mod runtime_config;
 pub use runtime_config::backend_kind_rules;
 mod runtime_facts;
 mod saved_artifact_ocr;
+// Workflow #489 AVAIL-1: an instance its device self-check made unavailable is probed again.
+mod unavailable_probe;
 use material_read::MaterialReadContext;
+#[cfg(test)]
+pub(crate) use unavailable_probe::UnavailableForTest;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation_read;
 // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
@@ -2415,6 +2419,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            unavailable_instances: Mutex::new(BTreeMap::new()),
             session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
@@ -5216,6 +5221,67 @@ impl RuntimeHost {
             .recheck_resource_fences()
     }
 
+    /// Workflow #489 AVAIL-1: one tick of the unavailable instances' probes at the host clock, as
+    /// the lease sweep runs it.
+    #[cfg(test)]
+    pub(crate) fn unavailable_probe_tick_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::UnavailableProbeTickForTest)?
+            .probe_unavailable_instances()
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1: `instance_alias` as the unavailable instances hold it
+    /// (`None` while it is not one), which no status answers in this release.
+    #[cfg(test)]
+    pub(crate) fn unavailable_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<UnavailableForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::UnavailableForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.unavailable_for_test(instance_id)
+    }
+
+    /// Workflow #489 AVAIL-1: opens `instance_alias`'s recovery cool-down window until
+    /// `until_unix_ms`, as a ladder that got the key would.
+    #[cfg(test)]
+    pub(crate) fn open_recovery_cooldown_for_test(
+        &self,
+        instance_alias: &str,
+        until_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::OpenRecoveryCooldownForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.open_cooldown_window_for_test(instance_id, until_unix_ms)
+    }
+
+    /// Workflow #489 AVAIL-1: the idle action holds `instance_alias`'s emulator stopped (its
+    /// `stop_emulator` done, no wake planned), as a start restores an instance it closed.
+    #[cfg(test)]
+    pub(crate) fn hold_emulator_stopped_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::HoldEmulatorStoppedForTest)?;
+        lock(&shared.idle, crate::codes::IdleLocation::Check)?.restore(
+            instance_alias,
+            crate::idle_action::KeptIdle {
+                action: actingcommand_runtime_config::IdleAction::StopEmulator,
+                wake_at_unix_ms: None,
+                woken: false,
+            },
+        );
+        Ok(())
+    }
+
     /// Workflow #398 RD-5b: one sample of every handset's device state at once, as the sampler
     /// runs it when a sample is due.
     #[cfg(test)]
@@ -7254,6 +7320,11 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // Workflow #489 AVAIL-1: the instances the backend self-check gate holds unavailable after a
+    // failed device self-check, with their probes, their attention and a recovery the ladder's
+    // cool-down held back (memory only; a restart starts it again at the gate's next decision).
+    // A leaf lock.
+    unavailable_instances: Mutex<BTreeMap<InstanceId, unavailable_probe::UnavailableInstance>>,
     // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
     // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
     session_deaths: Mutex<BTreeSet<InstanceId>>,
@@ -7993,6 +8064,13 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // #411 A38: a fence that waits for a person queues its periodic self-check when it is
         // due, on the host clock.
         if let Err(error) = shared.recheck_resource_fences() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // Workflow #489 AVAIL-1: an instance its device self-check made unavailable queues its
+        // probe when one is due and its key is free (a recovery its ladder's cool-down held back
+        // at the cool-down's end), and is brought to a person's attention once it lasted.
+        if let Err(error) = shared.probe_unavailable_instances() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }

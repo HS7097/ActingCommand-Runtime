@@ -1485,3 +1485,19 @@ test = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_de
 ruling = "#479 F-3b fix round 1 (0.12.75; register §1.487; the coordinator's work order rd-1119/brief-479-f3b-fix1.md, item 1, after the review of #1843: runtime-client 13, declared [12, 13])"
 reason = "Renamed: the name gave the range [12, 12] and one row, while the test asserts the declaration [12, 13] and two rows of the interfaces document (revision 12 its floor 12, revision 13 the range), so the name said a range the build no longer declares."
 covered_by = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so, in the apps.toml row of #480 PG-2e: the declaration speaks runtime-client [12, 13], the row of revision 12 says min is 12 and the row of revision 13 declares [12, 13]."
+
+# apps.toml, the row of Workflow #429 R-0b (the build's runtime-client range; Workflow #489 AVAIL-1).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_13"
+ruling = "Workflow #489 AVAIL-1 (0.12.76; register §1.493; the coordinator's work order of 11-20, item 4: the status member RuntimeInstanceStatus.unavailable takes the runtime-client revision the registry asks for, 14, declared [12, 14])"
+reason = "Renamed: the name gave the range [12, 13] the build declared at #479 F-3b, while the test asserts [12, 14] since Workflow #489 AVAIL-1 (runtime-client max 14), so the name said a range the build no longer declares."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_14, in the apps.toml row of Workflow #429 R-0b: the build's own declaration speaks runtime-client [12, 14]."
+
+# apps.toml, the row of #480 PG-2e (the build's runtime-client range and the rows that state it; Workflow #489 AVAIL-1).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so"
+ruling = "Workflow #489 AVAIL-1 (0.12.76; register §1.493; the coordinator's work order of 11-20, item 4: the status member RuntimeInstanceStatus.unavailable takes the runtime-client revision the registry asks for, 14, declared [12, 14])"
+reason = "Renamed: the name gave the range [12, 13] and the row of revision 13, while the test asserts the declaration [12, 14] and the rows of revision 12 (its floor 12) and 14 (the range), so the name said a range the build no longer declares."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_14_and_its_rows_say_so, in the apps.toml row of #480 PG-2e: the declaration speaks runtime-client [12, 14], the row of revision 12 says min is 12 and the row of revision 14 declares [12, 14]."

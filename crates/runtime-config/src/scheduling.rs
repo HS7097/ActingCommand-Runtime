@@ -68,6 +68,14 @@
 //! default `20`) and `suspension.break_in_ms` (default `604800000`), how long a pair's break-in of
 //! one package content lasts at least; read by the host before each scheduled run executes. No
 //! per-instance form.
+//! Workflow #489 AVAIL-1 (`contracts/scheduling/README.md`, "An unavailable instance is probed
+//! again"; `actingd-config` revision 35): `unavailable_probe.first_interval_ms`
+//! (`10000..=86400000`, default `60000`), `unavailable_probe.factor` (`1..=16`, default `2`),
+//! `unavailable_probe.max_interval_ms` (`10000..=86400000`, default `1800000`) and
+//! `unavailable_probe.attention_after_ms` (`60000..=604800000`, default `3600000`): when an
+//! instance its device self-check made unavailable is probed again, at growing intervals up to the
+//! cap, and after how long its unavailability is brought to a person's attention; read by the host
+//! at every lease sweep tick while such an instance exists. No per-instance form.
 //! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
 //! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
 //! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
@@ -249,6 +257,20 @@ pub const DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS: &str =
 /// several waits in its device's queue when its task declares no `max_queue_wait_ms`. It names no
 /// application and has no per-instance form.
 pub const DEVICE_GROUP_MAX_QUEUE_WAIT_MS: &str = "scheduling.device_group.max_queue_wait_ms";
+/// Workflow #489 AVAIL-1 (`actingd-config` revision 35; `contracts/scheduling/README.md`, "An
+/// unavailable instance is probed again"): how long, in milliseconds, after an instance its device
+/// self-check made unavailable the Runtime probes it the first time (its device self-check only).
+pub const UNAVAILABLE_PROBE_FIRST_INTERVAL_MS: &str =
+    "scheduling.unavailable_probe.first_interval_ms";
+/// Workflow #489 AVAIL-1: what each interval between two probes is multiplied by for the next one
+/// (`1`: every interval is the first).
+pub const UNAVAILABLE_PROBE_FACTOR: &str = "scheduling.unavailable_probe.factor";
+/// Workflow #489 AVAIL-1: the longest interval between two probes, in milliseconds.
+pub const UNAVAILABLE_PROBE_MAX_INTERVAL_MS: &str = "scheduling.unavailable_probe.max_interval_ms";
+/// Workflow #489 AVAIL-1: how long, in milliseconds, an instance stays unavailable by its device
+/// self-check before the Runtime brings it to a person's attention, once.
+pub const UNAVAILABLE_PROBE_ATTENTION_AFTER_MS: &str =
+    "scheduling.unavailable_probe.attention_after_ms";
 /// #428 SCHED-C1e (register §1.299 SC1-12; `actingd-config` revision 28;
 /// `contracts/scheduling/README.md`, "Lines for one instance"): the member of an instance's own
 /// pool lines (`instance.<instance id>.scheduling.pool_lines`; in the file the
@@ -402,6 +424,11 @@ pub struct SchedulingFile {
     // denies unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_group: Option<DeviceGroupFile>,
+    // Interface anchor `actingd-config` revision 35 (contracts/component-interfaces.md; Workflow
+    // #489 AVAIL-1): a Runtime before AVAIL-1 refuses a file that names it, because the section
+    // denies unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unavailable_probe: Option<UnavailableProbeFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -574,6 +601,16 @@ file_struct!(
         max_queue_wait_ms,
     }
 );
+file_struct!(
+    /// Workflow #489 AVAIL-1: the probes of an instance its device self-check made unavailable,
+    /// and when that is brought to a person's attention.
+    UnavailableProbeFile {
+        first_interval_ms,
+        factor,
+        max_interval_ms,
+        attention_after_ms,
+    }
+);
 
 const fn row(
     name: &'static str,
@@ -664,6 +701,29 @@ pub(crate) const BREAK_IN_RUNS_RANGE: KeyRange = KeyRange::Integer {
     min: 1,
     max: MAX_COUNT,
 };
+/// Workflow #489 AVAIL-1: an interval between two probes of an unavailable instance, ten seconds
+/// to a day: never so short that probing keeps the instance's key busy. A range, not a threshold.
+pub(crate) const UNAVAILABLE_PROBE_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
+    min: 10_000,
+    max: 86_400_000,
+};
+/// Workflow #489 AVAIL-1: what each interval is multiplied by, `1..=16`. A range, not a threshold.
+pub(crate) const UNAVAILABLE_PROBE_FACTOR_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 16 };
+/// Workflow #489 AVAIL-1: how long an instance stays unavailable before a person is told, one
+/// minute to one week. A range, not a threshold.
+pub(crate) const UNAVAILABLE_PROBE_ATTENTION_RANGE: KeyRange = KeyRange::Integer {
+    min: 60_000,
+    max: 604_800_000,
+};
+
+/// Workflow #489 AVAIL-1: a key of the probes of an unavailable instance, read by the host from the
+/// release that joins `actingd-config` revision 35.
+const fn avail1_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.76",
+        ..row(name, value_type, range, "AVAIL-1")
+    }
+}
 
 /// Workflow #438 HELD-1: a key of the held records, read by the host from the release that joins
 /// `actingd-config` revision 29.
@@ -962,6 +1022,29 @@ pub(crate) static ROWS: &[KeyRow] = &[
             "U1b",
         )
     },
+    // Workflow #489 AVAIL-1 (`contracts/scheduling/README.md`, "An unavailable instance is probed
+    // again"): read by the host at every lease sweep tick while an instance is unavailable by its
+    // device self-check, so an instruction applies from the next tick.
+    avail1_row(
+        UNAVAILABLE_PROBE_FIRST_INTERVAL_MS,
+        ValueType::DurationMs,
+        UNAVAILABLE_PROBE_INTERVAL_RANGE,
+    ),
+    avail1_row(
+        UNAVAILABLE_PROBE_FACTOR,
+        ValueType::Integer,
+        UNAVAILABLE_PROBE_FACTOR_RANGE,
+    ),
+    avail1_row(
+        UNAVAILABLE_PROBE_MAX_INTERVAL_MS,
+        ValueType::DurationMs,
+        UNAVAILABLE_PROBE_INTERVAL_RANGE,
+    ),
+    avail1_row(
+        UNAVAILABLE_PROBE_ATTENTION_AFTER_MS,
+        ValueType::DurationMs,
+        UNAVAILABLE_PROBE_ATTENTION_RANGE,
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -1157,6 +1240,42 @@ pub struct TaskHeldConfig {
     pub after_ms: u64,
 }
 
+/// Workflow #489 AVAIL-1 (`contracts/scheduling/README.md`, "An unavailable instance is probed
+/// again"): the probes of an instance its device self-check made unavailable, in milliseconds but
+/// the factor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnavailableProbeConfig {
+    /// The wait before the first probe: `10000..=86400000`.
+    pub first_interval_ms: u64,
+    /// What each interval is multiplied by for the next one: `1..=16`.
+    pub factor: u32,
+    /// The longest interval: `10000..=86400000`.
+    pub max_interval_ms: u64,
+    /// How long the instance stays unavailable before a person is told: `60000..=604800000`.
+    pub attention_after_ms: u64,
+}
+
+impl UnavailableProbeConfig {
+    /// The wait before probe number `probe` (the first is 1), counted from when the instance
+    /// became unavailable or the probe before ended: `first_interval_ms`, then each multiplied by
+    /// `factor`, never above `max_interval_ms` (a first interval above the cap is the cap).
+    pub fn interval_ms(&self, probe: u32) -> u64 {
+        let mut interval = self.first_interval_ms.min(self.max_interval_ms);
+        if self.factor <= 1 {
+            return interval;
+        }
+        for _ in 1..probe {
+            if interval >= self.max_interval_ms {
+                break;
+            }
+            interval = interval
+                .saturating_mul(u64::from(self.factor))
+                .min(self.max_interval_ms);
+        }
+        interval
+    }
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -1189,6 +1308,8 @@ pub struct SchedulingConfig {
     /// Workflow #437 ORD-1c: the longest time a task of a member of a device group of several waits
     /// in its device's queue when its task declares none, in milliseconds (`60000..=86400000`).
     pub max_queue_wait_ms: u64,
+    /// Workflow #489 AVAIL-1: the probes of an instance its device self-check made unavailable.
+    pub unavailable_probe: UnavailableProbeConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1775,6 +1896,12 @@ impl SchedulingConfig {
             },
             switch_failure_cooldown_ms: reader.duration(DEVICE_GROUP_SWITCH_FAILURE_COOLDOWN_MS)?,
             max_queue_wait_ms: reader.duration(DEVICE_GROUP_MAX_QUEUE_WAIT_MS)?,
+            unavailable_probe: UnavailableProbeConfig {
+                first_interval_ms: reader.duration(UNAVAILABLE_PROBE_FIRST_INTERVAL_MS)?,
+                factor: reader.count(UNAVAILABLE_PROBE_FACTOR)?,
+                max_interval_ms: reader.duration(UNAVAILABLE_PROBE_MAX_INTERVAL_MS)?,
+                attention_after_ms: reader.duration(UNAVAILABLE_PROBE_ATTENTION_AFTER_MS)?,
+            },
         })
     }
 }
