@@ -116,6 +116,7 @@ fn read(stages: &mut Stages, served: &[VisionRect], max_boxes: u32) -> OcrInfere
             line_merge: OcrLineMerge::GapFactor(0),
         },
         served,
+        lines: None,
     };
     request.validate().expect("a valid request");
     read_request(
@@ -346,6 +347,7 @@ fn request_view<'a>(
         timeout_ms: TIMEOUT_MS,
         blocks,
         served,
+        lines: None,
     }
 }
 

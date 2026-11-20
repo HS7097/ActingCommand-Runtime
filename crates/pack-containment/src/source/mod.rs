@@ -3160,6 +3160,11 @@ fn derived_shared_ocr(layout: &Value) -> CliOutcome<Option<Value>> {
     if let Some(preprocess) = shared.get("preprocess") {
         generated["preprocess"] = preprocess.clone();
     }
+    // Workflow #463 SEL-GRID G2: the lines of the read's name boxes, as declared, last; a read
+    // without them derives what it derived.
+    if let Some(lines) = shared.get("lines") {
+        generated["lines"] = lines.clone();
+    }
     Ok(Some(generated))
 }
 

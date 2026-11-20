@@ -42331,6 +42331,202 @@ self-check again on this build and reads `elapsed_us` of a shared read with twen
 blocks: the cost of one recognition has no number in the code (the design's section 1). In the
 release notes' language: 多列卡片列表上，选择的共享读字只识别、只计数落在它服务的名字框里的块，卡面上别的字（价格、限购、封面印字、购买键）不再占模型文件夹 `max_boxes` 的名额；每个名字的读数逐字节不变；被服务的块本身超过上限时仍以 `text_read_blocks_truncated` 结束，并多报 `requested`（被服务的块数）。
 
+### 1.491 Slice #463 SEL-GRID G2 (0.12.76): a shared read may declare the lines of its name boxes; a block that holds two lines of a name is cut before it is read (Workflow #463, work order board #482; met on 11-19 by the channel that keeps the resource repositories: on a shop list of four columns whose card names take one line or two, the detector answers the two lines of a name, 3 to 4 px apart, as one block of 42 to 43 px at some scroll positions, where one line is 21 to 23 px, and the name was unread on about ten frames of 84; the rules below are the coordinator's rulings in the work order and in the last section of the read-only design, not the owner's words; coordinator work order `rd-1119/brief-463-g2-name-lines.md`, after the design `rd-1119/design-463-selgrid.md`, its sections 3 and 5 and the coordinator's rulings 3 and 5; on main `1e2eb789`, the merge of §1.490)
+
+This section takes 1.491. It ships in 0.12.76. It adds one optional member to a layout's shared
+read (`shared_ocr.lines`) and with it `package` revision 21, the provider's read by lines at the
+vision boundary and in the PP-OCR engine, a cause word of the select's refusal in the Lab, and the
+refusal's list of what a name's read saw.
+
+**Why.** The recognizer reads a block as one line, so a block that holds two lines of a name reads
+under the confidence (`select_name_unread`, `low_confidence`). G1 (§1.490) does not touch this. The
+design found where the two lines become one (the detector's connected regions, or the merge of
+padded boxes, both before the name boxes) and that a package can declare `line_merge`,
+`preprocess` and the region and nothing of the detector; the coordinator took its recommendation:
+the read declares the lines of its name boxes and a block too tall for one line is cut before it is
+recognized.
+
+**What it rests on** (read in the code; the work order's three stop conditions, none met).
+- *One join* (stop condition 1). The blocks a name box holds are joined in one place,
+  `SceneEvaluation::layout_shared_text`, for both kinds of layout (§1.480, SEL2L-3), after the one
+  sort of `validate_ocr_result` (`(y, x, height, width, text)`): their texts joined with `\n`,
+  their confidence the lowest. The other joins of the code are a read's whole text (the engine's
+  aggregate, `validate_ocr_result`'s `text`), not a name's. This slice moves that join and that
+  lowest confidence into two functions (`joined_text`, `lowest_confidence`), which make a target's
+  text from its blocks and a cut block's text from its strips alike.
+- *The pixels where the cut is made* (stop condition 2). The engine's `read_request` holds the
+  frame it was given and recognizes each kept box with `stages.recognize(frame, box, budget)`,
+  whose tensor reads the frame inside the box (`frame_region_to_recognition_tensor`). The cut is
+  planned on that frame inside that box and each strip is recognized by the same call; a box that
+  is not cut is recognized exactly as before.
+- *What revision 21 touches* (stop condition 3): the `package` range only. The member is a task
+  file's and a derived pack's; the strips and the blocks below the floor are evaluation evidence of
+  the Lab's output, which the task diagnostic maps member by member and leaves out; the projection,
+  its features and their Unknown reasons keep their shape and vocabulary.
+
+**The rule.**
+- *The member.* `shared_ocr.lines` `{max, line_height}`, of a layout of either kind: `max` 1 to 3,
+  `line_height` at least 8 pixels of the package's base (the bounds written once,
+  `NAME_BOX_LINES_MAX` and `NAME_BOX_LINE_HEIGHT_MIN` in the contract crate). The source gate checks
+  its shape (`Declaration::shared_ocr`), the derivation writes it last (`derived_shared_ocr`), the
+  recognition pack its shape and its values (`validate_shared_ocr_wire`, `validate_shared_ocr`), and
+  refuses it on a read that gives text to a `template_relative` target, whose name box is never
+  placed before the frame. Absent, the read is exactly what it was.
+- *The request.* With the member and its name boxes (G1), the read calls the provider's read with
+  lines (`VisionProvider::read_text_lines`, `OcrProviderLines`), its line height as declared: every
+  frame is brought to the package's base before recognition and a chain's processed region moves
+  the picture and never scales it, so the declared height is the height in the picture the
+  provider is given, as G1's boxes are its rectangles (`OcrHandOver::in_picture` moves, a height is
+  unmoved). A read sent no box reads as before. A provider that cannot cut refuses (the trait's
+  default, `Unavailable`); the Runtime's adapter and the Lab's deadline wrapper pass it on.
+- *The plan* (`ocr_name_line_plan`, `crates/vision-ffi/src/name_lines.rs`, the one planner the engine
+  and the tests' engines call), for each served box: lower than half a line
+  (`h × 1000 < line_height × 500`) not read and answered `below_floor`; at least 1.25 lines
+  (`h × 1000 ≥ line_height × 1250`) with `max` of 2 or more cut into
+  `n = max(round(h / line_height), 2)` strips of its width, unless `round(h / line_height)` exceeds
+  `max` (fix round 1, the coordinator's ruling on the review's point 1): a box of more lines than
+  declared is not cut and is read whole, exactly as without the member, so that no strip holds a
+  line and a half and the member reads no name worse than without it; the Lab's refusal lists the
+  box's height, from which the author sees that `max` must be raised. Every other box whole.
+- *Where the cut goes.* Within a quarter of `line_height` around each equal position
+  `round(k × h / n)`, the row with the least ink, the equal position when no row has less, of rows
+  with equally least ink the closest (the upper at the same distance); the row of a cut is the
+  lower strip's first. Ink is counted on the pixels the recognizer is given, the frame inside the
+  box: for each row, the sum of the absolute differences of luma (`(299 R + 587 G + 114 B) / 1000`,
+  a gray pixel's own value) between horizontally neighbouring pixels, which a row of background has
+  none of whatever its colour and a row through letters has whether the letters are dark or light.
+  A strip lower than 8 px is not made: the box is read whole.
+- *The engine* (`read_name_lines`): the served boxes in the detector's order, planned; the plans
+  kept while their recognitions fit `max_boxes` (a cut box its strips, a box below the floor none);
+  a cut box answered with the strips that read a text, its text theirs joined by `\n` and its
+  confidence the lowest of theirs, a box none of whose strips reads anything dropped as an empty
+  box is; `served` the recognitions of every served box.
+- *The kernel* (`ReadCuts`): each cut block's strips, moved back like a block (`OcrHandOver::restored`),
+  must lie in their block, in order, no more than `max`, and the block's text and confidence must be
+  their join and their lowest (`joined_text`, `lowest_confidence`), else the provider's invalid
+  response (`vision_provider_invalid_response`); the blocks below the floor must lie in the read.
+  A target then takes its blocks as before; a block below the floor is in no text and goes to the
+  target whose region holds its centre as evidence only.
+- *The cap.* Each strip is one recognition: served blocks under the cap whose strips exceed it end
+  `text_read_blocks_truncated`, its one cause, with `requested` the recognitions.
+- *Evidence.* `OcrTextEvidence::strips` (each strip's `text`, `rect`, `confidence`) beside a cut
+  block, `OcrEvaluation::below_floor` (the rectangles of the target's blocks below the floor; their
+  number its length); both absent without the member.
+- *One cause, one word.* A reading that passes `minimum_confidence_milli` and matches no alias
+  within `max_distance` answered the same cause as one under the threshold. The kernel's mapping now
+  tells them apart (`CandidateIdentityDeclaration::map_ocr_with_cause`, of which `map_ocr` is the
+  feature, `CandidateUnreadCause`): the feature keeps `low_confidence` (it is a closed vocabulary of
+  the ledger's records, `CandidateUnknownReason`, which this slice does not move), and the select's
+  refusal `select_name_unread` names the cause `beyond_distance`, from the dry run's reads
+  (`SelectionDryRun::name_reads`, not serialized, from `SceneEvaluation::project_candidates_read`,
+  the projection's own loop). No decision changes. Fix round 1 (the review's point 2): only that
+  dry run collects the reads; every other projection passes none to the loop, which then makes no
+  name read, maps no cause and copies nothing, and `map_ocr` is §1.490's code unchanged, the cause
+  read from its feature afterwards by `map_ocr_with_cause` alone.
+- *The Lab.* The select's `read` takes `lines` (`SelectReadLines`, with `blocks` only, else
+  `validation_failed`), written when declared; `record stop` writes it into the shared read it
+  generates (`select_shared_read`, the one writer of fixed slots and rows), after `line_merge`; the
+  mark, `record ready`, `record stop` and the fold's offline entry read through the same probe.
+  Every `select_name_unread` refusal, of a slot or a row, lists what its read saw
+  (`Decided::with_blocks`): `blocks` (`rect`, `height`, `text`, and a cut block's `strips`) and,
+  when any, `below_floor` (`rect`, `height`).
+
+**Codes and words.** No outcome code, key or vocabulary of the catalogue is added: the cause of a
+`select_name_unread` refusal is a member of the Lab's `record_mark_rejected` details, which the
+outcome catalogue does not register, and the projection's Unknown reasons are unchanged. The new
+cause word `beyond_distance` (the refusal's `cause`; a refusal, exit 3 as every `record_mark_rejected`)
+is listed in [lab-recording.md](lab-recording.md) and the operation table's notes. The index check
+is current.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The bounds | `crates/actingcommand-contract/src/candidate_projection.rs`: `NAME_BOX_LINES_MAX`, `NAME_BOX_LINE_HEIGHT_MIN` |
+| The plan | `crates/vision-ffi/src/name_lines.rs`: `OcrNameLines`, `OcrNameLinePlan`, `ocr_name_line_plan`, `row_ink`, `least_ink_row`, the factor constants |
+| The boundary | `crates/vision-ffi/src/lib.rs`: `OcrInferenceRequest::lines` (and its view, `validate`), `OcrTextBlock::strips`, `OcrTextStrip`, `OcrInferenceResult::below_floor`, `validate_for`; `crates/execution-kernel/src/provider.rs`: `read_text_lines`, `map_ocr_lines_result` |
+| The engine | `providers/ppocr-onnx-json/src/lib.rs`: `read_request`, `read_name_lines` |
+| The read | `crates/recognition-pack/src/candidate_layout.rs`: `CandidateSharedLines`, `provider_lines`, `read_shared_text`, `ReadCuts`, `layout_shared_text`, `joined_text`, `lowest_confidence`, `validate_shared_ocr`, `validate_shared_ocr_wire`, `project_candidates_read`, `CandidateNameRead`; `lib.rs`: `OcrProviderLines`, `OcrProviderLinesResult`, `VisionProvider::read_text_lines`, `OcrTextEvidence::strips`, `OcrStripEvidence`, `OcrEvaluation::below_floor`; `ocr_preprocess.rs`: `OcrHandOver::restored`; `candidate_identity.rs`: `map_ocr_with_cause`, `CandidateUnreadCause` |
+| The dry run | `crates/execution-kernel/src/contained_task/selection.rs`: `SelectionDryRun::name_reads`, `projection_error` |
+| The source | `crates/pack-containment/src/source/declarations.rs`: `Declaration::shared_ocr`; `mod.rs`: `derived_shared_ocr` |
+| The revision | `distribution/windows/component-interfaces.json` `package` [3, 21]; `apps/actinglab/src/resource_verify/revision.rs`: the row `lines` under `shared_ocr`, 21 |
+| The Lab | `crates/lab/src/recording/model.rs`: `SelectReadLines`; `select.rs`: `validate_select_shape`, `decide`, `Decided::with_blocks`, `unread_cause`; `generate.rs`: `select_shared_read`; `scan.rs` and `crosscheck.rs`: the refusals; `ocr.rs`: `OcrDeadlineMax::read_text_lines` |
+| Texts | [selection-graph.md](selection-graph.md) ("Source declaration", "The lines of a name box", Rules); [vision-model-folders.md](vision-model-folders.md) (the `max_boxes` row and the read by lines); [lab-recording.md](lab-recording.md) (the refusal `select_name_unread`, "The lines of a name box", "The refusal lists the blocks"); [ocr-fields.md](ocr-fields.md) (`line_merge`); [resource-declarations.md](resource-declarations.md) ("Task schema `0.9` lines of a shared read's name boxes"); [component-interfaces.md](component-interfaces.md) (the `package` row 21); [resource-verify.md](resource-verify.md) (row 21); `contracts/lab-operations.json` (record mark's notes) |
+
+**The `package` revision.** A task file whose shared read declares `lines` is refused by every
+Runtime before this one at its declaration gate (`resource_declaration_invalid`, `UnknownField` at
+`/candidate_layouts/<i>/shared_ocr/lines`; `Declaration::shared_ocr` of main `1e2eb789` lists no
+such member), before `PackageAdmitted`, at every run of its package: so a Runtime of v0.12.75 that
+loads such a package answers that refusal, and its installer, whose range ends at 20, refuses a
+bundle that declares 21 at its `package` edge. This build declares [3, 21] (it was [3, 20]);
+`standard-pack build` computes 21 for a zip whose pack declares the member, of either layout kind
+and either execution mode, and as before for one without. `place` and admission check nothing new
+(row 20's precedent): this build places a zip that declares less as it declares. No other range
+moves: `ledger` [3, 9], `runtime-client` [12, 13], `actingd-config` [5, 34], `runtime-outcomes`
+[1, 1].
+
+**Tests** (exec gate map row "#463 SEL-GRID G2"; frames drawn as the existing tests draw theirs,
+lines of dark stripes on light gray or of a marker gray; no frame of a game; no clock read in a gate
+file).
+
+| Test | What it shows |
+|---|---|
+| `providers/ppocr-onnx-json/src/gate_463_g2.rs` `g2_two_lines_detected_as_one_box_are_cut_and_read_as_when_detected_apart`; `crates/recognition-pack/src/gate_463_g2.rs` `g2_two_lines_read_through_a_cut_are_the_name_read_when_detected_apart`; `crates/execution-kernel/src/tests/gate_463_g2.rs` `g2_two_lines_through_the_boundary_are_unread_without_lines_and_read_with_them` (1) | The engine's test draws what was measured (fix round 1, the review's point 8): one box of 43 px, its first line 18 rows of ink and its second 22, 3 rows apart. Read as today, without the member (the read sends no lines and the box is recognized whole, as one line), it reads both lines run together at 0.3; with `{2, 21}` the equal row 42 is the second line's second row and the cut goes to the least ink, row 40, between the lines: the strips of 20 and 23 rows each read their line and the block answers `ALPHA\nBRAVO` at 0.95 with its strips; found apart, the same texts. The kernel's and the boundary's (lines of 21 px 3 px apart in a box of 45 px): without the member the name is Unknown, `low_confidence`; with it the name is read; found apart, the same text, confidence and identity; through `VisionFfiProvider` over an engine that calls the planner, the same |
+| `g2_the_cut_goes_to_the_rows_between_lines_of_unequal_height` (2) | Lines of 19 and 23 px: the equal row 43 lies inside the second line; the cut goes to row 41, between them |
+| `g2_a_name_of_one_line_in_a_box_of_two_reads_as_without_lines` (engine), `g2_a_name_of_one_line_reads_byte_for_byte_as_without_lines` (kernel) (3) | A line of 22 px is under the factor: the engine's answer with lines equals its answer without, member for member, and the name's evidence is the same bytes |
+| `g2_three_lines_are_cut_in_three_with_max_three_and_read_whole_with_max_two` (4) | Three lines with `max` 3: cut at rows 43 and 66, each line read whole; with `max` 2 (three lines, more than declared) the box is not cut and is recognized whole, its answer the answer without the member, member for member (fix round 1) |
+| `g2_a_box_of_exactly_a_line_and_a_quarter_is_cut_and_a_pixel_lower_is_not`, `g2_a_box_of_exactly_half_a_line_is_read_and_a_pixel_lower_is_not`, `g2_a_cut_that_would_make_a_strip_under_eight_pixels_reads_the_box_whole`, `g2_light_letters_on_a_dark_ground_are_cut_at_the_same_row` (engine); `g2_under_a_colour_chain_the_strips_are_in_the_frame_coordinates` (kernel) (edges, fix round 1, the review's point 3) | Lines of 20 px: a box of 25 px is cut at its row 13, one of 24 read whole; a box of 10 px is read, one of 9 answered below the floor. Lines of 12 px: a box of 15 px would leave a strip of 7, so it is read whole, as without the member. Test 1's name drawn light on dark is cut at the same row 40. Under a chain (keep near-white, invert) over (5, 5, 190, 110) the provider is given the processed region and answers in it; the cut block, its strips and the block below the floor come back in the frame's coordinates |
+| `g2_a_box_below_half_a_line_is_not_read_and_is_reported` (engine), `g2_a_block_below_the_floor_is_in_no_name_and_is_counted` (kernel) (5) | A box of 9 px is not recognized, is answered below the floor and takes no recognition (served 1; without lines it is recognized, served 2); in the kernel it is in no text and in the `below_floor` of the target whose region holds it |
+| `g2_the_cap_counts_a_cut_box_as_its_strips` (engine), `g2_strips_over_the_cap_end_the_read_truncated` (kernel) (6) | Three cut boxes under a cap of 4 are 6 recognitions: the engine counts served 6 and recognizes 4 strips; the kernel ends the read `text_read_blocks_truncated` with `count` 3, `requested` 6, `limit_count` 4 |
+| `g2_on_a_reduced_frame_the_line_height_is_in_the_picture_the_engine_is_given` (7) | A frame twice the base, brought to the base: the engine is given 200 x 120 and `line_height` 21, never 42, and the name reads |
+| `g2_a_reading_beyond_the_distance_has_a_cause_of_its_own` (kernel); `crates/lab/src/gate_463_g2.rs` `g2_the_refusal_of_a_name_lists_its_blocks_and_tells_the_distance_from_the_confidence` (8) | Below the confidence `low_confidence`, past it and beyond `max_distance` `beyond_distance`, the feature `low_confidence` both times; in the Lab the refusal of a cut name of no entry names `beyond_distance` and lists the block and its two strips, a dim name `low_confidence` and its block |
+| `crates/pack-containment/src/source/tests.rs` `g2_a_shared_read_declares_the_lines_of_its_name_boxes`, `g2_the_lines_of_a_shared_read_derive_last`; `apps/actinglab/src/tests/gate_464_p2.rs` `p2_revision_21_the_lines_of_a_shared_read` (9) | Under task schema `0.9` the source gate admits the member and refuses another member, one left out and a string at their pointers; under `0.6` a shared read is `UnconsumedField` at `…/shared_ocr` with the member as without it (fix round 1: the fixture's task was `0.6`, where no shared read is consumed); the derivation writes it last; it needs 21 over 20 for either kind, and a read without it keeps its revision |
+| `g2_a_select_declares_the_lines_of_its_name_boxes_and_the_package_carries_them`, `g2_lines_without_blocks_are_refused` (Lab) (9) | The Lab's generation with the member (the recording keeps it, record stop writes it last into the shared read, the self-test passes through the cut) and without it (slot 0 refused `low_confidence`, the refusal listing its block); `lines` without `blocks` `validation_failed` |
+| `g2_lines_need_served_boxes_and_their_bounds` (engine), `g2_a_provider_that_cannot_cut_or_cuts_badly_fails_the_read`, `g2_admission_bounds_the_lines_and_needs_boxes_it_can_place` (kernel) | The boundary refuses lines without boxes or out of bounds; a provider that cannot cut, or a cut block that is not its strips' join, fails the read; admission bounds the member and refuses it on a read that serves a `template_relative` target |
+
+Adapted, the requirement moving the shipped `package` range from [3, 20] to [3, 21]:
+`gate_463_v1::v1_the_build_declares_package_through_revision_14`,
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 4`), `gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`
+(`SHARED_READ_REVISION + 1`), `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`
+and `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`; `gate_464_p2`'s
+base gains the entries that need 20. Adapted, the structs gaining their members and nothing of what
+they assert: the scripted answers of `gate_463_g1` (engine and boundary), `gate_428_vis_load1`, the
+vision boundary's own tests, the adapter's tests and the task diagnostic's test (`strips`,
+`below_floor` and `lines` empty). No golden re-recorded; `shared_read_tests.rs` and G1's
+expectations are untouched.
+
+**What is not changed.** Without the member, every reading, decision, outcome code and byte of
+evidence is what §1.490 left; the projection, its hash, its records and the ledger; every
+interface range but `package`; the model folder's parameters; a located text and every read that
+is not a layout's shared read. With it, a block under the factor and over the floor reads as
+without it. The one change without the member is the Lab's refusal: its `cause` `beyond_distance`
+where a reading passed the confidence, and its `blocks`.
+
+**Fix round 1** (coordinator work order `rd-1120/brief-463-g2-fix1.md`, after CI's first build and
+the independent review). The source gate's red test was its fixture's: SEL-2L's task is of task
+schema `0.6`, under which a shared read is `UnconsumedField` with `lines` exactly as without them
+(SEL-2L's own test pins it); the test now declares `0.9`, as SEL-2L's gate test does, and pins the
+`0.6` refusal for both. The Lab's gate takes a map's last key with `next_back`. A box of more lines
+than `max` is read whole ("The plan" above); the projection collects the names' reads for the
+dry run alone ("One cause, one word" above); test 1 of the engine draws what was measured and the
+edges have their tests (the table); [lab-recording.md](lab-recording.md) ("The lines of a name
+box", "The refusal lists the blocks") says which members a refusal gained, with or without the
+member, that they are answers to the recording agent and never enter a package file, and that the
+kernel's reading of a package without the member is unchanged byte for byte.
+
+**At deploy.** Nothing to configure. A package that declares `lines` is adopted into a resource
+repository only once this build is live: a Runtime before it refuses the member at every run
+(above), and the Lab's own self-checks pass on any Runtime because they run the Lab's kernel, so a
+self-check passing is no sign that the production Runtime reads it. Every pinned offline Lab is of
+this build before it records with `lines` (an earlier Lab refuses the member as an unknown member
+of a select's read). A rollback to v0.12.75 meets a placed package of revision 21 as an earlier
+Runtime meets it: every run of it is refused at the declaration gate (`UnknownField` at
+`/candidate_layouts/<i>/shared_ocr/lines`), and its installer refuses such a bundle at the `package`
+edge; so the rollback stays open while no root is placed from such a bundle (the `package` row 21).
+In
+the release notes' language: 选择的共享读字可以声明名字框的行数和行高（`shared_ocr.lines`）；一个块高到 1.25 行以上就在识别前按行切开、各自识别、照名字框原来的连接规则连起来，行数超过声明的块不切、整块读，矮于半行的块不进名字；一行的名字照旧；上限按切出来的条数数；包的修订升到 21（本版以前的 Runtime 在声明门拒）；Lab 拒绝一行名字时列出这一行每个块的框、高、字和切出来的条，读过了置信度却在距离内对不上任何名字的，原因词是 `beyond_distance`。
+
 ### 1.492 Slice #463 PRIV-SCAN (0.12.76): a public recording's provenance records a select's entry of named members only (board #463, work order #482; met on 11-19 by the channel that keeps the resource repositories: a package choosing from a roster carried, before it merged, the names its scan read screen by screen and a count of them in its task file; the owner's rule of 11-18 that whatever goes to GitHub is public, a private repository too, and that what an account holds does not enter a repository; the rules below are the coordinator's rulings in the work order and in its ruling of 11-19 after the implementer stopped on the work order's third stop condition, not the owner's words; coordinator work order `rd-1119/brief-463-priv-scan-record.md`, on main `1e2eb789`)
 
 This section takes 1.492 (1.491 is SEL-GRID G2's, on its own branch). It ships in 0.12.76.

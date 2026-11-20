@@ -1526,6 +1526,22 @@ pub struct SelectReadSpec {
     pub blocks: Option<SelectReadBlocks>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_merge: Option<SelectLineMerge>,
+    /// #463 SEL-GRID G2 (`contracts/lab-recording.md`, "Reading names by detecting blocks"): the
+    /// lines a name box holds, the words of a layout's `shared_ocr.lines`; only with `blocks`.
+    /// Absent, it is not written, so a select without it is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<SelectReadLines>,
+}
+
+/// #463 SEL-GRID G2: a name box holds at most `max` lines of `line_height` pixels of the
+/// package's base. Their bounds (1 to 3 lines, at least 8 pixels) are the kernel's, which the Lab
+/// does not copy: another value is refused by the kernel's admission of the probe at the
+/// self-test (`record_select_invalid`, `kernel_refused`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectReadLines {
+    pub max: u8,
+    pub line_height: u32,
 }
 
 /// #463 SEL-2L-a: how a select's names are cut into blocks, the word of a layout's

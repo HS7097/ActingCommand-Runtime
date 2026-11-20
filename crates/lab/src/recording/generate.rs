@@ -2498,7 +2498,7 @@ pub(crate) fn select_shared_read(
             ),
         )
     })?;
-    let shared = json!({
+    let mut shared = json!({
         "region": region_json(region),
         "languages": select.read.languages,
         "timeout_ms": select.read.timeout_ms,
@@ -2507,6 +2507,11 @@ pub(crate) fn select_shared_read(
         "blocks": blocks,
         "line_merge": line_merge
     });
+    // #463 SEL-GRID G2: the lines of the name boxes, after `line_merge`, as the read declares
+    // them; a read without them generates what it generated.
+    if let Some(lines) = select.read.lines {
+        shared["lines"] = json!(lines);
+    }
     for target in targets {
         if !shared_read_serves(&shared, region, target) {
             return Err(invalid(

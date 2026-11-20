@@ -396,7 +396,9 @@ select step's scan without an end, Workflow #463 K-c, register §1.454, since Wo
 register §1.458, so it computes 18; row 19, an `interrupts.json` entry without handlers or with the
 `result` `environment_reset`, Workflow #463 INT-1, register §1.473, so it computes 19 for a zip
 whose `interrupts.json` holds such an entry; row 20, a `repeated_anchor` layout's shared read,
-Workflow #463 SEL-2L, register §1.480, so it computes 20 for a zip whose pack holds such a layout);
+Workflow #463 SEL-2L, register §1.480, so it computes 20 for a zip whose pack holds such a layout;
+row 21, the lines of a shared read's name boxes, Workflow #463 SEL-GRID G2, register §1.491, so it
+computes 21 for a zip whose pack declares them);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -452,6 +454,7 @@ as an element of its array.
 | 18 | task | a `scan` object under the `select` of an element of `operations` that declares no `end` (absent or `null`, as the declaration gate reads it), in a pack of any execution mode (a Runtime before 18 requires `end` in its declaration gate in every pack): a member left out, which no member row can find, so read on its own (`scan_without_end`); whether the scan declares `early_stop`, without which this build refuses it, is the gate's | K-c, §1.454; S2-9b, §1.458; [selection-graph.md](selection-graph.md), "A scan without an end" |
 | 19 | root `interrupts.json` | `handlers` under `interrupts` when it holds an empty array (an entry that names no handler), and `result` under `interrupts` when it holds `environment_reset`; an entry with handlers and a `result` of before keep row 6's revision, and a file without them its bytes | INT-1, §1.473; [package-reference.md](package-reference.md), "An entry without handlers" |
 | 20 | task | `shared_ocr` of an element of `candidate_layouts` whose `kind` is `repeated_anchor`, in a pack of any execution mode (a Runtime before 20 refuses it in its declaration gate, `UnknownField`, in every pack): a member a row finds only beside its layout's `kind`, so read on its own (`anchored_shared_read`); a `fixed_slots` layout's `shared_ocr` keeps its revision (row 6 for its `preprocess`) | SEL-2L, §1.480; [selection-graph.md](selection-graph.md), "Shared OCR read" |
+| 21 | task | `lines` under `shared_ocr`, of a layout of either kind, in a pack of any execution mode (a Runtime before 21 refuses it in its declaration gate, `UnknownField` at `…/shared_ocr/lines`, in every pack); a shared read without it keeps its revision | SEL-GRID G2, §1.491; [selection-graph.md](selection-graph.md), "The lines of a name box" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

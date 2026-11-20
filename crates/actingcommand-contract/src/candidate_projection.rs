@@ -55,6 +55,15 @@ pub const CANDIDATE_LAYOUT_ID_MAX_BYTES: usize = 64;
 pub const CANDIDATE_FEATURE_NAME_MAX_BYTES: usize = 32;
 const PAGE_ID_MAX_BYTES: usize = 256;
 
+/// Workflow #463 SEL-GRID G2 (`contracts/selection-graph.md`, "The lines of a name box"): the most
+/// lines a layout's shared read may declare its name boxes to hold, written once for the
+/// recognition pack, which admits the declaration, and the vision boundary, which checks the
+/// request.
+pub const NAME_BOX_LINES_MAX: u8 = 3;
+/// Workflow #463 SEL-GRID G2: the least line height a shared read may declare, in pixels of the
+/// package's base, which is the picture the text provider is given.
+pub const NAME_BOX_LINE_HEIGHT_MIN: u32 = 8;
+
 /// One failure of this contract: its code, the item or field it concerns, and a detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateProjectionError {

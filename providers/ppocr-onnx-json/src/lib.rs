@@ -29,6 +29,8 @@ use actingcommand_vision_ffi::{
 use actingcommand_vision_ffi::{
     ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
 };
+// Workflow #463 SEL-GRID G2: the lines of a shared read's name boxes and the cut of a box.
+use actingcommand_vision_ffi::{OcrNameLinePlan, OcrNameLines, OcrTextStrip, ocr_name_line_plan};
 use actingcommand_vision_ffi::{
     PPOCR_CPU_EXECUTION_PROVIDER, PPOCR_DIRECTML_EXECUTION_PROVIDER, PPOCR_MAX_DIAGNOSTIC_REPORTS,
     PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
@@ -62,6 +64,9 @@ mod gate_428_vis_load1;
 // Workflow #463 SEL-GRID G1: a shared read's served name boxes, between the merge and the cap.
 #[cfg(test)]
 mod gate_463_g1;
+// Workflow #463 SEL-GRID G2: a served box too tall for one line is cut before it is recognized.
+#[cfg(test)]
+mod gate_463_g2;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -1498,6 +1503,17 @@ fn read_request(
     ran.detector = true;
     let budget = remaining_inference_budget(inference_deadline, stages.clock(), "PPOCR detector")?;
     let detected = stages.detect(frame, request.region, merge_gap_factor, budget)?;
+    // Workflow #463 SEL-GRID G2: a request that names lines reads its served boxes by them.
+    if let Some(lines) = request.lines {
+        return read_name_lines(
+            stages,
+            request,
+            lines,
+            (detected, max_boxes),
+            inference_deadline,
+            ran,
+        );
+    }
     // Workflow #463 SEL-GRID G1: between the merge of boxes into lines (in `detect`) and the cap, a
     // request that names served name boxes keeps the boxes that lie in one.
     let (detected, count) = keep_detected_boxes(detected, max_boxes, request.served);
@@ -1512,6 +1528,7 @@ fn read_request(
                 text: decoded.text,
                 rect: detected_box.rect,
                 confidence: decoded.confidence.or(Some(detected_box.confidence)),
+                strips: Vec::new(),
             });
         }
     }
@@ -1531,6 +1548,133 @@ fn read_request(
         // Only a request that chose `Detect` reports its count; an implicit full-frame
         // read keeps its result as before (Workflow #396 REC-1).
         detection: matches!(request.blocks, OcrBlockMode::Detect { .. }).then_some(count),
+        below_floor: Vec::new(),
+    })
+}
+
+/// Workflow #463 SEL-GRID G2 (`contracts/selection-graph.md`, "The lines of a name box";
+/// `contracts/vision-model-folders.md`, the `detector.max_boxes` row): `request`'s read of the
+/// boxes its detector found (`detected`, merged into lines) when it names `lines`, which it names
+/// only with served name boxes (`OcrInferenceRequestView::validate`). Between the merge and the
+/// cap it keeps the served boxes, by G1's rule ([`ocr_box_is_served`]), and plans each by the
+/// lines ([`ocr_name_line_plan`], on the frame it was given, the pixels the recognizer is given):
+/// a box below the floor is not read and is answered in `below_floor`; a cut box is recognized
+/// strip by strip, and answered with the strips that read a text, top to bottom, its text theirs
+/// joined by line feeds (the join of the read's own text) and its confidence the lowest of
+/// theirs, a box none of whose strips reads anything being dropped as an empty box is; every other
+/// box is recognized whole, exactly as without lines. The cap counts recognitions: the plans are
+/// kept in the detector's order while their recognitions fit `max_boxes` (a cut box its strips, a
+/// box below the floor none), and the count's `served` is the recognitions of every served box,
+/// which the kernel compares with `limit`.
+fn read_name_lines(
+    stages: &mut impl RequestStages,
+    request: OcrInferenceRequestView<'_>,
+    lines: OcrNameLines,
+    (detected, max_boxes): (Vec<DetectedTextBox>, u32),
+    inference_deadline: Duration,
+    ran: &mut InvocationRoles,
+) -> Result<OcrInferenceResult, ProviderInvokeError> {
+    let frame = &request.frame;
+    let detected_count = u32::try_from(detected.len()).unwrap_or(u32::MAX);
+    let planned = detected
+        .into_iter()
+        .filter(|detected_box| ocr_box_is_served(request.served, detected_box.rect))
+        .map(|detected_box| {
+            let plan = ocr_name_line_plan(frame, detected_box.rect, lines);
+            (detected_box, plan)
+        })
+        .collect::<Vec<_>>();
+    let recognitions = planned
+        .iter()
+        .map(|(_, plan)| plan.recognitions())
+        .fold(0_u32, u32::saturating_add);
+    let mut left = max_boxes;
+    let mut blocks = Vec::new();
+    let mut below_floor = Vec::new();
+    for (detected_box, plan) in &planned {
+        let Some(after) = left.checked_sub(plan.recognitions()) else {
+            break;
+        };
+        left = after;
+        let mut recognize =
+            |rect: VisionRect| -> Result<Option<(String, Option<f32>)>, ProviderInvokeError> {
+                ran.recognizer = true;
+                let budget = remaining_inference_budget(
+                    inference_deadline,
+                    stages.clock(),
+                    "PPOCR recognizer",
+                )?;
+                let decoded = stages.recognize(frame, rect, budget)?;
+                Ok((!decoded.text.is_empty()).then(|| {
+                    (
+                        decoded.text,
+                        decoded.confidence.or(Some(detected_box.confidence)),
+                    )
+                }))
+            };
+        match plan {
+            OcrNameLinePlan::BelowFloor => below_floor.push(detected_box.rect),
+            OcrNameLinePlan::Whole => {
+                if let Some((text, confidence)) = recognize(detected_box.rect)? {
+                    blocks.push(OcrTextBlock {
+                        text,
+                        rect: detected_box.rect,
+                        confidence,
+                        strips: Vec::new(),
+                    });
+                }
+            }
+            OcrNameLinePlan::Cut(cut) => {
+                let mut strips = Vec::with_capacity(cut.len());
+                for rect in cut {
+                    if let Some((text, confidence)) = recognize(*rect)? {
+                        strips.push(OcrTextStrip {
+                            text,
+                            rect: *rect,
+                            confidence,
+                        });
+                    }
+                }
+                if !strips.is_empty() {
+                    blocks.push(OcrTextBlock {
+                        text: strips
+                            .iter()
+                            .map(|strip| strip.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        rect: detected_box.rect,
+                        confidence: strips
+                            .iter()
+                            .map(|strip| strip.confidence)
+                            .reduce(|lowest, confidence| {
+                                lowest.zip(confidence).map(|(a, b)| a.min(b))
+                            })
+                            .flatten(),
+                        strips,
+                    });
+                }
+            }
+        }
+    }
+    let text = blocks
+        .iter()
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
+    Ok(OcrInferenceResult {
+        ppocr_diagnostics: Vec::new(),
+        text,
+        blocks,
+        confidence,
+        backend: VisionBackendKind::FastDeployPpocr,
+        warnings: Vec::new(),
+        detection: Some(OcrDetectionCount {
+            detected: detected_count,
+            limit: max_boxes,
+            served: Some(recognitions),
+        }),
+        below_floor,
     })
 }
 
@@ -2072,6 +2216,7 @@ fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenc
             text: decoded.text.clone(),
             rect: region,
             confidence: decoded.confidence,
+            strips: Vec::new(),
         }]
     };
 
@@ -2083,6 +2228,7 @@ fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenc
         backend: VisionBackendKind::FastDeployPpocr,
         warnings: Vec::new(),
         detection: None,
+        below_floor: Vec::new(),
     }
 }
 

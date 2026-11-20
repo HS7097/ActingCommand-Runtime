@@ -982,6 +982,25 @@ that needs two chains is declared as two targets. Readings, fields, value tests,
 member belongs to package interface revision 6, declared at the end of the 0.12.x B train; until
 then it is admitted by code.
 
+### Task schema `0.9` lines of a shared read's name boxes
+
+Workflow #463 SEL-GRID G2 (since 0.12.76, register §1.491). A layout's `shared_ocr`, of either kind,
+accepts `"lines": {"max": m, "line_height": h}` ([selection-graph.md](selection-graph.md), "The
+lines of a name box"). It passes to the derived recognition pack as declared, the shared read's
+last member; a source without it derives every document byte for byte as before. The declaration
+gate (source and pack alike) refuses with `resource_declaration_invalid` at:
+
+| Pointer | Refused when | Reason |
+|---|---|---|
+| `/candidate_layouts/<i>/shared_ocr/lines` | not an object | `InvalidType` |
+| `/candidate_layouts/<i>/shared_ocr/lines/<member>` | a member other than `max` and `line_height` | `UnknownField` |
+| `/candidate_layouts/<i>/shared_ocr/lines/max`, `…/line_height` | missing; not an unsigned integer | `MissingField`; `InvalidType` |
+
+Their values are the recognition pack's rules: `max` 1 to 3, `line_height` at least 8, and no OCR
+target the read gives text to with a `template_relative` region. The member belongs to package
+interface revision 21; a Runtime before it refuses it with `UnknownField` at
+`/candidate_layouts/<i>/shared_ocr/lines`.
+
 ### Task schema `0.9` observation windows and input rechecks
 
 Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a

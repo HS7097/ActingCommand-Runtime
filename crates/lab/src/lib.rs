@@ -168,6 +168,11 @@ mod gate_463_sel2l_a;
 #[cfg(test)]
 mod gate_463_sel2l_rows;
 
+// Workflow #463 SEL-GRID G2: a select's read may declare the lines of its name boxes; the refusal
+// of a name lists what its read saw.
+#[cfg(test)]
+mod gate_463_g2;
+
 // #463 PRIV-SCAN: a public recording's provenance records a select's entry of named members only;
 // a local one's as before.
 #[cfg(test)]

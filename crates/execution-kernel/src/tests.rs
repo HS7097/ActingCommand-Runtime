@@ -54,6 +54,9 @@ mod gate_463_rg1;
 // Workflow #463 SEL-GRID G1: a shared read's name boxes through the vision boundary.
 mod gate_463_g1;
 
+// Workflow #463 SEL-GRID G2: a shared read's lines through the vision boundary.
+mod gate_463_g2;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {

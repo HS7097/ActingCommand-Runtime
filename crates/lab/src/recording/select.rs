@@ -44,7 +44,9 @@ use super::model::{
 use super::store::{blocked, invalid, now_unix_ms, with_details};
 use crate::LabOcr;
 use crate::codes::{LabCode, SelectProblem};
-use actingcommand_contract::candidate_projection::{CandidateFeature, ProjectedCandidate};
+use actingcommand_contract::candidate_projection::{
+    CandidateFeature, CandidateUnknownReason, ProjectedCandidate,
+};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     InstanceFactContext, InstanceFactSnapshot, LabError, LabResult, TaskSelectionOutcome,
@@ -53,6 +55,7 @@ use actingcommand_device::Frame;
 use actingcommand_execution_kernel::{PreparedContainedTask, dry_run_select};
 use actingcommand_recognition_pack::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
+    CandidateNameBlock, CandidateNameRead, CandidateUnreadCause,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -301,6 +304,15 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
              \"blocks\": \"detect\" and \"line_merge\" ({{\"gap_factor\": n}} or \"none\"); give \
              both or neither"
         )));
+    }
+    // #463 SEL-GRID G2: the lines of a name box are those of the select's shared read, which only
+    // a read by detecting blocks makes.
+    if read.lines.is_some() && read.blocks.is_none() {
+        return Err(shape(
+            "read declares lines without blocks: the lines of a name box are those of the \
+             select's shared read; give \"blocks\": \"detect\" and \"line_merge\" with them"
+                .to_string(),
+        ));
     }
     let mut ids = BTreeSet::new();
     for name in &select.names {
@@ -870,20 +882,24 @@ pub(crate) fn check_step_select(
         // Fix 1: the refusal names the default's decision on the frame too (`blocked`: the run
         // would fail there).
         if let Some((slot, cause)) = default.unread.first() {
+            // #463 SEL-GRID G2: with what the refused slot's read saw.
             rejections.push(MarkRejection::new(
                 SELECT_REJECTION_ID,
                 NAME_UNREAD,
-                json!({
-                    "frame_id": frame_id,
-                    "slot": slot,
-                    "cause": cause,
-                    "unread": default
-                        .unread
-                        .iter()
-                        .map(|(slot, cause)| json!({"slot": slot, "cause": cause}))
-                        .collect::<Vec<_>>(),
-                    "default": default.kind
-                }),
+                default.with_blocks(
+                    json!({
+                        "frame_id": frame_id,
+                        "slot": slot,
+                        "cause": cause,
+                        "unread": default
+                            .unread
+                            .iter()
+                            .map(|(slot, cause)| json!({"slot": slot, "cause": cause}))
+                            .collect::<Vec<_>>(),
+                        "default": default.kind
+                    }),
+                    *slot,
+                ),
             ));
             continue;
         }
@@ -988,6 +1004,70 @@ pub(crate) struct Decided {
     pub(crate) unread: Vec<(u32, Value)>,
     /// #463 S2-9a: every instance the projection holds, as a scrolling select reads its rows.
     pub(crate) instances: Vec<DecidedInstance>,
+    /// #463 SEL-GRID G2: what each actionable instance's name read saw (the kernel's dry run,
+    /// `SelectionDryRun::name_reads`), by its index.
+    pub(crate) reads: BTreeMap<u32, CandidateNameRead>,
+}
+
+impl Decided {
+    /// #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`): the
+    /// refusal `detail` of the name of the instance `index` with what its read saw, so that an
+    /// author sets the name box, the lines and the chain from it: `blocks`, the blocks its name box
+    /// held, each with its `rect`, `height` and `text` and a cut block with its `strips` (each its
+    /// `rect`, `height` and `text`), and, when there are any, `below_floor`, the blocks lower than
+    /// half a line that were not read, each with its `rect` and `height`. A detail that is no
+    /// object, or an instance whose name was not read from OCR, is left as it is.
+    pub(crate) fn with_blocks(&self, mut detail: Value, index: u32) -> Value {
+        let Some(read) = self.reads.get(&index) else {
+            return detail;
+        };
+        if let Some(object) = detail.as_object_mut() {
+            insert_blocks(object, read);
+        }
+        detail
+    }
+}
+
+/// #463 SEL-GRID G2: the members [`Decided::with_blocks`] adds for `read`.
+fn insert_blocks(object: &mut serde_json::Map<String, Value>, read: &CandidateNameRead) {
+    let block_json = |block: &CandidateNameBlock| {
+        let mut value = json!({
+            "rect": block.rect,
+            "height": block.rect.height,
+            "text": block.text
+        });
+        if !block.strips.is_empty() {
+            value["strips"] = Value::Array(
+                block
+                    .strips
+                    .iter()
+                    .map(|strip| {
+                        json!({
+                            "rect": strip.rect,
+                            "height": strip.rect.height,
+                            "text": strip.text
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        value
+    };
+    object.insert(
+        "blocks".to_string(),
+        Value::Array(read.blocks.iter().map(block_json).collect()),
+    );
+    if !read.below_floor.is_empty() {
+        object.insert(
+            "below_floor".to_string(),
+            Value::Array(
+                read.below_floor
+                    .iter()
+                    .map(|rect| json!({"rect": rect, "height": rect.height}))
+                    .collect(),
+            ),
+        );
+    }
 }
 
 /// #463 S2-9a: one instance of a dry run's projection: its index, whether it is actionable (its
@@ -1063,11 +1143,19 @@ pub(crate) fn decide(
         }
     };
     let candidates = dry.candidate_projection.candidates();
+    // #463 SEL-GRID G2: what each instance's name read saw, the first read of its name.
+    let mut reads = BTreeMap::new();
+    for read in &dry.name_reads {
+        if read.feature == SELECT_FEATURE {
+            reads
+                .entry(read.instance_index)
+                .or_insert_with(|| read.clone());
+        }
+    }
+    let cause_of = |candidate: &ProjectedCandidate| unread_cause(candidate, &reads);
     let unread = candidates
         .iter()
-        .filter_map(|candidate| {
-            unread_cause(candidate).map(|cause| (candidate.instance_index, cause))
-        })
+        .filter_map(|candidate| cause_of(candidate).map(|cause| (candidate.instance_index, cause)))
         .collect::<Vec<_>>();
     // Fix 1: the decision by its kind, as the run takes it: an empty or insufficient decision
     // while a slot reads no known name is blocked (S0 §3.2 rule 2, which the run applies). #463
@@ -1076,7 +1164,7 @@ pub(crate) fn decide(
     // always actionable).
     let blocking = candidates
         .iter()
-        .any(|candidate| candidate.actionable && unread_cause(candidate).is_some());
+        .any(|candidate| candidate.actionable && cause_of(candidate).is_some());
     let kind = match mirrored_outcome(&dry.decision.outcome)? {
         TaskSelectionOutcome::Selected { .. } => {
             let [id] = dry.decision.selected.as_slice() else {
@@ -1108,6 +1196,24 @@ pub(crate) fn decide(
         TaskSelectionOutcome::Ambiguous { .. } => SelectDecision::Ambiguous,
         TaskSelectionOutcome::Unknown { .. } => SelectDecision::Unknown,
     };
+    let instances = candidates
+        .iter()
+        .map(|candidate| DecidedInstance {
+            index: candidate.instance_index,
+            actionable: candidate.actionable,
+            rect: RecordRect {
+                x: candidate.rect.x,
+                y: candidate.rect.y,
+                width: candidate.rect.width,
+                height: candidate.rect.height,
+            },
+            name: match candidate.features.get(SELECT_FEATURE) {
+                Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
+                _ => None,
+            },
+            unread: cause_of(candidate),
+        })
+        .collect();
     Ok(Ok(Decided {
         kind,
         clicks: candidates
@@ -1115,24 +1221,8 @@ pub(crate) fn decide(
             .map(|candidate| (candidate.instance_index, click_of(candidate)))
             .collect(),
         unread,
-        instances: candidates
-            .iter()
-            .map(|candidate| DecidedInstance {
-                index: candidate.instance_index,
-                actionable: candidate.actionable,
-                rect: RecordRect {
-                    x: candidate.rect.x,
-                    y: candidate.rect.y,
-                    width: candidate.rect.width,
-                    height: candidate.rect.height,
-                },
-                name: match candidate.features.get(SELECT_FEATURE) {
-                    Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
-                    _ => None,
-                },
-                unread: unread_cause(candidate),
-            })
-            .collect(),
+        instances,
+        reads,
     }))
 }
 
@@ -1167,11 +1257,27 @@ fn click_of(candidate: &ProjectedCandidate) -> RecordRect {
 }
 
 /// Why a slot's name read no known name: the identity feature's typed reason, or `missing` when
-/// the slot has no identity feature at all.
-fn unread_cause(candidate: &ProjectedCandidate) -> Option<Value> {
+/// the slot has no identity feature at all. #463 SEL-GRID G2: a `low_confidence` whose read passed
+/// the confidence and matched no alias within `max_distance` is `beyond_distance`, the cause the
+/// kernel's mapping gives that read (`CandidateIdentityDeclaration::map_ocr_with_cause`, called on
+/// the read in the dry run, `reads`), where the feature keeps its reason.
+fn unread_cause(
+    candidate: &ProjectedCandidate,
+    reads: &BTreeMap<u32, CandidateNameRead>,
+) -> Option<Value> {
     match candidate.features.get(SELECT_FEATURE) {
         Some(CandidateFeature::Identity { .. }) => None,
-        Some(CandidateFeature::Unknown { reason, .. }) => Some(json!(reason)),
+        Some(CandidateFeature::Unknown { reason, .. }) => {
+            let beyond = *reason == CandidateUnknownReason::LowConfidence
+                && reads
+                    .get(&candidate.instance_index)
+                    .is_some_and(|read| read.unread == Some(CandidateUnreadCause::BeyondDistance));
+            Some(if beyond {
+                json!(CandidateUnreadCause::BeyondDistance)
+            } else {
+                json!(reason)
+            })
+        }
         Some(_) | None => Some(json!("missing")),
     }
 }

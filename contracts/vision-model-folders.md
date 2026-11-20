@@ -273,7 +273,7 @@ built-in behaviour, so a model without `model.json` reads exactly as before.
 | `detector.threshold` | 0.3 | (0, 1) | text probability of a map cell |
 | `detector.min_area` | 4 | >= 1 | fewest cells of a text component |
 | `detector.box_padding` | 16 | 0..=256 | frame pixels added around a box |
-| `detector.max_boxes` | 64 | 1..=1024 | most boxes recognized per request: of every box detected, or (since 0.12.76) for a layout's shared read that names its name boxes of the boxes those hold |
+| `detector.max_boxes` | 64 | 1..=1024 | most boxes recognized per request: of every box detected, or (since 0.12.76) for a layout's shared read that names its name boxes of the boxes those hold; with the lines of the name boxes (since 0.12.76, Workflow #463 SEL-GRID G2) most recognitions, a box cut into its lines counting as its strips and a box below the floor as none |
 | `detector.merge_min_overlap_percent` | 35 | 0..=100 | vertical overlap for merging boxes on a line |
 | `detector.merge_gap_factor` | 3 | 0..=16 | horizontal gap allowed, in box heights |
 | `detector.merge_min_height` | 24 | 0..=1024 | box height counted at least this |
@@ -298,6 +298,21 @@ bottom edges outside, the rule the kernel gives a block to a target by), recogni
 that for such a read `max_boxes` counts the blocks of its name boxes. Every other request, a
 located text's among them, names none and is read and counted as before. A request that names
 name boxes without `detect` is refused as an invalid request.
+
+Workflow #463 SEL-GRID G2 (since 0.12.76): such a read may also name the lines its name boxes hold,
+`{max, line_height}` in pixels of the request's frame ([selection-graph.md](selection-graph.md),
+"The lines of a name box"). The engine then plans each box it keeps by them on the frame it was
+given (`ocr_name_line_plan`): a box lower than half a line is not recognized and is answered apart
+(`below_floor`); a box at least 1.25 lines high and of no more lines than `max`
+(`round(h / line_height) ≤ max`) is cut into `max(round(h / line_height), 2)` strips at the rows
+of least ink near their equal positions, each recognized on its own, and answered with its strips,
+its text theirs joined by line feeds and its confidence the lowest of theirs; every other box, one
+of more lines than `max` among them, is recognized whole. `max_boxes` then counts recognitions: the engine keeps
+the plans in the detector's order while their recognitions fit it, and `served` reports the
+recognitions of every kept box, which the kernel compares with `limit`. A request that names lines
+without name boxes, or lines outside their bounds (`max` 1 to 3, `line_height` at least 8), is
+refused as an invalid request; a result that answers strips or boxes below the floor to a request
+without lines is an invalid response.
 
 ## Identity
 
