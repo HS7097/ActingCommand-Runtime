@@ -316,13 +316,16 @@ above;
 register §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"): a
 scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`,
 since `observed_at_unix_ms`), and no recovery or run of the instance has succeeded since, no
-resume lifted a pause of it and the Runtime did not restart. Every candidate of the instance
-waits, an owed rerun, an immediate rerun, a remedy request or retry, a chain's successor and a
-store update task included, with no wake of its own: the block's end is followed by a lease end
-(the ladder's, the run's, the resume's reconnect), which wakes the evaluation. The fact
-refresh's deferral names this code as its `gate_code`. Other instances are not held. As for 4a,
-the round's candidates settled before it asks the closure wait with this reason too
-(`InstanceHolds`); an instance 4a holds keeps 4a's hold. The evaluation reads the blocks under
+resume lifted a pause of it, no blackout covered it and no fence took it, and the Runtime did not
+restart. Every candidate of the instance waits, an owed rerun, an immediate rerun, a remedy
+request or retry and a chain's successor included, with no wake of its own: the block's end is
+followed by a lease end (the ladder's, the run's, the resume's reconnect), which wakes the
+evaluation. A store update package's task passes, as it passes 4a (fix round 1: an instance whose
+game asks for an update fails every entry, and only that task can end it; its success ends the
+block as any run's does). The fact refresh's deferral names this code as its `gate_code`. Other
+instances are not held. As for 4a, the round's candidates settled before it asks the closure wait
+with this reason too (`InstanceHolds`, the store update tasks let through); an instance 4a holds
+keeps 4a's hold. The evaluation reads the blocks under
 the policy outcome gate a settlement blocks under, so no evaluation sees the run's settlement
 without its block; admission does not judge it again. The idle plan counts such a decision due
 (eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,

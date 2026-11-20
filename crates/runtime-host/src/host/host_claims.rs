@@ -204,6 +204,15 @@ fn instance_worker_loop(
             } => Some((pending.instance_id, pending.probe)),
             _ => None,
         };
+        // Workflow #490 ENTRY-A fix round 1: a recovery ladder whose worker panics ended without
+        // recovering, which an entry block it was the recovery of tells a person.
+        let ladder = match &job {
+            WorkerJob::HostClaim {
+                work: HostClaimWork::RecoveryLadder(pending),
+                ..
+            } => Some(PendingRecoveryLadder::clone(pending)),
+            _ => None,
+        };
         // Fix 2 (re-review L-3): the lane is taken out first, so a failure to issue the failure
         // links (a global fault) still ends a policy run's registration, left abandoned for the
         // reconciliation, never working, and the Runtime is marked fatal.
@@ -239,6 +248,9 @@ fn instance_worker_loop(
                 // reason; the record below is its one record.
                 if let Some((instance_id, probe)) = probe {
                     shared.end_panicked_unavailable_probe(instance_id, probe)?;
+                }
+                if let Some(ladder) = &ladder {
+                    shared.note_entry_recovery_failed(ladder)?;
                 }
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {

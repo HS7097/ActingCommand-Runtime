@@ -290,15 +290,18 @@ actingcommand_contract::outcome_codes! {
         // Workflow #490 ENTRY-A begin: a run that failed at its entry blocks its instance.
         /// Info (Workflow #490 ENTRY-A). The candidate's instance is entry-blocked: a scheduled run
         /// there failed at its entry (its main package executed no step), and since then no
-        /// recovery and no run of the instance succeeded and no resume lifted a pause of it. Every
-        /// candidate of the instance is deferred with no wake of its own, the fact refresh naming
-        /// it as its gate (keys `instance_id`, `task_id` and `decision_id` of the run that blocked
+        /// recovery and no run of the instance succeeded, no resume lifted a pause of it, and no
+        /// blackout covered it and no fence took it. Every candidate of the instance but a store
+        /// update package's task is deferred with no wake of its own, the fact refresh naming it
+        /// as its gate (keys `instance_id`, `task_id` and `decision_id` of the run that blocked
         /// it, `failure_code` its failure, `observed_at_unix_ms` when it was blocked).
         InstanceEntryBlocked => "instance_entry_blocked": info / none,
-        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance's recovery ended without
-        /// success (its ladder exhausted, or its recovery dropped by a blackout or an admission
-        /// refusal): it stays blocked and waits for a person, once per block (keys `instance_id`,
-        /// `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
+        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance waits for a person, once per
+        /// block: one of the block's own recoveries ended without recovering (its ladder
+        /// exhausted, its worker panicked), or (fix round 1) the block lasted
+        /// `scheduling.unavailable_probe.attention_after_ms` (then `elapsed_ms` and `limit_ms`)
+        /// whatever holds it (keys `instance_id`, `task_id`, `decision_id`, `failure_code`,
+        /// `observed_at_unix_ms` as above).
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
         // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin

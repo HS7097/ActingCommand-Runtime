@@ -1046,9 +1046,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.76",
-      "description": "Workflow #490 ENTRY-A (contracts/scheduling-blackout.md, Order of the deferrals, position 4b; contracts/policy-suspension.md, A failure at the entry): the candidate's instance (instance_id, the instance alias) is entry-blocked. A scheduled run there (its task task_id, its dispatch decision_id) failed at its entry, its main package having executed no step, with failure_code, and its settlement settled that failure as a condition of the instance at observed_at_unix_ms. Every candidate of the instance is deferred with no wake of its own, owed reruns, immediate reruns, remedy requests and the fact refresh (fact_refresh_pending with this code as gate_code) included, until a recovery ladder of the instance ends recovered, a run on the instance succeeds (a client's or the Lab's run too), a resume lifts a pause of it or the global one, or the Runtime restarts. Other instances are not affected. The not-running row of the schedule explanation carries it with the evaluation since which it holds.",
-      "common_causes": "A package left the game on a screen no package of the instance knows, so the next task's entry, its prerequisite or return-home layer, could not reach its entry page; the instance's recovery ladder was entered by that failure.",
-      "handling": "None while the recovery runs or waits for its cool-down's end. When instance_entry_blocked_awaiting_person was recorded, bring the game to a known screen and run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance."
+      "description": "Workflow #490 ENTRY-A (contracts/scheduling-blackout.md, Order of the deferrals, position 4b; contracts/policy-suspension.md, A failure at the entry): the candidate's instance (instance_id, the instance alias) is entry-blocked. A scheduled run there (its task task_id, its dispatch decision_id) failed at its entry, its main package having executed no step, with failure_code, and its settlement settled that failure as a condition of the instance (or as the pair's own failure) at observed_at_unix_ms. Every candidate of the instance is deferred with no wake of its own, owed reruns, immediate reruns, remedy requests and the fact refresh (fact_refresh_pending with this code as gate_code) included, but a store update package's task, which passes as at position 4a, until a recovery ladder of the instance ends recovered or environment_ready, a run on the instance succeeds (a client's or the Lab's run too), a resume lifts a pause of it or the global one, a blackout covers it, a fence takes it, or the Runtime restarts. Other instances are not affected. The not-running row of the schedule explanation carries it with the evaluation since which it holds.",
+      "common_causes": "A package left the game on a screen no package of the instance knows, so the next task's entry, its prerequisite or return-home layer, could not reach its entry page; the block's recovery is the ladder that failure entered, or for a failure the configured exclusion list keeps from starting a ladder by itself, the ladder the block starts under the trigger item that takes the failure's class.",
+      "handling": "None while the recovery runs, waits for its cool-down's end or is tried again after a transient refusal. When instance_entry_blocked_awaiting_person was recorded, bring the game to a known screen and run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance."
     },
     "instance_entry_blocked_awaiting_person": {
       "category": "warning",
@@ -1062,6 +1062,8 @@
         "decision_id": "required",
         "observed_at_unix_ms": "required",
         "failure_code": "optional",
+        "elapsed_ms": "optional",
+        "limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1071,7 +1073,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.76",
-      "description": "An entry-blocked instance (instance_id) is brought to a person's attention (Workflow #490 ENTRY-A): a recovery of it ended without success (its recovery ladder exhausted, or the recovery dropped by a blackout or an admission refusal), so it stays blocked and nothing will unblock it by itself. task_id and decision_id name the scheduled run whose failure at its entry blocked it, failure_code that failure, observed_at_unix_ms when it was blocked. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; the instance's candidates stay deferred with instance_entry_blocked.",
+      "description": "An entry-blocked instance (instance_id) waits for a person (Workflow #490 ENTRY-A): one of the block's own recoveries ended without recovering (its recovery ladder exhausted, or its worker panicked), or (fix round 1) the instance stayed blocked for scheduling.unavailable_probe.attention_after_ms, the threshold AVAIL-1's attention reads too, whatever holds it; then elapsed_ms is how long it has been blocked and limit_ms that threshold, both absent otherwise. task_id and decision_id name the scheduled run whose failure at its entry blocked it last, failure_code that failure, observed_at_unix_ms when it was blocked by it. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; the instance's candidates stay deferred with instance_entry_blocked, and a recovery still held is still taken up.",
       "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from, or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control).",
       "handling": "Look at the device and bring the game to a known screen; then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
     },
@@ -26262,7 +26264,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.76",
-      "description": "A Runtime host operation or stage: an instance's entry block, set by a scheduled run that failed at its entry, ended by a recovery or a run that succeeded or a resume, and the attention of a person once its recovery ended without success (Workflow #490 ENTRY-A)."
+      "description": "A Runtime host operation or stage: an instance's entry block, set by a scheduled run that failed at its entry, ended by a recovery or a run that succeeded, a resume, a blackout that covers the instance or a fence, and the attention of a person once one of its recoveries ended without recovering or it lasted attention_after_ms (Workflow #490 ENTRY-A)."
     },
     "instantiate_template": {
       "owner": "runtime-host",
@@ -30095,7 +30097,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.76",
-      "description": "A Runtime host operation or stage: the lease sweep admits an entry-blocked instance's recovery its ladder's cool-down held back, once the cool-down has ended (Workflow #490 ENTRY-A)."
+      "description": "A Runtime host operation or stage: the lease sweep admits an entry-blocked instance's held recovery once it is due (its cool-down's end, a transient refusal's next tick, the block's own trigger), ends a block a blackout covers or a fence took, and brings a block that lasted attention_after_ms to a person's attention (Workflow #490 ENTRY-A)."
     },
     "task_diagnostic_failed": {
       "owner": "runtime-host",

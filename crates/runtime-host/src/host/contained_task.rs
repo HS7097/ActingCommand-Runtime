@@ -8595,6 +8595,7 @@ impl HostShared {
         // Workflow #490 ENTRY-A: and what is known now of the instance's entry blocks.
         self.register_scheduled_resolution(
             context.decision_id(),
+            context.run_id(),
             context.lease_token().instance_id(),
         )?;
         lock(self.policy()?, HostLocation::ValidatePolicyRunContext)?

@@ -2299,7 +2299,7 @@ impl HostShared {
             // evaluation reads the blocks under. The execution is committed, so a failure here is
             // fatal, as the settlement facts' is.
             if recorded_now {
-                self.settle_entry(&data, entry, context.map(PolicyRunContext::run_id))
+                self.settle_entry(&data, entry, context)
                     .map_err(RuntimeHostError::into_fatal)?;
             }
             if let Some(settlement) = settlement {

@@ -209,13 +209,16 @@ impl HostShared {
     }
 
     /// Registers a scheduled run's decision as it enters the scheduled path, with what is known
-    /// then of its instance's entry blocks (Workflow #490 ENTRY-A).
+    /// then of its instance's entry blocks (Workflow #490 ENTRY-A): read before
+    /// `begin_contained_run` counts the run itself among the runs started on the instance
+    /// (ENTRY-A2), and (fix round 1) marking the run `run_id` as one whose settlement is to come.
     pub(super) fn register_scheduled_resolution(
         &self,
         decision_id: &str,
+        run_id: RunId,
         instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
-        let marks = self.entry_marks(instance_id)?;
+        let marks = self.entry_settlement_pending(run_id, instance_id)?;
         lock(
             &self.scheduled_resolutions,
             HostLocation::RegisterScheduledResolution,
@@ -735,10 +738,13 @@ impl HostShared {
             // a failure that does not accumulate, of a run whose main package executed no step and
             // whose failure came from its entry (a prerequisite or return-home layer, the gate, the
             // home entry's check or its recovery package), is a condition of the instance when the
-            // instance's recovery ladder takes it at the task stage, as the run's lease end judged
-            // it: the settlement settles it so and blocks the instance.
+            // instance's block has a recovery for it: fix round 1, for a failure of class
+            // `pack_logic_mismatch` (raised by the entry's own layers) the trigger item that takes
+            // its class whatever `exclude_codes` says, for any other the item the run's lease end
+            // matched (`entry_failure_recovered`). The settlement settles it so and blocks the
+            // instance.
             if !(at_entry
-                && self.ladder_takes_failure(context.lease_token().instance_id(), &code)?)
+                && self.entry_failure_recovered(context.lease_token().instance_id(), &code)?)
             {
                 return Ok(ScheduledFailure {
                     input: failed(Some(identity.encode())),
@@ -746,18 +752,44 @@ impl HostShared {
                 });
             }
             // ENTRY-A2 ("Whose failure"): unless it is its pair's own: the pair's task's last
-            // scheduled run failed at its entry too, with the same packages, and a recovery of the
-            // instance succeeded since that run began. Such a failure is written as one that
-            // accumulates (its `F` the run's error frame, or the pair's previous identity with the
-            // same prefix), so it counts toward `escalation_threshold`.
+            // scheduled run failed at its entry too, with the same packages, a recovery of the
+            // instance ended `recovered` since that run began, and either nothing else started on
+            // the instance since that recovery or (fix round 1) the pair's conditions in a row
+            // reached its rule's `escalation_threshold`. The marks are the run's start's, read
+            // before `begin_contained_run` counted the run itself. Such a failure is written as one
+            // that accumulates (its `F` the run's error frame, or the pair's previous identity with
+            // the same prefix), so it counts toward `escalation_threshold`.
             let marks = resolution.marks;
+            // Fix round 1 (the bound): the rule's `escalation_threshold`, which the pair's
+            // conditions in a row at the entry are measured against.
+            let escalation_threshold =
+                lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?
+                    .dispatch_escalation_threshold(decision_id)?;
             let own = self.entry_failure_own(
                 context.instance_alias(),
                 context.catalog_task_id(),
                 marks,
                 &identity.packages(),
+                escalation_threshold,
             )?;
             let failure_identity = if own {
+                // Fix round 1: an own failure's identity carries the content members an ordinary
+                // failure's carries, the game root's data files (`g`) included when the game has
+                // a root to read, so a repair of a root page or interrupt definition lifts the
+                // pair's pause as a changed package does.
+                if !identity
+                    .layers
+                    .iter()
+                    .any(|layer| matches!(layer, IdentityLayer::StandardPackRoot(_)))
+                    && let Some(root_hash) = self
+                        .standard_packs
+                        .root()
+                        .and_then(|root| standard_pack_root_hash(&root.join(&main.game)))
+                {
+                    identity
+                        .layers
+                        .push(IdentityLayer::StandardPackRoot(root_hash));
+                }
                 let current = locate_error_frame(context.run_id(), query)?;
                 own_entry_identity(
                     &identity,

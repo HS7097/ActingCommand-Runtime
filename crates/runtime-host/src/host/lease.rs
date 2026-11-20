@@ -1415,6 +1415,19 @@ impl HostShared {
         if matches!(capacity_use, CapacityUse::Business) && !preparation.is_existing() {
             self.require_business_capacity(links.clone())?;
         }
+        // Workflow #490 ENTRY-A2 fix round 1: a key granted to a person's or a client's claim (a
+        // client's lease, a Lab operation's, an input lifecycle's) may change the screen, so it
+        // counts as something that held the instance since its latest successful recovery
+        // (`note_entry_run_started`); a direct run's is counted once, when the run starts
+        // (`begin_contained_run`).
+        let manual = match &preparation {
+            LeasePreparation::New(prepared) => {
+                super::resource_fence::manual_claim(prepared.kind())
+                    && prepared.kind() != ClaimKind::DirectTaskRun
+            }
+            LeasePreparation::Existing(_) => false,
+        };
+        let granted_instance = preparation.token().instance_id();
         let intent = self.lease_intent(
             EventAction::LeaseAcquire,
             links.clone(),
@@ -1476,9 +1489,15 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
         );
-        self.map_critical_lease_result(result, RuntimeReceiptState::Admitted, |token| {
-            RuntimeResult::LeaseGranted { token }
-        })
+        let granted =
+            self.map_critical_lease_result(result, RuntimeReceiptState::Admitted, |token| {
+                RuntimeResult::LeaseGranted { token }
+            })?;
+        if manual {
+            self.note_entry_run_started(granted_instance)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        Ok(granted)
     }
 
     fn existing_lease_terminal(

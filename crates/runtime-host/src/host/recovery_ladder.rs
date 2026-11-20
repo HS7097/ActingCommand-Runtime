@@ -357,6 +357,10 @@ pub(super) struct PendingRecoveryLadder {
     /// Workflow #390 DRILL-1: a person's drill, and what it may do; `None` for a ladder a
     /// trigger started. A drill's own records are tagged `drill`.
     drill: Option<RecoveryDrillMode>,
+    /// Workflow #490 ENTRY-A fix round 1: its trigger is a scheduled run's failed lease end, whose
+    /// settlement takes a recovery held back for it (a direct run's, and every other trigger's,
+    /// is no such run).
+    scheduled_run: bool,
 }
 
 impl PendingRecoveryLadder {
@@ -370,12 +374,36 @@ impl PendingRecoveryLadder {
         &self.claim
     }
 
-    /// Workflow #490 ENTRY-A: the failed run a task-stage trigger names; `None` for any other
+    /// Workflow #490 ENTRY-A: the failed scheduled run a task-stage trigger names, whose
+    /// settlement is still to come when the ladder is held back; fix round 1: `None` for a direct
+    /// run's trigger too (it settles nothing that could take the recovery), and for any other
     /// trigger (a preparation's, a burst's, a fence's, a drill's).
     pub(super) fn task_run(&self) -> Option<RunId> {
         self.trigger
             .run_id
-            .filter(|_| self.trigger.stage == RecoveryTriggerStage::Task)
+            .filter(|_| self.scheduled_run && self.trigger.stage == RecoveryTriggerStage::Task)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 1: the instance it recovers.
+    pub(super) const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    /// Workflow #490 ENTRY-A fix round 1: its trigger's correlation, which a ladder admitted again
+    /// from a hold keeps: how an entry block knows its own recoveries.
+    pub(super) const fn correlation(&self) -> CorrelationId {
+        *self.correlation_id.transport()
+    }
+
+    /// Workflow #490 ENTRY-A fix round 1: whether the cool-down window holds it back (§4.6).
+    pub(super) const fn respects_cooldown(&self) -> bool {
+        self.respect_cooldown
+    }
+
+    /// Workflow #490 ENTRY-A fix round 1: whether it is a person's drill, which no entry block
+    /// takes as its recovery.
+    pub(super) const fn is_drill(&self) -> bool {
+        self.drill.is_some()
     }
 
     pub(super) const fn holder_id(&self) -> HolderId {
@@ -407,6 +435,10 @@ impl PendingRecoveryLadder {
 /// An admitted ladder, or why its admission was suppressed with the `until_unix_ms` its
 /// `recovery_ladder_suppressed` record names.
 type LadderAdmission = Result<PendingRecoveryLadder, (RecoveryLadderSuppression, u64)>;
+
+/// A task-stage trigger's match on one instance: the instance's `stuck_recovery` settings, the
+/// trigger item and how it matched.
+type TaskTriggerMatch<'a> = (InstanceStuckRecovery, &'a TriggerItem, RecoveryTriggerMatch);
 
 /// Per instance: where the cool-down window ends, and the identity of the latest preparation
 /// attempt (`PreparationSuperseded`). Whether a ladder holds or waits is the scheduler's
@@ -1176,6 +1208,7 @@ impl HostShared {
             config: Arc::clone(&config),
             profile,
             drill: None,
+            scheduled_run: false,
         };
         Ok((event, self.admit_recovery_ladder(pending)?))
     }
@@ -1264,6 +1297,7 @@ impl HostShared {
             config: Arc::clone(&config),
             profile,
             drill: None,
+            scheduled_run: false,
         };
         self.admit_recovery_ladder(pending)
     }
@@ -1367,6 +1401,7 @@ impl HostShared {
                 config: Arc::clone(&burst.config),
                 profile,
                 drill: None,
+                scheduled_run: false,
             };
             if let Some(ladder) = self.admit_recovery_ladder(pending)? {
                 self.enqueue_ladder_claim(ladder)?;
@@ -1659,24 +1694,15 @@ impl HostShared {
         }
     }
 
-    /// Workflow #369 H-1 (Workflow #490 ENTRY-A: one rule for the lease end and the settlement):
-    /// whether a run's failure `failure_code` on `resolved` starts a ladder at the run's lease end,
-    /// before its admission: not a direct run under `rules.direct_runs = exempt` (B1), a physical
-    /// instance (A1), `stuck_recovery` on, a trigger item of `config` that matches the code at the
-    /// task stage. Returns the instance's settings and the item with how it matched.
-    fn task_trigger_item<'a>(
+    /// Workflow #369 H-1: the instance's `stuck_recovery` settings when a run's failure on
+    /// `resolved` may start a ladder at the task stage at all: not a direct run under
+    /// `rules.direct_runs = exempt` (B1), a physical instance (A1), `stuck_recovery` on.
+    fn task_trigger_settings(
         &self,
-        config: &'a LadderConfig,
+        config: &LadderConfig,
         resolved: &RegisteredInstance,
         direct: bool,
-        failure_code: &CodeStr,
-    ) -> RuntimeHostResult<
-        Option<(
-            actingcommand_contract::InstanceStuckRecovery,
-            &'a TriggerItem,
-            RecoveryTriggerMatch,
-        )>,
-    > {
+    ) -> RuntimeHostResult<Option<InstanceStuckRecovery>> {
         if direct_run_exempt(&config.rules, direct) {
             return Ok(None);
         }
@@ -1691,17 +1717,68 @@ impl HostShared {
         {
             return Ok(None);
         }
+        Ok(Some(settings))
+    }
+
+    /// Workflow #369 H-1 (Workflow #490 ENTRY-A: one rule for the lease end and the settlement):
+    /// whether a run's failure `failure_code` on `resolved` starts a ladder at the run's lease end,
+    /// before its admission: [`Self::task_trigger_settings`], then a trigger item of `config` that
+    /// matches the code at the task stage, the exclusion list read first. Returns the instance's
+    /// settings and the item with how it matched.
+    fn task_trigger_item<'a>(
+        &self,
+        config: &'a LadderConfig,
+        resolved: &RegisteredInstance,
+        direct: bool,
+        failure_code: &CodeStr,
+    ) -> RuntimeHostResult<Option<TaskTriggerMatch<'a>>> {
+        let Some(settings) = self.task_trigger_settings(config, resolved, direct)? else {
+            return Ok(None);
+        };
         Ok(self
             .match_trigger(config, RecoveryTriggerStage::Task, failure_code)?
             .map(|(item, matched)| (settings, item, matched)))
     }
 
+    /// Workflow #490 ENTRY-A fix round 1 (`contracts/policy-suspension.md`, "A failure at the
+    /// entry"): the trigger item a scheduled run's failure `failure_code` at its entry is recovered
+    /// under on `resolved` once it blocks the instance. A failure of class `pack_logic_mismatch`
+    /// (the entry's own layers found the screen not what their packages expect) is matched with the
+    /// exclusion list not read (`classify_unexcluded`): the block's recovery is the block's own
+    /// trigger, whatever `exclude_codes` says of the code, which only keeps it from starting a
+    /// ladder by itself at the run's lease end; with the shipped triggers that is `pack_logic`,
+    /// the item that takes a page-unknown failure of a task. A failure of any other class (the
+    /// device link's, a fence's, the capture backend's, `environment_fault`; a configuration's) is
+    /// matched as the lease end matches it ([`Self::task_trigger_item`]). The class is the code's
+    /// own (`ladder_class_of`); no code is named.
+    fn entry_trigger_item<'a>(
+        &self,
+        config: &'a LadderConfig,
+        resolved: &RegisteredInstance,
+        failure_code: &CodeStr,
+    ) -> RuntimeHostResult<Option<TaskTriggerMatch<'a>>> {
+        if ladder_class_of(failure_code.as_str())
+            != Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch)
+        {
+            return self.task_trigger_item(config, resolved, false, failure_code);
+        }
+        let Some(settings) = self.task_trigger_settings(config, resolved, false)? else {
+            return Ok(None);
+        };
+        Ok(
+            match config.classify_unexcluded(RecoveryTriggerStage::Task, failure_code.as_str()) {
+                TriggerVerdict::Matched { item, by } => Some((settings, item, trigger_match(by))),
+                TriggerVerdict::Excluded | TriggerVerdict::Unmatched => None,
+            },
+        )
+    }
+
     /// Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): whether
-    /// a scheduled run's failure `failure_code` on `instance_id` is one its lease end enters the
-    /// instance's recovery ladder with, by the rule the lease end reads ([`Self::task_trigger_item`]
-    /// under the `recovery_ladder` section in effect). Only such a failure at the entry blocks its
-    /// instance, so a blocked instance always has a recovery coming, held or ended.
-    pub(super) fn ladder_takes_failure(
+    /// a scheduled run's failure `failure_code` at its entry on `instance_id` has a recovery its
+    /// instance's block is recovered by ([`Self::entry_trigger_item`] under the `recovery_ladder`
+    /// section in effect). Only such a failure at the entry blocks its instance, so a blocked
+    /// instance always has a recovery coming, held or ended.
+    pub(super) fn entry_failure_recovered(
         &self,
         instance_id: InstanceId,
         failure_code: &CodeStr,
@@ -1716,31 +1793,59 @@ impl HostShared {
         };
         let config = self.ladder_config()?;
         Ok(self
-            .task_trigger_item(&config, &resolved, false, failure_code)?
+            .entry_trigger_item(&config, &resolved, failure_code)?
             .is_some())
     }
 
     /// Workflow #369 H-1: decides, inside a run's failed lease end, whether its trigger starts
     /// a ladder: not a direct run under `rules.direct_runs = exempt` (B1), a physical instance
     /// (A1), `stuck_recovery` on, a trigger item that matches the code at the task stage, then
-    /// the admission. Returns the admitted ladder.
+    /// the admission. Returns the admitted ladder. Workflow #490 ENTRY-A fix round 1: a scheduled
+    /// run's failure the exclusion list keeps from starting a ladder, whose class the block's own
+    /// trigger takes ([`Self::entry_trigger_item`]), starts none here; its ladder is prepared and
+    /// kept for the run's settlement, which takes it as the recovery of the block it sets (taken
+    /// up at the lease sweep's next tick, `take_up_entry_recoveries`) or lets it go when the run did
+    /// not fail at its entry.
     pub(super) fn ladder_at_lease_end(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         resolved: &RegisteredInstance,
         trigger: LadderTrigger,
     ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
-        let instance_id = resolved.instance_id();
         let config = self.ladder_config()?;
-        let Some((settings, item, matched)) = self.task_trigger_item(
+        let Some(matched) = self.task_trigger_item(
             &config,
             resolved,
             trigger.direct,
             &trigger.terminal.failure_code,
         )?
         else {
+            if !trigger.direct
+                && let Some(matched) =
+                    self.entry_trigger_item(&config, resolved, &trigger.terminal.failure_code)?
+            {
+                let pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+                self.hold_entry_recovery(resolved.instance_id(), pending, 0)?;
+            }
             return Ok(None);
         };
+        let pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+        self.admit_recovery_ladder(pending)
+    }
+
+    /// Workflow #369 H-1: the ladder a run's failed lease end `trigger` starts on `resolved` under
+    /// the item `matched` names, not yet admitted. Workflow #490 ENTRY-A fix round 1: a scheduled
+    /// run's (not a direct run's) is marked so, whose settlement may take it when it is held.
+    fn task_ladder(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        resolved: &RegisteredInstance,
+        trigger: LadderTrigger,
+        config: &Arc<LadderConfig>,
+        matched: TaskTriggerMatch<'_>,
+    ) -> RuntimeHostResult<PendingRecoveryLadder> {
+        let (settings, item, matched) = matched;
+        let instance_id = resolved.instance_id();
         // Workflow #336 L2d (R23): a run that binds no recovery package takes the return-home
         // package of its package's game and server: Workflow #373 NAV-3a, the one the
         // standard-pack registry of its game names.
@@ -1762,7 +1867,7 @@ impl HostShared {
                 }
             }
         };
-        let profile = ladder_profile(resolved, &config)?;
+        let profile = ladder_profile(resolved, config)?;
         let issuer = self.events.issuer();
         let request_id = issuer
             .mint_request_id()
@@ -1781,7 +1886,7 @@ impl HostShared {
             causation_id,
             holder_id,
         )?;
-        let pending = PendingRecoveryLadder {
+        Ok(PendingRecoveryLadder {
             instance_id,
             instance_alias: resolved.instance_alias.clone(),
             trigger: RecoveryLadderTrigger {
@@ -1809,11 +1914,11 @@ impl HostShared {
             start_rung: item.start_rung,
             respect_cooldown: item.respect_cooldown,
             behind_ladder: false,
-            config: Arc::clone(&config),
+            config: Arc::clone(config),
             profile,
             drill: None,
-        };
-        self.admit_recovery_ladder(pending)
+            scheduled_run: !trigger.direct,
+        })
     }
 
     /// Workflow #387 D1c (B1 `trigger`): after a direct run's failed end released its key, the
@@ -1946,6 +2051,7 @@ impl HostShared {
             config: Arc::clone(&config),
             profile,
             drill: Some(mode),
+            scheduled_run: false,
         };
         let pending = match self.admit_or_suppress_ladder(pending)? {
             Ok(pending) => pending,
@@ -2278,6 +2384,10 @@ impl HostShared {
         let instance_alias = pending.instance_alias.clone();
         let holder_id = pending.holder_id;
         let lease_ttl_ms = pending.claim_ttl_ms();
+        // Workflow #490 ENTRY-A fix round 1: a claim the queue refuses is a transient obstacle to an
+        // entry block's recovery, which keeps it held and tries its admission again at the lease
+        // sweep's next tick.
+        let retry = pending.clone();
         match self.request_host_claim_work(
             HostClaim {
                 request: &claim,
@@ -2294,12 +2404,15 @@ impl HostShared {
             Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
                 Err(*failure.error)
             }
-            Err(failure) => self.append_lifecycle_failure(
-                RuntimeLifecycleFailureStage::OperationCleanup,
-                RuntimeLifecycleFailure::Host(&failure.error),
-                links,
-                None,
-            ),
+            Err(failure) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    links,
+                    None,
+                )?;
+                self.hold_entry_recovery_again(retry)
+            }
         }
     }
 
@@ -4525,26 +4638,12 @@ impl HostShared {
         severity: EventSeverity,
         phase: RuntimeLifecyclePhase,
     ) -> RuntimeHostResult<()> {
-        // Workflow #490 ENTRY-A (`entry_blocks.rs`): a ladder of the instance that ends recovered
-        // ends its entry block (ENTRY-A2: and is the recovery after which a marked pair's failure
-        // at its entry is its own); one that ends without success, or that a blackout or an
-        // admission refusal drops, leaves it blocked and brings it to a person's attention.
-        let recovered = match &phase {
-            RuntimeLifecyclePhase::RecoveryLadderFinished {
-                ladder_result:
-                    RecoveryLadderOutcome::Recovered | RecoveryLadderOutcome::EnvironmentReady,
-                ..
-            } => Some(true),
-            RuntimeLifecyclePhase::RecoveryLadderFinished {
-                ladder_result: RecoveryLadderOutcome::Exhausted,
-                ..
-            }
-            | RuntimeLifecyclePhase::RecoveryLadderSuppressed {
-                reason:
-                    RecoveryLadderSuppression::AdmissionDenied | RecoveryLadderSuppression::Blackout,
-                ..
-            } => Some(false),
-            _ => None,
+        // Workflow #490 ENTRY-A and fix round 1 (`entry_blocks.rs`): what the fact tells its
+        // instance's entry block. A plan drill acted on nothing and tells it nothing.
+        let effect = if pending.plan_drill() {
+            None
+        } else {
+            entry_effect(&phase)
         };
         self.append_event_raw(
             severity,
@@ -4554,11 +4653,77 @@ impl HostShared {
             pending.links.clone(),
             ladder_fact_payload(self.owner_epoch, pending, phase),
         )?;
-        match recovered {
-            Some(true) => self.note_entry_recovered(pending.instance_id),
-            Some(false) => self.note_entry_recovery_failed(pending.instance_id),
+        match effect {
+            Some(EntryEffect::Recovered) => self.note_entry_recovered(pending.instance_id),
+            Some(EntryEffect::Ended) => self.end_entry_block(pending.instance_id),
+            Some(EntryEffect::Failed) => self.note_entry_recovery_failed(pending),
+            // A blackout that covers the instance ends its block there and drops the recovery
+            // (nothing is dispatched inside it, and SR-4a3 raises nothing after it); one that only
+            // comes within the rung's time limit holds the recovery until its end, and the block
+            // ends once the blackout covers the instance (`take_up_entry_recoveries`).
+            Some(EntryEffect::Blackout { until_unix_ms }) => {
+                if self
+                    .blackout_covering(pending.instance_id, &pending.instance_alias)?
+                    .is_some()
+                {
+                    self.end_entry_block(pending.instance_id)
+                } else if pending.drill.is_none() {
+                    self.hold_entry_recovery(pending.instance_id, pending.clone(), until_unix_ms)
+                } else {
+                    Ok(())
+                }
+            }
+            Some(EntryEffect::Transient) => self.hold_entry_recovery_again(pending.clone()),
             None => Ok(()),
         }
+    }
+}
+
+/// Workflow #490 ENTRY-A fix round 1 (`entry_blocks.rs`): what one of a ladder's facts tells the
+/// entry block of its instance.
+enum EntryEffect {
+    /// The ladder ended `recovered`: it ends the block and (ENTRY-A2) is a recovery after which a
+    /// marked pair's failure at its entry may be the pair's own.
+    Recovered,
+    /// The ladder ended `environment_ready` (no startup package proved the screen): it ends the
+    /// block as before, and is no evidence against a pair.
+    Ended,
+    /// The ladder ended without recovering (`exhausted`).
+    Failed,
+    /// A blackout dropped the ladder; `until_unix_ms` is the blackout's end.
+    Blackout { until_unix_ms: u64 },
+    /// A transient obstacle refused the ladder (its admission's refusal, another ladder that holds
+    /// or waits for the instance, a later preparation that superseded its own): no failure of the
+    /// recovery, which is held again and tried at the lease sweep's next tick.
+    Transient,
+}
+
+/// The entry block's reading of the ladder fact `phase`; `None` for every fact that tells it
+/// nothing (a start, a rung, a cool-down's suppression, which holds the recovery by itself).
+fn entry_effect(phase: &RuntimeLifecyclePhase) -> Option<EntryEffect> {
+    match phase {
+        RuntimeLifecyclePhase::RecoveryLadderFinished { ladder_result, .. } => {
+            match ladder_result {
+                RecoveryLadderOutcome::Recovered => Some(EntryEffect::Recovered),
+                RecoveryLadderOutcome::EnvironmentReady => Some(EntryEffect::Ended),
+                RecoveryLadderOutcome::Exhausted => Some(EntryEffect::Failed),
+                RecoveryLadderOutcome::Planned => None,
+            }
+        }
+        RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+            reason,
+            until_unix_ms,
+            ..
+        } => match reason {
+            RecoveryLadderSuppression::Blackout => Some(EntryEffect::Blackout {
+                until_unix_ms: *until_unix_ms,
+            }),
+            RecoveryLadderSuppression::AdmissionDenied
+            | RecoveryLadderSuppression::AlreadyRunning
+            | RecoveryLadderSuppression::PreparationSuperseded => Some(EntryEffect::Transient),
+            RecoveryLadderSuppression::Cooldown => None,
+        },
+        _ => None,
     }
 }
 

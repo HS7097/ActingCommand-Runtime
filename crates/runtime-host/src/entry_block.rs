@@ -6,9 +6,12 @@
 //! memory (`host/entry_blocks.rs`) and hands the evaluation each blocked instance by alias as the
 //! cycle's inputs are read; this is what the evaluation answers the instance's candidates: every
 //! candidate (an owed rerun, an immediate rerun, a remedy request and the fact refresh included)
-//! is deferred with `instance_entry_blocked` and no wake of its own, whatever its rank. The
-//! block's end (a recovery or a run of the instance that succeeded, a resume, a restart) wakes the
-//! evaluation. The Runtime names no game, package or page here.
+//! is deferred with `instance_entry_blocked` and no wake of its own, whatever its rank, but (fix
+//! round 1) a store update package's task, which passes as at position 4a: an instance whose game
+//! asks for an update fails every entry, and only that task ends it. The block's end (a recovery
+//! or a run of the instance that succeeded, a resume, a restart, a covering blackout, a fence)
+//! wakes the evaluation or hands the instance to what owns it. The Runtime names no game, package
+//! or page here.
 
 use crate::codes::HostCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
@@ -55,13 +58,15 @@ fn reason(instance_id: &str, gate: &EntryBlockGate) -> DecisionReason {
 }
 
 /// Position 4b as the evaluator's whole-instance holds (as position 4a's, `application_update`):
-/// each blocked instance, every task held, so a candidate the round settles before it asks the
-/// eligibility closure waits with the block's reason too. An instance position 4a holds
-/// (`update_pending`) keeps 4a's hold, the earlier position.
+/// each blocked instance, every task held but (fix round 1) a store update package's task
+/// (`store_tasks`), so a candidate the round settles before it asks the eligibility closure waits
+/// with the block's reason too. An instance position 4a holds (`update_pending`) keeps 4a's hold,
+/// the earlier position, which lets the same tasks pass.
 pub(crate) fn hold(
     holds: &mut InstanceHolds,
     gates: &EntryBlockGates,
     update_pending: &BTreeSet<String>,
+    store_tasks: &BTreeSet<String>,
 ) {
     for (instance_id, gate) in gates {
         if !update_pending.contains(instance_id) {
@@ -69,7 +74,7 @@ pub(crate) fn hold(
                 instance_id.clone(),
                 reason(instance_id, gate),
                 HostCode::InstanceEntryBlocked.code(),
-                BTreeSet::new(),
+                store_tasks.clone(),
             );
         }
     }

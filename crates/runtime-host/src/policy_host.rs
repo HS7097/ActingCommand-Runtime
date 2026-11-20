@@ -4039,8 +4039,14 @@ impl PolicyHost {
         let mut instance_holds =
             crate::application_update::instance_holds(&update_pending, &store_tasks);
         // Workflow #490 ENTRY-A (position 4b): every candidate of an entry-blocked instance the
-        // round settles before it asks the closure waits with the block's reason as well.
-        crate::entry_block::hold(&mut instance_holds, entry_blocked, &update_pending);
+        // round settles before it asks the closure waits with the block's reason as well; fix
+        // round 1: but a store update task's.
+        crate::entry_block::hold(
+            &mut instance_holds,
+            entry_blocked,
+            &update_pending,
+            &store_tasks,
+        );
         // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): a
         // member in its switch cooldown is held whole at position 2, so every candidate of it the
         // round settles before asking the closure below (behind another member's winner of the
@@ -4261,8 +4267,12 @@ impl PolicyHost {
                 // position 4b): a scheduled run's failure at its entry blocked the instance; every
                 // candidate (an owed rerun, an immediate rerun, a remedy request, the fact refresh)
                 // waits with no wake of its own until a recovery or a run of the instance
-                // succeeds, a resume lifts a pause of it, or the Runtime restarts.
-                if let Some(gate) = entry_blocked.get(&intent.instance_id) {
+                // succeeds, a resume lifts a pause of it, or the Runtime restarts. Fix round 1: a
+                // store update package's task passes (as at 4a): an instance whose game asks for
+                // an update fails every entry, and only that task can end it.
+                if let Some(gate) = entry_blocked.get(&intent.instance_id)
+                    && !store_tasks.contains(&intent.task_id)
+                {
                     return Ok(crate::entry_block::deferral(
                         &intent.instance_id,
                         gate,
@@ -6323,6 +6333,23 @@ impl PolicyHost {
         )?;
         self.control
             .entry_condition(&catalog.compiled, &intent, admission, input)
+    }
+
+    /// Workflow #490 ENTRY-A2 fix round 1 (the bound): the `on_failure.escalation_threshold` of
+    /// the task `decision_id`'s dispatch runs, in the catalog generation it was dispatched under;
+    /// `None` for a dispatch this host does not know or a task that generation no longer has.
+    pub(crate) fn dispatch_escalation_threshold(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<u16>> {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return Ok(None);
+        };
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        Ok(catalog
+            .compiled
+            .dispatch_task(&dispatch.data.task_id)
+            .map(|task| task.on_failure.escalation_threshold))
     }
 
     /// Workflow #386 SR-2b-1: after the record of `data` is committed with the decision

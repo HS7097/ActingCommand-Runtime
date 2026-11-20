@@ -1684,6 +1684,19 @@ impl LadderConfig {
         {
             return TriggerVerdict::Excluded;
         }
+        self.classify_unexcluded(stage, spelling)
+    }
+
+    /// §3.1 with the exclusion list not read: the first item, in order, that names `stage` and
+    /// either the code `spelling` or its class; never [`TriggerVerdict::Excluded`]. Workflow #490
+    /// ENTRY-A fix round 1: the item an instance's entry block is recovered under, which
+    /// `exclude_codes` does not take from it (the list still keeps the code from starting a ladder
+    /// at its run's lease end, [`Self::classify`]).
+    pub fn classify_unexcluded(
+        &self,
+        stage: RecoveryTriggerStage,
+        spelling: &str,
+    ) -> TriggerVerdict<'_> {
         let class = ladder_class_of(spelling).unwrap_or(LadderClass::NotApplicable);
         for item in self
             .triggers

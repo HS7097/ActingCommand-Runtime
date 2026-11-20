@@ -43002,7 +43002,8 @@ hold; the replay test runs a client's run on a blocked instance).
    `page_confirmation_failed`, `contained_task_linear_intermediate_unobserved`,
    `contained_task_step_unconfirmed`, `contained_task_guard_refused`, …) and the item
    `task_capture_backend`'s four codes; the exclusions keep `contained_task_prerequisite_*` and
-   `contained_task_return_home_entry_unmatched` out. No code is named in the decision.
+   `contained_task_return_home_entry_unmatched` out. No code is named in the decision. (Fix round
+   1 replaces the last condition and lets those codes in: "Fix round 1" below.)
 2. *Settlement* (`policy_outcome.rs`, `PolicyControlState::entry_condition`): when no configured
    condition ended the run, its record carries `condition` {`refunded` true, `count` 1, the window's
    end}; no streak, no escalation, `continue`, no retry (R22 does not rerun it), no pause whatever
@@ -43076,7 +43077,74 @@ hold; the replay test runs a client's run on a blocked instance).
    the pair's attempts only when its rule sets a backoff, and without one R22 reruns it first after
    each recovery. With the recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0,
    `escalation_threshold` 2): three runs failing at the entry and three recoveries, the third run
-   pausing the pair.
+   pausing the pair. (Fix round 1 writes what orders the pair and bounds it whatever runs first:
+   below.)
+
+**Fix round 1** (the coordinator's work order of 11-21 after the independent review of #1853,
+`rd-1121/review-1853.md`; the rulings are the coordinator's, not the owner's words). It replaces
+rule 1's last condition, rule 4's ends of a recovery and rule 6's evidence, and adds:
+
+1. *The failures production has* (the review's "missed"). The shipped `exclude_codes` name
+   `contained_task_prerequisite_*` and `contained_task_return_home_entry_unmatched`, exactly the
+   failures of the 11-19 storm and of the seven rules that fail daily, so they stayed rerun at once.
+   Now a failure at the entry raised by the run's own entry (its prerequisite chain, its
+   return-home layer, its entry check) is an entry failure whatever the ladder's trigger
+   configuration says of its code. How it is told: by the code's `ladder_class`
+   `pack_logic_mismatch` (those layers judged the screen not what their packages expect; no code is
+   named). Every other failure met at the entry (`environment_fault`: `device_link_lost`, a
+   fence's `instance_resources_fenced`, the capture backend's codes, which its own item
+   `task_capture_backend` takes; a configuration's `declaration_error`) keeps the old third
+   condition, the ladder's configuration with its exclusions. The ladder rules of the instance
+   still decide whether a task-stage ladder may run at all (a physical instance, `stuck_recovery`
+   on): a fixture instance blocks nothing, as before. The block's recovery is the block's own
+   trigger: the lease end, which the exclusion keeps from starting a ladder, prepares the ladder
+   of the run's trigger under the item `LadderConfig::classify_unexcluded` gives (the shipped
+   triggers: `pack_logic`, the rule that takes a page-unknown failure of a task; the rungs as
+   configured) and keeps it for the run's settlement, which takes it as the block's held recovery,
+   due at once, admitted at the lease sweep's next tick (`ladder_at_lease_end`, `task_ladder`,
+   `entry_trigger_item`, `entry_failure_recovered`). No key, rule name or interface revision.
+2. *No block without an end and a person told* (the review's findings 1 and 2), in
+   `append_recovery_ladder_fact`'s reading of the ladder's facts (`entry_effect`),
+   `enqueue_ladder_claim`, the worker's panic branch (`host_claims.rs`), `fence_instance` and
+   `take_up_entry_recoveries`: a recovery a blackout covering the instance suppressed ends the block
+   and is dropped (one a coming blackout stopped is held until its end, and the block ends once the
+   blackout covers the instance; SR-4a3 as it is); a recovery the admission's capacity refusal,
+   `already_running`, a refused claim or a superseded preparation refused stays held and is tried at
+   the next tick (while capacity refuses or another ladder holds the instance the sweep keeps it
+   without trying, nothing recorded), never a failure and never a warning by itself; a recovery
+   that ended `exhausted` or whose worker panicked tells a person once per block; a fence ends the
+   block and drops its recovery; and a block that lasted `scheduling.unavailable_probe.
+   attention_after_ms` tells a person once per block whatever holds it (the same warning with
+   `elapsed_ms` and `limit_ms`; the one key serves AVAIL-1 and the entry blocks). The block counts
+   only its own recoveries' failures (`EntryBlock::recoveries`, the trigger correlations of the
+   blocking runs and of the recoveries it held), and a scheduled run's own recovery that failed
+   before its settlement (`EntryBlocks::unrecovered`, by the run); a recovery held for a run whose
+   settlement is to come is kept by the run (`EntryBlocks::cooled`, by run, only while the run is
+   `settling`), never for a direct run's ladder (`PendingRecoveryLadder::task_run`, its new
+   `scheduled_run`).
+3. *Store update tasks* pass position 4b as they pass 4a (`policy_host.rs`, `entry_block::hold`):
+   an instance whose game asks for an update fails every entry; that task's success ends the
+   block as any run's does.
+4. *ENTRY-A2's evidence*: only a ladder that ended `recovered` counts (`environment_ready` ends the
+   block, no evidence); "nothing ran first" also counts every key of the instance granted to a
+   person's or a client's claim (a client's lease, a Lab operation's, an input lifecycle's; a direct
+   run's is counted once at its run's start; `grant_prepared_lease_with_links`); an own failure's
+   identity carries the game root's data files `g` when the game has a standard-pack root; and the
+   bound: the mark counts the pair's failures at the entry in a row settled as conditions since it
+   last started its main package, and once they reach its rule's `escalation_threshold`
+   (`PolicyHost::dispatch_escalation_threshold`, the dispatch's catalog generation) every later
+   failure at the entry after a recovery that ended `recovered` is the pair's own, whatever ran
+   first. Worst case with the recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0,
+   `escalation_threshold` 2), the pair not assumed first: paused by its fourth failure at the entry,
+   each after a recovered ladder (two conditions, two own failures with one identity); a failure
+   after an unblocking that was no recovery is a condition that costs no own count and needs a
+   person or another run each time. What orders the pair after the block is the evaluation's
+   allocation order, the activity's interval and each rule's trigger and cooldown, not the failure.
+   All in the Host's memory.
+5. *The production path tested*: the replay F5 settles the second failure at the entry through
+   `failure_settlement.rs` (the marks its run's start read before `begin_contained_run` counted it,
+   the real error frame, the previous identity), which fails if the count were read after the
+   increment.
 
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`):
@@ -43084,7 +43152,7 @@ class `none`):
 | Code | The one situation | Refuses or warns | Exit status |
 |---|---|---|---|
 | `instance_entry_blocked` | a candidate of an entry-blocked instance waits (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason | none |
-| `instance_entry_blocked_awaiting_person` | an entry-blocked instance's recovery ended without success; it waits for a person (the same values) | warns, once per block (a `runtime.failed` record) | none |
+| `instance_entry_blocked_awaiting_person` | an entry-blocked instance waits for a person: one of its block's own recoveries ended without recovering (exhausted, its worker panicked), or (fix round 1) the block lasted `scheduling.unavailable_probe.attention_after_ms` (then `elapsed_ms`, `limit_ms`, two optional values added) (the same values) | warns, once per block (a `runtime.failed` record) | none |
 
 Locations `instance_entry_block` and `take_up_entry_recoveries`. No key, no word, no vocabulary.
 
@@ -43098,11 +43166,12 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 
 | Part | Where |
 |---|---|
-| Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`) |
+| Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`, since fix round 1 `entry_failure_recovered`) |
 | Whose failure (A2) | `crates/runtime-host/src/failure_identity.rs` (`FailureIdentity::packages`, `own_entry_identity`); `host/entry_blocks.rs` (`EntrySettlement`, `EntryMarks.recovered` and `.started`, `entry_failure_own`, `settle_entry`, `note_entry_recovered`, `note_entry_run_started`, `hand_over_held_recovery`); `host/contained_task.rs` (`begin_contained_run`); `host/failure_settlement.rs` (`build_scheduled_failure_identity`); `host/policy_outcome.rs` (the condition only for a failure not the pair's own); `host/recovery_ladder.rs` (`append_recovery_ladder_fact`) |
 | Settlement and replay | `crates/runtime-host/src/host/policy_outcome.rs` (`record_policy_dispatch_outcome_under_gate`, `entry_failure_input`); `policy_control.rs` (`entry_blocked`, `entry_condition`, `condition_window_end`, `commit_paced_execution`); `policy_host.rs` (`entry_condition`) |
 | The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`, `track_unavailability`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
 | The gate | `crates/runtime-host/src/entry_block.rs`; `policy_host.rs` (`PolicyEvaluationContext::entry_blocked`, `evaluate`); `host/policy_dispatch.rs` |
+| Fix round 1 | `crates/runtime-config/src/recovery_ladder.rs` (`LadderConfig::classify_unexcluded`); `host/recovery_ladder.rs` (`task_trigger_settings`, `entry_trigger_item`, `entry_failure_recovered`, `task_ladder`, `ladder_at_lease_end`, `entry_effect`, `enqueue_ladder_claim`, `PendingRecoveryLadder` `scheduled_run` and its accessors); `host/entry_blocks.rs` (`settling`, `cooled` by run, `unrecovered`, `recoveries`, the conditions in a row, `take_up_entry_recoveries`); `host/failure_settlement.rs` (the threshold, `g`); `host/host_claims.rs` (the panic); `host/resource_fence.rs` (`fence_instance`); `host/lease.rs` (`grant_prepared_lease_with_links`); `entry_block.rs` and `policy_host.rs` (store update tasks; `dispatch_escalation_threshold`) |
 | Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md) |
 
 **Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
@@ -43126,6 +43195,29 @@ existing tests of a scheduled run on a fixture instance (`fixture_simulation`) m
 are unchanged; `prq_a_prerequisite_that_meets_an_unknown_page_…` now settles as a condition and
 blocks its instance, which it does not assert. No golden re-recorded; no gate retired.
 
+Fix round 1's tests (host gate map, the second row "#490 ENTRY-A"):
+
+| Test | What it shows |
+|---|---|
+| `entry_a_f1_a_prerequisite_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The shipped defaults, a fake device on `shop`: the declared prerequisite ends on `done`, the run fails with `contained_task_prerequisite_entry_unmatched` (excluded): a condition (`…~fi…`, no retry, nothing counted for the day, no streak), the instance blocked; the block's own ladder (the run's trigger, `pack_logic` by class) is admitted, climbs and ends `exhausted`; still blocked, one person told |
+| `entry_a_f1_b_return_home_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The same with the prerequisite's return-home layer ending away from the prerequisite's entry: `contained_task_return_home_entry_unmatched` (excluded) |
+| `entry_a_f2_a_covering_blackout_ends_the_block_and_drops_its_held_recovery` (item 2) | The recovery held by the cool-down; a blackout covering the instance ends the block at the next tick; no ladder of the run's trigger, past the blackout's end too; no attention |
+| `entry_a_f2_a_capacity_refusal_is_tried_again_and_then_admitted` (item 2) | Hard capacity pressure at the cool-down's end: nothing admitted and nothing recorded (one suppression, the cool-down's), the recovery held and due, no attention; capacity back, the next tick admits it, it recovers and the block ends |
+| `entry_a_f2_a_fence_ends_the_block_and_drops_its_held_recovery` (item 2) | A fence ends the block and drops the held recovery; no ladder of the run's trigger, no attention |
+| `entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_recovery_held` (item 2) | The shipped `attention_after_ms`: nothing a millisecond before, one attention with `elapsed_ms` and `limit_ms` at it, the recovery still held, none more after |
+| `entry_a_f3_a_store_update_task_of_an_entry_blocked_instance_is_dispatched` (item 3) | Policy level: the ordinary task's failure at the entry blocks the instance; with the update fact true the store update task is dispatched, its decision without `instance_entry_blocked`, the ordinary task not, the block kept |
+| `entry_a2_f4_conditions_in_a_row_at_the_threshold_make_the_next_failure_the_pairs_own` (item 4) | Threshold 2, the settlement hook: two conditions each after another run first; after the next recovery, another run first again, the failure is the pair's own (counters 1, `retry_scheduled`) |
+| `entry_a2_f5_the_live_settlement_judges_a_failure_at_the_entry_after_a_real_recovery_the_pairs_own` (item 5) | On a fake device, the live settlement: a condition, a real ladder `recovered`, and the same task's next failure at the entry (at its next occurrence) is its own by the marks its start read: no condition, `consecutive_same_error` 1, an accumulating identity with `g`, the instance blocked holding its run's recovery |
+
+The exhausted ladder of item 2 is F1's and `entry_a_t1_t3_t4_…`'s. The hook tests (A2 a to e) are
+kept: they show what the replay does not (the backoff and the other task run first, the pause at
+the threshold, the mark cleared by a run past its entry, a resume as no evidence, another run
+first as a condition); their hook now reads the rule's threshold as the live settlement does.
+Adapted for fix round 1: `gate_387_d1c.rs`'s `h4_g6_g7_…` case "the code excluded" (the routine
+run fails at its entry with an excluded code of class `pack_logic_mismatch`: the exclusion still
+starts no ladder at the lease end, and the block's own ladder now climbs under `pack_logic` as the
+defaults' does, the ruling's intended change); `gate_373_nav3a.rs`'s `SHOP` is `pub(super)`.
+
 **What is not changed.** A failure in a step of the main package is settled, rerun, counted and
 paused as before (A2 only clears the pair's mark when such a run started its main package);
 budgets are taken at admission and an immediate rerun of a step failure costs one; the failure
@@ -43138,8 +43230,14 @@ needs a change; the records of a failed run keep their codes.
 rule whose threshold is 1) stays paused until its package's content changes, as every pause; the
 deploy lifts nothing. **The marks of A2** are memory: the deployed Runtime starts with none, so each
 pair's first failure at the entry after the deploy is a condition, and the rules whose entry is
-broken are paused after `escalation_threshold` own failures from then on (with the shipped
-recommendation of 2, the third failure at the entry of such a rule, after two recoveries). **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
+broken are paused after `escalation_threshold` own failures from then on (fix round 1: with the
+shipped recommendation of 2, by the fourth failure at the entry of such a rule at the most, each
+after a recovery that ended `recovered`, whatever ran first). **Fix round 1 at deploy:** the
+prerequisite and return-home failures the shipped `exclude_codes` name (the 11-19 storm's, the
+seven daily rules') now block their instance and start its block's own ladder instead of being
+rerun until the day's runs are spent; a block that lasts an hour (the shipped
+`attention_after_ms`) is told to a person; a store update task runs on a blocked instance.
+Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
 `945727d4`: `CodeStr` deserializes any text, `Outcome`'s reader takes any value keys, and the
 schedule explanation's check is its shape rules alone): its status read of an entry-blocked
 instance is byte for byte as before, since the status gains nothing from this slice; its schedule
@@ -43153,7 +43251,7 @@ owes that pair a rerun until the window's end, and a settlement it repeats for a
 record exists (a crash between the record and its completion) is refused
 (`policy_execution_identity_conflict`). A record of an own failure at the entry (A2) is an ordinary
 accumulating failure in the existing format, which v0.12.75 replays as it is (its streak, backoff
-or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。但同一条规则在恢复成功之后、作为这台上的第一次运行又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（退避大于 0 时这台上的其他任务先跑；推荐的 0 退避下恢复后先重跑它），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则（推荐配置下第三次进门失败时停），不再无限循环。恢复后先有别的运行开始过，再失败的仍算实例的条件。
+or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。但同一条规则在恢复成功之后、作为这台上的第一次运行又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（退避大于 0 时这台上的其他任务先跑；推荐的 0 退避下恢复后先重跑它），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则，不再无限循环。恢复后先有别的运行开始过（或有人、客户端占过这台的钥匙），再失败的仍算实例的条件；但这样的条件连续到 `escalation_threshold` 次以后，恢复成功后再进门失败就一律算它自己的，所以推荐配置下最多第四次进门失败时停。只有恢复阶梯以 recovered 结束才算“恢复过”。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；黑窗盖住、围栏接手时挡解除；容量不够等一时的拒绝下一拍再试；挡超过 `attention_after_ms` 也提醒一次；商店更新任务不被挡。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
