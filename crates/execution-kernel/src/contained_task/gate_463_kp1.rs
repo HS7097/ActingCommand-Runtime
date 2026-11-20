@@ -675,9 +675,10 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     let without_key = [3, 15];
 
     // Workflow #463 K-c (register §1.454) declares 18, the scan select without an end, Workflow
-    // #463 INT-1 (register §1.473) 19, an interrupt entry without handlers, and Workflow #463
-    // SEL-2L (register §1.480) 20, a repeated_anchor layout's shared read.
-    assert_eq!(own, [3, KEY_REVISION + 3]);
+    // #463 INT-1 (register §1.473) 19, an interrupt entry without handlers, Workflow #463
+    // SEL-2L (register §1.480) 20, a repeated_anchor layout's shared read, and Workflow #463
+    // SEL-GRID G2 (register §1.491) 21, the lines of a shared read's name boxes.
+    assert_eq!(own, [3, KEY_REVISION + 4]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));

@@ -184,6 +184,39 @@ impl CandidateIdentityDeclaration {
         )
     }
 
+    /// Workflow #463 SEL-GRID G2 ([`CandidateUnreadCause`]): [`Self::map_ocr`]'s feature, and when
+    /// the reading names no identity, why, in the words of a select's refusal: the feature's
+    /// reason, but a reading whose confidence passed `minimum_confidence_milli` and that no alias
+    /// matches within `max_distance` is [`CandidateUnreadCause::BeyondDistance`] where the feature
+    /// keeps `low_confidence`. The one mapping: the feature is `map_ocr`'s, and the cause is read
+    /// from it afterwards, so `map_ocr` does nothing it did not do before; only the Lab's dry run
+    /// asks for the cause.
+    pub fn map_ocr_with_cause(
+        &self,
+        text: &str,
+        confidence: Option<u16>,
+    ) -> (CandidateFeature, Option<CandidateUnreadCause>) {
+        let feature = self.map_ocr(text, confidence);
+        // `map_ocr` answers `low_confidence` past the confidence only from its distance: no alias
+        // lies within `max_distance`.
+        let passed = match &self.recognition {
+            CandidateIdentityRecognition::OcrAliases {
+                minimum_confidence_milli,
+                ..
+            } => confidence.is_some_and(|confidence| confidence >= *minimum_confidence_milli),
+            CandidateIdentityRecognition::IconTemplates { .. } => false,
+        };
+        let cause = match &feature {
+            CandidateFeature::Unknown {
+                reason: CandidateUnknownReason::LowConfidence,
+                ..
+            } if passed => Some(CandidateUnreadCause::BeyondDistance),
+            CandidateFeature::Unknown { reason, .. } => Some(CandidateUnreadCause::of(*reason)),
+            _ => None,
+        };
+        (feature, cause)
+    }
+
     /// Scores are normalized integer milli, in the slot's template declaration order.
     pub fn map_icons(
         &self,
@@ -275,6 +308,50 @@ impl CandidateIdentityDeclaration {
         CandidateFeature::Unknown {
             reason,
             source: Some(self.source()),
+        }
+    }
+}
+
+/// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`):
+/// why a name read no known name, as a select's refusal names it. Every word but one is the
+/// feature's Unknown reason; `beyond_distance` is a reading that passed the confidence and that
+/// no alias matches within `max_distance`, which the feature, its records and its decisions keep
+/// as `low_confidence` (the projection's reasons are a closed vocabulary of the ledger's records,
+/// which this slice does not move). A word for a refusal; nothing decides by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateUnreadCause {
+    Missing,
+    OutOfDomain,
+    /// No confidence, or one below `minimum_confidence_milli`.
+    LowConfidence,
+    /// The confidence passed; no alias lies within `max_distance`.
+    BeyondDistance,
+    Ambiguous,
+    NoConsensus,
+}
+
+impl CandidateUnreadCause {
+    /// The cause of an Unknown of `reason` that is the reason itself.
+    pub const fn of(reason: CandidateUnknownReason) -> Self {
+        match reason {
+            CandidateUnknownReason::Missing => Self::Missing,
+            CandidateUnknownReason::OutOfDomain => Self::OutOfDomain,
+            CandidateUnknownReason::LowConfidence => Self::LowConfidence,
+            CandidateUnknownReason::Ambiguous => Self::Ambiguous,
+            CandidateUnknownReason::NoConsensus => Self::NoConsensus,
+        }
+    }
+
+    /// The word, as it serializes.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::OutOfDomain => "out_of_domain",
+            Self::LowConfidence => "low_confidence",
+            Self::BeyondDistance => "beyond_distance",
+            Self::Ambiguous => "ambiguous",
+            Self::NoConsensus => "no_consensus",
         }
     }
 }

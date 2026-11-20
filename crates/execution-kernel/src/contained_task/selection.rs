@@ -60,8 +60,9 @@ use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateLayout, MAX_IDENTITY_TEMPLATES, PackPoint, PackRegion, RecognitionEvaluator,
-    RecognitionTarget, TargetKind, UnknownIdentityHandling,
+    CandidateLayout, CandidateNameRead, CandidateProjectionFailure, MAX_IDENTITY_TEMPLATES,
+    PackPoint, PackRegion, RecognitionEvaluator, RecognitionTarget, TargetKind,
+    UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, CandidateVerdict, DecisionReason, GateUnknownHandling,
@@ -127,6 +128,12 @@ pub struct SelectionDryRun {
     pub decision: SelectionDecision,
     /// The decision used an author's draft policy instead of the package's sealed document.
     pub policy_override: bool,
+    /// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal
+    /// `select_name_unread`): what the OCR read of each actionable candidate's identity feature
+    /// saw, for the Lab's refusal of a name that reads no known name. Not serialized: the dry
+    /// run's answer is what it was.
+    #[serde(skip)]
+    pub name_reads: Vec<CandidateNameRead>,
 }
 
 /// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?, confirm?,
@@ -910,7 +917,10 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
     Ok(())
 }
 
-/// The layout's candidate projection on one scene; a projection failure keeps its code.
+/// The layout's candidate projection on one scene; a projection failure keeps its code. Workflow
+/// #463 SEL-GRID G2: the dry run projects with its names' reads (`project_candidates_read`), so
+/// this form is the tests' alone.
+#[cfg(test)]
 fn project(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
@@ -919,8 +929,9 @@ fn project(
     project_placed(evaluator, scene, layout_id).map(|(projection, _)| projection)
 }
 
-/// Workflow #404 FS-3: [`project`] with each candidate's origin, in candidate order (the anchor
-/// match's top-left corner of a `repeated_anchor` instance).
+/// Workflow #404 FS-3: the layout's candidate projection on one scene with each candidate's
+/// origin, in candidate order (the anchor match's top-left corner of a `repeated_anchor`
+/// instance); a projection failure keeps its code.
 fn project_placed(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
@@ -929,15 +940,18 @@ fn project_placed(
     evaluator
         .scene_context(scene)
         .project_candidates_placed(layout_id)
-        .map_err(|failure| {
-            ContainedTaskError::with_detail(failure.code(), failure.detail())
-                .with_ppocr_diagnostics(
-                    failure
-                        .cause()
-                        .map(|cause| cause.ppocr_diagnostics().clone())
-                        .unwrap_or_default(),
-                )
-        })
+        .map_err(projection_error)
+}
+
+/// A projection's failure as a select step's error, its code kept (Workflow #463 SEL-GRID G2: one
+/// mapping for [`project_placed`] and the dry run's read projection).
+fn projection_error(failure: CandidateProjectionFailure) -> ContainedTaskError {
+    ContainedTaskError::with_detail(failure.code(), failure.detail()).with_ppocr_diagnostics(
+        failure
+            .cause()
+            .map(|cause| cause.ppocr_diagnostics().clone())
+            .unwrap_or_default(),
+    )
 }
 
 /// Workflow #404 FS-3: the Chebyshev distance in pixels between the anchor match origins of
@@ -2436,7 +2450,12 @@ pub(super) fn dry_run_select_with_facts(
         }
         None => &prepared.policy,
     };
-    let candidate_projection = project(&task.evaluator, &scene, &prepared.layout_id)?;
+    // Workflow #463 SEL-GRID G2: the same projection, with what each name's read saw.
+    let (candidate_projection, name_reads) = task
+        .evaluator
+        .scene_context(&scene)
+        .project_candidates_read(&prepared.layout_id)
+        .map_err(projection_error)?;
     let layout = task
         .evaluator
         .candidate_layout(&prepared.layout_id)
@@ -2455,6 +2474,7 @@ pub(super) fn dry_run_select_with_facts(
         candidate_projection,
         decision,
         policy_override: policy_override.is_some(),
+        name_reads,
     })
 }
 

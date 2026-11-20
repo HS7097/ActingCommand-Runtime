@@ -20,17 +20,18 @@ pub use actingcommand_device::{
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
     NnProviderLabel, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
-    OcrProviderBlocks, OcrProviderDetection, OcrProviderExecutionEvidence, OcrProviderObservation,
-    OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock, PackRect, VisionProviderError,
-    VisionProviderErrorCode, VisionProviderFrame,
+    OcrProviderBlocks, OcrProviderDetection, OcrProviderExecutionEvidence, OcrProviderLines,
+    OcrProviderLinesResult, OcrProviderObservation, OcrProviderRequest, OcrProviderResult,
+    OcrProviderTextBlock, PackRect, VisionProviderError, VisionProviderErrorCode,
+    VisionProviderFrame,
 };
 use actingcommand_vision_ffi::{
     NnClassificationResult, NnEngine, NnInferenceRequest, NnModelLoad, NnModelSpec, OcrBlockMode,
     OcrEngine, OcrExecutionAttestation, OcrExecutionStatus, OcrFallbackPolicy,
     OcrInferenceRequestView, OcrInferenceResult, OcrLineMerge, OcrModelLoad, OcrModelSpec,
-    OcrSessionId, OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode,
-    VisionFfiResult, VisionFrame, VisionFrameView, VisionModelListing, VisionModelLoader,
-    VisionPixelFormat, VisionRect, next_ocr_session_id,
+    OcrNameLines, OcrSessionId, OnnxExecutionProvider, VisionBackendKind, VisionFfiError,
+    VisionFfiErrorCode, VisionFfiResult, VisionFrame, VisionFrameView, VisionModelListing,
+    VisionModelLoader, VisionPixelFormat, VisionRect, next_ocr_session_id,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -883,12 +884,48 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     timeout_ms,
                     blocks: ocr_block_mode(request.blocks),
                     served: &served,
+                    lines: None,
                 })
             },
         )?;
         validate_ocr_backend(&result)
             .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
         Ok(map_ocr_result(result))
+    }
+
+    /// Workflow #463 SEL-GRID G2: a shared read whose name boxes declare `lines` reaches the
+    /// engine with the boxes and the lines as they are, and comes back with each cut block's
+    /// strips and the boxes below the floor.
+    fn read_text_lines(
+        &self,
+        request: OcrProviderRequest<'_>,
+        lines: OcrProviderLines,
+    ) -> Result<OcrProviderLinesResult, VisionProviderError> {
+        let frame = borrow_frame(request.frame)?;
+        let region = vision_rect(request.region);
+        let served = served_rects(request.served);
+        let (result, _) = self.call_ocr(
+            request.model_ref,
+            request.model_sha256,
+            request.timeout_ms,
+            |engine, timeout_ms| {
+                engine.read_text_view(OcrInferenceRequestView {
+                    frame,
+                    region,
+                    languages: request.languages,
+                    timeout_ms,
+                    blocks: ocr_block_mode(request.blocks),
+                    served: &served,
+                    lines: Some(OcrNameLines {
+                        max: lines.max,
+                        line_height: lines.line_height,
+                    }),
+                })
+            },
+        )?;
+        validate_ocr_backend(&result)
+            .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
+        Ok(map_ocr_lines_result(result))
     }
 
     fn read_text_with_execution_evidence(
@@ -910,6 +947,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     timeout_ms,
                     blocks: ocr_block_mode(request.blocks),
                     served: &served,
+                    lines: None,
                 })
             },
         )?;
@@ -1192,16 +1230,50 @@ fn map_ocr_result(result: OcrInferenceResult) -> OcrProviderResult {
             .into_iter()
             .map(|block| OcrProviderTextBlock {
                 text: block.text,
-                rect: PackRect {
-                    x: block.rect.x,
-                    y: block.rect.y,
-                    width: block.rect.width,
-                    height: block.rect.height,
-                },
+                rect: pack_of(block.rect),
                 confidence: block.confidence,
             })
             .collect(),
         confidence: result.confidence,
+    }
+}
+
+/// Workflow #463 SEL-GRID G2: an engine's answer to a request with lines: its blocks as
+/// [`map_ocr_result`] maps them, each block's strips beside them in the same order, and the boxes
+/// below the floor.
+fn map_ocr_lines_result(mut result: OcrInferenceResult) -> OcrProviderLinesResult {
+    let strips = result
+        .blocks
+        .iter_mut()
+        .map(|block| {
+            std::mem::take(&mut block.strips)
+                .into_iter()
+                .map(|strip| OcrProviderTextBlock {
+                    text: strip.text,
+                    rect: pack_of(strip.rect),
+                    confidence: strip.confidence,
+                })
+                .collect()
+        })
+        .collect();
+    let below_floor = std::mem::take(&mut result.below_floor)
+        .into_iter()
+        .map(pack_of)
+        .collect();
+    OcrProviderLinesResult {
+        result: map_ocr_result(result),
+        strips,
+        below_floor,
+    }
+}
+
+/// A rectangle of the vision boundary in the recognition pack's form.
+fn pack_of(rect: VisionRect) -> PackRect {
+    PackRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
     }
 }
 
@@ -2839,11 +2911,13 @@ mod tests {
                 text: "home".to_string(),
                 rect: request.region,
                 confidence: Some(0.99),
+                strips: Vec::new(),
             }],
             confidence: Some(0.99),
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
             detection: None,
+            below_floor: Vec::new(),
         }
     }
 
@@ -2859,11 +2933,13 @@ mod tests {
                     text: "home".to_string(),
                     rect: request.region,
                     confidence: Some(0.99),
+                    strips: Vec::new(),
                 }],
                 confidence: Some(0.99),
                 backend: self.backend,
                 warnings: self.warnings.clone(),
                 detection: None,
+                below_floor: Vec::new(),
             })
         }
     }

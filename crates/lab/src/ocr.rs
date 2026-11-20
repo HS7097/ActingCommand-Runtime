@@ -32,9 +32,9 @@ use actingcommand_execution_kernel::VisionFfiProvider;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_recognition_pack::{
-    NnProviderRequest, NnProviderResult, OcrProviderObservation, OcrProviderRequest,
-    OcrProviderResult, RecognitionPack, RecognitionTarget, ValueTestRight, VisionProvider,
-    VisionProviderError,
+    NnProviderRequest, NnProviderResult, OcrProviderLines, OcrProviderLinesResult,
+    OcrProviderObservation, OcrProviderRequest, OcrProviderResult, RecognitionPack,
+    RecognitionTarget, ValueTestRight, VisionProvider, VisionProviderError,
 };
 use actingcommand_vision_ffi::{
     ONNXRUNTIME_LIBRARY, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VISION_RUNTIME_DIRECTORY,
@@ -529,6 +529,16 @@ impl VisionProvider for OcrDeadlineMax {
     ) -> Result<OcrProviderObservation, VisionProviderError> {
         self.inner
             .read_text_with_execution_evidence(Self::raised(request))
+    }
+
+    // Workflow #463 SEL-GRID G2: a read with lines passes as every OCR request does, its deadline
+    // raised.
+    fn read_text_lines(
+        &self,
+        request: OcrProviderRequest<'_>,
+        lines: OcrProviderLines,
+    ) -> Result<OcrProviderLinesResult, VisionProviderError> {
+        self.inner.read_text_lines(Self::raised(request), lines)
     }
 
     fn classify(

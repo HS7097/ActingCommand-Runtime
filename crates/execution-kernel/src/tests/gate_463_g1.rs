@@ -90,6 +90,7 @@ impl OcrEngine for Engine {
                 text,
                 rect,
                 confidence: Some(0.9),
+                strips: Vec::new(),
             })
             .collect::<Vec<_>>();
         Ok(OcrInferenceResult {
@@ -104,6 +105,7 @@ impl OcrEngine for Engine {
             warnings: Vec::new(),
             ppocr_diagnostics: Vec::new(),
             detection: Some(detection),
+            below_floor: Vec::new(),
         })
     }
 }
