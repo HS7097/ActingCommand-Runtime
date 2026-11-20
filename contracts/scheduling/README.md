@@ -2767,6 +2767,66 @@ Once run counts are optional ("Optional run-count bounds") they no longer stop a
 - **Configuration.** `scheduling.no_progress.enabled` (default `true`), also per instance ([`runtime-config.md`](../runtime-config.md), "No-progress guard"); read at every evaluated cycle. Off on an instance, the evaluation of its pairs is the one before SS-4, the Runtime captures nothing for it and forgets its guards, so turning it off and on releases them. A Runtime start begins with no guard (each pair may run once more before its guard is armed again), and so does a new catalog generation for the pairs it decides.
 - **Entry point.** The policy crate's `evaluate_with_no_progress` takes the armed guards (`NoProgressGuards`) beside the instance holds; `NoProgressMemory` is the Runtime's memory (`capture`, `admit`, `observe`, `guards`, and since SS-4b `forget_released`, which the Runtime calls after every evaluation with the guards it passed, so that a guard the evaluation released for another cause is gone). With no guard the evaluation is `evaluate_with_instance_holds`'s, byte for byte, and a pair held for its served cause decides as before SS-4b.
 
+## An unavailable instance is probed again (Workflow #489 AVAIL-1, since 0.12.76)
+
+Register §1.493. A physical policy instance whose device the Runtime self-checks is available to
+the scheduler only while its stored self-check passes (Workflow #317 sc3): the backend self-check
+gate publishes `session.instance.available` `false` (`backend_selfcheck:<entry>:<generation>`) when
+a recorded open fails its check, and republishes the configured seed when a later one passes. The
+evaluation blocks every candidate of an unavailable instance at placement (`instance_unavailable`,
+`availability_source` `self_check`), so nothing is dispatched to it, and before this slice nothing
+else ran its self-check again: a self-check runs only in a run's, a rung's or a preparation's opens
+(a daemon start, an emulator control, a person's self-check or resume, a ladder, a fence's recheck),
+and a ladder its failure matched could be suppressed by an open cool-down window, which drops it and
+schedules nothing for the window's end. Two instances stayed unavailable for 15 and 16 hours on
+11-20 although a self-check passed at once when a person ran one.
+
+- **Which instances.** One the gate holds unavailable after a device self-check that failed (its
+  `device.self_check` record with `failure_code`), while its configured seed is available and no
+  fence, device link, device state or device system holds it. It stops being one when the gate no
+  longer holds it so. One the gate holds for a self-check never made (`backend_selfcheck:unchecked`:
+  a start before its preparation, facts dropped at an emulator stop) is not taken up until a
+  self-check of it fails: the emulator watch, the idle wake and a person's resume own those.
+- **The probe** is the device self-check `actingctl selfcheck` makes (a preparation on the
+  instance's key: it closes a retained session, reads the emulator status first, opens the backends
+  and checks capture and input), as the Runtime's own recovery preparation: no game input, no
+  application launch, no emulator start, no ladder of its own, and direction ① counts none of its
+  records. It runs on a self-check claim, which the lease sweep queues only while nothing holds or
+  waits for the instance's key and no takeover cool-down runs, so it never waits in front of a
+  client's, the Lab's or the scheduler's own work; it holds the key for the preparation alone.
+- **When** (`scheduling.unavailable_probe.*`, [runtime-config.md](../runtime-config.md)):
+  `first_interval_ms` after the instance became one, then after each failed probe the interval
+  times `factor`, at most `max_interval_ms`; an interval counts from the latest of the probe before,
+  the instance's latest recorded self-check or dropped self-check facts, and the latest sweep tick at
+  which a claim held or waited for its key. A probe that passes makes the instance available (the
+  gate republishes the seed) and ends the probes; a probe that fails is recorded with the next one's
+  time.
+- **A cool-down's end.** A ladder its cool-down suppresses (`recovery_ladder_suppressed`
+  `cooldown`) while the instance is one is held with it, with the `until_unix_ms` its suppression
+  names. From then on (no later than the sweep's next tick) a probe is due whatever its interval:
+  passing, the instance is available and the held recovery is dropped; failing, the held recovery is
+  admitted after the probe's record as it would have been without the cool-down (every other rule of
+  its admission as for every ladder) and its claim queued. The cool-down still holds a recovery back
+  while it runs; a drill is refused to its person as before; `stuck_recovery_cooldown_secs` keeps
+  its meaning.
+- **What holds the probes.** A scheduling pause of the instance or the global one, in any stage and
+  mode; a fence (its own recheck owns it, and the fenced instance is not one); an emulator the idle
+  action holds stopped (Workflow #486 owns its wake); a blackout that covers the instance (complete
+  silence; probed after it); the Runtime's stop. Each probe is checked again on the key. A pause, a
+  fence or an idle stop also drops a held recovery.
+- **A person is told** once per unavailability that lasted `attention_after_ms`:
+  `instance_unavailable_awaiting_person` (a warning `runtime.failed` record under the instance,
+  handed to the daemon's log too), and the status's `unavailable.awaiting_person`. Both end when the
+  instance is available again; the probes go on meanwhile.
+- **Records.** `instance_unavailable_probe_failed` (warning: the probe's number, the self-check's
+  failure, the next probe's time), `instance_unavailable_probe_passed` (info: the number, how long it
+  was unavailable, its cause) and `instance_unavailable_awaiting_person`, each a `runtime.failed`
+  record; the probe's own preparation records what every preparation records.
+- **Status.** `RuntimeInstanceStatus.unavailable` ([runtime-interface.md](../runtime-interface.md)):
+  since when, why, the probes, the latest one's end, the next one's time and `awaiting_person`;
+  absent for every available instance. Memory only: a restart starts it again at the gate's next
+  decision.
+
 ## Runtime Boundary
 
 V1 persistent scheduling state is single-host, local-filesystem state. Catalog generations, active pointers, ledgers, leases, budget journals, fact projections, approval projections, and release-set pointers must not be shared concurrently by independent hosts. A future multi-host revision must add host identity and fencing to every one of those owners instead of partially extending the V1 files.

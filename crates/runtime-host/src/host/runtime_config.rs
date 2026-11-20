@@ -1121,6 +1121,21 @@ impl HostShared {
         )
     }
 
+    /// Workflow #489 AVAIL-1 (`contracts/scheduling/README.md`, "An unavailable instance is
+    /// probed again"): `scheduling.unavailable_probe.*` in effect, read at every lease sweep tick
+    /// while an instance is unavailable by its device self-check, so an instruction applies from
+    /// the next tick.
+    pub(super) fn unavailable_probe_config(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::UnavailableProbeConfig> {
+        Ok(
+            lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+                .scheduling()
+                .map_err(remedy_config_failure)?
+                .unavailable_probe,
+        )
+    }
+
     /// Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect, read at each live
     /// settlement and online reconciliation, which decide a run's `condition` by them.
     pub(super) fn rerun_condition_rule(

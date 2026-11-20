@@ -185,8 +185,9 @@ pub(super) struct PendingFenceRecheck {
 }
 
 /// #411 A38: `outcome` with `failure_code` = the registered code `spelling` names; a spelling
-/// the embedded catalog does not list leaves the value out.
-fn with_failure_code(outcome: Outcome, spelling: Option<&str>) -> Outcome {
+/// the embedded catalog does not list leaves the value out. Workflow #489 AVAIL-1: a probe of an
+/// unavailable instance records its failure by it too.
+pub(super) fn with_failure_code(outcome: Outcome, spelling: Option<&str>) -> Outcome {
     let registered = spelling.and_then(|spelling| {
         let relayed = Outcome::relayed(spelling);
         if relayed.code().as_str() == spelling {

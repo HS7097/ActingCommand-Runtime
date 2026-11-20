@@ -267,6 +267,26 @@ actingcommand_contract::outcome_codes! {
         /// `instance_id`, `attempts` the passing recheck's number, `limit_count`).
         InstanceResourcesFenceRecheckPassed => "instance_resources_fence_recheck_passed": info / none,
         // Workflow #403 end
+        // Workflow #489 AVAIL-1 begin: an instance its device self-check made unavailable is
+        // probed again.
+        /// Warning (Workflow #489 AVAIL-1). A probe of an instance its device self-check made
+        /// unavailable (its device self-check only) did not pass; the instance stays unavailable.
+        /// One `runtime.failed` record per probe (keys `instance_id`, `attempts` the probe's
+        /// number, `failure_code` the self-check's failure or the refusal of its claim,
+        /// `next_occurrence_unix_ms` the next probe's time).
+        InstanceUnavailableProbeFailed => "instance_unavailable_probe_failed": warning / none,
+        /// Info (Workflow #489 AVAIL-1). A probe of an instance its device self-check made
+        /// unavailable passed: the instance is available to the scheduler again. One
+        /// `runtime.failed` record (keys `instance_id`, `attempts` the probe's number,
+        /// `elapsed_ms` how long it was unavailable, `failure_code` the cause it had).
+        InstanceUnavailableProbePassed => "instance_unavailable_probe_passed": info / none,
+        /// Warning (Workflow #489 AVAIL-1). An instance stayed unavailable by its device self-check
+        /// for `scheduling.unavailable_probe.attention_after_ms`: a person is told, once per
+        /// unavailability (keys `instance_id`, `elapsed_ms`, `limit_ms` the configured time,
+        /// `attempts` the probes so far, `failure_code` its cause, `next_occurrence_unix_ms` the
+        /// next probe's time).
+        InstanceUnavailableAwaitingPerson => "instance_unavailable_awaiting_person": warning / none,
+        // Workflow #489 AVAIL-1 end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
         /// rung's `recovery_rung_finished` outcome; M387 §4.1).
@@ -2215,6 +2235,9 @@ actingcommand_contract::outcome_locations! {
         QueueLeaseStatus => "queue_lease_status",
         // #411 A38: the lease sweep queues the due rechecks of fences that wait for a person.
         QueueResourceFenceRechecks => "queue_resource_fence_rechecks",
+        // Workflow #489 AVAIL-1: the lease sweep queues the due probes of instances their device
+        // self-check made unavailable, and tells a person of one unavailable too long.
+        QueueUnavailableProbes => "queue_unavailable_probes",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -2516,6 +2539,8 @@ actingcommand_contract::outcome_locations! {
         // #411 A38: one recheck of a fence that waits for a person, on its instance's worker.
         RunResourceFenceRecheck => "run_resource_fence_recheck",
         RunScheduledContainedTask => "run_scheduled_contained_task",
+        // Workflow #489 AVAIL-1: one probe of an unavailable instance, on its instance's worker.
+        RunUnavailableProbe => "run_unavailable_probe",
         RunStartupPackage => "run_startup_package",
         RuntimeLocalIpc => "runtime_local_ipc",
         RuntimeRequestDecodeFailed => "runtime_request_decode_failed",
@@ -2932,6 +2957,11 @@ pub(crate) mod test_spellings {
             DeviceLinkEventForTest => "device_link_event_for_test",
             DeviceLinkTickForTest => "device_link_tick_for_test",
             FenceRecheckTickForTest => "fence_recheck_tick_for_test",
+            // Workflow #489 AVAIL-1: a test runs one tick of the unavailable instances' probes
+            // and opens an instance's recovery cool-down.
+            UnavailableProbeTickForTest => "unavailable_probe_tick_for_test",
+            OpenRecoveryCooldownForTest => "open_recovery_cooldown_for_test",
+            HoldEmulatorStoppedForTest => "hold_emulator_stopped_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.

@@ -1725,6 +1725,20 @@ fn overview_result() -> Value {
     // #422 OV-24K fix 1 (L3): the not-running row the call budget left no time to read.
     properties["instances"]["items"]["properties"]["not_running_incomplete"] =
         json!({"const": true});
+    // Workflow #489 AVAIL-1: an instance unavailable by its device self-check, since when, why,
+    // its probes and whether a person was told, the status member as the Runtime answers it.
+    properties["instances"]["items"]["properties"]["unavailable"] = json!({
+        "type": "object",
+        "properties": {
+            "since_unix_ms": {"type": "integer"},
+            "cause": {"type": "string"},
+            "probes": {"type": "integer"},
+            "last_probe_unix_ms": {"type": "integer"},
+            "next_probe_unix_ms": {"type": "integer"},
+            "awaiting_person": {"type": "boolean"},
+        },
+        "required": ["since_unix_ms", "probes", "awaiting_person"],
+    });
     result
 }
 

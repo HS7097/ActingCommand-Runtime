@@ -98,7 +98,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `suspension.break_in_runs` and `suspension.break_in_ms` of the `scheduling` section; revisions
 ///   5 to 32 are still read, so [5, 33]. Workflow #479 F-2 (0.12.74, register §1.482) raises it to
 ///   34: an instance entry's `device.system` (`android` or `ios`, a handset's only); revisions 5
-///   to 33 are still read, so [5, 34].
+///   to 33 are still read, so [5, 34]. Workflow #489 AVAIL-1 (0.12.76, register §1.493) raises it
+///   to 35: the member `unavailable_probe` of the `scheduling` section; revisions 5 to 34 are
+///   still read, so [5, 35].
 /// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
@@ -209,15 +211,18 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   lower judges invalid; no request changes and `min` stays, so [12, 13]. Workflow #479 F-3a
 ///   (0.12.75, register §1.486) joins revision 13: the value `acib_screen_capture` of
 ///   `RuntimeCaptureBackend`, which a reader of 12 or lower refuses and only a configured iOS
-///   handset's observation carries; the range stays [12, 13].
+///   handset's observation carries; the range stays [12, 13]. Workflow #489 AVAIL-1 (0.12.76,
+///   register §1.493) raises `max` to 14: the status member `RuntimeInstanceStatus.unavailable`,
+///   which a reader of 13 or lower refuses; `min` stays, since an installer of 0.12.75 ([12, 13])
+///   must still meet this build, so [12, 14].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 34]),
+    ("actingd-config", [5, 35]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 9]),
     ("package", [3, 20]),
-    ("runtime-client", [12, 13]),
+    ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];
 

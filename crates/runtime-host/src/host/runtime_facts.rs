@@ -12,7 +12,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::PolicySettlement;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location, Outcome};
+use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, BackendOpenReport, DeviceSelfCheck,
     DeviceSelfCheckCapture, DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus,
@@ -401,7 +401,10 @@ impl HostShared {
             ),
         ];
         let scope = RuntimeFactScope::Instance { instance_id };
-        let result: RuntimeHostResult<()> = (|| {
+        // Workflow #489 AVAIL-1: the code of this open's failed self-check, which makes the
+        // instance one the probes take up when the gate holds it unavailable.
+        let mut failed = None;
+        let recorded: RuntimeHostResult<()> = (|| {
             let (instance_alias, self_checked) = self.selfcheck_instance(instance_id)?;
             let _gate = lock(
                 &self.fact_write_gate,
@@ -434,6 +437,9 @@ impl HostShared {
             // provider has no device connection to hint at).
             if self_checked {
                 let check = device_self_check(instance_alias, report, status);
+                failed = check
+                    .failure_code
+                    .map(|failure| CodeStr::from(failure.code()));
                 self.append_event_under_fact_gate(
                     if check.status == DeviceSelfCheckStatus::Failed {
                         EventSeverity::Warning
@@ -449,12 +455,13 @@ impl HostShared {
                 self.synchronize_fact_store_under_gate()?;
             }
             Ok(())
-        })()
-        .and_then(|()| {
+        })();
+        let result = recorded.and_then(|()| {
             self.gate_policy_availability_on_selfcheck(
                 instance_id,
                 Some((entry, report.session_generation)),
-            )
+            )?;
+            self.track_unavailability(instance_id, failed)
         });
         if let Err(error) = &result
             && error.is_fatal()
@@ -498,7 +505,9 @@ impl HostShared {
                 RuntimeFactInvalidationReason::DeviceClosed,
             )?;
         }
-        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        let result = self
+            .gate_policy_availability_on_selfcheck(instance_id, None)
+            .and_then(|()| self.track_unavailability(instance_id, None));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -543,7 +552,8 @@ impl HostShared {
                 )?;
             }
             Ok(())
-        })();
+        })()
+        .and_then(|()| self.track_unavailability(instance_id, None));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -562,7 +572,9 @@ impl HostShared {
             &self.backend_selfcheck_availability_gate,
             HostLocation::LiftInstanceResourceFence,
         )?;
-        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        let result = self
+            .gate_policy_availability_on_selfcheck(instance_id, None)
+            .and_then(|()| self.track_unavailability(instance_id, None));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -677,6 +689,28 @@ impl HostShared {
                     .map(|seed| seed.available)
             });
         Ok(seed_available.map(|available| (instance_alias, available)))
+    }
+
+    /// Workflow #489 AVAIL-1: when the backend self-check gate holds `instance_id` unavailable
+    /// (its availability in effect is the gate's own withdrawal) while its configured seed is
+    /// available and no fence holds it, that withdrawal's observation time; otherwise `None`: a
+    /// fixture, an instance without a configured seed or with an unavailable one, a fenced
+    /// instance, and one a device link, a device state or a device system holds.
+    pub(super) fn selfcheck_withdrawal(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let Some((instance_alias, seed_available)) = self.gated_policy_instance(instance_id)?
+        else {
+            return Ok(None);
+        };
+        if !seed_available || self.resource_fenced(instance_id)? {
+            return Ok(None);
+        }
+        let (active, _) = self.active_policy_instance_availability(&instance_alias)?;
+        Ok(active
+            .filter(Self::withdrawn_by_selfcheck_gate)
+            .map(|record| record.observed_at_unix_ms))
     }
 
     /// The instance's own active `session.instance.available` record and its boolean value.

@@ -516,6 +516,11 @@ impl HostShared {
         let resource_fences = self
             .resource_fence_statuses()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #489 AVAIL-1: the instances unavailable by their device self-check, with their
+        // probes, read and released before the registry lock.
+        let mut unavailable = self
+            .unavailable_statuses()
+            .map_err(RequestFailure::poison_without_terminal)?;
         // #411 A35-S5: the ladders whose hold waits, read and released before the registry lock.
         let ladder_busy_holds = self
             .ladder_busy_hold_statuses(now)
@@ -600,6 +605,7 @@ impl HostShared {
             let emulator_state = instance.emulator_state;
             let ladder_busy_hold = ladder_busy_holds.get(&instance_id).copied();
             let activity = activities.remove(&instance_id);
+            let instance_unavailable = unavailable.remove(&instance_id);
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -633,6 +639,7 @@ impl HostShared {
                         .with_emulator_state(emulator_state)
                         .with_ladder_busy_hold(ladder_busy_hold)
                         .with_activity(activity)
+                        .with_unavailable(instance_unavailable)
                 })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

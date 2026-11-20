@@ -30,6 +30,7 @@ use super::recovery_ladder::PendingRecoveryLadder;
 use super::resource_close::PendingHeldStartPreparation;
 use super::resource_fence::PendingFenceRecheck;
 use super::startup_package::PendingStartupPackage;
+use super::unavailable_probe::PendingUnavailableProbe;
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
@@ -60,6 +61,9 @@ pub(super) enum HostClaimWork {
     /// several that the device's hold for another member's unconfirmed close refused, queued by
     /// the lease sweep once that hold has ended, on a self-check claim.
     HeldStartPreparation(PendingHeldStartPreparation),
+    /// Workflow #489 AVAIL-1: one probe (the device self-check only) of an instance its device
+    /// self-check made unavailable, on a self-check claim.
+    UnavailableProbe(PendingUnavailableProbe),
 }
 
 impl HostClaimWork {
@@ -77,6 +81,8 @@ impl HostClaimWork {
             Self::IdleAction(_) => crate::codes::IdleLocation::Action.as_str(),
             // The payload runs the registered host operation of a held start preparation.
             Self::HeldStartPreparation(_) => HostLocation::RunHeldStartPreparation.as_str(),
+            // The payload runs the registered host operation of an unavailable instance's probe.
+            Self::UnavailableProbe(_) => HostLocation::RunUnavailableProbe.as_str(),
         }
     }
 }
@@ -273,6 +279,7 @@ impl HostShared {
             HostClaimWork::HeldStartPreparation(pending) => {
                 self.run_held_start_preparation(&pending, key)
             }
+            HostClaimWork::UnavailableProbe(pending) => self.run_unavailable_probe(&pending, key),
         }
     }
 
@@ -307,6 +314,7 @@ impl HostShared {
                     .issue_registered_instance(pending.instance_id),
             ),
             HostClaimWork::HeldStartPreparation(pending) => pending.links.clone(),
+            HostClaimWork::UnavailableProbe(pending) => pending.links.clone(),
         })
     }
 

@@ -1130,6 +1130,21 @@ scheduler) records `reason: "already_running"` (`until_unix_ms` is the window en
 the same queue and is judged against the cool-down again when it gets the key. Scheduling
 pause, shutdown or capacity denial suppresses admission (`admission_denied`).
 
+Workflow #489 AVAIL-1 (since 0.12.76; [scheduling/README.md](scheduling/README.md), "An
+unavailable instance is probed again"): a trigger the cool-down suppresses (at admission, or a
+queued ladder judged again when it gets the key) while its instance is unavailable by a failed
+device self-check no longer does "nothing else": the recovery is held with the instance until the
+`until_unix_ms` its suppression names. At that time (no later than the lease sweep's next tick)
+the instance's self-check runs as a probe; passing, the instance is available and the held
+recovery is dropped; failing, the held recovery is admitted as it would have been without the
+cool-down (the scheduling pause, shutdown, capacity, a blackout and a ladder that holds or waits
+for the instance still decide it) and its claim queued. The window still holds a recovery back
+while it runs; a person's drill it refuses is not held; a pause, a fence or an idle stop of the
+instance drops a held recovery. Which windows open, and when, is unchanged: a suppression never
+opens the window that suppressed it (the admission reads the window's end before a `triggered`
+item writes a new one), so a `cooldown` suppression names a window an earlier admitted ladder
+(`admitted`) or an earlier matched trigger (`triggered`) opened.
+
 The rules that stay in code (M387 §2.2b, Alice 10-10): only a physical instance starts a ladder;
 the ladder's own preparation never does; shutdown and an install drain refuse a trigger and end
 a climb; a lost key ends a climb; a capacity refusal and a scheduling pause refuse a trigger and
