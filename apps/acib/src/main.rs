@@ -79,6 +79,8 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
         timeout_ms,
     } = invocation;
     let (command, device, via) = (request.name(), request.device(), request.via());
+    // (ACIB-3d) A line of `stop` names the way of its kill requests, a refusal too.
+    let stop_way = request.stop_way();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -86,7 +88,8 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
         Ok(runtime) => runtime,
         Err(error) => {
             let failure = Failure::library(Problem::AsyncRuntimeFailed, &error);
-            return Printed::line(Line::refused_on(Some(command), device, via, failure));
+            let line = Line::refused_on(Some(command), device, via, failure);
+            return Printed::line(line.on_stop_way(stop_way));
         }
     };
     let deadline = Duration::from_millis(timeout_ms);
@@ -100,13 +103,14 @@ fn run(invocation: Invocation, started: Instant) -> Printed {
                 // A screenshot keeps its stage in `stage`, `running`, `launch` and `stop` in
                 // `steps`; no command sets both.
                 let steps = context.steps.borrow();
-                Printed::line(Line::deadline_passed(
+                let line = Line::deadline_passed(
                     command,
                     device.or(context.device.get()),
                     via,
                     context.stage.get().or(steps.current()),
                     steps.finished(),
-                ))
+                );
+                Printed::line(line.on_stop_way(stop_way))
             })
     })
 }
@@ -128,6 +132,233 @@ fn emit(printed: &Printed) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    /// (ACIB-3d, fix round 2) The calls of idevice 0.1.68's public interface this program never
+    /// makes, each by its type and its name, in the order of the README's section "Calls this
+    /// program never makes", which names each with its file and line and what it would do to the
+    /// phone: they restart, shut down, put to sleep or into recovery a phone, unpair it, change
+    /// its settings, install, upgrade or remove an application or change its data, or change what
+    /// the phone has mounted, holds on its pasteboard or shows.
+    const NEVER_MADE: [(&str, &str); 40] = [
+        ("DiagnosticsRelayClient", "restart"),
+        ("DiagnosticsRelayClient", "shutdown"),
+        ("DiagnosticsRelayClient", "sleep"),
+        ("LockdownClient", "enter_recovery"),
+        ("RestoreServiceClient", "enter_recovery"),
+        ("RestoreServiceClient", "reboot"),
+        ("LockdownClient", "unpair"),
+        ("UsbmuxdConnection", "delete_pair_record"),
+        ("UsbmuxdConnection", "save_pair_record"),
+        ("LockdownClient", "set_value"),
+        ("LockdownClient", "remove_value"),
+        ("ConfigurationServiceClient", "set_user_interface_style"),
+        ("ConfigurationServiceClient", "set_liquid_glass_opacity"),
+        ("ConfigurationServiceClient", "set_color_filter"),
+        ("ConfigurationServiceClient", "set_device_text_size"),
+        ("ConfigurationServiceClient", "set_reduce_motion"),
+        ("ConfigurationServiceClient", "set_increase_contrast"),
+        ("ConfigurationServiceClient", "set_show_borders"),
+        ("ConfigurationServiceClient", "set_reduce_transparency"),
+        ("SpringBoardServicesClient", "set_icon_state"),
+        ("SpringBoardServicesClient", "set_icon_state_with_version"),
+        ("RestoreServiceClient", "restore_lang"),
+        ("InstallationProxyClient", "install"),
+        ("InstallationProxyClient", "install_with_callback"),
+        ("InstallationProxyClient", "upgrade"),
+        ("InstallationProxyClient", "upgrade_with_callback"),
+        ("InstallationProxyClient", "uninstall"),
+        ("InstallationProxyClient", "uninstall_with_callback"),
+        ("AppServiceClient", "uninstall_app"),
+        ("FileServiceClient", "propose_empty_file"),
+        ("ImageMounter", "upload_image"),
+        ("ImageMounter", "upload_image_with_progress"),
+        ("ImageMounter", "mount_image"),
+        ("ImageMounter", "unmount_image"),
+        ("ImageMounter", "mount_developer"),
+        ("ImageMounter", "roll_personalization_nonce"),
+        ("ImageMounter", "roll_cryptex_nonce"),
+        ("PasteboardServiceClient", "set_text"),
+        ("PasteboardServiceClient", "set_image"),
+        ("OrientationServiceClient", "rotate"),
+    ];
+
+    /// (ACIB-3d, fix round 2) The heading of the README's section of the calls this program never
+    /// makes; the section ends at the next heading.
+    const NEVER_MADE_SECTION: &str = "\n### Calls this program never makes\n";
+
+    /// (ACIB-3d, fix round 2) Every source file of `acib`, by its path under `src/`, with its text.
+    /// A file added under `src/` is added here (its path and `include_str!` of it), or
+    /// [`the_source_names_none_of_the_calls_this_program_never_makes`] fails, naming it.
+    const SOURCES: [(&str, &str); 13] = [
+        ("answer.rs", include_str!("answer.rs")),
+        ("args.rs", include_str!("args.rs")),
+        ("bridge.rs", include_str!("bridge.rs")),
+        ("framing.rs", include_str!("framing.rs")),
+        ("key.rs", include_str!("key.rs")),
+        ("main.rs", include_str!("main.rs")),
+        ("matching.rs", include_str!("matching.rs")),
+        ("out_file.rs", include_str!("out_file.rs")),
+        ("picture.rs", include_str!("picture.rs")),
+        ("redact.rs", include_str!("redact.rs")),
+        ("stages.rs", include_str!("stages.rs")),
+        ("stopping.rs", include_str!("stopping.rs")),
+        ("tap.rs", include_str!("tap.rs")),
+    ];
+
+    /// Whether the line of code `code` names the method `method` as a call is written: `.method(`
+    /// or `.method::<`, or a path to it, `Segment::method` not followed by a character of an
+    /// identifier, whose segment is a type's (it starts with an upper-case letter, as a type, an
+    /// alias of one and `Self` do) or closes a list of generic arguments (`>`). A function of a
+    /// module (as `time::sleep`) is no such path: each call this program never makes is a method.
+    fn names_call(code: &str, method: &str) -> bool {
+        let identifier = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let called = [[".", method, "("].concat(), [".", method, "::<"].concat()];
+        if called.iter().any(|form| code.contains(form.as_str())) {
+            return true;
+        }
+        let path = ["::", method].concat();
+        code.match_indices(path.as_str()).any(|(at, _)| {
+            let (before, after) = (&code[..at], &code[at + path.len()..]);
+            let segment = before
+                .rsplit(|c: char| !identifier(c))
+                .next()
+                .unwrap_or_default();
+            let of_a_type = segment.starts_with(|c: char| c.is_ascii_uppercase())
+                || (segment.is_empty() && before.ends_with('>'));
+            of_a_type && !after.starts_with(identifier)
+        })
+    }
+
+    /// The paths of the files below `folder`, each written after `prefix` with `/` between its
+    /// parts, into `found`.
+    fn files_below(folder: &Path, prefix: &str, found: &mut Vec<String>) {
+        let entries = std::fs::read_dir(folder)
+            .unwrap_or_else(|error| panic!("list {}: {error}", folder.display()));
+        for entry in entries {
+            let entry =
+                entry.unwrap_or_else(|error| panic!("an entry of {}: {error}", folder.display()));
+            let name = entry
+                .file_name()
+                .into_string()
+                .unwrap_or_else(|name| panic!("a file name that is no text: {name:?}"));
+            let written = format!("{prefix}{name}");
+            if entry.path().is_dir() {
+                files_below(&entry.path(), &format!("{written}/"), found);
+            } else {
+                found.push(written);
+            }
+        }
+    }
+
+    /// (ACIB-3d, fix round 2) No source file of `acib` names a call this program never makes
+    /// ([`NEVER_MADE`]), in a method call or a path to it ([`names_call`]; lines that open with
+    /// `//` are comments and not read): a tripwire for how a call is written, not a proof (a
+    /// general request of the library, as `Channel::call_method`, sends whatever it is given, and
+    /// no name holds it). The forms are read, first, on lines written here from their parts, so
+    /// that this file names none of the calls itself. The README's section names exactly these
+    /// calls, in this order, each as the first call of an item of its list. The files read are
+    /// [`SOURCES`], and every file under `src/` is one of them: a file the test does not know fails
+    /// it, by its path.
+    #[test]
+    fn the_source_names_none_of_the_calls_this_program_never_makes() {
+        // A method call, one with generic arguments, a path through the type, through an alias of
+        // it and through its generic arguments are each read as naming the call; a module's
+        // function of the same name, a longer name and a longer path are not.
+        for (line, method) in [
+            (["    client.", "restart", "().await?;"].concat(), "restart"),
+            (
+                [
+                    "        .",
+                    "install_with_callback",
+                    "::<_, ()>(package, None)",
+                ]
+                .concat(),
+                "install_with_callback",
+            ),
+            (
+                ["    let call = DiagnosticsRelayClient::", "shutdown", ";"].concat(),
+                "shutdown",
+            ),
+            (
+                [
+                    "    AppService::",
+                    "uninstall_app",
+                    "(&mut service, bundle)",
+                ]
+                .concat(),
+                "uninstall_app",
+            ),
+            (
+                [
+                    "    AppServiceClient::<Box<dyn ReadWrite>>::",
+                    "uninstall_app",
+                    "(service)",
+                ]
+                .concat(),
+                "uninstall_app",
+            ),
+        ] {
+            assert!(names_call(&line, method), "{line}");
+        }
+        for (line, method) in [
+            ("        tokio::time::sleep(LOOK_INTERVAL).await;", "sleep"),
+            ("    let count = client.restart_count();", "restart"),
+            ("    let stage = Stage::restarted;", "restart"),
+        ] {
+            assert!(!names_call(line, method), "{line}");
+        }
+
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        let start = readme
+            .find(NEVER_MADE_SECTION)
+            .expect("the README has its section of the calls this program never makes")
+            + NEVER_MADE_SECTION.len();
+        let section = readme[start..].split("\n#").next().unwrap_or_default();
+        let listed: Vec<&str> = section
+            .lines()
+            .filter_map(|line| line.strip_prefix("- `"))
+            .map(|item| item.split('`').next().unwrap_or_default())
+            .collect();
+        let held: Vec<String> = NEVER_MADE
+            .iter()
+            .map(|(client, method)| format!("{client}::{method}"))
+            .collect();
+        assert_eq!(
+            listed, held,
+            "the README's list is the test's, in its order"
+        );
+
+        let mut found = Vec::new();
+        files_below(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            "",
+            &mut found,
+        );
+        let known: Vec<&str> = SOURCES.iter().map(|(path, _)| *path).collect();
+        for file in &found {
+            assert!(
+                known.contains(&file.as_str()),
+                "src/{file} is a source file this test does not read: add it to SOURCES"
+            );
+        }
+        assert_eq!(found.len(), known.len(), "SOURCES names each file once");
+
+        for (file, text) in SOURCES {
+            let code = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"));
+            for line in code {
+                for (client, method) in NEVER_MADE {
+                    assert!(
+                        !names_call(line, method),
+                        "src/{file} names {client}::{method}: {line}"
+                    );
+                }
+            }
+        }
+    }
+
     /// The keys of the table `[dependencies]` of the manifest `manifest`, in its order: every
     /// line of it that holds `=` and is no comment, read without the blanks around it and around
     /// its `=` (so a line indented, or written without spaces around `=`, is read too). A line

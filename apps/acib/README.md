@@ -4,7 +4,7 @@
 program of its own: the Runtime will speak to it as a separate process, as it speaks to adb.
 Nothing of the workspace depends on it.
 
-## This version (ACIB-0, ACIB-1 in 0.12.73; ACIB-2, ACIB-3 in 0.12.74; ACIB-3b, ACIB-3c in 0.12.75)
+## This version (ACIB-0, ACIB-1 in 0.12.73; ACIB-2, ACIB-3 in 0.12.74; ACIB-3b, ACIB-3c in 0.12.75; ACIB-3d in 0.12.76)
 
 Each run is one command; it prints **one JSON line** on standard output and ends with status 0
 when the command was answered, or 1 when it was refused or failed. A refused or failed line
@@ -17,18 +17,23 @@ it. With `--out -` it writes no file: the picture's bytes follow the line on the
 (below).
 
 **Two commands change what the phone runs and shows: `launch` and `stop`.** Every other
-command only reads. `launch` starts one application, through the instruments server's process
+command only reads. (ACIB-3d, fix round 2) The library's calls that would restart, shut down or
+otherwise change the phone, or install, remove or change an application, are named in "Calls this
+program never makes", below. `launch` starts one application, through the instruments server's process
 control (whether it then comes to the front the library does not say: to be observed on the
 phone); with `--relaunch` it first ends that application if it runs (what was not saved in it is
 lost). It is undone by `acib stop` with the same bundle, or by the person on the phone (the home
 gesture leaves it; the app switcher ends it); `acib` does not bring back what was in front
-before. `stop` has the instruments server kill the application's own processes at once (its
-`killPid:`; the library does not name the signal: what was not saved in the application is
-lost); it leaves the processes of its extensions (a widget, say) to the system, as a person who
-swipes the application away does. It is undone by `acib launch` with the same bundle, which
-starts the application anew, not in the state it was in. A `launch` or `stop` whose deadline
-passes, or a `launch` answered with any problem (below), may already have changed the phone:
-`acib running` tells what runs.
+before. `stop` asks the instruments server to kill the application's own processes at once (its
+`killPid:`, sent in the form `--via` names, below; the library does not name the signal: what was
+not saved in the application is lost); it leaves the processes of its extensions (a widget, say)
+to the system, as a person who swipes the application away does. It is undone by `acib launch`
+with the same bundle, which starts the application anew, not in the state it was in. A `launch`
+or `stop` whose deadline passes, or a `launch` or `stop` answered with any problem (below), may
+already have changed the phone: `acib running` tells what runs. (ACIB-3d) On a phone with iOS
+27.0.1 the library's own form of the kill ended nothing, sent as the library sends it and (fix
+round 1) with its answer waited for, the way `primitive` (below); **the way `archived` has not
+run on a phone**.
 
 usbmuxd is reached where the library finds it on this platform: on Windows the TCP port 27015
 of 127.0.0.1, which the device service of Apple's own software serves. Pairing is not part of
@@ -273,7 +278,7 @@ server, inside the tunnel of `services`:
 - `running`: for its list of running processes (its device information channel), read-only;
 - `launch`: to launch the application (its process control channel);
 - `stop`: for its list of running processes, to kill each of the application's own processes (its
-  process control channel), and for the list again.
+  process control channel), and (ACIB-3d) for the list again, on a connection of its own.
 
 The application service is asked by `probe` alone (below), for other systems and later versions.
 What these three send, and how their answers are read, was derived from the library's own source
@@ -325,8 +330,10 @@ as no channel):
   bundle's); an entry without a `realAppName` text is of no application.
 - **The launch** (`launch`): the channel `com.apple.instruments.server.services.processcontrol` and
   on it the library's `launch_app` (`services/dvt/process_control.rs` 120-218, below).
-- **The kill** (`stop`): the same process control channel and on it the library's `kill_app`, once
-  per process of the application (`services/dvt/process_control.rs` 275-296, below).
+- **The kill** (`stop`): the same process control channel and on it `killPid:`, once per process
+  of the application, in the form of the way `--via` names (ACIB-3d; `services/dvt/process_control.rs`
+  275-296 is the library's own form, below); the looks after the kills on another connection to
+  the instruments server, in the same tunnel.
 
 **Which processes are of a bundle.** The installation proxy's record gives the bundle's path, a
 directory; the instruments server's list gives each process its pid and its `realAppName`, and no
@@ -461,22 +468,39 @@ answer, error text or log line.
   answer), `connection_failed` or `other`. None of them says that nothing was started: the
   request may have reached the phone. After any `launch` problem, and after a `launch` whose
   deadline passed, `acib running` tells what is true.
-- `acib stop --device <n> --bundle <id>`: the application's own processes the first look lists
-  are each sent a kill request, one after the other: the library's `kill_app`, the method
-  `killPid:` with the pid as a 32-bit number, no answer asked for (`services/dvt/process_control.rs`
-  275-296: it "doesn't wait for confirmation"); the library does not name the signal the server
-  sends. Its extensions' processes are sent nothing: `stop` ends the application, not its
-  extensions, as a person who swipes the application away does, and names the extensions' pids
-  it left, which is no failure. Then the list is read again at once, on a device information
-  channel of its own, and again every 200 ms while it still lists a process the command
-  signalled and the next look starts before the command's deadline (a look the deadline cuts
-  leaves the one before it as the last). The line answers `installed`, whether the application
+- `acib stop --device <n> --bundle <id> [--via <kill>] [--wait-ms <ms>]`: the application's own
+  processes the first look lists are each sent a kill request, one after the other, on the
+  instruments server's process control channel: the method `killPid:`, in the form of the way
+  `--via` names (fix round 1: `primitive`, the default, `archived` or `library`; ACIB-3d, below,
+  where each way's library calls are listed); the library does not name the signal the server
+  sends. A way that asks for answers then waits for them, at most `--wait-ms` (1 to 120000,
+  default 5000) in all, (fix round 1) each answer paired with its request by the number the
+  library gave the request, never by its place among the answers (below).
+  Its extensions' processes are sent nothing: `stop` ends the application, not its extensions,
+  as a person who swipes the application away does, and names the extensions' pids it left,
+  which is no failure. Then (ACIB-3d) another connection to the instruments server is made, in
+  the same tunnel, and its first message read, and on it the list is read again at once, on a
+  device information channel of its own, and again every 200 ms while it still lists a process
+  the command signalled and the next look starts before the command's deadline (a look the
+  deadline cuts leaves the one before it as the last); the connection the kills went out on is
+  held, unused, until the command ends. The line answers `via`, the way (on every line of
+  `stop`, a refusal's too), `installed`, whether the application
   ran at the first look (`was_running`), the pids a kill request was made for (`signalled`), the
   pids of the application the last look lists (`remaining`), whether any runs (`running`), the
   pids of its extensions the last look lists (`extension_pids`) and, of that look, `located` and,
-  while the application is still listed, `application_located`, as `running` names them:
-  `{"command":"stop","device":3,"bundle":"com.example.app","installed":true,"was_running":true,
-  "signalled":[412],"remaining":[],"running":false,"extension_pids":[530],"located":181}`. An
+  while the application is still listed, `application_located`, as `running` names them; (ACIB-3d)
+  of a way that asks for answers, what each kill request was answered (`replies`: per pid,
+  `reply` `without_payload`, `with_payload` or `not_in_time`, and of an answer that came its
+  `message_type`, the first byte of its payload header; a payload is never read), and (fix round
+  2) how many answers this program saw that were given to no kill request (`unpaired_replies`,
+  only when there are any, below); and, of each
+  stage after the first look, whether the command reached it (`reached`: `kill_requests`,
+  `kill_replies` of a way that asks for answers, `look_connection`, `looks_after_kills`):
+  `{"command":"stop","device":3,"bundle":"com.example.app","via":"primitive","installed":true,
+  "was_running":true,"signalled":[412],"replies":[{"pid":412,"reply":"without_payload",
+  "message_type":0}],"remaining":[],"running":false,"extension_pids":[530],"located":181,
+  "reached":{"kill_requests":true,"kill_replies":true,"look_connection":true,
+  "looks_after_kills":true}}`. An
   application that does not run (or that the lookup does not hold, above) is a success that says
   so: `was_running` false, nothing signalled, nothing remaining, its extensions' pids and the
   first look's `located` named (none when the lookup does not hold it: nothing was looked at).
@@ -496,12 +520,276 @@ answer, error text or log line.
   application is stopped (status 0). A kill request that failed (the process control channel not
   opened, or the request not written) is a fact beside the verdict: its pid and the error's kind
   are in `signal_errors` (only when there are any), whether its process is gone (stopped) or
-  still listed (`still_running`). A process of the application the last look lists that the
-  command did not signal (one started after the first look) is named in `remaining` and
-  `running`, and is not `still_running`. A look after the kills failing answers
-  `process_list_failed` and keeps `signalled`; a deadline that passes before the first look after
-  the kills has answered is `deadline_passed`. An application that caught the server's signal
-  and stayed would be seen so, in the looks. It changes what the phone runs (above).
+  still listed (`still_running`); (ACIB-3d) of a way that asks for answers, a request whose
+  answer could not be waited for to its end is such a failed request too, and (fix round 1)
+  names why in `reply_failure`, as far as the library's error tells it (below). A process of
+  the application the last look lists that the command did not signal (one started after the
+  first look) is named in `remaining` and `running`, and is not `still_running`. A look after the
+  kills failing answers `process_list_failed` and keeps `signalled`; (ACIB-3d) the looks'
+  connection not made answers `service_unreachable`, its first message not read
+  `service_handshake_failed`, each with `error_kind`, keeping `signalled`, and none of the three
+  says anything of whether the application runs (no `running`, no `remaining`: `reached` names
+  the stage it stopped at). A deadline that passes before the first look after the kills has
+  answered is `deadline_passed`, with the `stage` (`kill_requests`, `kill_replies`,
+  `look_connection` or `looks_after_kills`). An application that caught the server's signal and
+  stayed would be seen so, in the looks. It changes what the phone runs (above).
+
+  **`stop` on a phone, and its ways (ACIB-3d).** What ran on a phone (observations of one phone,
+  iOS 27.0.1, on 2026-11-19, the system's calculator alone; not a rule):
+
+  - **13:28 to 13:29 JST, the build of ACIB-3c.** `launch` and `launch --relaunch` worked (the
+    relaunch answered another pid: the server ended the running one and started it anew), while
+    `stop`, twice, sent the library's `kill_app` for the one pid the first look listed and then
+    answered `process_list_failed` with `connection_failed`, its `stage_ms` `kill_requests` 1 and
+    `looks_after_kills` 1: the look made right after the kill, on the same connection, failed
+    within about a millisecond; the application kept its pid and the screen did not change,
+    while a `running` right after connected and answered as always.
+  - **15:17 JST, the build of ACIB-3d (`087efba2`).** `stop --via primitive`, once, for the
+    process the 13:28 round had left running: `signalled` named it; `signal_errors` held it with
+    `error_kind` `connection_failed`; `reached` named `kill_requests`, `kill_replies`,
+    `look_connection` and `looks_after_kills` all reached; `stage_ms` `kill_requests` 2,
+    `kill_replies` 2, `look_connection` 398, `looks_after_kills` 29076; `remaining` the same
+    process, `running` true, `still_running`, status 1; a `running` afterwards listed the same
+    process. So the looks on a connection of their own work there, and the kill in the library's
+    own form, its answer asked for, ends nothing: the wait for its answer failed within about two
+    milliseconds, the library's reader of the connection having stopped (the reason the build of
+    fix round 1 names `reader_stopped`, below). `library` was not sent again (the same bytes as at
+    13:28), and `archived` was not sent. (Fix round 3) That build, as every build up to fix round
+    2, read nothing more after the first failed read, and the library can hand a read that is
+    already waiting the end of the connection before an answer it has just read (below): **so
+    the run does not show that the phone sent no answer to the kill before the connection ended**,
+    only that `acib` saw none.
+
+  **What the library's source says of the run at 13:28**, and what it does not:
+
+  - The look after the kill was the library's request for a new device information channel
+    (`_requestChannelWithCode:identifier:` on the root channel, its answer waited for:
+    `services/dvt/remote_server.rs` 425-458, 798-812) on the connection the first look and the
+    kill had used (the first look's channel and the process control channel stay open: the
+    library's channel closes nothing when it is dropped, 118-127, and the one thing that does,
+    the client's own drop, 1265-1271, was not reached). It failed with the library's socket error,
+    which it gives once its reader of the connection has stopped (`closed_error`, 1245-1250; the
+    reader stops on any error of a message it reads: the connection ended or reset, or a message
+    it cannot read, 853-896, `services/dvt/message.rs` 585-665), or when the write itself fails
+    (its TCP stack's connection already gone: `jktcp` 0.1.8, `handle.rs` 92-130, 456-497,
+    `adapter.rs` 330-345). A reader stopped before the request was written would have left it
+    waiting until the deadline (`remote_server.rs` 729-739, 1241-1243): the connection ended while
+    the request was under way, or before it, from the phone's side or from the library's reading
+    of something the phone sent. Which of these, the library cannot tell (one error for all).
+  - The library's `kill_app` waits for its request to be written and flushed alone
+    (`process_control.rs` 286-296: `killPid:` with the pid as a 32-bit number, `expect_reply`
+    false; `remote_server.rs` 784-795, 712-748, 1273-1279); the flush waits for the TCP stack to
+    take the bytes, which it sends at once unless the phone's window is full (`jktcp`
+    `handle.rs` 178-189, 456-497, `adapter.rs` 474-525). Nothing `acib` did after it dropped the
+    connection before the failed look. Whether the phone's server read the request, refused its
+    form or ended the connection on it, its source does not show.
+  - `launch --relaunch`, which ended the application, differs in each of these: its request
+    (`launchSuspendedProcessWithDevicePath:…`) waits for its answer, correlated by its number
+    (`process_control.rs` 182-199, `remote_server.rs` 1346-1354, 798-812), all five of its
+    arguments are archived values, and it was the only request on a fresh connection. The
+    library's own device information client sends a pid as an archived number with its answer
+    asked for (`execnameForPid:` and `isRunningPid:`, `services/dvt/device_info.rs` 95-122), where
+    `killPid:` sends it as a 32-bit number and asks for none.
+  - The library's repository (compared on 2026-11-19, for comparison only) has these three files
+    of 0.1.68 (`process_control.rs`, `remote_server.rs`, `message.rs`) line for line on its main
+    branch: no later commit changed the kill or the reading of the connection. What else the
+    library's public interface offers to end a process is listed below (fix round 1).
+
+  After the run at 13:28 the likeliest cause was the form of the request (the server failing the
+  connection on a pid given as a 32-bit number, where it acts on an archived one); then that the
+  request was not acted on before the connection ended (the library waits for no answer); then
+  that the second device information channel on the same connection ended it. The run at 15:17
+  leaves out the last two: `primitive` waited for its answer and asked nothing more on that
+  connection, and the library's reader of that connection stopped all the same, within two
+  milliseconds of the kill. Left: the form of the request; or (a cause the review of #1849
+  added) a server that does not end a process its own connection did not start (`--relaunch`
+  ends one by another mechanism). Either way the server ended the connection or sent a message
+  the library could not read, and the library's error does not tell which (below); whether it
+  answered the kill before that, the run at 15:17 does not tell (above). The ways, by `--via`:
+
+  - `primitive` (fix round 1: the default, the form that is known):
+    `RemoteServerClient::make_channel` of `com.apple.instruments.server.services.processcontrol`
+    (its answer waited for), then per pid `Channel::call_method` with `killPid:`, the argument the
+    library's own, `AuxValue::U32` of the pid, its answer asked for, then `Channel::read_message`
+    for the answers, at most `--wait-ms` in all, each paired with its request by its number
+    (below). The same bytes as the library's `kill_app` but for the one flag that asks for an
+    answer. On the phone at 15:17: nothing ended, and no answer was seen, the wait for it
+    failing at once (above: whether one came is not known).
+  - `archived`, sent only when `--via archived` names it: the same calls, the argument
+    `AuxValue::archived_value` of the pid as a signed number (as `device_info.rs` 99-101 makes
+    one). Not known: whether this server's `killPid:` takes an archived number, what it answers,
+    which signal it sends. **Its worst reading** (the review of #1849): the library never sends
+    `killPid:` in this form, and its source does not show how the server reads the archived
+    object, so that the server reads it as another number cannot be excluded: a kill may reach
+    another process. It has not run on a phone.
+  - `library`: the library's `ProcessControlClient::new` and `kill_app`, unchanged (what ended
+    nothing at 13:28); only the looks after it differ, on a connection of their own. Not sent
+    again since: the same bytes as at 13:28.
+
+  Every way then makes the looks' connection (`AdapterHandle::connect_to_service_port` to the
+  instruments server's port, `RsdService::from_stream`, its first message read: `tcp/mod.rs`
+  10-17, `services/dvt/mod.rs` 37-46) and looks on it as above. To read a run: `via` names the
+  way; `reached` how far it went; `replies` (or a pid in `signal_errors`, with its
+  `reply_failure`) what became of each request, and `unpaired_replies` how many answers it saw
+  that were of none; `running`, `remaining` and the problem
+  (`still_running` or none) whether the application was ended; `stage_ms` how long each step
+  took.
+
+  **A first run on a phone**, one way at a time, each round from its first step, on an
+  application whose state nothing depends on (a system application, as the calculator was):
+
+  1. `acib launch --device <n> --bundle <id>`: it answers the application's `pid`.
+  2. `acib running --device <n> --bundle <id>`: `running` true, that pid in `pids`.
+  3. `acib stop --device <n> --bundle <id> --via <way>`: read `via`, `reached`, `replies` or
+     `signal_errors` (and their `reply_failure`), `remaining`, `running`, `problem` and
+     `stage_ms`.
+  4. `acib running --device <n> --bundle <id>`: whether the pid is gone (another pid is the
+     application started anew, by the system or by a person: no stop).
+
+  `primitive` first (its bytes are known); `archived` only where its worst reading (above) is
+  accepted; `library` adds nothing to the run at 13:28.
+
+  **Pairing the answers (fix round 1).** The library numbers the messages it sends on a
+  connection 1, 2, 3, … in their order (`services/dvt/remote_server.rs` 249, 791, 804; its
+  reader's own replies to the phone take the number of what they answer, 1020-1032, 1281-1295;
+  making the client sends nothing, `services/dvt/mod.rs` 43-45), and the server answers a request
+  with the request's number (the library pairs every answer it waits for by it:
+  `remote_server.rs` 1138-1161). Before the kills `stop` sends three requests on that connection
+  (the first look's channel request and its `runningProcesses`, then the process control
+  channel's request), so its kill requests are numbered 4, 5, … in the order sent, and an answer
+  is given to the request whose number it carries (bytes 16 to 19 of its header,
+  `services/dvt/message.rs` 531-545, 597) and to no other: an answer that is missing, late or out
+  of order is never given to another pid, and one whose number is of no request still waited for
+  is given to none and (fix round 2) counted, in `unpaired_replies` (only when there are any; no
+  byte of such an answer is read or kept). A request whose answer did not come in time is
+  `not_in_time`. (Fix round 3) `unpaired_replies` counts the answers this program saw before
+  its reading ended (every request answered, the wait passed, a read failed, or after the
+  connection's end the reading of what the library held done, below): one that came later, or
+  that the library had not read whole when the connection ended, is not counted.
+
+  **Reading the answers to their end (fix round 3).** The library's reader of the connection puts
+  each message it reads in its channel's queue before it reads the next, and marks the connection
+  closed only at the read that fails (`services/dvt/remote_server.rs` 861-885, 1062-1086). A read
+  of the channel begun after a message was queued takes it: it looks at the queue first
+  (836-839) and at the closed mark only then (842-844), and once the mark is set it answers at
+  once, never waiting. But a read already waiting when an answer and the end come together
+  returns whichever of the two its `tokio::select!` checks first (846-849), and that macro picks
+  its first branch at random: the error may come first, the answer left in the queue. Up to fix
+  round 2 `stop` ended its reading at the first failed read, so an answer that had reached this
+  computer just before the end could be named `reader_stopped` (two tests did so on CI, and the
+  run at 15:17 may have, above). Since fix round 3 a failed read whose error is the connection's
+  end (`reader_stopped`, the one error the library gives only once its closed mark is set, a
+  mark it never takes back) does not end the reading: each read after it takes the next answer
+  the library still holds, at once, until a read fails again, and only then is a request still
+  without its answer a failed one. **It reads on only after the connection's end.** After
+  `channel_cancelled` (the library dropped the channel's queue with it, `remote_server.rs`
+  1234-1239: nothing is left to take) or `other` (the connection's state is not known) the
+  reading ends at that first failure, as before. These reads send nothing and wait for nothing:
+  what `stop` sends, and when, is as before.
+
+  **When the wait for an answer fails (fix round 1).** The reason is named in `reply_failure`,
+  beside the failed request's pid and `error_kind`, from the library's error value alone (its
+  variant and, of a socket error, its kind; never its text, never a byte of a message, nothing of
+  the device or of another application), one of:
+
+  - `reader_stopped`: the library's error once its reader of the connection has stopped, a socket
+    error of the kind `BrokenPipe`, "remote server connection closed"
+    (`services/dvt/remote_server.rs` 842-849, 1245-1250). The reader stops at the first error of a
+    message it reads (853-896): the stream's end (the phone ended the connection), a reset or
+    another failed read, or a message it cannot read (`services/dvt/message.rs` 585-665). It
+    traces that error at warning level (878) and keeps nothing of it, and every wait after it
+    answers the one fixed error. (Fix round 2) The same error comes, too, when the library fails
+    to write its acknowledgement of a channel the phone asked to open (1020-1032): it then marks
+    the connection closed (1029-1031), its reader still running. **The library gives a caller one
+    undivided error for all of these**, and `acib` does not tell them apart. (Fix round 3) **What
+    it says, and what not:** beside a request, `reader_stopped` says that the connection ended
+    before this program saw an answer to it (every answer the library had read is taken first,
+    above), **not that the phone sent none**: an answer still under way, cut by the end, or one
+    the library could not read as a message (which itself stops the reader) is never seen.
+  - `channel_cancelled`: the library's `UnknownChannel` (`remote_server.rs` 828-833): the channel
+    is no longer the library's, which it makes so only when the phone cancels it
+    (`_channelCanceled:`, 938-960, 1234-1239); (fix round 3) what the library held of the channel
+    goes with it, so an answer read before the cancel and not yet taken is not seen either.
+  - `other`: any other error of the library.
+
+  A message whose stated lengths do not fit its bytes ends the library's reader by a panic
+  (`message.rs` 623, 634, 640-643: the slices are not checked), which leaves its closed flag unset:
+  the wait then runs to its end and answers `not_in_time`, and the panic's text (a place in the
+  library's source) goes to the standard error. So `not_in_time` does not prove that nothing
+  came. What the library's public interface would allow beyond this, none of it built:
+
+  - **A lower call, a reader of `acib`'s own.** `Message::from_reader` is public
+    (`message.rs` 585), and so are the parts of a request (`Message::new`, `MessageHeader::new`,
+    `PayloadHeader::method_invocation`, `Aux::from_values`, `Message::serialize`: 674-687,
+    495-514, 565-570, 330, 692-720): `acib` could hold the kill's connection itself in place of the
+    library's client and read each message with it, getting the parsed message (its payload's
+    bytes too, `raw_data`, 170-171, which `acib` would not read) or the reader's own error. That
+    error divides more, not all: the stream's end and an argument list shorter than it says are one
+    kind, `UnexpectedEof` (590 and 616; 230-252); a reset is the kind the TCP stack gives; a message
+    it cannot read otherwise is `NotEnoughBytes`, `UnknownAuxValueType` or `NsKeyedArchiveError`
+    (184, 211, 299, 308; 272; 653-654). It reads a whole message, every fragment by its length,
+    before it decodes it (588-621), so such a loop could read on after a message it could not
+    decode: a reader that survives an unreadable message. It would give each answer's number and
+    message type as well. Cost here: `acib`'s own conversation on that connection, in place of the
+    library's (the first message, the channel's request and its answer, the numbering, the
+    answers to what the phone itself asks on the connection, which the library gives,
+    `remote_server.rs` 961-1035, and the reader in a task of its own against its panics): some 150
+    to 250 lines and their tests, no crate added.
+  - **The bytes beneath the library.** The library takes any stream (`RemoteServerClient::new`,
+    `remote_server.rs` 1253-1257; `RsdService::from_stream`, `services/dvt/mod.rs` 43-45), so
+    the kill's connection could pass through a wrapper of `acib`'s own, as `probe`'s tap passes
+    the application service's: it would see each read's result, the stream's end, a failed read
+    and its kind, or bytes, and a reader stopped with neither under it would be a message the
+    library could not read. Cost: some 40 lines and a test, no crate, no byte kept; but its words
+    would come from the transport, not from the library's error value.
+  - **The library's own trace** (878: the error's text and its debug form): only a log
+    subscriber reads it, which `acib` installs none of (above) and which needs a crate the
+    dependency list does not have.
+
+  **What else the library offers to end or signal a process (fix round 1; none built).** Of
+  idevice 0.1.68's public interface, beside the `killPid:` above:
+
+  - The instruments server's process control (`services/dvt/process_control.rs`, the feature
+    `dvt`, on): `kill_app` (286-296: `killPid:` with the pid as `AuxValue::U32`, no answer asked
+    for: the way `library`); `launch_app` with `kill_existing` (156-218: the method
+    `launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:`, its
+    options `KillExisting` true, 168-171): it ends a running application only to start it anew,
+    a relaunch and no stop, so `stop` never sends it; `disable_memory_limit` (311-335:
+    `requestDisableMemoryLimitsForPid:` with the pid as `AuxValue::U32`, its answer, a boolean,
+    waited for), which ends nothing (it is the library's one other request of that channel on a
+    pid, and asks for its answer with the pid in the form of `primitive`); `launch_with_options`
+    (234-273) is the crate's own, not public. Any other method of that channel the library does
+    not name: `Channel::call_method` sends whatever it is given (`remote_server.rs` 1334-1343).
+  - CoreDevice's application service (`services/core_device/app_service.rs`, the feature
+    `core_device`, on), which answered none of seven read-only requests on the phone (`probe`,
+    below): `send_signal` (343-372: the feature `com.apple.coredevice.feature.sendsignaltoprocess`
+    with the input `process` `{processIdentifier: <pid>}` and `signal` `<number>`, its answer read
+    as the process, a time on the device and the signal: 78-84); `launch_application` with
+    `kill_existing` (232-300: `terminateExisting` true, 255), a relaunch; `uninstall_app`
+    (325-341: the feature `com.apple.coredevice.feature.uninstallapp`), which removes the
+    application and is no stop, and which `acib` never calls (fix round 2: "Calls this program
+    never makes", below).
+  - The debug server through its proxy (`services/debug_proxy.rs`, the service
+    `com.apple.internal.dt.remote.debugproxy`, 14-24, the feature `debug_proxy`, off):
+    `DebugProxyClient::send_command` (92-123) sends any packet of the GDB remote serial protocol;
+    the library names no packet that ends a process, so what to send would come from that
+    protocol's own documentation, not read here.
+  - WebDriverAgent (`services/wda.rs`, the feature `wda`, off): `terminate_app` (626-641, its
+    `terminateApp` with the bundle) and `delete_session` (696-704): they need WebDriverAgent
+    running on the phone, another project's program.
+  - The diagnostics relay (`services/diagnostics_relay.rs`, the feature `diagnostics_relay`,
+    off): `restart`, `shutdown` and `sleep` (187, 207, 227), the whole phone, no one process,
+    which `acib` never calls (fix round 2: below, with every other call of the library that
+    restarts, shuts down or changes a phone, or installs or removes an application).
+
+  Which next: the debug server, because it is the one way that goes through neither the
+  instruments server's process control (whose `killPid:`, in the form that is known, ended
+  nothing on that phone) nor the application service (which answers nothing there). It needs the
+  feature `debug_proxy` turned on (a change of the dependency's entry), the protocol's
+  documentation, and first a read-only look whether the phone lists the service and what
+  entitlement the handshake names for it (`acib services --device <n> --service
+  com.apple.internal.dt.remote.debugproxy`). `send_signal` costs the least (its feature is on),
+  but its service has answered nothing on that phone.
 
 **Errors.** The steps before the lookup and between it and the instruments server (the device,
 the pairing record, the lockdown sessions, the tunnel, the instruments server listed in the
@@ -513,7 +801,9 @@ processes not of the shape above), `connection_failed` (the library reported the
 the exchange as failed; of the instruments server's connection that is also what it reports once
 its reader of the connection has stopped, whatever stopped it: the phone ending the connection, a
 read failing, or a message the phone sent that it could not read, which it tells none apart:
-`services/dvt/remote_server.rs` 862-884, 1245-1250) and `other` (any other error of the library).
+`services/dvt/remote_server.rs` 862-884, 1245-1250; of a kill request's answer, fix round 1,
+`reply_failure` says what the library's error tells of it, above) and `other` (any other error of
+the library).
 `device_refused` and `xpc_failed` are kinds of the application service's requests, which only
 `probe` asks. A locked phone has no word of its own: the library maps no refusal to one, and none
 is guessed here; what a locked phone answers is to be observed on the phone.
@@ -540,19 +830,26 @@ words:
 - `launch_request`: the process control channel's request, the launch request and its answer.
 - `kill_requests`: the process control channel's request, whose answer is waited for (as every
   channel's request: `services/dvt/remote_server.rs` 446-455), and one kill request per process
-  of the application, whose answer is not waited for (none is asked for:
-  `services/dvt/process_control.rs` 286-296).
-- `looks_after_kills`: a device information channel's request of its own, the looks at the list
-  after the kills, and the waits of 200 ms between them.
+  of the application, in the form of the way (ACIB-3d), each written and flushed; of the way
+  `library` no answer is asked for (`services/dvt/process_control.rs` 286-296).
+- `kill_replies` (ACIB-3d; the ways `primitive` and `archived`): the server's answer to each kill
+  request, read on the process control channel, at most `--wait-ms` in all (fix round 1: each
+  paired with its request by its number).
+- `look_connection` (ACIB-3d): another connection inside the tunnel to the instruments server's
+  port, and its first message.
+- `looks_after_kills`: a device information channel's request of its own (ACIB-3d: on the
+  connection of `look_connection`), the looks at the list after the kills, and the waits of
+  200 ms between them.
 
 `running` goes through `usbmuxd`, `application_lookup`, `proxy_tunnel`, `discovery_handshake`,
 `service_connection`, `server_first_message`, `process_list`. `launch` goes through `usbmuxd`,
 `application_lookup`, `proxy_tunnel`, `discovery_handshake`, `service_connection`,
 `server_first_message`, `launch_request`. `stop` goes through `usbmuxd`, `application_lookup`,
 `proxy_tunnel`, `discovery_handshake`, `service_connection`, `server_first_message`,
-`process_list`, `kill_requests`, `looks_after_kills`. A command that stops early (a bundle the
-lookup does not hold, an application that does not run, a problem) goes through the first of them
-only. A screenshot's `session` covers what `usbmuxd` and the start of `proxy_tunnel` split, its
+`process_list`, `kill_requests`, `kill_replies`, `look_connection`, `looks_after_kills`. A command
+that stops early (a bundle the lookup does not hold, an application that does not run, a problem)
+goes through the first of them only, and `stop` the way `library` through all but
+`kill_replies`. A screenshot's `session` covers what `usbmuxd` and the start of `proxy_tunnel` split, its
 `tunnel` the rest of `proxy_tunnel` and `discovery_handshake`, and its `service_handshake` what
 `service_connection` names: the screenshot keeps its words and these commands use theirs, so that
 one word has one meaning; `server_first_message` is one step, the same in both.
@@ -573,6 +870,144 @@ the same: the deadline cuts the command there. Nothing but a stage's word and a 
 either: no identifier of the phone or of any application. A refusal of a step before the lookup or
 between it and the instruments server (`not_paired`, `session_refused`, `tunnel_failed`,
 `service_not_listed` and the like) is answered as before, with no `stage_ms`.
+
+### Calls this program never makes
+
+(ACIB-3d, fix round 2.) Of the public interface of idevice 0.1.68, these calls restart, shut down,
+put to sleep or into recovery a phone, unpair it or change its settings, install, upgrade or
+remove an application or change its data, or change what the phone has mounted, holds on its
+pasteboard or shows. **`acib` makes none of them**, in no command and under no flag. Each is named
+by its type and its name, with its file under the library's `src/` and the line its function
+starts at, and what it would do to the phone. Read for this list was the public interface of every
+module the features `acib` turns on compile in (`core_device`, `core_device_proxy`, `dvt`,
+`installation_proxy`, `mobile_image_mounter`, `rsd`, `springboardservices`, `tunnel_tcp_stack`,
+`usbmuxd`, and what they bring in: the lockdown client, always built, the XPC client, the TCP
+stack, the pairing record, the providers, the library's root); of the modules under features it
+does not turn on, the diagnostics relay and the restore service, which the reviews of #1849
+named. No call of these modules erases a phone.
+
+**The whole phone.**
+
+- `DiagnosticsRelayClient::restart` (`services/diagnostics_relay.rs` 187; the feature
+  `diagnostics_relay`, off): it asks the diagnostics relay to restart the phone (`Restart`).
+- `DiagnosticsRelayClient::shutdown` (207): it asks the diagnostics relay to shut the phone down
+  (`Shutdown`).
+- `DiagnosticsRelayClient::sleep` (227): it asks the diagnostics relay to put the phone to sleep
+  (`Sleep`).
+- `LockdownClient::enter_recovery` (`services/lockdown.rs` 568): it asks lockdown to put the phone
+  into recovery mode (`EnterRecovery`).
+- `RestoreServiceClient::enter_recovery` (`services/restore_service.rs` 39; the feature
+  `restore_service`, off): it asks the restore service to put the phone into recovery mode
+  (`recovery`).
+- `RestoreServiceClient::reboot` (78): it asks the restore service to restart the phone (`reboot`).
+
+**The pairing.**
+
+- `LockdownClient::unpair` (`services/lockdown.rs` 207): it removes this computer's pairing from
+  the phone (`Unpair`), so that the phone trusts this computer no more.
+- `UsbmuxdConnection::delete_pair_record` (`usbmuxd/mod.rs` 344): it deletes the pairing record
+  usbmuxd holds for the phone on this computer (`DeletePairRecord`).
+- `UsbmuxdConnection::save_pair_record` (320): it replaces the pairing record usbmuxd holds for
+  the phone on this computer with the one given (`SavePairRecord`).
+
+**The phone's settings.**
+
+- `LockdownClient::set_value` (`services/lockdown.rs` 135): it sets a value of the phone's
+  lockdown domains (`SetValue`; the library's own example turns on debugging over Wi-Fi).
+- `LockdownClient::remove_value` (168): it removes a value of the phone's lockdown domains
+  (`RemoveValue`).
+- `ConfigurationServiceClient::set_user_interface_style`
+  (`services/core_device/configuration_service.rs` 88): it switches the phone between its light
+  and dark appearance.
+- `ConfigurationServiceClient::set_liquid_glass_opacity` (101): it sets the opacity of the
+  system's glass material.
+- `ConfigurationServiceClient::set_color_filter` (145): it turns the accessibility colour filter on
+  or off.
+- `ConfigurationServiceClient::set_device_text_size` (191): it sets the size of the phone's
+  dynamic type.
+- `ConfigurationServiceClient::set_reduce_motion` (210): it turns Reduce Motion on or off.
+- `ConfigurationServiceClient::set_increase_contrast` (220): it turns Increase Contrast on or off.
+- `ConfigurationServiceClient::set_show_borders` (239): it turns the overlay of layout borders on
+  or off.
+- `ConfigurationServiceClient::set_reduce_transparency` (258): it turns Reduce Transparency on or
+  off.
+- `SpringBoardServicesClient::set_icon_state` (`services/springboardservices.rs` 181): it replaces
+  the layout of the phone's home screen (`setIconState`).
+- `SpringBoardServicesClient::set_icon_state_with_version` (207): it replaces the layout of the
+  home screen as `set_icon_state` does, in a format version given.
+- `RestoreServiceClient::restore_lang` (`services/restore_service.rs` 212): it asks the restore
+  service to set the phone's language to the one given (`restorelang`).
+
+**Applications and their data.**
+
+- `InstallationProxyClient::install` (`services/installation_proxy.rs` 131): it installs an
+  application on the phone from a package put there before.
+- `InstallationProxyClient::install_with_callback` (159): it installs an application as
+  `install` does, reporting its progress.
+- `InstallationProxyClient::upgrade` (198): it replaces an installed application by the one in a
+  package put on the phone before.
+- `InstallationProxyClient::upgrade_with_callback` (223): it replaces an application as `upgrade`
+  does, reporting its progress.
+- `InstallationProxyClient::uninstall` (262): it removes an application and its data from the
+  phone.
+- `InstallationProxyClient::uninstall_with_callback` (287): it removes an application and its
+  data as `uninstall` does, reporting its progress.
+- `AppServiceClient::uninstall_app` (`services/core_device/app_service.rs` 326): it removes an
+  application and its data from the phone through CoreDevice
+  (`com.apple.coredevice.feature.uninstallapp`).
+- `FileServiceClient::propose_empty_file` (`services/core_device/file_service.rs` 188): it
+  creates an empty file in the domain of its session, an application's data container among them.
+
+**What the phone has mounted, holds or shows.**
+
+- `ImageMounter::upload_image` (`services/mobile_image_mounter.rs` 116): it sends a disk image to
+  the phone's image mounter.
+- `ImageMounter::upload_image_with_progress` (141): it sends a disk image as `upload_image` does,
+  reporting its progress.
+- `ImageMounter::mount_image` (224): it mounts on the phone an image sent before (`MountImage`).
+- `ImageMounter::unmount_image` (272): it unmounts an image from the phone (`UnmountImage`), the
+  developer image among them.
+- `ImageMounter::mount_developer` (442): it sends a developer disk image to the phone and mounts
+  it.
+- `ImageMounter::roll_personalization_nonce` (412): it makes the phone roll the nonce of its
+  personalized images (`RollPersonalizationNonce`).
+- `ImageMounter::roll_cryptex_nonce` (425): it makes the phone roll its cryptex nonce
+  (`RollCryptexNonce`).
+- `PasteboardServiceClient::set_text` (`services/core_device/pasteboard_service.rs` 318): it
+  replaces what the phone's pasteboard holds with a text.
+- `PasteboardServiceClient::set_image` (346): it replaces what the phone's pasteboard holds with
+  an image.
+- `OrientationServiceClient::rotate` (`services/core_device/orientation_service.rs` 90): it turns
+  the phone's interface by 90 degrees.
+
+The image mounter's four `mount_personalized` calls (467 to 621) are built only under the
+library's feature `tss`, which `acib` does not turn on.
+
+**Not in this list, and why.** `launch`, with or without `--relaunch` (the instruments server's
+`launch_app`, its `KillExisting` false or true), and the kill requests of `stop` (`killPid:` in
+each of its three ways, the way `library` the library's `kill_app`) are this program's commands,
+each described in its own section above. The library's other calls that launch, end or signal one
+process (the application service's `send_signal` and its `launch_application` with
+`terminateExisting`, the process control's `disable_memory_limit`, the debug server's packets,
+WebDriverAgent's `terminate_app`: listed under `stop`, above) are of the kind of those two
+commands: whether one of them is ever built is decided with them, not here. Nor are the
+library's general requests in it, which send whatever they are given (`Channel::call_method` and
+`RemoteServerClient::call_method`, CoreDevice's `invoke` calls, lockdown's `start_service`, the XPC
+client's `send_object`): `acib` uses some of them, and what it sends with each is written in its
+command's section. A feature of the library turned on later is read the same way, and its calls
+of these kinds are added here and to the test.
+
+**What holds it.** A test (`main.rs`,
+`the_source_names_none_of_the_calls_this_program_never_makes`) reads every source file of `acib`
+and fails when one names a call of this list: a method call (`.name(` or `.name::<`) or a path to
+it whose segment before the name is a type's (`Type::name`, through an alias of the type or `Self`
+too, or after generic arguments, `>::name`); lines that open with `//` are comments and are not
+read, and a function of a module (`time::sleep`) is no such path. It fails, too, when this list
+and the test's own do not name the same calls in the same order. The files it reads are listed in
+it by their paths under `src/`, each with `include_str!`: a file added under `src/` fails the test,
+named by its path, until it is added to that list, and a file of the list that is gone fails its
+build. It is a tripwire for how a call is written, not a proof: what a general request carries no
+name holds.
 
 ### What the application service does with a request: `probe` (ACIB-3b, second and third rounds)
 
@@ -713,6 +1148,8 @@ The problem words: `command_line_invalid`, `async_runtime_failed`, `deadline_pas
 `launch_failed`, `still_running`, `not_installed`. The error kinds:
 `device_refused`, `answer_unreadable`, `connection_failed`, `xpc_failed`, `other` (each named,
 with its cause, where `probe`'s ways and `running`, `launch` and `stop` are described above).
+(Fix round 1) The words of `reply_failure`, beside a kill request of `stop` whose answer could not
+be waited for to its end: `reader_stopped`, `channel_cancelled`, `other` (above).
 
 **A locked phone.** Nothing read-only that `acib` can ask tells whether the phone is locked:
 the library maps a lockdown refusal `DeviceLocked` to an error of its own (idevice 0.1.68,
@@ -738,4 +1175,9 @@ stays up between requests.
 documentation. No code of another project is in it, and no build of another project is run by
 it or for it. (ACIB-3c) Which way `running`, `launch` and `stop` take, what they send and how
 they read the answers were derived from nothing but the library's own source and Apple's public
-documentation.
+documentation. (ACIB-3d) The ways of `stop`, and the reading of what the phone showed, were
+derived from the library's own source (0.1.68, and its repository's main branch for comparison),
+the source of its own MIT-licensed TCP stack (`jktcp` 0.1.8, which the library uses for the
+tunnel) and nothing else. (Fix round 1) The reading of the library's errors, the pairing of the
+answers by their numbers and the list of the library's other ways to end or signal a process were
+derived from the library's own source (0.1.68) and nothing else.
