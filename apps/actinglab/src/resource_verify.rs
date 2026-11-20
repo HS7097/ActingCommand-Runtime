@@ -42,6 +42,7 @@ use actingcommand_contract::outcome::{Detail, IoOp, Outcome, OutcomeEnvelope};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -83,8 +84,9 @@ enum StepsFor {
     /// same input.
     Verify,
     /// `standard-pack build`: the same steps; the checkout's read paths are every input its
-    /// bundle carries, the bundle carries `goals.json` and the repository's `tables/` too, and the
-    /// `package` revision is computed from the content (`revision.rs`).
+    /// bundle carries, the bundle carries the repository's `tables/` too, and the `package`
+    /// revision is computed from the content (`revision.rs`). (Workflow #455 GOALS-PACK-1: both
+    /// rows carry `goals.json`.)
     Build,
 }
 
@@ -632,8 +634,15 @@ pub(super) enum Counts {
         zip: Option<ZipCounts>,
         root_files: Vec<String>,
         /// The `package` revision the zip's `interfaces.json` declares: 3, or (Workflow #444
-        /// NOTICES-3) 10 when the bundle carries the notices directory.
+        /// NOTICES-3) 10 when the bundle carries the notices directory, or (Workflow #455
+        /// GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them; `standard-pack
+        /// build`'s from its content (`revision.rs`).
         package_revision: u64,
+        /// Workflow #455 GOALS-PACK-1: the repository's accepted `goals.json`, which the zip
+        /// carries; absent without one (a refused file fails the step), so that the counts of a
+        /// repository without the file are as before.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        goals: Option<GoalsCounts>,
     },
 }
 
@@ -642,6 +651,16 @@ pub(super) struct ZipCounts {
     pub(super) name: String,
     pub(super) sha256: String,
     pub(super) entries: usize,
+}
+
+/// Workflow #455 GOALS-PACK-1: the accepted `goals.json` the bundle step read and the zip carries:
+/// the game whose root it was held to, its repository path and how many entries of each type of
+/// version 2 it holds, every type named.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct GoalsCounts {
+    pub(super) game: String,
+    pub(super) path: String,
+    pub(super) entries: BTreeMap<&'static str, usize>,
 }
 
 #[derive(Serialize)]
