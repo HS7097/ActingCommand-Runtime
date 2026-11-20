@@ -9,6 +9,192 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.76
+
+本版是 v0.12.75 之后的 6 次合并、6 张 PR，没有列车，一张一张单独合入：#463 SEL-GRID G1 #1848、#479 ACIB-3d #1849、#463 PRIV-SCAN #1851、#463 SEL-GRID G2 #1850、#489 AVAIL-1 #1852，最后 #498 FACT-CAP #1854。
+每张在合入前都于本地并过 main（G2 两次、AVAIL-1 三次），冲突两边都整段留下：AVAIL-1 并进 G2 以后，`component-interfaces.json` 和它的钉一起对成 `actingd-config` [5, 35]、`runtime-client` [12, 14]、`package` [3, 21]；登记 §1.490 到 §1.493 和 §1.496 各一次、按号排（ACIB-3d 不占登记节）。
+**§1.494、§1.495 不在本版**：它们是看板 #490 还在做的两片，PR #1853 没合。
+内容是生产上看出来的两处缺陷、资源仓等着的做包工具三件，和 iOS 那条线的 `stop`：**被判成不可用的实例由 Runtime 按间隔再探**，久了告诉人，被冷却压下的恢复到期接着做（看板 #489）；**事实库的上限跟着范围走**（每台实例 224 条，每个服务器、每个游戏各 16 条），快满先警告，读数被拒时运行的失败带着事实库的拒绝（看板 #498）；
+**选择的共享读只识别、只数名字框里的块**，多列卡片列表不再撞上 64 块的上限；**共享读可以声明名字框的行**，粘成一块的两行名字在识别前切开（`package` 21）；**公开去向的录制，来源记录里的选择只写点名的成员**；`acib stop` 照实答应用还在不在跑，有三种发法和一张永不调用的清单。
+**生产上跑的是 v0.12.75（2026-11-19 15:11 JST 起，经 Lab 救急模块部署；看板 #421，评论 7001404921）**。从 v0.12.75 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都不用标志，`ledger_verify` 为 false，计划通知的 `rollback_window_bounded` 为 false，`defaults_diff` 四行（四个新键，来源都是 `default`），没有新文件**。
+**三个接口区间动了，下限都不动：`runtime-client` [12, 13] → [12, 14]、`actingd-config` [5, 34] → [5, 35]、`package` [3, 20] → [3, 21]**；`ledger` 仍是 [3, 9]；配置键加了 4 个（默认值文件的 sha256 跟着变了），结果码加了 4 个、位置 2 个，没有标成 `retired` 的。
+**退回 v0.12.75 开着，但多了两个条件：整机的事实超过 256 条以后，v0.12.75 载入不了事实库、起不来；这期间放过修订 21 的包，要先换掉**（见「部署和退路」「升级与退回」）。
+**使用中的安装最先碰到的是不可用的实例会被再探：哪台被设备自检或连接准备的失败判成不可用，Runtime 自己在 1、3、7、15、31 分钟、之后每 30 分钟各自检它一次，满一小时记一条警告**（见下）。
+
+- **为什么有这一版**：生产上的两处缺陷。看板 #489：11-20 两台实例的一次运行在打开成对的后端时失败，设备自检跟着失败，可用性被撤；它对上的恢复阶梯正被冷却压着（一台还剩 30 分钟、一台 27.5 秒），压下以后没有任何东西再看它，两台各空了 15 和 16 小时，而人按一次暂停再恢复，自检当场就过（§1.493）。
+  看板 #498：11-21 01:5x JST 从生产读到六台实例合计两百上下条事实，而事实库全机只有一个 256 的上限，再加读数一两天就满，满了新键被拒（这一件是 11-21 凌晨读到的，不是 11-20）。
+  另外三件是资源仓等着的做包工具：多列卡片列表一屏有 65 到 100 块字，超过模型文件夹 `max_boxes` 的 64，整帧被拒，一个包因此做不出来、十来个排在后面（§1.490）；行距三四像素的两行卡名在有些滚动位置被检测成一块、读不出（§1.491）；按持有名单选的公开包，任务文件的来源记录里带着逐屏读到的名字和个数（§1.492）。还有 iOS 那条线：`acib stop` 在主人的手机上关不掉应用（看板 #479）。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码和契约）：
+  - **首先，被判成不可用的实例会被再探**（AVAIL-1，§1.493；`contracts/scheduling/README.md`「An unavailable instance is probed again」，`contracts/emulator-control.md`「Cool-down, suppression and interruption」）。
+    **哪些实例**：后端自检门（`crates/runtime-host/src/host/runtime_facts.rs` 649 `gate_policy_availability_on_selfcheck`）撤了可用性、配置的种子又是可用、没有围栏、设备链接、设备状态或设备系统按着它的实例，门每做一次决定都过一遍（`host/unavailable_probe.rs` 254 `track_unavailability`）：
+    设备自检失败的（带 `failure_code`）；连接准备的别的步骤失败的（保留的会话关不掉、开完再关失败而资源确认已放、打开失败却没有报告，显式 HOST:PORT 的实例也在内、准备的租约被拒；`runtime_facts.rs` 546 `withhold_after_failed_preparation`，因是那一步的码，进来时作废它以前 `passed` 的自检事实）；打开的报告里留着 `unknown` 的（不带因进来，原因看那次打开的 `device.self_check` 记录，状态 `unknown`）。
+    **不进来的**：准备里读模拟器状态那一步撤的（模拟器停了、待绑定的读不到状态、设备认不出），归模拟器监视和闲置唤醒（见「已知的限度」）。名单只在内存里，重启以后从门的下一次决定重新起。
+    **什么时候探**：`scheduling.unavailable_probe.first_interval_ms`（默认 60000）以后探第一次，每失败一次间隔乘 `factor`（默认 2），最长 `max_interval_ms`（默认 1800000）：默认就是不可用以后 1、3、7、15、31 分钟各一次，之后每 30 分钟一次；
+    间隔从上一次探测结束、这台最近一次自检或自检事实被丢、最近一次有认领占着或等着它钥匙的那一轮里最晚的一刻算起（`unavailable_probe.rs` 183–214、293–297，`crates/runtime-config/src/scheduling.rs` 的 `UnavailableProbeConfig::interval_ms`）。
+    **四个键**都在 `scheduling.unavailable_probe` 下，`actingd-config` 35：`first_interval_ms`（10000 到 86400000）、`factor`（1 到 16）、`max_interval_ms`（10000 到 86400000）、`attention_after_ms`（60000 到 604800000，默认 3600000），运行中可改，租约清扫每一轮都重读，没有按实例的写法；
+    默认值写在 `actingd.defaults.json` 里，**不写它们的配置 `check-config` 照过、不出提示，四个键取默认值、来源 `default`**。
+    **探一次做什么**：就是人做 `actingctl selfcheck` 的那次准备，在这台实例的队列上用一个自检认领（`ClaimKind::SelfCheck`，`unavailable_probe.rs` 594–695，不加新的认领种类）：先关掉留着的会话、先读模拟器状态、再打开后端、查取帧和输入；**不点按、不拉起应用、不启动模拟器、不起恢复阶梯**，方向①不数它的记录。
+    只在这台的钥匙空着时排队（没有认领占着或等着、不在接管冷却里），拿到钥匙后再查一遍；**暂停（实例的或全局的，哪种模式、哪一段都算）、围栏、闲置动作停着模拟器、停电时段盖着这台、Runtime 在停，都不探**（`unavailable_probe.rs` 411–424 `probe_hold`）；
+    和别的准备一样，它会关掉无钥匙的 Lab 观察留下的会话，两者靠准入锁排开。探过了这台就恢复可用（`instance_unavailable_probe_passed`，info），没过记 `instance_unavailable_probe_failed`（warning，带下一次的时刻）；一次探测里打开过了、收尾的关闭又失败，算同一段不可用里的一次失败，间隔照涨。
+    **告诉人**：同一段不可用满 `attention_after_ms`（默认一小时），在实例下记一条 warning 的 `runtime.failed` `instance_unavailable_awaiting_person`（`elapsed_ms`、`limit_ms`、`attempts`，有因时带 `failure_code`），同时交给守护进程的日志（`unavailable_probe.rs` 530–560，`report_warning`），一段只记一次，恢复可用就结束；不发代理唤醒（唤醒的种类里没有它，加一种就是新的配置词）。
+    **被冷却压下的恢复**：实例在名单里时被冷却压下的那次恢复跟着实例留着（307 `hold_cooled_down_recovery`），带压下时说的 `until_unix_ms`；到点（最迟清扫的下一轮）不管间隔先探一次：过了就恢复可用、丢掉留着的恢复；
+    没过就重读当时生效的冷却窗（`host/recovery_ladder.rs` 2138 `cooldown_window_until`），没有窗按着才把它当成一架新的阶梯放行（新的请求号、因果号、持有者和认领，同一个触发，别的准入规则照旧；2058 `admit_held_recovery`），还有窗按着就压到那个窗结束。
+    每台只留一个，后压的顶掉先压的；被顶掉、实例离开名单、暂停、围栏、闲置停机时丢掉，每丢一次都再记一条那次触发自己的 `recovery_ladder_suppressed` `cooldown`（已有的记录，不加码）。
+    **探测崩了**：工作线程根部接住崩溃，记一条 `panic_caught`，这一段不可用里不再探这台，当场记 `instance_unavailable_awaiting_person`（`failure_code` `panic_caught`，没有下一次；370 `end_panicked_unavailable_probe`，`host/host_claims.rs` 238–242）；崩在连接准备里面的，照旧会弄坏这台设备的准入锁，下一次碰它就停整个 Runtime（看板 #496，本版不改）。
+  - **状态成员 `unavailable`：声明了、不答**（§1.493 规则 7；`contracts/runtime-interface.md`）：`RuntimeInstanceStatus` 多一个可选成员 `unavailable`（`since_unix_ms`、`cause`、`probes`、`last_probe_unix_ms`、`next_probe_unix_ms`、`awaiting_person`；`crates/actingcommand-contract/src/runtime.rs` 1705、1752–1773），算 `runtime-client` 14，所以声明 [12, 14]。
+    **本版的宿主对哪台实例都不填它**（`with_unavailable` 没有任何调用处）：v0.12.75 的 `RuntimeInstanceStatus` 带 `deny_unknown_fields`（v0.12.75 标签上 `runtime.rs` 1633–1635），填了的话，v0.12.75 的每个读者读整份状态都 `runtime_receipt_decode_failed`、锁住连接（`crates/runtime-client/src/ipc.rs` 228–233），
+    其中就有部署自己的启动后检查：`ready` 读不出状态答 `status_unreadable`（`crates/lab-rescue/src/install/postcheck.rs` 282），组合的部署随即自动退回（`deploy.rs` 794–795）。
+    这期间读者看不可用的实例，看 v0.12.75 就解得开的东西：总览行的 `not_running`（`why` `instance_unavailable`，`availability_source` `self_check`）和 `backend_selfcheck`（打开失败的那一项 `failed`，报告留 `unknown` 的那一项 `unknown`，别的准备步骤进来、自检事实已丢的是空对象 `{}`；`crates/lab-ops/src/overview.rs` 970），
+    在 `actingctl overview`、`ac_overview`、`actinglab status`、`ac_status` 里；再加账本里探测的记录和那条警告。**以后哪一版开始答它，同一版把下限抬到 14**（照 `runtime-client` 第 10、12 行的做法）；Lab 的总览行和第一代 MCP 的 `ac_overview` 已经会照原样传它（`overview.rs` 1087–1091，`apps/actingctl/src/mcp/tools.rs` 的输出 schema）。
+  - **`package` 21**（G2，§1.491；`contracts/selection-graph.md`「The lines of a name box」）：修订 21 的包可以在布局的共享读上声明 `shared_ocr.lines {max, line_height}`（`max` 1 到 3，`line_height` 至少 8 个基准像素；`crates/actingcommand-contract/src/candidate_projection.rs` 62–65），两种布局都行；
+    `standard-pack build` 数到 `shared_ocr` 下的 `lines` 才算 21（`apps/actinglab/src/resource_verify/revision.rs` 的 `SHARED_LINES_REVISION`），不声明的包修订不变。
+    块高到行高的 1.25 倍以上就在识别前按行切开（切在等分位置上下四分之一行高里墨最少的那一行，`crates/vision-ffi/src/name_lines.rs` 27–32、99），各自识别、照名字框原来的连接规则连起来；算出来的行数超过 `max` 的块不切、整块读；矮于半行的块不进名字（`below_floor`）；会切出不到 8 像素的条时整块读；上限按识别次数数。
+    **v0.12.75 和更早的 Runtime 在声明门拒这种包**：`resource_declaration_invalid`，`UnknownField` 在 `/candidate_layouts/<i>/shared_ocr/lines`（v0.12.75 标签上 `crates/pack-containment/src/source/declarations.rs` 1922–1940 的成员表里没有 `lines`），在 `PackageAdmitted` 之前，每次运行都拒；
+    v0.12.75 的 `place` 在它的 `package` 边拒声明 21 的包（`crates/lab-rescue/src/install/place.rs` 1536–1551，安装工具自己的区间到 20）；Lab 自己的自检跑的是 Lab 进程里的内核，对着哪个版本的 Runtime 都过。所以**资源仓等本版上线以后才放声明 `lines` 的包**。
+    **G1 不改包，也不改读出来的名字**：每帧第一次共享读之前，内核把被读目标的名字框放好、随请求发给提供方（`crates/recognition-pack/src/candidate_layout.rs` 2001 `served_name_boxes`），提供方在合并成行以后、截上限以前只留中心落在框里的块（`providers/ppocr-onnx-json/src/lib.rs` 2281 `keep_detected_boxes`，`crates/vision-ffi/src/lib.rs` 385 `ocr_box_is_served`；规则只写一处，`CandidateRect::holds_centre_of`，`candidate_projection.rs` 172–177）；
+    检测、补边和合并都在过滤之前，每块单独识别，**今天读得出的名字逐字节不变**；变的只有证据：`block_source_order` 按被服务的块数，`shared_read` 多 `served`，被服务的块本身超过上限时照旧 `text_read_blocks_truncated`、多报 `requested`（被服务的块数）。照旧整读的两种：手写的、靠模板在帧上定位的目标（`template_relative`），和放置出错的帧。
+  - **事实库的上限跟着范围走**（FACT-CAP，§1.496；`contracts/instance-fact-store.md`「Capacity ledger」）：原来全机一个 `MAX_ACTIVE_FACTS` 256，现在各范围各算各的（`crates/runtime-host/src/fact_store.rs` 147–160）：一台实例自己的事实 224 条，每个服务器 16 条，每个游戏 16 条，共享的事实只算一次；加一台实例带来它自己的 224 条，不挤别的实例。
+    **为什么一台是 224**：一台实例的视图是它自己的、它服务器的和它游戏的事实，三样加起来最多 256，正是一份快照（运行和准入的投影）和 `facts` 读的回答的上限（`MAX_FACT_RECORDS`，`crates/actingcommand-contract/src/fact.rs` 16，v0.12.75 的读者也核它）；一台自己的要是到 256，再加任何共享的事实，快照就超，`fact_snapshot_invalid` 停整个 Runtime。
+    **只有新键才和上限比**：一个范围里已有的键，不管这个范围现在有多少条，总能原地替换、作废（`preview_publish` 1121、`preview_observation` 1292 只在有新键时比，`commit_publish` 1176 和回放只在一个范围 256 条以上才致命），所以 v0.12.75 写下的库整个载入，超过新上限的范围只是不收新键。墓碑也改成每个范围各 256 条。
+    **快满先警告**：一台自己的事实到 180 条（224 的 80%，向上取整），在实例下记一条 warning 的 `runtime.failed` `fact_store_capacity_share_reached`（`instance_id` 是别名，`count`，`limit_count` 224），也交给守护进程的日志；每次发布在事实写门里、检查之前先写到期的，记完自己的记录以后再查一次（`host/facts.rs` 547、689、705）；
+    一段只记一次，降回 180 以下才会再记；段落只在内存里，所以重启后第一次发布会再记一次。今天最满的一台是 52 条（11-21 读的），部署以后不会有这条警告。
+    **读数被拒**：事实库拒了的读数、列表或调整，照旧把运行改写成失败 `contained_task_resource_reading_rejected`，现在失败带着事实库自己的拒绝码当 `caused_by`，记在终态和回答里（`host/contained_task.rs` 639 `refuse_stored_resource_reading`），以前只进开发日志；
+    排程把它当一次普通的失败：同错连败计数、按 `retry_limit` 退避重试，之后按 `on_failure.action` 暂停任务或继续，连败到 `escalation_threshold` 升成严重、直接暂停（`crates/runtime-host/src/policy_control.rs` 1551–1582）。所以**一台满了以后，给它带新键的规则会一条条被暂停**（已知的限度）。
+    **谁写服务器和游戏范围的事实**：只有客户端：Lab 的 `offset` 不指实例时写游戏范围的任务优先级偏移（`crates/lab-ops/src/scheduling.rs` 359–374），`pack-schedule set` 写服务器或游戏范围的包时间表（`core_ops.rs` 1046–1057），补救选择写游戏范围（服务器范围被拒，`crates/runtime-host/src/remedy_choices.rs` 157–161），和客户端发布时自己指名范围的键；宿主自己不往这两个范围发布。
+    这两种范围里超过 16 条的新键当场拒给发请求的客户端（`fact_store_capacity_exceeded`，请求的拒绝，不挤掉旧的）；今天这两种范围都是 0 条。
+  - **公开去向的录制写选择的来源记录**（PRIV-SCAN，§1.492；`contracts/lab-recording.md`「What a public recording records of a select」）：公开的录制，入口任务 `provenance.cross_check.selects` 里每个选择另建一个只有点名成员的对象（`crates/lab/src/recording/crosscheck.rs` 1193 `public_select_record`）：
+    `step`、`record_index`、`op`、`layout`、`wanted {name, default}`、`pressed`、`on_empty_key`、`frames`（每项只有帧号和两个判定的种类，1221 `public_frames`），滚动选择另有 `scan`：覆盖情况、按下的名字（不带位置）、没找到那次的覆盖和判定的种类（不带名字）；步骤自己的自测（`steps[].select.self_test`）同样只写点名成员（1239 `public_self_test`）。
+    **不再写的**：逐屏读到的名字（`scan.screens`）、读到的位置数（`scan.positions`）、每次滑动的步长（`scan.steps`）、按下的位置、`scan.absent.name`、各判定的行号 `slot`，和以后别的片往回答里加的任何成员（一条门测试守着）；判定的种类和覆盖词逐个点名写，不整块序列化。
+    **不变的**：本地去向的录制逐字节不变；Lab 答给制包手看的和录制自己的状态都不收窄；自检的结论、读包的各处、接口修订都不变；以前录的包保留它们已有的。
+    **还从别的路进包的**（`a1851` 和登记照实列了）：扫描生成用的数跟着录制时滚了几屏走：`select.scan.bounds` 的 `max_viewports`（2V，没有结尾标记时 2V+2）、`max_reposition_viewports`（2V）、由它们算的 `max_ms` 和任务超时（被截断时 `task_timeout_clamped` 的 `computed_ms`）、清单不满一屏时的 `max_instances`、末屏的尾距、一行最多几个（`columns`）；
+    还有按下的那一行（步骤的点击矩形和执行点）、帧号流水的间隔、录制序号 `record_index` 和步号的差、`scan.absent` 在不在、默认值判定的种类。这些是内核跑包要用的数，要不要做下一片等主人回答「大概持有多少个算不算库存数量」。
+  - **`acib stop`**（ACIB-3d，不占登记节；`apps/acib/README.md`）：发完结束请求以后另开一条连接再看进程清单，**结论从「看」来，不从请求来**：还列着发过请求的进程答 `still_running`（退出码 1），都不列了答已结束（退出码 0）。
+    三种发法（`--via`）：**`primitive`（默认）**，`killPid:` 带 32 位数的进程号、要回答，最多等 `--wait-ms`（1 到 120000，默认 5000）；`library`，库自己的 `kill_app`，和 v0.12.75 逐字节相同、不等回答；`archived`，进程号按归档的数、要回答，**只在明写 `--via archived` 时才发**，没有任何回落到它的路（`apps/acib/src/args.rs` 70）。
+    回答每行带 `via`；要回答的发法带 `replies`（每个进程 `without_payload`、`with_payload` 或 `not_in_time`，来了的带 `message_type`，从不读载荷），回答按库给请求的编号配对、不按先后，对不上任何请求的只记个数 `unpaired_replies`；`reached` 说走到了哪一段；等不到回答的请求进 `signal_errors`，`reply_failure` 是 `reader_stopped`、`channel_cancelled` 或 `other`；
+    第一次读失败是「连接已关」时，接着把库里已经收下的回答取完，别的读失败当场停；之后看清单失败答 `process_list_failed`、连不上 `service_unreachable`、握手失败 `service_handshake_failed`，都留着 `signalled`、不下结论。
+    **永不调用的清单**：README 点名 40 个库调用（让手机重启、关机、睡眠、进恢复模式、解除配对、改设置，装、升级、卸载应用或改它的数据，挂卸镜像、写剪贴板、旋转屏幕），这个程序哪条命令、哪个标志都不调；一条测试读 `apps/acib/src/` 下的每个源文件，出现这些调用就失败，多出一个它不认识的源文件也失败。
+    **在主人的手机上跑过的**（都只对一个系统自带的应用）：11-19 13:28 到 13:29 JST，v0.12.75 的构建，库的发法两次，都没结束它（看板 #479，评论 6999721500）；15:17，这一片第一个头 `087efba2` 的构建，`--via primitive` 一次，没结束，等回答在约两毫秒里失败（评论 7001459052）；
+    17:33，同一个构建，`--via archived` 一次（主人当天说可以试这一次）：不到一秒手机回了一个不带载荷的回答，应用结束了，别的应用的进程前后不变（评论 7003982340）。**所以默认的 `primitive` 在这部手机上结束不了应用，`archived` 结束得了（只观察过一次）**；默认改不改由主人定。合入的头 `92f351d6` 的 `stop` 还没上过手机。
+  - **三个接口区间**（`distribution/windows/component-interfaces.json` 4–10；`contracts/component-interfaces.md` 的 `actingd-config` 第 35 行、`runtime-client` 第 14 行、`package` 第 21 行）：
+    `runtime-client` [12, 14]（上面的状态成员；下限不动，v0.12.73 到 v0.12.75 的读者照读本版的状态）；`actingd-config` [5, 35]（`scheduling.unavailable_probe`；`SchedulingFile` 拒不认识的成员，v0.12.75 读写了它的配置就 `config_decode_failed`，v0.12.75 标签上 `crates/runtime-config/src/scheduling.rs` 343–345；不写它的配置修订不变）；`package` [3, 21]（上面）。
+    **`ledger` [3, 9] 不变**：AVAIL-1 和 FACT-CAP 写的都是已有种类的记录：三个探测的码和快满的警告在 `runtime.failed` 里，丢掉留着的恢复是 `runtime.lifecycle_observed` 的已有阶段 `recovery_ladder_suppressed`（`cooldown`），被拒读数的因挂在 `task.failed` 终态已有的 `caused_by` 链上；
+    新码和新位置都是记录里的文本，v0.12.75 的读者按拼写收（`crates/actingcommand-contract/src/outcome.rs` 740–744，本版没改）；**没有一张 v0.12.75 的读者拒收的闭词表加了值**：G2 的原因词 `beyond_distance` 只在 Lab 的拒绝里，账本记录用的 `CandidateUnknownReason` 没动；`crates/ledger` 一个文件没改。`install-selection` [1, 1]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 也不变。
+  - **盘上的东西**：本版照读 v0.12.75 留下的一切（账本修订 3 到 9、配置、录制、包、绑定、持久化的暂停、事实库），第一次启动不迁移、不要新状态根；v0.12.75 写下的事实库整个载入（今天整机 212 条）。新写进账本的只有上面那几条记录；名单、留着的恢复、提醒的段落都在内存里。
+    本版写的东西里 v0.12.75 读不了的：修订 21 的包；写了 `scheduling.unavailable_probe` 的配置；整机超过 256 条以后的事实库（见「部署和退路」）。
+
+- **改了什么**（再探、事实库、读名字、隐私、`acib`）：
+  - **再探**（AVAIL-1，§1.493）：宿主新模块 `host/unavailable_probe.rs`；`host/runtime_facts.rs`（门的决定交给名单、`withhold_after_failed_preparation`）、`host/resource_close.rs`（准备的两处撤回改走它）、`host/recovery_ladder.rs`（留着的恢复、放行、丢的记录）、`host/host_claims.rs`（探测的工作和崩溃）、`host.rs`（租约清扫的一步、名单）、`host/facts.rs`（`withdrawn_by_selfcheck_gate`）、`host/runtime_config.rs`、`host/resource_fence.rs`（一个函数对本 crate 可见）、`codes.rs`；
+    `crates/runtime-config/src/scheduling.rs` 四个键；契约库 `runtime.rs`（状态成员，声明不答）；`crates/lab-ops/src/overview.rs`、`apps/actingctl/src/mcp/tools.rs`（照原样传这个成员）；默认值文件和 `component-interfaces.json`。
+  - **事实库**（FACT-CAP，§1.496）：宿主 `fact_store.rs`（三个上限、只比新键、墓碑、快满的段落）、`host/facts.rs`（警告的记录）、`host/contained_task.rs`（拒绝的因）、`codes.rs`；契约库 `fact.rs` 只让 `MAX_FACT_RECORDS` 公开，值不变。
+  - **读名字**（G1 §1.490、G2 §1.491）：识别包 `candidate_layout.rs`、`lib.rs`、`ocr_preprocess.rs`、`text_locate.rs`、`candidate_identity.rs`（`map_ocr_with_cause`）；视觉边界 `crates/vision-ffi/src/lib.rs`、`name_lines.rs`（新，切行的规划）；PP-OCR 引擎 `providers/ppocr-onnx-json/src/lib.rs`；内核 `provider.rs`、`contained_task/selection.rs`；契约库 `candidate_projection.rs`；
+    包容器 `source/declarations.rs`、`source/mod.rs`；修订表 `revision.rs`；Lab 的 `recording/model.rs`、`select.rs`、`generate.rs`、`scan.rs`、`crosscheck.rs`、`ocr.rs`；操作表 `record mark` 一行的说明。
+  - **隐私**（PRIV-SCAN，§1.492）：Lab 的 `recording/crosscheck.rs`、`scan.rs`、`generate.rs`、`recording_api.rs`。
+  - **`acib`**（ACIB-3d，不占登记节，只动 `apps/acib`）：`answer.rs`、`args.rs`、`bridge.rs`、`main.rs`、`stages.rs`、README；依赖、锁文件、`NOTICE.md` 都没动。
+  - **这些都不替人拿主意**：探测只自检、不按不拉；快满只警告、不挤掉旧的；切行只在作者声明了行以后；隐私只少写，不改包怎么跑。
+
+- **部署和退路**：照 v0.12.75 那次的做法，用在线 v0.12.75 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）本版只改了测试（`gate_429_r0b_pairing.rs`、`gate_480_pg2e.rs` 为 [12, 14] 改名的两条和两条拒绝行的区间，`gate_463_v1.rs` 的 [3, 21]），产品代码没改，所以留存的 v0.12.75 副本做的和本版的一样。没有账本那一步：两边账本都是 [3, 9]。部署时要知道的，从各登记节的「At deploy」收在一起：
+  - **这一版由 v0.12.75 的留存副本对着在线的 v0.12.75 部署**（§1.493）：那份副本的部署、按住、放置和启动后检查经它的 `runtime-client` 13 读新的 Runtime（状态、配置事实、计划和目录、启动报告），本版回给它们的没有一个它不认识的成员（状态的 `unavailable` 不填），所以不会 `runtime_receipt_decode_failed`、`ready` 不会 `status_unreadable`、不会因此自动退回。
+    计划的 `defaults_diff` 四行（四个键，`live` 为空，`target` 是 60000、2、1800000、3600000，来源 `default`；`install/plan.rs` 584–608），启动后检查的 `new_keys` 核这四个键在新 Runtime 的 `config.parameters.scheduling` 里来源是 `default`（`postcheck.rs` 550–582、648–657）。部署前照旧不留开着的录制、不跑试跑。
+  - **没有要配的**：四个键取默认值，事实库的上限是契约里的常数；v0.12.75 写下的事实库整个载入，启动后第一次发布报出已到 180 条的实例（今天一台都没有）。
+  - **每一份钉着的离线 Lab 等本版上线以后再升到本版**（§1.490、§1.491、§1.492）：升了的 Lab 录得出声明 `lines` 的选择，生成的包是修订 21，它自己的自检全过，在线的 v0.12.75 却每次运行都拒；早一版的 Lab 读到选择的 `lines` 当成不认识的成员拒；钉着的 Lab 和生产的 Runtime 是同一个构建，读列表才读得一样；资源频道手工从任务文件里删 `scan.screens`、`scan.positions` 的做法，等钉着的 Lab 换到本版才停。
+  - **修订 21 的包等本版上线以后才放**（§1.491）：v0.12.75 的 `place` 在 `package` 边拒声明 21 的包，v0.12.75 的 Runtime 每次运行都在声明门拒。
+  - **退回 v0.12.75**：计划的边都过（见「升级与退回」）。`actingd-config` 35 的四个键部署时不写进根配置（它们在新构建的默认值文件里），v0.12.75 照读根配置；**有人往根配置里写了 `scheduling.unavailable_probe` 的，先拿掉**，否则 v0.12.75 的 `check-config` 拒（回退门第 4 部分不过）；
+    运行中用指令改过这几个键的，v0.12.75 不恢复这条指令（`config_override_dropped`），退回的启动后检查把它算成一处不一致（`post_check_mismatch`，退回不再退回）。
+    **本版新加的两个条件**：一，**整机的事实超过 256 条以后，退不回 v0.12.75 或更早**：v0.12.75 启动时载入事实库（`InstanceFactStore::recover` 经 `replay_publication` 到 `commit_publish`），载到第 257 个键就以致命的 `fact_store_capacity_exceeded`（操作 `commit_fact`，`runtime_halted`）停下，启动在就绪之前失败，退出码 1（码的类别是 `error`），以后每次启动都一样
+    （v0.12.75 标签上 `crates/runtime-host/src/fact_store.rs` 603–631、989–1024、1101–1131、2214–2216，`crates/actingcommand-contract/src/outcome.rs` 593–599）；回退门的四部分（`install/update.rs` 393–515）都不读事实库，门照过，换回去以后才起不来：**退回之前先数整机的事实**（今天 212 条）。
+    二，**这期间放过修订 21 的包**：回退门的 `package` 边只是警告（登记里不记包根的区间），v0.12.75 对那个包每次运行都拒：先换掉。回去以后名单、留着的恢复和提醒都没了（在内存里），11-20 那种卡死又会出现。
+    回退门只放行这次部署替换掉的 v0.12.75（`update.rs` 415）；**回 v0.12.72 及更早，计划以 `interface_edge` 拒**（`installer_meets_next`，`plan.rs` 325–341，v0.12.72 标签声明 `runtime-client` [3, 11]）。
+  - 跑着的 MCP 服务器在重新启动之前答旧的工具表；本版没有新工具、没有新参数，只有第一代的 `ac_overview` 的输出 schema 写了 `unavailable`（本版不答）。
+  - 部署以后要看的：部署前后事实库的合计（部署不写它，应当照旧）；有没有实例在被再探（总览行的 `not_running`、`backend_selfcheck`，账本里的 `instance_unavailable_probe_*`）；`op status` 的 `rollback_window`（见「升级与退回」）。
+
+- **已知的限度**（各片最后一次审查和验收记录列的，逐条核过）：
+  - **再探**（AVAIL-1）：**还没有在生产上见到它救回一台**，要等哪台再不可用时读账本里探测的记录。**仍然没人探、没人告诉的情形**（看板 #495）：模拟器重启次数用完（每一段只记一条 `emulator_watch_restart_exhausted`，不围栏、不叫人）、没开 `start_emulator` 而模拟器停了、模拟器开着安卓却一直不报端口、监视整个关着；
+    截图选 `auto` 落到别的后端、30 秒里复用缓存的，会一段段地进出名单、永远不提醒（生产上的实例都不是这种）。**一台实例的连接准备里程序崩了，停的仍是整个 Runtime**（看板 #496：准入锁坏了以后，模拟器监视和下一次准备一碰就致命）。
+    **状态里这一版对不可用的实例什么都不新说**，也还没有控制台显示探测；不发代理唤醒，只有记录和守护进程的日志。留着的恢复每台一个、后来的顶掉先前的，只有失败探测的结算才放行，重启时丢掉不记；放行和别的线程上 `triggered` 的准入之间有一个很窄的竞争，没改；
+    审查留的三处小事（两句说明把「配置」写成崩溃状态的出口；第二次崩溃又清理失败时返回的是清理的错，不是 `runtime_restart_required`，致命标记是对的；崩溃的测试只测了排队时的，没测准入锁里的）留给下一张动这个文件的片。
+  - **事实库**（FACT-CAP）：一台是 224 条，不是工作单要的「至少 256」（理由见上，验收认了）；**整机超过 256 条以后回不到 v0.12.75 或更早**；**一台满了以后，给它带新键的规则会一条条被暂停**（读数被拒按失败算，前面有 180 条的警告）；服务器、游戏范围快到 16 条时什么都不说（写的是客户端，被拒时当场知道）；
+    以前写下的库里要是某个共享范围超过 16 条，某台的视图可能超过 256、停 Runtime（今天这两种范围都是 0 条，没加检查）；**控制台一次读整机事实的回答最多 768 KiB，超过就拒**（`project_interface_response_too_large`，Denied，不致命；`crates/actingcommand-contract/src/project.rs` 35），按一条普通记录约 600 字节算约 1,200 条就满，今天整机 212 条，还远；状态里还看不到每台用了多少条。
+  - **读名字**（G1、G2）：**G2 的切行还没在真帧上碰过粘成一块的块**：测试的图是合成的，量到的尺寸（两行各 21 到 23、间隔 3 到 4）加起来比量到的块高还大，粘连块画成 18 和 22 两行、隔 3；要等资源仓钉的离线工具换到本版、在那张商店列表上试一次才算数。
+    G1「旧代码上这一帧会截断」是在同一条测试里用不发框代替旧代码证明的，不是在旧提交上真跑出来的；一次识别要几毫秒，代码里没有数；**Lab 的自检恒用 CPU 识别，生产用 DirectML**，块数和置信度可能有细小出入（原来就有）；G1 只治块数超上限，卡上截断或滚动显示、单帧读不全的名字是后面的片；
+    投影里的 `low_confidence` 仍然一词两因；靠模板定位的目标不能声明 `lines`。两片都还没在设备上跑过。
+  - **隐私**（PRIV-SCAN）：**清单的长度还从上面那几条路进包**；还没有用本版的 Lab 真录过一个从持有列表里选的包。
+  - **`acib`**（ACIB-3d）：**默认的 `stop`（`primitive`）结束不了主人手机上的应用**；`archived` 只结束过一次，用的是第一个头的构建；合入的头的 `stop` 还没上过手机；`reader_stopped` 里分不开连接被断、被重置、读失败和库解不了的消息（库只给一个错）；「通道被取消」和「其它」两种读失败没有测试盖住。
+    **`apps/acib/README.md` 说 `archived` 没在手机上跑过、只记了 13:28 和 15:17 两次，写在 17:33 那次之前**，和上面不一致，以上面为准。
+  - **看板 #490 不在本版修**（§1.494、§1.495 是它的两片，PR #1853 没合）：**进门就失败的任务照旧被立刻再派，直到当天的预算用完**，跑不了的包这期间靠人按住。
+  - 看板 #486 照旧：已关、不可用、又没被按着的实例仍会为派不了的任务被唤醒（闲置动作是停模拟器时才碰到，生产用的是关应用；再探要等它的唤醒结束了闲置的按住才碰得到它）。看板 #497 照旧：排序类的包变量，声明许可的个数最多 32，而一个值最多 1024 字节，合法的值可能存不下（读代码查出来的，生产上没碰到；界面的排序控件在本地按字节挡住）。
+  - 写这份说明的时候，本版在设备上跑过的只有 `acib stop`（用第一个头的构建，见上）；Runtime 和 Lab 的五片都还没在设备上跑过。
+
+- **`acib`**：ACIB-3d 见上面的「`acib stop`」。**`acib` 照旧不在发版的两个压缩包里**：`.github/workflows/windows-remote-build.yml` 本版没改（387–398 发版构建排除它，1007–1030 单独编、单独上传，发版那次不编），两个压缩包的文件表里没有它；锁文件、依赖和 `NOTICE.md` 本版没改。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：`actingd-config` [5, 35]（AVAIL-1，`contracts/component-interfaces.md` 的 `actingd-config` 第 35 行）、`runtime-client` [12, 14]（AVAIL-1，第 14 行，下限仍是 12）、`package` [3, 21]（G2，第 21 行），别的逐行和 v0.12.75 一样：`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10）。
+  固定的钉同一提交改了：`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120`，`crates/lab-rescue/src/install/gate_429_r0b_pairing.rs`、`gate_480_pg2e.rs` 为 [12, 14] 改名的两条，`gate_463_v1.rs` 的 [3, 21]，`gate_463_kp1`、`gate_463_sel2l`、`gate_463_sel2l_rows` 各一条。
+  没找到该升没升的：账本没有加表、索引、记录种类、成员或修订（`crates/ledger` 没改）；新码都在已有的记录里，`runtime-outcomes` 留 1；G1 的 `served`、G2 的 `strips` 和 `below_floor` 是识别的证据，不进线上格式和账本记录（任务诊断逐个成员映射、不带它们；契约库只多两个常数和一条规则）；PRIV-SCAN 的记录是 `provenance` 的成员，准入只要求它是对象或 null。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的 `codes.rs`、`fact_store.rs`、`host.rs`，`host/` 下的 `contained_task.rs`、`facts.rs`、`host_claims.rs`、`recovery_ladder.rs`、`resource_close.rs`、`resource_fence.rs`、`runtime_config.rs`、`runtime_facts.rs`、`unavailable_probe.rs`（新）、`task_diagnostic.rs`（只改测试），
+  测试 `tests/gate_489_avail1.rs`、`tests/gate_498_factcap.rs`（新），`gate_428_s168_4.rs`（助手对新门可见）、`gate_469_d4b.rs`（`served: None`），`tests.rs` 加测试声明；契约库 `candidate_projection.rs`、`fact.rs`、`runtime.rs`；内核 `provider.rs`、`contained_task/selection.rs` 和测试；
+  识别包 `candidate_identity.rs`、`candidate_layout.rs`、`lib.rs`、`ocr_preprocess.rs`、`text_locate.rs` 和测试；`crates/vision-ffi/src/lib.rs`、`name_lines.rs`（新）；`providers/ppocr-onnx-json/src/lib.rs` 和测试；包容器 `source/declarations.rs`、`source/mod.rs`、`source/tests.rs`；`crates/runtime-config/src/lib.rs`、`scheduling.rs`。
+  `apps/actingd`、账本 `crates/ledger`、客户端库 `crates/runtime-client`、`crates/policy`、`crates/scheduler`、`crates/device`、`crates/display-adapter`、`crates/watchdog`、`crates/host-metrics` 一个文件没改。
+- 配置键：加了四个，`scheduling.unavailable_probe.first_interval_ms`、`.factor`、`.max_interval_ms`、`.attention_after_ms`（上面），都能在运行中改，没有按实例的写法；没有去掉的。`actingd.defaults.json` 多这四个默认值（6 行），sha256 从 `e14b0ced7040a6d05046edddd9b0c8ee95a53de4b65d69fcc7d9dae17a433343` 变成 `c05c7478d893faa6dcfefd60b4cf2b1e748fdff2f89a9468f624ff24ce2b56fd`；
+  两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改（`distribution/` 下改了本文件、`component-interfaces.json` 和默认值文件）。
+- 结果码：加了 4 个码、2 个位置，没有标成 `retired` 的，没有改类别的，没有加键、词表和词。按片：AVAIL-1 加 `instance_unavailable_probe_failed`（runtime-host，warning）、`instance_unavailable_probe_passed`（runtime-host，info）、`instance_unavailable_awaiting_person`（runtime-host，warning），类都是 `none`，没有请求答它们；位置 `queue_unavailable_probes`、`run_unavailable_probe`；
+  FACT-CAP 加 `fact_store_capacity_share_reached`（runtime-host，warning，退出码 0），`fact_store_capacity_exceeded` 的码、类别和值不变；G1 给 `text_read_blocks_truncated` 加可选值 `requested`（已有的键）并改了说明；G2、PRIV-SCAN 没加码（`beyond_distance` 是 Lab 拒绝的细节里的词，不在目录里）；ACIB-3d 不用 Runtime 的码。
+  合计 4058 个码（在用 3969，`retired` 89），1777 个位置，31 个片段文件（42 个属主，11 个没有片段文件）；键 704，词表 292，词 2235；在用码按类别 error 3421、warning 185、info 221、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.76.json`：0 个码、0 个位置（新码都还没定稿，也没有新标 `retired` 的）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，改了 1 行（`record mark` 的说明写了 `lines` 和拒绝列出的块），没加参数；帮助最长 159 字节。命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。
+  Lab 的 MCP 服务器的工具数和参数不变（工具由行生成，行数没变）；第一代 MCP 服务器仍是 46 个工具，只改了 `ac_overview` 的输出 schema（行的 `unavailable`，本版不答）。
+  README 两种语言把工具表标题改成 v0.12.76，`acib` 那一行加了 `stop` 的 `--via` 和永不调用的清单（ACIB-3d）。两个压缩包的文件表不变：没有新文件、没有去掉的文件，`acib.exe` 不在里面。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）；`ci/retired-gates.toml` 多两条（AVAIL-1 为 [12, 14] 改名的两条）。看板 #71 另登记了 FLK-17、FLK-18，没有镜像进这张表。
+  本版的片在看板 #71 一件都没登记（它最后一次更新仍是 11-18 07:53 JST）；各片 CI 红过的都是自己的毛病（G1 第一头一处 lint；G2 第一头一条夹具测试和 lint；ACIB-3d 第二轮的两条先后竞争的测试，第三轮修的就是它；AVAIL-1 修订二轮之前三条回放测试的夹具；FACT-CAP 第一头一处 lint），改了再推；G2 并 main 之前的头 build 在看门狗冒烟那一步败过一次，当偶发记着，没登记；验收时读的头都是一次全过、没有重跑。
+
+升级与退回（救急模块部署、退回、撤销那几条路：`plan.rs`、`update.rs`、`status.rs`、`deploy.rs`、`postcheck.rs`、`place.rs` 本版没改，v0.12.75 说明里引的行号对本版也对）：
+
+- **v0.12.75 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 9]，`previous_max_in_next` 过，`one_way` 不触发（`install/plan.rs` 298–311）；`runtime-outcomes` 的 `next_max_in_installer` 过（312–324）；`install-control` 三方 [0, 0]；
+  `runtime-client` 的 `installer_meets_previous` 是安装工具 I [12, 13] 对在线 Rp [12, 13]，`installer_meets_next` 是 I [12, 13] 对本版 R* [12, 14]，都过（325–341）；用本版的副本做计划（I [12, 14]）也都过；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，照旧是 `pack_declaration_unknown` 警告、不挡，R* 写 [3, 21]（342–365）。
+  `actingd-config` 没有比区间的边：`installer_knows_keys`（370 起）只看配置写的键安装工具认不认识，根配置不写新键，过；`next_check_config` 照新版 `check-config` 的结果类别判，过（912–924）。`defaults_diff` 四行（584–608）；文件计划里没有 `new`；`ledger_verify` 为 false（925）；计划通知的 `rollback_window_bounded` 为 false（只有接受了单向的那一步才是 true，212）。
+- **本版第一次启动多写的**：格式上没有；不迁移、不要新状态根。配置的事实 `config.parameters.scheduling` 多四行（来源 `default`），`config.selection` 的 `defaults_sha256` 跟着默认值文件变；之后有实例被判成不可用时多探测的记录，有实例到 180 条时多那条警告。v0.12.75 的配置文件照收；`standard-pack check` 对今天的根答法相同（今天没有根声明 `lines`）。
+- **退回 v0.12.75：开着，有条件。** 回退门（`install/update.rs` 393–515）只放行这次部署替换掉的 v0.12.75（第 2 部分，410–420）。第 1 部分的边：`ledger` 两边 [3, 9]；`runtime-client` 是做退回的那份工具对 Rp [12, 14] 和 R* [12, 13]，本版的 I [12, 14] 和 v0.12.75 留存的 I [12, 13] 都交得上，过；`package` 每个游戏照旧是警告（登记里不记包根的区间）；`actingd-config` 没有区间的边。
+  第 2 部分用 v0.12.75 自己的 `actingledger events` 读部署以来的每一页：本版不写新的记录种类或成员，新码照拼写读，过。第 4 部分（500–513）是 v0.12.75 的 `check-config` 读在线的配置：根配置不写 `scheduling.unavailable_probe` 时过，写了就拒。
+  **动了的三个区间都不关窗、也不给它设界**：`rollback_window_bounded` 只看接受了的单向账本一步（`plan.rs` 212），`op status` 的 `rollback_window` 只比账本的边（`install/status.rs` 286–299）。**真挡退回的是门不看的两样**：整机超过 256 条的事实库（v0.12.75 起不来）和这期间放过的修订 21 的包（v0.12.75 每次运行都拒），见「部署和退路」。
+  部署以后 `op status` 的 `rollback_window` 里，留存的 v0.12.75、v0.12.74、v0.12.73、v0.12.72、v0.12.71 `ledger_edge_passes` 为 true，更早的为 false；**v0.12.72、v0.12.71 两行虽是 true，回它们的计划被拒**（`runtime-client`）；这一栏不说事实库有多少条，也不说放没放过修订 21 的包。
+  - 回去以后用不了的：再探和留着的恢复（11-20 那种卡死又会出现）、按范围的事实上限和快满的警告（又是全机 256 条）、被拒读数的因、名字框过滤（多列卡片列表又会撞 64 块的上限）、切行（修订 21 的包每次运行都被拒）；本版写下的公开包 v0.12.75 照收（准入不读来源记录的成员）。
+  - **账本、不写新键的配置、录制、修订 20 以内的包、绑定、持久化的暂停，v0.12.75 照读**；要先数的是事实库，要先换掉的是修订 21 的包和写了新键的配置。
+
+配对：
+
+- **控制台 UI**：界面的 v0.12.28 和 v0.12.29（11-20、11-21 的预发布）都钉 Runtime `945727d4`，即 v0.12.75。**本版没有它读不了的东西**：状态不带 `unavailable`（本版不填），它钉的契约库照解；四个新码在已有的 `runtime.failed` 记录里，丢掉留着的恢复是已有阶段的记录，按拼写读；读数被拒的因在已有的 `caused_by` 链上；G1、G2 的证据不上线上格式；账本库本版没改。它不用为本版改钉。
+  它不知道的：探测的三个码和快满的警告（当普通的记录读，显不显示是界面的事）；状态的 `unavailable`（要显示它，先钉到本版或更新，等答它的那一版，那一版的下限是 14）；它读整机事实的那次回答最多 768 KiB（上面）。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks`：`actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [12, 14]、`package` [3, 21]、`runtime-outcomes` [1, 1]；默认值文件的 sha256 是 `c05c7478d893faa6dcfefd60b4cf2b1e748fdff2f89a9468f624ff24ce2b56fd`；
+  `git diff --stat v0.12.75 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 只打印默认值文件一行（6 行新增）；`ledger` 两条边写 Rp [3, 9]、R* [3, 9]，都过；`runtime-client` 的边写 I [12, 13]、Rp [12, 13]、R* [12, 14]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`，R* 写 [3, 21]；`actingd-config` 的两行过；`defaults_diff` 四行；启动后检查的 `new_keys` 核这四个键。
+  **和 v0.12.75 那次不同的**：三个区间都动、下限都不动；`defaults_diff` 和 `new_keys` 从空变成四个键；默认值文件的哈希变了；事实库照搬过来，部署前后各读一次合计（今天 212 条，部署不该改它）；部署以后读有没有实例在被再探、有没有探测的记录和提醒；
+  **退回之前多两个条件**：数整机的事实（超过 256 条就不退）、核这期间有没有放过修订 21 的包（有就先换掉）；另核根配置里没有 `scheduling.unavailable_probe`。
+  照旧的：`notice.rollback_window_bounded` 为 false、`ledger_verify` 为 false、没有账本那一步、日志的 `one_way` 为 false；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住；救急模块的产品代码没变，按住和计划和上次一样；部署前核没有开着的录制和试跑。
+- **放置**：Lab 的 `place` 本版没改（`place.rs` 1536–1551 只查包声明的区间落在安装工具自己的区间里）：本版的 `place` 收声明到 21 的包，v0.12.75 的 `place` 在 `package` 边拒它。
+- **资源频道钉着的工具**（升到本版以后）：选择的 `read` 可以写 `lines`（要和 `blocks` 一起），`record stop` 写进生成的共享读，`standard-pack build` 算 21；`select_name_unread` 的拒绝列出这一行读到的块、切出来的条和矮块，过了置信度却在距离内对不上名字的，原因词是 `beyond_distance`；Lab 自己的内核按名字框只识别被服务的块；公开去向的录制，来源记录里的选择只写点名的成员。`acib` 的新构建在 CI 单独出的产物里，不随发版。
+- **两个 MCP 服务器**：Lab 的工具数和参数不变（`ac_record_mark` 的请求里可以写 `lines`，说明改了）；第一代的工具表一个没变，`ac_overview` 的输出 schema 多 `unavailable`（本版不答）。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.75 部署，经 Lab 的 `release stage`、`deploy`、`op status`：两面都不用标志，没有 `ledger_verify`，`defaults_diff` 四行、`new_keys` 核四个新键，没有新文件；三个区间动了、下限都不动；退回 v0.12.75 开着，先数事实、先换掉修订 21 的包。
+- 被设备自检或连接准备判成不可用的实例，Runtime 自己在 1、3、7、15、31 分钟、之后每 30 分钟再探（只自检），满一小时记 `instance_unavailable_awaiting_person`；被冷却压下的恢复到点接着做。状态这一版不答新成员。
+- 事实库按范围算上限：每台 224 条，每个服务器、每个游戏 16 条；到 180 条先警告；读数被拒的运行带着事实库的拒绝码失败。整机超过 256 条以后退不回 v0.12.75。
+- 选择的共享读只识别名字框里的块；声明 `lines` 的包能把粘成一块的两行名字切开读，这种包是修订 21，等本版上线以后再放；钉着的离线 Lab 等本版上线以后再升。
+- 公开去向的录制，来源记录里的选择只写点名的成员；本地去向逐字节不变。
+- `acib stop` 照实答应用还在不在跑；默认的 `primitive` 在主人的手机上结束不了应用，`archived` 要明写；`acib` 仍不随发版。
+
+本版合并的 PR：
+
+- #1854 #498 FACT-CAP（登记 §1.496）：host 门表 `#498` 6 条；`gate_428_s168_4.rs` 的助手对新门可见，它的测试不变。
+- #1852 #489 AVAIL-1（§1.493）：host 门表 `#489 AVAIL-1` 16 条；为 [12, 14] 改名两条（`gate_429_r0b_pairing`、`gate_480_pg2e` 各一），两条拒绝行的区间和 `component_interfaces` 跟着改。
+- #1850 #463 SEL-GRID G2（§1.491）：exec 门表 `#463 SEL-GRID G2` 27 条（提供方 11、识别包 8、内核 2、包容器 2、actinglab 1、Lab 3）；为 [3, 21] 改了 `gate_463_v1`、`gate_463_kp1`、`gate_463_sel2l`、`gate_463_sel2l_rows` 和 `component_interfaces`。
+- #1851 #463 PRIV-SCAN（§1.492）：exec 门表 `#463 PRIV-SCAN` 5 条（Lab）；没有改旧测试。
+- #1849 #479 ACIB-3d（不占登记节）：apps 门表 `#479 ACIB-3d` 7 条（`apps/acib` 自己的测试，不碰设备和网络）；旧测试跟着加了成员和词，名字不变。
+- #1848 #463 SEL-GRID G1（§1.490）：exec 门表 `#463 SEL-GRID G1` 11 条（识别包 5、提供方 4、内核 2）；几处脚本应答和证据只加了 `served: None`，期望没动。
+- 合计 72 条新测试；v0.12.75 门表里的 2 条改了名（见 AVAIL-1），旧名记进 `ci/retired-gates.toml`，此外没有测试退出门表。
+
 ## v0.12.75
 
 本版是 v0.12.74 之后的 7 次合并、7 张 PR，没有列车，一张一张单独合入：#479 ACIB-3b #1838、#480 PG-2e #1842、#479 ACIB-3c #1841、#479 F-3b #1843、#479 F-3a #1844、#485 START-1 #1846，最后 #484 IDLE-W2 #1845。
@@ -118,6 +304,10 @@ and artifact names bind the complete source SHA.
     被按住、Runtime 又已放手的实例上，真到期的任务要等按住结束才唤醒，比以前晚一次冷启动；按住到点结束、人恢复全局暂停、玩家占用解除以后，下一次评估最多要等 60 秒（对账的周期）；
     后面挡着的是自己不说时刻的（包挂起、任务暂停）时，按住结束以后照旧算到期并唤醒（原来就有的行为）；对已关的实例发手动运行仍因应用不在前台失败（不在这一片）；「启动准备占着时落进一次评估」测试里做不出来，用恢复出来的占用代替；**这一片没在生产上跑过：本版自己的部署就是它的第一次重启**。
   - 写这份说明的时候，本版在手机上跑过的只有 `acib` 的命令：探针、`running` 和截图（都只读），还有对一个系统自带的应用发的 `launch` 和 `stop`（见上面和下面的「`acib`」）；Runtime 自己经 `acib` 取 iOS 手机的帧（F-3a）还没对着手机跑过，别的也都还没在设备上跑过。
+    部署以后补记（看板 #421，评论 7001404921）：部署把工具包的三十步和新加的两步（18a、18b）都走完了，调度开着；Runtime 启动后 13.8 秒就绪（之前三次启动是 19.0、35.6、52.7 秒），
+    启动的新行里给上一轮收尾的那一段是 448 毫秒，上一次启动这一步花了 34.5 秒（看板 #485）；从换版前的账本头到放开按住，被按住的实例上一条唤醒记录都没写，其中两台的应用是闲置动作关掉的（看板 #484）；退回 v0.12.74、v0.12.73 的路都开着。
+    之后几天看到的、v0.12.76 答复或点名的：11-20 两台实例被设备自检判成不可用，一直没回来（15 和 16 小时；看板 #489，v0.12.76 修）；进门就失败的任务被立刻再派，直到当天的预算用完（看板 #490，v0.12.76 不修）；
+    事实库全机 256 条的上限用了约两百条（看板 #498，v0.12.76 修）。部署以后，安装经 Lab 的 `instance add` 多了第六台实例（11-20），配置经 `config replace` 换过两次（11-21）。
 
 - **`acib`**（ACIB-3b、ACIB-3c）：ACIB-3b：`running`、`launch`、`stop` 在期限到时答等在哪个阶段（`stage`），答了的行和查找以后的失败行都带各段用了多少毫秒（`stage_ms`），阶段只说等在哪、不说为什么；`services --service <名字>` 只答一个服务握手里的事实；
   只读的 `probe`：七种问法各问一次（截图服务和应用服务上只听不问各一种，应用服务上列应用三种、列进程两种；每种单开一条连接、最多一个请求，请求里不带任何目标），旁路只数手机发回来的帧和消息，答的只有词和计数。
