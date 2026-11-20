@@ -348,9 +348,14 @@ status member holds them.
 - *The count in a row and the wait* (ruling 2). Each failure at the entry counts one more in a row
   when the pair's previous one named the same packages in the same window, else it is the first.
   After the n-th the pair is not dispatched on that instance before `scheduling.unavailable_probe`'s
-  interval for n has passed since that failure's settlement (`first_interval_ms`, times `factor` for
-  each further one, at most `max_interval_ms`; shipped: one minute, two, four, … thirty), and never
-  past the window's end. The candidate waits `instance_entry_task_waiting` (info; `instance_id`,
+  interval for n (`first_interval_ms`, times `factor` for each further one, at most
+  `max_interval_ms`; shipped: one minute, two, four, … thirty) has passed since the end of the block
+  that failure set, whatever ends it, and since the end of any later block of the instance (the
+  coordinator's addition to fix round 4); until a block ends, and when none ended since the failure
+  (it set none), since its settlement; and never past the window's end. So the pair is kept out
+  for its interval after the instance can be dispatched to again: the instance's other due tasks
+  run first when a block ends, and two broken pairs cannot take turns while a healthy task waits.
+  The candidate waits `instance_entry_task_waiting` (info; `instance_id`,
   `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` of the latest failure, `count` the
   failures in a row, `next_eligible_unix_ms` the wait's end) and wakes then; a fact refresh names the
   code as its `gate_code`; the schedule explanation's candidate rows show it. Position 4b of the
@@ -378,38 +383,42 @@ status member holds them.
   its packages change (at its next failure, which then counts from one), at a restart (memory only),
   and (ruling 5) when a store update task's run succeeds on the instance, for every pair of the
   instance: the game is another version. That success still ends the block and the stretch as any
-  run's success does. A client's run, a recovery, a resume and a blackout end the block but leave
-  the counts and the wait as they are.
+  run's success does. A catalogue that becomes active (an activation or a rollback; the
+  coordinator's addition to fix round 4) clears every pair's count, wait and being set aside at
+  once, of every instance (the Runtime's one active catalogue serves them all): it may bind other
+  packages to the pair's task, and the pairs' packages are not compared there. A client's run, a
+  recovery, a resume and a blackout end the block but leave the counts as they are (the wait then
+  runs from that end, above).
 
 **The worst cases** (fix round 4, ruling 3). Shipped values (`first_interval_ms` 60 000, `factor` 2,
 `max_interval_ms` 1 800 000, `recovery_ladder.cooldown_secs` 600), climbs that end within about two
 minutes and a recovery that brings the game home each time (a pair whose own entry is broken):
 
-- *A broken pair with a healthy task due.* The broken pair, first-sorted, fails at about 0, 2, 12,
-  22 and 32 minutes (each block's climb waits the stretch's pace and the ten-minute cool-down
-  window, longer than the pair's wait of one to eight minutes, so the pair runs first when each
-  block ends; nothing counts against it, the healthy task never having run). After its fifth
-  failure its wait (sixteen minutes) outlasts the block, so the healthy task runs at about 42
-  minutes and is let in; its sixth failure, at about 48 minutes, is the first against it, its
-  wait then thirty minutes; the healthy task runs again meanwhile, and its seventh failure, at
-  about 78 minutes, is the second against it. With the recommended `on_failure` (threshold 2) it
-  is set aside at its seventh failure, with a threshold of 1 at its sixth; a person is told; the
-  rule is not paused, and the next window starts from nothing. The healthy task runs whenever the
-  broken pair waits.
+- *A broken pair with a healthy task due* (the healthy task's run short). The broken pair,
+  first-sorted, fails at about 0 minutes; its block ends at about 2, and the pair waits its minute
+  from there, so the healthy task runs first and is let in. The pair's second failure, at about 3
+  minutes, is the first against it: with a threshold of 1 it is set aside there. Its block's
+  climb, the first of a new stretch, waits for the cool-down window the first climb opened and
+  ends at about 12; the pair waits two minutes from there, the healthy task runs again, and the
+  pair's third failure, at about 14 minutes, is the second against it: with the recommended
+  `on_failure` (threshold 2) it is set aside there. A person is told; the rule is not paused, and
+  the next window starts from nothing. The healthy task runs whenever the broken pair waits.
 - *A broken pair with nothing else due.* Nothing is ever let in, so nothing counts against it and
-  it is never set aside. It fails at about 0, 2, 12, 22, 32 and 48 minutes, then once every thirty
-  minutes (its wait at its longest; each block's climb follows thirty minutes after the previous
-  climb's end): about fifty failures in a day's window. Each costs the instance one short run that
-  is given back, one block and one climb of the stretch from the application restart (the game
-  stopped and started and its startup package run; the emulator restarted at most once in the
-  stretch, "When"), and the stretch's attention tells a person after `attention_after_ms`.
+  it is never set aside, whatever the threshold. It fails at about 0, 3, 14, 26, 40 and 58 minutes
+  (each wait from its block's end, each later climb held by the stretch's pace and the ten-minute
+  cool-down window), then about every 32 minutes (its wait at its longest after its block's end,
+  the climb following it): about fifty failures in a day's window. Each costs the instance one
+  short run that is given back, one block and one climb of the stretch from the application
+  restart (the game stopped and started and its startup package run; the emulator restarted at
+  most once in the stretch, "When"), and the stretch's attention tells a person after
+  `attention_after_ms`.
 - *Every task failing at its entry for hours* (a condition nothing mends). No scheduled run gets
-  in, so no failure counts against any pair and nobody is set aside. Each pair waits after each of
-  its failures (one minute doubling to thirty), the stretch's climbs are paced (about six in its
-  first hour, then two an hour) and the emulator is restarted at most once in the stretch. When the
-  condition ends (a climb recovers, a person's run succeeds, a resume), each pair runs again once
-  its own wait has passed (at most thirty minutes after its latest failure) and its first run that
-  gets in starts its counts from nothing.
+  in, so no failure counts against any pair and nobody is set aside, whatever the threshold. Each
+  pair waits after each block's end (one minute doubling to thirty by its own count), the
+  stretch's climbs are paced (about six in its first hour, then two an hour) and the emulator is
+  restarted at most once in the stretch. When the condition ends (a climb recovers, a person's run
+  succeeds, a resume), each pair runs again once its wait from that block's end has passed (at
+  most thirty minutes after it) and its first run that gets in starts its counts from nothing.
 
 **The block.** The settlement of a failure at the entry, a condition, then blocks the instance,
 under the policy outcome gate the evaluation reads the blocks under: from then

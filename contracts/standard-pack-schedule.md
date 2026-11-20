@@ -759,14 +759,16 @@ can do something irreversible").
   the instance waits for its recovery (`instance_entry_blocked`; a store update rule's task still
   runs) and the rule is due again by its own trigger once it is unblocked. Fix round 4: no failure
   at the entry counts against the rule, whatever ran between. A rule that keeps failing at its
-  entry on an instance waits there after each failure (one minute, doubling to thirty with the
-  shipped values) while the instance's other rules run, and once its failures that came
-  although another rule got in reach its `escalation_threshold` it is set aside on that
-  instance until its activity window ends, a person told once; it is not paused, and the next
-  window starts from nothing. With the recommended `on_failure` (threshold 2) and a healthy
-  rule due, a rule whose entry is broken is set aside at about its seventh failure in the
-  window, with a threshold of 1 at about its sixth; alone on the instance it is never set
-  aside. No package or rule changes for it.
+  entry on an instance waits there after each failure, counted from the end of the instance's
+  block (one minute, doubling to thirty with the shipped values), while the instance's other
+  rules run first, and once its failures that came although another rule got in reach its
+  `escalation_threshold` it is set aside on that instance until its activity window ends, a
+  person told once; it is not paused, and the next window starts from nothing. With the
+  recommended `on_failure` (threshold 2) and a healthy rule due, a rule whose entry is broken is
+  set aside at about its third failure in the window (about fourteen minutes), with a threshold
+  of 1 at its second (about three minutes); alone on the instance it is never set aside.
+  Activating a catalogue (a mended package) starts every such count from nothing at once. No
+  package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

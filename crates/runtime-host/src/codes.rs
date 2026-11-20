@@ -314,7 +314,9 @@ actingcommand_contract::outcome_codes! {
         /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
         /// entry on its instance `count` times in a row in its activity window, the latest
         /// (`decision_id`, `failure_code`, settled at `observed_at_unix_ms`) less than
-        /// `scheduling.unavailable_probe`'s interval for `count` ago: it is not dispatched there
+        /// `scheduling.unavailable_probe`'s interval for `count` before now, counted from the end
+        /// of the block it set and of any later block of the instance (from its settlement until a
+        /// block ends): it is not dispatched there
         /// before `next_eligible_unix_ms` (never after the window's end), when it wakes; the fact
         /// refresh names it as its gate (keys `instance_id`, `task_id` as well).
         InstanceEntryTaskWaiting => "instance_entry_task_waiting": info / none,

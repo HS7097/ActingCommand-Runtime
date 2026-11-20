@@ -335,7 +335,8 @@ and 3; [policy-suspension.md](policy-suspension.md), "A pair that keeps failing 
 an instance not blocked or for a store update task that passes the block, a candidate whose pair
 (instance, catalog task) failed at its entry n times in a row waits `instance_entry_task_waiting`
 (`count`, `next_eligible_unix_ms`) until `scheduling.unavailable_probe`'s interval for n has passed
-since that failure's settlement, and one set aside for its window waits
+since the end of the block that failure set and of any later block of the instance (since its
+settlement until a block ends), and one set aside for its window waits
 `instance_entry_task_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the window's
 end; each wakes at its end and neither holds past the window's end; a fact refresh names the code
 as its `gate_code`. Only that task waits: the instance's other candidates are not held, and no rule
