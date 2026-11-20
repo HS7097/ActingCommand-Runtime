@@ -757,7 +757,7 @@ mod gate_485_start1;
 // unavailable is probed again, and a recovery its ladder's cool-down held back is taken up when the
 // cool-down ends.
 mod gate_489_avail1;
-// Workflow #490 ENTRY-A (0.12.76, register §1.494): a scheduled run that failed at its entry is a
+// Workflow #490 ENTRY-A (0.12.77, register §1.494): a scheduled run that failed at its entry is a
 // condition of its instance, which it blocks until a recovery or a run succeeds.
 mod gate_490_entry_a;
 // #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`

@@ -413,6 +413,26 @@ impl PendingRecoveryLadder {
         self.drill.is_some()
     }
 
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 2; `contracts/policy-suspension.md`, "Where a
+    /// block's recovery starts"): the climb starts at the first rung, in the rungs it climbs (its
+    /// profile's, else the section's), whose kind restarts the application
+    /// (`application_restart`, or `emulator_restart`, which restarts it with the emulator), the
+    /// rungs before it skipped `before_start_rung`; a later start its trigger item names is kept.
+    /// Told by each rung's kind (`RungConfig::action`), never by a name or a position. Rungs that
+    /// hold no such kind leave the start as configured.
+    pub(super) fn start_at_application_restart(&mut self) {
+        let configured = self
+            .profile
+            .as_ref()
+            .map_or(&self.config.rungs, |profile| &profile.rungs);
+        if let Some(index) = configured
+            .iter()
+            .position(|rung| restarts_application(rung.action()))
+        {
+            self.start_rung = self.start_rung.max(index + 1);
+        }
+    }
+
     pub(super) const fn holder_id(&self) -> HolderId {
         self.holder_id
     }
@@ -555,6 +575,13 @@ impl RungsTried {
 
     fn count(&self) -> u8 {
         u8::try_from(self.0.len()).unwrap_or(u8::MAX)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 3): whether the climb ran a rung that restarts
+    /// the application (an `application_restart` or `emulator_restart` rung not skipped at its
+    /// entry).
+    fn restarted(&self) -> bool {
+        self.0.iter().any(|rung| restarts_application(*rung))
     }
 }
 
@@ -1754,20 +1781,19 @@ impl HostShared {
     /// exclusion list not read (`classify_unexcluded`): the block's recovery is the block's own
     /// trigger, whatever `exclude_codes` says of the code, which only keeps it from starting a
     /// ladder by itself at the run's lease end; with the shipped triggers that is `pack_logic`,
-    /// the item that takes a page-unknown failure of a task. A failure of any other class (the
-    /// device link's, a fence's, the capture backend's, `environment_fault`; a configuration's) is
-    /// matched as the lease end matches it ([`Self::task_trigger_item`]). The class is the code's
-    /// own (`ladder_class_of`); no code is named.
+    /// the item that takes a page-unknown failure of a task. Fix round 2 (ruling 1): a failure of
+    /// any other class (the capture backend's, the device link's, a fence's, a configuration's)
+    /// is no failure at the entry, whatever the triggers say of it: `None`, so it blocks nothing
+    /// and is settled as before ENTRY-A. The class is the code's own (`ladder_class_of`); no code
+    /// is named.
     fn entry_trigger_item<'a>(
         &self,
         config: &'a LadderConfig,
         resolved: &RegisteredInstance,
         failure_code: &CodeStr,
     ) -> RuntimeHostResult<Option<TaskTriggerMatch<'a>>> {
-        if ladder_class_of(failure_code.as_str())
-            != Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch)
-        {
-            return self.task_trigger_item(config, resolved, false, failure_code);
+        if !entry_class(failure_code) {
+            return Ok(None);
         }
         let Some(settings) = self.task_trigger_settings(config, resolved, false)? else {
             return Ok(None);
@@ -1812,7 +1838,10 @@ impl HostShared {
     /// trigger takes ([`Self::entry_trigger_item`]), starts none here; its ladder is prepared and
     /// kept for the run's settlement, which takes it as the recovery of the block it sets (taken
     /// up at the lease sweep's next tick, `take_up_entry_recoveries`) or lets it go when the run did
-    /// not fail at its entry.
+    /// not fail at its entry. Fix round 2 (ruling 2): a scheduled run's failure at its entry that
+    /// blocks its instance again with no run's main package started there since its previous
+    /// block ended ([`Self::lease_end_restarts`]) climbs from the first rung that restarts the
+    /// application (`start_at_application_restart`), whether its ladder starts here or is held.
     pub(super) fn ladder_at_lease_end(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -1820,6 +1849,8 @@ impl HostShared {
         trigger: LadderTrigger,
     ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
         let config = self.ladder_config()?;
+        let restarts = !trigger.direct
+            && self.lease_end_restarts(resolved.instance_id(), &trigger.terminal)?;
         let Some(matched) = self.task_trigger_item(
             &config,
             resolved,
@@ -1831,13 +1862,38 @@ impl HostShared {
                 && let Some(matched) =
                     self.entry_trigger_item(&config, resolved, &trigger.terminal.failure_code)?
             {
-                let pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+                let mut pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+                if restarts {
+                    pending.start_at_application_restart();
+                }
                 self.hold_entry_recovery(resolved.instance_id(), pending, 0)?;
             }
             return Ok(None);
         };
-        let pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+        let mut pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
+        if restarts {
+            pending.start_at_application_restart();
+        }
         self.admit_recovery_ladder(pending)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 2; `contracts/policy-suspension.md`, "A failure at
+    /// the entry", "Where a block's recovery starts"): whether the failure `terminal` names, at a
+    /// scheduled run's failed lease end on `instance_id`, is one its settlement will judge a failure
+    /// at the entry (its code's class `pack_logic_mismatch`, the run's main package never started,
+    /// a code that does not accumulate there: `scheduled_run_failed_at_entry`, read from the run's
+    /// own records as the settlement reads them) on an instance whose previous block ended with no
+    /// run's main package started on it since (`entry_restart_due`). The run's records are read
+    /// only when the instance is in that state.
+    fn lease_end_restarts(
+        &self,
+        instance_id: InstanceId,
+        terminal: &FailedTaskTerminal,
+    ) -> RuntimeHostResult<bool> {
+        if !entry_class(&terminal.failure_code) || !self.entry_restart_due(instance_id)? {
+            return Ok(false);
+        }
+        self.scheduled_run_failed_at_entry(*terminal.run_id.transport(), &terminal.failure_code)
     }
 
     /// Workflow #369 H-1: the ladder a run's failed lease end `trigger` starts on `resolved` under
@@ -2416,10 +2472,11 @@ impl HostShared {
         let holder_id = pending.holder_id;
         let lease_ttl_ms = pending.claim_ttl_ms();
         // Workflow #490 ENTRY-A fix round 1: a claim the queue refuses is a transient obstacle to an
-        // entry block's recovery, which keeps it held and tries its admission again at the lease
-        // sweep's next tick.
+        // entry block's recovery, which keeps it held and tries its admission again. Fix round 2
+        // (ruling 7): on a growing interval, its refusal recorded when it first occurs in the
+        // block and when its cause changes, none per retry (`hold_refused_entry_recovery`).
         let retry = pending.clone();
-        match self.request_host_claim_work(
+        match self.request_ladder_claim(
             HostClaim {
                 request: &claim,
                 instance_alias: &instance_alias,
@@ -2436,15 +2493,42 @@ impl HostShared {
                 Err(*failure.error)
             }
             Err(failure) => {
-                self.append_lifecycle_failure(
-                    RuntimeLifecycleFailureStage::OperationCleanup,
-                    RuntimeLifecycleFailure::Host(&failure.error),
-                    links,
-                    None,
-                )?;
-                self.hold_entry_recovery_again(retry)
+                if self.hold_refused_entry_recovery(retry, failure.error.code())? {
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::OperationCleanup,
+                        RuntimeLifecycleFailure::Host(&failure.error),
+                        links,
+                        None,
+                    )?;
+                }
+                Ok(())
             }
         }
+    }
+
+    /// A ladder's claim requested of its instance's queue (`request_host_claim_work`). Workflow
+    /// #490 ENTRY-A fix round 2, test builds: while a test refuses ladder claims, the queue's
+    /// refusal of a full queue (`lease_queue_full`) is answered instead, recording nothing, and
+    /// counted.
+    fn request_ladder_claim(
+        &self,
+        claim: HostClaim<'_>,
+        work: HostClaimWork,
+    ) -> Result<(), RequestFailure> {
+        #[cfg(test)]
+        if self.refuse_ladder_claims_for_test.load(Ordering::Acquire) {
+            self.ladder_claims_refused_for_test
+                .fetch_add(1, Ordering::AcqRel);
+            return Err(RequestFailure::request(
+                RuntimeHostError::scheduler(
+                    HostLocation::SchedulerAdmission,
+                    &actingcommand_scheduler::SchedulerError::QueueFull,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        self.request_host_claim_work(claim, work)
     }
 
     /// Climbs one ladder on its instance's worker, holding `key`, and releases the key once
@@ -2821,13 +2905,19 @@ impl HostShared {
                             None,
                             None,
                         )?;
-                        return self.append_recovery_ladder_fact(
+                        // Workflow #490 ENTRY-A fix round 2 (ruling 3): a recovery is evidence
+                        // against a pair only when this climb restarted the application.
+                        return self.append_ladder_fact_as(
                             pending,
                             EventSeverity::Info,
                             RuntimeLifecyclePhase::RecoveryLadderFinished {
                                 ladder_result: RecoveryLadderOutcome::Recovered,
                                 rungs_tried: tried.count(),
                                 outcome: None,
+                            },
+                            ClimbEnd {
+                                restarted: tried.restarted(),
+                                interrupted: false,
                             },
                         );
                     }
@@ -3189,14 +3279,19 @@ impl HostShared {
             )?;
         }
         // Ledger revision 3: the interrupted climb's outcome (category warning) carries the
-        // interruption as its cause.
-        self.append_recovery_ladder_fact(
+        // interruption as its cause. Workflow #490 ENTRY-A fix round 2: an interruption is no
+        // failure of an entry block's recovery, which is held again.
+        self.append_ladder_fact_as(
             pending,
             ladder_exhausted_severity(true),
             RuntimeLifecyclePhase::RecoveryLadderFinished {
                 ladder_result: RecoveryLadderOutcome::Exhausted,
                 rungs_tried,
                 outcome: Some(interrupted(rung_reason_outcome(pending, key, reason))),
+            },
+            ClimbEnd {
+                restarted: false,
+                interrupted: true,
             },
         )
     }
@@ -4669,12 +4764,25 @@ impl HostShared {
         severity: EventSeverity,
         phase: RuntimeLifecyclePhase,
     ) -> RuntimeHostResult<()> {
+        self.append_ladder_fact_as(pending, severity, phase, ClimbEnd::default())
+    }
+
+    /// [`Self::append_recovery_ladder_fact`] of a climb's end that `climb` describes further
+    /// (Workflow #490 ENTRY-A fix round 2: whether it restarted the application, whether a
+    /// holding interruption ended it).
+    fn append_ladder_fact_as(
+        &self,
+        pending: &PendingRecoveryLadder,
+        severity: EventSeverity,
+        phase: RuntimeLifecyclePhase,
+        climb: ClimbEnd,
+    ) -> RuntimeHostResult<()> {
         // Workflow #490 ENTRY-A and fix round 1 (`entry_blocks.rs`): what the fact tells its
         // instance's entry block. A plan drill acted on nothing and tells it nothing.
         let effect = if pending.plan_drill() {
             None
         } else {
-            entry_effect(&phase)
+            entry_effect(&phase, climb)
         };
         self.append_event_raw(
             severity,
@@ -4685,7 +4793,9 @@ impl HostShared {
             ladder_fact_payload(self.owner_epoch, pending, phase),
         )?;
         match effect {
-            Some(EntryEffect::Recovered) => self.note_entry_recovered(pending.instance_id),
+            Some(EntryEffect::Recovered { restarted }) => {
+                self.note_entry_recovered(pending.instance_id, restarted)
+            }
             Some(EntryEffect::Ended) => self.end_entry_block(pending.instance_id),
             Some(EntryEffect::Failed) => {
                 self.note_entry_recovery_failed(pending, EntryRecoveryEnd::Exhausted)
@@ -4707,38 +4817,81 @@ impl HostShared {
                 }
             }
             Some(EntryEffect::Transient) => self.hold_entry_recovery_again(pending.clone()),
+            Some(EntryEffect::Interrupted) => self.hold_interrupted_entry_recovery(pending.clone()),
             None => Ok(()),
         }
     }
+}
+
+/// Workflow #490 ENTRY-A fix round 2 (ruling 2): whether a rung of kind `rung` restarts the
+/// application: the application restart, and the emulator restart above it.
+const fn restarts_application(rung: RecoveryRung) -> bool {
+    match rung {
+        RecoveryRung::ReturnHome => false,
+        RecoveryRung::ApplicationRestart | RecoveryRung::EmulatorRestart => true,
+    }
+}
+
+/// Workflow #490 ENTRY-A fix round 2 (ruling 1; `contracts/policy-suspension.md`, "A failure at
+/// the entry"): whether a code's class is `pack_logic_mismatch`, the one class a failure at the
+/// entry has (the entry's own layers found the screen not what their packages expect). Decided by
+/// the code's class (`ladder_class_of`), never by its name.
+fn entry_class(code: &CodeStr) -> bool {
+    ladder_class_of(code.as_str())
+        == Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch)
+}
+
+/// Workflow #490 ENTRY-A fix round 2: what the climb's end fact does not say and the entry block
+/// reads: whether the climb restarted the application (ruling 3) and whether a holding
+/// interruption ended it (a pause, business capacity, a drain or a shutdown; an update dialog's
+/// end of a rung's run), which is no failure of the recovery.
+#[derive(Clone, Copy, Default)]
+struct ClimbEnd {
+    restarted: bool,
+    interrupted: bool,
 }
 
 /// Workflow #490 ENTRY-A fix round 1 (`entry_blocks.rs`): what one of a ladder's facts tells the
 /// entry block of its instance.
 enum EntryEffect {
     /// The ladder ended `recovered`: it ends the block and (ENTRY-A2) is a recovery after which a
-    /// marked pair's failure at its entry may be the pair's own.
-    Recovered,
+    /// marked pair's failure at its entry may be the pair's own; fix round 2 (ruling 3): only
+    /// when the climb restarted the application (`restarted`).
+    Recovered { restarted: bool },
     /// The ladder ended `environment_ready` (no startup package proved the screen): it ends the
     /// block as before, and is no evidence against a pair.
     Ended,
-    /// The ladder ended without recovering (`exhausted`).
+    /// The ladder ended without recovering (`exhausted`), its rungs having run and failed (or a
+    /// busy or screen hold's limit stopped it).
     Failed,
     /// A blackout dropped the ladder; `until_unix_ms` is the blackout's end.
     Blackout { until_unix_ms: u64 },
     /// A transient obstacle refused the ladder (its admission's refusal, another ladder that holds
     /// or waits for the instance, a later preparation that superseded its own): no failure of the
-    /// recovery, which is held again and tried at the lease sweep's next tick.
+    /// recovery, which is held again and tried at the lease sweep's next tick once nothing holds
+    /// the instance.
     Transient,
+    /// Fix round 2: a holding interruption ended the ladder's climb (`exhausted` at Warning,
+    /// `recovery_ladder_interrupted`: a pause, business capacity, a drain or a shutdown; an update
+    /// dialog's end of a rung's run): no failure of the recovery either, which is held again, but
+    /// not taken up before the cool-down window its climb opened ends.
+    Interrupted,
 }
 
-/// The entry block's reading of the ladder fact `phase`; `None` for every fact that tells it
-/// nothing (a start, a rung, a cool-down's suppression, which holds the recovery by itself).
-fn entry_effect(phase: &RuntimeLifecyclePhase) -> Option<EntryEffect> {
+/// The entry block's reading of the ladder fact `phase`, `climb` saying what its end fact does not;
+/// `None` for every fact that tells it nothing (a start, a rung, a cool-down's suppression, which
+/// holds the recovery by itself).
+fn entry_effect(phase: &RuntimeLifecyclePhase, climb: ClimbEnd) -> Option<EntryEffect> {
     match phase {
         RuntimeLifecyclePhase::RecoveryLadderFinished { ladder_result, .. } => {
             match ladder_result {
-                RecoveryLadderOutcome::Recovered => Some(EntryEffect::Recovered),
+                RecoveryLadderOutcome::Recovered => Some(EntryEffect::Recovered {
+                    restarted: climb.restarted,
+                }),
                 RecoveryLadderOutcome::EnvironmentReady => Some(EntryEffect::Ended),
+                RecoveryLadderOutcome::Exhausted if climb.interrupted => {
+                    Some(EntryEffect::Interrupted)
+                }
                 RecoveryLadderOutcome::Exhausted => Some(EntryEffect::Failed),
                 RecoveryLadderOutcome::Planned => None,
             }

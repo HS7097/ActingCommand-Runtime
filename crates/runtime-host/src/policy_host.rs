@@ -6335,6 +6335,33 @@ impl PolicyHost {
             .entry_condition(&catalog.compiled, &intent, admission, input)
     }
 
+    /// Workflow #490 ENTRY-A2 fix round 2 (ruling 4a): the end of the activity window `decision_id`'s
+    /// admission was committed in (`PolicyControlState::admission_window_end`, the end a condition
+    /// of its run expires at); `None` for a dispatch that is unknown, not admitted or already has
+    /// its record, as [`Self::entry_condition`].
+    pub(crate) fn dispatch_window_end(&self, decision_id: &str) -> RuntimeHostResult<Option<u64>> {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return Ok(None);
+        };
+        let (None, DispatchLifecycle::Admitted, Some(admission)) = (
+            &dispatch.execution,
+            dispatch.lifecycle,
+            dispatch.admission.as_ref(),
+        ) else {
+            return Ok(None);
+        };
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
+        self.control
+            .admission_window_end(&catalog.compiled, &intent, admission)
+            .map(Some)
+    }
+
     /// Workflow #490 ENTRY-A2 fix round 1 (the bound): the `on_failure.escalation_threshold` of
     /// the task `decision_id`'s dispatch runs, in the catalog generation it was dispatched under;
     /// `None` for a dispatch this host does not know or a task that generation no longer has.

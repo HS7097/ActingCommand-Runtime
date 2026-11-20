@@ -289,22 +289,26 @@ actingcommand_contract::outcome_codes! {
         // Workflow #489 AVAIL-1 end
         // Workflow #490 ENTRY-A begin: a run that failed at its entry blocks its instance.
         /// Info (Workflow #490 ENTRY-A). The candidate's instance is entry-blocked: a scheduled run
-        /// there failed at its entry (its main package executed no step), and since then no
-        /// recovery and no run of the instance succeeded, no resume lifted a pause of it, and no
-        /// blackout covered it and no fence took it. Every candidate of the instance but a store
-        /// update package's task is deferred with no wake of its own, the fact refresh naming it
-        /// as its gate (keys `instance_id`, `task_id` and `decision_id` of the run that blocked
-        /// it, `failure_code` its failure, `observed_at_unix_ms` when it was blocked).
+        /// there failed at its entry (its main package executed no step, its failure's class
+        /// `pack_logic_mismatch`), and since then no recovery and no run of the instance
+        /// succeeded, no resume lifted a pause of it, and no blackout covered it and no fence took
+        /// it. Every candidate of the instance but a store update package's task is deferred with
+        /// no wake of its own, the fact refresh naming it as its gate (keys `instance_id`,
+        /// `task_id` and `decision_id` of the run that blocked it, `failure_code` its failure,
+        /// `observed_at_unix_ms` when it was blocked).
         InstanceEntryBlocked => "instance_entry_blocked": info / none,
-        /// Warning (Workflow #490 ENTRY-A fix round 1). An entry-blocked instance waits for a
-        /// person, once per block: the block lasted `scheduling.unavailable_probe.attention_after_ms`
-        /// (`elapsed_ms`, `limit_ms`), whatever holds it (keys `instance_id`, `task_id`,
-        /// `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
+        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance waits for a person, once per
+        /// stretch of blocks with nothing let in between them: the stretch lasted
+        /// `scheduling.unavailable_probe.attention_after_ms` (`elapsed_ms`, `limit_ms`), whatever
+        /// holds it, while no pause, fence or idle stop owns the instance (keys `instance_id`,
+        /// `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
-        /// Warning (Workflow #490 ENTRY-A fix round 1). One of an entry-blocked instance's own
-        /// recoveries ended without recovering (`entry_recovery_end`: its ladder exhausted, its
-        /// worker panicked; `trigger_rule` the trigger item it was admitted under): the Runtime
-        /// has stopped trying, the instance stays blocked, once per block (keys as above).
+        /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
+        /// without recovering (`entry_recovery_end`: its ladder exhausted, its worker panicked;
+        /// `trigger_rule` the trigger item it was admitted under): the instance stays blocked, once
+        /// per block; after an exhausted climb the block climbs again by itself
+        /// (`next_occurrence_unix_ms` its earliest time), after a panicked worker never (keys as
+        /// above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
         // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
@@ -3777,7 +3781,7 @@ actingcommand_contract::outcome_vocabulary! {
 // ---- Workflow #490 ENTRY-A fix round 1 (register §1.494): begin ----
 actingcommand_contract::outcome_vocabulary! {
     /// How an entry-blocked instance's own recovery ended without recovering (vocabulary
-    /// `entry_recovery_end`, since 0.12.76): the value of `instance_entry_blocked_recovery_failed`.
+    /// `entry_recovery_end`, since 0.12.77): the value of `instance_entry_blocked_recovery_failed`.
     pub enum EntryRecoveryEnd: "entry_recovery_end" {
         /// The recovery ladder climbed its rungs and ended `exhausted`.
         Exhausted => "exhausted",

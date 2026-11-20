@@ -312,12 +312,12 @@ unselected. A candidate the closure is asked about is answered by positions 1 to
 above;
 
 **4b.** the instance is entry-blocked (`instance_entry_blocked`, values `instance_id`, `task_id`,
-`decision_id`, `failure_code` and `observed_at_unix_ms`; Workflow #490 ENTRY-A, since 0.12.76,
+`decision_id`, `failure_code` and `observed_at_unix_ms`; Workflow #490 ENTRY-A, since 0.12.77,
 register §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"): a
-scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`,
-since `observed_at_unix_ms`), and no recovery or run of the instance has succeeded since, no
-resume lifted a pause of it, no blackout covered it and no fence took it, and the Runtime did not
-restart. Every candidate of the instance waits, an owed rerun, an immediate rerun, a remedy
+scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`, a
+code of class `pack_logic_mismatch`, since `observed_at_unix_ms`), and no recovery or run of the
+instance has succeeded since, no resume lifted a pause of it, no blackout covered it at the lease
+sweep's tick and no fence took it, and the Runtime did not restart. Every candidate of the instance waits, an owed rerun, an immediate rerun, a remedy
 request or retry and a chain's successor included, with no wake of its own: the block's end is
 followed by a lease end (the ladder's, the run's, the resume's reconnect), which wakes the
 evaluation. A store update package's task passes, as it passes 4a (fix round 1: an instance whose

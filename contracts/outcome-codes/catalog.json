@@ -2966,11 +2966,11 @@
     },
     "entry_recovery_end": {
       "type": "vocab:entry_recovery_end",
-      "description": "How an entry-blocked instance's own recovery ended without recovering, on instance_entry_blocked_recovery_failed: its recovery ladder ended exhausted, or the worker that climbed it panicked (Workflow #490 ENTRY-A fix round 1, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.76)."
+      "description": "How an entry-blocked instance's own recovery ended without recovering, on instance_entry_blocked_recovery_failed: its recovery ladder ended exhausted, or the worker that climbed it panicked (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77)."
     },
     "trigger_rule": {
       "type": "name",
-      "description": "The id of the recovery_ladder trigger item a ladder was admitted under, as its recovery_ladder_started names it as rule; absent for a ladder no trigger item admitted (Workflow #490 ENTRY-A fix round 1, since 0.12.76)."
+      "description": "The id of the recovery_ladder trigger item a ladder was admitted under, as its recovery_ladder_started names it as rule; absent for a ladder no trigger item admitted (Workflow #490 ENTRY-A, since 0.12.77)."
     }
   },
   "vocabularies": {
@@ -11861,7 +11861,7 @@
       }
     },
     "entry_recovery_end": {
-      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A fix round 1, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.76). Either way the Runtime stops trying to recover the block and the instance stays blocked.",
+      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Either way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after worker_panicked nothing climbs again in that block.",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -11869,10 +11869,10 @@
       },
       "tokens": {
         "exhausted": {
-          "description": "The recovery ladder climbed its rungs (each skipped or failed) and ended exhausted."
+          "description": "The recovery ladder climbed its rungs (each skipped or failed), or a busy or screen hold's limit stopped it, and it ended exhausted; the block climbs again by itself after a wait."
         },
         "worker_panicked": {
-          "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic)."
+          "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic), and nothing climbs again in that block."
         }
       }
     }

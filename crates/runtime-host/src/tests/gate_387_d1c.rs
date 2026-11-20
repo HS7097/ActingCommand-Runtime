@@ -2,8 +2,7 @@
 
 //! Workflow #387 D1c, the host rows of the ladder tests (frozen model M387 v1.2 §8.2): H-4 G6
 //! (a routine run's failure starts the ladder its trigger item names; the exclusion list starts
-//! none at the failed lease end; Workflow #490 ENTRY-A fix round 1: a scheduled run's failure at
-//! its entry then blocks its instance, whose own ladder climbs), H-4 G7 (the plan and the climb follow the configured rungs and start rung), D1-L2 and
+//! none), H-4 G7 (the plan and the climb follow the configured rungs and start rung), D1-L2 and
 //! D1-L3 (a ladder that waits for performance release takes no key at the failed lease end,
 //! waits, and climbs by the configuration it was admitted with) and D1-L4 (the same broken value
 //! sent by an instruction is refused whole and the Runtime goes on). Every expected value comes
@@ -152,12 +151,12 @@ fn skipped(rung: RecoveryRung, reason: RecoveryRungSkipReason) -> RecoveryRungPl
 /// H-4 G6 ① and ⑤, H-4 G7: the same routine failure under four configurations. The defaults
 /// climb return home, application restart, emulator restart (skipped: no emulator control) by
 /// the item `pack_logic`; rungs that name only their action climb in their configured order;
-/// an item's start rung skips the rungs before it; the exclusion list starts nothing at the failed
-/// lease end. Workflow #490 ENTRY-A fix round 1 (the coordinator's ruling: the block's recovery is
-/// the block's own trigger, `exclude_codes` notwithstanding): the routine run failed at its entry
-/// (its captures show no page from its first frame, its main package executed no step), so its
-/// settlement blocks the instance and the block's own ladder climbs under the item that takes the
-/// failure's class, `pack_logic`, as the defaults' does.
+/// an item's start rung skips the rungs before it; the exclusion list starts nothing. Workflow
+/// #490 ENTRY-A fix round 2 (ruling 10, the cell fix round 1 lost): the routine run's package is
+/// a `linear_steps` package with no prerequisite chain and no home entry check, so its first step
+/// is its main package's (it starts its main package and is no failure at the entry): a code the
+/// configuration excludes, failing after the main package started, starts no ladder, at the lease
+/// end or at its settlement.
 #[test]
 fn h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs() {
     let cases = [
@@ -226,18 +225,7 @@ fn h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs() 
                 "contained_task_prerequisite_*",
                 "contained_task_return_home_entry_unmatched",
             ]}),
-            // Workflow #490 ENTRY-A fix round 1: the entry block's own ladder, not the failure's.
-            Some((
-                "pack_logic",
-                vec![
-                    pending(RecoveryRung::ReturnHome),
-                    pending(RecoveryRung::ApplicationRestart),
-                    skipped(
-                        RecoveryRung::EmulatorRestart,
-                        RecoveryRungSkipReason::NoEmulatorControl,
-                    ),
-                ],
-            )),
+            None,
         ),
     ];
     for (case, section, expected) in cases {

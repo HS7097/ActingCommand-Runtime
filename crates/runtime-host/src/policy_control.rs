@@ -1727,6 +1727,19 @@ impl PolicyControlState {
         }))
     }
 
+    /// Workflow #490 ENTRY-A2 fix round 2 (ruling 4a): the end of the activity window of `intent`'s
+    /// profile its admission `admission` was committed in: the `expires_at_unix_ms` a condition of
+    /// its run carries, which a pair's conditions in a row at the entry do not outlive.
+    pub(crate) fn admission_window_end(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+    ) -> RuntimeHostResult<u64> {
+        let (_, profile) = task_and_profile(catalog, intent)?;
+        condition_window_end(profile, admission)
+    }
+
     /// Test builds: [`Self::commit_paced_execution`] of a record settled on its wall time.
     #[cfg(test)]
     pub(crate) fn commit_execution(

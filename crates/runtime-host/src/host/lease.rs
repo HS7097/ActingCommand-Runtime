@@ -1419,12 +1419,18 @@ impl HostShared {
         // client's lease, a Lab operation's, an input lifecycle's) may change the screen, so it
         // counts as something that held the instance since its latest successful recovery
         // (`note_entry_run_started`); a direct run's is counted once, when the run starts
-        // (`begin_contained_run`).
+        // (`begin_contained_run`). Fix round 2 (ruling 8): so do a person's emulator control and
+        // the automatic start (a configured start, the emulator watch's restart or recognition),
+        // which start, stop or bind the emulator.
         let manual = match &preparation {
-            LeasePreparation::New(prepared) => {
-                super::resource_fence::manual_claim(prepared.kind())
-                    && prepared.kind() != ClaimKind::DirectTaskRun
-            }
+            LeasePreparation::New(prepared) => matches!(
+                prepared.kind(),
+                ClaimKind::ClientLease
+                    | ClaimKind::InputLifecycle
+                    | ClaimKind::LabOperation
+                    | ClaimKind::EmulatorControl
+                    | ClaimKind::Autostart
+            ),
             LeasePreparation::Existing(_) => false,
         };
         let granted_instance = preparation.token().instance_id();

@@ -747,26 +747,30 @@ can do something irreversible").
   only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
   compose` and the Runtime's workbench do not report it.
-- **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.76, register
+- **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.77, register
   §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"). A rule's
   `daily_limit` is spent at each admission, and an immediate rerun of a failure in a step of its
   package costs one, as before. A run that failed at its entry (its package executed no step: the
-  game was on a screen its gate, prerequisite or return-home layer could not leave; since fix
-  round 1 whatever the ladder's `exclude_codes` say of such a code, so a prerequisite's entry not
-  reached and a return-home layer's recheck not passed count too) gives its admission back, is not
-  rerun at once, owes no rerun and never counts toward `escalation_threshold`, so a rule whose
-  threshold is 1 is not paused by it; the instance waits for its recovery
-  (`instance_entry_blocked`; a store update rule's task still runs) and the rule is due again by
-  its own trigger once it is unblocked. ENTRY-A2 ("Whose failure"): when the same rule then fails
-  at its entry again after a recovery of the instance ended `recovered`, and either nothing ran on
-  the instance first or its failures at the entry in a row as conditions have reached its
-  `escalation_threshold`, the failure is the rule's own: it keeps its admission, counts toward
-  `escalation_threshold`, waits for `retry_backoff_ms` and still waits for a recovery. Which of
-  the instance's due rules runs first after the recovery is the evaluation's allocation order
-  (priority and rank), not the failure. So a rule whose entry is broken is paused, with the
-  recommended `on_failure`, by its fourth failure at the entry at the most, each following such a
-  recovery, and a threshold of 1 pauses it by its second at the most. No package or rule changes
-  for it.
+  game was on a screen its gate, prerequisite or return-home layer could not leave, a code of class
+  `pack_logic_mismatch`, whatever the ladder's `exclude_codes` say of it, so a prerequisite's entry
+  not reached and a return-home layer's recheck not passed count too; a capture backend's or device
+  link's failure there does not) gives its admission back, is not rerun at once, owes no rerun and
+  never counts toward `escalation_threshold`, so a rule whose threshold is 1 is not paused by it;
+  the instance waits for its recovery (`instance_entry_blocked`; a store update rule's task still
+  runs) and the rule is due again by its own trigger once it is unblocked. ENTRY-A2 ("Whose
+  failure"): when the same rule then fails at its entry again in the same activity window, after a
+  recovery of the instance that ended `recovered` and restarted the application with nothing run
+  on the instance first, or once its failures at the entry in a row as conditions have reached its
+  `escalation_threshold` and since its previous one such a recovery came or another run's main
+  package started on the instance, the failure is the rule's own: it keeps its admission, counts
+  toward `escalation_threshold`, waits for `retry_backoff_ms` and still waits for a recovery. A
+  recovery at the return-home rung is no evidence against a rule. Which of the instance's due rules
+  runs first after the recovery is the evaluation's allocation order (priority and rank), not the
+  failure. So a rule whose entry is broken is paused, with the recommended `on_failure`, by its
+  fourth failure at the entry in one window at the most, and a threshold of 1 pauses it by its
+  second at the most, only when between the two the application was restarted and recovered the
+  instance or another run got in; conditions do not outlive their window, so a rule meeting one
+  condition a day is never paused by it. No package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

@@ -2387,6 +2387,10 @@ impl RuntimeHost {
             #[cfg(test)]
             worker_panic_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            refuse_ladder_claims_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            ladder_claims_refused_for_test: AtomicU64::new(0),
+            #[cfg(test)]
             frame_extent_fault_for_test: AtomicBool::new(false),
             #[cfg(test)]
             ppocr_seal_hook_for_test: Mutex::new(None),
@@ -5283,16 +5287,90 @@ impl RuntimeHost {
     }
 
     /// Workflow #490 ENTRY-A2: a recovery ladder of `instance_alias` ended `recovered`, as its
-    /// finished fact tells the entry blocks.
+    /// finished fact tells the entry blocks; fix round 2 (ruling 3): `restarted` when its climb
+    /// restarted the application.
     #[cfg(test)]
-    pub(crate) fn recover_instance_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
+    pub(crate) fn recover_instance_for_test(
+        &self,
+        instance_alias: &str,
+        restarted: bool,
+    ) -> RuntimeHostResult<()> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::RecoverInstanceForTest)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
-        shared.note_entry_recovered(instance_id)
+        shared.note_entry_recovered(instance_id, restarted)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2: a run's main package started on `instance_alias`, as its
+    /// settlement tells the entry blocks (rulings 2, 4b and 6).
+    #[cfg(test)]
+    pub(crate) fn let_run_in_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::StartRunForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.note_entry_let_in_for_test(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 2): whether `instance_alias`'s entry block, if it
+    /// has one, climbs from the application restart.
+    #[cfg(test)]
+    pub(crate) fn entry_block_restarts_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<bool>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.entry_block_restarts_for_test(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 6): `instance_alias`'s stretch of blocks, if one
+    /// runs: when it began and whether a person was told.
+    #[cfg(test)]
+    pub(crate) fn entry_stretch_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<(u64, bool)>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.entry_stretch_for_test(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 7): while `refuse`, the queue refuses every
+    /// ladder claim as a full queue does; returns the refusals so far.
+    #[cfg(test)]
+    pub(crate) fn refuse_ladder_claims_for_test(&self, refuse: bool) -> RuntimeHostResult<u64> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockTickForTest)?;
+        shared
+            .refuse_ladder_claims_for_test
+            .store(refuse, Ordering::Release);
+        Ok(shared
+            .ladder_claims_refused_for_test
+            .load(Ordering::Acquire))
+    }
+
+    /// Workflow #490 ENTRY-A fix round 2 (ruling 7): the ladder claims refused so far while a test
+    /// refused them.
+    #[cfg(test)]
+    pub(crate) fn ladder_claims_refused_for_test(&self) -> RuntimeHostResult<u64> {
+        Ok(self
+            .shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockTickForTest)?
+            .ladder_claims_refused_for_test
+            .load(Ordering::Acquire))
     }
 
     /// Workflow #490 ENTRY-A2: a run of another task (a scheduled run, a client's or the Lab's run)
@@ -7338,6 +7416,12 @@ struct HostShared {
     pause_lane_wait_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     worker_panic_for_test: AtomicBool,
+    // Workflow #490 ENTRY-A fix round 2, test only: while set, the queue refuses every ladder
+    // claim as a full queue does, and the refusals are counted.
+    #[cfg(test)]
+    refuse_ladder_claims_for_test: AtomicBool,
+    #[cfg(test)]
+    ladder_claims_refused_for_test: AtomicU64,
     // Workflow #387 D1c-G, test only: the next task frame's geometry reads a zero width.
     #[cfg(test)]
     frame_extent_fault_for_test: AtomicBool,
