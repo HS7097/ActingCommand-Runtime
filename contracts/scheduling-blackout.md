@@ -381,6 +381,18 @@ idle action closed that is unavailable and under no hold is still woken for a ta
 dispatched, a spent budget included, as the look ahead never reads a candidate the placement
 blocks (what this slice leaves, an issue of its own).
 
+**An asleep instance** (#486 ASLEEP-1, since 0.12.77; register §1.497;
+[scheduling/README.md](scheduling/README.md), "An asleep instance"). An instance whose emulator its
+idle action stops or holds stopped, and whose availability nothing but that stop withdrew, is not
+blocked at placement: its candidates go through the rest of placement and through this order as an
+available instance's do, positions 1 to 9 included (the closure is asked; a pause, a held key, a
+blackout, a budget, a backoff or the activity interval defers them with its own code and wake, and
+the look ahead above reads positions 3 to 8 behind a hold as for any instance). Only the
+candidate the round would then select is not selected: it waits with `instance_asleep_wake_due`
+and the evaluation's time as its wake, and takes the instance (and its device) for the round, so
+a candidate behind it waits as behind a selected one; no intent is made for it, so nothing of
+admission runs. An instance unavailable for any other cause is blocked at placement as before.
+
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
 lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,
 fencing, budget) and before the ceiling of its facts' freshness (`policy_facts_stale`) and the

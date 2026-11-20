@@ -1614,6 +1614,15 @@ the configured starts; the watch ends with the host.
   instance) says so, and the woken instance is active again once it is free, its emulator left as
   it is (a person's start, or the watch's recognition of a running one, brings it back). A
   wake's claim that meets the key off on its key ends the same way ("Holding checks" above).
+  #486 ASLEEP-1 (since 0.12.77; register §1.497): while the idle stop holds the emulator stopped
+  and nothing else withdrew or holds the instance, the instance is asleep, not unavailable, for the
+  scheduler ([scheduling/README.md](scheduling/README.md), "An asleep instance"): its wake comes for
+  a task that would be dispatched, at once, or at the release of the gate that holds its next task,
+  less the lead. A wake whose claim drove the emulator's Start binds the next idle stop: the idle
+  check does not stop that emulator again until a scheduled run has been admitted on the instance
+  since the wake, and says so once (`instance_idle_stop_withheld`;
+  [runtime-config.md](runtime-config.md), "What wakes an idle instance"); a claim that read the
+  emulator running started nothing and binds nothing.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes

@@ -1305,7 +1305,14 @@ impl HostShared {
                 );
             }
         };
-        let line = match self.drive_configured_start(&validated, &resolved, links, key) {
+        let started = self.drive_configured_start(&validated, &resolved, links, key);
+        // #486 ASLEEP-1 (register §1.497, ruling 6): an idle wake's start drove the emulator's
+        // Start, so the wake is one the idle check must see answered by a dispatched run before it
+        // stops that emulator again.
+        if pending.idle_wake && matches!(started, Ok(KeyedStart::Driven)) {
+            lock(&self.idle, HostLocation::RunEmulatorAutostart)?.wake_started_emulator(alias);
+        }
+        let line = match started {
             Ok(KeyedStart::Held { key, hold }) => {
                 return self.end_autostart_hold(pending, &key, HoldEnd::Held(hold));
             }

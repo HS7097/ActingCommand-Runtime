@@ -352,6 +352,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// projection resolved; set on the evaluator's own `instance_unavailable` reasons before the
     /// not-run explanation reads them.
     pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
+    /// #486 ASLEEP-1 (register §1.497): the instances asleep as the cycle's inputs were projected,
+    /// by alias (`HostShared::asleep_for_policy`): the evaluation judges each as if it were
+    /// available and selects nothing on it (`InstanceHolds::mark_asleep`).
+    pub(crate) asleep: &'a BTreeSet<String>,
 }
 
 /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
@@ -3720,6 +3724,18 @@ impl PolicyHost {
         .counts_every_run(latest_intent)
     }
 
+    /// #486 ASLEEP-1 (register §1.497, ruling 6): the ledger sequence of the latest admission of
+    /// a scheduled run on `alias` the dispatch journal holds (it keeps every open dispatch and each
+    /// pair's latest intent); none when it holds none. The idle check reads one later than a
+    /// wake's as that wake answered.
+    pub(crate) fn idle_latest_admission(&self, alias: &str) -> Option<u64> {
+        self.seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.data.instance_id == alias)
+            .filter_map(|dispatch| dispatch.admitted_sequence)
+            .max()
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
@@ -3890,6 +3906,7 @@ impl PolicyHost {
             dispatches_read,
             standard_pack_variables,
             availability_withdrawals,
+            asleep,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4042,6 +4059,12 @@ impl PolicyHost {
             let (reason, gate) =
                 crate::fact_refresh::switch_cooldown_hold(alias, *until_unix_ms).reason_and_gate();
             instance_holds.hold(alias.clone(), reason, gate, BTreeSet::new());
+        }
+        // #486 ASLEEP-1 (register §1.497; `scheduling/README.md`, "An asleep instance"): each
+        // instance asleep is judged as if it were available, and the candidate the round would
+        // select there waits as the task the instance is woken for (`instance_asleep_wake_due`).
+        for alias in asleep {
+            instance_holds.mark_asleep(alias.clone());
         }
         // Workflow #429 R-8 (`scheduling-blackout.md`, "Order of the deferrals", position 5;
         // `instance-fact-store.md`, "Pack schedule facts"): each instance's pack schedule as this

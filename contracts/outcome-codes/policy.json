@@ -588,6 +588,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_asleep_wake_due": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.77",
+      "description": "Scheduling decision reason (#486 ASLEEP-1, register 1.497; contracts/scheduling/README.md \"An asleep instance\"): the candidate the round would have selected on an asleep instance (instance_id, its alias), which is the task the instance is woken for. An instance is asleep while its emulator stands stopped by its idle action and nothing but that stop withdrew its availability (its configured seed available, no fence, no device link, device state or device system withdrawal, no failed self-check of its own). The evaluation judges an asleep instance as if it were available, through every gate an available instance's candidates go through, and selects nothing on it: this decision is deferred with the evaluation's time as its wake, so the idle plan counts it due and the idle check wakes the instance (its emulator's start, then its startup package); no dispatch intent, reason chain or decision record is made, and the candidates behind it wait as behind a selected one. Every other candidate of the instance carries its own gate's decision.",
+      "common_causes": "The idle action stopped the instance's emulator (stop_emulator, or auto's highest tier), and a task of the instance can be dispatched now.",
+      "handling": "None needed: the idle check wakes the instance at once and the task is dispatched once it is prepared again. A wake that starts the emulator and is followed by no dispatched run is reported as instance_idle_stop_withheld."
+    },
     "capability_missing": {
       "category": "info",
       "ladder_class": "none",

@@ -1482,3 +1482,14 @@ tests = [
     "actingcommand-scheduler::lib::tests::gate_480_pg2b::pg2b_every_other_queued_entry_counts_as_before_under_the_pause_hand_back",
 ]
 incident = ["#480", "PG-2b"]
+
+# #486 ASLEEP-1 (0.12.77; register §1.497; brief rd-1121/brief-486-asleep.md; contracts/scheduling/README.md, "An asleep instance"), the policy half, on a neutral V2 catalog (maintenance and judged tasks of one game on an hourly clock due at NOW, a valued pool and a capped pool of instance A read from their keys) with no clock read: with no asleep instance (none named, an available one named, an unknown one named; A available and unavailable) the evaluation equals evaluate_with_owed_reruns's byte for byte and decision for decision (1); A asleep (InstanceHolds::mark_asleep, its snapshot unavailable), its first candidate is deferred instance_asleep_wake_due (instance_id A) with the evaluation's time as its wake, not selected, no intent and no reason chain, and the candidate behind it carries the decision it carries behind the same candidate selected on A available (2); with its budget spent (the closure's deferral and release), its benefit unknown and a pool line holding it (would_cross_hard_line), each decision equals A available's (3); an unavailable instance no one names is blocked instance_unavailable as before, while the named one is woken for its task (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep_t1_with_no_asleep_instance_the_evaluation_is_the_one_without_the_input",
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_for",
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep_t3_a_gate_after_placement_decides_as_on_an_available_instance",
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before",
+]
+incident = ["#486", "ASLEEP-1"]

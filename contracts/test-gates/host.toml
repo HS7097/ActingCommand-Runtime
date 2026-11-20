@@ -4582,3 +4582,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_498_factcap::factcap_f_a_start_restores_more_than_256_facts_of_several_instances",
 ]
 incident = ["#498"]
+
+# #486 ASLEEP-1 (0.12.77; register §1.497; brief rd-1121/brief-486-asleep.md; contracts/runtime-config.md, "What wakes an idle instance"), the host half: gate_372k2's policy instance on a host of its own, emulator-controlled and device self-checked, with no idle action of its own; the pure idle planner under stop_emulator on the plans the host's evaluations leave; the stop's two ends on the host are the planner's idle phase after it (hold_emulator_stopped_for_test) and the gate's withdrawal (backend_selfcheck:unchecked); a manual Runtime clock. The stop with its wake at a spent budget's release less the lead, then asleep: every evaluation defers the task by its budget, not instance_unavailable, the plan counts it not due and no check starts the emulator (5); a judged task with no effect whose trigger is a past at clock: the stop with no wake, then benefit_unknown with no wake and no start at all (6); past the release the round's pick is instance_asleep_wake_due with no intent and the plan names it, one wake (the emulator's start, then the startup package) and none under its claims, then, prepared again by a person's self-check, the task dispatched twice and the emulator stopped again, unwarned (7); a spent-budget task and a benefit-unknown task through one day: one stop, no start before the release less the lead, one start at it, planned_time_reached (8); ruling 6 in the planner: a wake whose start started nothing binds nothing; after one that started the emulator, with no run dispatched, the emulator is not stopped again and one warning is due (cause, task, time), once; a run admitted after the wake lets the stop be taken; under auto close_app instead, warned, a lighter tier unwarned; an activation, an idle change and a start each let the stop be taken (9); after a seeding and a loading start the instance asleep again: the evaluations defer the task by its budget and the restored planner keeps its wake and starts nothing (10); under a person's pause the task is due behind it and the wake is held (WakeHeld), and it comes once the start is free (11). No clock read in the gate file
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h5_a_spent_budget_does_not_start_the_stopped_emulator_before_its_release",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h6_a_candidate_whose_benefit_is_unknown_wakes_the_stopped_emulator_never",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h7_a_task_due_while_asleep_starts_the_emulator_once_runs_and_sleeps_again",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h8_one_idle_stretch_one_stop_and_one_start_at_the_release",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h10_a_start_keeps_the_asleep_instance_asleep_with_its_wake",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep_h11_an_asleep_instance_under_a_persons_pause_is_not_woken",
+]
+incident = ["#486", "ASLEEP-1"]

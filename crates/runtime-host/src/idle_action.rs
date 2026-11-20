@@ -120,6 +120,18 @@
 //! - **The switch under `auto`.** An idle instance's wake comes at once for a switched action;
 //!   under `auto` the action is switched only when the tier it took is no longer one `auto` allows
 //!   on it, so a restart that restores a closed application under `auto` does not wake it.
+//!
+//! #486 ASLEEP-1 (0.12.77; register §1.497): an instance whose emulator its idle action stops or
+//! holds stopped ([`IdlePlanner::emulators_held_stopped`]) is asleep when nothing but that stop
+//! withdrew its availability (`HostShared::asleep_for_policy`); the evaluation judges it as if it
+//! were available, and the plan this module reads follows with no case of its own. Ruling 6, the
+//! bound on what that foresaw not: a wake whose work started the instance's emulator stays
+//! unanswered ([`IdlePlanner::check_with_due_task`]) until a scheduled run is admitted on the
+//! instance after it ([`IdleView::latest_admission`]), another idle configuration of the
+//! instance, a catalog's activation ([`IdlePlanner::forget_unanswered_wakes`]) or a Runtime start
+//! ends it; meanwhile the emulator is not stopped again (`auto` takes `close_app` at most, a plain
+//! `stop_emulator` nothing) and the first check that would have stopped it makes one warning due
+//! ([`IdlePlanner::take_withheld_stop`]).
 
 use crate::codes::IdleWakeCause;
 use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
@@ -154,6 +166,11 @@ pub(crate) struct IdleView {
     /// been opened since ([`RunsRead::counts_every_run`]). No action and no rest is decided on
     /// such a plan; an owed wake reads it as it reads every plan.
     pub(crate) run_uncounted: bool,
+    /// #486 ASLEEP-1 (register §1.497, ruling 6): the ledger sequence of the latest admission of a
+    /// scheduled run on the instance that the policy's dispatch journal holds
+    /// (`PolicyHost::idle_latest_admission`); none: it holds none. One later than a wake's
+    /// answers that wake ([`IdlePlanner::check_with_due_task`]).
+    pub(crate) latest_admission: Option<u64>,
 }
 
 impl IdleView {
@@ -495,7 +512,7 @@ enum Phase {
     Rested,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct InstanceIdle {
     phase: Phase,
     /// The last check that found the instance in use: an action waits for a plan made after it
@@ -508,6 +525,76 @@ struct InstanceIdle {
     /// #484 IDLE-W2: an idle instance owes its wake to the start that restored it (restored
     /// woken, or with no usable record), until the wake is queued.
     owed_at_start: bool,
+    /// #486 ASLEEP-1 (ruling 6): the wake that started the instance's emulator, while no scheduled
+    /// run dispatched on the instance since answered it.
+    unanswered: Option<UnansweredWake>,
+}
+
+impl InstanceIdle {
+    /// An instance in `phase` that no check found in use yet.
+    const fn new(phase: Phase, owed_at_start: bool) -> Self {
+        Self {
+            phase,
+            in_use_at_unix_ms: None,
+            unsupported: None,
+            owed_at_start,
+            unanswered: None,
+        }
+    }
+}
+
+/// #486 ASLEEP-1 (register §1.497, ruling 6; `contracts/runtime-config.md`, "What wakes an idle
+/// instance"): what the one warning of a wake that started the instance's emulator says when the
+/// idle check would have stopped that emulator again before a scheduled run was dispatched on the
+/// instance: why the wake came, the task it named (with `task_due`) and when it was queued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WithheldStop {
+    pub(crate) cause: IdleWakeCause,
+    pub(crate) task_id: Option<String>,
+    pub(crate) woken_at_unix_ms: u64,
+}
+
+/// #486 ASLEEP-1 (ruling 6): where the one warning of an unanswered wake stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopWarning {
+    /// No check would have stopped the emulator yet.
+    Unsaid,
+    /// A check withheld the stop; the host records the warning
+    /// ([`IdlePlanner::take_withheld_stop`]).
+    Due,
+    /// Recorded: not again for this wake.
+    Said,
+}
+
+/// #486 ASLEEP-1 (register §1.497, ruling 6): a wake after `stop_emulator` (its configured emulator
+/// start in effect), which no scheduled run dispatched on the instance since has answered. Once its
+/// configured start has started the instance's emulator ([`IdlePlanner::wake_started_emulator`];
+/// a start that found the emulator running started nothing), the idle check does not stop that
+/// emulator again while it stands: under `auto` the tier stops at `close_app`, under a plain
+/// `stop_emulator` nothing is taken. The planner's, in memory only: a scheduled run admitted on the
+/// instance after it, another idle configuration of the instance, a catalog's activation
+/// ([`IdlePlanner::forget_unanswered_wakes`]) and a Runtime start (a new planner) end it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnansweredWake {
+    withheld: WithheldStop,
+    /// The latest admission of a scheduled run on the instance as the wake was queued
+    /// ([`IdleView::latest_admission`]).
+    admitted_through: Option<u64>,
+    /// The instance's idle keys in effect as the wake was queued.
+    config: IdleConfig,
+    /// Whether the wake's configured start started the emulator.
+    started: bool,
+    warning: StopWarning,
+}
+
+impl UnansweredWake {
+    /// Whether a check with `config` and `latest_admission` finds the wake answered: a scheduled
+    /// run was admitted on the instance after it, or the instance's idle keys changed.
+    fn answered(&self, config: &IdleConfig, latest_admission: Option<u64>) -> bool {
+        self.config != *config
+            || latest_admission
+                .is_some_and(|latest| self.admitted_through.is_none_or(|through| latest > through))
+    }
 }
 
 /// The idle state of every instance, by alias. IDLE-1P (#405): the host keeps the closed
@@ -548,15 +635,36 @@ impl IdlePlanner {
         plan: Option<IdlePlan>,
         now_unix_ms: u64,
     ) -> Option<IdleStep> {
+        self.check_with_due_task(alias, config, view, plan, now_unix_ms, None)
+    }
+
+    /// [`Self::check`], with `due_task` the task the plan counts due (#484 IDLE-W2), which a wake
+    /// for it names. #486 ASLEEP-1 (register §1.497, ruling 6): a wake whose work starts the
+    /// instance's emulator is kept unanswered ([`UnansweredWake`]) until a check finds a scheduled
+    /// run admitted on the instance after it (`view.latest_admission`) or other idle keys
+    /// (`config`); while it stands the instance's emulator is not stopped again, and the first
+    /// check that would have stopped it makes its one warning due
+    /// ([`Self::take_withheld_stop`]).
+    pub(crate) fn check_with_due_task(
+        &mut self,
+        alias: &str,
+        config: &IdleConfig,
+        view: IdleView,
+        plan: Option<IdlePlan>,
+        now_unix_ms: u64,
+        due_task: Option<&str>,
+    ) -> Option<IdleStep> {
         let entry = self
             .instances
             .entry(alias.to_owned())
-            .or_insert(InstanceIdle {
-                phase: Phase::Active,
-                in_use_at_unix_ms: None,
-                unsupported: None,
-                owed_at_start: false,
-            });
+            .or_insert_with(|| InstanceIdle::new(Phase::Active, false));
+        if entry
+            .unanswered
+            .as_ref()
+            .is_some_and(|wake| wake.answered(config, view.latest_admission))
+        {
+            entry.unanswered = None;
+        }
         let phase = entry.phase;
         match phase {
             // The host reports the action's end (`finished`, `abandoned`) before the instance is
@@ -591,7 +699,7 @@ impl IdlePlanner {
                     // After the wake, an action waits for a plan made after this work.
                     entry.in_use_at_unix_ms = Some(now_unix_ms);
                 }
-                wake(
+                let step = wake(
                     entry,
                     config,
                     action,
@@ -599,7 +707,29 @@ impl IdlePlanner {
                     plan,
                     now_unix_ms,
                     view,
-                )
+                );
+                // #486 ASLEEP-1 (ruling 6): a wake whose work starts the emulator (its configured
+                // start in effect) is unanswered until a scheduled run is admitted after it.
+                if let (Some(IdleStep::Wake { work, .. }), Phase::Woken { cause, .. }) =
+                    (step, entry.phase)
+                    && work.contains(&WakeWork::EmulatorStart)
+                    && view.emulator_wakeable
+                {
+                    entry.unanswered = Some(UnansweredWake {
+                        withheld: WithheldStop {
+                            cause,
+                            task_id: due_task
+                                .filter(|_| cause == IdleWakeCause::TaskDue)
+                                .map(str::to_owned),
+                            woken_at_unix_ms: now_unix_ms,
+                        },
+                        admitted_through: view.latest_admission,
+                        config: *config,
+                        started: false,
+                        warning: StopWarning::Unsaid,
+                    });
+                }
+                step
             }
         }
     }
@@ -674,6 +804,8 @@ impl IdlePlanner {
         };
         // #484 IDLE-W2: a wake the start owed is still the start's.
         entry.owed_at_start = cause == IdleWakeCause::OwedAtStart;
+        // #486 ASLEEP-1 (ruling 6): the wake started nothing, so it leaves nothing to answer.
+        entry.unanswered = None;
         true
     }
 
@@ -703,6 +835,49 @@ impl IdlePlanner {
                 }
             )
         })
+    }
+
+    /// #486 ASLEEP-1 (register §1.497): the instances whose emulator their idle action stops or
+    /// holds stopped ([`Self::emulator_held_stopped`]), by alias: the ones of them nothing else
+    /// withdrew or holds are asleep (`HostShared::asleep_for_policy`).
+    pub(crate) fn emulators_held_stopped(&self) -> BTreeSet<String> {
+        self.instances
+            .keys()
+            .filter(|alias| self.emulator_held_stopped(alias.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of the unanswered wake of `alias`
+    /// once a check withheld the stop of its emulator; none otherwise, and none again for the same
+    /// wake. The host records it (`instance_idle_stop_withheld`).
+    pub(crate) fn take_withheld_stop(&mut self, alias: &str) -> Option<WithheldStop> {
+        let wake = self.instances.get_mut(alias)?.unanswered.as_mut()?;
+        if wake.warning != StopWarning::Due {
+            return None;
+        }
+        wake.warning = StopWarning::Said;
+        Some(wake.withheld.clone())
+    }
+
+    /// #486 ASLEEP-1 (ruling 6): the configured start a wake of `alias` queued started its emulator
+    /// (the host's autostart claim drove the Start): from now on the wake binds the stop of that
+    /// emulator until it is answered. Nothing for an instance with no unanswered wake.
+    pub(crate) fn wake_started_emulator(&mut self, alias: &str) {
+        if let Some(wake) = self
+            .instances
+            .get_mut(alias)
+            .and_then(|entry| entry.unanswered.as_mut())
+        {
+            wake.started = true;
+        }
+    }
+
+    /// #486 ASLEEP-1 (ruling 6): a catalog's activation answers every unanswered wake.
+    pub(crate) fn forget_unanswered_wakes(&mut self) {
+        for entry in self.instances.values_mut() {
+            entry.unanswered = None;
+        }
     }
 
     /// IDLE-1P (#405): the instances the idle action closed or is closing, by alias, each with
@@ -810,16 +985,14 @@ impl IdlePlanner {
     pub(crate) fn restore(&mut self, alias: &str, kept: KeptIdle) {
         self.instances.insert(
             alias.to_owned(),
-            InstanceIdle {
-                phase: Phase::Idle {
+            InstanceIdle::new(
+                Phase::Idle {
                     action: kept.action,
                     wake_at_unix_ms: kept.wake_at_unix_ms,
                 },
-                in_use_at_unix_ms: None,
-                unsupported: None,
                 // #484 IDLE-W2: a woken instance's wake is owed to the start.
-                owed_at_start: kept.woken,
-            },
+                kept.woken,
+            ),
         );
     }
 
@@ -829,15 +1002,13 @@ impl IdlePlanner {
     pub(crate) fn restore_owed(&mut self, alias: &str, action: IdleAction, at_unix_ms: u64) {
         self.instances.insert(
             alias.to_owned(),
-            InstanceIdle {
-                phase: Phase::Idle {
+            InstanceIdle::new(
+                Phase::Idle {
                     action,
                     wake_at_unix_ms: Some(at_unix_ms),
                 },
-                in_use_at_unix_ms: None,
-                unsupported: None,
-                owed_at_start: true,
-            },
+                true,
+            ),
         );
     }
 
@@ -921,7 +1092,13 @@ fn decide(
     let action = match action {
         // IDLE-2: one tier by the gap, directly, no higher than the instance can take.
         IdleAction::Auto(gaps) => {
-            match auto_tier(gaps, config.min_gap_ms, gap_ms, view.auto_cap())? {
+            let mut tier = auto_tier(gaps, config.min_gap_ms, gap_ms, view.auto_cap())?;
+            // #486 ASLEEP-1 (ruling 6): below the emulator's stop while a wake that started it is
+            // unanswered; the lighter tiers stay as they are.
+            if tier == Tier::StopEmulator && withhold_stop(entry) {
+                tier = Tier::CloseApp;
+            }
+            match tier {
                 Tier::Rest if rested => return None,
                 Tier::Rest => {
                     entry.phase = Phase::Resting;
@@ -937,6 +1114,11 @@ fn decide(
         // A task or a reading within the minimum gap keeps the instance as it is.
         action => {
             if gap_ms.is_some_and(|gap| gap < config.min_gap_ms) {
+                return None;
+            }
+            // #486 ASLEEP-1 (ruling 6): no stop of an emulator a wake started while that wake is
+            // unanswered.
+            if action == IdleAction::StopEmulator && withhold_stop(entry) {
                 return None;
             }
             action
@@ -955,6 +1137,19 @@ fn decide(
         next_due_unix_ms,
         wake_at_unix_ms,
     })
+}
+
+/// #486 ASLEEP-1 (ruling 6): whether the check withholds the stop of the instance's emulator, which
+/// the unanswered wake of `entry` started; when it does, the wake's one warning is due, unless it
+/// was said already.
+fn withhold_stop(entry: &mut InstanceIdle) -> bool {
+    let Some(wake) = entry.unanswered.as_mut().filter(|wake| wake.started) else {
+        return false;
+    };
+    if wake.warning == StopWarning::Unsaid {
+        wake.warning = StopWarning::Due;
+    }
+    true
 }
 
 /// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake

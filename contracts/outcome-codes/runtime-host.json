@@ -23371,6 +23371,31 @@
       "common_causes": "The instance's entry configures no startup_package while idle.action is close_app (the default), stop_emulator or auto; or, under auto, its game declares no return-home package for its server.",
       "handling": "Configure the instance's startup_package (and, for stop_emulator, start_emulator), or set instance.<id>.idle.action to none; for return_home, declare the server's return-home package in the game's standard pack, or raise idle.return_home_min_gap_ms to idle.min_gap_ms so that no gap rests."
     },
+    "instance_idle_stop_withheld": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "idle_action": "required",
+        "idle_wake_cause": "required",
+        "at_unix_ms": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.77",
+      "description": "#486 ASLEEP-1 (register 1.497, ruling 6; contracts/runtime-config.md \"What wakes an idle instance\"): an idle wake started the instance's emulator (after stop_emulator, its configured start in effect) and no scheduled run has been dispatched on the instance since, so the idle check that would have stopped the emulator again does not: under auto it takes close_app at most, the lighter tiers as they are; under stop_emulator it takes nothing. Recorded once per such wake, the first time the check withholds the stop (operation check_idle_instances): alias, idle_action stop_emulator (the stop not taken), idle_wake_cause (why the wake came), task_id (the task it named, with task_due) and at_unix_ms (when the wake was queued). A device_state_observed record under the instance and the same report line. The planner keeps the wake in memory only; a scheduled run admitted on the instance after it, a Runtime start, a catalog's activation and another idle configuration of the instance end it, and the stop may be taken again.",
+      "common_causes": "A task the instance was woken for could not be dispatched once the instance was prepared again: a gate the evaluation could not read while the emulator was stopped, or one that came between the wake and the end of its startup package.",
+      "handling": "Read the instance's schedule explanation for the named task: its why says what holds it. The emulator keeps running until a scheduled run is dispatched there; a person may stop it, or set idle.action, to end the wait at once."
+    },
     "run_duration_key_reserved": {
       "category": "error",
       "ladder_class": "none",

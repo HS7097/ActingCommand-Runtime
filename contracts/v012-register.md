@@ -43190,6 +43190,153 @@ status 1, not 2, as the code's category is `error`; every later start of that bu
 store and answers the same. In the release notes' language:
 实例事实库的上限改为按范围分别计：每个实例自己的事实最多 224 条，每个服务器、每个游戏各自最多 16 条（共享的事实只算一次）；加实例不再挤占别的实例。某实例自己的事实到上限的 80%（180 条）时先记一条警告 `fact_store_capacity_share_reached`；读数被拒时运行的失败记录里带上事实库拒绝的原因码。整机事实超过 256 条以后不能再回滚到 0.12.75 或更早的版本：那些版本启动时载入事实库会被拒（`fact_store_capacity_exceeded`），起不来。
 
+### 1.497 Slice #486 ASLEEP-1 (0.12.77): an instance whose emulator the idle action stopped is asleep, not unavailable; it is woken only for a task that would be dispatched, and a wake that started the emulator must be answered (board #486; the rules below are the coordinator's rulings 1 to 8 of 11-21, not the owner's words; the owner's words behind the slice, 11-02: 「没有任务时直接关闭模拟器」; coordinator work order `rd-1121/brief-486-asleep.md`; on main `f6e2cd26`)
+
+This section takes 1.497 (1.494 is pull request #1853's, 1.495 is reserved, 1.496 is on main). It
+ships in 0.12.77. [scheduling/README.md](scheduling/README.md) ("An asleep instance", new; "An
+unavailable instance is probed again", the stopped emulator's line) and
+[runtime-config.md](runtime-config.md) ("What wakes an idle instance", two paragraphs added) are the
+contract; [scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals") and
+[emulator-control.md](emulator-control.md) ("Idle stop (IDLE-1)") say what changes there.
+
+**The defect** (read in the code at main). The idle action `stop_emulator` stops the emulator, and
+the stop drops the instance's self-check facts (`invalidate_backend_selfcheck_facts`), so the
+backend self-check gate withdraws its availability (`backend_selfcheck:unchecked`) until a self-check
+passes after the idle wake has started the emulator. The evaluation blocked every candidate of an
+unavailable instance past its trigger at placement (`instance_unavailable`, `build_candidate`),
+before the order of the deferrals, the benefit gate, the pool lines and the ranking (the task's own
+cooldown and the no-progress guard come before placement and were read). The idle plan counted such
+a decision due when its trigger named no later time (an eligible decision with no wake of its own),
+and otherwise took its trigger's next time as the wake: the wake started the emulator and ran the
+startup package for a task the next evaluation held back (its budget spent, its benefit unknown, a
+pool line), the idle check stopped the emulator again, and the next evaluation counted the task due
+again, with no end. #484's look ahead reads positions 3 to 8 only behind a hold, and its fix round 2
+covers only an unavailable instance a hold holds; extending the look ahead would still leave a
+candidate the benefit gate, a pool's lines or the no-progress guard holds counted due.
+
+**The rule.**
+- *Asleep* (ruling 1). An instance is asleep while its idle action stops or holds its emulator
+  stopped (the planner's `stop_emulator` phases: asked for and not ended, its claim holding the key
+  while the stop runs, and done, its wake not come; `IdlePlanner::emulators_held_stopped`, read with
+  the closed instances as the cycle starts) and nothing but that stop withdrew its availability:
+  the projection's word of the withdrawal in effect is `self_check` (its configured seed available,
+  no device link, device state or device system withdrawal), no fence holds it (the cycle's fenced
+  aliases), and it is no instance AVAIL-1's probes take up (a failed self-check or preparation step
+  of its own) (`HostShared::asleep_for_policy`, `host/idle.rs`). The phase in which the stop still
+  runs counts: before the stop invalidates the facts the instance is available and so not asleep,
+  and its claim holds the key, so position 2 defers its candidates and the look ahead reads them as
+  for any held instance; after it, it is asleep. The host passes the set
+  (`PolicyEvaluationContext::asleep`) and names each instance in the evaluation's `InstanceHolds`
+  (`mark_asleep`). No fact changes.
+- *Judged as available, nothing selected* (ruling 2; `crates/policy/src/evaluator.rs`). The
+  evaluation holds each named instance whose snapshot is unavailable available in its own projection
+  of its input (`InstanceHolds::judge_asleep_as_available`), so placement, the order of the
+  deferrals (the closure is asked), the benefit gate, the pool lines and the capped order, the
+  no-progress guard, the ranking and its fact refresh's own gates (`own_gate`) read it as an
+  available instance's. In the allocation, the candidate the closure lets through on such an
+  instance is not selected: deferred, `instance_asleep_wake_due` (`instance_id` the alias), its wake
+  the evaluation's time; it takes the instance (`selected_instances`), its device
+  (`selected_devices`) and its capped block's place (`selected_blocks`) for the round, so the
+  candidates behind it wait as behind a selected one; a fact refresh picked so names the code as its
+  gate (`refresh_gates`, no wake). Kept out, each where it is made: no dispatch intent and no reason
+  chain (the selection path is not reached), so no dispatch decision record
+  (`append_decision_records` reads the selected chains), no admission and so no budget counted, no
+  random delay entry used, and no no-progress basis captured (`NoProgressMemory::capture` reads the
+  intents); no shared run slot (`round_slots.choose` not called); no chain step settled as
+  dispatched (`handover.settle(true)` not called; the successor reached counts as not dispatched);
+  no `capped_spend` reason, and its capped block is not passed for its round
+  (`capped::settle` skips the pairs in `woken_for`), so its episode does not advance past it; no
+  clock-slot `owed` record (written for intents only). What judging does short of selecting still
+  happens: the closure's admission preview, a random delay drawn at position 9 and the clock-slot
+  deferrals noted, a suspension's lift check.
+- *The idle plan* (ruling 3) follows with no case of its own (`IdleDraft::add` unchanged): the
+  decision above is due and named (`idle_due_task`); every other decision counts as on an available
+  instance. The wake is unchanged: the emulator's start, then the startup package.
+- *Ruling 6, a wake that started the emulator must be answered* (`crates/runtime-host/src/idle_action.rs`).
+  A wake after `stop_emulator` with its configured start in effect is kept by the planner as
+  unanswered (`UnansweredWake`: its cause, the task it named, its time, the latest admission of a
+  scheduled run on the instance as it was queued, the idle keys in effect); the autostart claim that
+  drives the emulator's Start for an idle wake marks it started (`IdlePlanner::wake_started_emulator`,
+  called from `drive_autostart`); a claim that read the emulator running started nothing and binds
+  nothing (`gate_idle1p`'s N-1 case). While a started one stands, `decide` does not take
+  `stop_emulator`: under `auto` the tier is capped at `close_app` (a rest and `close_app` as before),
+  under a plain `stop_emulator` nothing is taken; the first such check makes one warning due
+  (`take_withheld_stop`), which the host records as `instance_idle_stop_withheld` (warning, its
+  cause, task, time; `check_idle`). The check reads the latest admission of a scheduled run on the
+  instance under the policy guard with the plan (`PolicyHost::idle_latest_admission`, the dispatch
+  journal's `admitted_sequence`, `IdleView::latest_admission`); a later one than the wake's, another
+  `idle` configuration of the instance (`IdleConfig` compared), a catalog's activation
+  (`forget_unanswered_wakes`, called after `switch_policy_catalog` commits) and a Runtime start (a new
+  planner) end it; a wake whose start met a hold (`wake_held`) is not kept. Memory only; no key; the
+  status has no idle row, so the warning is what a person reads.
+- *Ruling 7.* A paused asleep instance's wake is held as any `stop_emulator` wake (`start_held`,
+  `WakeHeld`); a blackout and a closed activity window are read through the order of the deferrals
+  and the plan as for any instance. Nothing is added for a person's own emulator start or stop.
+- *Codes.* Two added, both pending: `instance_asleep_wake_due` (policy, info, ladder class `none`,
+  exit 0: a scheduling decision reason, the candidate an asleep instance is woken for) and
+  `instance_idle_stop_withheld` (runtime-host, warning, ladder class `none`, exit 0: the idle check
+  did not stop an emulator a wake started, no scheduled run having been dispatched since). The index
+  checked current. The planner and the plan decide by no code: `IdleDraft::add` is unchanged, and
+  `capped::settle` reads the set of pairs, not the code.
+
+**What does not change.** With no asleep instance the evaluation, the plan and the explanation are
+byte for byte main's (ruling 4: the projection is not touched and the allocation branch is not
+reached). An instance `close_app` closed is not asleep (it stays available, and #484's look ahead
+and its fix round 2 hold for it as they are). The other case of the issue (an instance whose
+application `close_app` closed and whose reconnect or self-check then failed) is AVAIL-1's and is
+not changed: such an instance is not asleep; its decisions are blocked `instance_unavailable` as
+before, the plan wakes it once (due with no wake of its own, or at its trigger's next time), the
+wake's startup package's preparation fails and the instance is left awake and unavailable, which
+the probes take up (no loop). `session.instance.available`, every record and status, every
+interface revision, `actingd-config` (no key), `host.idle_state` (the memory of ruling 6 is not kept
+across a start). The look ahead, `IdleDraft` and the fix round 2 path are untouched.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The input, the judging and the allocation | `crates/policy/src/evaluator.rs`: `InstanceHolds` (`asleep`, `mark_asleep`, `judge_asleep_as_available`), `evaluate_scheduling` (the projection, the asleep branch after the closure's answer, `woken_for` in `capped::settle`), `asleep_reason` |
+| The code | `crates/policy/src/codes.rs` (`PolicyCode::InstanceAsleepWakeDue`); `contracts/outcome-codes/policy.json` |
+| Who is asleep | `crates/runtime-host/src/host/idle.rs`: `idle_emulators_held_stopped`, `asleep_for_policy`; `crates/runtime-host/src/host/policy_dispatch.rs` (read at the cycle's start, after the fenced aliases); `crates/runtime-host/src/policy_host.rs` (`PolicyEvaluationContext::asleep`, `mark_asleep`) |
+| Ruling 6 | `crates/runtime-host/src/idle_action.rs` (`IdleView::latest_admission`, `UnansweredWake`, `WithheldStop`, `check_with_due_task`, `withhold_stop`, `wake_started_emulator`, `take_withheld_stop`, `forget_unanswered_wakes`); `crates/runtime-host/src/host/idle.rs` (`check_idle`, `withheld_stop_outcome`); `crates/runtime-host/src/host/emulator_autostart.rs` (`drive_autostart`); `crates/runtime-host/src/host/policy_catalog.rs` (`switch_policy_catalog`); `crates/runtime-host/src/policy_host.rs` (`idle_latest_admission`); `crates/runtime-host/src/codes.rs` (`IdleCode::StopWithheld`); `contracts/outcome-codes/runtime-host.json` |
+
+**Tests** (`crates/policy/src/tests/gate_486_asleep.rs`, policy gate map row "#486"; and
+`crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate map row "#486": the policy fixture
+instance on a host of its own, emulator-controlled and device self-checked, no idle action of its
+own; the pure planner under `stop_emulator` on the plans the host's evaluations leave; the stop's two
+ends on the host are the planner's idle phase after it, `hold_emulator_stopped_for_test`, and the
+gate's withdrawal, `publish_backend_selfcheck_unavailable_for_test`; no clock read in either file).
+
+| Test | What it shows |
+|---|---|
+| `asleep_t1_with_no_asleep_instance_the_evaluation_is_the_one_without_the_input` (1) | No instance named, an available one named, an unknown one named, with A available and unavailable: byte for byte and decision for decision (wakes too) the evaluation of `evaluate_with_owed_reruns` |
+| `asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_for` (2) | A asleep, two candidates: the first deferred `instance_asleep_wake_due` (its alias), wake the evaluation's time, no intent, no reason chain, no selection reason; the evaluation's wake now; the second equal to its decision behind the same candidate selected on A available |
+| `asleep_t3_a_gate_after_placement_decides_as_on_an_available_instance` (3) | A spent budget (the closure's deferral, its release as wake), an unknown benefit, a pool line (`would_cross_hard_line`): each decision equal to A available's, no intent |
+| `asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before` (4) | A unavailable, B named: A blocked `instance_unavailable` as without the input; B woken for its task |
+| `asleep_h5_a_spent_budget_does_not_start_the_stopped_emulator_before_its_release` (5) | `stop_emulator` taken with its wake at the release less the lead; asleep, every evaluation defers the task by its budget (not `instance_unavailable`), the plan counts it not due, no start, the wake kept |
+| `asleep_h6_a_candidate_whose_benefit_is_unknown_wakes_the_stopped_emulator_never` (6) | A judged task with no effect, its trigger a past `at` clock: the stop with no wake; asleep, `benefit_unknown` with no wake, no start, no wake at all |
+| `asleep_h7_a_task_due_while_asleep_starts_the_emulator_once_runs_and_sleeps_again` (7) | Past the release: the pick `instance_asleep_wake_due`, no intent, the plan names it; one wake (the emulator's start, then the startup package), none under its claims; prepared again (a person's self-check), the task is dispatched twice, and the next check stops the emulator again, with no warning |
+| `asleep_h8_one_idle_stretch_one_stop_and_one_start_at_the_release` (8) | A spent-budget task and a benefit-unknown task through one day: one stop, no start before the release less the lead, one start at it (`planned_time_reached`) |
+| `asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once` (9) | A wake whose start started nothing binds nothing; after one that started the emulator, no run dispatched: no stop, one warning (cause, task, time), once; a run admitted after it lets the stop be taken; under `auto` `close_app` instead, warned, and a gap of one hour takes `close_app` unwarned; an activation, an idle change and a start each let the stop be taken |
+| `asleep_h10_a_start_keeps_the_asleep_instance_asleep_with_its_wake` (10) | After a seeding and a loading start, the instance asleep again: the evaluations defer the task by its budget, the restored planner keeps its wake and starts nothing |
+| `asleep_h11_an_asleep_instance_under_a_persons_pause_is_not_woken` (11) | Under a person's pause the task is due behind it and the wake is held (`WakeHeld`); once the start is free it comes |
+
+Adapted: none (test 12: the tests of the idle actions, of #484 and of AVAIL-1 are unchanged; the
+policy crate's `InstanceHolds` gains a private member, which no test builds by its fields).
+
+**At deploy.** No new key: nothing to configure. A v0.12.76 reader of the schedule explanation
+(`actingctl`, the MCP server, the console) meets one code it does not know,
+`instance_asleep_wake_due`, as a candidate row's `why` and in its `reasons`, on an instance whose
+emulator `stop_emulator` stopped, and only for the evaluation in which the wake is queued (the row's
+`next_wake_unix_ms` the evaluation's time); a code is carried as its spelling, so it reads it as an
+unknown code's text, as every new code of a release. `instance_idle_stop_withheld` is a
+`device_state_observed` record under the instance and a report line, read the same way. A rollback
+to v0.12.76 meets nothing kept on disk: the asleep set and ruling 6's memory are in memory only,
+`host.idle_state` keeps its shape, and the two codes stay in the ledger's records as codes that
+build does not know. Production runs `close_app` on every instance today, so nothing changes there
+until the coordinator sets `stop_emulator` or `auto` on an instance. In the release notes' language:
+被闲置动作停掉模拟器的实例改按「睡着」处理：调度照常判它的每个候选（次数、退避、收益、池子水位都照读），真能派的任务才把它唤醒（新原因码 `instance_asleep_wake_due`）；唤醒起了模拟器、之后一直没派出任务时，不再把模拟器停掉，记一条警告 `instance_idle_stop_withheld`。生产现在用的是关应用，不受影响。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
