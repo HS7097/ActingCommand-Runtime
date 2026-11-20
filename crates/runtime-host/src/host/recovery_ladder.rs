@@ -1878,7 +1878,16 @@ impl HostShared {
             &trigger.terminal.failure_code,
         )?
         else {
+            // Fix round 5 (CI on fix round 4's head): staged only for a run that checked its entry
+            // and never started its main package; one that started it blocks nothing, so nothing
+            // is staged and nothing let go (recorded) at its settlement.
             if !trigger.direct
+                && self
+                    .scheduled_run_entry_checked(
+                        *trigger.terminal.run_id.transport(),
+                        trigger.entry,
+                    )?
+                    .is_some()
                 && let Some(matched) =
                     self.entry_trigger_item(&config, resolved, &trigger.terminal.failure_code)?
             {

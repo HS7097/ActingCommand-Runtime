@@ -2291,16 +2291,15 @@ impl HostShared {
             let rerun_signals = policy.take_rerun_signals();
             // Workflow #490 ENTRY-A fix round 4 (rulings 3 and 5): what the policy knows of the
             // run's task, which its pair's count reads: its rule's `escalation_threshold` (only for
-            // a failure at the entry) and whether it is a store update package's task (only for a
-            // success).
+            // a failure at the entry) and whether it is a store update package's task (fix round
+            // 5, ruling 4: whatever the run's end).
             let entry_rule = EntryRule {
                 threshold: if matches!(entry, Some(EntrySettlement::AtEntry { .. })) {
                     policy.dispatch_escalation_threshold(decision_id)?
                 } else {
                     u16::MAX
                 },
-                store_task: matches!(data.outcome, PolicyExecutionOutcome::Succeeded { .. })
-                    && policy.is_store_task(&data.task_id),
+                store_task: policy.is_store_task(&data.task_id),
             };
             drop(policy);
             // Workflow #490 ENTRY-A: a run recorded now counts in or starts again its pair's

@@ -39,7 +39,12 @@
 //!   another window, other packages and a restart start it from nothing; a store update task's
 //!   success starts every pair of its instance from nothing and is no run let in for them; a
 //!   catalogue that becomes active starts every pair from nothing. Nothing else follows: no pause,
-//!   no streak, nothing that outlives the window.
+//!   no streak, nothing that outlives the window. Fix round 5 (ruling 3): past the longest interval
+//!   each further failure in a row waits one first interval more (`pair_interval_ms`), and a
+//!   scheduled run let in on the instance (the event that raises `entered`) ends every pair's wait
+//!   there and its count in a row at once (`EntryBlocks::let_pairs_go`); a store update task's run
+//!   is no such run whatever its end (ruling 4), and a changed package frees every pair as an
+//!   activation does (ruling 5, the scheduler workbench's check).
 //! - **Where a climb starts and when** (fix round 3, rulings 3 and 5). A stretch of the instance
 //!   runs from its first block since a run was last let in (a scheduled run's main package started
 //!   after its entry check, a scheduled run, a client's or the Lab's run succeeded) until the next
@@ -119,7 +124,8 @@ pub(super) struct EntryRule {
     /// The task's `on_failure.escalation_threshold` in the dispatch's catalog generation
     /// (`u16::MAX` when the generation holds no such task: nothing is set aside then).
     pub(super) threshold: u16,
-    /// The task is a store update package's (UPD-1's remedy table).
+    /// The task is a store update package's (UPD-1's remedy table); fix round 5 (ruling 4):
+    /// whatever its run's end.
     pub(super) store_task: bool,
 }
 
@@ -358,6 +364,8 @@ impl EntryBlocks {
     /// whose failure set the block is kept out for its interval after the instance can be
     /// dispatched to again, and a pair whose wait passed during a later block (another pair's)
     /// waits again: two broken pairs cannot take turns while another task of the instance is due.
+    /// Fix round 5 (ruling 3 (ii)): a pair whose wait a scheduled run let in ended has none to
+    /// renew.
     fn end(&mut self, instance_id: InstanceId, now_unix_ms: u64) -> Option<HeldEntryRecovery> {
         bump(&mut self.ended, instance_id);
         let block = self.blocked.remove(&instance_id)?;
@@ -366,7 +374,7 @@ impl EntryBlocks {
         for (_, pair) in self
             .pairs
             .iter_mut()
-            .filter(|((pair_instance, _), _)| *pair_instance == instance_id)
+            .filter(|((pair_instance, _), pair)| *pair_instance == instance_id && pair.in_a_row > 0)
         {
             pair.until_unix_ms = pair
                 .until_unix_ms
@@ -384,6 +392,23 @@ impl EntryBlocks {
         }
         if !self.blocked.contains_key(&instance_id) {
             self.stretches.remove(&instance_id);
+        }
+    }
+
+    /// Fix round 5 (ruling 3 (ii)): a scheduled run was let in on `instance_id` (the event that
+    /// raises `entered`): every pair of the instance has its count in a row set back to none and
+    /// its wait ended at once. What counts against it (`against`, by the `entered` its latest
+    /// failure kept), its window and its packages stay, so its next failure at the entry counts
+    /// one more against it; a pair set aside stays set aside to its window's end.
+    fn let_pairs_go(&mut self, instance_id: InstanceId) {
+        for (_, pair) in self
+            .pairs
+            .iter_mut()
+            .filter(|((pair_instance, _), _)| *pair_instance == instance_id)
+        {
+            pair.in_a_row = 0;
+            pair.interval_ms = 0;
+            pair.until_unix_ms = 0;
         }
     }
 
@@ -426,7 +451,7 @@ impl EntryBlocks {
                 )
             });
         let set_aside = window_end > 0 && against >= u32::from(threshold);
-        let interval_ms = config.interval_ms(in_a_row);
+        let interval_ms = pair_interval_ms(config, in_a_row);
         let pair = EntryPair {
             packages,
             window_end,
@@ -498,6 +523,11 @@ impl EntryBlocks {
                 if block.panicked {
                     return (None, None);
                 }
+                // Fix round 5 (ruling 5): every later climb of the block starts at the
+                // application restart, whichever path builds it (this hold, the take-up, or the
+                // lease end of a later failure at the entry while the block stands, a store update
+                // task's), as the held one below does.
+                block.restarts = true;
                 if let Some(held) = &block.held {
                     return (Some(held.until_unix_ms.max(paced)), None);
                 }
@@ -516,6 +546,27 @@ impl EntryBlocks {
             }
         }
     }
+}
+
+/// Fix round 5 (ruling 3 (i)): a pair's wait after its `in_a_row`-th failure at the entry in a
+/// row: `config`'s interval for that count, and past `max_interval_ms` one more first interval for
+/// each further failure in a row (the window's end still bounds it, `pair_deferral`), so two pairs
+/// of an instance whose counts differ never come due together, and the one that has just failed
+/// again comes after the others.
+fn pair_interval_ms(config: UnavailableProbeConfig, in_a_row: u32) -> u64 {
+    let interval = config.interval_ms(in_a_row);
+    if interval < config.max_interval_ms {
+        return interval;
+    }
+    // The first count in a row whose interval is the longest.
+    let reached = (1..in_a_row)
+        .find(|count| config.interval_ms(*count) >= config.max_interval_ms)
+        .unwrap_or(in_a_row);
+    interval.saturating_add(
+        config
+            .interval_ms(1)
+            .saturating_mul(u64::from(in_a_row.saturating_sub(reached))),
+    )
 }
 
 /// The wait before the claim of a block's recovery is tried again after the block's
@@ -645,13 +696,25 @@ impl HostShared {
             }
             let set_aside = match instance {
                 Some(instance_id) => {
-                    if succeeded && rule.store_task {
-                        blocks.note_let_in(instance_id, false);
-                        blocks
-                            .pairs
-                            .retain(|(pair_instance, _), _| *pair_instance != instance_id);
+                    if rule.store_task {
+                        // Fix round 5 (ruling 4): a store update task's run is never evidence that
+                        // the instance lets tasks in, whether it succeeded or its main package
+                        // started and it failed: no `entered`, no pair's wait ended. It still lets
+                        // a run in for the stretch, and its success starts every pair of the
+                        // instance from nothing (fix round 4, ruling 5).
+                        if succeeded {
+                            blocks.note_let_in(instance_id, false);
+                            blocks
+                                .pairs
+                                .retain(|(pair_instance, _), _| *pair_instance != instance_id);
+                        } else if let_in {
+                            blocks.note_let_in(instance_id, false);
+                        }
                     } else if let_in {
                         blocks.note_let_in(instance_id, true);
+                        // Fix round 5 (ruling 3 (ii)): the same event ends every pair's wait on
+                        // the instance and sets its count in a row back to none.
+                        blocks.let_pairs_go(instance_id);
                     }
                     let key = (instance_id, data.task_id.clone());
                     match blocked_by {
@@ -849,6 +912,8 @@ impl HostShared {
     /// pair's packages there would mean measuring every task's packages at the switch, so every
     /// pair of every instance (the host's one active catalogue serves them all) starts from
     /// nothing: its count, its wait and its being set aside are cleared. Blocks and stretches stay.
+    /// Fix round 5 (ruling 5): so does the scheduler workbench's check that finds a package's
+    /// declaration files changed (a placement that activates no catalogue).
     pub(super) fn clear_entry_pairs(&self) -> RuntimeHostResult<()> {
         lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
             .pairs
@@ -936,13 +1001,15 @@ impl HostShared {
     }
 
     /// Fix round 3, test only: a scheduled run was let in on `instance_id`, as its settlement
-    /// tells the blocks.
+    /// tells the blocks (fix round 5, ruling 3 (ii): every pair's wait there ended too).
     #[cfg(test)]
     pub(super) fn note_entry_let_in_for_test(
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
-        lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.note_let_in(instance_id, true);
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        blocks.note_let_in(instance_id, true);
+        blocks.let_pairs_go(instance_id);
         Ok(())
     }
 

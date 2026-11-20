@@ -91,6 +91,19 @@ pub(crate) fn entry_blocked(failure: &PolicyFailureRecord) -> bool {
             .is_some_and(|identity| identity.at_entry())
 }
 
+/// Workflow #490 ENTRY-A fix round 5 (ruling 1): whether `input` is a failure whose identity's `F`
+/// is an entry failure's (`i…`): with a condition, a failure at the entry, which settles as any
+/// task's, a sensitive task's too.
+fn input_at_entry(input: &PolicyExecutionInput) -> bool {
+    matches!(
+        input,
+        PolicyExecutionInput::Failed {
+            failure_identity: Some(identity),
+            ..
+        } if FailureIdentity::parse(identity).is_some_and(|identity| identity.at_entry())
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyExecutionInput {
     Succeeded,
@@ -1439,10 +1452,16 @@ impl PolicyControlState {
         } = timing;
         let compared_ms = budget_elapsed_ms.unwrap_or(runtime_ms);
         let (task, _) = task_and_profile(catalog, intent)?;
+        // Workflow #490 ENTRY-A fix round 5 (ruling 1): a failure at the entry (its condition and
+        // its identity's `F` an entry failure's, as the record keeps them) settles as any task's,
+        // a sensitive task's too: its main package executed no step, so the sensitive rule (pause
+        // at the first failure) does not apply and the record says so (`sensitive` false), as the
+        // record of any other task's failure at the entry does.
+        let sensitive = task.sensitive && !(condition.is_some() && input_at_entry(input));
         // Only a recoverable failure of a task that is not sensitive settles by a condition: its
         // record continues, and a sensitive or severe failure pauses (register S1).
         if condition.is_some()
-            && (task.sensitive
+            && (sensitive
                 || !matches!(
                     input,
                     PolicyExecutionInput::Failed {
@@ -1504,13 +1523,13 @@ impl PolicyControlState {
                         escalation_streak: previous
                             .map_or(0, |previous| previous.escalation_streak),
                         performance_tax_exempt: class == PolicyFailureClass::Recoverable
-                            && !task.sensitive
+                            && !sensitive
                             && perf_context.pressure_observed(),
                         retry_attempt: 0,
                         disposition: PolicyFailureDisposition::Continue,
                         retry_at_unix_ms: None,
                         runtime_ms,
-                        sensitive: task.sensitive,
+                        sensitive,
                         perf_context: Box::new(perf_context.clone()),
                         condition,
                     },
@@ -1700,8 +1719,9 @@ impl PolicyControlState {
     /// condition the first settlement of `intent`'s run settles by when the run failed at its entry:
     /// its counts given back whatever `scheduling.rerun.refund_counts` says, `count` 1 (it adds to
     /// no series of the pair's condition terminations: it owes no rerun) and the end of the activity
-    /// window the run was admitted in. `None` for a success, a stop, a severe failure and a sensitive
-    /// task's failure, which settle as before. The record keeps it, so a replay never calls this.
+    /// window the run was admitted in. `None` for a success, a stop and a severe failure, which
+    /// settle as before. Fix round 5 (ruling 1): a sensitive task's too: its main package did not
+    /// start, so nothing sensitive was begun. The record keeps it, so a replay never calls this.
     pub(crate) fn entry_condition(
         &self,
         catalog: &CompiledCatalog,
@@ -1716,10 +1736,7 @@ impl PolicyControlState {
         else {
             return Ok(None);
         };
-        let (task, profile) = task_and_profile(catalog, intent)?;
-        if task.sensitive {
-            return Ok(None);
-        }
+        let (_, profile) = task_and_profile(catalog, intent)?;
         Ok(Some(PolicyConditionSettlement {
             refunded: true,
             count: 1,

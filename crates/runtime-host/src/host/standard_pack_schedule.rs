@@ -1142,6 +1142,19 @@ impl HostShared {
         {
             return Ok(());
         }
+        // Workflow #490 ENTRY-A fix round 5 (ruling 5): a placement can replace a registered
+        // package's files without changing the rules a composition activates, and a scheduled run
+        // takes its package as the registry places it when it is dispatched, so a pair's packages
+        // can change while no catalogue becomes active. A package of a game in use whose
+        // declaration files changed since the last check frees every pair as an activation does
+        // (`clear_entry_pairs`): a pair that waits or is set aside is dispatched again.
+        if state.marks.iter().any(|(game, kept)| {
+            marks
+                .get(game)
+                .is_some_and(|now| now.packages != kept.packages)
+        }) {
+            self.clear_entry_pairs()?;
+        }
 
         let mut read = BTreeMap::new();
         if let Some(root) = &root {

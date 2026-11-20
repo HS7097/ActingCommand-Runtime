@@ -98,6 +98,25 @@
 //!   it is not;
 //! - M7 (the coordinator's addition to rulings 2 and 3): a catalogue that changes a set-aside pair's
 //!   package frees it at once.
+//!
+//! Fix round 5 (the coordinator's work order of 11-21 after the fifth independent review):
+//!
+//! - N1 (ruling 1): a sensitive task's failure at the entry, under a threshold of 1, settles as a
+//!   condition, its admission given back, the instance blocked, the rule not paused, no streak;
+//! - N3 (a) (ruling 3, case (a)): after an outage the pairs at the maximum no longer come due
+//!   together (the broken one waits one first interval more), the healthy task runs in the round
+//!   after the broken one's failure, its run let in ends every wait at once and keeps what counts
+//!   against a pair; N3 (b) (ruling 3 (i)): past the maximum, one first interval more per failure;
+//! - N4 (ruling 4): a store update task whose main package started and failed raises nothing and
+//!   ends no wait;
+//! - ruling 5: the first replay asserts that after an exhausted climb the block's later climbs
+//!   start at the application restart, whichever path builds them.
+//!
+//! M1, M2, M3 (a), M3 (c), M7 and R2 change with ruling 3 (ii) (a scheduled run let in ends every
+//! pair's wait), and every policy-level admission comes after the previous run's lease lapsed
+//! (`LEASE_LAPSED_MS`: M1 failed on fix round 4's head admitting a run two seconds after another);
+//! M4 ends its first block with a recovery (the review's M4) and waits for each climb's end as the
+//! other replays do.
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
@@ -185,6 +204,10 @@ const BLOCK_MS: u64 = 3 * MINUTE_MS;
 const HOUR_MS: u64 = 3_600_000;
 /// Fix round 4 (M3 c): a third task of the budget fixture's rule, between `TASK` and `OTHER`.
 const BROKEN: &str = "fixture.broken";
+/// Fix round 5 (CI on fix round 4's head: M1 admitted `OTHER` two seconds after `TASK`): past the
+/// test configuration's lease TTL (5 s, `config`), so the lease of the run before, which the
+/// settlement hook does not release, has lapsed when the next run is admitted.
+const LEASE_LAPSED_MS: u64 = 10_000;
 
 // ---- The policy-level fixture.
 
@@ -659,12 +682,16 @@ fn set_aside_reports(host: &RuntimeHost) -> Vec<Outcome> {
 }
 
 /// M1 (ruling 1; the settlement hook, two tasks, `escalation_threshold` 1): `TASK` fails at its
-/// entry; while it waits, `OTHER` is dispatched and succeeds (a scheduled run let in); `TASK`'s
-/// second failure at the entry comes once its wait has passed; `OTHER` is let in again (the pair
-/// being set aside for the window, ruling 3), and `TASK`'s third failure at the entry comes the
-/// next day. Each is a condition of the instance: the rule's counters 0, `continue`, no retry, no
-/// pause cause, its count given back, no failure streak in the pair's value record, the instance
-/// blocked by it. No failure at the entry counts against its rule, whatever got in between.
+/// entry; after its block's end, while it waits, `OTHER` is dispatched and succeeds (a scheduled
+/// run let in, which since fix round 5 ends `TASK`'s wait at once, ruling 3 (ii)); `TASK`'s second
+/// failure at the entry comes once `OTHER`'s lease has lapsed; after that block's end `OTHER` is
+/// let in again (the pair being set aside for the window, ruling 3), and `TASK`'s third failure at
+/// the entry comes the next day. Each is a condition of the instance: the rule's counters 0,
+/// `continue`, no retry, no pause cause, its count given back, no failure streak in the pair's
+/// value record, the instance blocked by it. No failure at the entry counts against its rule,
+/// whatever got in between. Fix round 5 (CI on fix round 4's head, where this test failed): every
+/// admission comes after the previous run's lease lapsed (`LEASE_LAPSED_MS`; the settlement hook
+/// releases none), each block lasting `BLOCK_MS`.
 #[test]
 fn entry_m1_failures_at_the_entry_with_another_run_let_in_before_each_never_count_against_the_rule()
 {
@@ -677,15 +704,15 @@ fn entry_m1_failures_at_the_entry_with_another_run_let_in_before_each_never_coun
     let mut settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
     assert_settled_at_entry(&failure_of(&settled));
     for (seed, next_day) in [(101, false), (103, true)] {
-        recover(&host);
-        let other = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, seed);
+        let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+        let other = admit_at(&host, &clock, block_end + 1_000, seed);
         assert_eq!(other.task_id, OTHER, "the task waits, the other runs");
         let succeeded = succeed(&host, &clock, &other);
         let at = if next_day {
             POLICY_NOW_UNIX_MS + DAY_MS
         } else {
-            (settled.observed_at_unix_ms + FIRST_INTERVAL_MS)
-                .max(succeeded.observed_at_unix_ms + 1_000)
+            succeeded.observed_at_unix_ms + LEASE_LAPSED_MS
         };
         let next = admit_at(&host, &clock, at, seed + 1);
         assert_eq!(next.task_id, TASK, "{seed}");
@@ -705,12 +732,14 @@ fn entry_m1_failures_at_the_entry_with_another_run_let_in_before_each_never_coun
 /// (`BLOCK_MS`, longer than the interval) its wait counts from that settlement, and once a recovery
 /// ends the block, from the block's end. A second after that end `TASK` waits
 /// `instance_entry_task_waiting` (count 1, `next_eligible_unix_ms` the wait's end, the failing run
-/// named) and `OTHER`, the healthy task, is dispatched and succeeds before `TASK`'s second attempt;
-/// a millisecond before the wait's end `TASK` still waits, at it it is dispatched and fails at its
-/// entry again, a failure that counts against it (`OTHER` got in): twice the interval now, from
-/// the end of the block that failure set, `OTHER` running first again. At that end `TASK`'s next
-/// run's main package starts after its entry check and fails in a step: the pair starts from
-/// nothing, and after the step failure's backoff `TASK` is dispatched with no wait.
+/// named) and `OTHER`, the healthy task, is dispatched and succeeds before `TASK`'s second attempt.
+/// Fix round 5 (ruling 3 (ii)): that scheduled run let in ends `TASK`'s wait at once and sets its
+/// count in a row back to none, so once `OTHER`'s lease has lapsed `TASK` is dispatched with no
+/// reason of its pair, long before its old wait's end, and fails at its entry again: its first in a
+/// row (the first interval again), one against it (`OTHER` got in), its wait counted from that
+/// block's end. At that wait's end `TASK`'s next run's main package starts after its entry check and
+/// fails in a step: the pair starts from nothing, and after the step failure's backoff `TASK` is
+/// dispatched with no wait.
 #[test]
 fn entry_m2_the_pair_waits_from_its_blocks_end_so_the_healthy_task_runs_first_and_a_run_past_its_entry_clears_it()
  {
@@ -720,68 +749,75 @@ fn entry_m2_the_pair_waits_from_its_blocks_end_so_the_healthy_task_runs_first_an
         .expect("activate the catalog");
     let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
     assert_eq!(first.task_id, TASK);
-    let mut intent = first;
-    let mut settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
-    for (count, seed) in [(1_u32, 101), (2, 103)] {
-        let interval = FIRST_INTERVAL_MS << (count - 1);
-        assert_eq!(
-            pair(&host, TASK),
-            Some((
-                count,
-                count - 1,
-                settled.observed_at_unix_ms + interval,
-                false
-            )),
-            "from the settlement while the block lasts: {count}"
-        );
-        let block_end = settled.observed_at_unix_ms + BLOCK_MS;
-        recover_at(&host, &clock, block_end);
-        let until = block_end + interval;
-        assert_eq!(
-            pair(&host, TASK),
-            Some((count, count - 1, until, false)),
-            "from the block's end: {count}"
-        );
-        let at = block_end + 1_000;
-        advance_manual_clock_to(&clock, at);
-        let evaluation = evaluate(&host, at, seed);
-        assert!(
-            dispatched(&evaluation, OTHER),
-            "another due task runs: {evaluation:#?}"
-        );
-        assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
-        let waiting = reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting)
-            .unwrap_or_else(|| panic!("the task waits: {evaluation:#?}"));
-        assert_eq!(
-            waiting.value("instance_id"),
-            Some(&json!(POLICY_INSTANCE_ALIAS))
-        );
-        assert_eq!(waiting.value("task_id"), Some(&json!(TASK)));
-        assert_eq!(
-            waiting.value("decision_id"),
-            Some(&json!(intent.decision_id))
-        );
-        assert_eq!(waiting.value("count"), Some(&json!(count)));
-        assert_eq!(waiting.value("next_eligible_unix_ms"), Some(&json!(until)));
-        let other = admit_at(&host, &clock, at, seed + 50);
-        assert_eq!(
-            other.task_id, OTHER,
-            "the healthy task runs before the pair's next attempt"
-        );
-        succeed(&host, &clock, &other);
-        advance_manual_clock_to(&clock, until - 1);
-        let before = evaluate(&host, until - 1, seed + 100);
-        assert!(
-            !dispatched(&before, TASK),
-            "not before its end: {before:#?}"
-        );
-        intent = admit_at(&host, &clock, until, seed + 1);
-        assert_eq!(intent.task_id, TASK, "{count}");
-        if count == 1 {
-            settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
-            assert_settled_at_entry(&failure_of(&settled));
-        }
-    }
+    let settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    assert_eq!(
+        pair(&host, TASK),
+        Some((1, 0, settled.observed_at_unix_ms + FIRST_INTERVAL_MS, false)),
+        "from the settlement while the block lasts"
+    );
+    let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    let until = block_end + FIRST_INTERVAL_MS;
+    assert_eq!(
+        pair(&host, TASK),
+        Some((1, 0, until, false)),
+        "from the block's end"
+    );
+    let at = block_end + 1_000;
+    advance_manual_clock_to(&clock, at);
+    let evaluation = evaluate(&host, at, 101);
+    assert!(
+        dispatched(&evaluation, OTHER),
+        "another due task runs: {evaluation:#?}"
+    );
+    assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
+    let waiting = reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting)
+        .unwrap_or_else(|| panic!("the task waits: {evaluation:#?}"));
+    assert_eq!(
+        waiting.value("instance_id"),
+        Some(&json!(POLICY_INSTANCE_ALIAS))
+    );
+    assert_eq!(waiting.value("task_id"), Some(&json!(TASK)));
+    assert_eq!(
+        waiting.value("decision_id"),
+        Some(&json!(first.decision_id))
+    );
+    assert_eq!(waiting.value("count"), Some(&json!(1)));
+    assert_eq!(waiting.value("next_eligible_unix_ms"), Some(&json!(until)));
+    let other = admit_at(&host, &clock, at, 151);
+    assert_eq!(
+        other.task_id, OTHER,
+        "the healthy task runs before the pair's next attempt"
+    );
+    let succeeded = succeed(&host, &clock, &other);
+    assert_eq!(
+        pair(&host, TASK),
+        Some((0, 0, 0, false)),
+        "a scheduled run let in ends the wait at once (ruling 3 (ii))"
+    );
+    let at = succeeded.observed_at_unix_ms + LEASE_LAPSED_MS;
+    assert!(at < until, "long before the old wait's end");
+    advance_manual_clock_to(&clock, at);
+    let evaluation = evaluate(&host, at, 102);
+    assert!(dispatched(&evaluation, TASK), "{evaluation:#?}");
+    assert_eq!(
+        reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting),
+        None
+    );
+    let second = admit_at(&host, &clock, at, 152);
+    assert_eq!(second.task_id, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &second, ENTRY_RUN_MS);
+    assert_settled_at_entry(&failure_of(&settled));
+    let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    let until = block_end + FIRST_INTERVAL_MS;
+    assert_eq!(
+        pair(&host, TASK),
+        Some((1, 1, until, false)),
+        "its first in a row again, one against it"
+    );
+    let intent = admit_at(&host, &clock, until, 103);
+    assert_eq!(intent.task_id, TASK);
     clock.advance(ENTRY_RUN_MS);
     host.settle_next_policy_run_past_its_entry_for_test()
         .expect("arm the settlement");
@@ -813,8 +849,11 @@ fn entry_m2_the_pair_waits_from_its_blocks_end_so_the_healthy_task_runs_first_an
 
 /// M3 (a) (ruling 3; the settlement hook, two tasks, `escalation_threshold` 2): `TASK` fails at its
 /// entry three times, each block lasting `BLOCK_MS`, `OTHER` dispatched and succeeding after each
-/// block's end while `TASK` waits (from that end) before the second and the third. The second
-/// counts once against it, the third twice: it reaches the threshold, so `TASK` is set aside until
+/// block's end while `TASK` waits (from that end) before the second and the third; fix round 5
+/// (ruling 3 (ii)): each such success ends `TASK`'s wait and its count in a row and keeps what
+/// counts against it, and `TASK` is dispatched once `OTHER`'s lease has lapsed, each failure its
+/// first in a row. The second counts once against it, the third twice: it reaches the threshold,
+/// so `TASK` is set aside until
 /// its activity window's end and one `instance_entry_task_set_aside_reported` names the task, the
 /// count, the threshold and the window's end. An hour later `TASK` waits
 /// `instance_entry_task_set_aside` and `OTHER` is dispatched; after the window's end `TASK` is
@@ -839,22 +878,25 @@ fn entry_m3_a_at_the_threshold_the_pair_is_set_aside_until_its_windows_end_and_a
         recover_at(&host, &clock, block_end);
         let other = admit_at(&host, &clock, block_end + 1_000, seed);
         assert_eq!(other.task_id, OTHER);
-        succeed(&host, &clock, &other);
-        let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
+        let succeeded = succeed(&host, &clock, &other);
+        // Fix round 5 (ruling 3 (ii)): the run let in ends the pair's wait and its count in a
+        // row, and leaves what counts against it.
         assert_eq!(
-            until,
-            block_end + (FIRST_INTERVAL_MS << (against - 1)),
-            "from the block's end"
+            pair(&host, TASK),
+            Some((0, against - 1, 0, false)),
+            "the wait ended, the count against it kept"
         );
-        last = admit_at(&host, &clock, until, seed + 1);
+        last = admit_at(
+            &host,
+            &clock,
+            succeeded.observed_at_unix_ms + LEASE_LAPSED_MS,
+            seed + 1,
+        );
         assert_eq!(last.task_id, TASK);
         settled = settle_at_entry_after(&host, &clock, &last, ENTRY_RUN_MS);
         assert_settled_at_entry(&failure_of(&settled));
         let (in_a_row, counted, _, set_aside) = pair(&host, TASK).expect("the pair");
-        assert_eq!(
-            (in_a_row, counted, set_aside),
-            (against + 1, against, against == 2)
-        );
+        assert_eq!((in_a_row, counted, set_aside), (1, against, against == 2));
     }
     let reports = set_aside_reports(&host);
     let [report] = reports.as_slice() else {
@@ -962,10 +1004,22 @@ fn entry_m3_c_two_broken_pairs_and_a_healthy_task_the_healthy_task_runs_and_both
     }
     let other = admit_at(&host, &clock, block_end + 1_000, 102);
     assert_eq!(other.task_id, OTHER, "both wait, the healthy task runs");
-    succeed(&host, &clock, &other);
+    let succeeded = succeed(&host, &clock, &other);
+    // Fix round 5 (ruling 3 (ii)): the run let in ends both pairs' waits at once; `TASK`, first in
+    // the order, goes once `OTHER`'s lease has lapsed, then `BROKEN` after `TASK`'s block's end
+    // (its count in a row none, so that end sets it no wait).
     for (task_id, seed) in [(TASK, 103), (BROKEN, 104)] {
-        let (_, _, until, _) = pair(&host, task_id).expect("the pair waits");
-        let next = admit_at(&host, &clock, until, seed);
+        assert_eq!(
+            pair(&host, task_id).map(|(in_a_row, _, until, _)| (in_a_row, until)),
+            Some((0, 0)),
+            "{task_id}: no wait"
+        );
+        let at = if task_id == TASK {
+            succeeded.observed_at_unix_ms + LEASE_LAPSED_MS
+        } else {
+            block_end + 1_000
+        };
+        let next = admit_at(&host, &clock, at, seed);
         assert_eq!(next.task_id, task_id);
         let settled = settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
         let (_, against, _, set_aside) = pair(&host, task_id).expect("the pair");
@@ -1019,9 +1073,15 @@ fn entry_m7_a_catalogue_with_a_changed_package_frees_a_set_aside_pair_at_once() 
     recover_at(&host, &clock, block_end);
     let other = admit_at(&host, &clock, block_end + 1_000, 101);
     assert_eq!(other.task_id, OTHER);
-    succeed(&host, &clock, &other);
-    let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
-    let second = admit_at(&host, &clock, until, 102);
+    let succeeded = succeed(&host, &clock, &other);
+    // Fix round 5 (ruling 3 (ii)): `OTHER`'s success ended `TASK`'s wait; it goes once `OTHER`'s
+    // lease has lapsed.
+    let second = admit_at(
+        &host,
+        &clock,
+        succeeded.observed_at_unix_ms + LEASE_LAPSED_MS,
+        102,
+    );
     assert_eq!(second.task_id, TASK);
     let settled = settle_at_entry_after(&host, &clock, &second, ENTRY_RUN_MS);
     assert_eq!(
@@ -1059,6 +1119,376 @@ fn entry_m7_a_catalogue_with_a_changed_package_frees_a_set_aside_pair_at_once() 
         reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting),
         None
     );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+// ---- Fix round 5 at the policy level.
+
+/// N1: [`sources`] with the task marked `sensitive`.
+fn sensitive_sources(escalation_threshold: u16) -> CatalogSources {
+    let mut sources = sources(escalation_threshold);
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the task fixture");
+    tasks["tasks"][0]["sensitive"] = json!(true);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
+    sources
+}
+
+/// N1 (fix round 5, ruling 1; the settlement hook, a sensitive task, `escalation_threshold` 1): its
+/// run fails at its entry. Its main package started nothing, so nothing sensitive was begun: the
+/// record is a condition of the instance as any task's (refunded, count 1, `continue`, counters 0,
+/// no retry, no pause cause, `F` `i…`), and says so (`sensitive` false, the sensitive rule not
+/// applied); the pair's value record holds no count for the day and no streak, and the instance is
+/// blocked by the run. The rule is not paused.
+#[test]
+fn entry_n1_a_sensitive_tasks_failure_at_the_entry_settles_as_a_condition_and_never_pauses_its_rule()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&sensitive_sources(1))
+        .expect("activate the catalog");
+    let (intent, admission) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
+    let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    let failure = failure_of(&settled);
+    assert_settled_at_entry(&failure);
+    assert!(!failure.sensitive, "settled as any task's: {failure:?}");
+    let record = latest_value_record(&host);
+    assert!(
+        record.daily_counts.iter().all(|count| count.count == 0),
+        "the run's count is given back: {record:?}"
+    );
+    assert!(record.failure_streak.is_none(), "no streak: {record:?}");
+    assert_eq!(blocked_by(&host).decision_id, intent.decision_id);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// N3 (a) (fix round 5, ruling 3, case (a); the settlement hook, three tasks, `escalation_threshold`
+/// 2, `scheduling.unavailable_probe`'s first and longest interval one minute, so a pair is at the
+/// maximum from its first failure): an outage. `TASK`, first in the order, fails at its entry, then
+/// `BROKEN` and `OTHER` (both healthy here) fail too while it waits, each block `BLOCK_MS` long:
+/// every pair waits the maximum from the last block's end, all due together. The outage ends:
+/// `TASK`, whose entry stays broken, is dispatched first and fails again, its second in a row, and
+/// past the maximum it waits one first interval more (ruling 3 (i)), so in the round after that
+/// block's end it waits (`count` 2) and the healthy `BROKEN` is dispatched and succeeds. That run
+/// let in ends every pair's wait at once (ruling 3 (ii)): no reason holds `TASK` or `OTHER`, `TASK`
+/// (first in the order) is dispatched once `BROKEN`'s lease has lapsed and its failure counts
+/// against it; after that block's end the healthy `BROKEN` runs again, which keeps that count
+/// (ruling 3 (ii) touches no count against a pair), and `TASK`'s next failure is the second against
+/// it: set aside for its window, one person told.
+#[test]
+fn entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_let_in_ends_every_wait()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(
+        &root,
+        instance_id(),
+        POLICY_NOW_UNIX_MS,
+        paced_between(FIRST_INTERVAL_MS, FIRST_INTERVAL_MS, json!({})).manifest,
+    );
+    host.activate_policy_catalog(&three_tasks(2))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(first.task_id, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    let mut block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    for (task_id, seed) in [(BROKEN, 101), (OTHER, 102)] {
+        let intent = admit_at(&host, &clock, block_end + 1_000, seed);
+        assert_eq!(intent.task_id, task_id, "the outage");
+        let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+        block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+    }
+    for task_id in [TASK, BROKEN, OTHER] {
+        assert_eq!(
+            pair(&host, task_id),
+            Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
+            "{task_id}: at the maximum, due with the others"
+        );
+    }
+
+    let again = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, 103);
+    assert_eq!(again.task_id, TASK, "first in the order");
+    let settled = settle_at_entry_after(&host, &clock, &again, ENTRY_RUN_MS);
+    block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    assert_eq!(
+        pair(&host, TASK),
+        Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false)),
+        "past the maximum, one first interval more"
+    );
+    assert_eq!(
+        pair(&host, BROKEN),
+        Some((1, 0, block_end + FIRST_INTERVAL_MS, false))
+    );
+    let at = block_end + FIRST_INTERVAL_MS;
+    advance_manual_clock_to(&clock, at);
+    let round = evaluate(&host, at, 104);
+    assert!(dispatched(&round, BROKEN), "{round:#?}");
+    let waiting = reason_of(&round, TASK, HostCode::InstanceEntryTaskWaiting)
+        .unwrap_or_else(|| panic!("the broken task waits: {round:#?}"));
+    assert_eq!(waiting.value("count"), Some(&json!(2)));
+    assert_eq!(
+        waiting.value("next_eligible_unix_ms"),
+        Some(&json!(block_end + 2 * FIRST_INTERVAL_MS))
+    );
+    let healthy = admit_at(&host, &clock, at, 105);
+    assert_eq!(
+        healthy.task_id, BROKEN,
+        "the healthy task, in the round after"
+    );
+    let let_in = succeed(&host, &clock, &healthy);
+    for task_id in [TASK, OTHER] {
+        assert_eq!(
+            pair(&host, task_id),
+            Some((0, 0, 0, false)),
+            "{task_id}: its wait ended at once"
+        );
+    }
+    assert_eq!(pair(&host, BROKEN), None, "its own run got in");
+
+    let at = let_in.observed_at_unix_ms + LEASE_LAPSED_MS;
+    advance_manual_clock_to(&clock, at);
+    let round = evaluate(&host, at, 106);
+    for task_id in [TASK, OTHER] {
+        assert_eq!(
+            reason_of(&round, task_id, HostCode::InstanceEntryTaskWaiting),
+            None,
+            "{task_id}: {round:#?}"
+        );
+    }
+    let broken = admit_at(&host, &clock, at, 107);
+    assert_eq!(broken.task_id, TASK, "first in the order, no longer held");
+    let settled = settle_at_entry_after(&host, &clock, &broken, ENTRY_RUN_MS);
+    assert_eq!(
+        pair(&host, TASK),
+        Some((1, 1, settled.observed_at_unix_ms + FIRST_INTERVAL_MS, false)),
+        "it came although a run was let in: one against it"
+    );
+    block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    let healthy = admit_at(&host, &clock, block_end + 1_000, 108);
+    assert_eq!(healthy.task_id, BROKEN);
+    let let_in = succeed(&host, &clock, &healthy);
+    assert_eq!(
+        pair(&host, TASK),
+        Some((0, 1, 0, false)),
+        "the wait ended, the count against it kept"
+    );
+    let last = admit_at(
+        &host,
+        &clock,
+        let_in.observed_at_unix_ms + LEASE_LAPSED_MS,
+        109,
+    );
+    assert_eq!(last.task_id, TASK);
+    settle_at_entry_after(&host, &clock, &last, ENTRY_RUN_MS);
+    assert_eq!(
+        pair(&host, TASK).map(|(_, against, _, set_aside)| (against, set_aside)),
+        Some((2, true)),
+        "set aside at the threshold"
+    );
+    let reports = set_aside_reports(&host);
+    let [report] = reports.as_slice() else {
+        panic!("one person told: {reports:#?}");
+    };
+    assert_eq!(report.value("task_id"), Some(&json!(TASK)));
+    assert_eq!(report.value("count"), Some(&json!(2)));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// N3 (b) (fix round 5, ruling 3 (i); the settlement hook, one task, `escalation_threshold` 3,
+/// `scheduling.unavailable_probe`'s first interval one minute, its longest two, factor 2): four
+/// failures at the entry in a row with nothing let in, each block `BLOCK_MS`, each next run at its
+/// wait's end: after the first the pair waits one minute from its block's end, after the second
+/// two (the maximum), after the third three and after the fourth four (past the maximum, one first
+/// interval more for each further failure in a row).
+#[test]
+fn entry_n3_b_past_the_maximum_each_further_failure_in_a_row_waits_one_first_interval_more() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(
+        &root,
+        instance_id(),
+        POLICY_NOW_UNIX_MS,
+        paced_between(FIRST_INTERVAL_MS, 2 * FIRST_INTERVAL_MS, json!({})).manifest,
+    );
+    host.activate_policy_catalog(&sources(3))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    let mut settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    for (in_a_row, minutes, seed) in [(1_u32, 1_u64, 101), (2, 2, 102), (3, 3, 103), (4, 4, 104)] {
+        let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+        let until = block_end + minutes * FIRST_INTERVAL_MS;
+        assert_eq!(
+            pair(&host, TASK),
+            Some((in_a_row, 0, until, false)),
+            "{in_a_row}"
+        );
+        if in_a_row < 4 {
+            let next = admit_at(&host, &clock, until, seed);
+            settled = settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+        }
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// N4 (fix round 5, ruling 4; policy level, gate_upd1's store update task, the ordinary task's
+/// `escalation_threshold` 1): the ordinary task fails at its entry and waits its first interval.
+/// The game asks for an update; the store update task passes the block, its main package starts
+/// after its entry check and it fails (severe, so it is not rerun): that is no run let in for the
+/// pairs, so the ordinary task's pair is as it was, its wait not ended. A recovery ends the block;
+/// the ordinary task's next failure at the entry is its second in a row and none against it: not
+/// set aside, no person told.
+#[test]
+fn entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_let_in() {
+    let root = TempDir::new().expect("tempdir");
+    let ordinary = neutral_contained_task_package(true);
+    let store = super::gate_store_fg2::store_package();
+    let mut procedures = Vec::new();
+    for (index, (procedure, package)) in [
+        ("procedure.observe", ordinary.as_slice()),
+        (STORE_PROCEDURE, store.as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = root.path().join(format!("bound-{index}.zip"));
+        fs::write(&path, package).expect("write the package");
+        procedures.push(
+            ProcedureBinding::new(
+                procedure,
+                "operation.observe",
+                vec!["after_observation".to_owned()],
+            )
+            .expect("procedure binding")
+            .with_package_path(path.to_string_lossy()),
+        );
+    }
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(ProcedureManifest::new(procedures).expect("manifest")),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&store_sources_threshold_one())
+        .expect("activate the catalog");
+    let evaluate_at = |at: u64, seed: u64| {
+        advance_manual_clock_to(&clock, at);
+        host.evaluate_policy_cycle_with_test_inputs(
+            &update_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: clock.monotonic_ms(),
+            },
+            seed,
+            PolicyTrigger::Recovery,
+        )
+        .expect("evaluate the policy")
+        .evaluation
+        .expect("a full evaluation")
+    };
+    let grant = |evaluation: &actingcommand_policy::PolicyEvaluation, task_id: &str| {
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == task_id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{task_id} is dispatched: {evaluation:#?}"));
+        let chain = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .cloned()
+            .expect("its reason chain");
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &chain, &policy_context(&host, &intent))
+            .expect("the admission")
+        else {
+            panic!("{task_id} is granted");
+        };
+        (intent, context)
+    };
+
+    let first = evaluate_at(POLICY_NOW_UNIX_MS + 1_000, 1);
+    let ordinary_intent = first
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == TASK)
+        .cloned()
+        .unwrap_or_else(|| panic!("the ordinary task: {first:#?}"));
+    record_policy_approval(&host, &ordinary_intent);
+    let (intent, context) = grant(&first, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    assert_settled_at_entry(&failure_of(&settled));
+    host.release_policy_dispatch_lease_for_test(&context)
+        .expect("end the dispatch's lease");
+    let waiting = (1, 0, settled.observed_at_unix_ms + FIRST_INTERVAL_MS, false);
+    assert_eq!(pair(&host, TASK), Some(waiting));
+
+    advance_manual_clock_to(&clock, POLICY_NOW_UNIX_MS + MINUTE_MS);
+    host.record_application_update_for_test(POLICY_INSTANCE_ALIAS, true)
+        .expect("the game asks for an update");
+    let store_at = POLICY_NOW_UNIX_MS + ACTIVITY_INTERVAL_PAST_MS;
+    let update = evaluate_at(store_at, 2);
+    let (store_intent, store_context) = grant(&update, STORE_TASK);
+    clock.advance(ENTRY_RUN_MS);
+    host.settle_next_policy_run_past_its_entry_for_test()
+        .expect("arm the settlement");
+    let store_failure = failure_of(
+        &host
+            .record_policy_dispatch_outcome(
+                &store_intent.decision_id,
+                &PolicyExecutionInput::Failed {
+                    outcome: Outcome::new(
+                        actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed
+                            .code(),
+                    ),
+                    failure_identity: None,
+                    class: PolicyFailureClass::Severe,
+                },
+            )
+            .expect("the store update task's settlement"),
+    );
+    assert_eq!(store_failure.condition, None);
+    host.release_policy_dispatch_lease_for_test(&store_context)
+        .expect("end the dispatch's lease");
+    assert_eq!(
+        pair(&host, TASK),
+        Some(waiting),
+        "no run let in for the pairs: no wait ended"
+    );
+    host.record_application_update_for_test(POLICY_INSTANCE_ALIAS, false)
+        .expect("the game is up to date");
+    recover(&host);
+
+    let again = evaluate_at(store_at + ACTIVITY_INTERVAL_PAST_MS, 3);
+    let (intent, context) = grant(&again, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    assert_settled_at_entry(&failure_of(&settled));
+    host.release_policy_dispatch_lease_for_test(&context)
+        .expect("end the dispatch's lease");
+    let (in_a_row, against, _, set_aside) = pair(&host, TASK).expect("the pair");
+    assert_eq!(
+        (in_a_row, against, set_aside),
+        (2, 0, false),
+        "nothing counts against it"
+    );
+    assert!(set_aside_reports(&host).is_empty(), "no one told");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }
@@ -1574,6 +2004,12 @@ fn entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_fai
         .expect("the instance's block")
         .expect("the instance stays blocked");
     assert!(told);
+    assert_eq!(
+        replay.restarts(),
+        Some(true),
+        "fix round 5 (ruling 5): after an exhausted climb every later climb of the block, \
+         whichever path builds it, starts at the application restart"
+    );
     let attention = the_exhausted_recovery(&replay.host);
     assert_eq!(attention.value("task_id"), Some(&json!(TASK)));
     assert_eq!(
@@ -2436,8 +2872,11 @@ fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_a
             host.let_run_in_for_test(POLICY_INSTANCE_ALIAS)
                 .expect("a run's main package starts");
         }
-        let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
-        let next = admit_at(&host, &clock, until, seed);
+        // Fix round 5 (ruling 3 (ii)): a run let in ends the pair's wait (`until` 0); the next
+        // run then goes once the lease of the one before has lapsed.
+        let (_, _, until, _) = pair(&host, TASK).expect("the pair");
+        let now = clock.sample().expect("the manual clock").unix_ms;
+        let next = admit_at(&host, &clock, until.max(now + LEASE_LAPSED_MS), seed);
         let settled = settle_at_entry(&host, &clock, &next);
         assert_settled_at_entry(&failure_of(&settled));
         assert_eq!(blocked_by(&host).decision_id, next.decision_id);
@@ -3303,17 +3742,6 @@ fn emulator_actions(state: &FakeState) -> Vec<actingcommand_contract::EmulatorIn
         .clone()
 }
 
-/// M4: nothing holds or waits for the policy instance's key (a ladder's handed-off startup run
-/// included).
-fn wait_for_instance_free(host: &RuntimeHost) {
-    wait_until("the instance's key free", || {
-        let (holder, queued) = host
-            .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
-            .expect("instance claims");
-        holder.is_none() && queued.is_empty()
-    });
-}
-
 /// M4 (ruling 4; the live path on a fake device with emulator control, manual clock): the game is
 /// on `away`, which no package of the instance knows. The scheduled run fails at its entry; its
 /// block's first climb runs every rung, the emulator's Stop and Start included. At the task's next
@@ -3357,7 +3785,6 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
     replay.fail_at_entry();
     assert_settled_at_entry(&replay.execution());
     wait_for_ladders_finished(&replay.host, 1);
-    wait_for_instance_free(&replay.host);
     assert_eq!(
         emulator_actions(&replay.state),
         [Stop, Start],
@@ -3368,6 +3795,11 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
         plans.first().and_then(|(_, plan)| plan.last()),
         Some(&planned(RecoveryRung::EmulatorRestart, None))
     );
+    // Fix round 5 (ruling 2, the fifth review's M4): the instance's startup package is `main`,
+    // which fails on `away`, so the first climb ends `exhausted` and the block stands; a
+    // recovery ends it with nothing let in, as M6 does, so the task is dispatched at its next
+    // occurrence and its next block is in the same stretch.
+    recover(&replay.host);
 
     let second = admit_scheduled_at(
         &replay.host,
@@ -3383,7 +3815,6 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
         started_plans(&replay.host).len() == 2
     });
     wait_for_ladders_finished(&replay.host, 2);
-    wait_for_instance_free(&replay.host);
     let plans = started_plans(&replay.host);
     let (trigger, plan) = &plans[1];
     assert_eq!(trigger.run_id, Some(second.run_id()));
@@ -3469,7 +3900,6 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
         "a new stretch may restart the emulator once again"
     );
     wait_for_ladders_finished(&replay.host, 3);
-    wait_for_instance_free(&replay.host);
     assert_eq!(emulator_actions(&replay.state), [Stop, Start, Stop, Start]);
     replay.close();
 }

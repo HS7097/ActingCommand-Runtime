@@ -613,11 +613,32 @@ impl HostShared {
         code: &actingcommand_contract::outcome::CodeStr,
         entry: super::contained_task::RunEntry,
     ) -> RuntimeHostResult<bool> {
+        Ok(self
+            .scheduled_run_entry_checked(run_id, entry)?
+            .is_some_and(|gated| {
+                let scope = if gated { "gate" } else { "main" };
+                !failure_accumulates(code, scope, false)
+            }))
+    }
+
+    /// Workflow #490 ENTRY-A fix round 5 (CI on fix round 4's head: `gate_387_d1c`'s cell "the
+    /// code excluded"): the first half of [`Self::scheduled_run_at_entry`], from what the host
+    /// holds of the run `run_id` in memory: its chain was resolved, it checked its entry and its
+    /// main package never started (`entry`). `Some(gated)` then (`gated`: a prerequisite chain or a
+    /// page graph's own entry check), else `None`. The lease end of a failure the exclusion list
+    /// keeps from starting a ladder stages the block's own recovery only for such a run: a run
+    /// that started its main package never blocks its instance, so nothing is staged for it and
+    /// nothing is let go at its settlement.
+    pub(super) fn scheduled_run_entry_checked(
+        &self,
+        run_id: RunId,
+        entry: super::contained_task::RunEntry,
+    ) -> RuntimeHostResult<Option<bool>> {
         if entry.started {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(decision_id) = self.entry_settling_dispatch(run_id)? else {
-            return Ok(false);
+            return Ok(None);
         };
         let shape = lock(
             &self.scheduled_resolutions,
@@ -628,14 +649,10 @@ impl HostShared {
         .filter(|main| main.resolved)
         .map(|main| (!main.layers.is_empty(), main.linear));
         let Some((layered, linear)) = shape else {
-            return Ok(false);
+            return Ok(None);
         };
         let gated = layered || (!linear && entry.checked);
-        if !(gated || entry.checked) {
-            return Ok(false);
-        }
-        let scope = if gated { "gate" } else { "main" };
-        Ok(!failure_accumulates(code, scope, false))
+        Ok((gated || entry.checked).then_some(gated))
     }
 
     fn build_scheduled_failure_identity(

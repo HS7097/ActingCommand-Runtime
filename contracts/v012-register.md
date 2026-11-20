@@ -43610,6 +43610,66 @@ words, not the owner's):
    codes' texts (`instance_entry_task_waiting`, `instance_entry_task_set_aside`, their handling),
    the index checked current; the texts of item 9.
 
+**Fix round 5** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix5.md`, after
+the fifth independent review of #1853, `rd-1121/review-1853-fix4.md`, and CI's `host-lab` on fix
+round 4's head; the rulings are the coordinator's, not the owner's words):
+
+1. *A sensitive task's failure at the entry is a condition too* (`PolicyControlState::entry_condition`
+   no longer excepts it; `preview_paced_settlement` takes a condition of a sensitive task whose
+   identity's `F` is an entry failure's, `input_at_entry`). Its main package did not start, so
+   nothing sensitive was begun; its settlement, block, staged recoveries and pair's wait are any
+   task's. The sensitive rule is not applied, so the record's `sensitive` is `false` (the
+   contract's record check refuses a sensitive record that continues; no member, no word, `ledger`
+   does not move). A Runtime of 0.12.76 or earlier replays no condition of a sensitive task: after
+   a rollback to one it stops at its start on such a record. Other classes stay: a failure at the
+   entry whose policy class is `severe` (a code the Runtime raises only as fatal, or a terminal its
+   failure point marked `failure_severe`) settles as before; of the 68 codes of class
+   `pack_logic_mismatch` none is in the static severe list (`is_severe_policy_failure`, 155
+   codes), and `failure_severe` is set only where the run's error was fatal or poisoned the Runtime
+   (any code: then it pauses at once, as before) and by a linear step that met an unrecorded screen
+   (`contained_task_linear_unrecorded_screen`, raised in the `main` scope only, never at the
+   entry).
+2. *M4* ends its first block with a recovery (the review's point) and awaits each climb's end as
+   the other replays do (`wait_for_ladders_finished`).
+3. *Pairs at the maximum no longer come due together.* (i) `pair_interval_ms`: past
+   `max_interval_ms` one more `first_interval_ms` per further failure in a row (the window's end
+   still bounds it). (ii) `EntryBlocks::let_pairs_go`: the scheduled run let in that raises
+   `entered` (not a store update task's, not a client's or the Lab's) sets every pair of the
+   instance to none in a row and ends its wait at once; `against`, the window, the packages and
+   being set aside stay; a block's end sets no wait on such a pair (`EntryBlocks::end`). No order
+   by which pair failed longest ago, no pair waiting for another.
+4. *A store update task's run is never evidence* (`EntryRule::store_task` whatever the run's end;
+   `settle_entry`): its main package started and it failed counts for the stretch only.
+5. *Found and fixed.* (a) A placement can replace a registered package's files without changing
+   the rules a composition activates (a scheduled run takes its package as the registry places it
+   at dispatch): the workbench's check that finds a package's declaration files changed frees
+   every pair as an activation does (`check_standard_pack_rules`, `clear_entry_pairs`). (b) The
+   start's (and the online) reconciliation settles a run from its terminal with no identity, so a
+   failure at the entry it settles counts against the rule (streak, `on_failure`); not changed in
+   this round (the ledger's recovery rule refuses a reconciled failure with an identity, and the
+   run's chain is memory the restart lost): a known gap, below. (c) After an exhausted climb the
+   block's `restarts` is set (`EntryBlocks::recovery_ended`), so every later climb of the block,
+   held, taken up or prepared by a later failure's lease end (a store update task's), starts at the
+   application restart.
+6. *"Told once"* is true again: once per pair and window, and again after an activation, a changed
+   package or a Runtime start cleared the counts (`codes.rs`, the catalogue's text after its first
+   sentence, so the index stays current, the contract).
+7. *Known bounds, not changed.* A broken pair alone is never set aside: about thirty-five failures in
+   a day's window with 3 (i) (fifty before), each a given-back short run, a block and a climb from
+   the application restart, a person told after the stretch's hour. Every catalogue's activation
+   (and since this round a changed package) frees every pair, so a broken pair fails its threshold
+   plus one more times after each. A failure at the entry the reconciliation settles counts
+   against its rule (5 (b)).
+
+CI on fix round 4's head (`848491b2`), the coordinator's addition: `gate_387_d1c`'s cell "the code
+excluded" saw the record of a staged recovery let go at the settlement (fix round 4, ruling 6) of a
+run that started its main package: the lease end now stages the block's own recovery only for a run
+that checked its entry and never started its main package (`scheduled_run_entry_checked`). M1
+admitted `OTHER` two seconds after `TASK`, inside the test configuration's five-second lease the
+settlement hook does not release: every policy-level admission now follows the previous run's
+lapsed lease (`LEASE_LAPSED_MS`). M4 ran out its 120-second wait before the admission the review
+named. host-lab's limits rise to job 60, Test 50 (`.github/workflows/ci.yml`).
+
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`; fix round 2: `since` 0.12.77):
 
@@ -43620,7 +43680,7 @@ class `none`; fix round 2: `since` 0.12.77):
 | `instance_entry_blocked_recovery_failed` | (fix round 1, item 7; fix round 2, item 5; fix round 3, item 4) one of an entry-blocked instance's own recoveries ended without recovering; after `exhausted` the block climbs again by itself, paced, after `update_dialog` nothing climbs again in the stretch, after `worker_panicked` nothing in the block (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `entry_recovery_end`, `trigger_rule?`, `next_occurrence_unix_ms?` the next climb's earliest time, `failure_code?`) | warns, once per block (a `runtime.failed` record) | none |
 | `instance_entry_task_waiting` | (fix round 4, item 2) the candidate's task failed at its entry on its instance `count` times in a row in its window; it is not dispatched there before `next_eligible_unix_ms` (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms` of the latest, `count`, `next_eligible_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason, with a wake | none |
 | `instance_entry_task_set_aside` | (fix round 4, item 3) the candidate's task is set aside on its instance until its window's end: `count` of its failures at the entry came although another scheduled run was let in, reaching `limit_count`, its rule's `escalation_threshold` (`window_end_unix_ms`, the values above); a fact refresh names it as `gate_code` | info, a decision's reason, with a wake | none |
-| `instance_entry_task_set_aside_reported` | (fix round 4, item 3) a person is told once that the task is set aside on the instance until `window_end_unix_ms` (`count`, `limit_count`, the latest failure's values) | warns, once per pair and window (a `runtime.failed` record) | none |
+| `instance_entry_task_set_aside_reported` | (fix round 4, item 3) a person is told once that the task is set aside on the instance until `window_end_unix_ms` (`count`, `limit_count`, the latest failure's values) | warns, once per pair and window, and again after an activation, a changed package or a Runtime start cleared the counts (fix round 5) (a `runtime.failed` record) | none |
 | `recovery_rung_skipped_emulator_restarted_in_stretch` | (fix round 4, item 4) a later climb of a stretch of entry blocks did not run the emulator's rung, which a ladder of the stretch ran already | info, a skipped rung's `recovery_rung_finished` outcome | none |
 
 Locations `instance_entry_block` and `take_up_entry_recoveries`. No word. Fix round 1, item 7: the
@@ -43658,6 +43718,7 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 | Fix round 2 | `host/recovery_ladder.rs` (`entry_class`, `entry_trigger_item` for one class, `restarts_application`, `PendingRecoveryLadder::start_at_application_restart`, `ClimbEnd`, `append_ladder_fact_as`, `entry_effect`, `finish_interrupted_ladder`, `enqueue_ladder_claim`, `request_ladder_claim`); `host/entry_blocks.rs` (`EntrySettlement::AtEntry.window_end`, the mark's `window_end`, `let_in`, `ended_let_in`, `restart_due`, `stretches`, `restarts`, `panicked`, `refusals`, `hold_refused_entry_recovery`, `take_up_entry_recoveries`); `host/failure_settlement.rs` (the window's end); `policy_host.rs` (`dispatch_window_end`); `policy_control.rs` (`admission_window_end`); `host.rs` (the test seams). Fix round 3 removed `lease_end_restarts`, `RungsTried::restarted`, `scheduled_run_failed_at_entry`, `EntryMarks.let_in`, the block's `exhausted` and the two claim kinds in `host/lease.rs` |
 | Fix round 3 | `crates/policy/src/evaluator.rs` (`InstanceHolds::yield_turn`, `yielding`, `YieldingTask`, `yield_turns`, the yield's reason behind the instance's winner) and `evaluator/device_order.rs` (`Contenders::yields`); `entry_block.rs` (`EntryBlockGates` with the yields, `hold`); `host/entry_blocks.rs` (`EntryMarks` with `ended` alone, `EntrySettlement::TargetStarted { entered }`, `EntryClimb`, `EntryFailureMark::entered`, `entered`, `yielding`, `note_task_run`, `Stretch::climbs`, `last_end_unix_ms`, `update_dialog`, `paced_until`, `counts_climb`, `climb_ended`, `EntryBlocks::recovery_ended`, `EntryBlock::hold`, `entry_climb`, `entry_failure_own`, `settle_entry`, `note_entry_success`, `note_entry_climb_ended_block`, `record_dropped_entry_recoveries`, `take_up_entry_recoveries`); `failure_identity.rs` (`entry_passed`); `host/failure_settlement.rs` (`scheduled_run_at_entry`, the evidence); `host/contained_task.rs` (`RunEntry`, `ContainedRunControl::note_entry_fact`, `record_entry_fact`, the success's let-in); `host/recovery_ladder.rs` (`LadderTrigger::entry`, `ladder_at_lease_end`, `lease_end_entry_climb`, `ClimbEnd` as an enum, `EntryEffect::UpdateDialog`, `finish_interrupted_ladder_as`); `codes.rs` (`InstanceEntryYielding`, `EntryRecoveryEnd::UpdateDialog`); `host.rs` (the test seams `entry_climbs_for_test`, `entry_yielding_for_test`). Fix round 4 removed the policy crate's changes (`evaluator.rs`, `evaluator/device_order.rs` are main's again), the yields, `note_task_run`, `entry_failure_own`, the evidence in `failure_settlement.rs`, `InstanceEntryYielding` and `entry_yielding_for_test` |
 | Fix round 4 | `host/entry_blocks.rs` (`EntrySettlement::AtEntry` without `own`, `EntryRule`, `EntryPair`, `EntryBlocks::pairs`, `pair_failed`, `emulator_runs`, `Stretch::emulator_restarted`, `EntryClimb::skip_emulator`, `settle_entry`, `block_instance_entry`'s recorded drops, `note_entry_emulator_restart`, `record_entry_set_aside`, `entry_block_gates`, `take_up_entry_recoveries`); `entry_block.rs` (`EntryPairGate`, `EntryBlockGates::pair_deferral`); `policy_host.rs` (the eligibility closure, `dispatch_escalation_threshold`, `is_store_task`); `host/policy_outcome.rs` (the rule handed to `settle_entry`); `host/recovery_ladder.rs` (`PendingRecoveryLadder::skip_emulator`, `skip_emulator_restart`, the skipped emulator rung, `finish_interrupted_ladder_as`' `cause`); `host/failure_settlement.rs` (the evidence removed); `failure_identity.rs` (`own_entry_identity` removed); `codes.rs` (the four codes, the test spellings); `host.rs` (`entry_pair_for_test`). The coordinator's addition: `host/entry_blocks.rs` (`EntryPair::interval_ms`, `EntryBlocks::end` with the block's end time, `clear_entry_pairs`); `host/policy_catalog.rs` (`switch_policy_catalog` calls `clear_entry_pairs`) |
+| Fix round 5 | `policy_control.rs` (`entry_condition` for a sensitive task, `input_at_entry`, `preview_paced_settlement`'s `sensitive`); `host/entry_blocks.rs` (`pair_interval_ms`, `EntryBlocks::let_pairs_go`, `end` skipping a pair with none in a row, `settle_entry` for a store update task and a run let in, `recovery_ended` setting `restarts`, the test seam `note_entry_let_in_for_test`); `host/policy_outcome.rs` (`EntryRule::store_task` whatever the end); `host/failure_settlement.rs` (`scheduled_run_entry_checked`); `host/recovery_ladder.rs` (the excluded code's staged recovery only for a run that checked its entry); `host/standard_pack_schedule.rs` (`check_standard_pack_rules` frees the pairs when a package's declaration files changed); `codes.rs` (two texts); `.github/workflows/ci.yml` (host-lab's limits) |
 | Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md); fix round 2: [emulator-control.md](emulator-control.md) ("Triggers") and [runtime-config.md](runtime-config.md) (`recovery_ladder.exclude_codes`) on what an excluded code does |
 
 **Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
@@ -43771,6 +43832,24 @@ outlasts the pair's first wait from its block's end) and K3 (c)
 | `entry_m6_on_a_page_graph_without_a_chain_the_lease_end_tells_a_failure_before_its_main_package_from_one_after` (the two flags) | A page graph without a chain: a failure before its main package started climbs at once from the application restart (`checked`); one after it started is no failure at the entry and climbs as configured at once (`started`) |
 | `entry_m7_a_catalogue_with_a_changed_package_frees_a_set_aside_pair_at_once` (the addition, 2) | Threshold 1: `TASK` set aside at its second failure (`OTHER` in between), waiting `instance_entry_task_set_aside` after its block's end; a catalogue (version 2) in which `TASK` runs another package is activated: the pair is gone, and a second later, before the window's end, `TASK` is dispatched with neither reason |
 
+Fix round 5's tests (host gate map, the sixth row "#490 ENTRY-A"; 35 tests in the six rows, 31
+before this round). None removed. Changed: M1 (blocks of three minutes, each admission after the
+previous run's lease lapsed: the cause of its failure on fix round 4's head; `OTHER`'s success ends
+`TASK`'s wait), M2 (after `OTHER`'s success the wait has ended and `TASK`'s next failure is its
+first in a row again, one against it), M3 (a) (after each `OTHER` success the pair is `(0, n, 0,
+false)`, each failure its first in a row), M3 (c) and M7 (the next run once `OTHER`'s lease has
+lapsed, the waits having ended), R2 (the next run at its wait's end or, after the run let in, once
+the lease has lapsed; the test seam `let_run_in_for_test` ends the waits as a settlement does), M4
+(a recovery ends its first block; each climb awaited by its end), and the first replay (after its
+exhausted climb the block climbs from the application restart: 5 (c)).
+
+| Test | What it shows |
+|---|---|
+| `entry_n1_a_sensitive_tasks_failure_at_the_entry_settles_as_a_condition_and_never_pauses_its_rule` (1) | A sensitive task, threshold 1: its failure at the entry a condition (refunded, count 1, `continue`, counters 0, no pause cause, `…~fi…`), its record's `sensitive` false, no count for the day, no streak, the instance blocked |
+| `entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_let_in_ends_every_wait` (3, case (a)) | First and longest interval one minute, threshold 2: after an outage the three pairs at the maximum are due together; the broken one fails again and waits two minutes, so the healthy task runs in the round after; its success ends every wait (`(0, 0, 0, false)`), the broken one fails once against it, the healthy task runs again keeping that count (`(0, 1, 0, false)`), and the next failure sets it aside, one report |
+| `entry_n3_b_past_the_maximum_each_further_failure_in_a_row_waits_one_first_interval_more` (3 (i)) | First interval one minute, longest two: waits of one, two, three and four minutes after the first to the fourth failure in a row |
+| `entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_let_in` (4) | The store update task's main package starts and it fails: the ordinary pair as it was; its next failure the second in a row, none against it, not set aside |
+
 **What is not changed.** A failure in a step of the main package is settled, rerun, counted and
 paused as before (A2 only clears the pair's mark when such a run started its main package);
 budgets are taken at admission and an immediate rerun of a step failure costs one; the failure
@@ -43804,7 +43883,14 @@ the update dialog stops a block's climbs until the store update task (or a perso
 keeps failing at its entry waits on that instance (one minute, doubling to thirty, from the end of
 the instance's block) and, once it failed so often while other rules got in, is set aside there
 until its activity window ends, a person told; activating a catalogue frees every such rule at
-once; the emulator is restarted at most once in a stretch of blocks.
+once; the emulator is restarted at most once in a stretch of blocks. **Fix round 5 at deploy:** a
+sensitive rule's failure at its entry no longer pauses it; past thirty minutes a rule that keeps
+failing at its entry waits a minute more each time; any other scheduled run that gets in on the
+instance (not a store update task's) ends every such rule's wait there at once; a store update
+task that fails after its main package started counts for no rule; a placement that changes a
+package frees every such rule as an activation does. A rollback to 0.12.76 or earlier after a
+sensitive rule failed at its entry stops at its start on that record (the earlier build settles
+no condition of a sensitive task) while it is in the ledger the start replays.
 Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
 `945727d4`: `CodeStr` deserializes any text, `Outcome`'s reader takes any value keys, and the
 schedule explanation's check is its shape rules alone): its status read of an entry-blocked

@@ -318,7 +318,9 @@ actingcommand_contract::outcome_codes! {
         /// of the block it set and of any later block of the instance (from its settlement until a
         /// block ends): it is not dispatched there
         /// before `next_eligible_unix_ms` (never after the window's end), when it wakes; the fact
-        /// refresh names it as its gate (keys `instance_id`, `task_id` as well).
+        /// refresh names it as its gate (keys `instance_id`, `task_id` as well). Fix round 5: past
+        /// `max_interval_ms` one more `first_interval_ms` per further failure in a row, and a
+        /// scheduled run let in on the instance ends the wait at once.
         InstanceEntryTaskWaiting => "instance_entry_task_waiting": info / none,
         /// Info (Workflow #490 ENTRY-A fix round 4, ruling 3). The candidate's task is set aside on
         /// its instance until its activity window ends (`window_end_unix_ms`), when it wakes: in
@@ -328,8 +330,10 @@ actingcommand_contract::outcome_codes! {
         /// `observed_at_unix_ms` (keys `instance_id`, `task_id` as well). The fact refresh names it
         /// as its gate.
         InstanceEntryTaskSetAside => "instance_entry_task_set_aside": info / none,
-        /// Warning (Workflow #490 ENTRY-A fix round 4, ruling 3). A person is told, once, that a
-        /// task is set aside on its instance until its activity window ends
+        /// Warning (Workflow #490 ENTRY-A fix round 4, ruling 3). A person is told, once per task,
+        /// instance and window (and again when it is set aside again after a catalogue's
+        /// activation, a changed package or a Runtime start cleared the counts; fix round 5,
+        /// ruling 6), that a task is set aside on its instance until its activity window ends
         /// (`window_end_unix_ms`): `count` of its failures at the entry in that window came
         /// although the instance had let another scheduled run in since its previous one, which
         /// reached its rule's `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`,
