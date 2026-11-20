@@ -43092,6 +43092,13 @@ store; only the snapshot and the view bound what one instance can hold.
   longer holds room (its latest observation time is still kept for "not newer"). The commit and the
   history's replay take what the ledger holds up to 256 facts of one scope, so a store before this
   slice (at most 256 in all) loads whole, an instance past 224 included, which then takes no new key.
+  *Only a new key is compared* (fix round 1, after the review): every check compares a scope's
+  count with its bound only for a key the scope does not hold (`preview_observation` when the
+  observation brings one, `new_identities > 0`; `preview_publish`, `commit_publish` and
+  `HistoricalFactProjection::publish` only for a key not active), so a scope past its bound (a
+  store before this slice may hold more than 16 facts of a server or a game, or more than 224 of an
+  instance) still has every key it holds replaced in place and invalidated; the invalidations
+  compare nothing.
 - *Tombstones* follow the same rule: at most 256 of each scope in memory, each scope's oldest
   written one dropped first (`trim_recent_tombstones`). A scope's pending invalidations never
   outnumber its active facts, so dropping is never blocked; with one bound for the host and more
@@ -43160,7 +43167,7 @@ the wall clock, as S168-4's).
 | `factcap_c_a_shared_fact_is_counted_once` (3) | A server fact and a game fact of two instances take nothing from either's bound; the server and the game are refused past 16, another game takes a fact; an instance's snapshot with every scope at its bound holds 256 records and is valid |
 | `factcap_d_the_warning_at_the_share_once_and_cleared` (4) | No report one short of 180; one at 180 with the count; none at 181; a takeover back to 171 ends the episode with no report; one again at 180; never for an instance far under |
 | `factcap_e_a_refused_readings_run_fails_and_another_instance_reads_on` (5) | One `fact_store_capacity_share_reached` (180, 224) under the instance's link on the way to its bound; its new list's run fails `contained_task_resource_reading_rejected` (`read_members:fact_store_capacity_exceeded`), one `task.failed` after the warning with the store's refusal as a cause, no `task.completed`, nothing published or evicted; the other instance reads and publishes the same list; no warning names it |
-| `factcap_f_a_start_restores_more_than_256_facts_of_several_instances` (6) | 301 facts of three instances and a game load at a start as the full replay leaves them, each snapshot holds 101, each instance takes a new key; 240 facts of one instance written without the check load whole and that instance takes no new key |
+| `factcap_f_a_start_restores_more_than_256_facts_of_several_instances` (6) | 301 facts of three instances and a game load at a start as the full replay leaves them, each snapshot holds 101, each instance takes a new key; 240 facts of one instance written without the check load whole and that instance takes no new key, while a key it holds is replaced in place and the replacement's trigger invalidates it; at 239 it still takes no new key |
 
 Adapted: none. `gate_428_s168_4.rs` gains `pub(super)` on the helpers test 5 reuses (`Screen`,
 `list`, `detail`, `Device` with `new` and `shows`, `write_package`, `start`, `run`, `completed`,
@@ -43170,9 +43177,18 @@ the host's (256 in all), and their other instance re-reads a list it already hol
 the tombstones' compaction (one instance's 288 invalidations, 256 kept) holds as written.
 
 **At deploy.** Nothing to configure: the bounds are contract constants. A store written by 0.12.75
-loads whole. The first publication after the start reports each instance already at or past 180 of
-its own facts. In the release notes' language:
-实例事实库的上限改为按范围分别计：每个实例自己的事实最多 224 条，每个服务器、每个游戏各自最多 16 条（共享的事实只算一次）；加实例不再挤占别的实例。某实例自己的事实到上限的 80%（180 条）时先记一条警告 `fact_store_capacity_share_reached`；读数被拒时运行的失败记录里带上事实库拒绝的原因码。
+loads whole; a scope it filled past its new bound takes no new key, and every key it holds is still
+replaced and invalidated. The first publication after the start reports each instance already at
+or past 180 of its own facts. **At a rollback:** once the host holds more than 256 facts in all, a
+0.12.75 Runtime cannot load the store, as its one bound was 256 for the whole host (the same
+constant since the store was added), so a rollback to 0.12.75 or earlier fails at that build's
+start. Read in 0.12.75's code (tag `v0.12.75`): the start's load (`InstanceFactStore::recover`,
+through `replay_publication` to `commit_publish`) refuses the 257th active key with the fatal
+`fact_store_capacity_exceeded` (operation `commit_fact`, `runtime_halted`); the start ends before
+readiness with that error, actingd writes it as its start refusal's daemon line and exits with
+status 1, not 2, as the code's category is `error`; every later start of that build reads the same
+store and answers the same. In the release notes' language:
+实例事实库的上限改为按范围分别计：每个实例自己的事实最多 224 条，每个服务器、每个游戏各自最多 16 条（共享的事实只算一次）；加实例不再挤占别的实例。某实例自己的事实到上限的 80%（180 条）时先记一条警告 `fact_store_capacity_share_reached`；读数被拒时运行的失败记录里带上事实库拒绝的原因码。整机事实超过 256 条以后不能再回滚到 0.12.75 或更早的版本：那些版本启动时载入事实库会被拒（`fact_store_capacity_exceeded`），起不来。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

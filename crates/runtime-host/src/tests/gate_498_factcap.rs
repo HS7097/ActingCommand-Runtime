@@ -638,6 +638,8 @@ fn factcap_e_a_refused_readings_run_fails_and_another_instance_reads_on() {
 // this one wrote, which held at most 256 facts in all and could hold them in one instance, loads
 // whole too: 240 own facts of one instance (appended without the store's check, as that build's
 // bound let them in) are restored, and that instance takes no new key while it is past its bound.
+// A key it holds is still replaced in place past its bound (the replacement adds no key), and the
+// replacement's trigger invalidates it; one fact fewer, still past the bound, it takes no new key.
 #[test]
 fn factcap_f_a_start_restores_more_than_256_facts_of_several_instances() {
     let mut store = Store::new();
@@ -683,8 +685,10 @@ fn factcap_f_a_start_restores_more_than_256_facts_of_several_instances() {
 
     let mut older = Store::new();
     let id = older.instance_id();
-    let fill = older.observation(&instance("alias-a"), "fill", 0..240, &[]);
+    let fill = older.observation(&instance("alias-a"), "fill", 0..239, &[]);
     older.append_unchecked(fill, &[id]);
+    let held = older.observation(&instance("alias-a"), "held", 0..1, &[]);
+    older.append_unchecked(held, &[id]);
     let restored = InstanceFactStore::recover(&older.ledger, Arc::clone(&older.state))
         .expect("an older store's load");
     assert_eq!(restored.active_count(), 240);
@@ -695,5 +699,28 @@ fn factcap_f_a_start_restores_more_than_256_facts_of_several_instances() {
         "an instance past its bound takes no new key",
     );
     assert_eq!(older.own("alias-a"), 240);
+
+    let replacement = older.observation(
+        &instance("alias-a"),
+        "held",
+        0..1,
+        &[EventType::RuntimeTakeover],
+    );
+    older
+        .publish(replacement, &[id])
+        .expect("a key the instance holds is replaced past its bound");
+    assert_eq!(older.own("alias-a"), 240);
+    older.takeover();
+    assert_eq!(
+        older.own("alias-a"),
+        239,
+        "the replacement's trigger invalidates it"
+    );
+    let after = older.observation(&instance("alias-a"), "after", 0..1, &[]);
+    assert_full(
+        older.publish(after, &[id]),
+        "still past its bound, the instance takes no new key",
+    );
+    assert_eq!(older.own("alias-a"), 239);
     older.close();
 }

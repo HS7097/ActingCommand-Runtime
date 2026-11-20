@@ -736,8 +736,8 @@ bound (`crates/runtime-host/src/fact_store.rs`), contract constants, not setting
 | Scope | Its facts are | Bound | Constant |
 |---|---|---|---|
 | one instance (`instance { instance_id }`) | the instance's own facts | 224 | `MAX_INSTANCE_FACTS` |
-| one server (`server { server_id }`) | the server's facts, whatever instances they apply to | 16 | `MAX_SERVER_FACTS` |
-| one game (`game { game_id }`) | the game's facts, whatever instances they apply to | 16 | `MAX_GAME_FACTS` |
+| one server (`server { server_id }`) | the server's facts, whatever instances they apply to; written only by clients, under the scope their request names: priority offsets, pack schedules, any key a client publishes (the families below); the Runtime publishes nothing under a server | 16 | `MAX_SERVER_FACTS` |
+| one game (`game { game_id }`) | the game's facts, whatever instances they apply to; written only by clients, as a server's, and remedy choices besides; the Runtime publishes nothing under a game | 16 | `MAX_GAME_FACTS` |
 
 - **Counted once.** A server- or game-scoped fact counts once, against its server's or its game's
   bound, never against the instances it applies to. The host's bound is what follows: 224 for each
@@ -762,9 +762,13 @@ bound (`crates/runtime-host/src/fact_store.rs`), contract constants, not setting
   an observation whose scope's active facts and its keys not yet active there would pass the
   scope's bound, before the fact write gate appends anything. The start's load, the replay and the
   history at a ledger position take what the ledger holds up to 256 facts of one scope, the most
-  one snapshot holds, and stop past it as before (fatal `fact_store_capacity_exceeded`). A store
-  written before 0.12.76 held at most 256 facts in all, so it loads whole, an instance past its new
-  bound included; such an instance takes no new key until it is under its bound again.
+  one snapshot holds, and stop past it as before (fatal `fact_store_capacity_exceeded`). Every one
+  of these checks compares the count with the bound only for a key the scope does not hold: an
+  observation that brings none is never compared, and an invalidation compares nothing. A store
+  written before 0.12.76 held at most 256 facts in all, so it loads whole, a scope past its new
+  bound included (an instance past 224, a server or a game past 16); such a scope takes no new key
+  until it is under its bound again, while every key it holds is still replaced in place and
+  invalidated.
 - **Tombstones** follow the same rule: at most 256 of each scope in memory
   (`MAX_RECENT_FACT_TOMBSTONES`), the scope's oldest written one dropped first; the State
   document's tombstone still refuses a dropped one's snapshot, as before. A scope's pending

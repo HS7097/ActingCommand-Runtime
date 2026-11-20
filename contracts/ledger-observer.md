@@ -677,10 +677,15 @@ CREATE TABLE ledger_index (
 | `lifecycle` | `last_start`, `last_close`, `last_fatal` | overwritten; read by X2 |
 
 - Only `state` rows load into business memory; the other roles serve the exception reads.
-- Rows are bounded: instance store ≤ 256 active facts plus tombstones (since Workflow #498: 224 an
-  instance and 16 a server or a game, so the host's bound follows its scopes); workbench ≤ 16 384 and only
-  whitelisted keys; decision memory one per dispatch pair and one per (instance, activity
-  profile); requests bounded by configuration.
+- Rows are bounded, but not the instance store's: its active facts are bounded per scope (since
+  Workflow #498, 0.12.76: 224 an instance's own, 16 a server's, 16 a game's) and its tombstones in
+  memory to 256 a scope, but its `state` rows (one per key whose latest record is a publication or
+  an invalidation) and the `latest_observed` the load derives from them (§11.3) are bounded by
+  nothing but the number of different keys ever written: an invalidated key keeps its row and its
+  time, and the store's check counts active facts, no longer every key ever written (before Workflow
+  #498 that count was held to 256 for the host). Workbench ≤ 16 384 and only whitelisted keys;
+  decision memory one per dispatch pair and one per (instance, activity profile); requests bounded
+  by configuration.
 - The index is internal; outside readers read records and views. A mirror of the table lives in
   the ledger's memory (§14.1).
 - **As built by AO-2** (register §1.38 OB1):
@@ -795,8 +800,9 @@ CREATE TABLE ledger_index (
   or continued task therefore reads after a restart the failure state and the round it read
   before.
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
-  time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
-  rolls out, a resend of the same identity is still refused by `latest_observed` as
+  time; tombstones = keys whose latest record is an invalidation (in memory at most 256 a scope,
+  the oldest written dropped first; after a tombstone rolls out, a resend of the same identity is
+  still refused by `latest_observed` as
   `fact_observation_not_newer`, no longer `fact_source_snapshot_invalidated`); the input
   boundaries = the instance's latest `input.committed` and latest `input.failed` timestamps.
 - AO-0 checked the payloads (LEDG §8.3): `fact.published` carries the record with its

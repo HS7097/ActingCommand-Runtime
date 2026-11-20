@@ -1286,9 +1286,12 @@ impl InstanceFactStore {
         }
         // Workflow #498: the observation's one scope takes its keys not active yet from its own
         // bound; an invalidated key's identity holds no room (its latest observation time is kept
-        // for the rule above).
-        if scope_fact_count(&self.active, &first.scope) + new_identities
-            > scope_fact_bound(&first.scope)
+        // for the rule above). An observation that brings no such key adds nothing and is never
+        // compared: a key the scope holds is replaced in place even in a scope a build before
+        // 0.12.76 filled past its bound.
+        if new_identities > 0
+            && scope_fact_count(&self.active, &first.scope) + new_identities
+                > scope_fact_bound(&first.scope)
         {
             return Err(fact_request(
                 HostCode::FactStoreCapacityExceeded,
@@ -1504,7 +1507,7 @@ impl InstanceFactStore {
     /// bounded; the State document's tombstone still refuses a dropped one's snapshot).
     fn trim_recent_tombstones(&mut self) -> RuntimeHostResult<()> {
         let mut counts = BTreeMap::<FactScope, usize>::new();
-        for ((identity, _), _) in &self.invalidated {
+        for (identity, _) in self.invalidated.keys() {
             *counts.entry(identity.0.clone()).or_default() += 1;
         }
         for (scope, count) in counts {
