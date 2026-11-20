@@ -372,8 +372,14 @@ Lab's run are not scheduled candidates: the block never holds them.
 the ladder changes (where it starts, how long it holds: Workflow #490 ENTRY-B). A ladder its
 cool-down suppressed is not dropped: it is held with the block and admitted when the cool-down
 ends, as without the cool-down, by the lease sweep's step after the unavailable instances' probes
-(Workflow #489 AVAIL-1's mechanism); a pause, a fence or an idle stop that owns the instance drops
-it, a blackout makes it wait. A recovery that ends without success (a ladder `exhausted`, or one
+(Workflow #489 AVAIL-1's mechanism, a new request, causation, holder and claim for it); the window
+in force is read again then, and a later window (another ladder's climb, a `triggered` admission)
+keeps it held until its end; a pause, a fence or an idle stop that owns the instance drops it, a
+blackout makes it wait. A recovery AVAIL-1 held for an instance unavailable by its device
+self-check is taken up by AVAIL-1's probe; when the instance leaves that set (a probe passed) the
+block takes the recovery over instead of dropping it. While the instance is unavailable its
+candidates answer `instance_unavailable`, which the evaluation gives at placement, before the
+order of the deferrals. A recovery that ends without success (a ladder `exhausted`, or one
 a blackout or an admission refusal dropped) leaves the instance blocked and brings it to a
 person's attention once per block: `instance_entry_blocked_awaiting_person` (a warning
 `runtime.failed` record under the instance, handed to the daemon's log).

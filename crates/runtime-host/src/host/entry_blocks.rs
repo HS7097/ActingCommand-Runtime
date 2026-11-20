@@ -378,10 +378,14 @@ impl HostShared {
 
     /// The lease sweep's step after the unavailable instances' probes: each blocked instance whose
     /// held recovery's cool-down has ended has it admitted as it would have been without the
-    /// cool-down ([`Self::admit_held_recovery`], every other admission rule as for every ladder),
-    /// unless a blackout covers the instance (it waits) or a pause, a fence or an idle stop owns it
-    /// (the recovery is dropped: those have their own rules, and a resume ends the block). Only a
-    /// failure the Runtime does not survive is returned.
+    /// cool-down ([`Self::admit_held_recovery`], every other admission rule as for every ladder,
+    /// with a request id, a causation id, a holder and a claim request of its own), unless a
+    /// blackout covers the instance (it waits) or a pause, a fence or an idle stop owns it (the
+    /// recovery is dropped: those have their own rules, and a resume ends the block). As Workflow
+    /// #489 AVAIL-1's release reads it (fix round 1, item 3), the cool-down that ended is the
+    /// instance's window in force now, read again here: while a later window holds the instance
+    /// (another ladder's climb, a `triggered` admission), the recovery stays held until that
+    /// window's end. Only a failure the Runtime does not survive is returned.
     pub(super) fn take_up_entry_recoveries(&self) -> RuntimeHostResult<()> {
         if self.fatal.is_shutdown_requested() {
             return Ok(());
@@ -412,10 +416,21 @@ impl HostShared {
             if hold == ProbeHold::Blackout {
                 continue;
             }
+            let window_until_unix_ms = self.cooldown_window_until(instance_id)?;
             let held = lock(&self.entry_blocks, HostLocation::TakeUpEntryRecoveries)?
                 .blocked
                 .get_mut(&instance_id)
-                .and_then(|block| block.held.take_if(|held| held.until_unix_ms <= now_unix_ms));
+                .and_then(|block| {
+                    let held = block.held.as_mut()?;
+                    if held.until_unix_ms > now_unix_ms {
+                        return None;
+                    }
+                    if hold != ProbeHold::Owned && now_unix_ms < window_until_unix_ms {
+                        held.until_unix_ms = window_until_unix_ms;
+                        return None;
+                    }
+                    block.held.take()
+                });
             if hold == ProbeHold::Owned {
                 continue;
             }

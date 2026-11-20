@@ -42736,8 +42736,13 @@ self-check passed, made it available at once.
    gate holds unavailable (its availability in effect is the gate's own withdrawal) after a device
    self-check that failed (`device.self_check` with `failure_code`), while its configured seed is
    available and no fence, device link, device state or device system holds it. It leaves the set
-   when the gate no longer holds it so. A withdrawal for a self-check never made
-   (`backend_selfcheck:unchecked`) enters nothing until a self-check fails.
+   when the gate no longer holds it so. Fix round 1 (the coordinator's rulings R1 and R5 of 11-20,
+   23:29 JST): so does one the gate holds as `backend_selfcheck:unchecked` after any other failing
+   step of a connection preparation (`withhold_after_failed_preparation`): a close of the kept
+   session, or the close after the opens, that failed with its resources confirmed released; an
+   open that failed without a report (an explicit HOST:PORT instance included); the preparation's
+   lease refused. Its cause is the step's code. Only the preparation's emulator status read keeps
+   its withdrawals out (the emulator watch's and the idle wake's; fix round 1 below).
 2. *A cool-down's end.* A ladder its cool-down suppresses (at admission, and a queued ladder judged
    again when it gets the key) while its instance is in the set is held with it, with the
    `until_unix_ms` its suppression names. From then (no later than the lease sweep's next tick) a
@@ -42763,16 +42768,29 @@ self-check passed, made it available at once.
 6. *Fail loud* (the brief's item 3). The existing ways used, none invented: a warning
    `runtime.failed` record `instance_unavailable_awaiting_person` under the instance, once per
    unavailability that lasted `attention_after_ms`, handed to the daemon's log
-   (`report_warning`); and the status, which `actingctl status`, `actingctl overview` /
-   `ac_overview`, the Lab's `ac_status` and the console read: the instance's `unavailable` member
-   with `awaiting_person` true. Both end when the instance is available again. The agent wake's
+   (`report_warning`); it ends when the instance is available again. (The first head also set the
+   status member `unavailable.awaiting_person`; fix round 1 answers no such member, rule 7.) The agent wake's
    kinds (`ladder_exhausted`, `instance_fenced`, `run_failed`, `daily_summary`) name no such
    record, and a new kind would be a new configuration word (`actingd-config`), so no wake is sent;
    the watchdog's attention reads the process, not an instance's status.
 7. *The status* (`RuntimeInstanceStatus.unavailable`, `InstanceUnavailable`): `since_unix_ms` (the
    withdrawal's observation), `cause?` (the failed check's code), `probes`, `last_probe_unix_ms?`,
    `next_probe_unix_ms?` (absent while one is queued or runs), `awaiting_person`. One added optional
-   member: `runtime-client` 14.
+   member, `runtime-client` 14, **declared and not answered** (fix round 1, the coordinator's
+   ruling): the host fills it for no instance in 0.12.76, whatever the instance's state, because a
+   reader of 0.12.75 (`945727d4`: `RuntimeInstanceStatus` with `deny_unknown_fields`,
+   `crates/actingcommand-contract/src/runtime.rs:1634`) refuses a status that carries it. The
+   release that first answers it raises `min` to 14 in the same release (the practice of the
+   `runtime-client` rows 10 and 12). Until then an instance the probes take up shows by what a
+   reader of 0.12.75 already decodes: the overview row's `backend_selfcheck` (the program facts
+   `backend.selfcheck.<entry>.status` `failed` and `.checked_at_unix_ms`;
+   `crates/lab-ops/src/overview.rs:967-971`, `1221-1257` at `945727d4`) and `not_running` (the
+   latest evaluation's row, `why` `instance_unavailable` with `availability_source` `self_check`;
+   `overview.rs:1124-1149`, `crates/runtime-host/src/policy_host.rs:372`,
+   `crates/runtime-host/src/host/facts.rs:961-1021` at `945727d4`), in `actingctl overview`,
+   `ac_overview`, `actinglab status` and `ac_status`; the ledger's probe records; and
+   `instance_unavailable_awaiting_person`. `RuntimeInstanceStatus` itself has no member that shows
+   it, and no console shows the probes yet.
 
 Memory only: a restart starts the set again at the gate's next decision; nothing is persisted.
 
@@ -42802,35 +42820,42 @@ Locations `queue_unavailable_probes` and `run_unavailable_probe`. No key or word
 
 **Interfaces.** `actingd-config` [5, 34] → [5, 35] ([component-interfaces.md](component-interfaces.md),
 row 35): the member `scheduling.unavailable_probe`. `runtime-client` [12, 13] → [12, 14] (row 14):
-the status member `unavailable`, which a reader of 13 or lower refuses; `min` stays 12, because
-14 would share no revision with the installer of 0.12.75 ([12, 13]), so no installer could plan the
-update. `ledger` does not move (the new codes and locations travel as text in `runtime.failed`
-records every revision reads).
+the status member `unavailable`, which a reader of 13 or lower refuses, declared so that every
+reader built from this release on decodes it and answered for no instance (fix round 1); `min`
+stays 12 until the release that answers it. `ledger` does not move (the new codes and locations
+travel as text in `runtime.failed` records every revision reads).
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
-| The set, the probes, the attention, the status read | `crates/runtime-host/src/host/unavailable_probe.rs`: `UnavailableInstance`, `track_unavailability`, `hold_cooled_down_recovery`, `probe_unavailable_instances`, `run_unavailable_probe`, `settle_unavailable_probe`, `unavailable_statuses` |
-| The gate's decisions | `crates/runtime-host/src/host/runtime_facts.rs`: `record_backend_selfcheck_facts`, `invalidate_backend_selfcheck_facts`, `withhold_policy_instance_availability`, `regate_policy_instance_availability`, `selfcheck_withdrawal`; `facts.rs`: `withdrawn_by_selfcheck_gate` |
-| The held recovery | `crates/runtime-host/src/host/recovery_ladder.rs`: `admit_or_suppress_ladder`, `climb_recovery_ladder`, `admit_held_recovery` |
-| The sweep, the worker, the status | `crates/runtime-host/src/host.rs` (`lease_sweep_loop`, `HostShared::unavailable_instances`); `host_claims.rs` (`HostClaimWork::UnavailableProbe`); `read_events.rs` |
+| The set, the probes, the attention | `crates/runtime-host/src/host/unavailable_probe.rs`: `UnavailableInstance`, `track_unavailability`, `hold_cooled_down_recovery`, `probe_unavailable_instances`, `run_unavailable_probe`, `settle_unavailable_probe`, `end_panicked_unavailable_probe` (fix round 1), `unavailable_for_test` (test builds) |
+| The gate's decisions | `crates/runtime-host/src/host/runtime_facts.rs`: `record_backend_selfcheck_facts`, `invalidate_backend_selfcheck_facts`, `withhold_policy_instance_availability`, `withhold_after_failed_preparation` (fix round 1), `regate_policy_instance_availability`, `selfcheck_withdrawal`; `facts.rs`: `withdrawn_by_selfcheck_gate`; `resource_close.rs`: `prepare_connection_attempt`, `record_connection_preparation_failure` (fix round 1) |
+| The held recovery | `crates/runtime-host/src/host/recovery_ladder.rs`: `admit_or_suppress_ladder`, `climb_recovery_ladder`, `admit_held_recovery`, `cooldown_window_until` (fix round 1) |
+| The sweep, the worker | `crates/runtime-host/src/host.rs` (`lease_sweep_loop`, `HostShared::unavailable_instances`); `host_claims.rs` (`HostClaimWork::UnavailableProbe`, `instance_worker_loop`) |
 | The keys | `crates/runtime-config/src/scheduling.rs`: `UnavailableProbeFile`, `UnavailableProbeConfig`, the four rows; `distribution/windows/actingd.defaults.json`; `crates/runtime-host/src/host/runtime_config.rs`: `unavailable_probe_config` |
-| The status member | `crates/actingcommand-contract/src/runtime.rs`: `InstanceUnavailable`, `RuntimeInstanceStatus::unavailable`; `crates/lab-ops/src/overview.rs` (`instance_row`); `apps/actingctl/src/mcp/tools.rs` (the overview schema) |
+| The status member (declared, not answered) | `crates/actingcommand-contract/src/runtime.rs`: `InstanceUnavailable`, `RuntimeInstanceStatus::unavailable`; `crates/lab-ops/src/overview.rs` (`instance_row`) and `apps/actingctl/src/mcp/tools.rs` (the overview schema) pass it on once a Runtime answers it; `read_events.rs` sets nothing (fix round 1) |
 | Texts | [scheduling/README.md](scheduling/README.md) ("An unavailable instance is probed again"); [emulator-control.md](emulator-control.md) ("Cool-down, suppression and interruption"); [runtime-config.md](runtime-config.md); [runtime-interface.md](runtime-interface.md); [component-interfaces.md](component-interfaces.md) |
 
 **Tests** (`crates/runtime-host/src/tests/gate_489_avail1.rs`, host gate map row "#489 AVAIL-1";
-the policy fixture instance on a bound device endpoint, on a manual Runtime clock; its self-check
-fails by its capture open, closed and confirmed; no clock read in the gate file).
+the policy fixture instance on a bound device endpoint, an explicit host and port, on a manual
+Runtime clock; its self-check fails by its capture open, closed and confirmed; the probes' state
+read from the host, `unavailable_for_test`, since no status answers it; no clock read in the gate
+file).
 
 | Test | What it shows |
 |---|---|
-| `avail1_t1_at_the_cooldowns_end_a_passing_self_check_makes_the_instance_available_again` (1) | The replay with 30 minutes of cool-down left: one `recovery_ladder_suppressed` `cooldown` of `task_capture_backend`, no ladder, the instance unavailable with its cause and its next probe at the window's end; there the self-check passes: `instance_unavailable_probe_passed`, available, no ladder, and the due task admitted and granted at its next occurrence |
-| `avail1_t1_at_the_cooldowns_end_a_failing_self_check_admits_the_held_recovery` (1) | The addition's shape, 27.5 s left: no probe before the end; then `instance_unavailable_probe_failed` and after it the held recovery's ladder starts with the failed run's trigger; still one suppression |
+| `avail1_t1_at_the_cooldowns_end_a_passing_self_check_makes_the_instance_available_again` (1) | The replay with 30 minutes of cool-down left, with production's code (fix round 1, item 5): the policy instance and a bystander on the Nemu IPC, so the run opens afresh; its paired open fails (`paired_backend_open_failed`, confirmed, no report of the device layer); one `recovery_ladder_suppressed` `cooldown` of `task_capture_backend`, no ladder, the instance unavailable with that cause and its next probe at the window's end; there the self-check passes: `instance_unavailable_probe_passed`, available, no ladder, and the due task admitted at its next occurrence |
+| `avail1_t1_at_the_cooldowns_end_a_failing_self_check_admits_the_held_recovery` (1) | The addition's shape, 27.5 s left, the same code: no probe before the end; then `instance_unavailable_probe_failed` (`paired_backend_open_failed`) and after it the held recovery's ladder starts with the failed run's trigger through `task_capture_backend`; still one suppression |
 | `avail1_t2_an_unavailable_instance_is_probed_at_growing_intervals_up_to_the_cap` (2) | No cool-down: none a millisecond before the first interval; 60 s, then 180 s, then 300 s (the cap, not 540 s); the third passes and nothing probes it any more |
 | `avail1_t3_a_paused_instance_is_not_probed`, `…_a_fenced_instance_…`, `…_an_idle_stopped_instance_…` (3) | Ten first intervals on, no probe of a paused, a fenced or an idle-stopped instance |
-| `avail1_t4_the_attention_is_raised_once_and_ends_with_the_unavailability` (4) | Nothing a millisecond before `attention_after_ms`; then one warning under the instance with its values; none again at a probe; gone from the status when a probe passed, still one record |
-| `avail1_t5_the_status_says_it_and_an_available_instance_is_unchanged` (5) | The member's exact values before and after a failed probe; once available, the instance's status is byte for byte what it was before |
+| `avail1_t3_the_global_pause_holds_the_probes_until_it_is_lifted` (fix round 1, item 6) | The global pause: ten first intervals on, none queued and no recovery preparation; once it is lifted, the next due probe runs |
+| `avail1_t4_the_attention_is_raised_once_and_ends_with_the_unavailability` (4) | Nothing a millisecond before `attention_after_ms`; then one warning under the instance with its values; none again at a probe; ended when a probe passed, still one record |
+| `avail1_t5_the_probe_state_says_it_and_an_available_instance_is_unchanged` (5) | The probes' state before and after a failed probe (since, cause, probes, next); once available, the instance's status is byte for byte what it was before |
+| `avail1_t5_the_status_of_an_unavailable_instance_decodes_as_0_12_75_decodes_it` (fix round 1, item 1) | The status built while the instance is one the probes take up has no member `unavailable`, and a structure of 0.12.75's members with `deny_unknown_fields` decodes it, every member one it knows; on the first head it carried the member |
+| `avail1_t6_a_held_recovery_waits_for_the_window_in_force` (item 3) | Held until T1 while another window runs to T2 = T1 + 60 s: at T1 the probe fails and nothing is released, the next probe is T2; at T2 the recovery is admitted, once |
+| `avail1_t7_a_probe_whose_worker_panics_ends_and_the_next_is_due_after_its_interval` (item 4) | The probe's worker panics: one `panic_caught` (category `run_unavailable_probe`, under the instance) and no probe record; the next probe one interval after the panic's end; once the key lapsed it runs as the second |
+| `avail1_t8_a_failed_close_of_the_kept_session_enters_the_probes`, `avail1_t8_an_open_without_a_report_on_an_explicit_endpoint_enters_the_probes` (R4) | A failed close of the kept session (confirmed), and an open without a report (the session dies at its first frame), each take the available instance into the probes with that code; no `passed` self-check stands meanwhile; the probe at the first interval passes |
 
 Adapted (6), the requirement moving what they pin: `tools/actinglab-architecture/tests/component_interfaces.rs`
 (`V0120`: `actingd-config` [5, 35], `runtime-client` [12, 14]); `crates/lab-rescue`'s
@@ -42838,29 +42863,104 @@ Adapted (6), the requirement moving what they pin: `tools/actinglab-architecture
 `gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_13_and_its_rows_say_so`, renamed `…_12_to_14…`
 for the range they assert (their retirements in `ci/retired-gates.toml`), and the refused rows of
 the two other tests of those files (R* and I [12, 14]). No other existing test touched; no golden
-re-recorded.
+re-recorded. Fix round 1 renamed `avail1_t5_the_status_says_it_and_an_available_instance_is_unchanged`
+(never on main) for what it now asserts; no retirement is owed.
 
 **What is not changed.** An unavailable instance is still given no task: the evaluation and its
 words are untouched, and only a probe that passes changes availability, through the gate. The
 cool-down still holds a recovery back while it runs, and which windows open and when is unchanged;
 `stuck_recovery_cooldown_secs` keeps its meaning; a drill is refused as before. No game, package
-or alias is named in code. The ledger's records and shapes.
+or alias is named in code. The ledger's records and shapes. Fix round 1 changes none of: the probe
+itself and when it does not run, the four keys and their defaults, `actingd-config` 35, the
+warning's code and its once-per-unavailability rule, #486's behaviour, the declared range
+`runtime-client` [12, 14], and the emulator watch's and the idle wake's paths.
 
-**At deploy.** The four keys take their defaults (60 s, 2, 30 min, 1 h); nothing to configure. **A
-v0.12.75 tool reading the status of an instance that is unavailable by a failed self-check** (the
-console, `actingctl status` and `overview` / `ac_overview`, the Lab's `ac_status`, all of
-`runtime-client` 13) fails `runtime_receipt_decode_failed` and latches its connection, since the
-status denies unknown members and the Runtime cannot tell a client's revision; while no instance is
-so, it reads every status as before. So the console and every Lab copy are built from a build of
-revision 14 before or with this release; actingctl and actinglab of this build speak 14. **A
-rollback to v0.12.75** passes the installer's edges ([12, 14] and [12, 13] meet); its Runtime
-refuses a configuration file that names `scheduling.unavailable_probe` (`config_decode_failed`),
-so a file that sets the keys is put back first, and an instruction that set one is recorded as
-not restored there (its start goes on); it reads the new records' codes as text;
-the probes, the held recoveries and the attention were memory and are gone, and the 11-20 dead
-state can return. In the release notes' language: 设备自检失败而被调度器视为不可用的实例，运行时会按间隔重新自检（只做自检：不点、不启动应用、不启动模拟器；1、3、7、15、31 分钟，之后每 30 分钟，四个新键 `scheduling.unavailable_probe.*` 可调）；恢复阶梯被冷却压下时，冷却一到先自检，过了就恢复可用，不过就放行被压下的那次恢复；不可用满一小时记一条警告 `instance_unavailable_awaiting_person` 并在状态里标出；状态多了 `unavailable` 成员（`runtime-client` 14），v0.12.75 的控制台和工具在有这种实例时读不了状态，要先换。
+**At deploy** (rewritten in fix round 1 from the code of v0.12.75, `945727d4`). The four keys take
+their defaults (60 s, 2, 30 min, 1 h); nothing to configure.
 
-### 1.494 Slice #490 ENTRY-A (0.12.76): a run that failed at its entry is a condition of its instance, not a failure of its task; the instance is entry-blocked until a recovery or a run succeeds (Workflow #490, a production defect of 11-20; the rules below are the coordinator's rulings on board #490, in the work order, in its constraint of 23:18 JST after the review of #1852 and in its ruling of 23:57 JST (ENTRY-A2: a failure at the entry after a successful recovery is the pair's own), not the owner's words; coordinator work order `rd-1120/brief-490-entry-a.md` after the read-only study `rd-1120/study-490-entry-failures.md`; stacked on #1852's head `f3d39bbd`)
+- *The installed v0.12.75 tool's deploy, place and post-check* read the new Runtime through their
+  `runtime-client` 13 (`crates/lab-rescue/src/install/runtime.rs`, `SystemRuntime`): the status
+  (`client.status()`, `runtime.rs:361-392`: the owner epoch, the global pause, each instance's
+  alias, pause, `lease_active`, queue and game; the hold's reads in `hold.rs`, the post-check's
+  `ready`, `bindings`, `pauses` and `no_dispatch` from `postcheck.rs:219`, `place.rs:2343`), the
+  configuration facts (`runtime_fact_snapshot`, `runtime.rs:402-437`: `config.overrides`,
+  `config.parameters.*`, `config.start`), the latest plan and catalog (`schedule_explanation`,
+  `runtime.rs:394-400`, `439-470`) and the start report (`runtime.rs:621-636`). This build answers
+  none of them with a member a reader of 13 lacks: the status member `unavailable` is filled for no
+  instance (rule 7) and no other answer changed shape. So `RuntimeInstanceStatus`'s
+  `deny_unknown_fields` meets nothing, no status read fails `runtime_receipt_decode_failed`
+  (`crates/runtime-client/src/ipc.rs:230`), `ready` does not fail `status_unreadable`
+  (`postcheck.rs:282`) and no automatic rollback follows from it (`deploy.rs:764-795`). `new_keys`
+  (`postcheck.rs:550-582`) passes: the four keys are new in the plan's defaults diff, and the new
+  Runtime reports each `default` in its `config.parameters.scheduling` rows, the root's file naming
+  none. The installer's edges pass: `runtime-client` [12, 13] meets [12, 14]; the root's file of
+  `actingd-config` 34 or lower is within [5, 35].
+- *The console in production* (built from a v0.12.7x Runtime, `runtime-client` 13 or lower) reads
+  the same status, facts and records through its own client: nothing new is answered to it, and the
+  new `runtime.failed` records carry their codes as text, which every revision reads. No console
+  shows the probes or the member yet (the interface repository has no display for them); a person
+  sees an instance the probes take up as unavailable in `actingctl overview`, `ac_overview`,
+  `actinglab status` and `ac_status` (`backend_selfcheck`, `not_running`, rule 7) and in the
+  warning records.
+- *A rollback to v0.12.75* passes the installer's edges both ways. Nothing at deploy writes the keys
+  of `actingd-config` 35: they are the new slot's defaults (`actingd.defaults.json`), and the
+  update leaves the root's `actingd.config.json` as it is (its post-check expects them `default`),
+  so v0.12.75 reads the root's file as before. Only a person who wrote `scheduling.unavailable_probe`
+  into that file makes v0.12.75 refuse it (`config_decode_failed`: its `SchedulingFile` denies
+  unknown members, `crates/runtime-config/src/scheduling.rs:344-345`), so such a file is put back
+  first. A run-time instruction that set one of the keys (`host.config_overrides`) is not restored
+  by v0.12.75 (`EffectiveConfig::restore`, `crates/runtime-config/src/effective.rs:1348-1350`,
+  `config_override_dropped`); its start goes on and names the key in the start report's
+  `instructions_dropped`, which the rollback's post-check `instructions` counts as a mismatch
+  (`post_check_mismatch`; a rollback is not rolled back). It reads the new records' codes as text;
+  the probes, the held recoveries and the attention were memory and are gone, and the 11-20 dead
+  state can return.
+
+In the release notes' language: 设备自检失败、或连接准备的其他步骤失败（关闭会话失败、打开失败但没有报告、准备的租约被拒）而被调度器视为不可用的实例，运行时会按间隔重新自检（只做自检：不点、不启动应用、不启动模拟器；1、3、7、15、31 分钟，之后每 30 分钟，四个新键 `scheduling.unavailable_probe.*` 可调）；恢复阶梯被冷却压下时，冷却（以当时生效的冷却窗为准）一到先自检，过了就恢复可用，不过就放行被压下的那次恢复；不可用满一小时记一条警告 `instance_unavailable_awaiting_person`。状态里暂不回答新成员（`runtime-client` 声明到 14，下限仍是 12），v0.12.75 的控制台和工具照常读状态；这种实例在 `actingctl overview` 和 `ac_overview` 的 `backend_selfcheck`、`not_running` 以及警告记录里看得到。
+
+**Fix round 1** (the coordinator's work order `rd-1120/brief-489-avail1-fix1.md` after the review of
+#1852, and its rulings R1 to R5 of 11-20, 23:29 JST, on its point 7(b); not the owner's words).
+
+- *Item 1.* Rule 7 and the interfaces paragraph: the member is declared and answered for no
+  instance; `read_events.rs` is as on main.
+- *Item 3, the window in force.* `settle_unavailable_probe` reads the instance's window in force
+  (`cooldown_window_until`) before it releases a held recovery whose stored end has passed: while a
+  later window runs (another ladder's climb under `admitted`; under `triggered` every matched
+  trigger's admission, which writes a new end even when it then suppresses), the recovery stays
+  held and its end becomes that window's, the next probe's time. Nothing of the ladder's admission
+  or climb changes.
+- *Item 4, a probe whose worker panics.* The join's error arm, not a guard on drop:
+  `instance_worker_loop` already catches every payload's panic, records it once (`panic_caught`,
+  its failure category the payload's, `run_unavailable_probe`, under the probe's links) and decides
+  the rebuilt worker; `end_panicked_unavailable_probe` runs there, before that record (as a panicked
+  policy run's registration ends there), returns the step to waiting with its interval from the
+  panic's end and takes the climbing mark off. A guard's drop would run inside the unwinding, where
+  it can return no failure (Fail Loud) and would take the set's lock mid-panic. No code is added;
+  the index check is run.
+- *Item 7a.* A ladder its cool-down suppressed on its key under `queue` (`climb_recovery_ladder`)
+  had its claim granted and released under its request id. Held and released later, that id would
+  not be refused (the scheduler refuses only an id active or queued, `crates/scheduler/src/lib.rs`,
+  `enqueue_claim` and `prepare_claim_acquire`), so a second grant and the ladder's start would sit
+  under the first grant's id. `admit_held_recovery` now admits every held recovery as a new ladder
+  of the same trigger, with a request id, a causation id, a holder and a claim of its own (the
+  trigger's correlation kept).
+- *Item 7b, rulings R1 to R5.* Rule 1: every failing step of a connection preparation but its
+  emulator status read takes the instance into the set with that step's code
+  (`withhold_after_failed_preparation`; a stored self-check entry `failed` keeps its own facts). R2:
+  that call is the one place a `passed` self-check of an instance it takes up is dropped
+  (`invalidate_backend_selfcheck_facts`), so none stands while it is in the set; a probe that passes
+  publishes its opens' `backend.selfcheck.*` facts, their `device.self_check` records and the gate's
+  republication of the configured seed. R3: the status read's withdrawals (an emulator stopped, a
+  state that could not be read on a pending binding, a device not recognized) stay the emulator
+  watch's and the idle wake's, written with their places and bounds in
+  [scheduling/README.md](scheduling/README.md); their paths are unchanged.
+- *Item 7c.* [scheduling/README.md](scheduling/README.md), "The probe": a probe, as every
+  preparation, closes a session a keyless Lab observation kept, and the admission lock serialises
+  the two.
+- *Tests.* T1 replays production's code; T3 adds the global pause; T5 is split (the probes' state;
+  the status a reader of 0.12.75 decodes); T6, T7 and T8 are new (the table above).
+
+### 1.494 Slice #490 ENTRY-A (0.12.76): a run that failed at its entry is a condition of its instance, not a failure of its task; the instance is entry-blocked until a recovery or a run succeeds (Workflow #490, a production defect of 11-20; the rules below are the coordinator's rulings on board #490, in the work order, in its constraint of 23:18 JST after the review of #1852 and in its ruling of 23:57 JST (ENTRY-A2: a failure at the entry after a successful recovery is the pair's own), not the owner's words; coordinator work order `rd-1120/brief-490-entry-a.md` after the read-only study `rd-1120/study-490-entry-failures.md`; stacked on #1852, merged at its head `fd177368`, its fix round 1)
 
 This section takes 1.494, after AVAIL-1's §1.493, on whose code it stands (the ladder's held
 recovery and the lease sweep's step). It ships in 0.12.76.
@@ -42922,16 +43022,28 @@ hold; the replay test runs a client's run on a blocked instance).
 4. *The way out.* The lease end entered the ladder; nothing of the ladder changes. A ladder its
    cool-down suppressed is held with the block (or kept for the failed run's settlement, by the run
    its trigger names) and admitted at the cool-down's end by `take_up_entry_recoveries`, the lease
-   sweep's step after AVAIL-1's probes, through AVAIL-1's `admit_held_recovery` and `probe_hold` (a
-   pause, a fence or an idle stop drops it, a blackout makes it wait); when AVAIL-1 holds it for an
-   unavailable instance, AVAIL-1's probe takes it up. A ladder that ends `exhausted`, or one a
+   sweep's step after AVAIL-1's probes, through AVAIL-1's `admit_held_recovery` (since its fix
+   round, a request id, a causation id, a holder and a claim request of its own) and `probe_hold` (a
+   pause, a fence or an idle stop drops it, a blackout makes it wait); as AVAIL-1's release does
+   since its fix round, the step reads the instance's cool-down window in force again
+   (`cooldown_window_until`) and keeps the recovery held until a later window's end. When AVAIL-1
+   holds it for an unavailable instance, AVAIL-1's probe takes it up; a probe that passes, or any
+   other way out of the unavailable set, hands it to the entry blocks (`track_unavailability`
+   calls `hold_entry_recovery`) instead of dropping it, so an instance that was unavailable and
+   entry-blocked still has its recovery coming once it is available. A ladder that ends `exhausted`, or one a
    blackout or an admission refusal drops, leaves the instance blocked and raises
    `instance_entry_blocked_awaiting_person` once per block (AVAIL-1's way: a warning record and the
    daemon's log).
 5. *The status* (the constraint of 23:18): no member is added to `RuntimeInstanceStatus` or to any
    other type a v0.12.75 reader decodes with unknown members refused. The not-running row of
    `ScheduleExplanation` (`why` with `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms`;
-   `since_unix_ms`) and the candidate rows carry it; the ledger holds the records.
+   `since_unix_ms`) and the candidate rows carry it; the ledger holds the records. An instance both
+   unavailable (AVAIL-1's set, since its fix round also after a failed step of a connection
+   preparation) and entry-blocked answers one reason, `instance_unavailable` (its
+   `availability_source`): the evaluation blocks an unavailable instance's candidates at placement,
+   before it asks the order of the deferrals where position 4b stands, and the instance cannot be
+   dispatched to before a probe or another preparation proves it; once it is available and still
+   blocked its candidates answer `instance_entry_blocked`.
 6. *Whose failure (ENTRY-A2; the coordinator's ruling of 11-20 23:57 JST after the report of the
    first head, `8f8a260d`).* Production had that day seven rules that fail at their entry or
    prerequisite from a good home page every time; as conditions they would loop (refunded,
@@ -42978,7 +43090,7 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 | Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`) |
 | Whose failure (A2) | `crates/runtime-host/src/failure_identity.rs` (`FailureIdentity::packages`, `own_entry_identity`); `host/entry_blocks.rs` (`EntrySettlement`, `EntryMarks.recovered`, `entry_failure_own`, `settle_entry`, `note_entry_recovered`); `host/failure_settlement.rs` (`build_scheduled_failure_identity`); `host/policy_outcome.rs` (the condition only for a failure not the pair's own); `host/recovery_ladder.rs` (`append_recovery_ladder_fact`) |
 | Settlement and replay | `crates/runtime-host/src/host/policy_outcome.rs` (`record_policy_dispatch_outcome_under_gate`, `entry_failure_input`); `policy_control.rs` (`entry_blocked`, `entry_condition`, `condition_window_end`, `commit_paced_execution`); `policy_host.rs` (`entry_condition`) |
-| The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
+| The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`, `track_unavailability`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
 | The gate | `crates/runtime-host/src/entry_block.rs`; `policy_host.rs` (`PolicyEvaluationContext::entry_blocked`, `evaluate`); `host/policy_dispatch.rs` |
 | Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md) |
 

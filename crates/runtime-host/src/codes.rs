@@ -2981,6 +2981,8 @@ pub(crate) mod test_spellings {
             UnavailableProbeTickForTest => "unavailable_probe_tick_for_test",
             OpenRecoveryCooldownForTest => "open_recovery_cooldown_for_test",
             HoldEmulatorStoppedForTest => "hold_emulator_stopped_for_test",
+            // Fix round 1: a test reads an instance as the unavailable instances hold it.
+            UnavailableForTest => "unavailable_for_test",
             // Workflow #490 ENTRY-A: a test settles the next run as one that failed at its entry,
             // reads an instance's entry block and runs one tick of the blocks' held recoveries.
             SettleAtEntryForTest => "settle_at_entry_for_test",

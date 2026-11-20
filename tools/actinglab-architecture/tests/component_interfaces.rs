@@ -216,8 +216,8 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `RuntimeCaptureBackend`, which a reader of 12 or lower refuses and only a configured iOS
 ///   handset's observation carries; the range stays [12, 13]. Workflow #489 AVAIL-1 (0.12.76,
 ///   register §1.493) raises `max` to 14: the status member `RuntimeInstanceStatus.unavailable`,
-///   which a reader of 13 or lower refuses; `min` stays, since an installer of 0.12.75 ([12, 13])
-///   must still meet this build, so [12, 14].
+///   which a reader of 13 or lower refuses, so (fix round 1) this build's Runtime answers it for no
+///   instance and `min` stays until the release that answers it, so [12, 14].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 35]),

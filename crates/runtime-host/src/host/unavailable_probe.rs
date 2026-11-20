@@ -17,12 +17,18 @@
 //! - **Which instances.** One that the backend self-check gate holds unavailable after a device
 //!   self-check that *failed* (its `device.self_check` record with `failure_code`), while its
 //!   configured seed is available and no fence holds it (`HostShared::track_unavailability`, called
-//!   at every decision of the gate). It leaves the set when the gate no longer holds it (its
-//!   self-check passed and its availability came back, a fence, a device link or a device state
-//!   took the instance, or the configuration marks it unavailable). An instance the gate holds for
-//!   a self-check never made (`backend_selfcheck:unchecked`: a start before its preparation, facts
-//!   dropped at an emulator stop) enters only once a self-check of it fails: the emulator watch,
-//!   the idle wake and a person's resume own those.
+//!   at every decision of the gate). Fix round 1 (the coordinator's rulings R1 to R3 of 11-20):
+//!   also one the gate holds as `backend_selfcheck:unchecked` after any other failing step of a
+//!   connection preparation (a close of the kept session or the close after the opens that failed
+//!   with its resources confirmed released, an open that failed without a report, the
+//!   preparation's lease refused; `withhold_after_failed_preparation`), with that step's code. It
+//!   leaves the set when the gate no longer holds it (its self-check passed and its availability
+//!   came back, a fence, a device link or a device state took the instance, or the configuration
+//!   marks it unavailable). An instance the gate holds for a self-check never made (a start
+//!   before its preparation, facts dropped at an emulator stop or control) or for the
+//!   preparation's emulator status read (#411 A48: no emulator process, a state that could not be
+//!   read on a pending binding, a device not recognized) enters only once a later step of a
+//!   preparation of it fails: the emulator watch, the idle wake and a person's resume own those.
 //! - **The probe** is the device self-check a person's `actingctl selfcheck` runs (a preparation
 //!   on the instance's key: it closes a retained session, reads the emulator status first, opens
 //!   the backends and checks capture and input; no game input, no application launch, no emulator
@@ -31,7 +37,12 @@
 //!   of the instance's queue (no new claim kind), queued by the lease sweep only while nothing
 //!   holds or waits for the instance's key and no takeover cool-down runs, so it never queues in
 //!   front of a client's, the Lab's or the scheduler's own work; it takes the key for the
-//!   preparation's few seconds and releases it.
+//!   preparation's few seconds and releases it. Like every preparation it closes a session a
+//!   keyless Lab observation kept on the instance first; the instance's admission lock, which the
+//!   preparation holds and an observation takes, serialises the two. A probe whose worker panics
+//!   ends at the worker's root (`end_panicked_unavailable_probe`, fix round 1): the step waits
+//!   again, the next probe counts its interval from there, and the panic is the worker's
+//!   `panic_caught` record under the probe's links.
 //! - **When.** `scheduling.unavailable_probe.first_interval_ms` after the instance became
 //!   unavailable, then after each failed probe the interval times `factor`, at most
 //!   `max_interval_ms`. An interval counts quiet time: while a claim holds or waits for the
@@ -40,9 +51,13 @@
 //! - **A cool-down's end** (item 1): a ladder that its cool-down suppressed while the instance was
 //!   in the set is held with the instance, with the `until_unix_ms` its suppression named. From
 //!   that time (no later than the sweep's next tick) a probe is due whatever the interval: a probe
-//!   that passes drops the held recovery with the unavailability; one that fails admits it as it
-//!   would have been admitted without the cool-down (every other admission rule as before) and
-//!   queues its claim. The cool-down still holds a recovery back while it runs.
+//!   that passes drops the held recovery with the unavailability (Workflow #490 ENTRY-A: an
+//!   entry-blocked instance's block takes it over instead); one that fails reads the
+//!   instance's cool-down window in force again (fix round 1: a later climb, or a `triggered`
+//!   admission, may have opened one since) and, once no window holds it, admits the recovery as
+//!   it would have been admitted without the cool-down (every other admission rule as before) and
+//!   queues its claim; while one does, the recovery stays held until that window's end. The
+//!   cool-down still holds a recovery back while it runs.
 //! - **What holds probing.** A scheduling pause of the instance or the global one (any stage, any
 //!   mode), a fence (its own recheck owns it), an emulator the idle action holds stopped, a
 //!   blackout that covers the instance, and a stop. Each probe is checked again on the key. A
@@ -51,9 +66,13 @@
 //!   probe's time, `instance_unavailable_probe_passed`). An instance in the set for
 //!   `attention_after_ms` is brought to a person's attention once per unavailability:
 //!   `instance_unavailable_awaiting_person` (a warning `runtime.failed` record under the instance,
-//!   handed to the daemon's log too) and the status member `unavailable.awaiting_person`, which a
-//!   status read, `actingctl status`, `ac_overview` and the console show; both end when the
-//!   instance is available again.
+//!   handed to the daemon's log too); it ends when the instance is available again.
+//! - **The status** answers nothing of the set in 0.12.76 (fix round 1, the coordinator's ruling):
+//!   the contract declares `RuntimeInstanceStatus.unavailable` (`runtime-client` 14) and the host
+//!   fills it for no instance, since a reader of 0.12.75 refuses a status that carries it; the
+//!   slice that answers it raises the floor to 14 in the same release. A reader of today tells
+//!   the instance by the overview row's `backend_selfcheck` and `not_running`, and by the records
+//!   above.
 //!
 //! Memory only: a restart starts the set again from the gate's next decision.
 
@@ -66,8 +85,8 @@ use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::identifier_text;
 use crate::policy_host::InstanceOccupancy;
 use crate::time::RuntimeClockSample;
+use actingcommand_contract::LeasePriority;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
-use actingcommand_contract::{InstanceUnavailable, LeasePriority};
 use actingcommand_runtime_config::UnavailableProbeConfig;
 use std::collections::btree_map::Entry;
 
@@ -93,7 +112,8 @@ struct HeldRecovery {
 pub(super) struct UnavailableInstance {
     /// When the withdrawal in effect was observed.
     since_unix_ms: u64,
-    /// The code of the failed self-check that made it unavailable.
+    /// The code of the failed self-check, or of the failed step of a connection preparation,
+    /// that made it unavailable (the latest one).
     cause: Option<CodeStr>,
     /// When the interval to the next probe began (the host clock's monotonic reading and Unix
     /// time): the instance's entry, the end of a probe, or the latest tick at which a claim held
@@ -101,12 +121,23 @@ pub(super) struct UnavailableInstance {
     from: RuntimeClockSample,
     /// The probes started in this unavailability.
     probes: u32,
-    /// When the latest probe ended.
-    last_probe_unix_ms: Option<u64>,
     step: ProbeStep,
     /// Whether a person was told (`instance_unavailable_awaiting_person`).
     awaiting_person: bool,
     held: Option<HeldRecovery>,
+}
+
+/// Test builds: one instance of the set as the probes hold it (the status answers none of it in
+/// this release).
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnavailableForTest {
+    pub(crate) since_unix_ms: u64,
+    pub(crate) cause: Option<CodeStr>,
+    pub(crate) probes: u32,
+    /// When the next probe is due; `None` while one is queued or runs.
+    pub(crate) next_probe_unix_ms: Option<u64>,
+    pub(crate) awaiting_person: bool,
 }
 
 impl UnavailableInstance {
@@ -116,7 +147,6 @@ impl UnavailableInstance {
             cause: None,
             from: now,
             probes: 0,
-            last_probe_unix_ms: None,
             step: ProbeStep::Idle,
             awaiting_person: false,
             held: None,
@@ -155,18 +185,6 @@ impl UnavailableInstance {
                     .is_some_and(|held| now.unix_ms >= held.until_unix_ms)
         })
     }
-
-    /// The instance as `Status` reports it.
-    fn status(&self, config: UnavailableProbeConfig) -> InstanceUnavailable {
-        InstanceUnavailable {
-            since_unix_ms: self.since_unix_ms,
-            cause: self.cause.clone(),
-            probes: self.probes,
-            last_probe_unix_ms: self.last_probe_unix_ms,
-            next_probe_unix_ms: self.next_probe_unix_ms(config),
-            awaiting_person: self.awaiting_person,
-        }
-    }
 }
 
 /// One probe of an unavailable instance, on a self-check claim of its instance's queue (no new
@@ -200,8 +218,9 @@ struct ProbeStart {
 
 impl HostShared {
     /// The gate's decision for `instance_id` was made (`runtime_facts.rs`): the instance enters
-    /// the set when the gate holds it unavailable after a self-check that failed with `failed`,
-    /// stays while the gate holds it so, and leaves it otherwise. Called under the gate's own
+    /// the set when the gate holds it unavailable after a self-check, or (fix round 1) another
+    /// step of a connection preparation, that failed with `failed`, stays while the gate holds it
+    /// so (its cause the latest such code), and leaves it otherwise. Called under the gate's own
     /// lock; takes the fact store's and the set's leaf locks.
     pub(super) fn track_unavailability(
         &self,
@@ -216,7 +235,18 @@ impl HostShared {
         )?;
         match (withdrawn, failed) {
             (None, _) => {
-                instances.remove(&instance_id);
+                // Workflow #490 ENTRY-A: a recovery held back with the instance goes to the entry
+                // blocks (`hold_entry_recovery`): an entry-blocked instance's block takes it up at
+                // its cool-down's end (the window in force read again), and the settlement of the
+                // failed run its trigger names, still to come, adopts it; nothing else takes it up,
+                // so for any other instance it is dropped with the unavailability, as before.
+                let held = instances
+                    .remove(&instance_id)
+                    .and_then(|instance| instance.held);
+                drop(instances);
+                if let Some(held) = held {
+                    self.hold_entry_recovery(instance_id, held.ladder, held.until_unix_ms)?;
+                }
             }
             (Some(since_unix_ms), failed) => {
                 let instance = match instances.entry(instance_id) {
@@ -267,26 +297,59 @@ impl HostShared {
         self.hold_entry_recovery(instance_id, ladder, until_unix_ms)
     }
 
-    /// Every unavailable instance as `Status` reports it, with the configuration in effect.
-    pub(super) fn unavailable_statuses(
+    /// Test builds: `instance_id` as the set holds it, with the configuration in effect.
+    #[cfg(test)]
+    pub(super) fn unavailable_for_test(
         &self,
-    ) -> RuntimeHostResult<BTreeMap<InstanceId, InstanceUnavailable>> {
-        if lock(
-            &self.unavailable_instances,
-            HostLocation::ProjectRuntimeControlPlaneStatus,
-        )?
-        .is_empty()
-        {
-            return Ok(BTreeMap::new());
-        }
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<UnavailableForTest>> {
         let config = self.unavailable_probe_config()?;
         Ok(lock(
             &self.unavailable_instances,
-            HostLocation::ProjectRuntimeControlPlaneStatus,
+            HostLocation::QueueUnavailableProbes,
         )?
-        .iter()
-        .map(|(instance_id, instance)| (*instance_id, instance.status(config)))
-        .collect())
+        .get(&instance_id)
+        .map(|instance| UnavailableForTest {
+            since_unix_ms: instance.since_unix_ms,
+            cause: instance.cause.clone(),
+            probes: instance.probes,
+            next_probe_unix_ms: instance.next_probe_unix_ms(config),
+            awaiting_person: instance.awaiting_person,
+        }))
+    }
+
+    /// Fix round 1 (item 4): probe `probe` of `instance_id` ended by a panic of its worker,
+    /// queued or running. Called at the worker's root, where the panic was caught (the join's
+    /// error arm, `instance_worker_loop`), before the panic's own record: the step waits again
+    /// and the next interval counts from now, so the schedule goes on; the instance's climbing
+    /// mark a running probe set is taken off. Nothing else is recorded for it: the panic is the
+    /// worker's `panic_caught` under the probe's links, once. The panicked payload's key lapses
+    /// at its TTL, as every panicked payload's does.
+    pub(super) fn end_panicked_unavailable_probe(
+        &self,
+        instance_id: InstanceId,
+        probe: u32,
+    ) -> RuntimeHostResult<()> {
+        let now = self.runtime_clock_sample()?;
+        let ended = {
+            let mut instances = lock(
+                &self.unavailable_instances,
+                HostLocation::RunUnavailableProbe,
+            )?;
+            match instances.get_mut(&instance_id) {
+                Some(instance) if instance.probes == probe && instance.step != ProbeStep::Idle => {
+                    instance.step = ProbeStep::Idle;
+                    instance.from = now;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if ended {
+            lock(&self.stability_counter, HostLocation::RunUnavailableProbe)?
+                .set_climbing(instance_id, false);
+        }
+        Ok(())
     }
 
     /// What holds the probes of `instance_id` (alias `alias`) now.
@@ -675,7 +738,10 @@ impl HostShared {
     /// another rule took it): a passing probe records `instance_unavailable_probe_passed`. An
     /// instance still in the set records `instance_unavailable_probe_failed` with the next
     /// probe's time; its next interval counts from now, and a recovery held back whose cool-down
-    /// has ended is admitted after the record.
+    /// has ended is admitted after the record. Fix round 1 (item 3): the cool-down that ended is
+    /// the instance's window in force now, read again here, not only the one the suppression
+    /// named: while a later window holds the instance (another ladder's climb, a `triggered`
+    /// admission), the recovery stays held until that window's end, the next probe's time.
     fn settle_unavailable_probe(
         &self,
         instance_id: InstanceId,
@@ -687,6 +753,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let config = self.unavailable_probe_config()?;
         let now = self.runtime_clock_sample()?;
+        let window_until_unix_ms = self.cooldown_window_until(instance_id)?;
         let still = {
             let mut instances = lock(
                 &self.unavailable_instances,
@@ -696,12 +763,22 @@ impl HostShared {
                 Some(instance) if instance.probes == probe && instance.step == step => {
                     instance.step = ProbeStep::Idle;
                     instance.from = now;
-                    instance.last_probe_unix_ms = Some(now.unix_ms);
                     let ended = instance
                         .held
                         .as_ref()
                         .is_some_and(|held| held.until_unix_ms <= now.unix_ms);
-                    let held = if ended { instance.held.take() } else { None };
+                    let window_holds = now.unix_ms < window_until_unix_ms;
+                    if ended
+                        && window_holds
+                        && let Some(held) = instance.held.as_mut()
+                    {
+                        held.until_unix_ms = window_until_unix_ms;
+                    }
+                    let held = if ended && !window_holds {
+                        instance.held.take()
+                    } else {
+                        None
+                    };
                     Some((instance.next_probe_unix_ms(config), held))
                 }
                 // The set holds another unavailability of the instance by now.

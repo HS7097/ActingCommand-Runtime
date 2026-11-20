@@ -1698,7 +1698,9 @@ pub struct RuntimeInstanceStatus {
     control: Option<InstanceControl>,
     /// Workflow #489 AVAIL-1 (`runtime-client` 14): the instance is unavailable by its device
     /// self-check, and how it is probed again; absent otherwise. A reader whose `max` is below 14
-    /// refuses a status that carries it.
+    /// refuses a status that carries it, so Runtime 0.12.76 fills it for no instance (fix round 1,
+    /// the coordinator's ruling): every reader built from 0.12.76 on decodes it, and the release
+    /// whose Runtime first answers it raises `runtime-client`'s `min` to 14.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unavailable: Option<InstanceUnavailable>,
 }
@@ -1746,6 +1748,7 @@ pub struct InstanceFencePersonWait {
 /// dropped), while no fence, device link or device state holds it: since when, why, and how the
 /// Runtime probes it again (its device self-check only, at growing intervals). Memory only: a
 /// restart starts it again from the instance's withdrawal. Absent for every available instance.
+/// Declared, not answered: Runtime 0.12.76 sends it for no instance (fix round 1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceUnavailable {
