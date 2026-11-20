@@ -33,14 +33,15 @@
 //! ([`lay_goals`]): once `package bundle` wrote the bundle, the file is held to the game root it
 //! makes by the one goal check `package bundle --goals` and `standard-pack check` run (the
 //! resource tooling's `check_bundle_goals`); a refused file fails the step with every problem, as
-//! `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`), and no
-//! zip is made; an accepted one is laid beside `bundle.json` byte for byte, as `package bundle
-//! --goals` lays it, goes into the zip, the read-back and the installed root with the other root
-//! files, and is named in the counts (`goals`). `resource verify`'s `interfaces.json` then declares
-//! `package` [14, 14] (`GOALS_PACKAGE_REVISION`), the highest revision of what its zip carries
-//! ([`package_revision`]). A repository without the file is bundled and declared byte for byte as
-//! before. (Workflow #464 P2 gave `standard-pack build`'s `package bundle` the file as `--goals`,
-//! which names only the first problem of a refused one.)
+//! `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`), the
+//! index and copy checks still run on the bundle without it (fix round 1), and no zip is made; an
+//! accepted one is laid beside `bundle.json` byte for byte, as `package bundle --goals` lays it,
+//! goes into the zip, the read-back and the installed root with the other root files, and is named
+//! in the counts (`goals`). `resource verify`'s `interfaces.json` then declares `package` [14, 14]
+//! (`GOALS_PACKAGE_REVISION`), the highest of 3, 10 with the notices directory and 14 with the file
+//! ([`package_revision`]; it reads no pack's content). A repository without the file is bundled
+//! and declared byte for byte as before. (Workflow #464 P2 gave `standard-pack build`'s `package
+//! bundle` the file as `--goals`, which names only the first problem of a refused one.)
 //!
 //! Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): `standard-pack build` carries
 //! the repository's `pack-catalog.json` into the zip's root, byte for byte, when the contract
@@ -259,15 +260,19 @@ fn lay_out(
     for warning in response.warnings {
         run.warn(warning);
     }
-    // Workflow #455 GOALS-PACK-1: a refused `goals.json` fails the step and no zip is made.
-    if root_files.contains(&STANDARD_PACK_GOALS_FILE)
-        && !lay_goals(inputs.repo, &bundle_dir, run, tally)?
-    {
-        return Ok(());
-    }
+    // Workflow #455 GOALS-PACK-1: a refused `goals.json` fails the step; the index and copy checks
+    // still run, on the bundle without it, so that one run names every error of the step, and
+    // then the step stops before any zip is made (fix round 1).
+    let goals_refused = root_files.contains(&STANDARD_PACK_GOALS_FILE)
+        && !lay_goals(inputs.repo, &bundle_dir, run, tally)?;
+    let laid_root_files = root_files
+        .iter()
+        .copied()
+        .filter(|name| !goals_refused || *name != STANDARD_PACK_GOALS_FILE)
+        .collect::<Vec<_>>();
     let index = check_index(
         inputs,
-        root_files,
+        &laid_root_files,
         notices,
         &maintenance,
         &response.index,
@@ -277,6 +282,9 @@ fn lay_out(
     tally.packs = index.packs.len();
     tally.files = index.packs.iter().map(|pack| pack.file_count).sum();
     tally.bytes = index.packs.iter().map(|pack| pack.byte_count).sum();
+    if goals_refused {
+        return Ok(());
+    }
 
     // The zip: the bundle directory and interfaces.json, entries in ordinal order.
     let game = index.game.clone();

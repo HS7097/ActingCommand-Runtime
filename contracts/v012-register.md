@@ -43232,8 +43232,11 @@ report's counts, `standard-pack build`, "The `package` revision") are the contra
   `RootFileInputs`, as `package bundle` read them) and its packs below `packs/`, each problem given
   by `goal_warnings`, as `standard-pack check` gives it. A refused file fails the step with every
   problem, `standard_pack_root_invalid` (`game`, `path` the repository's file,
-  `standard_pack_problem`, `json_pointer`, `step`) in file order, as a refused root file fails it,
-  and no zip is written. A version 1 file has one problem, `goal_version_retired` at
+  `standard_pack_problem`, `json_pointer`, `step`) in file order, as a refused root file fails it;
+  the step's index and copy checks still run in the same run, on `bundle/` without the file, so
+  that one run names every error of the step (fix round 1), and the step then stops before the zip.
+  Such a run leaves the `bundle/` it made, without the file, in the work directory; there is no
+  `out/` and no zip. A version 1 file has one problem, `goal_version_retired` at
   `/schema_version`, as `package bundle --goals` refuses it. An accepted file is named in the
   step's counts: `goals {game, path, entries}`, its entries counted by type, every type of
   version 2 named.
@@ -43248,17 +43251,27 @@ report's counts, `standard-pack build`, "The `package` revision") are the contra
   as before. A zip without the file declares what it declared before.
 - *Bound to the commit.* `goals.json` is a root input of both rows' `checkout` precondition (it was
   `standard-pack build`'s only), so the file a zip carries is the committed blob, never an ignored
-  file. A repository without the file has the same files checked as before.
+  file. A repository without the file has the same files checked as before, with one exception
+  (fix round 1, found by the independent review): a commit without the file whose work tree holds
+  a `goals.json` that git ignores now fails `resource verify`'s `checkout` precondition, where
+  0.12.76 and before passed over the file. The person sees `resource_verify_checkout_dirty` with
+  `dirty_problem` `ignored_in_read_path` (its `first_path` `goals.json` when no other read path is
+  ignored) and every content step `not_run`, until the file is committed or taken out of the work
+  tree.
 - *Codes.* None added; no decision reads a code (the step decides by the check's verdict, an enum,
   not by a code). `standard_pack_root_invalid` and the existing words of the file's problems name
-  every case. The outcome code index is unchanged and current.
+  every case. The outcome code index is unchanged and current. Fix round 1: the catalogue's
+  description of `standard_pack_root_invalid` (`contracts/outcome-codes/contract.json`) names
+  `goals.json` among the root files it reports, after its first sentence, so the index, built from
+  that sentence, stays as it is.
 
 **What does not change.** What `standard-pack check`, `package bundle --goals`, the installer's
 `place` and the Runtime's workbench do with the file; the file's format and its rules; the
 operation table (no parameter; the report gains the optional counts member `goals` and keeps its
 schema `actinglab.resource-verify.v1`, and the row's output is the command's report); every
 interface revision; `resource verify`'s report, zip and `interfaces.json` for a repository
-without the file; `standard-pack build`'s zip and `build.json` (with an accepted file its zip holds
+without the file (but for an ignored `goals.json` in its work tree, *Bound to the commit* above);
+`standard-pack build`'s zip and `build.json` (with an accepted file its zip holds
 the bytes `package bundle --goals` laid; with a refused one it fails as before, its failures now
 every problem with its values). No game, package or alias is named in code. The slices in flight
 (#1853 in `crates/runtime-host`, #486 in the policy evaluator and the host, and the slice on the
@@ -43283,7 +43296,7 @@ TOOL-1 packs, no `schedule.json`; no clock read).
 |---|---|
 | `goals_pack_a_repository_without_the_file_is_verified_as_before` (1) | 11 files checked; the bundle counts exactly RV-1's members (no `goals`, no root file, package 3, a zip of 9 entries); the zip's members RV-1's; `interfaces.json` `package` [3, 3] with this build's head; no `goals.json` in the zip or the installed root |
 | `goals_pack_an_accepted_file_is_named_carried_and_declared` (2) | A heading and a note: passed, 12 files checked; counts `goals` {neutral, `goals.json`, heading 1, note 1, resource 0, tier 0, variable 0}, root files [`goals.json`], package 14; a zip of 10 entries carrying the file byte for byte and declaring [14, 14], which this build's installer range holds (`package_edge_holds` over `distribution/windows/component-interfaces.json`) and which declares what the file asks (`BundleRevisionNeed::Goals`; [3, 3] does not: `goal_undeclared`); the installed root holds the file and `standard-pack check` lists it without a problem |
-| `goals_pack_a_refused_file_fails_with_every_problem_and_no_zip` (3) | A `resource` entry over a pool the root does not offer and a placement of a variable no pack declares: `resource_verify_failed`, the `bundle` step alone, its failures exactly `goal_pool_unknown` at `/entries/0/governs/pool` and `goal_variable_unknown` at `/entries/1/name`, each `standard_pack_root_invalid` with the game, the repository's file and the step, the first the top outcome's cause; no zip, no `goals` in the counts; `standard-pack check` of a root holding the same file gives the same words at the same pointers in the same order |
+| `goals_pack_a_refused_file_fails_with_every_problem_and_no_zip` (3) | A `resource` entry over a pool the root does not offer and a placement of a variable no pack declares: `resource_verify_failed`, the `bundle` step alone, its failures exactly `goal_pool_unknown` at `/entries/0/governs/pool` and `goal_variable_unknown` at `/entries/1/name`, each `standard_pack_root_invalid` with the game, the repository's file and the step, the first the top outcome's cause; fix round 1: pack B's directory also holds a file the bundle does not copy, and the same run's third failure is the copy check's `resource_verify_bundle_mismatch` `pack_copy_differs` naming `packs/<B>`; no zip, no `goals` in the counts; `standard-pack check` of a root holding the same file gives the same words at the same pointers in the same order |
 | `goals_pack_a_version_1_file_is_refused_as_the_bundle_refuses_it` (4) | Its one failure `goal_version_retired` at `/schema_version`, no zip; `package bundle --goals` refuses the same file `standard_pack_root_invalid` with the same word at the same pointer, `--out` not written |
 | `goals_pack_each_commit_is_verified_as_its_own_case` (5) | The work order's "two game roots in one repository" cannot be built (a repository is one game root); its nearest case: one repository's commit with the file, then the next without it, each verified on its own, the second answering what test 1 answers |
 
@@ -43291,16 +43304,38 @@ Adapted: `gate_464_p2::p2_notices_give_package_10_and_goals_give_14`, its name k
 pinned that `resource verify` left `goals.json` out of its zip and declared [10, 10]; the
 requirement makes it carry the file and declare [14, 14]. Every other test of `resource verify`
 (RV-1, NOTICES-3, P2, S3-7), of `package bundle` and of the installer's goals handling (G-R1,
-V1) holds as written.
+V1) holds as written. Fix round 1 extends test 3 (above): its failures are three, and the checks
+of the game, the path and the step read the `standard_pack_root_invalid` failures only.
+
+**Why, and what a release still needs** (fix round 1; coordinator work order
+`rd-1121/brief-1856-fix1.md`, after the independent review). The zip `resource verify` makes is the
+verification's, under `--work`, not a release: the four resource repositories make their release
+zips with `actinglab package bundle` from their own release script, not with `resource verify` and
+not with `standard-pack build` (the resource side's answer of 11-21; the Runtime side has not read
+those repositories). So this slice gives the repository's verification the check and the file; it
+does not put the file into a release. A release carries `goals.json` only once the resource side
+moves its release script to `standard-pack build` (which has carried an accepted file and declared
+the revision its content needs since 0.12.61), or has the script give the file to `package bundle
+--goals` and write `package` 14 at least into the zip's `interfaces.json` itself (`package bundle`
+writes none). That is owed by the resource side; the Tools owe nothing more for the file.
 
 **At deploy.** Nothing changes at the Runtime's start: no configuration, no record, no interface
-revision. A resource repository's CI makes a zip that carries `goals.json` with `resource verify`
-only once its pinned Tools are 0.12.77 or later: an earlier `resource verify` leaves the file out of
-its zip and says nothing of it (`standard-pack build` has carried it since 0.12.61). Such a zip
-declares `package` [14, 14]: the installers of 0.12.61 and later place it; the installer of 0.12.60
-(`package` [3, 12]) and every earlier one refuse it in the plan at their `package` edge
-(`interface_edge`), before the hold and any write. In the release notes' language:
-`resource verify` 现在检查资源仓里的 `goals.json`（用 `standard-pack check` 和 `package bundle --goals` 的同一套检查）：被拒的文件让打包一步失败，每个问题都列出来，不出 zip；通过的文件原样放进 zip（与 `bundle.json` 同级），`interfaces.json` 声明 `package` [14, 14]，报告的打包计数里写出它（各类条目数）。没有该文件的资源仓结果与以前完全相同。资源仓的 CI 要把钉住的 Tools 升到 0.12.77 或更高才会带上这个文件；带该文件的 zip 只有 0.12.61 及以后的安装器能放置。
+revision. A resource repository's CI checks `goals.json` and carries it in its verification's zip
+with `resource verify` only once its pinned Tools are 0.12.77 or later: an earlier `resource
+verify` leaves the file out of its zip and says nothing of it. A release zip carries the file
+only once the resource side changes its release script (above). A zip that carries the file and
+declares `package` [14, 14] is placed by the installers of 0.12.61 and later; the installer of
+0.12.60 (`package` [3, 12]) and every earlier one refuse it in the plan at their `package` edge
+(`interface_edge`), before the hold and any write. A gap this slice does not close (the
+independent review): `resource verify` reads no pack's content for its declaration, so a
+repository whose packs declare `variables` or a shared read's `lines` and that holds no
+`goals.json` is still declared `package` [3, 3] (or [10, 10] with `notices/`) by `resource
+verify`. With `variables`, today's installer refuses such a zip in its plan
+(`variable_undeclared`), and an older one takes it and its Runtime cannot run the pack; with
+`lines`, no installer checks it ([component-interfaces.md](component-interfaces.md), the `package`
+row 21): one whose range ends below 21 takes it and its Runtime refuses the pack at every run.
+Only `standard-pack build` declares by content. In the release notes' language:
+`resource verify` 现在检查资源仓里的 `goals.json`（用 `standard-pack check` 和 `package bundle --goals` 的同一套检查）：被拒的文件让打包一步失败，每个问题都列出来，这一步其余的索引和拷贝检查也照跑，不出 zip（工作目录里留下不带该文件的 `bundle/`）；通过的文件原样放进校验用的 zip（与 `bundle.json` 同级），`interfaces.json` 声明 `package` [14, 14]，报告的打包计数里写出它（各类条目数）。没有该文件的资源仓结果与以前相同，只有一处例外：工作树里有一个被 git 忽略的 `goals.json` 时，checkout 一步现在会失败（`resource_verify_checkout_dirty`，`ignored_in_read_path`），以前是通过。资源仓的 CI 要把钉住的 Tools 升到 0.12.77 或更高，校验才会检查并带上这个文件；资源仓发版用的是各仓自己脚本里的 `package bundle`，发版的 zip 要带上这个文件，还要资源侧把发版脚本换成 `standard-pack build`（或给 `package bundle` 传 `--goals` 并自己在 `interfaces.json` 里声明 14 以上）。带该文件的 zip 只有 0.12.61 及以后的安装器能放置。`resource verify` 仍不按包的内容声明修订：包里声明了变量或 `lines`、又没有 `goals.json` 的仓仍声明 3。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

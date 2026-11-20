@@ -472,8 +472,11 @@ fn goals_pack_an_accepted_file_is_named_carried_and_declared() {
 // placement of a variable no pack declares): the verification fails in the `bundle` step alone with
 // both problems, in file order, each `standard_pack_root_invalid` with the game, the repository's
 // file, its word and its pointer, and the step; the first is the top outcome's cause; no zip is
-// written and the counts name no file. `standard-pack check` of a root that holds the same file
-// gives the same words at the same pointers in the same order: one check.
+// written and the counts name no file. Fix round 1: the step's index and copy checks still run in
+// the same run: pack B's directory also holds a file the bundle does not copy (a pack is copied as
+// `control.json` and `resources/` only), and the same failures name it, `pack_copy_differs`.
+// `standard-pack check` of a root that holds the same file gives the same words at the same
+// pointers in the same order: one check.
 #[test]
 fn goals_pack_a_refused_file_fails_with_every_problem_and_no_zip() {
     let fixture = Fixture::new();
@@ -481,6 +484,10 @@ fn goals_pack_a_refused_file_fails_with_every_problem_and_no_zip() {
     let (plain, _) = fixture.verify("plain");
     assert_eq!(plain.exit_code(), 0, "{}", plain.envelope_json());
     fixture.write_json(GOALS, &refused_goals());
+    fixture.write(
+        &format!("packs/{PACK_B}/NOTES.txt"),
+        "A note the bundle does not copy.\n",
+    );
     fixture.commit("a refused goal declaration");
     let (result, report) = fixture.verify("refused");
     assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
@@ -499,9 +506,21 @@ fn goals_pack_a_refused_file_fails_with_every_problem_and_no_zip() {
         ),
     ];
     assert_eq!(root_problems(failures), expected, "{bundle}");
-    assert_eq!(failures.len(), 2, "{bundle}");
+    assert_eq!(failures.len(), 3, "{bundle}");
+    let copied = format!("packs/{PACK_B}");
+    assert!(
+        failures.iter().any(|failure| {
+            failure["code"] == "resource_verify_bundle_mismatch"
+                && failure["values"]["path"] == copied.as_str()
+                && failure["values"]["bundle_problem"] == "pack_copy_differs"
+        }),
+        "{bundle}"
+    );
     let path = fixture.repo().join(GOALS).display().to_string();
-    for failure in failures {
+    for failure in failures
+        .iter()
+        .filter(|failure| failure["code"] == ROOT_INVALID)
+    {
         assert_eq!(failure["values"]["game"], "neutral", "{failure}");
         assert_eq!(failure["values"]["path"], path.as_str(), "{failure}");
         assert_eq!(failure["values"]["step"], "bundle", "{failure}");

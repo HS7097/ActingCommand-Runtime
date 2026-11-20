@@ -252,19 +252,25 @@ for that game, and a reader of the declaration says why.
   bundle makes: the composed schedule's pools and rules, every package of `bundle.json` and the
   variables the bundle's packs declare). A refused file fails the step with every problem, each
   `standard_pack_root_invalid` with `game`, `path` (the repository's file), `standard_pack_problem`,
-  `json_pointer` and `step`, in file order, as `standard-pack check` gives them, and no zip is
-  written; a version 1 file is so refused with its one problem, `goal_version_retired`, as `package
-  bundle --goals` refuses it. An accepted file is laid beside `bundle.json` byte for byte, as
+  `json_pointer` and `step`, in file order, as `standard-pack check` gives them; the step's index
+  and copy checks still run in the same run, and no zip is written; a version 1 file is so refused
+  with its one problem, `goal_version_retired`, as `package bundle --goals` refuses it. An
+  accepted file is laid beside `bundle.json` byte for byte, as
   `package bundle --goals` lays it; the zip, its read-back and the installed root the step checks
   with `standard-pack check` carry it; the step's counts name it (`goals`: the game, the path and
   how many entries of each type); and it is a read path of the `checkout` precondition, so the file
   a zip carries is the committed blob. `resource verify`'s `interfaces.json` declares `package`
-  [14, 14] for it, the highest revision of what its zip carries (10 for `notices/`, 3 otherwise);
-  `standard-pack build`'s declares the revision its content needs, 14 at least. A repository
-  without the file is verified, bundled and declared byte for byte as before. No outcome code is
-  added. (In 0.12.76 and before, `resource verify` passed over the file without a word and left it
-  out of its zip, and `standard-pack build` gave it to `package bundle --goals`, which names only
-  the first problem of a refused file.)
+  [14, 14] for it, the highest of 3, 10 (with `notices/`) and 14 (with `goals.json`): it reads no
+  pack's content, so a pack that declares `variables` or a shared read's `lines` does not raise
+  it; only `standard-pack build` raises its declaration by content, and declares the revision its
+  content needs, 14 at least with the file. A repository without the file is verified, bundled and
+  declared byte for byte as before, with one exception: a `goals.json` in the work tree that git
+  ignores now fails `resource verify`'s `checkout` precondition (`resource_verify_checkout_dirty`,
+  `dirty_problem` `ignored_in_read_path`, no content step run), where 0.12.76 and before passed
+  over it ([resource-verify.md](resource-verify.md), "Clean"). No outcome code is added. (In
+  0.12.76 and before, `resource verify` passed over the file without a word and left it out of its
+  zip, and `standard-pack build` gave it to `package bundle --goals`, which names only the first
+  problem of a refused file.)
 - **The installer's `place`** (the Lab's rescue module) takes `goals.json` from a bundle zip as a root
   file, placed last among them (after `schedule.json`, whose pools and rules its entries name), and
   sets it aside as `goals.json.old-<ms>` when the game root holds one and a later zip carries none;
@@ -430,17 +436,26 @@ without one, as it does today.
 ## Before any pack carries the file
 
 What G-R1 fix round 1 said a later slice owed before any standard pack carries `goals.json` is
-built (Workflow #455 GOALS-PACK-1, Runtime 0.12.77, register [v012-register.md](v012-register.md)
-§1.498; "Who reads it"): `resource verify` checks a repository's `goals.json` with the one check,
-names an accepted file in its answer and fails on a refused one with every problem; its `bundle`
-step carries an accepted file in the zip beside `bundle.json`, byte for byte; and its
-`interfaces.json` declares `package` [14, 14] for it, so that the installer's `place` takes the
-zip. Nothing more is owed by the Tools for the file. What stays with the resource side:
+built for the repository's verification (Workflow #455 GOALS-PACK-1, Runtime 0.12.77, register
+[v012-register.md](v012-register.md) §1.498; "Who reads it"): `resource verify` checks a
+repository's `goals.json` with the one check, names an accepted file in its answer and fails on a
+refused one with every problem; its `bundle` step carries an accepted file in the zip it makes
+under `--work`, beside `bundle.json`, byte for byte; and that zip's `interfaces.json` declares
+`package` [14, 14] for it, which the installer's `place` takes. That zip is the verification's, not
+a release: the four resource repositories make their release zips with `actinglab package bundle`
+from their own release script, not with `resource verify` and not with `standard-pack build` (the
+resource side's answer of 11-21; the Runtime side has not read those repositories). So this slice
+gives the repository's verification the check and the file; a release carries `goals.json` only
+once the resource side changes its release script (below). The Tools owe nothing more for the file: `standard-pack build` has carried an
+accepted one and declared the revision its content needs since 0.12.61, and `package bundle
+--goals` lays one. What is still owed, by the resource side:
 
-- a resource repository's CI makes such a zip with `resource verify` only once its pinned Tools are
-  0.12.77 or later: an earlier `resource verify` leaves the file out of its zip and says nothing of
-  it (`standard-pack build` has carried it since 0.12.61);
-- such a zip declares `package` [14, 14]: the installers of 0.12.61 and later place it; the
-  installer of 0.12.60 (`package` [3, 12]) and every earlier one refuse it in the plan at their
-  `package` edge (`interface_edge`), before the hold and any write;
+- its release script moves to `standard-pack build`, or gives the file to `package bundle --goals`
+  and writes `package` 14 at least into the zip's `interfaces.json` itself (`package bundle` writes
+  none), so that its release zip carries an accepted `goals.json` and declares the revision;
+- its CI's `resource verify` checks and carries the file only once its pinned Tools are 0.12.77 or
+  later: an earlier `resource verify` leaves the file out of its zip and says nothing of it;
+- a zip that carries the file and declares `package` [14, 14] is placed by the installers of
+  0.12.61 and later; the installer of 0.12.60 (`package` [3, 12]) and every earlier one refuse it in
+  the plan at their `package` edge (`interface_edge`), before the hold and any write;
 - the resource-side review of every file ("What is not this file's", item 3).
