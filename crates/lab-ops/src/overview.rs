@@ -1084,6 +1084,11 @@ pub(crate) fn instance_row(
     if let Some(fence) = instance.resource_fence() {
         row.insert("resource_fence".to_owned(), json!(fence));
     }
+    // Workflow #489 AVAIL-1: an instance its device self-check made unavailable, since when, why,
+    // its probes and whether a person was told; the status member as the Runtime answers it.
+    if let Some(unavailable) = instance.unavailable() {
+        row.insert("unavailable".to_owned(), json!(unavailable));
+    }
     // Workflow #437 G1 fix round 1: a member of a device group of several whose device is held
     // for another member's unconfirmed close (`device_group_wait` `close_unconfirmed`, `alias` that
     // member), the status member as the Runtime answers it.

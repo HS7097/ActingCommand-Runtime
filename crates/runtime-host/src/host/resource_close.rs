@@ -2640,9 +2640,18 @@ impl HostShared {
             failure_code = failure_code.or(Some(close_error.code().as_str()));
         }
         // An open failure is already a `failed` self-check; any other failing step (a failed
-        // open without reports, a failed close) still leaves the instance unavailable.
-        if failure_code.is_some() {
-            self.withhold_policy_instance_availability(instance_id)?;
+        // open without reports, a failed close) still leaves the instance unavailable. Workflow
+        // #489 AVAIL-1 fix round 1 (the coordinator's rulings R1 to R3 of 11-20): every failing
+        // step but the emulator status read (#411 A48: no emulator process, a state that could
+        // not be read on a pending binding, a device not recognized; the emulator watch and the
+        // idle wake own those) takes the instance into the unavailable instances the probes take
+        // up, with the step's code, and no `passed` self-check stands for it.
+        if let Some(code) = failure_code {
+            if status_failure.is_some() {
+                self.withhold_policy_instance_availability(instance_id)?;
+            } else {
+                self.withhold_after_failed_preparation(instance_id, code)?;
+            }
         }
         let selfcheck = scheduling_resume_selfcheck(&observations, failure_code);
         // #402 HS-2: a backend switch's failed candidate starts no ladder (design HS-M §3.2 step
@@ -2698,7 +2707,8 @@ impl HostShared {
     /// A preparation step other than an open failed without being fatal (the preparation lease
     /// was refused): one `runtime.failed` record with stage
     /// `runtime_lifecycle_connection_preparation` names the instance and the code, and the
-    /// instance stays or becomes unavailable.
+    /// instance stays or becomes unavailable. Workflow #489 AVAIL-1 fix round 1 (R1): it is one
+    /// the probes take up, with that code.
     fn record_connection_preparation_failure(
         &self,
         instance_id: InstanceId,
@@ -2712,7 +2722,7 @@ impl HostShared {
             links,
             None,
         )?;
-        self.withhold_policy_instance_availability(instance_id)
+        self.withhold_after_failed_preparation(instance_id, error.code())
     }
 }
 

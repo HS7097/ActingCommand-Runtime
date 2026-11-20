@@ -889,6 +889,21 @@ impl HostShared {
         )
     }
 
+    /// Workflow #489 AVAIL-1: whether `record` is a withdrawal (`false`) the backend self-check
+    /// gate published, whatever its cause.
+    pub(super) fn withdrawn_by_selfcheck_gate(record: &FactRecord) -> bool {
+        record.source_detector == BACKEND_SELFCHECK_AVAILABILITY_DETECTOR
+            && record
+                .source_snapshot_id
+                .starts_with(BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX)
+            && matches!(
+                record.content,
+                FactContent::Inline {
+                    value: ContractFactValue::Boolean(false)
+                }
+            )
+    }
+
     /// Workflow #398 RD-2 (model-398 v1.1 §4.2): whether `record` is a withdrawal the device
     /// link published, whatever its state.
     pub(super) fn withdrawn_by_device_link(record: Option<&FactRecord>) -> bool {

@@ -518,6 +518,23 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.task_held.after_ms` (Workflow #438 HELD-1, since 0.12.56) | milliseconds `60000..=86400000` | `1800000` |
 | `scheduling.device_group.switch_failure_cooldown_ms` (Workflow #437 MAPP-2b, since 0.12.60) | milliseconds `1..=3600000` | `300000` |
 | `scheduling.device_group.max_queue_wait_ms` (Workflow #437 ORD-1c, since 0.12.60) | milliseconds `60000..=86400000` | `1800000` |
+| `scheduling.unavailable_probe.first_interval_ms` (Workflow #489 AVAIL-1, since 0.12.76) | milliseconds `10000..=86400000` | `60000` |
+| `scheduling.unavailable_probe.factor` (Workflow #489 AVAIL-1, since 0.12.76) | integer `1..=16` | `2` |
+| `scheduling.unavailable_probe.max_interval_ms` (Workflow #489 AVAIL-1, since 0.12.76) | milliseconds `10000..=86400000` | `1800000` |
+| `scheduling.unavailable_probe.attention_after_ms` (Workflow #489 AVAIL-1, since 0.12.76) | milliseconds `60000..=604800000` | `3600000` |
+
+**The probes of an unavailable instance (Workflow #489 AVAIL-1, since 0.12.76; `actingd-config`
+revision 35; [scheduling/README.md](scheduling/README.md), "An unavailable instance is probed
+again").** The four `scheduling.unavailable_probe` keys are settable and read at every lease sweep
+tick while an instance is unavailable by a failed device self-check (or, since fix round 1, by
+another failed step of a connection preparation), so an instruction applies from the next tick;
+none has a per-instance form. The wait before probe *n* is `first_interval_ms`
+times `factor` to the power *n* − 1, never above `max_interval_ms` (a first interval above the cap
+is the cap; `factor` 1 keeps every interval the first), counted from the latest of: the end of
+the probe before, the instance's latest recorded self-check or dropped self-check facts (a run's,
+a rung's or a preparation's opens touched the device), and the latest sweep tick at which a claim
+held or waited for the instance's key. `attention_after_ms` is how long such an instance stays unavailable before a person
+is told, once per unavailability. No cross-key rule refuses a value.
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired

@@ -951,6 +951,80 @@
       "common_causes": "The device came back by itself (a capture channel that could not open for a moment).",
       "handling": "Nothing to do."
     },
+    "instance_unavailable_probe_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "attempts": "required",
+        "failure_code": "optional",
+        "next_occurrence_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "A probe of an instance (instance_id) its device self-check made unavailable to the scheduler did not pass (Workflow #489 AVAIL-1): attempts is the probe's number in this unavailability, failure_code the self-check's failure when it named one, the failed step of the probe's preparation (a close, an open without a report), or the refusal of the probe's claim. Since fix round 1 the instances probed also include one a failed step of a connection preparation other than its emulator status read withdrew. The probe is the self-check actingctl selfcheck runs (a preparation on the instance's key: it opens the backends and checks capture and input; no game input, no application launch, no emulator start), as the Runtime's own recovery preparation, so it starts no recovery ladder by itself; when a recovery the ladder's cool-down held back is due (no cool-down window in force holds the instance any more), that recovery is admitted after this record as it would be without the cool-down. The instance stays unavailable; next_occurrence_unix_ms is the next probe's time (scheduling.unavailable_probe: first_interval_ms, then each interval multiplied by factor, at most max_interval_ms). Recorded as a runtime.failed record under the probe's request links. Fix round 2: a probe whose opens passed and whose later step failed (the close after the opens, with two Nemu instances) is one failed probe of the same unavailability, with that step's code as failure_code; failure_code is absent when nothing in the probe named a code (an instance an open whose report left an entry unknown took in, whose device.self_check record says status unknown).",
+      "common_causes": "The capture or input backend of the instance still does not open: the emulator, its IPC or the device is not back yet.",
+      "handling": "Nothing while the probes go on; when the instance waits for a person (instance_unavailable_awaiting_person), look at the device and run actingctl selfcheck, actingctl resume or an emulator restart for the instance."
+    },
+    "instance_unavailable_probe_passed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "attempts": "required",
+        "elapsed_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "A probe of an instance (instance_id) its device self-check made unavailable passed (Workflow #489 AVAIL-1): its self-check passed as a person's does, the instance is available to the scheduler again and its due tasks are dispatched as usual; a recovery the ladder's cool-down held back is dropped, since there is nothing left to recover (fix round 2: after this record, its trigger's recovery_ladder_suppressed cooldown is written once more). attempts is the passing probe's number, elapsed_ms how long the instance was unavailable, failure_code the cause it had when one was named. Recorded as a runtime.failed record under the probe's request links; a person who was told of the unavailability sees it end here, and the overview row's backend_selfcheck and not_running follow the passing self-check (no status member answers the probes in 0.12.76).",
+      "common_causes": "The device came back by itself (a backend that could not open for a moment).",
+      "handling": "Nothing to do."
+    },
+    "instance_unavailable_awaiting_person": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "elapsed_ms": "required",
+        "limit_ms": "required",
+        "attempts": "required",
+        "failure_code": "optional",
+        "next_occurrence_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "An instance (instance_id) stayed unavailable to the scheduler by its device self-check for limit_ms (scheduling.unavailable_probe.attention_after_ms) and is brought to a person's attention (Workflow #489 AVAIL-1): elapsed_ms is how long it has been unavailable, attempts the probes made so far, failure_code its cause when one was named, next_occurrence_unix_ms the next probe's time. Recorded once per unavailability as a runtime.failed record under the instance's links and handed to the daemon's log; it holds until the instance is available again (no status member answers it in 0.12.76: the status member unavailable is declared and not answered). The probes go on. Fix round 2: also at once when a probe's worker panicked, unless this unavailability already told a person: failure_code panic_caught (the code of the worker's own record that follows), elapsed_ms how long so far, attempts the probes counted, no next_occurrence_unix_ms, since nothing probes the instance again in that unavailability.",
+      "common_causes": "The emulator, its IPC or the device did not come back by itself; or the instance's backend fails the same way at every open. With failure_code panic_caught: a defect met by the probe, whose panic_caught record names it.",
+      "handling": "Look at the device; run actingctl selfcheck for the instance, or a pause and a resume, or an emulator restart. A passing self-check ends the unavailability and the attention. With failure_code panic_caught, also report the panic_caught record."
+    },
     "action_id_issue_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -27427,6 +27501,14 @@
       "since": "0.12.9",
       "description": "A Runtime host operation or stage: the lease sweep queues the due periodic self-checks of fences that wait for a person (#411 A38)."
     },
+    "queue_unavailable_probes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "A Runtime host operation or stage: the lease sweep queues the due probes of instances their device self-check made unavailable, and tells a person of one unavailable too long (Workflow #489 AVAIL-1)."
+    },
     "read_active_contained_run": {
       "owner": "runtime-host",
       "layer": "host",
@@ -29602,6 +29684,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: run startup package."
+    },
+    "run_unavailable_probe": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "A Runtime host operation or stage: one probe (the device self-check only) of an instance its device self-check made unavailable, on its instance's worker (Workflow #489 AVAIL-1)."
     },
     "runtime_local_ipc": {
       "owner": "runtime-host",

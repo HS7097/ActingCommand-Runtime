@@ -153,7 +153,7 @@ pub use scheduling::{
     EvaluationRetryConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
     InstancePoolLineSet, InstanceSchedulingFile, PacingStage, PackAdmissionConfig, PoolLineValue,
     QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
-    SchedulingConfig, SchedulingFile, TaskHeldConfig,
+    SchedulingConfig, SchedulingFile, TaskHeldConfig, UnavailableProbeConfig,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,

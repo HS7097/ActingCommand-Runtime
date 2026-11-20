@@ -1696,6 +1696,13 @@ pub struct RuntimeInstanceStatus {
     /// no control gate. No method sets it. R-7b's host is the first to derive it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     control: Option<InstanceControl>,
+    /// Workflow #489 AVAIL-1 (`runtime-client` 14): the instance is unavailable by its device
+    /// self-check, and how it is probed again; absent otherwise. A reader whose `max` is below 14
+    /// refuses a status that carries it, so Runtime 0.12.76 fills it for no instance (fix round 1,
+    /// the coordinator's ruling): every reader built from 0.12.76 on decodes it, and the release
+    /// whose Runtime first answers it raises `runtime-client`'s `min` to 14.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unavailable: Option<InstanceUnavailable>,
 }
 
 /// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
@@ -1733,6 +1740,36 @@ pub struct InstanceFencePersonWait {
     /// while the recheck is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_recheck_unix_ms: Option<u64>,
+}
+
+/// Workflow #489 AVAIL-1 (`contracts/scheduling/README.md`, "An unavailable instance is probed
+/// again"; `runtime-client` revision 14): an instance its device self-check made unavailable to
+/// the scheduler (a self-check that did not pass, or one not made again since its facts were
+/// dropped), while no fence, device link or device state holds it: since when, why, and how the
+/// Runtime probes it again (its device self-check only, at growing intervals). Memory only: a
+/// restart starts it again from the instance's withdrawal. Absent for every available instance.
+/// Declared, not answered: Runtime 0.12.76 sends it for no instance (fix round 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceUnavailable {
+    /// When the withdrawal in effect was observed.
+    pub since_unix_ms: u64,
+    /// The code of the failed self-check that made it unavailable, when one named a code
+    /// (`paired_backend_open_failed`, …); absent for a self-check not made yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<crate::outcome::CodeStr>,
+    /// The probes started since it became unavailable, a running one included.
+    pub probes: u32,
+    /// When the latest probe ended; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_probe_unix_ms: Option<u64>,
+    /// When the next probe is due: the next interval's end, or the end of the cool-down that
+    /// holds a recovery back when that comes first; absent while a probe is queued or runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_probe_unix_ms: Option<u64>,
+    /// The unavailability lasted `scheduling.unavailable_probe.attention_after_ms`: it was brought
+    /// to a person's attention (`instance_unavailable_awaiting_person`).
+    pub awaiting_person: bool,
 }
 
 /// #411 A35-S5 (design `a35-design.md` §5.1 S5, Q7): a recovery ladder of the instance that
@@ -1815,6 +1852,7 @@ impl RuntimeInstanceStatus {
             player_hold: None,
             player_hold_operation: None,
             control: None,
+            unavailable: None,
         };
         status.validate()?;
         Ok(status)
@@ -1991,6 +2029,17 @@ impl RuntimeInstanceStatus {
 
     pub const fn activity(&self) -> Option<&InstanceActivity> {
         self.activity.as_ref()
+    }
+
+    /// Workflow #489 AVAIL-1: this status with the instance's unavailability by its device
+    /// self-check.
+    pub fn with_unavailable(mut self, unavailable: Option<InstanceUnavailable>) -> Self {
+        self.unavailable = unavailable;
+        self
+    }
+
+    pub const fn unavailable(&self) -> Option<&InstanceUnavailable> {
+        self.unavailable.as_ref()
     }
 }
 

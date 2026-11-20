@@ -21,7 +21,9 @@
 // 12 pairs, one whose `max` is below 12 fails `ui_meets_next` alone (the second test, renamed; fix
 // round 1 renamed the first for the range it asserts). #479 F-3b fix round 1 (register §1.487,
 // 0.12.75) raises `max` to 13 and keeps the floor: [12, 13]; the first test, renamed for the range
-// it asserts, and the second's refused row, whose R* is that range.
+// it asserts, and the second's refused row, whose R* is that range. Workflow #489 AVAIL-1 (register
+// §1.493, 0.12.76) raises `max` to 14 and keeps the floor: [12, 14]; the first test, renamed for
+// the range it asserts, and the second's refused row, whose R* is that range.
 
 use super::manifest::{Speaks, UiDeclaration, parse_declaration};
 use super::plan::{Edge, EdgeResult, ui_edges};
@@ -60,13 +62,13 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
-fn r0b_the_build_declares_runtime_client_12_to_13() {
+fn r0b_the_build_declares_runtime_client_12_to_14() {
     // Workflow #432 AGT-1b (register §1.246) raises `max` to 5, #407 PERF-READ (§1.280) to 6,
     // #428 S168-LB1a (§1.311) to 7, #434 LAB-6S1a (§1.287) to 8, #463 V3 (§1.383) to 9, #437
-    // G1 fix round 2 (§1.433) to 10, #463 S3-8 (§1.444) to 11, #480 PG-2c (§1.472) to 12 and
-    // #479 F-3b fix round 1 (§1.487) to 13; the floor this test is about stayed at 3 until #480
-    // PG-2e (§1.485) raised it to 12.
-    assert_eq!(own_speaks().get("runtime-client"), Some(&[12, 13]));
+    // G1 fix round 2 (§1.433) to 10, #463 S3-8 (§1.444) to 11, #480 PG-2c (§1.472) to 12,
+    // #479 F-3b fix round 1 (§1.487) to 13 and Workflow #489 AVAIL-1 (§1.493) to 14; the floor
+    // this test is about stayed at 3 until #480 PG-2e (§1.485) raised it to 12.
+    assert_eq!(own_speaks().get("runtime-client"), Some(&[12, 14]));
 }
 
 #[test]
@@ -102,7 +104,7 @@ fn r0b_a_console_that_reads_12_pairs_and_one_whose_max_is_below_12_is_refused() 
             "result": "fail",
             "parties": [
                 {"party": "U*", "source": "manifest", "range": [3, 11]},
-                {"party": "R*", "source": "manifest", "range": [12, 13]},
+                {"party": "R*", "source": "manifest", "range": [12, 14]},
             ],
         })
     );

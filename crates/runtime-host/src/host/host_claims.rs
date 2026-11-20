@@ -30,6 +30,7 @@ use super::recovery_ladder::PendingRecoveryLadder;
 use super::resource_close::PendingHeldStartPreparation;
 use super::resource_fence::PendingFenceRecheck;
 use super::startup_package::PendingStartupPackage;
+use super::unavailable_probe::PendingUnavailableProbe;
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
@@ -60,6 +61,9 @@ pub(super) enum HostClaimWork {
     /// several that the device's hold for another member's unconfirmed close refused, queued by
     /// the lease sweep once that hold has ended, on a self-check claim.
     HeldStartPreparation(PendingHeldStartPreparation),
+    /// Workflow #489 AVAIL-1: one probe (the device self-check only) of an instance its device
+    /// self-check made unavailable, on a self-check claim.
+    UnavailableProbe(PendingUnavailableProbe),
 }
 
 impl HostClaimWork {
@@ -77,6 +81,8 @@ impl HostClaimWork {
             Self::IdleAction(_) => crate::codes::IdleLocation::Action.as_str(),
             // The payload runs the registered host operation of a held start preparation.
             Self::HeldStartPreparation(_) => HostLocation::RunHeldStartPreparation.as_str(),
+            // The payload runs the registered host operation of an unavailable instance's probe.
+            Self::UnavailableProbe(_) => HostLocation::RunUnavailableProbe.as_str(),
         }
     }
 }
@@ -189,6 +195,15 @@ fn instance_worker_loop(
             WorkerJob::PolicyRun(run) => Some(run.lane()),
             WorkerJob::HostClaim { .. } => None,
         };
+        // Workflow #489 AVAIL-1 fix round 1 (item 4): what a panicked probe of an unavailable
+        // instance leaves behind (its instance's probe step, queued or running).
+        let probe = match &job {
+            WorkerJob::HostClaim {
+                work: HostClaimWork::UnavailableProbe(pending),
+                ..
+            } => Some((pending.instance_id, pending.probe)),
+            _ => None,
+        };
         // Fix 2 (re-review L-3): the lane is taken out first, so a failure to issue the failure
         // links (a global fault) still ends a policy run's registration, left abandoned for the
         // reconciliation, never working, and the Runtime is marked fatal.
@@ -219,6 +234,13 @@ fn instance_worker_loop(
                 if let Some(lane) = lane {
                     shared.drop_panicked_policy_run(lane)?;
                 }
+                // Workflow #489 AVAIL-1 fix round 2 (item 2): a panicked probe ends its
+                // unavailability's probes and tells a person (`end_panicked_unavailable_probe`).
+                // A failure of that clean-up is kept, and returned only after the panic's own
+                // record and the fatal mark a second panic owes, which it never swallows.
+                let probe_ended = probe.map_or(Ok(()), |(instance_id, probe)| {
+                    shared.end_panicked_unavailable_probe(instance_id, probe)
+                });
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
@@ -226,6 +248,12 @@ fn instance_worker_loop(
                         HostLocation::RunInstanceWorker,
                         RuntimeErrorCode::RuntimeHalted,
                     );
+                    shared.fatal.mark(error.clone())?;
+                    probe_ended?;
+                    return Err(error);
+                }
+                if let Err(error) = probe_ended {
+                    let error = error.into_fatal();
                     shared.fatal.mark(error.clone())?;
                     return Err(error);
                 }
@@ -273,6 +301,7 @@ impl HostShared {
             HostClaimWork::HeldStartPreparation(pending) => {
                 self.run_held_start_preparation(&pending, key)
             }
+            HostClaimWork::UnavailableProbe(pending) => self.run_unavailable_probe(&pending, key),
         }
     }
 
@@ -307,6 +336,7 @@ impl HostShared {
                     .issue_registered_instance(pending.instance_id),
             ),
             HostClaimWork::HeldStartPreparation(pending) => pending.links.clone(),
+            HostClaimWork::UnavailableProbe(pending) => pending.links.clone(),
         })
     }
 

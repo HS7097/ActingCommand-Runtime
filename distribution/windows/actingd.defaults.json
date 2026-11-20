@@ -388,6 +388,12 @@
     "device_group": {
       "switch_failure_cooldown_ms": 300000,
       "max_queue_wait_ms": 1800000
+    },
+    "unavailable_probe": {
+      "first_interval_ms": 60000,
+      "factor": 2,
+      "max_interval_ms": 1800000,
+      "attention_after_ms": 3600000
     }
   },
   "ledger_observer": {

@@ -2034,7 +2034,131 @@ impl HostShared {
                 rule: pending.trigger.rule.clone(),
             },
         )?;
+        // Workflow #489 AVAIL-1 (item 1): a recovery the cool-down holds back while its instance
+        // is unavailable by its device self-check is taken up when the cool-down ends. A drill is
+        // a person's and is refused to them instead.
+        if reason == RecoveryLadderSuppression::Cooldown && pending.drill.is_none() {
+            self.hold_cooled_down_recovery(pending.instance_id, pending, until_unix_ms)?;
+        }
         Ok(Err((reason, until_unix_ms)))
+    }
+
+    /// Workflow #489 AVAIL-1 (item 1): a recovery its cool-down held back while the instance was
+    /// unavailable, whose cool-down has ended and whose instance a probe found still unavailable:
+    /// admitted as it would have been without the cool-down (every other admission rule as for
+    /// every ladder: a scheduling pause, business capacity, a blackout, a ladder that holds or
+    /// waits for the instance), its claim queued; a refused admission is recorded as for every
+    /// ladder. A preparation's ladder names the probe's preparation, the instance's latest, as the
+    /// one it recovers from: B2 would otherwise read the probe's failed preparation as a later one
+    /// that superseded the ladder's own and suppress it at its climb. Fix round 1 (item 7a): it is
+    /// admitted as a new ladder of the same trigger, with a request id, a causation id and a
+    /// holder of its own and its claim's request for them; a ladder suppressed on its key (B3
+    /// `queue`) had its claim granted and released under the ids it was admitted with, which
+    /// therefore name no second claim.
+    pub(super) fn admit_held_recovery(
+        &self,
+        mut pending: PendingRecoveryLadder,
+    ) -> RuntimeHostResult<()> {
+        pending.respect_cooldown = false;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadRecoveryLadderInstance,
+        )?
+        .get(&pending.instance_id)
+        .cloned()
+        .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
+        let issuer = self.events.issuer();
+        let request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        pending.claim = self.ladder_claim_request(
+            &resolved,
+            request_id,
+            pending.correlation_id,
+            causation_id,
+            holder_id,
+        )?;
+        pending.links = pending
+            .links
+            .with_request_id(request_id)
+            .with_causation_id(causation_id);
+        pending.request_id = *request_id.transport();
+        pending.causation_id = causation_id;
+        pending.holder_id = holder_id;
+        if pending.trigger.preparation.is_some() {
+            let latest = lock(
+                &self.recovery_ladders,
+                HostLocation::GateRecoveryPreparation,
+            )?
+            .get(&pending.instance_id)
+            .and_then(|window| window.preparation);
+            if latest.is_some() {
+                pending.trigger.preparation = latest;
+            }
+        }
+        match self.admit_recovery_ladder(pending)? {
+            Some(admitted) => self.enqueue_ladder_claim(admitted),
+            None => Ok(()),
+        }
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 2 (item 4): a recovery its cool-down held back with an
+    /// unavailable instance is dropped without being taken up (a later suppression replaced it,
+    /// the instance left the unavailable instances, or a pause, a fence or an idle stop took the
+    /// instance). Its trigger ends in a record: its own `recovery_ladder_suppressed` `cooldown`
+    /// once more (info, under the ladder's links, `until_unix_ms` the end it was held to, the
+    /// trigger item that matched): the cool-down suppressed it and nothing starts from it. No code,
+    /// word or member is added; a held recovery taken up writes `recovery_ladder_started`, and one
+    /// whose admission is refused when it is released writes that refusal's own suppression.
+    pub(super) fn record_dropped_held_recovery(
+        &self,
+        pending: &PendingRecoveryLadder,
+        until_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        self.append_recovery_ladder_fact(
+            pending,
+            EventSeverity::Info,
+            RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+                reason: RecoveryLadderSuppression::Cooldown,
+                until_unix_ms,
+                rule: pending.trigger.rule.clone(),
+            },
+        )
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (item 3): the end of `instance_id`'s cool-down window in
+    /// force now, as an admission reads it (`0` while none was opened).
+    pub(super) fn cooldown_window_until(&self, instance_id: InstanceId) -> RuntimeHostResult<u64> {
+        Ok(
+            lock(&self.recovery_ladders, HostLocation::AdmitRecoveryLadder)?
+                .get(&instance_id)
+                .map_or(0, |window| window.until_unix_ms),
+        )
+    }
+
+    /// Workflow #489 AVAIL-1, test builds: opens `instance_id`'s cool-down window until
+    /// `until_unix_ms`, as a ladder that got the key would.
+    #[cfg(test)]
+    pub(super) fn open_cooldown_window_for_test(
+        &self,
+        instance_id: InstanceId,
+        until_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        lock(
+            &self.recovery_ladders,
+            HostLocation::OpenRecoveryLadderWindow,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .until_unix_ms = until_unix_ms;
+        Ok(())
     }
 
     /// Workflow #369 H-1, P1 (review #716 follow-up): the explicit release `request_id` of the
@@ -2238,7 +2362,7 @@ impl HostShared {
                 .get(&pending.instance_id)
                 .map_or(0, |window| window.until_unix_ms);
             if now_unix_ms < until_unix_ms {
-                return self.append_recovery_ladder_fact(
+                self.append_recovery_ladder_fact(
                     pending,
                     EventSeverity::Info,
                     RuntimeLifecyclePhase::RecoveryLadderSuppressed {
@@ -2246,7 +2370,18 @@ impl HostShared {
                         until_unix_ms,
                         rule: pending.trigger.rule.clone(),
                     },
-                );
+                )?;
+                // Workflow #489 AVAIL-1 (item 1): taken up when the cool-down ends while the
+                // instance is unavailable by its device self-check.
+                return if pending.drill.is_none() {
+                    self.hold_cooled_down_recovery(
+                        pending.instance_id,
+                        pending.clone(),
+                        until_unix_ms,
+                    )
+                } else {
+                    Ok(())
+                };
             }
         }
         // B4 `admitted` (Workflow #369 §5.3): only a ladder that got the key opens its window;

@@ -753,6 +753,10 @@ mod gate_411_a65;
 // Workflow #485 START-1 (0.12.75, register §1.489): the start's settlement of earlier epochs'
 // direct runs reads the finished runs by type alone, and the start log times every stage.
 mod gate_485_start1;
+// Workflow #489 AVAIL-1 (0.12.76, register §1.493): an instance its device self-check made
+// unavailable is probed again, and a recovery its ladder's cool-down held back is taken up when the
+// cool-down ends.
+mod gate_489_avail1;
 // #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`
 // after each Lab observation), so its closes do not grow with them.
 mod gate_411_p51;

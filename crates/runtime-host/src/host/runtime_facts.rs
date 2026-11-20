@@ -12,7 +12,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::PolicySettlement;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location, Outcome};
+use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, BackendOpenReport, DeviceSelfCheck,
     DeviceSelfCheckCapture, DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus,
@@ -401,7 +401,13 @@ impl HostShared {
             ),
         ];
         let scope = RuntimeFactScope::Instance { instance_id };
-        let result: RuntimeHostResult<()> = (|| {
+        // Workflow #489 AVAIL-1: the code of this open's failed self-check, which makes the
+        // instance one the probes take up when the gate holds it unavailable; fix round 2 (item
+        // 3): so does an open whose self-check is `unknown` (an entry its report left `unknown`),
+        // with no code: no word is added, and its `device.self_check` record says why.
+        let mut failed = None;
+        let mut unknown = false;
+        let recorded: RuntimeHostResult<()> = (|| {
             let (instance_alias, self_checked) = self.selfcheck_instance(instance_id)?;
             let _gate = lock(
                 &self.fact_write_gate,
@@ -434,6 +440,10 @@ impl HostShared {
             // provider has no device connection to hint at).
             if self_checked {
                 let check = device_self_check(instance_alias, report, status);
+                failed = check
+                    .failure_code
+                    .map(|failure| CodeStr::from(failure.code()));
+                unknown = check.status == DeviceSelfCheckStatus::Unknown;
                 self.append_event_under_fact_gate(
                     if check.status == DeviceSelfCheckStatus::Failed {
                         EventSeverity::Warning
@@ -449,12 +459,13 @@ impl HostShared {
                 self.synchronize_fact_store_under_gate()?;
             }
             Ok(())
-        })()
-        .and_then(|()| {
+        })();
+        let result = recorded.and_then(|()| {
             self.gate_policy_availability_on_selfcheck(
                 instance_id,
                 Some((entry, report.session_generation)),
-            )
+            )?;
+            self.track_unavailability(instance_id, failed, unknown)
         });
         if let Err(error) = &result
             && error.is_fatal()
@@ -498,7 +509,9 @@ impl HostShared {
                 RuntimeFactInvalidationReason::DeviceClosed,
             )?;
         }
-        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        let result = self
+            .gate_policy_availability_on_selfcheck(instance_id, None)
+            .and_then(|()| self.track_unavailability(instance_id, None, false));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -514,6 +527,46 @@ impl HostShared {
     pub(super) fn withhold_policy_instance_availability(
         &self,
         instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        self.withhold_policy_instance_availability_for(instance_id, None)
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (the coordinator's rulings R1 and R2 of 11-20): a step
+    /// of a connection preparation other than its emulator status read failed with `cause` (the
+    /// step's code: a close of the kept session or the close after the opens that failed with
+    /// its resources confirmed released, an open that failed without a report, the preparation's
+    /// lease refused, or an open whose self-check failed). The instance is withdrawn as
+    /// [`Self::withhold_policy_instance_availability`] withdraws it and, while the gate holds it
+    /// so (a gated instance, its seed available, no fence), enters the unavailable instances the
+    /// probes take up with `cause`, as one whose self-check failed. R2: no `passed` self-check
+    /// stands for such an instance: unless a stored self-check entry says `failed` (an open's own
+    /// failure, kept as the overview shows it), its `backend.selfcheck.*` facts are dropped here
+    /// first (`invalidate_backend_selfcheck_facts`), the one place it happens; the next recorded
+    /// self-check alone makes it available again. Every refusal is returned.
+    pub(super) fn withhold_after_failed_preparation(
+        &self,
+        instance_id: InstanceId,
+        cause: &str,
+    ) -> RuntimeHostResult<()> {
+        let gated = self
+            .gated_policy_instance(instance_id)?
+            .is_some_and(|(_, seed_available)| seed_available)
+            && !self.resource_fenced(instance_id)?;
+        if gated && !self.backend_selfcheck_failed(instance_id)? {
+            self.invalidate_backend_selfcheck_facts(instance_id)?;
+        }
+        self.withhold_policy_instance_availability_for(
+            instance_id,
+            Some(Outcome::relayed(cause).code().clone()),
+        )
+    }
+
+    /// [`Self::withhold_policy_instance_availability`], the unavailable instances told of the
+    /// decision with `failed` (`track_unavailability`).
+    fn withhold_policy_instance_availability_for(
+        &self,
+        instance_id: InstanceId,
+        failed: Option<CodeStr>,
     ) -> RuntimeHostResult<()> {
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
@@ -543,7 +596,8 @@ impl HostShared {
                 )?;
             }
             Ok(())
-        })();
+        })()
+        .and_then(|()| self.track_unavailability(instance_id, failed, false));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -562,7 +616,9 @@ impl HostShared {
             &self.backend_selfcheck_availability_gate,
             HostLocation::LiftInstanceResourceFence,
         )?;
-        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        let result = self
+            .gate_policy_availability_on_selfcheck(instance_id, None)
+            .and_then(|()| self.track_unavailability(instance_id, None, false));
         if let Err(error) = &result
             && error.is_fatal()
         {
@@ -679,6 +735,28 @@ impl HostShared {
         Ok(seed_available.map(|available| (instance_alias, available)))
     }
 
+    /// Workflow #489 AVAIL-1: when the backend self-check gate holds `instance_id` unavailable
+    /// (its availability in effect is the gate's own withdrawal) while its configured seed is
+    /// available and no fence holds it, that withdrawal's observation time; otherwise `None`: a
+    /// fixture, an instance without a configured seed or with an unavailable one, a fenced
+    /// instance, and one a device link, a device state or a device system holds.
+    pub(super) fn selfcheck_withdrawal(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let Some((instance_alias, seed_available)) = self.gated_policy_instance(instance_id)?
+        else {
+            return Ok(None);
+        };
+        if !seed_available || self.resource_fenced(instance_id)? {
+            return Ok(None);
+        }
+        let (active, _) = self.active_policy_instance_availability(&instance_alias)?;
+        Ok(active
+            .filter(Self::withdrawn_by_selfcheck_gate)
+            .map(|record| record.observed_at_unix_ms))
+    }
+
     /// The instance's own active `session.instance.available` record and its boolean value.
     fn active_policy_instance_availability(
         &self,
@@ -730,6 +808,25 @@ impl HostShared {
         let (input, capture, nemu) = (status("input"), status("capture"), status("nemu"));
         Ok(![&input, &capture, &nemu].contains(&&failed)
             && (nemu == passed || (input == passed && capture == passed)))
+    }
+
+    /// Workflow #489 AVAIL-1 fix round 1 (R2): whether a stored `backend.selfcheck.<entry>.status`
+    /// of the instance says `failed` (an open's own failed self-check).
+    fn backend_selfcheck_failed(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        let store = lock(
+            &self.runtime_facts,
+            HostLocation::ReadBackendSelfcheckStatus,
+        )?;
+        let failed = FactValue::String("failed".to_owned());
+        Ok(["input", "capture", "nemu"].into_iter().any(|entry| {
+            store
+                .get(
+                    &scope,
+                    &format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{BACKEND_SELFCHECK_STATUS_SUFFIX}"),
+                )
+                .is_some_and(|record| record.value == failed)
+        }))
     }
 
     /// EMU-BIND fix 1 (0.12.28, review M1): whether the store holds any `backend.selfcheck.*`
