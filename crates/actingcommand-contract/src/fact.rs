@@ -11,7 +11,9 @@ use std::path::Path;
 const MAX_FACT_KEY_BYTES: usize = 192;
 const MAX_FACT_TEXT_BYTES: usize = 1_024;
 /// The records of one observation, of an `InstanceFactSnapshot` and of an `InstanceFactView`.
-const MAX_FACT_RECORDS: usize = 256;
+/// Workflow #498 FACT-CAP: the instance fact store's per-scope bounds add up to it, so that no
+/// instance's facts, its own with its server's and its game's, outgrow one snapshot.
+pub const MAX_FACT_RECORDS: usize = 256;
 /// Workflow #428 S168-LB1a (since 0.12.55; `contracts/instance-fact-store.md`, "List reading
 /// facts", "Row bound"): the rows of one `record_list` fact, a bound of its own apart from
 /// `MAX_FACT_RECORDS`, checked by every reader of a record (`FactValue::validate`). It is the

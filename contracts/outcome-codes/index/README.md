@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3968 |
+| active | 3969 |
 | retired | 89 |
-| all | 4057 |
+| all | 4058 |
 
 ## Active codes by category
 
@@ -32,7 +32,7 @@ here.
 |---|---:|
 | success | 125 |
 | info | 221 |
-| warning | 184 |
+| warning | 185 |
 | error | 3421 |
 | fatal | 17 |
 
@@ -40,12 +40,12 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 814 |
+| `common_causes` and `handling` both written | 815 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3150 |
 | `settled` | 154 |
-| `pending` | 3814 |
-| all active codes | 3968 |
+| `pending` | 3815 |
+| all active codes | 3969 |
 
 ## By owner
 
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1180 | 1133 | 211 | 6 |
+| [runtime-host](runtime-host.md) | 1181 | 1134 | 212 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4057 | 3968 | 814 | 154 |
+| all | 4058 | 3969 | 815 | 154 |

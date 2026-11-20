@@ -393,7 +393,19 @@ For `contained_task_resource_reading_rejected`, the fact store code can be trace
 - `fact_observation_incomplete_refresh`: the key's active record came from an observation with
   other keys.
 - `fact_observation_in_future`: the Runtime clock is behind the device clock.
-- `fact_store_capacity_exceeded`: the count of active fact identities.
+- `fact_store_capacity_exceeded`: the count of the instance's own active facts against its bound
+  (since Workflow #498, 0.12.76: each instance's own bound, 224; [instance-fact-store.md](instance-fact-store.md),
+  "Capacity ledger"; before it the count of the host's fact identities against 256). The instance
+  was said to be near it first (`fact_store_capacity_share_reached`, a Warning `runtime.failed`
+  under the instance, at 80% of its bound).
+
+Since Workflow #498 (0.12.76) a refusal of the store itself (a record it refused at publication, or
+an adjustment's invalidation it refused) is also the `caused_by` link of the run's failure, on its
+`task.failed` terminal and its answer, so the ledger names the store's code beside the native
+detail; a record refused before it reached the store (`fact_observation_invalid`, an adjustment's
+base replaced) carries no such link, as before. Each refused run records its refusal once, on its
+own terminal; a scheduled run refused so settles as a failure of its task (`failure_streak`), never
+as a success.
 
 The detail `<id>:fact_observation_invalid` also names a reading that a fact record cannot hold.
 
@@ -842,13 +854,15 @@ the run the same way.
 ### Capacity and reserved keys
 
 - Each list is one fact identity, `(instance scope, fact_key)`, whatever its rows and however
-  often they change: the store replaces the record in place. Identities count against the store's
-  256 active facts, shared by the whole host and never reclaimed
-  ([instance-fact-store.md](instance-fact-store.md), "Capacity ledger"). A package may declare
-  several lists, for example one per kind of member, each under its own key: *n* lists cost *n*
-  identities on every instance that runs it. On a full store the publication is refused
-  (`fact_store_capacity_exceeded`, the run fails `contained_task_resource_reading_rejected`);
-  nothing is evicted.
+  often they change: the store replaces the record in place. Since Workflow #498 (0.12.76) an
+  identity counts against the bound of its instance's own active facts, 224 for each instance
+  ([instance-fact-store.md](instance-fact-store.md), "Capacity ledger"; before it the store's 256
+  identities, shared by the whole host and never reclaimed). A package may declare several lists,
+  for example one per kind of member, each under its own key: *n* lists cost *n* identities on
+  every instance that runs it, each of that instance's own bound. On an instance at its bound the
+  publication is refused (`fact_store_capacity_exceeded`, the run fails
+  `contained_task_resource_reading_rejected` with the store's refusal as its cause); nothing is
+  evicted, and the other instances' lists go on.
 - A client never writes a list: a `PublishFact` or `PublishFacts` of a key under
   `inventory.list.` is refused before the fact write gate, as the non-fatal request error
   `list_reading_key_reserved` (`fact_key`), with nothing appended, from every client envelope
