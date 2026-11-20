@@ -8591,8 +8591,12 @@ impl HostShared {
         context: &PolicyRunContext,
         task_request: &ContainedTaskRequest,
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
-        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
-        self.register_scheduled_resolution(context.decision_id())?;
+        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item);
+        // Workflow #490 ENTRY-A: and what is known now of the instance's entry blocks.
+        self.register_scheduled_resolution(
+            context.decision_id(),
+            context.lease_token().instance_id(),
+        )?;
         lock(self.policy()?, HostLocation::ValidatePolicyRunContext)?
             .validate_run_context(context)
             .map_err(|error| {
@@ -12248,6 +12252,13 @@ impl HostShared {
             if let Some(mut failure) = reading_failure {
                 failure.terminal = Some(terminal(&terminal_event));
                 return Err(failure);
+            }
+            // Workflow #490 ENTRY-A (`entry_blocks.rs`): a run on the instance that succeeded (a
+            // scheduled run, a client's or the Lab's, a startup package, a rung's) ends the
+            // instance's entry block, before its lease ends and wakes the evaluation.
+            if draft.outcome == TaskOutcome::Success {
+                self.end_entry_block(token.instance_id())
+                    .map_err(RequestFailure::poison_without_terminal)?;
             }
             Ok(terminal_event)
         })();

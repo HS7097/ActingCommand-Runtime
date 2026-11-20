@@ -179,9 +179,10 @@ pub(super) struct PendingUnavailableProbe {
     pub(super) links: EventLinksDraft,
 }
 
-/// What holds an instance's probes at a tick.
+/// What holds an instance's probes at a tick (Workflow #490 ENTRY-A: and the take-up of an
+/// entry-blocked instance's held recovery, `entry_blocks.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProbeHold {
+pub(super) enum ProbeHold {
     /// Nothing: the instance may be probed when its key is free.
     Free,
     /// A blackout covers the instance: it is probed after the blackout.
@@ -241,25 +242,29 @@ impl HostShared {
 
     /// Workflow #489 AVAIL-1 (item 1): a ladder of `instance_id` its cool-down suppressed until
     /// `until_unix_ms`. While the instance is unavailable by its self-check, the recovery is held
-    /// with it and taken up when the cool-down ends; otherwise nothing changes.
+    /// with it and taken up when the cool-down ends. Workflow #490 ENTRY-A: otherwise it is held
+    /// with the instance's entry block, or kept for the settlement of the failed run its trigger
+    /// names (`hold_entry_recovery`).
     pub(super) fn hold_cooled_down_recovery(
         &self,
         instance_id: InstanceId,
         ladder: PendingRecoveryLadder,
         until_unix_ms: u64,
     ) -> RuntimeHostResult<()> {
-        if let Some(instance) = lock(
-            &self.unavailable_instances,
-            HostLocation::QueueUnavailableProbes,
-        )?
-        .get_mut(&instance_id)
         {
-            instance.held = Some(HeldRecovery {
-                ladder,
-                until_unix_ms,
-            });
+            let mut instances = lock(
+                &self.unavailable_instances,
+                HostLocation::QueueUnavailableProbes,
+            )?;
+            if let Some(instance) = instances.get_mut(&instance_id) {
+                instance.held = Some(HeldRecovery {
+                    ladder,
+                    until_unix_ms,
+                });
+                return Ok(());
+            }
         }
-        Ok(())
+        self.hold_entry_recovery(instance_id, ladder, until_unix_ms)
     }
 
     /// Every unavailable instance as `Status` reports it, with the configuration in effect.
@@ -285,7 +290,11 @@ impl HostShared {
     }
 
     /// What holds the probes of `instance_id` (alias `alias`) now.
-    fn probe_hold(&self, instance_id: InstanceId, alias: &str) -> RuntimeHostResult<ProbeHold> {
+    pub(super) fn probe_hold(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+    ) -> RuntimeHostResult<ProbeHold> {
         let paused =
             lock(&self.scheduling_pause, HostLocation::QueueUnavailableProbes)?.pauses(alias);
         if paused

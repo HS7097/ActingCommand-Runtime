@@ -49,7 +49,9 @@ loop and activity budgets, the activity's sampled interval after its previous ad
 (`policy_activity_interval_active`) and the activity windows still apply, and every rerun
 consumes the budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
 its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
-page-graph task is rerun at once as a linear one is.
+page-graph task is rerun at once as a linear one is. Since 0.12.76 (Workflow #490 ENTRY-A) a
+failure at the run's entry is no failure of the task and is never rerun at once ("A failure at the
+entry" below): it settles as a condition, with no retry, and blocks its instance.
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -108,7 +110,7 @@ The live settlement of a scheduled run whose main package was admitted, as `line
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `n<I><H>` | Workflow #373 NAV-5 (M-373 §8.5): the navigation, recovery chain or interrupt layer package a navigation failure happened in (the last `EntryRecoveryFailed` of a layer with role `navigation_hop`, `recovery_chain` or `interrupt_handler`), or the package a `contained_task_navigation_package_invalid` names; `I` and `H` as above, `H` at the path the registry of the run's game gives it. Absent when the failure happened in no such layer. |
 | `g<H>` | Workflow #373 NAV-5 (M-373 §8.5): the first 12 hex digits of SHA-256 over the run's game root's `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent file adds nothing), `x` when they could not be read. Present, after `n`, on a failure whose code starts with `contained_task_navigation_` or `contained_task_interrupt_`, or that happened in such a layer; absent on every other failure. |
-| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
+| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate; since 0.12.76 (Workflow #490 ENTRY-A) `i` and the same digits for such a failure at the run's entry that the settlement settled as a condition of the instance ("A failure at the entry"); it does not accumulate either. |
 
 The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 NAV-5: was
 214 before `n` and `g`), without whitespace or control characters. A segment out of the order
@@ -223,7 +225,9 @@ Every other failure is rerun only: its `F` is unique, so it never repeats the pr
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
 the start not on the first step, `contained_task_linear_application_unconfirmed`, device and
 backend errors, operator pause, cancellation and deadline, the task timeout and recognition
-errors.
+errors. Since 0.12.76 (Workflow #490 ENTRY-A) such a failure at the run's entry that the
+instance's recovery ladder takes is not rerun either: it settles as a condition of the instance
+("A failure at the entry" below).
 
 The restart segment (R25-1): the run had a `launch` or `restart` application effect
 (`application.intent`) and no `StepFinished` after the last one names a main-interface page
@@ -252,6 +256,89 @@ clears the pair's streak and immediate-rerun round; a block that repeats is boun
 round instead. A linear run that ends on a select step's `on_empty` key (Workflow #463 K1,
 [linear-steps.md](linear-steps.md), "Select steps") or on an ending page (Workflow #463 K2, since
 0.12.61, [linear-steps.md](linear-steps.md), "Endings") is a success in the same way.
+
+## A failure at the entry (Workflow #490 ENTRY-A, since 0.12.76)
+
+Register §1.494; the coordinator's work order of 11-20 on board #490 and its constraint of 23:18
+JST, not the owner's words. The production defect of 11-20 (v0.12.75): a package left a game on a
+screen no package knows; every task due after it failed at its entry, was rerun at once (R22)
+until its runs of the day were spent, a rule whose `escalation_threshold` is 1 was paused by one
+such failure, and once nothing failed any more nothing triggered a recovery.
+
+**Which failures.** The live settlement of a scheduled run decides it, from what it already reads
+for the failure identity ("Failure identity"), and writes the result into the record (below). A
+run failed at its entry when all of these hold:
+
+- its main package was admitted and its prerequisite chain resolved (not the `prepare` scope:
+  a refusal of the chain is a configuration problem and accumulates as before);
+- it checked its entry and its main package never started: a gated run (a prerequisite chain, a
+  page-graph run's entry check) or a home entry's preflight (an `EntryRecoveryDecision` among its
+  rows), and no `EntryTargetDisposition` `Started`, so the main package executed no step. The
+  scopes are `gate` and `pre:<I>`, and the home entry's check and its recovery package (which
+  "Scope and step" counts as `main` for a `linear_steps` run without a chain);
+- its failure does not accumulate ("Which failures accumulate": the navigation and interrupt
+  failures that accumulate in every scope stay accumulating failures of the task);
+- the instance's recovery ladder takes it: the rule the run's lease end reads (not a direct run,
+  a physical instance, stuck recovery on, a trigger item at the task stage that matches the code
+  and no exclusion), so a blocked instance always has a recovery coming, held or ended.
+
+So the set of codes is the configuration's: with the shipped `recovery_ladder.triggers` it is the
+codes of class `pack_logic_mismatch` (item `pack_logic`) that the gate, a prerequisite or
+return-home layer, the home entry's check or its recovery package end a run with, among them
+`contained_task_page_unknown`, `contained_task_recognition_failed`,
+`contained_task_home_entry_not_matched`, `contained_task_home_recovery_binding_missing` and a
+layer's own `page_confirmation_failed`, `contained_task_linear_intermediate_unobserved`,
+`contained_task_step_unconfirmed` and `contained_task_guard_refused`; and the capture codes of
+the item `task_capture_backend` (`capture_backend_open_failed`, `paired_backend_open_failed`,
+`capture_backend_operation_failed`, `capture_frame_invalid`) met at the entry. The shipped
+exclusions keep `contained_task_prerequisite_*` and `contained_task_return_home_entry_unmatched`
+(the gate's own codes of a chain that cannot reach the entry) out, and a code of another class
+(`contained_task_entry_pages_missing`, `declaration_error`; a vision provider failure,
+`environment_fault`) is matched by no item: those settle as before. A run the start's
+reconciliation settles from its terminal (its settlement was interrupted) has no failure identity
+and settles as before.
+
+**Settlement.** Such a run settles by the condition path ("Condition termination and owed
+reruns", "Settlement"): its record carries `condition` with `refunded` true whatever
+`scheduling.rerun.refund_counts` says, `count` 1 and the end of the window it was admitted in; it
+adds to no failure streak and no escalation (the pair's counters stay as they were), keeps the
+disposition `continue` with no `retry_at_unix_ms` (so R22 does not rerun it), cannot pause its
+pair whatever `escalation_threshold` says, gives back the four counts its admission took, and its
+runtime is not counted. It owes no rerun: the pair's owed rerun stays as it was, and the task is
+a candidate again by its own trigger and cooldown once its instance is no longer blocked. Its
+failure identity is written as for a failure that does not accumulate, with the frame mark `i`
+in place of `u` (the same digest of the decision id): `<base>~v2~…~fi<12 hex>`. That mark is how
+the record says it: a replay reads `condition` and the mark from the record, owes no rerun, and
+never reads the configuration. No member and no word of the record is added; the record's
+outcome keeps its code.
+
+**The block.** The settlement then blocks the instance, under the policy outcome gate the
+evaluation reads the blocks under: from then on every candidate of the instance (owed reruns,
+immediate reruns, remedy requests and the fact refresh included) waits with
+`instance_entry_blocked` ([scheduling-blackout.md](scheduling-blackout.md), "Order of the
+deferrals", position 4b). The block ends when a recovery ladder of the instance ends `recovered`
+or `environment_ready`, when any run on the instance succeeds (a scheduled run, a client's or the
+Lab's run, a startup package, a rung's run), when a resume lifts the instance's pause or the
+global one, or at a restart (memory only: the start prepares and self-checks the instance again,
+and nothing of the screen is known to be wrong). A recovery or a run that succeeded between the
+run's start and its settlement leaves no block. The recovery's own runs and a client's or the
+Lab's run are not scheduled candidates: the block never holds them.
+
+**The way out.** The failure's lease end entered the ladder as a failed run's does; nothing of
+the ladder changes (where it starts, how long it holds: Workflow #490 ENTRY-B). A ladder its
+cool-down suppressed is not dropped: it is held with the block and admitted when the cool-down
+ends, as without the cool-down, by the lease sweep's step after the unavailable instances' probes
+(Workflow #489 AVAIL-1's mechanism); a pause, a fence or an idle stop that owns the instance drops
+it, a blackout makes it wait. A recovery that ends without success (a ladder `exhausted`, or one
+a blackout or an admission refusal dropped) leaves the instance blocked and brings it to a
+person's attention once per block: `instance_entry_blocked_awaiting_person` (a warning
+`runtime.failed` record under the instance, handed to the daemon's log).
+
+**Status.** No member of the status is added (the coordinator's constraint of 23:18: a v0.12.75
+reader refuses a status with a member it does not know). The not-running row of
+`ScheduleExplanation` carries it: its `why` is `instance_entry_blocked` with the blocking run's
+`task_id`, `decision_id`, `failure_code` and `observed_at_unix_ms`, and its `since_unix_ms` the
+first evaluation that deferred the instance so.
 
 ## A failure that pauses at its first occurrence (Workflow #463 U1)
 

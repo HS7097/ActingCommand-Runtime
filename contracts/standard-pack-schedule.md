@@ -747,6 +747,16 @@ can do something irreversible").
   only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
   compose` and the Runtime's workbench do not report it.
+- **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.76, register
+  §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"). A rule's
+  `daily_limit` is spent at each admission, and an immediate rerun of a failure in a step of its
+  package costs one, as before. A run that failed at its entry (its package executed no step: the
+  game was on a screen its gate, prerequisite or return-home layer could not leave, and the
+  instance's recovery ladder takes the failure) gives its admission back, is not rerun at once,
+  owes no rerun and never counts toward `escalation_threshold`, so a rule whose threshold is 1 is
+  paused only by a failure of its own steps; the instance waits for its recovery
+  (`instance_entry_blocked`) and the rule is due again by its own trigger once it is unblocked. No
+  package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

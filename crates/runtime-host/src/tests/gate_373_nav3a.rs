@@ -183,8 +183,8 @@ impl Pack<'_> {
     }
 
     // The same files in one ZIP container (a source package: no `resources/manifest.json`), for a
-    // scheduled run whose package is a `.zip`.
-    fn zip(&self) -> Vec<u8> {
+    // scheduled run whose package is a `.zip` (Workflow #490 ENTRY-A's gate file too).
+    pub(super) fn zip(&self) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
         let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (path, value) in self.files() {

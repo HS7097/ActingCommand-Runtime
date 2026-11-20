@@ -564,7 +564,18 @@ impl HostShared {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.resume_scheduling(request, validated, scope, expected.as_ref(), connection_id)
+                let resumed = self.resume_scheduling(
+                    request,
+                    validated,
+                    scope,
+                    expected.as_ref(),
+                    connection_id,
+                )?;
+                // Workflow #490 ENTRY-A: a pause set and lifted by a resume ends the entry block of
+                // the instance it resumed (of every instance for the global scope).
+                self.end_entry_blocks_at_resume(scope)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                Ok(resumed)
             }
             // Workflow #317 sc3 (d): a manual reconnect and self-check of a physical instance.
             RuntimeOperation::SelfCheckInstance { instance_alias } => {

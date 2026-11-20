@@ -370,6 +370,14 @@ impl PendingRecoveryLadder {
         &self.claim
     }
 
+    /// Workflow #490 ENTRY-A: the failed run a task-stage trigger names; `None` for any other
+    /// trigger (a preparation's, a burst's, a fence's, a drill's).
+    pub(super) fn task_run(&self) -> Option<RunId> {
+        self.trigger
+            .run_id
+            .filter(|_| self.trigger.stage == RecoveryTriggerStage::Task)
+    }
+
     pub(super) const fn holder_id(&self) -> HolderId {
         self.holder_id
     }
@@ -1651,6 +1659,67 @@ impl HostShared {
         }
     }
 
+    /// Workflow #369 H-1 (Workflow #490 ENTRY-A: one rule for the lease end and the settlement):
+    /// whether a run's failure `failure_code` on `resolved` starts a ladder at the run's lease end,
+    /// before its admission: not a direct run under `rules.direct_runs = exempt` (B1), a physical
+    /// instance (A1), `stuck_recovery` on, a trigger item of `config` that matches the code at the
+    /// task stage. Returns the instance's settings and the item with how it matched.
+    fn task_trigger_item<'a>(
+        &self,
+        config: &'a LadderConfig,
+        resolved: &RegisteredInstance,
+        direct: bool,
+        failure_code: &CodeStr,
+    ) -> RuntimeHostResult<
+        Option<(
+            actingcommand_contract::InstanceStuckRecovery,
+            &'a TriggerItem,
+            RecoveryTriggerMatch,
+        )>,
+    > {
+        if direct_run_exempt(&config.rules, direct) {
+            return Ok(None);
+        }
+        let settings = self.instance_stuck_recovery(resolved.instance_id(), config)?;
+        let physical = resolved.provenance() == ExecutionBackendProvenance::PhysicalDevice;
+        if !settings.enabled
+            || ladder_invariants(&LadderFacts {
+                physical,
+                ..LadderFacts::PASSING
+            })
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .match_trigger(config, RecoveryTriggerStage::Task, failure_code)?
+            .map(|(item, matched)| (settings, item, matched)))
+    }
+
+    /// Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): whether
+    /// a scheduled run's failure `failure_code` on `instance_id` is one its lease end enters the
+    /// instance's recovery ladder with, by the rule the lease end reads ([`Self::task_trigger_item`]
+    /// under the `recovery_ladder` section in effect). Only such a failure at the entry blocks its
+    /// instance, so a blocked instance always has a recovery coming, held or ended.
+    pub(super) fn ladder_takes_failure(
+        &self,
+        instance_id: InstanceId,
+        failure_code: &CodeStr,
+    ) -> RuntimeHostResult<bool> {
+        let Some(resolved) = lock(
+            &self.registered_instances,
+            HostLocation::ReadRecoveryLadderInstance,
+        )?
+        .get(&instance_id)
+        .cloned() else {
+            return Ok(false);
+        };
+        let config = self.ladder_config()?;
+        Ok(self
+            .task_trigger_item(&config, &resolved, false, failure_code)?
+            .is_some())
+    }
+
     /// Workflow #369 H-1: decides, inside a run's failed lease end, whether its trigger starts
     /// a ladder: not a direct run under `rules.direct_runs = exempt` (B1), a physical instance
     /// (A1), `stuck_recovery` on, a trigger item that matches the code at the task stage, then
@@ -1663,23 +1732,10 @@ impl HostShared {
     ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
         let instance_id = resolved.instance_id();
         let config = self.ladder_config()?;
-        if direct_run_exempt(&config.rules, trigger.direct) {
-            return Ok(None);
-        }
-        let settings = self.instance_stuck_recovery(instance_id, &config)?;
-        let physical = resolved.provenance() == ExecutionBackendProvenance::PhysicalDevice;
-        if !settings.enabled
-            || ladder_invariants(&LadderFacts {
-                physical,
-                ..LadderFacts::PASSING
-            })
-            .is_some()
-        {
-            return Ok(None);
-        }
-        let Some((item, matched)) = self.match_trigger(
+        let Some((settings, item, matched)) = self.task_trigger_item(
             &config,
-            RecoveryTriggerStage::Task,
+            resolved,
+            trigger.direct,
             &trigger.terminal.failure_code,
         )?
         else {
@@ -4423,6 +4479,26 @@ impl HostShared {
         severity: EventSeverity,
         phase: RuntimeLifecyclePhase,
     ) -> RuntimeHostResult<()> {
+        // Workflow #490 ENTRY-A (`entry_blocks.rs`): a ladder of the instance that ends recovered
+        // ends its entry block; one that ends without success, or that a blackout or an admission
+        // refusal drops, leaves it blocked and brings it to a person's attention.
+        let recovered = match &phase {
+            RuntimeLifecyclePhase::RecoveryLadderFinished {
+                ladder_result:
+                    RecoveryLadderOutcome::Recovered | RecoveryLadderOutcome::EnvironmentReady,
+                ..
+            } => Some(true),
+            RuntimeLifecyclePhase::RecoveryLadderFinished {
+                ladder_result: RecoveryLadderOutcome::Exhausted,
+                ..
+            }
+            | RuntimeLifecyclePhase::RecoveryLadderSuppressed {
+                reason:
+                    RecoveryLadderSuppression::AdmissionDenied | RecoveryLadderSuppression::Blackout,
+                ..
+            } => Some(false),
+            _ => None,
+        };
         self.append_event_raw(
             severity,
             EventSource::Runtime,
@@ -4430,8 +4506,12 @@ impl HostShared {
             EventActor::Runtime,
             pending.links.clone(),
             ladder_fact_payload(self.owner_epoch, pending, phase),
-        )
-        .map(|_| ())
+        )?;
+        match recovered {
+            Some(true) => self.end_entry_block(pending.instance_id),
+            Some(false) => self.note_entry_recovery_failed(pending.instance_id),
+            None => Ok(()),
+        }
     }
 }
 

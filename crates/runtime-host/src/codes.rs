@@ -287,6 +287,20 @@ actingcommand_contract::outcome_codes! {
         /// next probe's time).
         InstanceUnavailableAwaitingPerson => "instance_unavailable_awaiting_person": warning / none,
         // Workflow #489 AVAIL-1 end
+        // Workflow #490 ENTRY-A begin: a run that failed at its entry blocks its instance.
+        /// Info (Workflow #490 ENTRY-A). The candidate's instance is entry-blocked: a scheduled run
+        /// there failed at its entry (its main package executed no step), and since then no
+        /// recovery and no run of the instance succeeded and no resume lifted a pause of it. Every
+        /// candidate of the instance is deferred with no wake of its own, the fact refresh naming
+        /// it as its gate (keys `instance_id`, `task_id` and `decision_id` of the run that blocked
+        /// it, `failure_code` its failure, `observed_at_unix_ms` when it was blocked).
+        InstanceEntryBlocked => "instance_entry_blocked": info / none,
+        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance's recovery ended without
+        /// success (its ladder exhausted, or its recovery dropped by a blackout or an admission
+        /// refusal): it stays blocked and waits for a person, once per block (keys `instance_id`,
+        /// `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
+        InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
+        // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
         /// rung's `recovery_rung_finished` outcome; M387 §4.1).
@@ -2238,6 +2252,11 @@ actingcommand_contract::outcome_locations! {
         // Workflow #489 AVAIL-1: the lease sweep queues the due probes of instances their device
         // self-check made unavailable, and tells a person of one unavailable too long.
         QueueUnavailableProbes => "queue_unavailable_probes",
+        // Workflow #490 ENTRY-A: an instance's entry block, set by a run that failed at its entry,
+        // ended by a recovery, a run or a resume, and the attention of a person once its recovery
+        // ended without success; the lease sweep takes up a recovery its cool-down held back.
+        InstanceEntryBlock => "instance_entry_block",
+        TakeUpEntryRecoveries => "take_up_entry_recoveries",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -2962,6 +2981,11 @@ pub(crate) mod test_spellings {
             UnavailableProbeTickForTest => "unavailable_probe_tick_for_test",
             OpenRecoveryCooldownForTest => "open_recovery_cooldown_for_test",
             HoldEmulatorStoppedForTest => "hold_emulator_stopped_for_test",
+            // Workflow #490 ENTRY-A: a test settles the next run as one that failed at its entry,
+            // reads an instance's entry block and runs one tick of the blocks' held recoveries.
+            SettleAtEntryForTest => "settle_at_entry_for_test",
+            EntryBlockForTest => "entry_block_for_test",
+            EntryBlockTickForTest => "entry_block_tick_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.

@@ -352,6 +352,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// projection resolved; set on the evaluator's own `instance_unavailable` reasons before the
     /// not-run explanation reads them.
     pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
+    /// Workflow #490 ENTRY-A (`scheduling-blackout.md`, "Order of the deferrals", position 4b):
+    /// each instance a scheduled run's failure at its entry blocked, by alias, as the host held them
+    /// when the cycle's inputs were read; every candidate of such an instance waits.
+    pub(crate) entry_blocked: &'a crate::entry_block::EntryBlockGates,
 }
 
 /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
@@ -3890,6 +3894,7 @@ impl PolicyHost {
             dispatches_read,
             standard_pack_variables,
             availability_withdrawals,
+            entry_blocked,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4033,6 +4038,9 @@ impl PolicyHost {
         // is left eligible and unselected.
         let mut instance_holds =
             crate::application_update::instance_holds(&update_pending, &store_tasks);
+        // Workflow #490 ENTRY-A (position 4b): every candidate of an entry-blocked instance the
+        // round settles before it asks the closure waits with the block's reason as well.
+        crate::entry_block::hold(&mut instance_holds, entry_blocked, &update_pending);
         // Workflow #437 MAPP-2b (`contracts/device-group.md`, "The member's switch cooldown"): a
         // member in its switch cooldown is held whole at position 2, so every candidate of it the
         // round settles before asking the closure below (behind another member's winner of the
@@ -4246,6 +4254,18 @@ impl PolicyHost {
                 {
                     return Ok(crate::application_update::deferral(
                         &intent.instance_id,
+                        refresh,
+                    ));
+                }
+                // Workflow #490 ENTRY-A (`scheduling-blackout.md`, "Order of the deferrals",
+                // position 4b): a scheduled run's failure at its entry blocked the instance; every
+                // candidate (an owed rerun, an immediate rerun, a remedy request, the fact refresh)
+                // waits with no wake of its own until a recovery or a run of the instance
+                // succeeds, a resume lifts a pause of it, or the Runtime restarts.
+                if let Some(gate) = entry_blocked.get(&intent.instance_id) {
+                    return Ok(crate::entry_block::deferral(
+                        &intent.instance_id,
+                        gate,
                         refresh,
                     ));
                 }
@@ -6258,6 +6278,36 @@ impl PolicyHost {
         )?;
         self.control
             .decide_condition(&catalog.compiled, &intent, admission, input, rule)
+    }
+
+    /// Workflow #490 ENTRY-A: the condition the first settlement of `decision_id`'s run settles by
+    /// when the run failed at its entry (`PolicyControlState::entry_condition`). A dispatch that is
+    /// unknown, not admitted or already has its record settles by nothing here, as
+    /// [`Self::decide_condition`].
+    pub(crate) fn entry_condition(
+        &self,
+        decision_id: &str,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<Option<PolicyConditionSettlement>> {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return Ok(None);
+        };
+        let (None, DispatchLifecycle::Admitted, Some(admission)) = (
+            &dispatch.execution,
+            dispatch.lifecycle,
+            dispatch.admission.as_ref(),
+        ) else {
+            return Ok(None);
+        };
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
+        self.control
+            .entry_condition(&catalog.compiled, &intent, admission, input)
     }
 
     /// Workflow #386 SR-2b-1: after the record of `data` is committed with the decision

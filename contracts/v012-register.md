@@ -42664,6 +42664,144 @@ not restored there (its start goes on); it reads the new records' codes as text;
 the probes, the held recoveries and the attention were memory and are gone, and the 11-20 dead
 state can return. In the release notes' language: 设备自检失败而被调度器视为不可用的实例，运行时会按间隔重新自检（只做自检：不点、不启动应用、不启动模拟器；1、3、7、15、31 分钟，之后每 30 分钟，四个新键 `scheduling.unavailable_probe.*` 可调）；恢复阶梯被冷却压下时，冷却一到先自检，过了就恢复可用，不过就放行被压下的那次恢复；不可用满一小时记一条警告 `instance_unavailable_awaiting_person` 并在状态里标出；状态多了 `unavailable` 成员（`runtime-client` 14），v0.12.75 的控制台和工具在有这种实例时读不了状态，要先换。
 
+### 1.494 Slice #490 ENTRY-A (0.12.76): a run that failed at its entry is a condition of its instance, not a failure of its task; the instance is entry-blocked until a recovery or a run succeeds (Workflow #490, a production defect of 11-20; the rules below are the coordinator's rulings on board #490, in the work order and in its constraint of 23:18 JST after the review of #1852, not the owner's words; coordinator work order `rd-1120/brief-490-entry-a.md` after the read-only study `rd-1120/study-490-entry-failures.md`; stacked on #1852's head `f3d39bbd`)
+
+This section takes 1.494, after AVAIL-1's §1.493, on whose code it stands (the ladder's held
+recovery and the lease sweep's step). It ships in 0.12.76.
+
+**What happened** (v0.12.75). A package left a game on a screen no package knows. Every task due
+after it failed at its entry (`contained_task_page_unknown`, 0 steps of its main package): such a
+failure never accumulates, so its identity's `F` was unique, its streak 1, and the immediate rerun
+(R22) dispatched it again within seconds until its runs of the day were spent (the counts are taken
+at admission); a rule whose `escalation_threshold` is 1 was paused by one such failure; the fact
+refresh failed too; and once the runs were spent nothing failed, so nothing triggered a recovery,
+and one instance stood still for two hours.
+
+**What it rests on** (read in the code of `f3d39bbd`; the study's references are of `960406f0`).
+The study's references hold as given (`failure_accumulates` 198-211; the streak and disposition
+`policy_control.rs` 1516-1582; `immediate_retry_pairs` 2020-2082; the condition refund 1893-1899;
+`run_gated` 316, `gate_layer` 348, `close_open` 616-644; `ladder_at_lease_end` 1658-1761;
+`application_update.rs` 58, 92), with two corrections: the cool-down's suppression no longer only
+drops the ladder (AVAIL-1 holds it for an instance unavailable by its self-check), and "scope not
+`main`" alone misses the home entry's preflight of a `linear_steps` run without a chain, which
+"Scope and step" counts as `main` although the main package has not started. The live settlement
+already reads the run's own rows for the identity (`failure_rows`), so the entry failures are told
+from what the settlement has: no ledger member is needed (the work order's first stop condition
+does not hold). The condition path gives the admission back (`refund_admission_counts`), and a run
+whose main package executed no step never ran its task, so no task runs more often than its
+`daily_limit` (the second does not hold). The block is a gate of the policy evaluation only: a
+ladder's rung runs, a client's and the Lab's runs are no scheduled candidates (the third does not
+hold; the replay test runs a client's run on a blocked instance).
+
+**The rule.**
+1. *Which failures* (`failure_settlement.rs`, `failed_at_entry`): a scheduled run whose main
+   package was admitted and chain resolved, that checked its entry (a gate: a prerequisite chain or
+   a page-graph entry check; or an `EntryRecoveryDecision` of the home entry's preflight) and never
+   started its main package (no `EntryTargetDisposition` `Started`), whose failure does not
+   accumulate, and that the instance's ladder takes at the task stage by the rule the lease end
+   reads (`task_trigger_item`, one function for both). Scopes `gate`, `pre:<I>` and the home entry's
+   check and recovery package. Codes, with the shipped triggers: class `pack_logic_mismatch` met
+   there (`contained_task_page_unknown`, `contained_task_recognition_failed`,
+   `contained_task_home_entry_not_matched`, `contained_task_home_recovery_binding_missing`, a layer's
+   `page_confirmation_failed`, `contained_task_linear_intermediate_unobserved`,
+   `contained_task_step_unconfirmed`, `contained_task_guard_refused`, …) and the item
+   `task_capture_backend`'s four codes; the exclusions keep `contained_task_prerequisite_*` and
+   `contained_task_return_home_entry_unmatched` out. No code is named in the decision.
+2. *Settlement* (`policy_outcome.rs`, `PolicyControlState::entry_condition`): when no configured
+   condition ended the run, its record carries `condition` {`refunded` true, `count` 1, the window's
+   end}; no streak, no escalation, `continue`, no retry (R22 does not rerun it), no pause whatever
+   `escalation_threshold` says, the four counts given back, no runtime counted, no rerun owed (the
+   pair's owed rerun stays as it was). The identity's `F` is `i` and the unique digest
+   (`IdentityFrame::Entry`, `entry_identity`); `policy_control::entry_blocked` reads condition and
+   mark from the record, so a replay owes no rerun and never reads the configuration.
+3. *The block* (`host/entry_blocks.rs`; `entry_block.rs`; position 4b): set by the settlement under
+   the policy outcome gate, read by the evaluation under it; every candidate of the instance (the
+   fact refresh included) waits `instance_entry_blocked`, and the round's settled candidates too
+   (`InstanceHolds`). Ended by a ladder `recovered` or `environment_ready`, any run on the instance
+   that succeeded (`append_contained_task_terminal`), a resume of the instance or the global one
+   (`requests.rs`), a restart (memory only). A scheduled run's start keeps the instance's marks, so a
+   recovery or a run that succeeded before the settlement leaves no block, and a recovery that
+   already failed raises the attention with it. The idle plan counts the deferral due: no idle action
+   closes a blocked instance.
+4. *The way out.* The lease end entered the ladder; nothing of the ladder changes. A ladder its
+   cool-down suppressed is held with the block (or kept for the failed run's settlement, by the run
+   its trigger names) and admitted at the cool-down's end by `take_up_entry_recoveries`, the lease
+   sweep's step after AVAIL-1's probes, through AVAIL-1's `admit_held_recovery` and `probe_hold` (a
+   pause, a fence or an idle stop drops it, a blackout makes it wait); when AVAIL-1 holds it for an
+   unavailable instance, AVAIL-1's probe takes it up. A ladder that ends `exhausted`, or one a
+   blackout or an admission refusal drops, leaves the instance blocked and raises
+   `instance_entry_blocked_awaiting_person` once per block (AVAIL-1's way: a warning record and the
+   daemon's log).
+5. *The status* (the constraint of 23:18): no member is added to `RuntimeInstanceStatus` or to any
+   other type a v0.12.75 reader decodes with unknown members refused. The not-running row of
+   `ScheduleExplanation` (`why` with `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms`;
+   `since_unix_ms`) and the candidate rows carry it; the ledger holds the records.
+
+**Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
+class `none`):
+
+| Code | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `instance_entry_blocked` | a candidate of an entry-blocked instance waits (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason | none |
+| `instance_entry_blocked_awaiting_person` | an entry-blocked instance's recovery ended without success; it waits for a person (the same values) | warns, once per block (a `runtime.failed` record) | none |
+
+Locations `instance_entry_block` and `take_up_entry_recoveries`. No key, no word, no vocabulary.
+
+**Interfaces.** None moves. `runtime-client` stays [12, 14] as AVAIL-1 leaves it (its fix round
+takes its own member out): no answer gains a member, and a new code and new value keys in a
+schedule explanation's `why` are read by every revision (`CodeStr` is any text, `Outcome`'s values a
+map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is text inside
+`failure_identity`, a token member every revision decodes. `actingd-config` does not move.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`) |
+| Settlement and replay | `crates/runtime-host/src/host/policy_outcome.rs` (`record_policy_dispatch_outcome_under_gate`, `entry_failure_input`); `policy_control.rs` (`entry_blocked`, `entry_condition`, `condition_window_end`, `commit_paced_execution`); `policy_host.rs` (`entry_condition`) |
+| The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
+| The gate | `crates/runtime-host/src/entry_block.rs`; `policy_host.rs` (`PolicyEvaluationContext::entry_blocked`, `evaluate`); `host/policy_dispatch.rs` |
+| Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md) |
+
+**Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
+clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `entry_a_t1_a_failure_at_the_entry_settles_as_a_condition_and_blocks_the_instance` (1) | The budget fixture's run settled as one at its entry: a condition (refunded, count 1, `continue`, counters 0, no retry, no pause cause, identity `…~fi…`); the value record holds no count for the day, no streak, no owed rerun; the instance blocked by that run; a second later nothing is dispatched there, the task waits `instance_entry_blocked` with its values, no `failure_retry_immediate`; the not-running row says it since that evaluation |
+| `entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_the_entry` (2) | `escalation_threshold` 1: at the entry a condition, not paused, blocked; in a step `paused_task`, `repeated_failure`, nothing blocked |
+| `entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_failed_ladder_tells_a_person` (1, 3, 4) | On a fake device, a page graph whose prerequisite layer does not know the screen fails with `contained_task_page_unknown` before any input: a condition, the instance blocked, one ladder by `pack_logic`; the ladder ends `exhausted`, still blocked, one `instance_entry_blocked_awaiting_person` naming the run; a client's run on the blocked instance completes and its success ends the block |
+| `entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblocks` (3) | Ten minutes of cool-down left: one suppression, no ladder, the block holds the recovery; nothing a millisecond before the end; at the end the ladder starts with the run's trigger, its return-home rung recovers, the block ends; the due task is dispatched at its next occurrence |
+
+Test 5 is the existing tests, unchanged in what they assert. Touched: `gate_373_nav3a.rs`, whose
+`Pack::zip` is now `pub(super)` (the gate file builds its packages with it); nothing else. The
+existing tests of a scheduled run on a fixture instance (`fixture_simulation`) meet no ladder and
+are unchanged; `prq_a_prerequisite_that_meets_an_unknown_page_…` now settles as a condition and
+blocks its instance, which it does not assert. No golden re-recorded; no gate retired.
+
+**What is not changed.** A failure in a step of the main package is settled, rerun, counted and
+paused as before; budgets are taken at admission and an immediate rerun of a step failure costs
+one; a manual or Lab run's entry failure blocks nothing and is answered as before; the ladder (its
+start, its holds, its cool-down while it runs); the start's reconciliation of an interrupted
+settlement (no identity: settled as before). No package, game or alias is named in code; no package
+needs a change; the records of a failed run keep their codes.
+
+**At deploy.** Nothing to configure. **A pair paused before the deploy by an entry failure** (a
+rule whose threshold is 1) stays paused until its package's content changes, as every pause; the
+deploy lifts nothing. **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
+`945727d4`: `CodeStr` deserializes any text, `Outcome`'s reader takes any value keys, and the
+schedule explanation's check is its shape rules alone): its status read of an entry-blocked
+instance is byte for byte as before, since the status gains nothing from this slice; its schedule
+explanation read (`ac_overview`'s not-running rows) decodes the new `why`; its deploy, place and
+post-check read the status only and meet nothing new; the ledger's new records (`runtime.failed`
+with the new code, `policy.not_run_changed` naming it) are codes it reads as text. **A rollback to
+v0.12.75** passes the installer's edges as AVAIL-1's does; the blocks were memory and are gone, so
+the instance is scheduled again and the 11-20 storm can return; a record settled at the entry
+replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives no identity), so it
+owes that pair a rerun until the window's end, and a settlement it repeats for a dispatch whose
+record exists (a crash between the record and its completion) is refused
+(`policy_execution_identity_conflict`). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

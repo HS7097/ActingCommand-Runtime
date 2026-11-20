@@ -311,6 +311,24 @@ store update task that ranks first never leaves the instance's other candidates 
 unselected. A candidate the closure is asked about is answered by positions 1 to 4 first, as
 above;
 
+**4b.** the instance is entry-blocked (`instance_entry_blocked`, values `instance_id`, `task_id`,
+`decision_id`, `failure_code` and `observed_at_unix_ms`; Workflow #490 ENTRY-A, since 0.12.76,
+register §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"): a
+scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`,
+since `observed_at_unix_ms`), and no recovery or run of the instance has succeeded since, no
+resume lifted a pause of it and the Runtime did not restart. Every candidate of the instance
+waits, an owed rerun, an immediate rerun, a remedy request or retry, a chain's successor and a
+store update task included, with no wake of its own: the block's end is followed by a lease end
+(the ladder's, the run's, the resume's reconnect), which wakes the evaluation. The fact
+refresh's deferral names this code as its `gate_code`. Other instances are not held. As for 4a,
+the round's candidates settled before it asks the closure wait with this reason too
+(`InstanceHolds`); an instance 4a holds keeps 4a's hold. The evaluation reads the blocks under
+the policy outcome gate a settlement blocks under, so no evaluation sees the run's settlement
+without its block; admission does not judge it again. The idle plan counts such a decision due
+(eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
+and its look ahead does not read this position. The not-running row of the schedule explanation
+names it, since the first evaluation that deferred the instance so;
+
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";
    built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed

@@ -277,6 +277,8 @@ mod runtime_facts;
 mod saved_artifact_ocr;
 // Workflow #489 AVAIL-1: an instance its device self-check made unavailable is probed again.
 mod unavailable_probe;
+// Workflow #490 ENTRY-A: the instances a scheduled run's failure at its entry blocked.
+mod entry_blocks;
 use material_read::MaterialReadContext;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation_read;
@@ -2418,6 +2420,7 @@ impl RuntimeHost {
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
             unavailable_instances: Mutex::new(BTreeMap::new()),
+            entry_blocks: Mutex::new(entry_blocks::EntryBlocks::default()),
             session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
@@ -5244,6 +5247,39 @@ impl RuntimeHost {
         shared.open_cooldown_window_for_test(instance_id, until_unix_ms)
     }
 
+    /// Workflow #490 ENTRY-A: the next settlement of a scheduled run settles it as a run that failed
+    /// at its entry (its input's failure identity must not accumulate), as the live settlement does
+    /// for such a run.
+    #[cfg(test)]
+    pub(crate) fn settle_next_policy_run_at_entry_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::SettleAtEntryForTest)?
+            .settle_next_at_entry_for_test()
+    }
+
+    /// Workflow #490 ENTRY-A: `instance_alias`'s entry block, if it has one: the gate the
+    /// evaluation reads, whether a person was told, and when its held recovery is due.
+    #[cfg(test)]
+    pub(crate) fn entry_block_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Option<entry_blocks::EntryBlockForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.entry_block_for_test(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A: one tick of the entry-blocked instances' held recoveries at the host
+    /// clock, as the lease sweep runs it.
+    #[cfg(test)]
+    pub(crate) fn entry_block_tick_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockTickForTest)?
+            .take_up_entry_recoveries()
+    }
+
     /// Workflow #489 AVAIL-1: the idle action holds `instance_alias`'s emulator stopped (its
     /// `stop_emulator` done, no wake planned), as a start restores an instance it closed.
     #[cfg(test)]
@@ -7307,6 +7343,10 @@ struct HostShared {
     // cool-down held back (memory only; a restart starts it again at the gate's next decision).
     // A leaf lock.
     unavailable_instances: Mutex<BTreeMap<InstanceId, unavailable_probe::UnavailableInstance>>,
+    // Workflow #490 ENTRY-A: the instances a scheduled run's failure at its entry blocked, with
+    // a recovery the ladder's cool-down held back for them and the marks a run's settlement
+    // compares (memory only; a restart starts with no block). A leaf lock.
+    entry_blocks: Mutex<entry_blocks::EntryBlocks>,
     // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
     // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
     session_deaths: Mutex<BTreeSet<InstanceId>>,
@@ -8053,6 +8093,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // probe when one is due and its key is free (a recovery its ladder's cool-down held back
         // at the cool-down's end), and is brought to a person's attention once it lasted.
         if let Err(error) = shared.probe_unavailable_instances() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // Workflow #490 ENTRY-A: an entry-blocked instance's recovery its ladder's cool-down held
+        // back is taken up when the cool-down ends.
+        if let Err(error) = shared.take_up_entry_recoveries() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
