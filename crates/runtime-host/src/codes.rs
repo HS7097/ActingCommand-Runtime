@@ -296,13 +296,16 @@ actingcommand_contract::outcome_codes! {
         /// as its gate (keys `instance_id`, `task_id` and `decision_id` of the run that blocked
         /// it, `failure_code` its failure, `observed_at_unix_ms` when it was blocked).
         InstanceEntryBlocked => "instance_entry_blocked": info / none,
-        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance waits for a person, once per
-        /// block: one of the block's own recoveries ended without recovering (its ladder
-        /// exhausted, its worker panicked), or (fix round 1) the block lasted
-        /// `scheduling.unavailable_probe.attention_after_ms` (then `elapsed_ms` and `limit_ms`)
-        /// whatever holds it (keys `instance_id`, `task_id`, `decision_id`, `failure_code`,
-        /// `observed_at_unix_ms` as above).
+        /// Warning (Workflow #490 ENTRY-A fix round 1). An entry-blocked instance waits for a
+        /// person, once per block: the block lasted `scheduling.unavailable_probe.attention_after_ms`
+        /// (`elapsed_ms`, `limit_ms`), whatever holds it (keys `instance_id`, `task_id`,
+        /// `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
+        /// Warning (Workflow #490 ENTRY-A fix round 1). One of an entry-blocked instance's own
+        /// recoveries ended without recovering (`entry_recovery_end`: its ladder exhausted, its
+        /// worker panicked; `trigger_rule` the trigger item it was admitted under): the Runtime
+        /// has stopped trying, the instance stays blocked, once per block (keys as above).
+        InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
         // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
@@ -3770,3 +3773,16 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- #484 IDLE-W2: end ----
+
+// ---- Workflow #490 ENTRY-A fix round 1 (register §1.494): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// How an entry-blocked instance's own recovery ended without recovering (vocabulary
+    /// `entry_recovery_end`, since 0.12.76): the value of `instance_entry_blocked_recovery_failed`.
+    pub enum EntryRecoveryEnd: "entry_recovery_end" {
+        /// The recovery ladder climbed its rungs and ended `exhausted`.
+        Exhausted => "exhausted",
+        /// The worker that climbed the ladder panicked; the ladder ended there.
+        WorkerPanicked => "worker_panicked",
+    }
+}
+// ---- Workflow #490 ENTRY-A fix round 1: end ----

@@ -458,15 +458,23 @@ findings 1 and 2):
 - *A recovery that ended without recovering.* One of the block's own recoveries (the blocking runs'
   lease ends' ladders, the recoveries the block held, took over or admitted) that ends `exhausted`
   or whose worker panicked leaves the instance blocked and brings it to a person's attention once
-  per block: `instance_entry_blocked_awaiting_person` (a warning `runtime.failed` record under the
-  instance, handed to the daemon's log). A scheduled run's own recovery that ended so before the
-  run's settlement raises it with the block that settlement sets; a ladder of another trigger does
-  not make the block warn.
+  per block: `instance_entry_blocked_recovery_failed` (a warning `runtime.failed` record under the
+  instance, handed to the daemon's log), its `entry_recovery_end` (`exhausted`, `worker_panicked`)
+  and the trigger item the ladder was admitted under (`trigger_rule`, when it had one). The Runtime
+  has stopped trying: a person looks at the instance. A scheduled run's own recovery that ended so
+  before the run's settlement raises it with the block that settlement sets; a ladder of another
+  trigger does not make the block warn.
 - *The catch-all.* An instance entry-blocked without a break for
   `scheduling.unavailable_probe.attention_after_ms` is brought to a person's attention once per
-  block, whatever holds it, a recovery still held included: the same warning, with `elapsed_ms` and
-  `limit_ms` the threshold. The one key serves AVAIL-1's unavailable instances and the entry blocks;
-  no key is added.
+  block, whatever holds it, a recovery still held included: `instance_entry_blocked_awaiting_person`
+  (the same kind of record), with `elapsed_ms` and `limit_ms` the threshold. The one key serves
+  AVAIL-1's unavailable instances and the entry blocks; no key is added.
+- *Both.* One code, one cause (the coordinator's ruling of 11-21 02:02 JST): each of the two is
+  raised at most once per block, when its own condition first holds, and a block may raise both,
+  in the order their conditions came: usually the recovery's failure first and, the block still
+  standing, the threshold later; a recovery still held or climbing when the threshold passes
+  raises the threshold's first and its failure, if it comes, after. A block that ends and a new
+  one set later may raise each again.
 
 **Status.** No member of the status is added (the coordinator's constraint of 23:18: a v0.12.75
 reader refuses a status with a member it does not know). The not-running row of

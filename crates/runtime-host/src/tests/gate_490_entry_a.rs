@@ -51,12 +51,14 @@
 //!   whose return-home layer's recheck, is unmatched fails at its entry: no immediate rerun, its
 //!   admission given back, the instance blocked, and the block's own ladder (`pack_logic`, by the
 //!   code's class) admitted and climbed; it cannot recover, so the instance stays blocked and one
-//!   person is told (the bullet "the exhausted ladder" of item 2 too, as the first replay below);
+//!   person is told by `instance_entry_blocked_recovery_failed` (the ladder's end and its trigger
+//!   item; the bullet "the exhausted ladder" of item 2 too, as the first replay below);
 //! - F2 (item 2): a blackout that covers the instance ends the block and drops its held recovery,
 //!   and none comes after the blackout; business capacity's refusal keeps the recovery held,
 //!   nothing recorded, until capacity returns, when it is admitted and recovers; a fence ends the
 //!   block and drops its held recovery; a block that lasts
-//!   `scheduling.unavailable_probe.attention_after_ms` tells a person once, its recovery still held;
+//!   `scheduling.unavailable_probe.attention_after_ms` tells a person once
+//!   (`instance_entry_blocked_awaiting_person`, one code, one cause), its recovery still held;
 //! - F3 (item 3): a store update package's task of an entry-blocked instance is dispatched;
 //! - F4 (item 4, the bound): once a pair's conditions in a row reach its `escalation_threshold`, its
 //!   next failure at the entry after a recovery is its own though another run started first;
@@ -1061,7 +1063,8 @@ impl Replay {
     /// is blocked by it. The exclusion starts no ladder at the run's lease end; the block's own
     /// ladder is admitted at the lease sweep's next tick under the item that takes the code's
     /// class, `pack_logic`, its trigger the failed run's. No package of the instance knows the
-    /// screen the run left, so it ends `exhausted`: the instance stays blocked, one person told.
+    /// screen the run left, so it ends `exhausted`: the instance stays blocked, one person told
+    /// (`instance_entry_blocked_recovery_failed`).
     fn assert_an_excluded_failure_blocks_and_starts_the_blocks_ladder(&self, code: &str) {
         self.fail_at_entry();
         let failure = self.execution();
@@ -1094,16 +1097,14 @@ impl Replay {
             ),
             "no package knows the screen"
         );
-        let (gate, awaiting_person, _) = self.block();
+        let (gate, told, _) = self.block();
         assert_eq!(
             (gate.decision_id.as_str(), gate.failure_code.as_str()),
             (self.context.decision_id(), code)
         );
-        assert!(awaiting_person);
-        assert_eq!(
-            failed_outcomes(&self.host, HostCode::InstanceEntryBlockedAwaitingPerson).len(),
-            1
-        );
+        assert!(told);
+        let failed = the_exhausted_recovery(&self.host);
+        assert_eq!(failed.value("failure_code"), Some(&json!(code)));
     }
 
     fn manual_clock(&self) -> &ManualRuntimeClock {
@@ -1139,6 +1140,37 @@ fn failed_outcomes(host: &RuntimeHost, code: HostCode) -> Vec<Outcome> {
         .collect()
 }
 
+/// Fix round 1 (one code, one cause): the one `instance_entry_blocked_recovery_failed` of `host`,
+/// the block's own `pack_logic` ladder ended `exhausted`; no `instance_entry_blocked_awaiting_person`
+/// (the block has not lasted `attention_after_ms`).
+fn the_exhausted_recovery(host: &RuntimeHost) -> Outcome {
+    let failures = failed_outcomes(host, HostCode::InstanceEntryBlockedRecoveryFailed);
+    let [failed] = failures.as_slice() else {
+        panic!("one recovery that ended without recovering: {failures:#?}");
+    };
+    assert_eq!(
+        failed.value("entry_recovery_end"),
+        Some(&json!("exhausted"))
+    );
+    assert_eq!(failed.value("trigger_rule"), Some(&json!("pack_logic")));
+    assert!(
+        failed_outcomes(host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty(),
+        "the threshold has not passed"
+    );
+    failed.clone()
+}
+
+/// Fix round 1: neither warning of an entry-blocked instance was raised on `host`.
+fn assert_no_one_told(host: &RuntimeHost) {
+    for code in [
+        HostCode::InstanceEntryBlockedAwaitingPerson,
+        HostCode::InstanceEntryBlockedRecoveryFailed,
+    ] {
+        let told = failed_outcomes(host, code);
+        assert!(told.is_empty(), "{told:#?}");
+    }
+}
+
 /// A client's run of a package from `away` to `menu` on the policy instance: its receipt.
 fn manual_run(host: &RuntimeHost, root: &Path) -> RuntimeReceipt {
     let path = root.join("manual");
@@ -1162,9 +1194,10 @@ fn manual_run(host: &RuntimeHost, root: &Path) -> RuntimeReceipt {
 /// condition of the instance, and the instance is blocked by it. Its lease end enters the ladder as
 /// a failed run's does (`pack_logic`, once). The ladder cannot recover (the return-home package does
 /// not know `away` either, the startup package fails as the run did, no emulator control): it ends
-/// `exhausted`, the instance stays blocked and one `instance_entry_blocked_awaiting_person` names
-/// the run, its failure and since when. A client's run on the blocked instance is not refused; it
-/// leaves `away` for `menu` and succeeds, and its success ends the block.
+/// `exhausted`, the instance stays blocked and one `instance_entry_blocked_recovery_failed` names
+/// the run, its failure, the ladder's end and its trigger item (fix round 1, one code, one cause;
+/// no `instance_entry_blocked_awaiting_person`). A client's run on the blocked instance is not
+/// refused; it leaves `away` for `menu` and succeeds, and its success ends the block.
 #[test]
 fn entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_failed_ladder_tells_a_person()
  {
@@ -1201,16 +1234,13 @@ fn entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_fai
         ),
         "the ladder cannot recover"
     );
-    let (_, awaiting_person, _) = replay
+    let (_, told, _) = replay
         .host
         .entry_block_for_test(POLICY_INSTANCE_ALIAS)
         .expect("the instance's block")
         .expect("the instance stays blocked");
-    assert!(awaiting_person);
-    let attentions = failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson);
-    let [attention] = attentions.as_slice() else {
-        panic!("one attention: {attentions:#?}");
-    };
+    assert!(told);
+    let attention = the_exhausted_recovery(&replay.host);
     assert_eq!(attention.value("task_id"), Some(&json!(TASK)));
     assert_eq!(
         attention.value("decision_id"),
@@ -1255,9 +1285,9 @@ fn entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_fai
         "the run's success ends the block"
     );
     assert_eq!(
-        failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).len(),
+        failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedRecoveryFailed).len(),
         1,
-        "the attention was raised once"
+        "the recovery's failure was raised once"
     );
     replay.close();
 }
@@ -1357,7 +1387,7 @@ fn entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblo
         0,
         "ENTRY-A2: no run started since the recovery (its rung's run is the Runtime's own)"
     );
-    assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
+    assert_no_one_told(&replay.host);
 
     advance_manual_clock_to(clock, NEXT_DISPATCH_UNIX_MS);
     let evaluation = evaluate(&replay.host, NEXT_DISPATCH_UNIX_MS, 300);
@@ -1493,7 +1523,7 @@ fn entry_a_f2_a_covering_blackout_ends_the_block_and_drops_its_held_recovery() {
         "the dropped recovery never comes"
     );
     assert!(!replay.blocked());
-    assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
+    assert_no_one_told(&replay.host);
     replay.close();
 }
 
@@ -1579,7 +1609,7 @@ fn entry_a_f2_a_capacity_refusal_is_tried_again_and_then_admitted() {
         "the return-home rung recovers"
     );
     assert!(!replay.blocked(), "the recovery's success ends the block");
-    assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
+    assert_no_one_told(&replay.host);
     replay.close();
 }
 
@@ -1598,7 +1628,7 @@ fn entry_a_f2_a_fence_ends_the_block_and_drops_its_held_recovery() {
     assert!(!replay.blocked(), "the fence ends the block");
     replay.tick();
     assert!(replay.ladders().is_empty(), "its held recovery was dropped");
-    assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
+    assert_no_one_told(&replay.host);
     replay.close();
 }
 
@@ -1606,7 +1636,8 @@ fn entry_a_f2_a_fence_ends_the_block_and_drops_its_held_recovery() {
 /// for twice `attention_after_ms`. A millisecond before the block has lasted
 /// `scheduling.unavailable_probe.attention_after_ms` the sweep's tick tells no one; at that time
 /// one `instance_entry_blocked_awaiting_person` names the run, how long the block lasted and the
-/// threshold, with the recovery still held; a later tick tells no one again.
+/// threshold, with the recovery still held; a later tick tells no one again, and no
+/// `instance_entry_blocked_recovery_failed` is raised (no recovery of the block ended).
 #[test]
 fn entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_recovery_held() {
     let replay = replay(&route(RETURN_HOME, "away", "menu", BACK_STEPS, None), true);
@@ -1615,7 +1646,7 @@ fn entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_reco
     let since = gate.since_unix_ms;
     advance_manual_clock_to(replay.manual_clock(), since + ATTENTION_AFTER_MS - 1);
     replay.tick();
-    assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
+    assert_no_one_told(&replay.host);
     replay.manual_clock().advance(1);
     replay.tick();
     let attentions = failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson);
@@ -1643,6 +1674,10 @@ fn entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_reco
         failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).len(),
         1,
         "once per block"
+    );
+    assert!(
+        failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedRecoveryFailed).is_empty(),
+        "no recovery of the block ended: one code, one cause"
     );
     replay.close();
 }

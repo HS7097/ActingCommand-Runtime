@@ -83,6 +83,7 @@ use super::runtime_config::ladder_profile;
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
 use crate::codes::ApplicationUpdateCode;
+use crate::codes::EntryRecoveryEnd;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
@@ -393,6 +394,12 @@ impl PendingRecoveryLadder {
     /// from a hold keeps: how an entry block knows its own recoveries.
     pub(super) const fn correlation(&self) -> CorrelationId {
         *self.correlation_id.transport()
+    }
+
+    /// Workflow #490 ENTRY-A fix round 1: the trigger item it was admitted under, if any
+    /// (`instance_entry_blocked_recovery_failed`'s `trigger_rule`).
+    pub(super) fn rule(&self) -> Option<&str> {
+        self.trigger.rule.as_deref()
     }
 
     /// Workflow #490 ENTRY-A fix round 1: whether the cool-down window holds it back (§4.6).
@@ -4680,7 +4687,9 @@ impl HostShared {
         match effect {
             Some(EntryEffect::Recovered) => self.note_entry_recovered(pending.instance_id),
             Some(EntryEffect::Ended) => self.end_entry_block(pending.instance_id),
-            Some(EntryEffect::Failed) => self.note_entry_recovery_failed(pending),
+            Some(EntryEffect::Failed) => {
+                self.note_entry_recovery_failed(pending, EntryRecoveryEnd::Exhausted)
+            }
             // A blackout that covers the instance ends its block there and drops the recovery
             // (nothing is dispatched inside it, and SR-4a3 raises nothing after it); one that only
             // comes within the rung's time limit holds the recovery until its end, and the block

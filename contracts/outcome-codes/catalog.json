@@ -2963,6 +2963,14 @@
     "idle_wake_cause": {
       "type": "vocab:idle_wake_cause",
       "description": "Why an idle instance's wake was queued, on instance_idle_action with operation queue_idle_wake: a task of the instance due that can be dispatched now (with task_id), the idle action in effect changed, a wake the start owed, or the planned wake time reached (#484 IDLE-W2, contracts/runtime-config.md \"What wakes an idle instance\", since 0.12.75)."
+    },
+    "entry_recovery_end": {
+      "type": "vocab:entry_recovery_end",
+      "description": "How an entry-blocked instance's own recovery ended without recovering, on instance_entry_blocked_recovery_failed: its recovery ladder ended exhausted, or the worker that climbed it panicked (Workflow #490 ENTRY-A fix round 1, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.76)."
+    },
+    "trigger_rule": {
+      "type": "name",
+      "description": "The id of the recovery_ladder trigger item a ladder was admitted under, as its recovery_ladder_started names it as rule; absent for a ladder no trigger item admitted (Workflow #490 ENTRY-A fix round 1, since 0.12.76)."
     }
   },
   "vocabularies": {
@@ -11849,6 +11857,22 @@
         },
         "planned_time_reached": {
           "description": "The planned wake time, the next due task's time less the action's wake lead, was reached (also while a pause, an install hold or a claim held the instance, whose claims then wait behind the holder)."
+        }
+      }
+    },
+    "entry_recovery_end": {
+      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A fix round 1, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.76). Either way the Runtime stops trying to recover the block and the instance stays blocked.",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "EntryRecoveryEnd"
+      },
+      "tokens": {
+        "exhausted": {
+          "description": "The recovery ladder climbed its rungs (each skipped or failed) and ended exhausted."
+        },
+        "worker_panicked": {
+          "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic)."
         }
       }
     }

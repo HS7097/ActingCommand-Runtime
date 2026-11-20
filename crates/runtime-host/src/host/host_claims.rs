@@ -253,9 +253,12 @@ fn instance_worker_loop(
                 // Workflow #490 ENTRY-A fix round 1: a panicked recovery ladder ended without
                 // recovering; an entry block it was a recovery of tells a person
                 // (`note_entry_recovery_failed`). Its failure is kept as the probe's is.
-                let ladder_ended = ladder
-                    .as_ref()
-                    .map_or(Ok(()), |ladder| shared.note_entry_recovery_failed(ladder));
+                let ladder_ended = ladder.as_ref().map_or(Ok(()), |ladder| {
+                    shared.note_entry_recovery_failed(
+                        ladder,
+                        crate::codes::EntryRecoveryEnd::WorkerPanicked,
+                    )
+                });
                 let ended = probe_ended.and(ladder_ended);
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {

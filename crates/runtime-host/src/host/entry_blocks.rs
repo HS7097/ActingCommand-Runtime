@@ -31,14 +31,16 @@
 //!   holds or waits for the instance, a claim the queue refused, a preparation superseded) keeps
 //!   the recovery held and tries it again at the next tick; a recovery of the block that ends
 //!   without recovering (its ladder `exhausted`, its worker panicked) leaves the instance blocked
-//!   and tells a person once per block; and a block that lasts
+//!   and tells a person once per block that the Runtime has stopped trying
+//!   (`instance_entry_blocked_recovery_failed`); and a block that lasts
 //!   `scheduling.unavailable_probe.attention_after_ms` tells a person once per block whatever
-//!   holds it (`instance_entry_blocked_awaiting_person`, a warning record and the daemon's log).
+//!   holds it (`instance_entry_blocked_awaiting_person`). Each is a warning record and the daemon's
+//!   log; a block may raise both, each when its own condition first holds.
 //! - **Races.** A scheduled run's start keeps its instance's marks (how many blocks ended so far),
 //!   and its settlement compares them: anything that ended a block between the run's start and its
 //!   settlement leaves no block. A recovery of the run's own failure that ended without recovering
-//!   before the settlement (fix round 1: that run's, not any ladder of the instance) raises the
-//!   attention with the block.
+//!   before the settlement (fix round 1: that run's, not any ladder of the instance) raises
+//!   `instance_entry_blocked_recovery_failed` with the block.
 //!
 //! - **Whose failure (ENTRY-A2).** The coordinator's ruling of 11-20 23:57 JST: a failure at the
 //!   entry is the instance's condition only while nothing says it is the pair's own. Each pair
@@ -62,7 +64,7 @@
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::unavailable_probe::ProbeHold;
 use super::*;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{EntryRecoveryEnd, HostCode, HostLocation};
 use crate::entry_block::{EntryBlockGate, EntryBlockGates};
 use crate::failure_identity::{FailureIdentity, identifier_text};
 use actingcommand_contract::outcome::{CodeStr, Outcome};
@@ -121,14 +123,26 @@ struct HeldEntryRecovery {
     until_unix_ms: u64,
 }
 
+/// Fix round 1: how one of a block's own recoveries ended without recovering, and the trigger
+/// item it was admitted under (`instance_entry_blocked_recovery_failed`).
+#[derive(Clone)]
+struct FailedEntryRecovery {
+    end: EntryRecoveryEnd,
+    rule: Option<String>,
+}
+
 /// One blocked instance.
 struct EntryBlock {
     /// The latest failure at the entry that blocked it.
     gate: EntryBlockGate,
     /// Since when the instance is blocked without a break (the attention's clock).
     since_unix_ms: u64,
-    /// A person was told (`instance_entry_blocked_awaiting_person`), once per block.
+    /// A person was told the block outlasted `attention_after_ms`
+    /// (`instance_entry_blocked_awaiting_person`), once per block.
     awaiting_person: bool,
+    /// Fix round 1: a person was told one of the block's own recoveries ended without recovering
+    /// (`instance_entry_blocked_recovery_failed`), once per block.
+    recovery_failed: bool,
     held: Option<HeldEntryRecovery>,
     /// Fix round 1: the trigger correlations of the block's own recoveries (the blocking runs'
     /// lease ends, the recoveries it held or took over): only one of these ending without
@@ -157,8 +171,8 @@ pub(super) struct EntryBlocks {
     /// otherwise.
     cooled: BTreeMap<RunId, HeldEntryRecovery>,
     /// Fix round 1: the scheduled runs whose own recovery ended without recovering before their
-    /// settlement: the block that settlement sets tells a person at once.
-    unrecovered: BTreeSet<RunId>,
+    /// settlement, and how: the block that settlement sets tells a person at once.
+    unrecovered: BTreeMap<RunId, FailedEntryRecovery>,
     /// Test only: what the next settlement is armed to be.
     #[cfg(test)]
     settle_for_test: Option<SettleForTest>,
@@ -182,8 +196,8 @@ impl EntryBlocks {
     }
 }
 
-/// One blocked instance as a test reads it: its gate, whether a person was told and when its held
-/// recovery is due.
+/// One blocked instance as a test reads it: its gate, whether a person was told of it (either
+/// warning) and when its held recovery is due.
 #[cfg(test)]
 pub(crate) type EntryBlockForTest = (EntryBlockGate, bool, Option<u64>);
 
@@ -336,8 +350,8 @@ impl HostShared {
     /// (`failure_code` its failure's code, `run` the run and its correlation when the settlement
     /// had its context, `marks` what the run's start knew of the instance). A block of the
     /// instance that ended since the run's start leaves it unblocked; the run's own recovery that
-    /// ended without recovering since then raises the attention at once; a recovery held for this
-    /// run is the block's.
+    /// ended without recovering since then raises `instance_entry_blocked_recovery_failed` at once
+    /// (once per block); a recovery held for this run is the block's.
     fn block_instance_entry(
         &self,
         data: &PolicyExecutionEventData,
@@ -355,7 +369,7 @@ impl HostShared {
             failure_code,
             since_unix_ms: data.observed_at_unix_ms,
         };
-        let attention = {
+        let told = {
             let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             let now = blocks.marks(instance_id);
             let (cooled, failed) = match run {
@@ -363,22 +377,23 @@ impl HostShared {
                     blocks.cooled.remove(&run_id),
                     blocks.unrecovered.remove(&run_id),
                 ),
-                None => (None, false),
+                None => (None, None),
             };
             if now.ended != marks.ended {
                 // A recovery or a run of the instance succeeded, a resume came, a blackout covered
                 // it or a fence took it after the run began: nothing is left to block.
                 return Ok(());
             }
-            let (since_unix_ms, told, mut recoveries, previous_held) =
+            let (since_unix_ms, awaiting_person, recovery_failed, mut recoveries, previous_held) =
                 match blocks.blocked.remove(&instance_id) {
                     Some(block) => (
                         block.since_unix_ms,
                         block.awaiting_person,
+                        block.recovery_failed,
                         block.recoveries,
                         block.held,
                     ),
-                    None => (gate.since_unix_ms, false, BTreeSet::new(), None),
+                    None => (gate.since_unix_ms, false, false, BTreeSet::new(), None),
                 };
             if let Some((_, correlation)) = run {
                 recoveries.insert(correlation);
@@ -386,22 +401,24 @@ impl HostShared {
             if let Some(held) = &cooled {
                 recoveries.insert(held.ladder.correlation());
             }
-            let awaiting_person = told || failed;
-            let attention = (awaiting_person && !told).then(|| gate.clone());
+            let told = failed
+                .filter(|_| !recovery_failed)
+                .map(|failed| (gate.clone(), failed));
             blocks.blocked.insert(
                 instance_id,
                 EntryBlock {
                     gate,
                     since_unix_ms,
                     awaiting_person,
+                    recovery_failed: recovery_failed || told.is_some(),
                     held: cooled.or(previous_held),
                     recoveries,
                 },
             );
-            attention
+            told
         };
-        match attention {
-            Some(gate) => self.record_entry_attention(instance_id, &gate, None),
+        match told {
+            Some((gate, failed)) => self.record_entry_recovery_failed(instance_id, &gate, &failed),
             None => Ok(()),
         }
     }
@@ -452,18 +469,23 @@ impl HostShared {
         Ok(())
     }
 
-    /// A recovery `ladder` ended without recovering (fix round 1: its ladder `exhausted`, its
-    /// worker panicked): when it is one of its blocked instance's own recoveries, the instance
-    /// stays blocked and is brought to a person's attention, once per block; a scheduled run's own
-    /// recovery that ended so before the run's settlement raises it with the block that settlement
-    /// sets. Any other ladder's end tells a block nothing.
+    /// A recovery `ladder` ended without recovering, as `end` says (fix round 1: its ladder
+    /// `exhausted`, its worker panicked): when it is one of its blocked instance's own recoveries,
+    /// the instance stays blocked and `instance_entry_blocked_recovery_failed` tells a person,
+    /// once per block; a scheduled run's own recovery that ended so before the run's settlement
+    /// raises it with the block that settlement sets. Any other ladder's end tells a block nothing.
     pub(super) fn note_entry_recovery_failed(
         &self,
         ladder: &PendingRecoveryLadder,
+        end: EntryRecoveryEnd,
     ) -> RuntimeHostResult<()> {
         let instance_id = ladder.instance_id();
         let correlation = ladder.correlation();
-        let attention = {
+        let failed = FailedEntryRecovery {
+            end,
+            rule: ladder.rule().map(str::to_owned),
+        };
+        let told = {
             let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             let own = blocks
                 .blocked
@@ -471,8 +493,8 @@ impl HostShared {
                 .is_some_and(|block| block.recoveries.contains(&correlation));
             if own {
                 blocks.blocked.get_mut(&instance_id).and_then(|block| {
-                    (!block.awaiting_person).then(|| {
-                        block.awaiting_person = true;
+                    (!block.recovery_failed).then(|| {
+                        block.recovery_failed = true;
                         block.gate.clone()
                     })
                 })
@@ -480,13 +502,13 @@ impl HostShared {
                 if let Some(run_id) = ladder.task_run()
                     && blocks.settling.contains(&run_id)
                 {
-                    blocks.unrecovered.insert(run_id);
+                    blocks.unrecovered.insert(run_id, failed);
                 }
-                None
+                return Ok(());
             }
         };
-        match attention {
-            Some(gate) => self.record_entry_attention(instance_id, &gate, None),
+        match told {
+            Some(gate) => self.record_entry_recovery_failed(instance_id, &gate, &failed),
             None => Ok(()),
         }
     }
@@ -614,11 +636,7 @@ impl HostShared {
                 (late, block.held.as_ref().map(|held| held.until_unix_ms))
             };
             if let Some((gate, elapsed_ms)) = late {
-                self.record_entry_attention(
-                    instance_id,
-                    &gate,
-                    Some((elapsed_ms, attention_after_ms)),
-                )?;
+                self.record_entry_attention(instance_id, &gate, elapsed_ms, attention_after_ms)?;
             }
             let Some(until_unix_ms) = held_until else {
                 continue;
@@ -701,31 +719,54 @@ impl HostShared {
             .collect())
     }
 
-    /// `instance_entry_blocked_awaiting_person` of `instance_id` blocked by `gate`: a warning
-    /// `runtime.failed` record under the instance's links, handed to the daemon's log too. `late`
-    /// (fix round 1): for the block that lasted the threshold, how long it lasted and the
-    /// threshold (`elapsed_ms`, `limit_ms`); `None` for a recovery that ended without recovering.
+    /// Fix round 1: `instance_entry_blocked_awaiting_person` of `instance_id`, blocked by `gate`
+    /// without a break for `elapsed_ms`, which reached `limit_ms` (`attention_after_ms`).
     fn record_entry_attention(
         &self,
         instance_id: InstanceId,
         gate: &EntryBlockGate,
-        late: Option<(u64, u64)>,
+        elapsed_ms: u64,
+        limit_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let outcome = entry_block_outcome(
+            HostCode::InstanceEntryBlockedAwaitingPerson,
+            instance_id,
+            gate,
+        )
+        .elapsed_ms(elapsed_ms)
+        .limit_ms(limit_ms);
+        self.record_entry_block_warning(instance_id, outcome)
+    }
+
+    /// Fix round 1: `instance_entry_blocked_recovery_failed` of `instance_id`, blocked by `gate`,
+    /// one of whose own recoveries ended without recovering as `failed` says.
+    fn record_entry_recovery_failed(
+        &self,
+        instance_id: InstanceId,
+        gate: &EntryBlockGate,
+        failed: &FailedEntryRecovery,
+    ) -> RuntimeHostResult<()> {
+        let outcome = entry_block_outcome(
+            HostCode::InstanceEntryBlockedRecoveryFailed,
+            instance_id,
+            gate,
+        )
+        .entry_recovery_end(failed.end);
+        let outcome = match failed.rule.as_deref() {
+            Some(rule) => outcome.trigger_rule(rule),
+            None => outcome,
+        };
+        self.record_entry_block_warning(instance_id, outcome)
+    }
+
+    /// One warning of an entry-blocked instance, `outcome`: a `runtime.failed` record under the
+    /// instance's links, handed to the daemon's log too.
+    fn record_entry_block_warning(
+        &self,
+        instance_id: InstanceId,
+        outcome: Outcome,
     ) -> RuntimeHostResult<()> {
         let operation = HostLocation::InstanceEntryBlock;
-        let outcome = Outcome::new(HostCode::InstanceEntryBlockedAwaitingPerson)
-            .operation(operation)
-            .instance_id(identifier_text(&instance_id))
-            .task_id(gate.task_id.as_str())
-            .decision_id(gate.decision_id.as_str())
-            .observed_at_unix_ms(gate.since_unix_ms);
-        let outcome = match gate.failure_code.registered() {
-            Some(code) => outcome.failure_code(code),
-            None => outcome,
-        };
-        let outcome = match late {
-            Some((elapsed_ms, limit_ms)) => outcome.elapsed_ms(elapsed_ms).limit_ms(limit_ms),
-            None => outcome,
-        };
         let links = self
             .events
             .system_links()?
@@ -869,9 +910,24 @@ impl HostShared {
             .map(|block| {
                 (
                     block.gate.clone(),
-                    block.awaiting_person,
+                    block.awaiting_person || block.recovery_failed,
                     block.held.as_ref().map(|held| held.until_unix_ms),
                 )
             }))
+    }
+}
+
+/// Fix round 1: the warning `code` of `instance_id`, blocked by `gate`: the values both warnings
+/// carry.
+fn entry_block_outcome(code: HostCode, instance_id: InstanceId, gate: &EntryBlockGate) -> Outcome {
+    let outcome = Outcome::new(code)
+        .operation(HostLocation::InstanceEntryBlock)
+        .instance_id(identifier_text(&instance_id))
+        .task_id(gate.task_id.as_str())
+        .decision_id(gate.decision_id.as_str())
+        .observed_at_unix_ms(gate.since_unix_ms);
+    match gate.failure_code.registered() {
+        Some(code) => outcome.failure_code(code),
+        None => outcome,
     }
 }

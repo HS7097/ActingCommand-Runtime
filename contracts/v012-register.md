@@ -43124,7 +43124,8 @@ hold; the replay test runs a client's run on a blocked instance).
    available; for any other instance it is dropped as AVAIL-1 drops it. A ladder that ends `exhausted`, or one a
    blackout or an admission refusal drops, leaves the instance blocked and raises
    `instance_entry_blocked_awaiting_person` once per block (AVAIL-1's way: a warning record and the
-   daemon's log).
+   daemon's log; fix round 1, items 2 and 7, changes both: a blackout or a refusal no longer warns,
+   and a recovery that ended without recovering raises `instance_entry_blocked_recovery_failed`).
 5. *The status* (the constraint of 23:18): no member is added to `RuntimeInstanceStatus` or to any
    other type a v0.12.75 reader decodes with unknown members refused. The not-running row of
    `ScheduleExplanation` (`why` with `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms`;
@@ -43201,9 +43202,10 @@ rule 1's last condition, rule 4's ends of a recovery and rule 6's evidence, and 
    `already_running`, a refused claim or a superseded preparation refused stays held and is tried at
    the next tick (while capacity refuses or another ladder holds the instance the sweep keeps it
    without trying, nothing recorded), never a failure and never a warning by itself; a recovery
-   that ended `exhausted` or whose worker panicked tells a person once per block; a fence ends the
-   block and drops its recovery; and a block that lasted `scheduling.unavailable_probe.
-   attention_after_ms` tells a person once per block whatever holds it (the same warning with
+   that ended `exhausted` or whose worker panicked tells a person once per block
+   (`instance_entry_blocked_recovery_failed`, item 7); a fence ends the block and drops its
+   recovery; and a block that lasted `scheduling.unavailable_probe.attention_after_ms` tells a
+   person once per block whatever holds it (`instance_entry_blocked_awaiting_person` with
    `elapsed_ms` and `limit_ms`; the one key serves AVAIL-1 and the entry blocks). The block counts
    only its own recoveries' failures (`EntryBlock::recoveries`, the trigger correlations of the
    blocking runs and of the recoveries it held), and a scheduled run's own recovery that failed
@@ -43242,6 +43244,18 @@ rule 1's last condition, rule 4's ends of a recovery and rule 6's evidence, and 
    unchanged. A held recovery replaced (`hold_cooled_down_recovery`) or dropped by a pause, a fence
    or an idle stop is AVAIL-1's as on main. A recovery ladder whose worker panics is noted beside a
    panicked probe, its failure kept and returned after the panic's record, as the probe's is.
+7. *One code, one cause* (the coordinator's ruling of 11-21 02:02 JST, after the fix round's
+   first report): the two ways a block comes to a person are two codes. The catch-all keeps
+   `instance_entry_blocked_awaiting_person`, its `elapsed_ms` and `limit_ms` now required; a
+   recovery of the block that ended without recovering raises `instance_entry_blocked_recovery_failed`
+   with how it ended (`entry_recovery_end`, a new vocabulary: `exhausted`, `worker_panicked`) and
+   the trigger item the ladder was admitted under (`trigger_rule`, when it had one): the Runtime
+   has stopped trying, a person looks at the instance. Each is raised at most once per block, when
+   its own condition first holds (`EntryBlock::recovery_failed` beside `awaiting_person`;
+   `EntryBlocks::unrecovered` keeps how the run's own recovery ended); a block may raise both, in
+   the order their conditions came ([policy-suspension.md](policy-suspension.md), "Both"). The
+   panic branch passes `worker_panicked`, the ladder's finished fact `exhausted`
+   (`note_entry_recovery_failed`, `PendingRecoveryLadder::rule`). Nothing else changes.
 
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`):
@@ -43249,9 +43263,13 @@ class `none`):
 | Code | The one situation | Refuses or warns | Exit status |
 |---|---|---|---|
 | `instance_entry_blocked` | a candidate of an entry-blocked instance waits (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason | none |
-| `instance_entry_blocked_awaiting_person` | an entry-blocked instance waits for a person: one of its block's own recoveries ended without recovering (exhausted, its worker panicked), or (fix round 1) the block lasted `scheduling.unavailable_probe.attention_after_ms` (then `elapsed_ms`, `limit_ms`, two optional values added) (the same values) | warns, once per block (a `runtime.failed` record) | none |
+| `instance_entry_blocked_awaiting_person` | (fix round 1, item 7) an entry-blocked instance's block lasted `scheduling.unavailable_probe.attention_after_ms` without a break, whatever holds it (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `elapsed_ms`, `limit_ms`, `failure_code?`) | warns, once per block (a `runtime.failed` record) | none |
+| `instance_entry_blocked_recovery_failed` | (fix round 1, item 7) one of an entry-blocked instance's own recoveries ended without recovering: the Runtime has stopped trying (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `entry_recovery_end`, `trigger_rule?`, `failure_code?`) | warns, once per block (a `runtime.failed` record) | none |
 
-Locations `instance_entry_block` and `take_up_entry_recoveries`. No key, no word, no vocabulary.
+Locations `instance_entry_block` and `take_up_entry_recoveries`. No word. Fix round 1, item 7: the
+value keys `entry_recovery_end` (vocabulary `entry_recovery_end`, `crates/runtime-host/src/codes.rs`
+`EntryRecoveryEnd`: `exhausted`, `worker_panicked`) and `trigger_rule` (a name: the ladder
+trigger item's id).
 
 **Interfaces.** None moves. `runtime-client` stays [12, 14] as AVAIL-1 leaves it (its fix round
 takes its own member out): no answer gains a member, and a new code and new value keys in a
@@ -43278,7 +43296,7 @@ clock read in the gate file).
 |---|---|
 | `entry_a_t1_a_failure_at_the_entry_settles_as_a_condition_and_blocks_the_instance` (1) | The budget fixture's run settled as one at its entry: a condition (refunded, count 1, `continue`, counters 0, no retry, no pause cause, identity `…~fi…`); the value record holds no count for the day, no streak, no owed rerun; the instance blocked by that run; a second later nothing is dispatched there, the task waits `instance_entry_blocked` with its values, no `failure_retry_immediate`; the not-running row says it since that evaluation |
 | `entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_the_entry` (2) | `escalation_threshold` 1: at the entry a condition, not paused, blocked; in a step `paused_task`, `repeated_failure`, nothing blocked |
-| `entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_failed_ladder_tells_a_person` (1, 3, 4) | On a fake device, a page graph whose prerequisite layer does not know the screen fails with `contained_task_page_unknown` before any input: a condition, the instance blocked, one ladder by `pack_logic`; the ladder ends `exhausted`, still blocked, one `instance_entry_blocked_awaiting_person` naming the run; a client's run on the blocked instance completes and its success ends the block |
+| `entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_failed_ladder_tells_a_person` (1, 3, 4) | On a fake device, a page graph whose prerequisite layer does not know the screen fails with `contained_task_page_unknown` before any input: a condition, the instance blocked, one ladder by `pack_logic`; the ladder ends `exhausted`, still blocked, one `instance_entry_blocked_recovery_failed` naming the run (fix round 1, item 7: `entry_recovery_end` `exhausted`, `trigger_rule` `pack_logic`; no `instance_entry_blocked_awaiting_person`); a client's run on the blocked instance completes and its success ends the block |
 | `entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblocks` (3) | Ten minutes of cool-down left: one suppression, no ladder, the block holds the recovery; nothing a millisecond before the end; at the end the ladder starts with the run's trigger, its return-home rung recovers, the block ends; the due task is dispatched at its next occurrence |
 | `entry_a2_a_after_a_recovery_the_pairs_own_failure_lets_another_task_run_first` (A2 a) | Two tasks, `TASK` first: a condition and the mark; a recovery; `TASK` first again and its failure at the entry is its own: no condition, counters 1, `retry_scheduled` at the rule's backoff, `F` `na`, the day's count kept (the first given back), the instance blocked again; after the next recovery an evaluation within the backoff dispatches the other task, not `TASK` |
 | `entry_a2_b_own_failures_pause_the_pair_at_its_threshold_and_a_recovery_unblocks` (A2 b) | Threshold 2: condition, recovery, own (1), recovery, own at the backoff's end with the same identity (2): `paused_task`, `repeated_failure`, the mark cleared, the instance blocked; the next recovery unblocks it, nothing of the paused pair is dispatched and no `instance_entry_blocked` is left |
@@ -43296,12 +43314,12 @@ Fix round 1's tests (host gate map, the second row "#490 ENTRY-A"):
 
 | Test | What it shows |
 |---|---|
-| `entry_a_f1_a_prerequisite_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The shipped defaults, a fake device on `shop`: the declared prerequisite ends on `done`, the run fails with `contained_task_prerequisite_entry_unmatched` (excluded): a condition (`…~fi…`, no retry, nothing counted for the day, no streak), the instance blocked; the block's own ladder (the run's trigger, `pack_logic` by class) is admitted, climbs and ends `exhausted`; still blocked, one person told |
+| `entry_a_f1_a_prerequisite_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The shipped defaults, a fake device on `shop`: the declared prerequisite ends on `done`, the run fails with `contained_task_prerequisite_entry_unmatched` (excluded): a condition (`…~fi…`, no retry, nothing counted for the day, no streak), the instance blocked; the block's own ladder (the run's trigger, `pack_logic` by class) is admitted, climbs and ends `exhausted`; still blocked, one person told (item 7: one `instance_entry_blocked_recovery_failed`, `exhausted`, `pack_logic`) |
 | `entry_a_f1_b_return_home_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The same with the prerequisite's return-home layer ending away from the prerequisite's entry: `contained_task_return_home_entry_unmatched` (excluded) |
 | `entry_a_f2_a_covering_blackout_ends_the_block_and_drops_its_held_recovery` (item 2) | The recovery held by the cool-down; a blackout covering the instance ends the block at the next tick; no ladder of the run's trigger, past the blackout's end too; no attention |
 | `entry_a_f2_a_capacity_refusal_is_tried_again_and_then_admitted` (item 2) | Hard capacity pressure at the cool-down's end: nothing admitted and nothing recorded (one suppression, the cool-down's), the recovery held and due, no attention; capacity back, the next tick admits it, it recovers and the block ends |
 | `entry_a_f2_a_fence_ends_the_block_and_drops_its_held_recovery` (item 2) | A fence ends the block and drops the held recovery; no ladder of the run's trigger, no attention |
-| `entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_recovery_held` (item 2) | The shipped `attention_after_ms`: nothing a millisecond before, one attention with `elapsed_ms` and `limit_ms` at it, the recovery still held, none more after |
+| `entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_recovery_held` (item 2) | The shipped `attention_after_ms`: nothing a millisecond before, one `instance_entry_blocked_awaiting_person` with `elapsed_ms` and `limit_ms` at it, the recovery still held, none more after, and no `instance_entry_blocked_recovery_failed` (item 7) |
 | `entry_a_f3_a_store_update_task_of_an_entry_blocked_instance_is_dispatched` (item 3) | Policy level: the ordinary task's failure at the entry blocks the instance; with the update fact true the store update task is dispatched, its decision without `instance_entry_blocked`, the ordinary task not, the block kept |
 | `entry_a2_f4_conditions_in_a_row_at_the_threshold_make_the_next_failure_the_pairs_own` (item 4) | Threshold 2, the settlement hook: two conditions each after another run first; after the next recovery, another run first again, the failure is the pair's own (counters 1, `retry_scheduled`) |
 | `entry_a2_f5_the_live_settlement_judges_a_failure_at_the_entry_after_a_real_recovery_the_pairs_own` (item 5) | On a fake device, the live settlement: a condition, a real ladder `recovered`, and the same task's next failure at the entry (at its next occurrence) is its own by the marks its start read: no condition, `consecutive_same_error` 1, an accumulating identity with `g`, the instance blocked holding its run's recovery |
@@ -43314,6 +43332,9 @@ Adapted for fix round 1: `gate_387_d1c.rs`'s `h4_g6_g7_…` case "the code exclu
 run fails at its entry with an excluded code of class `pack_logic_mismatch`: the exclusion still
 starts no ladder at the lease end, and the block's own ladder now climbs under `pack_logic` as the
 defaults' does, the ruling's intended change); `gate_373_nav3a.rs`'s `SHOP` is `pub(super)`.
+Item 7 (one code, one cause) changes what `entry_a_t1_t3_t4_…`, F1 (a) and (b) and the threshold's
+test assert as above; the tests that assert no attention (T3, the three other F2 tests) now
+assert neither warning.
 
 **What is not changed.** A failure in a step of the main package is settled, rerun, counted and
 paused as before (A2 only clears the pair's mark when such a run started its main package);
@@ -43332,15 +43353,18 @@ shipped recommendation of 2, by the fourth failure at the entry of such a rule a
 after a recovery that ended `recovered`, whatever ran first). **Fix round 1 at deploy:** the
 prerequisite and return-home failures the shipped `exclude_codes` name (the 11-19 storm's, the
 seven daily rules') now block their instance and start its block's own ladder instead of being
-rerun until the day's runs are spent; a block that lasts an hour (the shipped
-`attention_after_ms`) is told to a person; a store update task runs on a blocked instance.
+rerun until the day's runs are spent; a block whose own recovery ended without recovering is told
+to a person (`instance_entry_blocked_recovery_failed`), and so is a block that lasts an hour (the
+shipped `attention_after_ms`; `instance_entry_blocked_awaiting_person`); a store update task runs
+on a blocked instance.
 Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
 `945727d4`: `CodeStr` deserializes any text, `Outcome`'s reader takes any value keys, and the
 schedule explanation's check is its shape rules alone): its status read of an entry-blocked
 instance is byte for byte as before, since the status gains nothing from this slice; its schedule
 explanation read (`ac_overview`'s not-running rows) decodes the new `why`; its deploy, place and
 post-check read the status only and meet nothing new; the ledger's new records (`runtime.failed`
-with the new code, `policy.not_run_changed` naming it) are codes it reads as text. **A rollback to
+with the new codes, `policy.not_run_changed` naming `instance_entry_blocked`) are codes it reads as
+text, their values (`entry_recovery_end`, `trigger_rule` among them) a map it takes as it is. **A rollback to
 v0.12.75** passes the installer's edges as AVAIL-1's does; the blocks were memory and are gone, so
 the instance is scheduled again and the 11-20 storm can return; a record settled at the entry
 replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives no identity), so it
@@ -43348,7 +43372,7 @@ owes that pair a rerun until the window's end, and a settlement it repeats for a
 record exists (a crash between the record and its completion) is refused
 (`policy_execution_identity_conflict`). A record of an own failure at the entry (A2) is an ordinary
 accumulating failure in the existing format, which v0.12.75 replays as it is (its streak, backoff
-or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。但同一条规则在恢复成功之后、作为这台上的第一次运行又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（退避大于 0 时这台上的其他任务先跑；推荐的 0 退避下恢复后先重跑它），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则，不再无限循环。恢复后先有别的运行开始过（或有人、客户端占过这台的钥匙），再失败的仍算实例的条件；但这样的条件连续到 `escalation_threshold` 次以后，恢复成功后再进门失败就一律算它自己的，所以推荐配置下最多第四次进门失败时停。只有恢复阶梯以 recovered 结束才算“恢复过”。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；黑窗盖住、围栏接手时挡解除；容量不够等一时的拒绝下一拍再试；挡超过 `attention_after_ms` 也提醒一次；商店更新任务不被挡。
+or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复没成功就记一条警告 `instance_entry_blocked_recovery_failed`（运行时已不再尝试，请人看一下这台实例）。但同一条规则在恢复成功之后、作为这台上的第一次运行又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（退避大于 0 时这台上的其他任务先跑；推荐的 0 退避下恢复后先重跑它），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则，不再无限循环。恢复后先有别的运行开始过（或有人、客户端占过这台的钥匙），再失败的仍算实例的条件；但这样的条件连续到 `escalation_threshold` 次以后，恢复成功后再进门失败就一律算它自己的，所以推荐配置下最多第四次进门失败时停。只有恢复阶梯以 recovered 结束才算“恢复过”。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；黑窗盖住、围栏接手时挡解除；容量不够等一时的拒绝下一拍再试；挡超过 `attention_after_ms` 另记一条 `instance_entry_blocked_awaiting_person`，两条各自每次挡最多一条；商店更新任务不被挡。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
