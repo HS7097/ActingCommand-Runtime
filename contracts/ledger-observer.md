@@ -58,7 +58,9 @@ shape, every removal, every configuration key and its slice) and the capacity le
 - **Two memory stores hold the live state** (LEDG §3.1):
   - the *instance fact store* (`InstanceFactStore`): observations of the application under
     automation and the instructions a person or an agent sets (`session.*`); at most 256 active
-    facts for the whole host, shared by every instance, refused (never evicted) when full;
+    facts for the whole host, shared by every instance, refused (never evicted) when full (since
+    Workflow #498, 0.12.76: a bound per scope, 224 an instance's own facts and 16 a server's or a
+    game's, [instance-fact-store.md](instance-fact-store.md) "Capacity ledger");
   - the *scheduler workbench*: the runtime fact store (`RuntimeFactStore`, at most 16 384 records)
     plus the scheduler's decision memory: the dispatch clock, the per-dispatch-pair
     `PolicyControlState` (daily and window counts, window runtime, failure streaks and pauses,
@@ -675,7 +677,8 @@ CREATE TABLE ledger_index (
 | `lifecycle` | `last_start`, `last_close`, `last_fatal` | overwritten; read by X2 |
 
 - Only `state` rows load into business memory; the other roles serve the exception reads.
-- Rows are bounded: instance store ≤ 256 active facts plus tombstones; workbench ≤ 16 384 and only
+- Rows are bounded: instance store ≤ 256 active facts plus tombstones (since Workflow #498: 224 an
+  instance and 16 a server or a game, so the host's bound follows its scopes); workbench ≤ 16 384 and only
   whitelisted keys; decision memory one per dispatch pair and one per (instance, activity
   profile); requests bounded by configuration.
 - The index is internal; outside readers read records and views. A mirror of the table lives in

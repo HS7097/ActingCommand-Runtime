@@ -42669,6 +42669,131 @@ the answers' entry holds them in, which occur nowhere else in the fixture's file
 the local step's self-test equal to the recording's; test 5 walks the new named list. No reader
 changes, no verdict, no interface revision; a local recording's files are byte for byte as before.
 
+### 1.496 Slice #498 FACT-CAP (0.12.76): the instance fact store's bound follows its scopes; an instance near its bound is said so before the store refuses it (board #498; a defect read in production on 11-21: six instances held about 205 records against one bound of 256 for the whole host, and the store would have filled within days; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-498-fact-store-capacity.md`, on main `705e8222`)
+
+This section takes 1.496: 1.493, 1.494 and 1.495 are taken by slices not yet on main and are left
+free. It ships in 0.12.76. [instance-fact-store.md](instance-fact-store.md) ("Capacity ledger",
+rewritten) is the contract; [resource-readings.md](resource-readings.md) ("Host", the codes of a
+refused reading; "Capacity and reserved keys") says what a refused reading's run records.
+
+**What the constant governed** (read in the code before this slice). `MAX_ACTIVE_FACTS` (256,
+`crates/runtime-host/src/fact_store.rs`) had four uses: the history's replay at a ledger position
+(`HistoricalFactProjection::publish`, fatal), a single record's check (`preview_publish`, the
+request's refusal), the commit of a record as the live store follows the ledger, at a start's
+tagged load and its replay included (`commit_publish`, fatal), and an observation's check
+(`preview_observation`, which counted every identity the store had ever seen, `latest_observed`,
+never reclaimed). Nothing else was sized from it. The tombstones had a bound of their own, 256 for
+the host (`MAX_RECENT_FACT_TOMBSTONES`), dropping the oldest written one. What a larger store
+meets: `MAX_FACT_RECORDS` (256, `crates/actingcommand-contract/src/fact.rs`) bounds the records of
+an `InstanceFactSnapshot` (a run's and an admission's projection; a snapshot past it is the fatal
+`fact_snapshot_invalid`) and of an `InstanceFactView` (the `facts` read, which a 0.12.75 client
+checks too); the host's 256 kept both within it. The `facts` read refuses a reply over one frame
+explicitly (`instance_fact_snapshot_too_large_for_frame`). The scheduler's projection takes up to
+16,384 facts (`MAX_EVALUATION_FACTS`). The console's project read answers every active fact of the
+host in one response of at most 768 KiB and refuses past it (`project_interface_response_too_large`,
+Denied), as long lists could already make it. `runtime.fact_snapshot` is the runtime fact store's
+record (16,384 records, sealed in parts of 512 KiB) and holds no instance fact. The start's tagged
+load reads the index rows under a time budget, not a count. So no record or format bounds a larger
+store; only the snapshot and the view bound what one instance can hold.
+
+**The rule.**
+- *A bound per scope* (`MAX_INSTANCE_FACTS` 224, `MAX_SERVER_FACTS` 16, `MAX_GAME_FACTS` 16;
+  `scope_fact_bound`, `scope_fact_count`). The active facts stored under exactly one scope are
+  counted against its bound: an instance's own facts against 224, a server's facts and a game's
+  facts, each counted once, against 16. The host's bound is what follows: 224 for each instance and
+  16 for each server and each game in use. The three add up to `MAX_FACT_RECORDS`, so an
+  instance's snapshot, its own facts with its server's and its game's, holds at most 256 at every
+  bound. **The work order's floor of 256 per instance gives way to it:** with 256 own facts and any
+  shared fact an instance's snapshot would pass 256 and halt the Runtime, and the snapshot's and
+  the view's bound is checked by 0.12.75's readers; 224 + 16 + 16 keeps "today's host bound becomes
+  one instance's" for what an instance holds, its shared facts included, without moving a format.
+- *Active facts count.* An observation's check counts the active facts of its scope and its keys
+  not active there (`preview_observation`, `preview_publish`); an invalidated fact's identity no
+  longer holds room (its latest observation time is still kept for "not newer"). The commit and the
+  history's replay take what the ledger holds up to 256 facts of one scope, so a store before this
+  slice (at most 256 in all) loads whole, an instance past 224 included, which then takes no new key.
+- *Tombstones* follow the same rule: at most 256 of each scope in memory, each scope's oldest
+  written one dropped first (`trim_recent_tombstones`). A scope's pending invalidations never
+  outnumber its active facts, so dropping is never blocked; with one bound for the host and more
+  than 256 facts, a trigger shared by them would have blocked it (`fact_tombstone_compaction_blocked`).
+- *The warning* (`FACT_CAPACITY_WARNING_FACTS`, 80% rounded up, 180 of 224): the new code
+  `fact_store_capacity_share_reached` (warning, ladder class `none`; `instance_id` the alias,
+  `count` its own active facts, `limit_count` its bound), one Warning `runtime.failed` under the
+  instance's links. The store keeps the episodes in memory (`capacity_warnings_due`: an instance
+  reported once at or past the share, its episode ended when it falls back under it); the host
+  writes what is due in every publication's hold of the fact write gate, after it follows the ledger
+  and before the store's check, and again after the publication's record
+  (`report_fact_capacity_under_gate` in `publish_facts_under_gate`, the path of every publication,
+  `EditGoal`, `EditPackSchedule` and `ApplyResourceTargets` included). So an instance found at or
+  past the share by a start is reported before anything of it can be refused. A server or a game at
+  its bound has no warning of its own: persons and agents write their facts and get the refusal.
+- *A refusal is loud where it happens.* Read in the code: a reading, a list or an adjustment the
+  store refuses rewrites the run's successful terminal into the failure
+  `contained_task_resource_reading_rejected` (`refuse_resource_readings`, `host/contained_task.rs`),
+  so the run answers Failed and its one terminal is `task.failed`; a scheduled run's settlement
+  reads it as `Failed` (`policy_lanes.rs` `run_scheduled_policy_task`; at a start
+  `policy_outcome.rs`'s reconciliation from the terminal), its task's `failure_streak` grows and its
+  backoff and the fact refresh's `failure_code` show the code; each attempt records its own
+  terminal once; nothing reads it as a success (`draft.outcome` Failure, the scheduling outcome
+  cleared). What was lost: the store's code reached only the native detail (`<id>:<code>`, the
+  developer log), not the record. Fixed: a refusal of the store itself is now the failure's
+  `caused_by` link, on the terminal and the answer (`refuse_stored_resource_reading`, the three
+  places that relay the store's refusal); a refusal made before the store (`fact_observation_invalid`,
+  an adjustment's base replaced) carries none, as before. The run-duration samples
+  (`run_duration_row_dropped`) and the capped episodes (`capped_state_failed`) keep their contracted
+  warnings with the refusal as their cause.
+- *Codes.* One added, `fact_store_capacity_share_reached` (runtime-host, warning, exit 0); the
+  index regenerated. `fact_store_capacity_exceeded` keeps its code, category and values. No
+  decision reads either code.
+- *What does not change.* What a fact is, its scopes and its lifetime; the tombstones' behaviour
+  (only their bound, per scope); every interface revision; `actingd-config` (no key); no member is
+  added to any record or status (the status structures a 0.12.75 reader decodes with
+  `deny_unknown_fields` are untouched: a later slice can show an instance's usage beside the
+  performance status's `facts.instance_facts`, or in the instance rows of `ac_status`, with a
+  revision of its own). `MAX_FACT_RECORDS` becomes public in the contract crate; its value does not
+  move.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The bounds, the count, the checks, the tombstones, the episodes | `crates/runtime-host/src/fact_store.rs`: `MAX_INSTANCE_FACTS`, `MAX_SERVER_FACTS`, `MAX_GAME_FACTS`, `FACT_CAPACITY_WARNING_FACTS`, `scope_fact_bound`, `scope_fact_count`, `HistoricalFactProjection::publish`, `preview_publish`, `commit_publish`, `preview_observation`, `trim_recent_tombstones`, `capacity_warnings_due` |
+| The warning record | `crates/runtime-host/src/host/facts.rs`: `report_fact_capacity_under_gate`, called twice in `publish_facts_under_gate` |
+| The refusal's cause | `crates/runtime-host/src/host/contained_task.rs`: `refuse_stored_resource_reading`, `refuse_resource_readings` |
+| The code | `crates/runtime-host/src/codes.rs` (`FactCapacityCode`); `contracts/outcome-codes/runtime-host.json`; the index |
+| The snapshot's bound | `crates/actingcommand-contract/src/fact.rs`: `MAX_FACT_RECORDS` public |
+| Texts | [instance-fact-store.md](instance-fact-store.md) ("Capacity ledger" rewritten: the bounds, the per-instance and the shared-scope rows, the six-instance example, the booking rule; the tombstones, the priority offsets, the resource target policy, the pack schedule, the readers' table); [resource-readings.md](resource-readings.md); [resource-targets.md](resource-targets.md); [ledger-observer.md](ledger-observer.md) §1, §11; `docs/live-fact-pools.md` |
+
+The two slices in flight in `crates/runtime-host/src/host/` (`unavailable_probe.rs`,
+`recovery_ladder.rs`, `runtime_facts.rs`, `entry_blocks.rs`, `failure_settlement.rs`,
+`policy_host.rs`) are not touched.
+
+**Tests** (`crates/runtime-host/src/tests/gate_498_factcap.rs`, host gate map row "#498"; tests 1
+to 4 and 6 drive the store on a ledger and its State store as the host does, test 5 the host of the
+S168-4 gate, whose helpers become visible to the sibling gate; no clock read but test 5's fill at
+the wall clock, as S168-4's).
+
+| Test | What it shows |
+|---|---|
+| `factcap_a_an_instance_at_its_bound_is_refused_while_another_takes_a_key` (1) | One short of its bound, two new keys of an instance are refused whole and one is taken; at its bound every new key of it is refused (`fact_store_capacity_exceeded`, not fatal), nothing evicted, while another instance takes a new key |
+| `factcap_b_a_second_instances_bound_is_not_eaten_by_the_first` (2) | With one instance at its bound a second takes its whole bound (448 facts, more than 256), is refused at it, and a third takes a key |
+| `factcap_c_a_shared_fact_is_counted_once` (3) | A server fact and a game fact of two instances take nothing from either's bound; the server and the game are refused past 16, another game takes a fact; an instance's snapshot with every scope at its bound holds 256 records and is valid |
+| `factcap_d_the_warning_at_the_share_once_and_cleared` (4) | No report one short of 180; one at 180 with the count; none at 181; a takeover back to 171 ends the episode with no report; one again at 180; never for an instance far under |
+| `factcap_e_a_refused_readings_run_fails_and_another_instance_reads_on` (5) | One `fact_store_capacity_share_reached` (180, 224) under the instance's link on the way to its bound; its new list's run fails `contained_task_resource_reading_rejected` (`read_members:fact_store_capacity_exceeded`), one `task.failed` after the warning with the store's refusal as a cause, no `task.completed`, nothing published or evicted; the other instance reads and publishes the same list; no warning names it |
+| `factcap_f_a_start_restores_more_than_256_facts_of_several_instances` (6) | 301 facts of three instances and a game load at a start as the full replay leaves them, each snapshot holds 101, each instance takes a new key; 240 facts of one instance written without the check load whole and that instance takes no new key |
+
+Adapted: none. `gate_428_s168_4.rs` gains `pub(super)` on the helpers test 5 reuses (`Screen`,
+`list`, `detail`, `Device` with `new` and `shows`, `write_package`, `start`, `run`, `completed`,
+`publications`); its tests are unchanged and still hold: S168-4 test 9 and FL-2 test 4 fill one
+instance until the store refuses, which is now that instance's bound (224 of its own) instead of
+the host's (256 in all), and their other instance re-reads a list it already holds. The unit test of
+the tombstones' compaction (one instance's 288 invalidations, 256 kept) holds as written.
+
+**At deploy.** Nothing to configure: the bounds are contract constants. A store written by 0.12.75
+loads whole. The first publication after the start reports each instance already at or past 180 of
+its own facts. In the release notes' language:
+实例事实库的上限改为按范围分别计：每个实例自己的事实最多 224 条，每个服务器、每个游戏各自最多 16 条（共享的事实只算一次）；加实例不再挤占别的实例。某实例自己的事实到上限的 80%（180 条）时先记一条警告 `fact_store_capacity_share_reached`；读数被拒时运行的失败记录里带上事实库拒绝的原因码。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -610,8 +610,9 @@ supplying it is refused; both as `resource_targets_key_reserved`.
 **Identity and budget.** The policy is not excluded from the overlay: it reaches
 `EvaluationFacts.facts`, the combined `fact_snapshot_id`, admission staleness
 (`policy_facts_stale`), the `FactsChanged` trigger and forward projections like every overlaid
-fact. Each instance's policy takes one of the store's 256 active fact identities; each
-inventory key it reads takes its own.
+fact. Each instance's policy takes one of the store's active facts, since Workflow #498 one of
+the instance's own 224 ([instance-fact-store.md](instance-fact-store.md), "Capacity ledger"; before
+it one of the host's 256 identities); each inventory key it reads takes its own.
 
 ### One value by name
 

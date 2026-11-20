@@ -70,7 +70,8 @@ AO-3 implements the entry, the revisions and the gate order; AO-6 the start load
 - **Start load.** Every key of this store is tagged. At start the store is loaded from the index
   table's `state` rows and the records they point to (ledger-observer.md §11.5), not by replaying
   the ledger; `latest_observed`, tombstones and the input boundary are derived from the same
-  records. Tombstones stay in the store (at most 256). History at a ledger position
+  records. Tombstones stay in the store (at most 256; since Workflow #498, 0.12.76, at most 256 of
+  each scope, "Capacity ledger"). History at a ledger position
   (`at_position`) remains for forensics only.
   - **As built by LN-2** (Workflow #422, register §1.183): the load equals the replay of every
     event in its active records (with their sequence, event id, scope instances and
@@ -420,7 +421,8 @@ records of the `session.` family.
 
 **Publication.** Offsets travel through `PublishFact` / `PublishFacts` and the
 normal fact rules (one scope and snapshot per observation, idempotent identical
-retries, strictly newer observations, the 256-record store bound). The
+retries, strictly newer observations, the store's bound of the offset's scope: 224 an instance,
+16 a server or a game since Workflow #498, "Capacity ledger"; 256 for the host before it). The
 publisher chooses the lifetime: an absent `expires_at_unix_ms` never expires;
 a present one follows the usual TTL policy validation. On top of the ordinary
 record validation the Runtime refuses, as the non-fatal request error
@@ -540,8 +542,9 @@ replace the stored ones and the stored entries are kept, and a v1 document is re
 
 **Projection.** The key is not excluded from the overlay: an unexpired or expired policy is an
 ordinary overlaid fact, so it reaches `EvaluationFacts.facts`, the combined
-`fact_snapshot_id`, admission staleness and forward projections. It takes one of the 256
-active fact identities per instance. The evaluator scores it as `contracts/resource-targets.md`
+`fact_snapshot_id`, admission staleness and forward projections. It takes one of the instance's
+own active facts (224 an instance since Workflow #498, "Capacity ledger"; one of the host's 256
+before it). The evaluator scores it as `contracts/resource-targets.md`
 ("Evaluation") states; a server- or game-scoped record of the key, which only an ordinary
 publication before RT-S1a could write, is never a policy: it is ignored with the reason
 `resource_target_policy_ignored` on the candidates of every instance it covers.
@@ -590,7 +593,7 @@ The store accepts or refuses it like any other observation.
   | --- | --- | --- |
   | the record's own check (`FactValue::validate`): every write and publication, a client's publication (`fact_record_invalid`), the host's check of a list before it publishes (`contained_task_resource_reading_rejected`), the decode of a `fact.published` ledger record (`validate_fact_observation`), a snapshot's and a view's check of each record, the client's check of an `InstanceFactSnapshot` answer | the new constant, 1024 | — |
   | an observation (`validate_fact_observation`) | — | `MAX_FACT_RECORDS`, 256 |
-  | `InstanceFactSnapshot::validate`, `InstanceFactView::validate` | — | `MAX_FACT_RECORDS`, 256 |
+  | `InstanceFactSnapshot::validate`, `InstanceFactView::validate` | — | `MAX_FACT_RECORDS`, 256 (since Workflow #498 the store's bounds of an instance, its server and its game add up to it, "Capacity ledger") |
   | the kernel's list reading (`MAX_LIST_READING_ROWS`) | 1024, equal to the new constant | — |
   | the scheduler's input (`observed_fact_value_is_bounded`) and the catalog's predicate value (`maxItems`) | 256, the policy's own (the projection leaves a longer list out, "Projection into the evaluation") | — |
   | a key whose own contract bounds its rows (`session.remedy.choices`, `health.run_duration`) and the runtime fact store, a store of its own (`MAX_RUNTIME_FACT_RECORD_ROWS`, [runtime-fact-store.md](runtime-fact-store.md)) | its own bound, 256 | — |
@@ -722,56 +725,135 @@ answer carries no `records_total`. Both are `runtime-client` 7 shapes
 without a prefix, so an instance over the frame cannot be replayed with its facts until a later
 slice pages the read.
 
-## Capacity ledger (Workflow #383 AO-0)
+## Capacity ledger (Workflow #383 AO-0; a bound per scope since Workflow #498 FACT-CAP, 0.12.76)
 
-The store holds at most 256 active facts for the whole host (`MAX_ACTIVE_FACTS`,
-`crates/runtime-host/src/fact_store.rs`), shared by every instance; a new key on a full store is
-refused (`fact_store_capacity_exceeded`), never evicted. Tombstones have their own bound of 256 and
-do not count. Every slice that adds keys to this store books them here first (LEDG §3.1, AO-0 row).
+**The bound follows the scopes** (Workflow #498, [v012-register.md](v012-register.md) §1.496; the
+coordinator's ruling on board #498, not the owner's words). Before 0.12.76 the store held at most
+256 active facts for the whole host, one constant shared by every instance. Since then no number is
+shared by the host: the facts stored under exactly one scope are counted against that scope's own
+bound (`crates/runtime-host/src/fact_store.rs`), contract constants, not settings:
 
-Per instance *i* with game *g* and server *s*; a server- or game-scoped key shared by several
-instances is booked once.
+| Scope | Its facts are | Bound | Constant |
+|---|---|---|---|
+| one instance (`instance { instance_id }`) | the instance's own facts | 224 | `MAX_INSTANCE_FACTS` |
+| one server (`server { server_id }`) | the server's facts, whatever instances they apply to | 16 | `MAX_SERVER_FACTS` |
+| one game (`game { game_id }`) | the game's facts, whatever instances they apply to | 16 | `MAX_GAME_FACTS` |
 
-| Family | Keys | Scope | Rows per instance | Slice | Today's deployment (3 instances, each with its own game and server) |
-|---|---|---|---|---|---|
-| policy instance seeds | `session.instance.available`, `.capabilities`, `.preferred_tasks` | instance | 3 | existing (#313) | 9 |
-| resource target policy | `session.resource_targets` | instance | 1 | existing (#308 RT-S1a) | ≤ 3 |
-| priority offsets | `session.task.<task_id>.priority_offset` | instance, server or game | one per task with an offset set | existing (#308 4a-2) | *O* (usually 0–3) |
-| readings (D2 reality keys) | `resource.*`, `inventory.*` | instance | *R*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 | 44 (6 + 15 + 23: the distinct `fact_key` readings of the three resource repositories at `d41137c0`, `6dd529a1`, `dfb3729`) |
-| pack schedule | `session.pack.schedule` | instance, server, game | ≤ 3 (one per scope used) | SR-11 | ≤ 9 |
-| remedy choices | `session.remedy.choices` | instance or game (never server: "Remedy choice facts" below) | ≤ 2 (one per scope used) | #411 B15 R6 | ≤ 6 |
-| run parameters (overlay) | `session.dispatch.parameter.<name>` | — | 0: an overlay of a run's snapshots, never stored ("Run parameters" below) | #411 B15 R5 | 0 |
-| feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
-| instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
-| run-duration samples | `health.run_duration` | instance | 1 (one record of at most 256 package rows; "Run duration facts" below) | SCH-M ED-2 | 3 |
-| application update | `health.application.update_required` | instance | 1 ("Application update facts" below; seeded at the start) | UPD-1 (0.12.30) | 3 (5 with five instances) |
-| instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
-| display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
-| selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
-| list readings | `inventory.list.<name>` | instance | *L*: the distinct list keys of the packages bound to the instance, a list reading's or a field list's, one each whatever its rows ("List reading facts" above) | #428 S168-4, #450 FL-1 | 0 (no package declares a list yet) |
+- **Counted once.** A server- or game-scoped fact counts once, against its server's or its game's
+  bound, never against the instances it applies to. The host's bound is what follows: 224 for each
+  instance with facts, and 16 for each server and each game with facts. An instance added brings
+  its own 224 and takes no room from another; an instance at its bound is refused its own new keys
+  only (`fact_store_capacity_exceeded`, a request's refusal, nothing evicted), and every other
+  instance's readings go on. A key already active in its scope is always replaced in place.
+- **Why 224 and 16.** The three add up to 256 (`MAX_FACT_RECORDS`,
+  `crates/actingcommand-contract/src/fact.rs`), the records one `InstanceFactSnapshot` (the fact
+  projection of a run and of an admission) and one `InstanceFactView` (the general `facts` read)
+  may hold. An instance's snapshot holds its own facts and those of its server and its game, so
+  with every scope at its bound it holds exactly 256 and stays valid. An instance's own bound of
+  256 or more would let a full instance with any shared fact outgrow its snapshot
+  (`fact_snapshot_invalid`, which halts the Runtime) unless the snapshot's bound moved, which a
+  reader of 0.12.75 checks. So the 256 that bounded a host now bounds what one instance holds, its
+  shared facts included, and its own facts take 224 of it.
+- **What counts.** Active facts. An invalidated fact holds no room (its latest observation time is
+  still kept for "not newer"); an expired one stays active and counts until a newer observation of
+  its key or an invalidation replaces it. Before 0.12.76 a publication's check counted every
+  identity the store had ever seen, never reclaimed.
+- **Where it is checked.** A publication's check (`preview_observation`, `preview_publish`) refuses
+  an observation whose scope's active facts and its keys not yet active there would pass the
+  scope's bound, before the fact write gate appends anything. The start's load, the replay and the
+  history at a ledger position take what the ledger holds up to 256 facts of one scope, the most
+  one snapshot holds, and stop past it as before (fatal `fact_store_capacity_exceeded`). A store
+  written before 0.12.76 held at most 256 facts in all, so it loads whole, an instance past its new
+  bound included; such an instance takes no new key until it is under its bound again.
+- **Tombstones** follow the same rule: at most 256 of each scope in memory
+  (`MAX_RECENT_FACT_TOMBSTONES`), the scope's oldest written one dropped first; the State
+  document's tombstone still refuses a dropped one's snapshot, as before. A scope's pending
+  invalidations never outnumber its active facts, so dropping is never blocked (with one bound for
+  the host, a trigger shared by more than 256 facts would have blocked it,
+  `fact_tombstone_compaction_blocked`).
+- **It says so before it refuses.** An instance whose own active facts reach 80% of its bound
+  (`FACT_CAPACITY_WARNING_FACTS`, 180 of 224) is reported once: one Warning `runtime.failed`
+  `fact_store_capacity_share_reached` under the instance's links (system links alone for an alias
+  no registered instance has), `instance_id` the alias, `count` its own active facts, `limit_count`
+  its bound, also handed to the daemon's log. The publication that reaches the share writes it
+  after its own record; every publication, under the fact write gate and before its check, first
+  writes what is due, so an instance found at or past the share by a start is reported before the
+  store can refuse it anything. None more until its count falls back under the share (an
+  invalidation); its next rise is reported again. The episodes are kept in memory, so a start
+  reports an instance at or past the share once more. Nothing is refused for the warning. A server
+  or a game at its bound is refused without a warning of its own: their facts are written by
+  persons and agents, who get the refusal as their answer.
+- **What a larger store meets.** The scheduler's projection takes up to 16,384 facts
+  (`MAX_EVALUATION_FACTS`), room for about seventy instances at their bounds. The console's project
+  read (`ProjectInterface`) answers every active fact of the host in one response of at most
+  768 KiB and refuses past it (`project_interface_response_too_large`, Denied, as it already did
+  for long lists): at about 600 bytes an ordinary record, some 1,200 records fill it, so a host with
+  many instances near their bounds needs that read paged, a later slice's work. The `facts` read of
+  one instance and a run's snapshot are bounded as above.
+- **Booking.** Every slice that adds keys to this store books them here first (LEDG §3.1, AO-0 row),
+  in its family's row, against the bound of the scope it writes: an instance's rows against 224, a
+  server's or a game's against 16. A slice that would push one instance's booked rows past 224, or
+  one server's or game's past 16, stops and reports instead of merging; the store keeps refusing,
+  not evicting.
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 3 + 3 + 9 + 12 = **104 + *O***
-  (UPD-1's application update row included), well under 256.
-- **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 10
-  + 5 + 5 + 15 + 20 = **144 + *O* + *R₄* + *R₅* + *F*** (UPD-1's 5 included), the 20 being the
-  display facts of five instances bound to a device; the reading keys of new packages are the
-  variable that matters.
+**An instance's own facts** (instance *i*, against 224):
+
+| Family | Keys | Rows | Slice |
+|---|---|---|---|
+| policy instance seeds | `session.instance.available`, `.capabilities`, `.preferred_tasks` | 3 | existing (#313) |
+| resource target policy | `session.resource_targets` | 1 | existing (#308 RT-S1a) |
+| priority offsets | `session.task.<task_id>.priority_offset` | *O_i*: one per task with an offset set on the instance | existing (#308 4a-2) |
+| readings (D2 reality keys) | `resource.*`, `inventory.*` | *R_i*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 |
+| pack schedule | `session.pack.schedule` | ≤ 1 | SR-11 |
+| remedy choices | `session.remedy.choices` | ≤ 1 | #411 B15 R6 |
+| run parameters (overlay) | `session.dispatch.parameter.<name>` | 0: an overlay of a run's snapshots, never stored ("Run parameters" below) | #411 B15 R5 |
+| feature locks | `session.feature.<feature_key>` | *F_i*: the distinct feature keys the bound packages declare | SR-5a, SR-5b |
+| instance performance baseline | `health.perf_baseline.<signal>.<backend>` | 2 (two signals × backends in use, usually one) | P-m |
+| run-duration samples | `health.run_duration` | 1 (one record of at most 256 package rows; "Run duration facts" below) | SCH-M ED-2 |
+| application update | `health.application.update_required` | 1 ("Application update facts" below; seeded at the start) | UPD-1 (0.12.30) |
+| instruction lines (reserved) | `session.instructions` | ≤ 1 | GOAL-1 |
+| display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) |
+| selector identities (#308 SEL-L2) | — | 0: the business identity domain is package data, not a fact | — |
+| list readings | `inventory.list.<name>` | *L_i*: the distinct list keys of the packages bound to the instance, a list reading's or a field list's, one each whatever its rows ("List reading facts" above) | #428 S168-4, #450 FL-1 |
+| a client's own keys | any key a client publishes under the instance | *C_i* | — |
+
+The fixed rows of an instance bound to a device come to 15 (3 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 4);
+*O_i* + *R_i* + *F_i* + *L_i* + *C_i* may take the other 209.
+
+**A server's or a game's facts** (server *s* or game *g*, each against 16):
+
+| Family | Keys | Rows | Slice |
+|---|---|---|---|
+| priority offsets | `session.task.<task_id>.priority_offset` | one per task with an offset set on the server or the game (`actingctl task-offset`'s default scope is the game) | existing (#308 4a-2) |
+| pack schedule | `session.pack.schedule` | ≤ 1 each | SR-11 |
+| remedy choices | `session.remedy.choices` | ≤ 1, a game's only (never a server's: "Remedy choice facts" below) | #411 B15 R6 |
+| instruction lines (reserved) | `session.instructions` | ≤ 1 each | GOAL-1 |
+| a client's own keys | any key a client publishes under the server or the game | what it publishes | — |
+
+**The six-instance deployment, an example** (read on 11-21, before 0.12.76; no instance, game or
+account named). Six instances bound to devices held 45, 30, 39, 16, 30 and 45 records each as the
+`facts` read answers them, their server's and game's records counted with each (about 205 in all,
+under the host's bound of 256 then, and filling it within days as packages that read material
+stocks and shops were placed). Under the bounds by scope, the largest holds fewer than 45 own facts
+of its 224 (20%), far under the warning at 180; the host's bound is 6 × 224 = 1,344 own facts plus
+16 for each server and each game in use (with three of each, 1,440). A package placed on one instance moves only that instance's row: its
+readings and lists (*R_i*, *L_i*) are booked against that instance's 224, and every other instance
+keeps its room.
+
 - DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
   `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
   not counted; DA-4 books them here when it adds them.
 - **Outside the Runtime**: today's deployment generator publishes one-shot request facts
   (`session.w2.manual_request`, predicates over up to 200 such keys, D2M research B §3.3); each
-  published request holds one active fact until it expires. The task request of MCP-17 (a
-  `run_once` row in `session.instructions`) replaces them; until it does, the deployment must keep
-  the number of live requests small.
-- **List readings** (#428 S168-4): each instance adds its *L*, the lists its bound packages read.
+  published request holds one active fact of its scope until a newer observation or an
+  invalidation replaces it. The task request of MCP-17 (a `run_once` row in `session.instructions`)
+  replaces them; until it does, the deployment must keep the number of live requests small.
+- **List readings** (#428 S168-4): each instance adds its *L_i*, the lists its bound packages read.
   A package that splits one list into several (one per kind of member, as the coordinator's
   answer Q-5 to the 168 design does) costs one identity per list on every instance that runs it,
-  for example 8 lists on one instance: 8. The slice that places the first such package books its
-  *L* in this table. A field list (#450 FL-1) is one more such identity on each instance whose
-  package declares it; the slice that places the first one books it here.
-- A slice that would push the computed total over 256 for the deployed instance count stops and
-  reports instead of merging; the store keeps refusing, not evicting.
+  for example 8 lists on one instance: 8 of that instance's 224. The slice that places the first
+  such package books its *L_i* in this table. A field list (#450 FL-1) is one more such identity on
+  each instance whose package declares it; the slice that places the first one books it here.
 
 ## Pack schedule facts
 
@@ -910,9 +992,10 @@ the intent as `policy_facts_stale` and a just-closed package is never dispatched
 such record the hashed input is exactly the previous one, so identities do not change.
 
 **Capacity and ledger.** The key takes one active fact identity per scope that uses it (the
-instance, its server, its game), counted in the store's shared capacity of 256 active facts
-(Workflow #383 AO-0 keeps the capacity ledger); when the store is full the write fails as today
-and nothing is evicted. A write is an ordinary `fact.published` event of the publishing request;
+instance, its server, its game), counted against that scope's own bound (since Workflow #498:
+224 an instance, 16 a server or a game; before it the host's shared 256; "Capacity ledger", which
+Workflow #383 AO-0 keeps); when the scope is at its bound the write fails as today and nothing is
+evicted. A write is an ordinary `fact.published` event of the publishing request;
 like every key of this store it is a tagged record that the start loads from the ledger
 (Workflow #383).
 

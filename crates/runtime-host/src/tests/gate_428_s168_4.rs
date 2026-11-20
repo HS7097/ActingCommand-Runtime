@@ -57,7 +57,7 @@ fn patch(card: u32) -> [u8; 3] {
 // One screen: its page colour, whether the list's end shows, the content moved up by `shift`
 // pixels, and its cards, each in its slot with its patch.
 #[derive(Debug, Clone)]
-struct Screen {
+pub(super) struct Screen {
     page: [u8; 3],
     end: bool,
     shift: u32,
@@ -66,7 +66,7 @@ struct Screen {
 
 // The list page showing `cards` down its slots in that order, each with its own patch, its end
 // showing.
-fn list(cards: impl IntoIterator<Item = u32>) -> Screen {
+pub(super) fn list(cards: impl IntoIterator<Item = u32>) -> Screen {
     Screen {
         page: RED,
         end: true,
@@ -79,7 +79,7 @@ fn list(cards: impl IntoIterator<Item = u32>) -> Screen {
     }
 }
 
-fn detail() -> Screen {
+pub(super) fn detail() -> Screen {
     Screen {
         page: BLUE,
         end: false,
@@ -148,13 +148,13 @@ impl Plan {
 
 // One device instance: a display of the package's resolution observed (Workflow #392 DA-A), on
 // which the fake paints its plan.
-struct Device {
+pub(super) struct Device {
     state: Arc<FakeState>,
     plan: Arc<std::sync::Mutex<Plan>>,
 }
 
 impl Device {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         *state
@@ -174,7 +174,7 @@ impl Device {
     }
 
     // The next run sees `screens`, one more after each of its inputs.
-    fn shows(&self, screens: Vec<Screen>) {
+    pub(super) fn shows(&self, screens: Vec<Screen>) {
         let mut plan = self.plan.lock().expect("plan");
         plan.base = self.state.input_count.load(Ordering::Acquire);
         plan.screens = screens;
@@ -363,13 +363,13 @@ fn list_package(package_id: &str, fact_key: &str) -> Vec<u8> {
 }
 
 // The package of the list reading of `fact_key`, written under `root`.
-fn write_package(root: &TempDir, name: &str, fact_key: &str) -> PathBuf {
+pub(super) fn write_package(root: &TempDir, name: &str, fact_key: &str) -> PathBuf {
     let path = root.path().join(name);
     fs::write(&path, list_package("neutral.list.task", fact_key)).expect("write the package");
     path
 }
 
-fn start(root: &TempDir, devices: &[(&str, &Device)]) -> RuntimeHost {
+pub(super) fn start(root: &TempDir, devices: &[(&str, &Device)]) -> RuntimeHost {
     let provider = FakeProvider::from_entries(devices.iter().map(|(alias, device)| {
         (
             (*alias).to_owned(),
@@ -382,7 +382,11 @@ fn start(root: &TempDir, devices: &[(&str, &Device)]) -> RuntimeHost {
 }
 
 // One manual run of `package` on `alias`; its receipt and correlation.
-fn run(host: &RuntimeHost, alias: &str, package: &Path) -> (RuntimeReceipt, CorrelationId) {
+pub(super) fn run(
+    host: &RuntimeHost,
+    alias: &str,
+    package: &Path,
+) -> (RuntimeReceipt, CorrelationId) {
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
@@ -398,7 +402,7 @@ fn run(host: &RuntimeHost, alias: &str, package: &Path) -> (RuntimeReceipt, Corr
     (client.send(&request), correlation_id)
 }
 
-fn completed(host: &RuntimeHost, receipt: &RuntimeReceipt) {
+pub(super) fn completed(host: &RuntimeHost, receipt: &RuntimeReceipt) {
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,
@@ -409,7 +413,7 @@ fn completed(host: &RuntimeHost, receipt: &RuntimeReceipt) {
 }
 
 // Every `fact.published` record of `key`, in ledger order.
-fn publications(host: &RuntimeHost, key: &str) -> Vec<FactRecord> {
+pub(super) fn publications(host: &RuntimeHost, key: &str) -> Vec<FactRecord> {
     let mut events = host
         .query_persisted_events_for_test(EventQuery {
             event_type: Some(EventType::FactPublished),

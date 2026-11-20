@@ -24160,6 +24160,29 @@
       "description": "A tool's hold (an instance pause with pause_mode quiet_or_lift: a rescue operation's hold, a recording's hold) was lifted, all or nothing, without its instance having become quiet (#480 PG-2d, contracts/scheduling-pause.md \"A pause's life in the ledger\"): its caller's time ended first (its drain's runs had not reached their next checkpoint by the grace, or its hand-back still met something in the way at the grace, the instance's admission guard still taken included) or, since its fix round 1 (the coordinator's ruling: every lift of a hold without quiet is recorded), a queued entry refused its hand-back or the scheduler refused its session close lease. pause_reason is the hold's reason and in_the_way what was in the way (pause_obstacle; read outside the admission guard when another party held it, and then possibly empty; with queued_entry for a refusing entry; close_refused for a refused close lease); the cause is the Runtime's own code of that failure (scheduling_pause_drain_incomplete, scheduling_pause_release_busy, lease_transfer_not_safe, or the close lease's refusal such as lease_busy or lease_cooldown), which the request's Failed receipt answers. Written once, after the lift, as a device_state_observed record under the instance with the pause request's links; never an answer. A hold that failed otherwise (an unconfirmed or otherwise failed close, a failed check, a shutdown, a fatal error) writes none.",
       "common_causes": "A run, a lease, an owed reset or the Runtime's own emulator start or ladder that still held the instance when the hold's time ended; another client's entry queued for the instance; a session close lease the scheduler refused (another member's entry ahead, the takeover cooldown, a holder).",
       "handling": "The hold's own answer says what its operation does next; the instance is not paused by it. Wait until what was in the way ends, then run the operation again."
+    },
+    "fact_store_capacity_share_reached": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.76",
+      "description": "Workflow #498 FACT-CAP (contracts/instance-fact-store.md, \"Capacity ledger\"): an instance's own active facts in the instance fact store (instance_id the instance's alias, count its own active facts) reached 80% of its bound (limit_count, 224: each instance has a bound of its own, and each server and each game one of 16). One Warning runtime.failed record under the instance's links, written by the publication that reached the share, or by the first publication after a start that finds the instance at or past it; none more until its count falls back under the share. Nothing is refused: the instance takes new keys up to its bound, and only then is a new key refused (fact_store_capacity_exceeded).",
+      "common_causes": "The packages bound to the instance read many distinct keys (readings, lists, display and policy seeds), or a publisher wrote many keys of its own under the instance.",
+      "handling": "Read the instance's keys (ac_facts) against its rows in the capacity ledger of contracts/instance-fact-store.md before a new package with keys of its own is placed on it; a count falls back only when facts of the instance are invalidated. The bound is a contract constant, not a setting."
     }
   },
   "locations": {
