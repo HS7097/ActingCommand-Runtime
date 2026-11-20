@@ -5,6 +5,7 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
+use super::crosscheck::public_self_test;
 use super::ending::{ending_page_id, ending_rule_refusals};
 use super::fold::scan_not_selected;
 use super::follow::{follow_invalid, located_page_problem};
@@ -2010,8 +2011,16 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
     }
     // #463 R1: only a select step records its select: the declaration, the name its demonstration
     // pressed, its `on_empty` key (#463 S2-9b: `null` for a select that declares none) and the
-    // decisions of its mark-time self-test.
+    // decisions of its mark-time self-test. #463 PRIV-SCAN fix round 1
+    // (`contracts/lab-recording.md`, "What a public recording records of a select"): a public
+    // recording records the self-test of named members only, each decision by its kind without the
+    // row it chose ([`public_self_test`]); a local one as before.
     if let Some(select) = &step.step.select {
+        let self_test = if plan.destination == RecordDestination::Public {
+            public_self_test(&select.self_test)
+        } else {
+            json!(select.self_test)
+        };
         entry.insert(
             "select".into(),
             json!({
@@ -2019,7 +2028,7 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
                 "pressed": select.declaration.pressed_name(),
                 "on_empty_key": empty_end_key(&plan.task_id, &select.declaration),
                 "marked_at_unix_ms": select.marked_at_unix_ms,
-                "self_test": select.self_test
+                "self_test": self_test
             }),
         );
     }

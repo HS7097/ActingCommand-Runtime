@@ -13,7 +13,7 @@ use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
     ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
-    SelectFrameDecision, SelectSpec, StepSelect,
+    SelectFrameDecision, SelectSelfTest, SelectSpec, StepSelect,
 };
 use super::near::{NearThresholdAt, Nearest, TemplateNearThreshold, TemplateScore};
 use super::select::{
@@ -1147,20 +1147,19 @@ pub(crate) fn select_checks(
                 }
             }
             // #463 R1 fix 1: each decision by its kind, as at mark time.
-            frames.push(json!(SelectFrameDecision {
+            frames.push(SelectFrameDecision {
                 frame_id: frame.frame_id.clone(),
                 pressed,
                 default: default.kind,
-            }));
+            });
         }
-        let decided = json!(frames);
         records.push(public_select_record(
             (plan, step, spec),
             &operation,
-            decided.clone(),
+            public_frames(&frames),
             None,
         ));
-        item["frames"] = decided;
+        item["frames"] = json!(frames);
         after_press.extend(select_page_elsewhere(
             plan,
             step,
@@ -1182,9 +1181,11 @@ pub(crate) fn select_checks(
 /// the entry of the select step `step` (its declaration `spec`, its operation `operation`) that a
 /// public recording's provenance records: a new object of the named members only, built here and
 /// never from the answers' entry: the step and its serial number, its operation and layout, the
-/// wanted value, the pressed name, the `on_empty` key, `frames`, the decisions on its own live
-/// frames, and, of a scrolling select, `scan`, what [`super::scan::ScanRecord`] keeps of it. A
-/// member the answers' entry has or gains is in it only when it is named here.
+/// wanted value (fix round 1: its `name` and `default`, each named), the pressed name, the
+/// `on_empty` key, `frames`, the decisions on its own live frames as [`public_frames`] gives them
+/// (or each frame undetermined), and, of a scrolling select, `scan`, what
+/// [`super::scan::ScanRecord`] keeps of it. A member the answers' entry has or gains is in it only
+/// when it is named here; no value in it is serialized from a type whose members are not named.
 fn public_select_record(
     (plan, step, spec): (&Plan, &PlanStep, &SelectSpec),
     operation: &str,
@@ -1196,7 +1197,7 @@ fn public_select_record(
         "record_index": step.step.index,
         "op": operation,
         "layout": plan.select_layout_id(step),
-        "wanted": spec.wanted,
+        "wanted": {"name": spec.wanted.name, "default": spec.wanted.default},
         "pressed": spec.pressed_name(),
         "on_empty_key": empty_end_key(&plan.task_id, spec),
         "frames": frames
@@ -1205,6 +1206,52 @@ fn public_select_record(
         record["scan"] = scan;
     }
     record
+}
+
+/// #463 PRIV-SCAN fix round 1 (`contracts/lab-recording.md`, "What a public recording records of a
+/// select"): the decisions on a select step's own live frames as a public recording records them,
+/// each of named members only: the frame's id and, for the pressed name and for the default, the
+/// decision's kind alone (`{result}`). Never the row a `selected` decision chose (`slot`, the row's
+/// index on the pressed screen, which, pressed on a scrolling list's first screen, is the pressed
+/// name's position in the list).
+pub(crate) fn public_frames(decisions: &[SelectFrameDecision]) -> Value {
+    Value::Array(
+        decisions
+            .iter()
+            .map(|decision| {
+                json!({
+                    "frame_id": decision.frame_id,
+                    "pressed": {"result": decision_kind(decision.pressed)},
+                    "default": {"result": decision_kind(decision.default)}
+                })
+            })
+            .collect(),
+    )
+}
+
+/// #463 PRIV-SCAN fix round 1: the mark-time self-test of a select step as a public recording's
+/// provenance records it in the step's entry (`steps[].select.self_test`), of named members only:
+/// its status, its reason when it has one, and its decisions as [`public_frames`] gives them.
+pub(crate) fn public_self_test(test: &SelectSelfTest) -> Value {
+    let mut kept = json!({"status": test.status.as_str()});
+    if let Some(reason) = &test.reason {
+        kept["reason"] = json!(reason);
+    }
+    kept["frames"] = public_frames(&test.frames);
+    kept
+}
+
+/// #463 PRIV-SCAN fix round 1: the word of a decision's kind, the tag its JSON carries, each kind
+/// named, so that a member a kind carries or gains never reaches a public record.
+fn decision_kind(decision: SelectDecision) -> &'static str {
+    match decision {
+        SelectDecision::Selected { .. } => "selected",
+        SelectDecision::Empty => "empty",
+        SelectDecision::Ambiguous => "ambiguous",
+        SelectDecision::Insufficient => "insufficient",
+        SelectDecision::Blocked => "blocked",
+        SelectDecision::Unknown => "unknown",
+    }
 }
 
 /// #463 SC-1: where a page of the package comes from, or whose frame a frame is: a step's own (its

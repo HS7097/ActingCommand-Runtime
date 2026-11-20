@@ -20,7 +20,11 @@
 // frame or name of a game; the tests read no clock and never sleep. Every expected number comes
 // from the geometry above, as S2-9a's gate has it: the offline entry reads 11 positions over 4
 // forward screens of 6 screens in all, 3 forward swipes of 24 px, `delta` at position 3, and
-// `lima`, which no row shows, empty over complete coverage.
+// `lima`, which no row shows, empty over complete coverage. Fix round 1 (coordinator work order
+// `rd-1120/brief-463-priv-scan-fix1.md`, after the independent review): the record's `scan.absent`
+// keeps no name and each frame's decisions keep their kind without the row they chose (`slot`), in
+// the select entry and in the step's own self-test; test 1 also searches every file for the absent
+// name and for the pressed row's index as the answers' entry holds them.
 // - `privscan_a_public_package_holds_none_of_the_left_out_members` (1)
 // - `privscan_a_local_package_records_the_answers_entries_as_before` (2)
 // - `privscan_adopt_its_check_and_regression_pass_the_public_package` (3)
@@ -28,7 +32,7 @@
 // - `privscan_a_public_record_holds_no_member_off_the_named_list` (5)
 
 use crate::recording::model::RecordDestination;
-use crate::recording::store::{lab_dir, old_record_path};
+use crate::recording::store::{lab_dir, old_record_path, recording_path};
 use crate::regression_case::run_regression_case;
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
@@ -71,8 +75,16 @@ const YELLOW: [u8; 3] = [230, 230, 20];
 const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// The members of the answers' entry a public record leaves out, by their names: the names each
 /// screen showed, the positions the scan read, the content step of each swipe, the pressed name's
-/// position in the list.
-const LEFT_OUT: [&str; 4] = ["screens", "positions", "content_step_px", "position"];
+/// position in the list and (fix round 1) the row a frame's decision chose.
+const LEFT_OUT: [&str; 5] = [
+    "screens",
+    "positions",
+    "content_step_px",
+    "position",
+    "slot",
+];
+/// Fix round 1: the name `lima`, which the select declares and no row shows: the absent name.
+const ABSENT: &str = "lima";
 /// The time the adoption gives itself, which names its kept places.
 const ADOPTED_AT: u64 = 1_000;
 
@@ -466,11 +478,12 @@ fn holds(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 // The members a public record names, as a tree: an object names its members, an array its items by
-// its one item, `null` a value. The decisions on a frame by their kind (`{result, slot}`), or a
-// frame not evaluated (`result`); of the scan, a decision by its kind and the name it chose.
+// its one item, `null` a value. Fix round 1: the decisions on a frame by their kind alone
+// (`{result}`), or a frame not evaluated (`result`); of the scan, the pressed name's decision by
+// its kind and the name it chose, and the absent run's coverage and decision by its kind, without
+// a name.
 fn named_list() -> Value {
-    let decision = json!({"result": null, "slot": null});
-    let chosen = json!({"result": null, "name": null});
+    let decision = json!({"result": null});
     json!({
         "step": null,
         "record_index": null,
@@ -482,10 +495,50 @@ fn named_list() -> Value {
         "frames": [{"frame_id": null, "pressed": decision, "default": decision, "result": null}],
         "scan": {
             "coverage": null,
-            "pressed": chosen,
-            "absent": {"name": null, "coverage": null, "decision": chosen}
+            "pressed": {"result": null, "name": null},
+            "absent": {"coverage": null, "decision": decision}
         }
     })
+}
+
+// Fix round 1: the decisions on frames `frames` as a public record holds them: each frame's id and
+// each decision's kind, without the row it chose.
+fn unslotted(frames: &Value) -> Value {
+    Value::Array(
+        frames
+            .as_array()
+            .expect("the frames' decisions")
+            .iter()
+            .map(|frame| {
+                json!({
+                    "frame_id": frame["frame_id"],
+                    "pressed": {"result": frame["pressed"]["result"]},
+                    "default": {"result": frame["default"]["result"]}
+                })
+            })
+            .collect(),
+    )
+}
+
+// Fix round 1: the `select` of the one select step of `steps`, the provenance's or the
+// recording's.
+fn select_of(steps: &Value) -> &Value {
+    steps
+        .as_array()
+        .expect("the steps")
+        .iter()
+        .map(|step| &step["select"])
+        .find(|select| select.is_object())
+        .expect("a select step")
+}
+
+// Fix round 1: the member `member` holding `value` as a JSON text writes it, pretty-printed (as
+// every file of a package and of a case is) and compact.
+fn written_forms(member: &str, value: &Value) -> [String; 2] {
+    [
+        format!("\"{member}\": {value}"),
+        format!("\"{member}\":{value}"),
+    ]
 }
 
 // The paths of the members of `value` that `list` does not name, each `/member/…` (an array's
@@ -692,6 +745,14 @@ impl Bench {
         files_under(&lab_dir(&self.state(), RECORD_ID))
     }
 
+    // Fix round 1: the recording's own state, `recording.json`.
+    fn recording(&self) -> Value {
+        serde_json::from_slice(
+            &fs::read(recording_path(&self.state(), RECORD_ID)).expect("the recording file"),
+        )
+        .expect("the recording JSON")
+    }
+
     // `record stop [--destination <word>]`: the `lab` output with its status.
     fn stop(&self, destination: Option<RecordDestination>) -> Result<Value, LabError> {
         let options = RecordStopOptions {
@@ -759,11 +820,17 @@ fn two_forward() -> Bench {
 
 // The brief's test 1: a public recording of a scrolling select read to the list's end. The answer
 // is not narrowed: `lab.selects` (and the cross-check's `selects` in `lab.cross_check`) still says
-// what the scan read: 11 positions, 6 screens with their names, 3 swipes and `delta` at position 3.
-// The package's entry task records the select's scan as `coverage`, `pressed` without its position
-// and `absent`, nothing else; the other members of the entry are the answer's. And no file the
-// recording writes into the package, nor any case it writes beside it, holds a left-out member by
-// its name, searched in the bytes of every file, not at one member's path.
+// what the scan read: 11 positions, 6 screens with their names, 3 swipes, `delta` at position 3,
+// the absent name `lima` and the row each frame's decision chose. The package's entry task records
+// the select's scan as `coverage`, `pressed` without its position and `absent` without its name,
+// nothing else; its `frames` each decision's kind without its row (fix round 1), the step's own
+// self-test the same; the other members of the entry are the answer's. And no file the recording
+// writes into the package, nor any case it writes beside it, holds a left-out member by its name,
+// nor (fix round 1) the absent name or the pressed row's index as the answers' entry holds them,
+// searched in the bytes of every file, not at one member's path. The values searched occur nowhere
+// else in the fixture's files: `"name": "lima"` (the package declares `lima` in its lists of names,
+// never as a member `name`) and `"slot": <the pressed row's index>` (no other member is named
+// `slot`).
 #[test]
 fn privscan_a_public_package_holds_none_of_the_left_out_members() {
     let bench = selected();
@@ -788,6 +855,19 @@ fn privscan_a_public_package_holds_none_of_the_left_out_members() {
         "{answered}"
     );
     assert_eq!(lab["cross_check"]["selects"][0], *answered, "{lab}");
+    // Fix round 1: the absent name and the pressed row's index on the primary frame, as the
+    // answers' entry holds them; its text pretty-printed shows each in the form searched below.
+    assert_eq!(answered["scan"]["absent"]["name"], ABSENT, "{answered}");
+    let row = &answered["frames"][0]["pressed"]["slot"];
+    assert!(row.is_u64(), "{answered}");
+    let held = [
+        written_forms("name", &json!(ABSENT)),
+        written_forms("slot", row),
+    ];
+    let shown = serde_json::to_string_pretty(answered).expect("the answer's text");
+    for [pretty, _] in &held {
+        assert!(shown.contains(pretty.as_str()), "{pretty}: {shown}");
+    }
 
     let entries = package(&lab);
     let task = task_of(&entries);
@@ -797,7 +877,7 @@ fn privscan_a_public_package_holds_none_of_the_left_out_members() {
         json!({
             "coverage": "complete",
             "pressed": {"result": "selected", "name": "delta"},
-            "absent": {"name": "lima", "coverage": "complete", "decision": {"result": "empty"}}
+            "absent": {"coverage": "complete", "decision": {"result": "empty"}}
         }),
         "{recorded}"
     );
@@ -809,10 +889,23 @@ fn privscan_a_public_package_holds_none_of_the_left_out_members() {
         "wanted",
         "pressed",
         "on_empty_key",
-        "frames",
     ] {
         assert_eq!(recorded[member], answered[member], "{member}: {recorded}");
     }
+    assert_eq!(
+        recorded["frames"],
+        unslotted(&answered["frames"]),
+        "{recorded}"
+    );
+    // Fix round 1: the step's own self-test, as the recording keeps it, by its status and each
+    // decision's kind.
+    let kept = select_of(&bench.recording()["steps"])["self_test"].clone();
+    assert_eq!(kept["status"], "passed", "{kept}");
+    assert_eq!(
+        select_of(&task["provenance"]["steps"])["self_test"],
+        json!({"status": "passed", "frames": unslotted(&kept["frames"])}),
+        "{task}"
+    );
 
     let mut written = entries.into_iter().collect::<Vec<_>>();
     written.extend(files_under(&cases_directory(&lab)));
@@ -826,15 +919,19 @@ fn privscan_a_public_package_holds_none_of_the_left_out_members() {
             let key = format!("\"{member}\":");
             assert!(!holds(bytes, key.as_bytes()), "{name} holds {member}");
         }
+        for form in held.iter().flatten() {
+            assert!(!holds(bytes, form.as_bytes()), "{name} holds {form}");
+        }
     }
 }
 
 // The brief's test 2: the same recording stopped again with `--destination local`: it generates
 // again; its answer's entries are the public stop's; its entry task carries `provenance.destination:
 // "local"` and records the answers' entries, as every recording did before this slice, the scan's
-// `positions` among them; every other file of the package is the public package's byte for byte,
-// and the entry task is the public one's but for its generation time, the mark and the select
-// entries.
+// `positions`, the absent name and each decision's row among them, and (fix round 1) the step's own
+// self-test as the recording keeps it, as before; every other file of the package is the public
+// package's byte for byte, and the entry task is the public one's but for its generation time, the
+// mark, the select entries and the step's self-test.
 #[test]
 fn privscan_a_local_package_records_the_answers_entries_as_before() {
     let bench = selected();
@@ -852,8 +949,13 @@ fn privscan_a_local_package_records_the_answers_entries_as_before() {
         task["provenance"]["cross_check"]["selects"], local["selects"],
         "{task}"
     );
+    let recorded = &task["provenance"]["cross_check"]["selects"][0];
+    assert_eq!(recorded["scan"]["positions"], 11, "{task}");
+    assert_eq!(recorded["scan"]["absent"]["name"], ABSENT, "{task}");
+    assert!(recorded["frames"][0]["pressed"]["slot"].is_u64(), "{task}");
     assert_eq!(
-        task["provenance"]["cross_check"]["selects"][0]["scan"]["positions"], 11,
+        select_of(&task["provenance"]["steps"])["self_test"],
+        select_of(&bench.recording()["steps"])["self_test"],
         "{task}"
     );
 
@@ -877,6 +979,16 @@ fn privscan_a_local_package_records_the_answers_entries_as_before() {
             .and_then(Value::as_object_mut)
             .expect("the cross-check")
             .remove("selects");
+        // Fix round 1: the step's own self-test, which test 1 and the assertion above compare.
+        for step in provenance
+            .get_mut("steps")
+            .and_then(Value::as_array_mut)
+            .expect("the steps")
+        {
+            if let Some(select) = step.get_mut("select").and_then(Value::as_object_mut) {
+                select.remove("self_test");
+            }
+        }
     }
     assert_eq!(one, other);
 }
@@ -988,10 +1100,11 @@ fn privscan_the_self_check_refuses_the_same_case_public_and_local() {
 }
 
 // The coordinator's test of 11-19: every member of a public record's select entry, at every depth,
-// is on the named list ([`named_list`]), so that a member a later slice adds to the answers' entry
-// fails here the day it reaches the record. The same walk over the answers' entry finds the scan's
-// `screens`, `positions`, `steps` and the pressed name's `position`: it would have found them had the
-// record been the answers' entry.
+// is on the named list ([`named_list`]; fix round 1: the new one, down to the members of `frames`),
+// so that a member a later slice adds to the answers' entry fails here the day it reaches the
+// record. The same walk over the answers' entry finds the scan's `screens`, `positions`, `steps`,
+// the pressed name's `position`, (fix round 1) the absent run's `name` and the row of each frame's
+// decisions: it would have found them had the record been the answers' entry.
 #[test]
 fn privscan_a_public_record_holds_no_member_off_the_named_list() {
     let bench = selected();
@@ -1010,6 +1123,9 @@ fn privscan_a_public_record_holds_no_member_off_the_named_list() {
         "/scan/positions",
         "/scan/steps",
         "/scan/pressed/position",
+        "/scan/absent/name",
+        "/frames/pressed/slot",
+        "/frames/default/slot",
     ] {
         assert!(
             answered.iter().any(|found| found == path),

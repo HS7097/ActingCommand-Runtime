@@ -32,7 +32,9 @@
 //! run fails with the kernel's `selection_scan_early_stop_unreached`. The offline entry must stop
 //! early on the pressed name; a name no screen shows is not judged offline then.
 
-use super::crosscheck::{Failures, FirstDecision, FrameCache, Locus, evaluator_bundle};
+use super::crosscheck::{
+    Failures, FirstDecision, FrameCache, Locus, evaluator_bundle, public_frames,
+};
 use super::fold::scan_invalid;
 use super::frames::{LoadedFrame, crop_png, read_stored_frame, rect_contains, rect_inside};
 use super::generate::{
@@ -2435,11 +2437,10 @@ pub(crate) fn scan_select_checks(
                     failures.fail(locus, mismatch(step, frame_id, reason, detail))?;
                 }
             }
-            Ok(live) => decisions.push(json!(live.decision)),
+            Ok(live) => decisions.push(live.decision),
         }
     }
-    let frames = json!(decisions);
-    item["frames"] = frames.clone();
+    item["frames"] = json!(decisions);
 
     let mut screens = Vec::with_capacity(state.screens.len());
     // #463 S2-9b: the names read on the first screen and those after a forward swipe.
@@ -2519,7 +2520,7 @@ pub(crate) fn scan_select_checks(
             result["positions"] = json!(run.positions);
             result["pressed"] = json!(run.decision);
             result["steps"] = json!(content_steps(&state.screens, &run.offsets));
-            kept["coverage"] = json!(run.coverage);
+            kept["coverage"] = json!(coverage_word(run.coverage));
             kept["pressed"] = public_decision(&run.decision);
         }
     }
@@ -2537,10 +2538,11 @@ pub(crate) fn scan_select_checks(
             failures.fail(on(ids.as_slice()), mismatch(step, first_id, reason, detail))?;
         }
         if let Some(run) = judged.run {
+            // Fix round 1: without the name, the first declared name no screen showed, which over
+            // a scan that covered the list says that every name declared before it was shown.
             kept["absent"] = json!({
-                "name": run.name,
-                "coverage": run.coverage,
-                "decision": public_decision(&run.decision)
+                "coverage": coverage_word(run.coverage),
+                "decision": {"result": scan_decision_kind(&run.decision)}
             });
             result["absent"] = json!(run);
         }
@@ -2559,29 +2561,59 @@ pub(crate) fn scan_select_checks(
         )?;
     }
     item["scan"] = result;
-    Ok(ScanRecord { frames, scan: kept })
+    Ok(ScanRecord {
+        frames: public_frames(&decisions),
+        scan: kept,
+    })
 }
 
 /// #463 PRIV-SCAN (`contracts/lab-recording.md`, "What a public recording records of a select";
 /// the coordinator's ruling of 11-19 after the owner's rule of 11-18 that what an account holds
 /// does not enter a repository): what a public recording's provenance records of a scrolling
 /// select beside the answers' entry, built apart from it of named members only: the decisions on
-/// the step's own live frames (`frames`) and, of its scan (`scan`), whether the scan covered the
-/// list (`coverage`, a closed word), the pressed name's decision by its kind and name without its
-/// position (`pressed`), and the run for the name no screen shows (`absent`: that name, its
-/// coverage and its decision so). Never the names each screen showed, how many positions or screens
-/// the scan read, nor the content step of a swipe.
+/// the step's own live frames (`frames`, as [`public_frames`] gives them: each frame's id and each
+/// decision's kind, fix round 1: without the row it chose) and, of its scan (`scan`), whether the
+/// scan covered the list (`coverage`, a closed word), the pressed name's decision by its kind and
+/// name without its position (`pressed`), and the run for a name no screen shows (`absent`: fix
+/// round 1, its coverage and its decision's kind alone, without that name). Never the names each
+/// screen showed, how many positions or screens the scan read, nor the content step of a swipe.
 pub(crate) struct ScanRecord {
     pub(crate) frames: Value,
     pub(crate) scan: Value,
 }
 
 /// #463 PRIV-SCAN: a decision of the offline entry as a public recording records it: its kind, and
-/// the name a `selected` one chose, without the name's position in the list.
+/// the name a `selected` one chose, without the name's position in the list; fix round 1: every
+/// other kind by its word alone ([`scan_decision_kind`]).
 fn public_decision(decision: &ScanDecision) -> Value {
     match decision {
         ScanDecision::Selected { name, .. } => json!({"result": "selected", "name": name}),
-        other => json!(other),
+        other => json!({"result": scan_decision_kind(other)}),
+    }
+}
+
+/// #463 PRIV-SCAN fix round 1: the word of the kind of a decision of the offline entry, the tag its
+/// JSON carries, each kind named, so that a member a kind carries or gains never reaches a public
+/// record.
+fn scan_decision_kind(decision: &ScanDecision) -> &'static str {
+    match decision {
+        ScanDecision::Selected { .. } => "selected",
+        ScanDecision::Empty => "empty",
+        ScanDecision::Ambiguous => "ambiguous",
+        ScanDecision::Insufficient => "insufficient",
+        ScanDecision::Blocked => "blocked",
+        ScanDecision::Unknown => "unknown",
+    }
+}
+
+/// #463 PRIV-SCAN fix round 1: the word of a scan's coverage, as its JSON writes it, each state
+/// named, so that a member a state gains never reaches a public record.
+fn coverage_word(coverage: ScanCoverageState) -> &'static str {
+    match coverage {
+        ScanCoverageState::NotStarted => "not_started",
+        ScanCoverageState::Incomplete => "incomplete",
+        ScanCoverageState::EarlyStopped => "early_stopped",
+        ScanCoverageState::Complete => "complete",
     }
 }
 
