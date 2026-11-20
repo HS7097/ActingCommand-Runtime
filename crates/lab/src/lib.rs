@@ -173,6 +173,11 @@ mod gate_463_sel2l_rows;
 #[cfg(test)]
 mod gate_463_g2;
 
+// #463 PRIV-SCAN: a public recording's provenance records a select's entry of named members only;
+// a local one's as before.
+#[cfg(test)]
+mod gate_463_priv_scan;
+
 // Workflow #479 F-3b: a frame within a pixel of the base's shape is brought to the base by the
 // frame gate; a stored scene of it answers on the base; a recording on it is refused as before;
 // fix round 1: the two recording paths that ask the map count such a size as the map does.

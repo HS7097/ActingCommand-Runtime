@@ -564,7 +564,11 @@ recording was checked offline, and that the content was tried on a real applicat
   left) is the offline review of ruling 2 on #464, its rule unchanged: the entry task's provenance
   a recording's, the cross-check `passed`, the first decision evaluated, no step whose click needs
   review. It says nothing of a run on a device. A class other than `held` still needs it
-  (`recording_unreviewed`, "The checks").
+  (`recording_unreviewed`, "The checks"). #463 PRIV-SCAN (0.12.76): of the provenance the review
+  reads `source`, `record_id`, `cross_check.status`, `warnings[].code` and each step's `click` and
+  `key` `needs_review`, nothing of the cross-check's `selects`, whose entries a public recording
+  records with fewer members ([lab-recording.md](lab-recording.md), "What a public recording
+  records of a select"); a public package is reviewed as before.
 - `review.trial` is the latest trial of the content this adoption writes, as
   [standard-pack-trial.md](standard-pack-trial.md) records trials: the records of the package under
   the state directory the adoption is given (`--state-dir`, default actinglab's session directory,
