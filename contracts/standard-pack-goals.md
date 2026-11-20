@@ -286,8 +286,11 @@ for that game, and a reader of the declaration says why.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
-  as this check does, with the same reader and the same rule, for the composer's irreversible mark
-  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  as this check does, with the same reader and the same rule; since Workflow #455 G-R2x (0.12.77,
+  register §1.499) that reading serves the warning for a package that cannot be read
+  (`standard_pack_package_unreadable`) and the variables' judgement (from 0.12.60 to 0.12.76 it
+  served the composer's irreversible mark too,
+  [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
   Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
   `goals.json` too, where it reads every package's declaration (and so do the offline readers that
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
@@ -385,8 +388,9 @@ without one, as it does today.
      visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.369) the rules that
      follow a rule are every rule, not held, whose trigger has a chain link to it as the evaluator
      reads one (a `dependency_completed` reached only through `all` whose `terminal_states` holds
-     `succeeded`), the lists the composer's irreversible mark reads
-     ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
+     `succeeded`), the lists the policy crate's `standard_pack_rule_followers` gives (before G-R2x
+     the composer's irreversible mark read them too,
+     [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
      with a value of its own, one whose link also accepts another end and one behind a complete rule
      count too, not only the followers the coverage lists as riding (`benefit_followers`).
      **A limit that the slice which makes a tier act must lift first:** a rule whose trigger depends

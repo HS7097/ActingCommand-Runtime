@@ -43346,8 +43346,8 @@ now) and [standard-pack-schedule.md](standard-pack-schedule.md) ("The irreversib
 rewritten; "A game whose root cannot be composed", moved out of it) are the contract;
 [scheduling/README.md](scheduling/README.md), [scheduling/v2/README.md](scheduling/v2/README.md)
 and its `tasks.schema.json`, [standard-pack-goals.md](standard-pack-goals.md) (the sentences of the
-evaluator's line), [remedies.md](remedies.md) and [instance-fact-store.md](instance-fact-store.md)
-follow it.
+evaluator's line; fix round 1, the two that still named the composer's mark),
+[remedies.md](remedies.md) and [instance-fact-store.md](instance-fact-store.md) follow it.
 
 **What is withdrawn, and on whose words.** G-R2s (0.12.60, §1.369, the coordinator's rulings of
 11-14) built the line "a goal never raises the weight of a task whose package can do something
@@ -43386,10 +43386,15 @@ included). The remedy layer's own rules stay."
   which every unmarked candidate read under G-R2s and was left as it was, is what a candidate of a
   marked task reads now. The resolution without the record (`unrecorded`) is still computed, for
   the void alone (`LeftOutWhy::RootUncomposed`, its reason, its decision identity, all unchanged).
-  An unmarked candidate runs no line this slice changes, so its numbers, reasons and records are
-  byte for byte main's; what can change around it is only the competition (a candidate of a task
-  that carried the mark can now outrank it). On an instance without a target record nothing
-  changes. The forward projection runs the same score stage, so it weighs such a task alike too.
+  A candidate whose task never carried the mark runs no line this slice changes, so it keeps its own
+  score-stage numbers and its net benefit. What can change on its instance (fix round 1, where this
+  said "byte for byte main's", which said too much) is the competition and every record that lists
+  competitors: the winner's lead (`rank_breakdown`'s `lead`), the decision record's rows of the
+  candidates passed over (`decision_candidate_not_selected`, their `total` and `behind_by`), the
+  order of a capped round by value per unit, the reserve gate and the heavy-scene slots, because a
+  candidate that carried the mark can now be raised by a goal. That is the purpose of the
+  withdrawal. On an instance without a target record nothing changes. The forward projection runs
+  the same score stage, so it weighs such a task alike too.
 - *The composer* (`crates/policy/src/compose.rs`): `irreversible_rules`, the `marked` input of
   `instantiate` and the member's write in `compose_task` are removed. The required input
   `StandardPackGameFiles.irreversible` stays, read only for `unreadable()`, the composition's
@@ -43455,10 +43460,13 @@ after the deploy, which runs before that cycle's evaluation, the workbench activ
 generation (`catalog.activated`, version the ledger head plus one) for the whole composed catalog;
 an installation whose active generation carries no member composes the same hash and activates
 nothing. What that new hash resets: the SS-4 no-progress guards pin the hash, but they are memory
-only and a start has none; a kept capped episode is kept (its consumers key, task id, consumption
-and `benefit_limited`, is unchanged); daily budgets, cooldowns and run states are per task id,
-unchanged; the dispatches' decision identities hash the new catalog hash, as at every new
-generation.
+only and a start has none; fix round 1 adds two more a new generation rebuilds, both memory only,
+so a start has neither: the random delay table, whose entries end when the generation changes
+(`RandomDelayTable::prune`, `crates/runtime-host/src/policy_host.rs`), and the remedy table, rebuilt
+for the new catalog hash (`RemedyState::table_due`, `crates/runtime-host/src/remedy.rs`); a kept
+capped episode is kept (its consumers key, task id, consumption and `benefit_limited`, is
+unchanged); daily budgets, cooldowns and run states are per task id, unchanged; the dispatches'
+decision identities hash the new catalog hash, as at every new generation.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -43494,11 +43502,15 @@ moves rule B to another package; the requirement deliberately changes what it pi
 fixture of any other gate file names the member, so none was touched for it.
 
 **At deploy.** Ruling 5's findings above: the start loads 0.12.76's generations, and a rollback
-starts on this build's state. **The scheduling of an instance changes only if it holds a target
-record and a task that carried the mark produces one of its targets' pools (or a v1 record names
-such a task):** that candidate is now weighed with the record, and may outrank the instance's
-other candidates; every other candidate's own numbers are main's, and an instance without a target
-record is untouched. To see beforehand whether an installation has such an instance: the active
+starts on this build's state. **The scheduling of an instance really changes only when a pool that
+a task which carried the mark produces carries a target on that instance that is not met (another
+candidate's `resource_targets` reason on that instance shows that target `applied` with a `gap`
+above 0), or when a version 1 record on that instance names such a task** (fix round 1, made
+exact): that candidate is then raised by the goal, and may outrank the instance's other
+candidates; every other candidate keeps its own score-stage numbers and its net benefit, and what
+can change around it is the competition and the records that list competitors (*The evaluator*
+above); an instance without a target record is untouched. To see beforehand whether an
+installation has such an instance: the active
 generation's `tasks` document in the state root holds `"irreversible_reach": true` on the tasks
 that carried the mark; the instance's `session.resource_targets` record (its goals) shows whether
 it holds a target record; and in the running Runtime's schedule explanation (`actingctl schedule`,
@@ -43511,9 +43523,12 @@ deploy activates one new generation where the active one carries the member (abo
 
 **Limits.** The void of an uncomposed root stays, and its own reason ("the active generation may
 not hold the game as its files give it now") is now its only one; whether it should stay is not
-this slice's question. `standard-pack-goals.md`'s sentences that name "the composer's irreversible
-mark" outside the evaluator's line ("Who reads it", the followers' sentence of the first safety
-place) are left to the other slices in that file, as the work order asks.
+this slice's question. Fix round 1 rewrote the two sentences of `standard-pack-goals.md` that still
+named "the composer's irreversible mark" outside the evaluator's line: in "Who reads it", the
+workbench's reading of every package's declaration serves, since G-R2x, the warning for a package
+that cannot be read and the variables' judgement; in the followers' sentence of the first safety
+place, the lists are those `standard_pack_rule_followers` gives. No other paragraph of that file
+changed.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

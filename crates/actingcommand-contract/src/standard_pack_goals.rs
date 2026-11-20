@@ -611,8 +611,9 @@ impl GoalReferences {
     /// G-R1 fix round 2: whether a rule that follows `rule` ([`GoalRule::followers`]), directly
     /// or through further followers, runs a package that can do something irreversible, or is a
     /// rule or runs a package the references were not told of (never passed). Each follower is
-    /// visited once, so a cycle of followers ends the walk. G-R2s: the walk is the one the
-    /// composer runs, [`IrreversiblePackages::followers_irreversible`].
+    /// visited once, so a cycle of followers ends the walk. The walk is
+    /// [`IrreversiblePackages::followers_irreversible`] (the composer ran it too from G-R2s until
+    /// G-R2x withdrew the mark, register §1.499).
     fn follower_irreversible(&self, rule: &GoalRule) -> bool {
         self.packages
             .followers_irreversible(&rule.followers, |follower_id| {

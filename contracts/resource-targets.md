@@ -86,12 +86,17 @@ target record as on an instance without one, with the reason
 - **The composer writes no mark** ([standard-pack-schedule.md](standard-pack-schedule.md), "The
   irreversible mark"). The member stays readable in a V2 catalog, without effect, because a catalog
   generation of 0.12.60 to 0.12.76 carries it ([scheduling/v2/README.md](scheduling/v2/README.md)).
-- **No other candidate's number changes.** The record's own resolution, which every candidate whose
-  task never carried the mark read under G-R2s and reads now, is the one G-R2s left as it was; only
-  the candidates of tasks that carried the mark read it now instead of the resolution without the
-  record. Their rank can rise, so another candidate can lose its place to one; the other
-  candidate's own numbers and reasons are its own. On an instance without a target record nothing
-  changes.
+- **A candidate whose task never carried the mark keeps its own numbers.** The record's own
+  resolution, which every such candidate read under G-R2s and reads now, is the one G-R2s left as it
+  was; only the candidates of tasks that carried the mark read it now instead of the resolution
+  without the record. So such a candidate keeps its own score-stage numbers and its net benefit.
+  What can change on its instance is the competition and every record that lists competitors: the
+  winner's lead (`rank_breakdown`'s `lead`), the decision record's rows of the candidates passed
+  over (`decision_candidate_not_selected`, their `total` and `behind_by`), the order of a capped
+  round by value per unit ([scheduling/README.md](scheduling/README.md), "Capped spending order"),
+  the reserve gate ("Task Reserves" there) and the heavy-scene slots ("Shared Run Limits" there),
+  because a candidate that carried the mark can now be raised by a goal. That is the purpose of the
+  withdrawal. On an instance without a target record nothing changes.
 - **What stays** until the owner decides whether goals and variables may govern such packages: the
   goal check's refusal of an entry that governs one (`goal_governs_irreversible`,
   [standard-pack-goals.md](standard-pack-goals.md)), kernel admission's refusal of `variables` on

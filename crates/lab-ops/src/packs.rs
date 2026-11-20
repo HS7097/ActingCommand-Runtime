@@ -1032,10 +1032,10 @@ impl Rows {
     /// registry lists, read by this crate's own reading of its `control.json`
     /// ([`control_provides`]; lab-ops does not reach the Runtime's package reader), through the one
     /// copy of the rule ([`IrreversiblePackages::new`]). A package whose control file cannot be
-    /// read could not be read (Workflow #455 G-R2x, register §1.499: the composer marks no task
-    /// by it). Each control file is read
-    /// once into `declared`; its warning is given where its row is built, or, for a package
-    /// without a row, after the rows.
+    /// read is passed as one that could not be read (`None`); since Workflow #455 G-R2x (register
+    /// §1.499) the composer marks no task by it. Each control file is read once into `declared`;
+    /// its warning is given where its row is built, or, for a package without a row, after the
+    /// rows.
     fn game_irreversibility(
         root: &Path,
         game: &str,

@@ -639,12 +639,13 @@ fn schedule(extra: Option<(&str, Value)>) -> Value {
     })
 }
 
+/// One package of the fixture as a reader reads it: its id, what it provides (each capability with
+/// its mark) and what its remedies list.
+type Declared<'a> = (&'a str, &'a [(&'a str, bool)], &'a [&'a str]);
+
 /// The fixture's packages as a reader read them, each with what it provides (each capability with
 /// its mark) and what its remedies list; `unread` could not be read.
-fn root_of(
-    packages: [(&str, &[(&str, bool)], &[&str]); 5],
-    unread: Option<&str>,
-) -> IrreversiblePackages {
+fn root_of(packages: [Declared<'_>; 5], unread: Option<&str>) -> IrreversiblePackages {
     IrreversiblePackages::new(
         packages
             .iter()
