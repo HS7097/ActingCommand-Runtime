@@ -1102,8 +1102,9 @@ fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below(
         other => panic!("the build's package range: {other:?}"),
     };
     // Workflow #463 SEL-GRID G2 (register §1.491) raises the build's range to [3, 21], the lines
-    // of a shared read's name boxes; [20, 20] stays within it.
-    assert_eq!(own, [3, 21]);
+    // of a shared read's name boxes, and Workflow #428 S168-LK (register §1.500) to [3, 22], a
+    // linear step's list reading; [20, 20] stays within it.
+    assert_eq!(own, [3, 22]);
     assert!(package_edge_holds(own, [20, 20]));
     assert!(!package_edge_holds([3, 19], [20, 20]));
 }

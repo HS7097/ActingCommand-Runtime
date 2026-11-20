@@ -49,7 +49,7 @@ pub(super) use online::RuntimeScanSource;
 #[cfg(test)]
 pub(super) use online::run_scan;
 pub use online::{
-    dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
+    dry_run_list_reading, dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
     replay_scan_with_tables,
 };
 pub(super) use select::{

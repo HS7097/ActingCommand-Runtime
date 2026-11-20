@@ -12,8 +12,10 @@
 //! - **Admission.** The operation's members first ([`TaskProgram::validate_list_reading_members`],
 //!   before the common operation checks), then its references and its scan's static checks
 //!   ([`prepare_list_readings`]); every refusal is `contained_task_resource_reading_invalid` with
-//!   the detail `<operation id>:<reason>`, the reason the refused member below the operation. A
-//!   `linear_steps` task refuses the step with `contained_task_linear_invalid`, `reason=read_list`.
+//!   the detail `<operation id>:<reason>`, the reason the refused member below the operation.
+//!   Workflow #428 S168-LK: a `linear_steps` task admits the step too, its members checked the
+//!   same way first (`TaskProgram::validate_linear`), and a `key` beside `read_list` is another
+//!   effect beside it (`read_list`), in both modes.
 //! - **The read.** The scan session of a select over a scan, its steps 1 and 2, with no policy:
 //!   each position's first complete reading (its identity and every declared column's feature
 //!   Known) is one row. A position read but never fixed, two positions of one key, or a position
@@ -27,8 +29,15 @@
 //!   ListReadingFrame`] for the frame captured last; the step then records one
 //!   [`ContainedTaskTrace::ListReading`], the list whole or its miss, which the host publishes at
 //!   the run's successful end or writes as the warning row at once.
+//!
+//! Workflow #428 S168-LK (`contracts/linear-steps.md`, "List reading steps"; register §1.500): the
+//! scan and its list are one function (`PreparedContainedTask::scan_list`), which the run's step
+//! of either mode calls and records, and which the dry run over saved viewports
+//! (`dry_run_list_reading`) calls and answers ([`ListReadingDryRun`]).
 
-use super::scan::{RuntimeScanSource, ScanDeclaration, ScanEnd, ScanSession, ScanSource};
+use super::scan::{
+    RuntimeScanSource, ScanDeclaration, ScanDryRunViewport, ScanEnd, ScanSession, ScanSource,
+};
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ContainedTaskTrace, PageObservation, PreparedContainedTask, ResourceReadingProblem,
@@ -108,6 +117,17 @@ impl PreparedListReading {
     pub(super) fn fact_key(&self) -> &str {
         &self.fact_key
     }
+
+    /// Workflow #428 S168-LK: the list's declaration as the step `operation_id` records it with
+    /// its list, and as the dry run answers it.
+    pub(super) fn declaration(&self, operation_id: &str) -> ListReadingDeclaration {
+        ListReadingDeclaration {
+            operation_id: operation_id.to_owned(),
+            fact_key: self.fact_key.clone(),
+            valid_for_ms: self.valid_for_ms,
+            frame_indices: Vec::new(),
+        }
+    }
 }
 
 /// One list reading's declaration, as the host publishes it: the operation that read it, the
@@ -168,10 +188,50 @@ pub(super) enum ListRead {
     Missed(ListReadingMiss),
 }
 
+/// Workflow #428 S168-LK (`contracts/resource-readings.md`, "List readings", "Offline"): a
+/// `read_list` step's scan dry-run over saved viewports (`dry_run_list_reading`), answering what
+/// the step's run records: the list's declaration, the session's coverage viewports in order, each
+/// with the end check it read, and the list whole or its miss, as the run's `ListReading` record
+/// carries it. In memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListReadingDryRun {
+    pub declaration: ListReadingDeclaration,
+    pub viewports: Vec<ScanDryRunViewport>,
+    pub list: Result<ListReadingRows, ListReadingMiss>,
+}
+
+impl ListReadingDryRun {
+    /// The warning a run writes for the list's miss ([`ListReadingMiss::outcome`],
+    /// `contained_task_resource_reading_unresolved`); `None` for a list read whole.
+    pub fn warning(&self) -> Option<Outcome> {
+        self.list
+            .as_ref()
+            .err()
+            .map(|miss| miss.outcome(&self.declaration))
+    }
+}
+
+/// Workflow #428 S168-LK: what one `read_list` step's scan read (`PreparedContainedTask::
+/// scan_list`): the frame captured last, the device capture time the list is observed at (the
+/// frame its end check passed on for a list read whole, the last frame for a miss), the list
+/// whole or its miss, and the session's coverage viewports.
+pub(super) struct ScannedList {
+    pub(super) last: PageObservation,
+    pub(super) captured_at: SystemTime,
+    pub(super) list: Result<ListReadingRows, ListReadingMiss>,
+    pub(super) viewports: Vec<ScanDryRunViewport>,
+}
+
 /// `contained_task_resource_reading_invalid` of the operation `operation_id`, refused at `member`
 /// (the refused member below the operation, or the task member a rule of the whole task names).
 fn refusal(operation_id: &str, member: &str) -> ContainedTaskError {
     ContainedTaskError::with_detail(READING_INVALID.code(), format!("{operation_id}:{member}"))
+}
+
+/// Workflow #428 S168-LK: the dry run of a list reading asked of the operation `operation_id`,
+/// which declares none: `contained_task_resource_reading_invalid`, `<operation id>:read_list`.
+pub(super) fn not_a_list_reading(operation_id: &str) -> ContainedTaskError {
+    refusal(operation_id, READ_LIST_MEMBER)
 }
 
 impl TaskOperation {
@@ -184,7 +244,7 @@ impl TaskOperation {
     /// takes (`contracts/resource-readings.md`, "Members of a `read_list` step"): another effect,
     /// a retry, a recovery, a trusted coordinate, a confirmation after its moves, a cap of its
     /// own, or a `linear_steps` member. Another effect is named `read_list`, the member the
-    /// declaration gate refuses beside it.
+    /// declaration gate refuses beside it. Workflow #428 S168-LK: a `key` is another effect.
     fn refused_read_list_member(&self) -> Option<&'static str> {
         [
             (
@@ -192,7 +252,8 @@ impl TaskOperation {
                 self.click.is_some()
                     || self.application.is_some()
                     || self.select.is_some()
-                    || self.wait.is_some(),
+                    || self.wait.is_some()
+                    || self.key.is_some(),
             ),
             ("max_attempts", self.max_attempts.is_some()),
             ("retry_interval_ms", self.retry_interval_ms.is_some()),
@@ -224,8 +285,10 @@ impl TaskProgram {
             .any(TaskOperation::declares_read_list)
     }
 
-    /// The page-graph admission of every `read_list` step's members, before the common
-    /// operation checks (`contracts/resource-readings.md`, "List readings", "Declaration"):
+    /// The admission of every `read_list` step's members, before the common operation checks,
+    /// in a page graph and (Workflow #428 S168-LK) in a step plan, where it is the first check of
+    /// `TaskProgram::validate_linear` after the task's own (`contracts/resource-readings.md`,
+    /// "List readings", "Declaration"):
     /// task schema `0.9` (`read_list` refused before it), a task that declares
     /// `scheduling_outcome`, at most 16 such steps (`operations` for the 17th), none of the
     /// members [`TaskOperation::refused_read_list_member`] names, no retry, a declared guard and
@@ -546,6 +609,8 @@ impl PreparedContainedTask {
     /// task's). The list, whole or its miss, is recorded as one [`ContainedTaskTrace::
     /// ListReading`]; the step's last viewport is returned, on which the step finishes. A failure
     /// of the scan ends the run with its code at the stage `read_list`, publishing nothing.
+    /// Workflow #428 S168-LK: the step of a page graph and of a step plan alike; its scan and its
+    /// list are [`Self::scan_list`]'s.
     pub(super) fn read_list_step<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -554,6 +619,39 @@ impl PreparedContainedTask {
         first: &PageObservation,
         (step_index, timing): (u32, ContainedTaskTimingContext),
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
+        let scanned = self.scan_list(
+            runtime,
+            operation,
+            prepared,
+            first,
+            (step_index, timing),
+            false,
+        )?;
+        runtime
+            .record(ContainedTaskTrace::ListReading {
+                declaration: prepared.declaration(&operation.id),
+                captured_at: scanned.captured_at,
+                list: scanned.list,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(scanned.last)
+    }
+
+    /// Workflow #428 S168-LK: the scan of one `read_list` step over `runtime` from its dispatched
+    /// frame `first` within `timing`'s deadline, and the list it read: the one reading the run's
+    /// step records ([`Self::read_list_step`]) and the dry run over saved viewports answers
+    /// (`dry_run_list_reading`, whose `runtime` hands out the saved frames: `replay`, no wait
+    /// between captures). The end check's frame is recorded as `ListReadingFrame` as it passes. A
+    /// failure of the scan is the error, with the stage `read_list`.
+    pub(super) fn scan_list<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        prepared: &PreparedListReading,
+        first: &PageObservation,
+        (step_index, timing): (u32, ContainedTaskTimingContext),
+        replay: bool,
+    ) -> Result<ScannedList, ContainedTaskRunError<R::Error>> {
         let layout = self
             .evaluator
             .candidate_layout(&prepared.layout_id)
@@ -582,7 +680,7 @@ impl PreparedContainedTask {
             layout,
             first,
             (step_index, timing, deadline, draw),
-            false,
+            replay,
         )
         .reading_list();
         let read = session.read_list(&mut source, &prepared.key_column, &prepared.columns);
@@ -594,12 +692,6 @@ impl PreparedContainedTask {
                 outcome.pack_operation_id(operation.id.as_str())
             })
         })?;
-        let declaration = ListReadingDeclaration {
-            operation_id: operation.id.clone(),
-            fact_key: prepared.fact_key.clone(),
-            valid_for_ms: prepared.valid_for_ms,
-            frame_indices: Vec::new(),
-        };
         let (captured_at, list): (SystemTime, Result<ListReadingRows, ListReadingMiss>) = match read
         {
             ListRead::Whole(rows) => (
@@ -612,13 +704,11 @@ impl PreparedContainedTask {
             ),
             ListRead::Missed(miss) => (last.captured_at, Err(miss)),
         };
-        runtime
-            .record(ContainedTaskTrace::ListReading {
-                declaration,
-                captured_at,
-                list,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(last)
+        Ok(ScannedList {
+            last,
+            captured_at,
+            list,
+            viewports: session.summary(None).viewports,
+        })
     }
 }

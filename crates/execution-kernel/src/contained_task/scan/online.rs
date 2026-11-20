@@ -21,6 +21,7 @@ use super::{
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::RunTables;
+use crate::contained_task::list_reading::{ListReadingDryRun, not_a_list_reading};
 use crate::contained_task::selection::{check_policy_override, on_empty_mode_refusal};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
@@ -858,6 +859,82 @@ pub fn dry_run_scan_decide(
         },
     )
     .map_err(replay_error)
+}
+
+/// Workflow #428 S168-LK (`contracts/resource-readings.md`, "List readings", "Offline"): the
+/// `read_list` step `operation_id` dry-run over a saved frame sequence, the entry a self-check of
+/// a recorded read step calls. The frames are as for [`dry_run_scan`]: the step's dispatched frame,
+/// then every capture its scan takes, in order (without a target consensus a viewport settles once
+/// two captures agree, so a forward run of viewports v0 … vn is the sequence v0, v0, v1, v1, …,
+/// vn, vn). The dispatched frame must be the step's page (`select_page_mismatch`, as for a select's
+/// dry run). The scan and its list are the run's own (`PreparedContainedTask::scan_list`, which the
+/// step of either mode calls), within the scan's `max_ms`, with no wait between captures; nothing
+/// is recorded, published or pressed. The answer is what the step's run records: the list whole or
+/// its miss (whose warning [`ListReadingDryRun::warning`] gives), with the list's declaration and
+/// the coverage viewports, each with its end check. A failure of the scan is the error, with the
+/// stage `read_list`, as it ends a run; a move backward or a capture past the last frame is
+/// `selection_scan_replay_frame_missing`, never a list. An operation that declares no list reading
+/// is `contained_task_resource_reading_invalid`, `<operation id>:read_list`.
+pub fn dry_run_list_reading(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    frames: Vec<Frame>,
+) -> Result<ListReadingDryRun, ContainedTaskError> {
+    let operation = task
+        .program
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                operation_id,
+            )
+        })?;
+    let prepared = operation
+        .prepared_list
+        .as_deref()
+        .ok_or_else(|| not_a_list_reading(operation_id))?;
+    let mut runtime = ReplayRuntime {
+        frames: frames.into_iter(),
+        tables: RunTables::default(),
+    };
+    let started = runtime.observation_now();
+    let deadline = started + Duration::from_millis(prepared.max_ms());
+    let timing = ContainedTaskTimingContext::new(started, deadline, TaskTimingBudgetOrigin::Task);
+    let first = match task
+        .capture_frame(&mut runtime, None, None, timing, None, None)
+        .map_err(replay_error)?
+    {
+        Some(first)
+            if crate::page_anchor_matches(
+                &task.control.game,
+                &first.page_label,
+                &operation.from,
+            ) =>
+        {
+            first
+        }
+        other => {
+            let observed =
+                other.map_or_else(|| "<unrecognized>".to_owned(), |frame| frame.page_label);
+            return Err(ContainedTaskError::with_detail(
+                ExecutionKernelCode::SelectPageMismatch.code(),
+                format!(
+                    "operation={operation_id} from={} matched_pages={observed}",
+                    operation.from
+                ),
+            ));
+        }
+    };
+    let scanned = task
+        .scan_list(&mut runtime, operation, prepared, &first, (0, timing), true)
+        .map_err(replay_error)?;
+    Ok(ListReadingDryRun {
+        declaration: prepared.declaration(operation_id),
+        viewports: scanned.viewports,
+        list: scanned.list,
+    })
 }
 
 /// One scan session of the select step `operation_id` over `runtime`, whose next capture is the
