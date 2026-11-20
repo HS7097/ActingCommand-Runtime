@@ -518,6 +518,101 @@ fn g2_a_block_below_the_floor_is_in_no_name_and_is_counted() {
     assert!(ocr(&names[1]).below_floor.is_empty());
 }
 
+// Edge test, a colour chain: the read over (5, 5, 190, 110) and both names declare the same chain
+// (keep near-white, invert), so the provider is given the processed region alone, its origin at
+// the read's (5, 5), the name boxes moved onto it, and answers its blocks, strips and blocks below
+// the floor in that picture. The read moves each back onto the region's origin: slot 0's evidence
+// holds the cut block, its two strips and the speck of test 5 in the frame's coordinates, where
+// the read without a chain holds them (tests 1 and 5), and the names read as there.
+#[test]
+fn g2_under_a_colour_chain_the_strips_are_in_the_frame_coordinates() {
+    const SHARED: PackRect = PackRect {
+        x: 5,
+        y: 5,
+        width: 190,
+        height: 110,
+    };
+    let in_picture = |rect: PackRect| PackRect {
+        x: rect.x - SHARED.x,
+        y: rect.y - SHARED.y,
+        ..rect
+    };
+    let chain = json!({"steps": [
+        {"kind": "keep_colors", "colors": [[255, 255, 255], [240, 240, 232]], "tolerance": 40},
+        {"kind": "invert"}
+    ]});
+    let mut pack = slots_pack(lines_json());
+    pack["candidate_layouts"][0]["shared_ocr"]["region"] = rect_json(SHARED);
+    pack["candidate_layouts"][0]["shared_ocr"]["preprocess"] = chain.clone();
+    for target in [0_usize, 1] {
+        pack["targets"][target]["preprocess"] = chain.clone();
+    }
+    let speck = PackRect {
+        x: 60,
+        y: 64,
+        width: 20,
+        height: 4,
+    };
+    let provider = Provider::new(
+        Vec::new(),
+        Cut {
+            blocks: vec![
+                (
+                    block("ALPHA\nBRAVO", in_picture(MERGED), 0.95),
+                    vec![
+                        block("ALPHA", in_picture(ALPHA), 0.95),
+                        block("BRAVO", in_picture(BRAVO), 0.95),
+                    ],
+                ),
+                (block("CHARLIE", in_picture(CHARLIE), 0.95), Vec::new()),
+            ],
+            below_floor: vec![in_picture(speck)],
+            count: None,
+        },
+    );
+
+    let (projection, names) = project(&evaluator(pack, provider.clone()).expect("admitted"));
+
+    assert_eq!(
+        provider.seen(),
+        [Seen {
+            served: vec![in_picture(NAME_0), in_picture(NAME_1)],
+            lines: Some(LINES)
+        }]
+    );
+    assert_eq!(
+        members(&projection),
+        [Ok("alpha_bravo".to_owned()), Ok("charlie".to_owned())]
+    );
+    let name = ocr(&names[0]);
+    assert!(name.preprocess.is_some(), "the chain's evidence");
+    assert_eq!(name.text, "ALPHA\nBRAVO");
+    assert_eq!(
+        name.blocks
+            .iter()
+            .map(|block| block.rect)
+            .collect::<Vec<_>>(),
+        [MERGED]
+    );
+    assert_eq!(
+        name.blocks[0]
+            .strips
+            .iter()
+            .map(|strip| strip.rect)
+            .collect::<Vec<_>>(),
+        [ALPHA, BRAVO]
+    );
+    assert_eq!(name.below_floor, [speck]);
+    assert_eq!(
+        ocr(&names[1])
+            .blocks
+            .iter()
+            .map(|block| block.rect)
+            .collect::<Vec<_>>(),
+        [CHARLIE]
+    );
+}
+
 // Test 6, the kernel's side: served blocks under the cap whose strips exceed it (the provider
 // counts 6 recognitions of 3 blocks over a cap of 4) end the frame text_read_blocks_truncated, its
 // one cause, with the recognitions as `requested` beside the detected count.

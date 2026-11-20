@@ -14,9 +14,9 @@
 // at 0.95; a region that holds parts of two lines or more, or a part of one, reads their texts run
 // together at 0.3; a region that holds no line reads nothing. It records every region it is asked.
 // The frame is a light gray 200 with each line drawn as dark (40) vertical stripes every third
-// column, the way letters give a row of a line its edges and leave a row between lines without
-// any; every expected value comes from that drawing, the rules of the planner and the numbers
-// below.
+// column (one test draws them light on dark), the way letters give a row of a line its edges and
+// leave a row between lines without any; every expected value comes from that drawing, the rules
+// of the planner and the numbers below.
 
 use super::*;
 use actingcommand_vision_ffi::VisionFrame;
@@ -38,6 +38,11 @@ const NAME_BOX: VisionRect = VisionRect {
 const TWO_LINES: OcrNameLines = OcrNameLines {
     max: 2,
     line_height: 21,
+};
+/// Lines of 20 pixels, of which 1.25 lines (25 px) and half a line (10 px) are whole pixels.
+const LINES_OF_TWENTY: OcrNameLines = OcrNameLines {
+    max: 2,
+    line_height: 20,
 };
 
 fn rect(x: i32, y: i32, width: i32, height: i32) -> VisionRect {
@@ -65,13 +70,18 @@ fn line(text: &'static str, top: i32, height: i32) -> Line {
 
 /// The frame with `lines` drawn on the background.
 fn frame(lines: &[Line]) -> VisionFrame {
-    let mut pixels = vec![BACKGROUND; (WIDTH * HEIGHT * 3) as usize];
+    painted(lines, (BACKGROUND, INK))
+}
+
+/// The frame with `lines` drawn in the gray `ink` on the gray `ground`.
+fn painted(lines: &[Line], (ground, ink): (u8, u8)) -> VisionFrame {
+    let mut pixels = vec![ground; (WIDTH * HEIGHT * 3) as usize];
     for drawn in lines {
         let rect = drawn.rect;
         for y in rect.y..rect.y + rect.height {
             for x in (rect.x..rect.x + rect.width).step_by(3) {
                 let at = ((y as u32 * WIDTH + x as u32) * 3) as usize;
-                pixels[at..at + 3].copy_from_slice(&[INK; 3]);
+                pixels[at..at + 3].copy_from_slice(&[ink; 3]);
             }
         }
     }
@@ -87,6 +97,8 @@ fn frame(lines: &[Line]) -> VisionFrame {
 struct Stages {
     lines: Vec<Line>,
     boxes: Vec<VisionRect>,
+    /// The grays of the ground and of the drawn lines.
+    colours: (u8, u8),
     recognized: Vec<VisionRect>,
 }
 
@@ -95,6 +107,7 @@ impl Stages {
         Self {
             lines: lines.to_vec(),
             boxes,
+            colours: (BACKGROUND, INK),
             recognized: Vec::new(),
         }
     }
@@ -177,7 +190,7 @@ fn read(
     lines: Option<OcrNameLines>,
     max_boxes: u32,
 ) -> OcrInferenceResult {
-    let frame = frame(&stages.lines);
+    let frame = painted(&stages.lines, stages.colours);
     let languages = vec!["en".to_string()];
     let request = OcrInferenceRequestView {
         frame: frame.view(),
@@ -222,18 +235,53 @@ fn strip_texts(block: &OcrTextBlock) -> Vec<&str> {
         .collect()
 }
 
-// Test 1, the provider's side: a name of two lines 21 px high and 3 px apart (rows 20..41 and
-// 44..65), detected as one box of 45 px, about twice the line height. Read as today (no lines) the
-// box is recognized whole, as one line, and reads both lines run together at 0.3. With the lines
-// of two the box is cut at row 43, between them (45 px make round(45 / 21) = 2 strips; the equal
-// position, row 20 + 23, has no ink, so it stays), each strip is recognized on its own and reads
-// its line, and the box answers "ALPHA\nBRAVO" at 0.95 with its two strips: the texts the same
-// lines read when the detector finds them apart, two boxes of one line each, which the lines read
-// whole as they are read without them.
+/// The two lines of test 1's name and the one block they are found as, drawn as measured on 11-19
+/// (the work order's materials): a block of 43 px (42 to 43 measured), the lines 3 rows apart (3
+/// to 4 measured), the first the shorter, as on the measured card: ALPHA 18 rows of ink (rows
+/// 20..38), BRAVO 22 (rows 41..63). The block is tighter than the two lines found apart (21 to 23
+/// px each, a detector's box of one line holding rows of ground around its letters), so the lines
+/// are drawn as the block holds them.
+fn glued_name() -> ([Line; 2], VisionRect) {
+    (
+        [line("ALPHA", 20, 18), line("BRAVO", 41, 22)],
+        rect(20, 20, 120, 43),
+    )
+}
+
+/// Where the lines of [`glued_name`] are cut with the lines of two: at row 40.
+const GLUED_STRIPS: [VisionRect; 2] = [
+    VisionRect {
+        x: 20,
+        y: 20,
+        width: 120,
+        height: 20,
+    },
+    VisionRect {
+        x: 20,
+        y: 40,
+        width: 120,
+        height: 23,
+    },
+];
+
+// Test 1, the provider's side: the name of `glued_name`, two lines found as one box of 43 px.
+// Read as today (no lines) the box is recognized whole, as one line, and reads both lines run
+// together at 0.3. With the lines of two (21 px) it is cut in round(43 / 21) = 2 strips. The equal
+// position, row 20 + 22 = 42, is BRAVO's second row; within a quarter of the line height (5 rows)
+// the least ink lies on the rows between the lines, 38 to 40, and the cut goes to the closest of
+// them, row 40: the strips 20..40 and 40..63, 20 and 23 rows, each a line high as a line found
+// apart, hold one line whole each and read it, and the box answers "ALPHA\nBRAVO" at 0.95 with its
+// two strips. A cut at the equal position would have given the upper strip BRAVO's first row.
+// Found apart, two boxes of one line each, the lines read whole, as they are read without lines:
+// the texts of the strips.
 #[test]
 fn g2_two_lines_detected_as_one_box_are_cut_and_read_as_when_detected_apart() {
-    let lines = [line("ALPHA", 20, 21), line("BRAVO", 44, 21)];
-    let merged = rect(20, 20, 120, 45);
+    let (lines, merged) = glued_name();
+    let equal = 20 + 22;
+    assert!(
+        rows_overlap(lines[1].rect, rect(20, equal - 1, 120, 1)),
+        "setup"
+    );
 
     let mut stages = Stages::new(&lines, vec![merged]);
     let today = read(&mut stages, &[NAME_BOX], None, 64);
@@ -244,8 +292,7 @@ fn g2_two_lines_detected_as_one_box_are_cut_and_read_as_when_detected_apart() {
 
     let mut stages = Stages::new(&lines, vec![merged]);
     let cut = read(&mut stages, &[NAME_BOX], Some(TWO_LINES), 64);
-    let strips = [rect(20, 20, 120, 23), rect(20, 43, 120, 22)];
-    assert_eq!(stages.recognized, strips);
+    assert_eq!(stages.recognized, GLUED_STRIPS);
     assert_eq!(texts(&cut), ["ALPHA\nBRAVO"]);
     assert_eq!(cut.blocks[0].rect, merged);
     assert_eq!(cut.blocks[0].confidence, Some(0.95));
@@ -256,7 +303,7 @@ fn g2_two_lines_detected_as_one_box_are_cut_and_read_as_when_detected_apart() {
             .iter()
             .map(|strip| strip.rect)
             .collect::<Vec<_>>(),
-        strips
+        GLUED_STRIPS
     );
     assert_eq!(
         cut.detection,
@@ -267,7 +314,7 @@ fn g2_two_lines_detected_as_one_box_are_cut_and_read_as_when_detected_apart() {
         })
     );
 
-    let apart = [rect(20, 20, 120, 21), rect(20, 44, 120, 21)];
+    let apart = [lines[0].rect, lines[1].rect];
     for lines_declared in [None, Some(TWO_LINES)] {
         let mut stages = Stages::new(&lines, apart.to_vec());
         let detected_apart = read(&mut stages, &[NAME_BOX], lines_declared, 64);
@@ -326,14 +373,15 @@ fn g2_a_name_of_one_line_in_a_box_of_two_reads_as_without_lines() {
     assert_eq!(texts(&with), ["CHARLIE"]);
 }
 
-// Test 4: three lines of 21 px, 3 px apart (rows 20..41, 44..65, 68..89), one box of 69 px. With
-// `max` 3 it is cut in round(69 / 21) = 3 strips at rows 43 and 66, both between lines, and reads
-// "ALPHA\nBRAVO\nCHARLIE". With `max` 2 it is cut in two at the equal position, row 55, inside the
-// second line (no row within 5 of it has less ink): each strip holds parts of two lines and reads
-// them run together at 0.3, so the name reads poorly; a box of three lines is the author's to
-// declare with `max` 3.
+// Test 4: three lines of 21 px, 3 px apart (rows 20..41, 44..65, 68..89), one box of 69 px,
+// round(69 / 21) = 3 lines. With `max` 3 it is cut in 3 strips at rows 43 and 66, both between
+// lines, and reads "ALPHA\nBRAVO\nCHARLIE". With `max` 2 the box holds more lines than the name box
+// declares: it is not cut (two strips would hold a line and a half each) and is read whole, exactly
+// as without lines: the three lines run together at 0.3, the answer member for member the answer
+// without lines. A box of three lines is the author's to declare with `max` 3, which the box's
+// height in the Lab's refusal shows.
 #[test]
-fn g2_three_lines_are_cut_in_three_with_max_three_and_in_two_with_max_two() {
+fn g2_three_lines_are_cut_in_three_with_max_three_and_read_whole_with_max_two() {
     let lines = [
         line("ALPHA", 20, 21),
         line("BRAVO", 44, 21),
@@ -363,13 +411,96 @@ fn g2_three_lines_are_cut_in_three_with_max_three_and_in_two_with_max_two() {
     assert_eq!(three.blocks[0].confidence, Some(0.95));
 
     let mut stages = Stages::new(&lines, vec![merged]);
+    let without = read(&mut stages, &[NAME_BOX], None, 64);
+    assert_eq!(stages.recognized, [merged]);
+
+    let mut stages = Stages::new(&lines, vec![merged]);
     let two = read(&mut stages, &[NAME_BOX], Some(TWO_LINES), 64);
+    assert_eq!(stages.recognized, [merged]);
+    assert_eq!(two, without);
+    assert_eq!(texts(&two), ["ALPHABRAVOCHARLIE"]);
+    assert_eq!(two.blocks[0].confidence, Some(0.3));
+    assert!(two.blocks[0].strips.is_empty());
+}
+
+// Edge test, the factor: with lines of 20 px, 1.25 lines are exactly 25 px. A box of 25 px (one
+// drawn line filling it, so that no row has less ink than another) is cut, in round(25 / 20) = 1,
+// at least 2, strips at the equal position, row 13 of the box; a box of 24 px, a pixel lower, is
+// recognized whole.
+#[test]
+fn g2_a_box_of_exactly_a_line_and_a_quarter_is_cut_and_a_pixel_lower_is_not() {
+    let lines = [line("TALL", 20, 25), line("SHORT", 60, 24)];
+    let (tall, short) = (rect(20, 20, 120, 25), rect(20, 60, 120, 24));
+
+    let mut stages = Stages::new(&lines, vec![tall, short]);
+    let result = read(&mut stages, &[NAME_BOX], Some(LINES_OF_TWENTY), 64);
+
     assert_eq!(
         stages.recognized,
-        [rect(20, 20, 120, 35), rect(20, 55, 120, 34)]
+        [rect(20, 20, 120, 13), rect(20, 33, 120, 12), short]
     );
-    assert_eq!(texts(&two), ["ALPHABRAVO\nBRAVOCHARLIE"]);
-    assert_eq!(two.blocks[0].confidence, Some(0.3));
+    assert_eq!(result.blocks[0].strips.len(), 2);
+    assert!(result.blocks[1].strips.is_empty());
+    assert_eq!(texts(&result)[1], "SHORT");
+}
+
+// Edge test, the floor: with lines of 20 px, half a line is exactly 10 px. A box of 10 px is read
+// (whole: it is under the factor); a box of 9 px, a pixel lower, is not recognized and is answered
+// below the floor.
+#[test]
+fn g2_a_box_of_exactly_half_a_line_is_read_and_a_pixel_lower_is_not() {
+    let lines = [line("HALF", 20, 10), line("SPECK", 60, 9)];
+    let (half, speck) = (rect(20, 20, 120, 10), rect(20, 60, 120, 9));
+
+    let mut stages = Stages::new(&lines, vec![half, speck]);
+    let result = read(&mut stages, &[NAME_BOX], Some(LINES_OF_TWENTY), 64);
+
+    assert_eq!(stages.recognized, [half]);
+    assert_eq!(texts(&result), ["HALF"]);
+    assert_eq!(result.below_floor, [speck]);
+}
+
+// Edge test, the lowest strip: with lines of 12 px a box of 15 px is exactly 1.25 lines and would be
+// cut in two at row 8 of the box (no row has less ink); its lower strip would be 7 px, lower than
+// 8, so no cut is made and the box is recognized whole, its answer the answer without lines.
+#[test]
+fn g2_a_cut_that_would_make_a_strip_under_eight_pixels_reads_the_box_whole() {
+    let lines = [line("NARROW", 30, 15)];
+    let narrow = rect(20, 30, 120, 15);
+
+    let mut stages = Stages::new(&lines, vec![narrow]);
+    let without = read(&mut stages, &[NAME_BOX], None, 64);
+
+    let mut stages = Stages::new(&lines, vec![narrow]);
+    let with = read(
+        &mut stages,
+        &[NAME_BOX],
+        Some(OcrNameLines {
+            max: 2,
+            line_height: 12,
+        }),
+        64,
+    );
+
+    assert_eq!(stages.recognized, [narrow]);
+    assert_eq!(with, without);
+    assert_eq!(texts(&with), ["NARROW"]);
+}
+
+// Edge test, the colour of the text: test 1's name drawn light (200) on a dark ground (40). Ink
+// counts the edges of the letters, not their darkness, so the box is cut at the same row as dark
+// letters on light, row 40, and reads the same name.
+#[test]
+fn g2_light_letters_on_a_dark_ground_are_cut_at_the_same_row() {
+    let (lines, merged) = glued_name();
+    let mut stages = Stages::new(&lines, vec![merged]);
+    stages.colours = (INK, BACKGROUND);
+
+    let cut = read(&mut stages, &[NAME_BOX], Some(TWO_LINES), 64);
+
+    assert_eq!(stages.recognized, GLUED_STRIPS);
+    assert_eq!(texts(&cut), ["ALPHA\nBRAVO"]);
+    assert_eq!(strip_texts(&cut.blocks[0]), ["ALPHA", "BRAVO"]);
 }
 
 // Test 5, the provider's side: a box of 9 px inside the name box beside a name of one line, lower

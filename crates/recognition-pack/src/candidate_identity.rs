@@ -147,19 +147,6 @@ impl CandidateIdentityDeclaration {
     }
 
     pub fn map_ocr(&self, text: &str, confidence: Option<u16>) -> CandidateFeature {
-        self.map_ocr_with_cause(text, confidence).0
-    }
-
-    /// Workflow #463 SEL-GRID G2 ([`CandidateUnreadCause`]): [`Self::map_ocr`], and when the
-    /// reading names no identity, why, in the words of a select's refusal: the feature's reason,
-    /// but a reading whose confidence passed `minimum_confidence_milli` and that no alias matches
-    /// within `max_distance` is [`CandidateUnreadCause::BeyondDistance`] where the feature keeps
-    /// `low_confidence`. The one mapping: `map_ocr` is this function's feature.
-    pub fn map_ocr_with_cause(
-        &self,
-        text: &str,
-        confidence: Option<u16>,
-    ) -> (CandidateFeature, Option<CandidateUnreadCause>) {
         let CandidateIdentityRecognition::OcrAliases {
             max_distance,
             minimum_margin,
@@ -167,13 +154,13 @@ impl CandidateIdentityDeclaration {
             confusions,
         } = &self.recognition
         else {
-            return self.unread(CandidateUnknownReason::OutOfDomain);
+            return self.unknown(CandidateUnknownReason::OutOfDomain);
         };
         if confidence.is_none_or(|confidence| confidence < *minimum_confidence_milli) {
-            return self.unread(CandidateUnknownReason::LowConfidence);
+            return self.unknown(CandidateUnknownReason::LowConfidence);
         }
         let Some(text) = normalize_name(text, confusions) else {
-            return self.unread(CandidateUnknownReason::OutOfDomain);
+            return self.unknown(CandidateUnknownReason::OutOfDomain);
         };
         // The runner-up needs max_distance + margin precision; saturated distances beyond
         // that cannot alter admission. Each DP row contains at most 129 cells.
@@ -189,19 +176,41 @@ impl CandidateIdentityDeclaration {
                 .unwrap_or(limit + 1);
             rows.push((entry.id.as_str(), entry.variant.as_deref(), distance));
         }
-        let feature = self.choose(
+        self.choose(
             &rows,
             *max_distance,
             *minimum_margin,
             confidence.map(i64::from),
-        );
-        // The confidence passed above, so a `low_confidence` of `choose` is its distance: no
-        // alias lies within `max_distance`.
+        )
+    }
+
+    /// Workflow #463 SEL-GRID G2 ([`CandidateUnreadCause`]): [`Self::map_ocr`]'s feature, and when
+    /// the reading names no identity, why, in the words of a select's refusal: the feature's
+    /// reason, but a reading whose confidence passed `minimum_confidence_milli` and that no alias
+    /// matches within `max_distance` is [`CandidateUnreadCause::BeyondDistance`] where the feature
+    /// keeps `low_confidence`. The one mapping: the feature is `map_ocr`'s, and the cause is read
+    /// from it afterwards, so `map_ocr` does nothing it did not do before; only the Lab's dry run
+    /// asks for the cause.
+    pub fn map_ocr_with_cause(
+        &self,
+        text: &str,
+        confidence: Option<u16>,
+    ) -> (CandidateFeature, Option<CandidateUnreadCause>) {
+        let feature = self.map_ocr(text, confidence);
+        // `map_ocr` answers `low_confidence` past the confidence only from its distance: no alias
+        // lies within `max_distance`.
+        let passed = match &self.recognition {
+            CandidateIdentityRecognition::OcrAliases {
+                minimum_confidence_milli,
+                ..
+            } => confidence.is_some_and(|confidence| confidence >= *minimum_confidence_milli),
+            CandidateIdentityRecognition::IconTemplates { .. } => false,
+        };
         let cause = match &feature {
             CandidateFeature::Unknown {
                 reason: CandidateUnknownReason::LowConfidence,
                 ..
-            } => Some(CandidateUnreadCause::BeyondDistance),
+            } if passed => Some(CandidateUnreadCause::BeyondDistance),
             CandidateFeature::Unknown { reason, .. } => Some(CandidateUnreadCause::of(*reason)),
             _ => None,
         };
@@ -300,14 +309,6 @@ impl CandidateIdentityDeclaration {
             reason,
             source: Some(self.source()),
         }
-    }
-
-    /// Workflow #463 SEL-GRID G2: an Unknown of `reason` and its cause.
-    fn unread(
-        &self,
-        reason: CandidateUnknownReason,
-    ) -> (CandidateFeature, Option<CandidateUnreadCause>) {
-        (self.unknown(reason), Some(CandidateUnreadCause::of(reason)))
     }
 }
 

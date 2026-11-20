@@ -303,10 +303,11 @@ Workflow #463 SEL-GRID G2 (since 0.12.76): such a read may also name the lines i
 `{max, line_height}` in pixels of the request's frame ([selection-graph.md](selection-graph.md),
 "The lines of a name box"). The engine then plans each box it keeps by them on the frame it was
 given (`ocr_name_line_plan`): a box lower than half a line is not recognized and is answered apart
-(`below_floor`); a box at least 1.25 lines high is cut into `clamp(round(h / line_height), 2, max)`
-strips at the rows of least ink near their equal positions, each recognized on its own, and
-answered with its strips, its text theirs joined by line feeds and its confidence the lowest of
-theirs; every other box is recognized whole. `max_boxes` then counts recognitions: the engine keeps
+(`below_floor`); a box at least 1.25 lines high and of no more lines than `max`
+(`round(h / line_height) ≤ max`) is cut into `max(round(h / line_height), 2)` strips at the rows
+of least ink near their equal positions, each recognized on its own, and answered with its strips,
+its text theirs joined by line feeds and its confidence the lowest of theirs; every other box, one
+of more lines than `max` among them, is recognized whole. `max_boxes` then counts recognitions: the engine keeps
 the plans in the detector's order while their recognitions fit it, and `served` reports the
 recognitions of every kept box, which the kernel compares with `limit`. A request that names lines
 without name boxes, or lines outside their bounds (`max` 1 to 3, `line_height` at least 8), is

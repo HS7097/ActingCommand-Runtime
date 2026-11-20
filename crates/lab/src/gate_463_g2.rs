@@ -667,7 +667,7 @@ fn g2_a_select_declares_the_lines_of_its_name_boxes_and_the_package_carries_them
     assert_eq!(
         shared
             .as_object()
-            .and_then(|members| members.keys().last())
+            .and_then(|members| members.keys().next_back())
             .map(String::as_str),
         Some("lines")
     );

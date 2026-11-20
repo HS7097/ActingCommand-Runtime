@@ -810,7 +810,7 @@ impl SceneEvaluation<'_> {
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
     ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
-        self.project_reading(layout_id, scenes, record, &mut Vec::new())
+        self.project_reading(layout_id, scenes, record, None)
     }
 
     /// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`):
@@ -827,13 +827,15 @@ impl SceneEvaluation<'_> {
             layout_id,
             &[self.scene],
             &mut |_, _, _, _| Ok(()),
-            &mut reads,
+            Some(&mut reads),
         )?;
         Ok((projection, reads))
     }
 
     /// [`Self::project_candidates_placed_with_samples`], and (Workflow #463 SEL-GRID G2) into
-    /// `reads` what the OCR read of each actionable instance's identity feature saw.
+    /// `reads`, when given, what the OCR read of each actionable instance's identity feature saw.
+    /// Only the Lab's dry run gives it ([`Self::project_candidates_read`]); every other projection
+    /// passes `None` and makes no name read, maps no cause and copies nothing.
     fn project_reading(
         &self,
         layout_id: &str,
@@ -844,7 +846,7 @@ impl SceneEvaluation<'_> {
             Instant,
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
-        reads: &mut Vec<CandidateNameRead>,
+        mut reads: Option<&mut Vec<CandidateNameRead>>,
     ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
         let evaluator = self.evaluator;
         let layout = evaluator.candidate_layout(layout_id).ok_or_else(|| {
@@ -1213,11 +1215,12 @@ impl SceneEvaluation<'_> {
                         let evaluation = evaluate(target_id, placement)?;
                         let value = feature_value(feature, &evaluation)?;
                         // Workflow #463 SEL-GRID G2: what the identity's read saw, for a select's
-                        // refusal; nothing of the projection depends on it.
-                        if let (Some(identity), Some(ocr)) =
-                            (&feature.identity, evaluation.ocr.as_deref())
+                        // refusal, only when the Lab's dry run asks; nothing of the projection
+                        // depends on it.
+                        if let (Some(name_reads), Some(identity), Some(ocr)) =
+                            (reads.as_mut(), &feature.identity, evaluation.ocr.as_deref())
                         {
-                            reads.push(name_read(
+                            name_reads.push(name_read(
                                 (instance_index, feature.name.as_str(), sample.frame),
                                 identity,
                                 ocr,

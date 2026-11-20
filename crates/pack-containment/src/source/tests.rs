@@ -1136,23 +1136,42 @@ fn sel2l_the_shared_read_of_a_repeated_anchor_layout_derives_last() {
 
 /// Workflow #463 SEL-GRID G2 (register §1.491; contracts/selection-graph.md, "The lines of a name
 /// box"): a layout's shared read may declare `lines`, `{"max": m, "line_height": h}`, both
-/// unsigned; their values are the recognition pack's. On the task of SEL-2L's tests, the
-/// declaration gate admits a read over `full_frame` with `lines`, and refuses a member `lines` does
-/// not know (`UnknownField` at `/candidate_layouts/0/shared_ocr/lines/gap`), a member left out
-/// (`MissingField` at `…/lines/line_height`) and a member that is no unsigned integer
-/// (`InvalidType` at `…/lines/max`).
+/// unsigned; their values are the recognition pack's. On the task of SEL-2L's tests under task
+/// schema `0.9`, the schema a shared read is consumed from (`anchored_bundle` writes `0.6`, as
+/// SEL-2L's gate test sets `0.9` itself), the declaration gate admits a read over `full_frame` with
+/// `lines`, and refuses a member `lines` does not know (`UnknownField` at
+/// `/candidate_layouts/0/shared_ocr/lines/gap`), a member left out (`MissingField` at
+/// `…/lines/line_height`) and a member that is no unsigned integer (`InvalidType` at
+/// `…/lines/max`). Under task schema `0.6` the read is `UnconsumedField` at
+/// `/candidate_layouts/0/shared_ocr`, with `lines` exactly as without them.
 #[test]
 fn g2_a_shared_read_declares_the_lines_of_its_name_boxes() {
-    let gate = |lines: Value| {
+    let gate = |schema: &str, lines: Option<Value>| {
         let mut read = shared_read(json!({"mode": "full_frame"}));
-        read["lines"] = lines;
+        if let Some(lines) = lines {
+            read["lines"] = lines;
+        }
         let mut layout = anchored_layout();
         layout["shared_ocr"] = read;
-        declaration_file_requests(&[anchored_bundle(layout)]).map(|_| ())
+        let mut bundle = anchored_bundle(layout);
+        bundle.data["schema_version"] = json!(schema);
+        declaration_file_requests(&[bundle]).map(|_| ())
     };
 
-    gate(json!({"max": 2, "line_height": 21}))
+    gate("0.9", Some(json!({"max": 2, "line_height": 21})))
         .unwrap_or_else(|error| panic!("lines of two: {}", error.message));
+    for lines in [None, Some(json!({"max": 2, "line_height": 21}))] {
+        let error = gate("0.6", lines.clone()).expect_err("a shared read under task schema 0.6");
+        let issue = declaration_issue(error);
+        assert_eq!(
+            (issue.field_path.as_str(), issue.reason),
+            (
+                "/candidate_layouts/0/shared_ocr",
+                ResourceDeclarationReason::UnconsumedField
+            ),
+            "{lines:?}"
+        );
+    }
     for (lines, field_path, reason) in [
         (
             json!({"max": 2, "line_height": 21, "gap": 3}),
@@ -1170,7 +1189,7 @@ fn g2_a_shared_read_declares_the_lines_of_its_name_boxes() {
             ResourceDeclarationReason::InvalidType,
         ),
     ] {
-        let error = gate(lines.clone()).expect_err("lines of another shape");
+        let error = gate("0.9", Some(lines.clone())).expect_err("lines of another shape");
         assert_eq!(error.code, "resource_declaration_invalid", "{lines}");
         let issue = declaration_issue(error);
         assert_eq!(

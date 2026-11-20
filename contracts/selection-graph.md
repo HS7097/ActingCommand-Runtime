@@ -480,8 +480,13 @@ shared read may declare the lines its name boxes hold, of a layout of either kin
   - a block lower than half a line (`height × 1000 < line_height × 500`) is **not read**: it is in
     no text, and the provider answers it apart, below the floor;
   - a block at least 1.25 lines high (`height × 1000 ≥ line_height × 1250`), with `max` of 2 or
-    more, is **cut** into `clamp(round(height / line_height), 2, max)` strips of its full width,
-    each recognized on its own;
+    more, is **cut** into `max(round(height / line_height), 2)` strips of its full width, each
+    recognized on its own, unless `round(height / line_height)` exceeds `max`: a block of more
+    lines than the name box declares is **not cut** and is read whole, exactly as without the
+    member, so that no strip holds a line and a half and the member reads no name worse than
+    without it; the Lab's refusal of such a name lists the block's height
+    ([lab-recording.md](lab-recording.md), "The refusal lists the blocks"), from which the author
+    sees that `max` must be raised;
   - every other block is recognized whole, as without lines; a name of one line in a box that
     allows two is about one line high, under the factor, and reads as without the member.
 - **Where the cut goes.** Not blindly at the equal positions `round(k × height / n)`: within a

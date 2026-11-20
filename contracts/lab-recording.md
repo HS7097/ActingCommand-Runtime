@@ -1200,21 +1200,31 @@ select's layout of rows found by their anchor, whose shared read covers its read
   probe at the self-test (`record_select_invalid`, `kernel_refused`). `record stop` writes it into
   the shared read it generates, of a select of fixed slots and of a scrolling select alike, after
   `line_merge`; the mark-time self-test, `record ready`, `record stop`'s self-checks and the fold's
-  offline entry read through the same probe, so with it. Absent, it is not written, and the
-  recording, the mark's answer and the package are byte for byte what they were. A package whose
-  read declares it needs `package` revision 21 ([component-interfaces.md](component-interfaces.md),
-  row 21), which `standard-pack build` counts; a Runtime before 0.12.76 refuses such a package at
-  every run (`UnknownField` at `/candidate_layouts/<i>/shared_ocr/lines`).
+  offline entry read through the same probe, so with it. A block of more lines than `max` is not
+  cut and is read whole, as without the member; the refusal of its name lists the block with its
+  `height` ("The refusal lists the blocks"), from which the author sees that `max` must be raised.
+  Absent, the member is not written: the recording and the package are byte for byte what they
+  were, and so is the kernel's reading of the package, which sends no lines and reads every block
+  as before. A mark's answers are not all what they were, with or without the member: since
+  0.12.76 every `select_name_unread` refusal carries `blocks`, and `below_floor` when there are any
+  (below), and its `cause` is `beyond_distance` where a reading passed the confidence and matched
+  no name within `max_distance`, which it named `low_confidence` before. A package whose read
+  declares it needs `package` revision 21 ([component-interfaces.md](component-interfaces.md), row
+  21), which `standard-pack build` counts; a Runtime before 0.12.76 refuses such a package at every
+  run (`UnknownField` at `/candidate_layouts/<i>/shared_ocr/lines`).
 - **The refusal lists the blocks** (Workflow #463 SEL-GRID G2): every `select_name_unread`, of the
   mark-time self-test and of `record ready`'s and `record stop`'s self-checks, of a slot or of a
-  row, lists what that slot's or row's read saw, so that an author sets the name box, the lines and
-  the chain from what the read saw rather than adding misreadings to an alias table: `blocks`, the
-  blocks its name box held, each with its `rect`, its `height` and its `text`, and a cut block with
-  its `strips`, each with its `rect`, `height` and `text`; and, when there are any, `below_floor`,
-  the blocks lower than half a line that were not read, each with its `rect` and `height`. They come
-  from the kernel's dry run of the step, which gives the evidence of each name's read beside the
-  projection (`SelectionDryRun::name_reads`, not serialized), and are absent for a name that was not
-  read from OCR. No outcome code or reason is added.
+  row, of a select with `lines` or without, lists what that slot's or row's read saw, so that an
+  author sets the name box, the lines and the chain from what the read saw rather than adding
+  misreadings to an alias table: `blocks`, the blocks its name box held, each with its `rect`, its
+  `height` and its `text`, and a cut block with its `strips`, each with its `rect`, `height` and
+  `text`; and, when there are any, `below_floor`, the blocks lower than half a line that were not
+  read, each with its `rect` and `height`. They come from the kernel's dry run of the step, which
+  gives the evidence of each name's read beside the projection (`SelectionDryRun::name_reads`, not
+  serialized; only the dry run reads it, a run's projection makes none), and are absent for a name
+  that was not read from OCR. These members, and the cause `beyond_distance`, are answers to the
+  recording agent, in the refusal's details; they never enter a package file. No outcome code or
+  reason is added.
 
 ### Marking a choice first
 

@@ -4,8 +4,8 @@
 //! name box"; `contracts/vision-model-folders.md`, the `detector.max_boxes` row): the lines a
 //! layout's shared read declares its name boxes to hold, and how the text provider reads a served
 //! block by them, between the cap's count and the recognizer. A block lower than half a line is
-//! not read; a block at least 1.25 lines high is cut into its lines, each recognized on its own;
-//! every other block is recognized whole, as before.
+//! not read; a block at least 1.25 lines high and of no more lines than declared is cut into its
+//! lines, each recognized on its own; every other block is recognized whole, as before.
 //!
 //! The two factors are constants measured on 11-19 on the list that started the work (a shop of
 //! four columns whose card names hold one line or two): a name of two lines detected as one block
@@ -86,13 +86,16 @@ impl OcrNameLinePlan {
 /// How the served block `rect` of `frame`, the picture the provider is given, is read under
 /// `lines`. Lower than [`OCR_NAME_LINE_FLOOR_MILLI`] thousandths of the line height: not read.
 /// At least [`OCR_NAME_LINE_CUT_MILLI`] thousandths, with `max` of at least 2: cut into
-/// `clamp(round(height / line_height), 2, max)` strips. The cut between strip `k` and `k + 1` of
-/// `n` is not made blindly at the equal position `round(k * height / n)`: within a quarter of the
-/// line height around it, it goes to the row with the least ink ([`row_ink`]), the equal position
-/// when no row has less, and of rows with equally least ink the one closest to it (the upper one
-/// at the same distance); the row of a cut is the first row of the lower strip. A cut that would
-/// make a strip lower than [`OCR_NAME_LINE_STRIP_MIN`] pixels is not made: the block is read
-/// whole. Every other block is read whole, as without lines.
+/// `max(round(height / line_height), 2)` strips, unless `round(height / line_height)` exceeds
+/// `max`: a block of more lines than the name box declares is not cut and is read whole, exactly
+/// as without lines, so that no strip holds a line and a half (its height, which the Lab's refusal
+/// lists, tells the author to raise `max`). The cut between strip `k` and `k + 1` of `n` is not
+/// made blindly at the equal position `round(k * height / n)`: within a quarter of the line height
+/// around it, it goes to the row with the least ink ([`row_ink`]), the equal position when no row
+/// has less, and of rows with equally least ink the one closest to it (the upper one at the same
+/// distance); the row of a cut is the first row of the lower strip. A cut that would make a strip
+/// lower than [`OCR_NAME_LINE_STRIP_MIN`] pixels is not made: the block is read whole. Every other
+/// block is read whole, as without lines.
 pub fn ocr_name_line_plan(
     frame: &VisionFrameView<'_>,
     rect: VisionRect,
@@ -109,11 +112,16 @@ pub fn ocr_name_line_plan(
     if line == 0 || tall < line * OCR_NAME_LINE_CUT_MILLI || lines.max < 2 || width == 0 {
         return OcrNameLinePlan::Whole;
     }
+    // round(height / line_height): a block of more lines than `max` is read whole, as without
+    // lines; otherwise at least 2 strips (1.25 lines round to 1).
+    let lines_held = (2 * u64::from(height) + line) / (2 * line);
+    if lines_held > u64::from(lines.max) {
+        return OcrNameLinePlan::Whole;
+    }
     let Some(ink) = row_ink(frame, rect) else {
         return OcrNameLinePlan::Whole;
     };
-    // round(height / line_height), at least 2 and at most `max` (2 or more here).
-    let count = ((2 * u64::from(height) + line) / (2 * line)).clamp(2, u64::from(lines.max));
+    let count = lines_held.max(2);
     let reach = u64::from(lines.line_height / 4);
     let mut bounds = vec![0_u64];
     for k in 1..count {
