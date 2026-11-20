@@ -32,13 +32,34 @@ pub(crate) struct EntryBlockGate {
     pub(crate) since_unix_ms: u64,
 }
 
-/// The blocked instances, by alias.
-pub(crate) type EntryBlockGates = BTreeMap<String, EntryBlockGate>;
+/// The blocked instances and (fix round 3, ruling 2) the pairs that yield their turn, by alias,
+/// as the evaluation reads them.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EntryBlockGates {
+    blocked: BTreeMap<String, EntryBlockGate>,
+    /// Fix round 3: each instance whose block ended, with the gate of that block: the pair whose
+    /// failure at the entry set it (`task_id`) yields its turn there.
+    yielding: BTreeMap<String, EntryBlockGate>,
+}
 
-/// `instance_entry_blocked` of the instance `instance_id` (its alias) that `gate` blocked: the
-/// run that blocked it, its failure's code when the catalog registers it, and since when.
-fn outcome(instance_id: &str, gate: &EntryBlockGate) -> Outcome {
-    let outcome = Outcome::new(HostCode::InstanceEntryBlocked)
+impl EntryBlockGates {
+    pub(crate) fn new(
+        blocked: BTreeMap<String, EntryBlockGate>,
+        yielding: BTreeMap<String, EntryBlockGate>,
+    ) -> Self {
+        Self { blocked, yielding }
+    }
+
+    /// The gate of the instance `instance_id` (its alias) when it is blocked.
+    pub(crate) fn get(&self, instance_id: &str) -> Option<&EntryBlockGate> {
+        self.blocked.get(instance_id)
+    }
+}
+
+/// `code` of the instance `instance_id` (its alias) and the block `gate`: the run whose failure at
+/// its entry set it, its failure's code when the catalog registers it, and since when.
+fn outcome_of(code: HostCode, instance_id: &str, gate: &EntryBlockGate) -> Outcome {
+    let outcome = Outcome::new(code)
         .instance_id(instance_id)
         .task_id(gate.task_id.as_str())
         .decision_id(gate.decision_id.as_str())
@@ -47,6 +68,11 @@ fn outcome(instance_id: &str, gate: &EntryBlockGate) -> Outcome {
         Some(code) => outcome.failure_code(code),
         None => outcome,
     }
+}
+
+/// `instance_entry_blocked` of the instance `instance_id` (its alias) that `gate` blocked.
+fn outcome(instance_id: &str, gate: &EntryBlockGate) -> Outcome {
+    outcome_of(HostCode::InstanceEntryBlocked, instance_id, gate)
 }
 
 /// Position 4b's reason for a candidate on the instance `instance_id`.
@@ -61,14 +87,18 @@ fn reason(instance_id: &str, gate: &EntryBlockGate) -> DecisionReason {
 /// each blocked instance, every task held but (fix round 1) a store update package's task
 /// (`store_tasks`), so a candidate the round settles before it asks the eligibility closure waits
 /// with the block's reason too. An instance position 4a holds (`update_pending`) keeps 4a's hold,
-/// the earlier position, which lets the same tasks pass.
+/// the earlier position, which lets the same tasks pass. Fix round 3 (ruling 2;
+/// `contracts/policy-suspension.md`, "The pair yields its turn"): on an instance whose block
+/// ended, the pair whose failure at the entry set that block yields its turn
+/// (`InstanceHolds::yield_turn`) until another run started there; when a candidate it yielded to
+/// takes the instance it waits `instance_entry_yielding`, a fact refresh naming that code.
 pub(crate) fn hold(
     holds: &mut InstanceHolds,
     gates: &EntryBlockGates,
     update_pending: &BTreeSet<String>,
     store_tasks: &BTreeSet<String>,
 ) {
-    for (instance_id, gate) in gates {
+    for (instance_id, gate) in &gates.blocked {
         if !update_pending.contains(instance_id) {
             holds.hold(
                 instance_id.clone(),
@@ -77,6 +107,17 @@ pub(crate) fn hold(
                 store_tasks.clone(),
             );
         }
+    }
+    for (instance_id, gate) in &gates.yielding {
+        holds.yield_turn(
+            instance_id.clone(),
+            gate.task_id.clone(),
+            DecisionReason {
+                outcome: outcome_of(HostCode::InstanceEntryYielding, instance_id, gate),
+                detail: format!("Runtime instance entry yielding: instance_id={instance_id}"),
+            },
+            HostCode::InstanceEntryYielding.code(),
+        );
     }
 }
 

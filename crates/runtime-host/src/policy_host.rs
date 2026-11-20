@@ -6362,23 +6362,6 @@ impl PolicyHost {
             .map(Some)
     }
 
-    /// Workflow #490 ENTRY-A2 fix round 1 (the bound): the `on_failure.escalation_threshold` of
-    /// the task `decision_id`'s dispatch runs, in the catalog generation it was dispatched under;
-    /// `None` for a dispatch this host does not know or a task that generation no longer has.
-    pub(crate) fn dispatch_escalation_threshold(
-        &self,
-        decision_id: &str,
-    ) -> RuntimeHostResult<Option<u16>> {
-        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
-            return Ok(None);
-        };
-        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        Ok(catalog
-            .compiled
-            .dispatch_task(&dispatch.data.task_id)
-            .map(|task| task.on_failure.escalation_threshold))
-    }
-
     /// Workflow #386 SR-2b-1: after the record of `data` is committed with the decision
     /// `decision`, an exhausted one queues its `policy_rerun_exhausted` record
     /// (`policy.planning_signal_observed`, kind `goal_missed`) for [`Self::take_rerun_signals`].

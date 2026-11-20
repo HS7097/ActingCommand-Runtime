@@ -758,19 +758,17 @@ can do something irreversible").
   never counts toward `escalation_threshold`, so a rule whose threshold is 1 is not paused by it;
   the instance waits for its recovery (`instance_entry_blocked`; a store update rule's task still
   runs) and the rule is due again by its own trigger once it is unblocked. ENTRY-A2 ("Whose
-  failure"): when the same rule then fails at its entry again in the same activity window, after a
-  recovery of the instance that ended `recovered` and restarted the application with nothing run
-  on the instance first, or once its failures at the entry in a row as conditions have reached its
-  `escalation_threshold` and since its previous one such a recovery came or another run's main
-  package started on the instance, the failure is the rule's own: it keeps its admission, counts
-  toward `escalation_threshold`, waits for `retry_backoff_ms` and still waits for a recovery. A
-  recovery at the return-home rung is no evidence against a rule. Which of the instance's due rules
-  runs first after the recovery is the evaluation's allocation order (priority and rank), not the
-  failure. So a rule whose entry is broken is paused, with the recommended `on_failure`, by its
-  fourth failure at the entry in one window at the most, and a threshold of 1 pauses it by its
-  second at the most, only when between the two the application was restarted and recovered the
-  instance or another run got in; conditions do not outlive their window, so a rule meeting one
-  condition a day is never paused by it. No package or rule changes for it.
+  failure"; fix round 3): when the same rule then fails at its entry again in the same activity
+  window, and another scheduled run was let in on the instance between the two (its main package
+  started after its entry check, or it succeeded), the failure is the rule's own: it keeps its
+  admission, counts toward `escalation_threshold`, waits for `retry_backoff_ms` and still waits for
+  a recovery. What a recovery did is no evidence against a rule. After the instance's block ends,
+  the rule whose failure set it yields its turn there: the instance's other due rules go first, and
+  it runs when none of them can. So a rule whose entry is broken is paused, with the recommended
+  `on_failure`, by its third failure at the entry in one window at the earliest, and a threshold of
+  1 pauses it by its second at the earliest, each only once another rule got in between; in a
+  condition that keeps every rule out (nothing gets in) no rule is paused, however long it lasts,
+  and a rule meeting one condition a day is never paused by it. No package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

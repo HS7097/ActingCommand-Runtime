@@ -304,12 +304,21 @@ actingcommand_contract::outcome_codes! {
         /// `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
         /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
-        /// without recovering (`entry_recovery_end`: its ladder exhausted, its worker panicked;
-        /// `trigger_rule` the trigger item it was admitted under): the instance stays blocked, once
-        /// per block; after an exhausted climb the block climbs again by itself
-        /// (`next_occurrence_unix_ms` its earliest time), after a panicked worker never (keys as
-        /// above).
+        /// without recovering (`entry_recovery_end`: its ladder exhausted, the game's update
+        /// dialog ended a rung's run, its worker panicked; `trigger_rule` the trigger item it was
+        /// admitted under): the instance stays blocked, once per block; after an exhausted climb
+        /// the block climbs again by itself (`next_occurrence_unix_ms` its earliest time), after
+        /// the update dialog no climb again in the stretch, after a panicked worker none in the
+        /// block (keys as above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
+        /// Info (Workflow #490 ENTRY-A fix round 3). The candidate's task yields its turn on its
+        /// instance: its failure at the entry set the instance's latest block, which has ended, and
+        /// no run of another task has started there since; a candidate of the instance that ranked
+        /// behind it took the instance this round, with no wake of its own, the fact refresh
+        /// naming it as its gate (keys `instance_id`, `task_id` the yielding task, `decision_id`
+        /// its run whose failure set the block, `failure_code` that failure, `observed_at_unix_ms`
+        /// when it set the block).
+        InstanceEntryYielding => "instance_entry_yielding": info / none,
         // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
@@ -3785,6 +3794,9 @@ actingcommand_contract::outcome_vocabulary! {
     pub enum EntryRecoveryEnd: "entry_recovery_end" {
         /// The recovery ladder climbed its rungs and ended `exhausted`.
         Exhausted => "exhausted",
+        /// Fix round 3 (ruling 4): the game's update dialog ended a rung's run, which ends the
+        /// ladder `exhausted` at Warning; no climb again in the instance's stretch of blocks.
+        UpdateDialog => "update_dialog",
         /// The worker that climbed the ladder panicked; the ladder ended there.
         WorkerPanicked => "worker_panicked",
     }

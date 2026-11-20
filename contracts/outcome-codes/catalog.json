@@ -2966,7 +2966,7 @@
     },
     "entry_recovery_end": {
       "type": "vocab:entry_recovery_end",
-      "description": "How an entry-blocked instance's own recovery ended without recovering, on instance_entry_blocked_recovery_failed: its recovery ladder ended exhausted, or the worker that climbed it panicked (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77)."
+      "description": "How an entry-blocked instance's own recovery ended without recovering, on instance_entry_blocked_recovery_failed: its recovery ladder ended exhausted, the game's update dialog ended a rung's run, or the worker that climbed it panicked (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77)."
     },
     "trigger_rule": {
       "type": "name",
@@ -11861,7 +11861,7 @@
       }
     },
     "entry_recovery_end": {
-      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Either way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after worker_panicked nothing climbs again in that block.",
+      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Every way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after update_dialog nothing climbs again in the instance's stretch of blocks, after worker_panicked nothing climbs again in that block.",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -11870,6 +11870,9 @@
       "tokens": {
         "exhausted": {
           "description": "The recovery ladder climbed its rungs (each skipped or failed), or a busy or screen hold's limit stopped it, and it ended exhausted; the block climbs again by itself after a wait."
+        },
+        "update_dialog": {
+          "description": "Fix round 3: a rung's package run met the game's update dialog (an interrupts.json page with result application_update_required), which ended it with contained_task_application_update_required and the ladder exhausted at Warning (UPD-1); no climb again in the instance's stretch of blocks: the store update task passes the block and its success ends it."
         },
         "worker_panicked": {
           "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic), and nothing climbs again in that block."

@@ -28,9 +28,9 @@ use crate::codes::{BreakInProblem, HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, MISSING_HASH,
     RERUN_ONLY_BACKEND_FAILURES, content_hash_prefix, encode_failure_base, entry_checked,
-    failed_at_entry, failure_accumulates, failure_detail_fingerprint, failure_key, failure_rows,
-    failure_step, identifier_text, in_restart_segment, locate_error_frame, navigation_failure_code,
-    navigation_layer_failure, own_entry_identity,
+    entry_passed, failed_at_entry, failure_accumulates, failure_detail_fingerprint, failure_key,
+    failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
+    navigation_failure_code, navigation_layer_failure, own_entry_identity,
 };
 use crate::suspension_lift::{
     LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
@@ -209,16 +209,17 @@ impl HostShared {
     }
 
     /// Registers a scheduled run's decision as it enters the scheduled path, with what is known
-    /// then of its instance's entry blocks (Workflow #490 ENTRY-A): read before
-    /// `begin_contained_run` counts the run itself among the runs started on the instance
-    /// (ENTRY-A2), and (fix round 1) marking the run `run_id` as one whose settlement is to come.
+    /// then of its instance's entry blocks (Workflow #490 ENTRY-A), marking the run `run_id` as
+    /// one whose settlement is to come and (fix round 3, ruling 2) the start of a run of
+    /// `task_id`, the run's catalog task, on its instance.
     pub(super) fn register_scheduled_resolution(
         &self,
         decision_id: &str,
+        task_id: &str,
         run_id: RunId,
         instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
-        let marks = self.entry_settlement_pending(run_id, decision_id, instance_id)?;
+        let marks = self.entry_settlement_pending(run_id, decision_id, task_id, instance_id)?;
         lock(
             &self.scheduled_resolutions,
             HostLocation::RegisterScheduledResolution,
@@ -598,41 +599,46 @@ impl HostShared {
         result
     }
 
-    /// Workflow #490 ENTRY-A fix round 2 (ruling 2): at the failed lease end of the scheduled run
-    /// `run_id`, before its settlement, whether its failure `code` is one the settlement will
-    /// judge a failure at its entry: the run's chain was resolved, it checked its entry and its
-    /// main package never started (`failed_at_entry`), and the code does not accumulate in the
-    /// scope the run failed in (`failure_accumulates`), read from the run's own records as the
-    /// settlement reads them (`build_scheduled_failure_identity`). The code's class is the
-    /// caller's to judge. A run whose settlement is not to come is no such run.
-    pub(super) fn scheduled_run_failed_at_entry(
+    /// Workflow #490 ENTRY-A fix round 3 (ruling 6): at the failed lease end of the scheduled run
+    /// `run_id`, before its settlement, whether its failure `code` is one the settlement will judge
+    /// a failure at its entry, taken from what the host holds of the run in memory and reading no
+    /// ledger: its chain was resolved (`ScheduledMain::resolved`), it checked its entry (a
+    /// prerequisite chain, or `entry`'s `checked`: an `EntryRecoveryDecision` it recorded) and its
+    /// main package never started (`entry`'s `started`: no `EntryTargetDisposition` `Started`
+    /// recorded), and the code does not accumulate in the scope such a run fails in (the gate's or
+    /// a layer's with a chain, `main` without one: `failure_accumulates`, outside the restart
+    /// segment, which only lets more accumulate). So it never says "at the entry" for a run the
+    /// settlement settles otherwise, and the settlement's own judgement stands. The code's class is
+    /// the caller's to judge. A run whose settlement is not to come is no such run.
+    pub(super) fn scheduled_run_at_entry(
         &self,
         run_id: RunId,
         code: &actingcommand_contract::outcome::CodeStr,
+        entry: super::contained_task::RunEntry,
     ) -> RuntimeHostResult<bool> {
+        if entry.started {
+            return Ok(false);
+        }
         let Some(decision_id) = self.entry_settling_dispatch(run_id)? else {
             return Ok(false);
         };
-        let main = lock(
+        let shape = lock(
             &self.scheduled_resolutions,
             HostLocation::ReadScheduledResolution,
         )?
         .get(&decision_id)
-        .and_then(|resolution| resolution.main.clone());
-        let Some(main) = main.filter(|main| main.resolved) else {
+        .and_then(|resolution| resolution.main.as_ref())
+        .filter(|main| main.resolved)
+        .map(|main| (!main.layers.is_empty(), main.linear));
+        let Some((layered, linear)) = shape else {
             return Ok(false);
         };
-        let query = |query: EventQuery| {
-            crate::recovery_read::read_through_head(&self.ledger, &query)
-                .map_err(|_| ledger_error(HostLocation::ReadFailureIdentityRows))
-        };
-        let rows = failure_rows(run_id, query)?;
-        let gated = !main.layers.is_empty() || (!main.linear && entry_checked(&rows));
-        if !failed_at_entry(&rows, gated) {
+        let gated = layered || (!linear && entry.checked);
+        if !(gated || entry.checked) {
             return Ok(false);
         }
-        let (scope, _) = failure_step(&rows, gated);
-        Ok(!failure_accumulates(code, &scope, false))
+        let scope = if gated { "gate" } else { "main" };
+        Ok(!failure_accumulates(code, scope, false))
     }
 
     fn build_scheduled_failure_identity(
@@ -737,10 +743,13 @@ impl HostShared {
         };
         let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
         // Workflow #490 ENTRY-A: the run checked its entry and its main package never started.
-        // ENTRY-A2: any other run whose chain was resolved started its main package (its entry
-        // worked), which clears its pair's mark.
+        // ENTRY-A2: any other run whose chain was resolved started its main package, which clears
+        // its pair's mark; fix round 3 (ruling 1): one that started it after an entry check it
+        // passed was let in on its instance.
         let at_entry = main.resolved && failed_at_entry(&rows, gated);
-        let started = (main.resolved && !at_entry).then_some(EntrySettlement::TargetStarted);
+        let started = (main.resolved && !at_entry).then(|| EntrySettlement::TargetStarted {
+            entered: entry_passed(&rows),
+        });
         // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
         // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
         // rule in where the failure arose, so the startup recovery and the ledger read the same
@@ -788,35 +797,23 @@ impl HostShared {
                     entry: started,
                 });
             }
-            // ENTRY-A2 ("Whose failure"): unless it is its pair's own: the pair's task's last
-            // scheduled run failed at its entry too, with the same packages, in the same activity
-            // window (fix round 2, ruling 4a), and either a recovery of the instance that ended
-            // `recovered` and restarted the application (ruling 3) came since that run began and
-            // nothing else started on the instance since that recovery, or (fix round 1, the
-            // bound) the pair's conditions in a row reached its rule's `escalation_threshold` and
-            // (ruling 4b) such a recovery came or another run's main package started on the
-            // instance since its previous failure at the entry. The marks are the run's start's,
-            // read before `begin_contained_run` counted the run itself. Such a failure is written
-            // as one that accumulates (its `F` the run's error frame, or the pair's previous
-            // identity with the same prefix), so it counts toward `escalation_threshold`.
+            // ENTRY-A2 ("Whose failure"; fix round 3, ruling 1): unless it is its pair's own: the
+            // pair's task's last scheduled run failed at its entry too, with the same packages, in
+            // the same activity window, and the instance let another scheduled run in since that
+            // failure (its main package started after its entry check, or it succeeded). What a
+            // recovery did is no evidence. Such a failure is written as one that accumulates (its
+            // `F` the run's error frame, or the pair's previous identity with the same prefix), so
+            // it counts toward `escalation_threshold`.
             let marks = resolution.marks;
-            // Fix round 1 (the bound): the rule's `escalation_threshold`, which the pair's
-            // conditions in a row at the entry are measured against; fix round 2 (ruling 4a): the
-            // end of the activity window the run's admission was committed in, which they do not
-            // outlive.
-            let (escalation_threshold, window_end) = {
-                let policy = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?;
-                (
-                    policy.dispatch_escalation_threshold(decision_id)?,
-                    policy.dispatch_window_end(decision_id)?.unwrap_or_default(),
-                )
-            };
+            // The end of the activity window the run's admission was committed in.
+            let window_end = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?
+                .dispatch_window_end(decision_id)?
+                .unwrap_or_default();
             let own = self.entry_failure_own(
+                context.lease_token().instance_id(),
                 context.instance_alias(),
                 context.catalog_task_id(),
-                marks,
                 &identity.packages(),
-                escalation_threshold,
                 window_end,
             )?;
             let failure_identity = if own {

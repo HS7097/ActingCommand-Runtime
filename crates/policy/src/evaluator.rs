@@ -369,6 +369,9 @@ pub struct RunSlots {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstanceHolds {
     holds: BTreeMap<String, WholeInstanceHold>,
+    /// Workflow #490 ENTRY-A fix round 3 ([`InstanceHolds::yield_turn`]): the task of each
+    /// instance that yields its turn.
+    yields: BTreeMap<String, YieldingTask>,
 }
 
 /// One held instance of [`InstanceHolds`] (named apart from the fact refresh's [`InstanceHold`]).
@@ -377,6 +380,15 @@ struct WholeInstanceHold {
     reason: DecisionReason,
     gate: Code,
     exempt_tasks: BTreeSet<String>,
+}
+
+/// Workflow #490 ENTRY-A fix round 3: the task of an instance that yields its turn, and the wait
+/// it shows when a candidate it yielded to takes the instance (the hold's reason and gate, no
+/// task exempt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct YieldingTask {
+    task_id: String,
+    hold: WholeInstanceHold,
 }
 
 impl InstanceHolds {
@@ -405,6 +417,76 @@ impl InstanceHolds {
             .get(instance_id)
             .filter(|hold| !hold.exempt_tasks.contains(task_id))
     }
+
+    /// Workflow #490 ENTRY-A fix round 3 (`contracts/policy-suspension.md`, "A failure at the
+    /// entry", "The pair yields its turn"): the task `task_id` of `instance_id` yields its turn.
+    /// In the allocation order its candidate goes behind every other candidate of its instance,
+    /// whose order, and every other candidate's, is unchanged, so it is selected only when none of
+    /// them is; and of a device of several it contends only while no other candidate of its
+    /// member does. When a candidate that ranked behind it takes the instance, it waits with
+    /// `reason` and no wake, a fact refresh's naming `gate`. A later yield of the same instance
+    /// replaces it.
+    pub fn yield_turn(
+        &mut self,
+        instance_id: impl Into<String>,
+        task_id: impl Into<String>,
+        reason: DecisionReason,
+        gate: Code,
+    ) {
+        self.yields.insert(
+            instance_id.into(),
+            YieldingTask {
+                task_id: task_id.into(),
+                hold: WholeInstanceHold {
+                    reason,
+                    gate,
+                    exempt_tasks: BTreeSet::new(),
+                },
+            },
+        );
+    }
+
+    /// Workflow #490 ENTRY-A fix round 3: the yield of `task_id` on `instance_id`, if that task
+    /// yields its turn there.
+    fn yielding(&self, task_id: &str, instance_id: &str) -> Option<&YieldingTask> {
+        self.yields
+            .get(instance_id)
+            .filter(|yielding| yielding.task_id == task_id)
+    }
+}
+
+/// Workflow #490 ENTRY-A fix round 3 ([`InstanceHolds::yield_turn`]): each yielding candidate of
+/// `candidates`, the allocation order, moved to just behind the last other candidate of its
+/// instance; every other candidate keeps its order. Returns, by each moved candidate's work index,
+/// the tasks of its instance that ranked behind it before it moved.
+fn yield_turns(
+    candidates: &mut Vec<PlacementCandidate>,
+    holds: &InstanceHolds,
+) -> BTreeMap<usize, BTreeSet<String>> {
+    let mut moved = BTreeMap::new();
+    for (instance_id, yielding) in &holds.yields {
+        let Some(from) = candidates.iter().position(|candidate| {
+            candidate.instance_id == *instance_id && candidate.task_id == yielding.task_id
+        }) else {
+            continue;
+        };
+        let Some(last) = candidates
+            .iter()
+            .rposition(|candidate| candidate.instance_id == *instance_id)
+            .filter(|last| *last > from)
+        else {
+            continue;
+        };
+        let passed = candidates[from + 1..=last]
+            .iter()
+            .filter(|candidate| candidate.instance_id == *instance_id)
+            .map(|candidate| candidate.task_id.clone())
+            .collect::<BTreeSet<_>>();
+        let candidate = candidates.remove(from);
+        moved.insert(candidate.work_index, passed);
+        candidates.insert(last, candidate);
+    }
+    moved
 }
 
 /// Workflow #437 MAPP-1 (`contracts/device-group.md`, "One pick per device per round"): the
@@ -2354,6 +2436,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // SS-2h: a capped block takes its lead's place, after the promotions.
     capped::assign_leads(&mut candidates);
     candidates.sort_by(|left, right| allocation_order(left, right, tiers, &turns));
+    // Workflow #490 ENTRY-A fix round 3: a task that yields its turn goes behind the other
+    // candidates of its instance; nothing else moves.
+    let yielded = yield_turns(&mut candidates, instance_holds);
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
     // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
@@ -2506,6 +2591,27 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             if let Some(hold) = instance_hold {
                 hold_unasked(
                     hold,
+                    refresh,
+                    candidate.work_index,
+                    &mut work,
+                    &mut refresh_gates,
+                );
+                continue;
+            }
+            // Workflow #490 ENTRY-A fix round 3: a task that yielded its turn to a candidate of
+            // its instance that ranked behind it waits with the yield's reason.
+            if let Some(yielding) =
+                instance_holds.yielding(&candidate.task_id, &candidate.instance_id)
+                && yielded.get(&candidate.work_index).is_some_and(|passed| {
+                    selected_devices
+                        .get(device_groups.device(&candidate.instance_id))
+                        .is_some_and(|(winner, winner_task)| {
+                            *winner == candidate.instance_id && passed.contains(winner_task)
+                        })
+                })
+            {
+                hold_unasked(
+                    &yielding.hold,
                     refresh,
                     candidate.work_index,
                     &mut work,

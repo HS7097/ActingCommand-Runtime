@@ -330,7 +330,12 @@ the policy outcome gate a settlement blocks under, so no evaluation sees the run
 without its block; admission does not judge it again. The idle plan counts such a decision due
 (eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
 and its look ahead does not read this position. The not-running row of the schedule explanation
-names it, since the first evaluation that deferred the instance so;
+names it, since the first evaluation that deferred the instance so. Once the block has ended (fix
+round 3), the pair whose failure set it yields its turn on the instance until a run of another task
+starts or is settled there: it is no deferral of this order but its place in the allocation order,
+behind the instance's other candidates, and a candidate it yielded to that takes the instance
+leaves it waiting `instance_entry_yielding` with no wake of its own
+([policy-suspension.md](policy-suspension.md), "The pair yields its turn");
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";

@@ -675,6 +675,22 @@ pub(crate) fn failed_at_entry(rows: &[PersistedEvent], gated: bool) -> bool {
     checked
 }
 
+/// Workflow #490 ENTRY-A fix round 3 (ruling 1; `contracts/policy-suspension.md`, "Whose
+/// failure"): whether a run's main package started after an entry check it passed (an
+/// `EntryTargetDisposition` `Started` among its rows): the instance let it in. A run that checks no
+/// entry starts its main package whatever the screen, which proves nothing of it.
+pub(crate) fn entry_passed(rows: &[PersistedEvent]) -> bool {
+    rows.iter().filter_map(semantic_fact).any(|fact| {
+        matches!(
+            fact,
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::Started,
+                ..
+            }
+        )
+    })
+}
+
 /// R25-1 (ruling 5961093808): whether a run failed inside its restart segment: it had a launch
 /// or restart application effect and no `StepFinished` page after the last one is the main
 /// interface of `game`: for a `linear_steps` run its main-interface predicate, for a page-graph

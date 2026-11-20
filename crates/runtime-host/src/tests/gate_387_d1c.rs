@@ -156,7 +156,8 @@ fn skipped(rung: RecoveryRung, reason: RecoveryRungSkipReason) -> RecoveryRungPl
 /// a `linear_steps` package with no prerequisite chain and no home entry check, so its first step
 /// is its main package's (it starts its main package and is no failure at the entry): a code the
 /// configuration excludes, failing after the main package started, starts no ladder, at the lease
-/// end or at its settlement.
+/// end or at its settlement; fix round 3 (the review's point): the cell waits one sweep's tick
+/// before it asserts that no block and no ladder exist.
 #[test]
 fn h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs() {
     let cases = [
@@ -234,6 +235,15 @@ fn h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs() 
         let (_root, host, _state) = failed_routine_run(manifest, |_| {});
         let Some((rule, plan)) = expected else {
             // The decision is made inside the failed lease end: no ladder claim exists after it.
+            // Workflow #490 ENTRY-A fix round 3: and none after the lease sweep's next tick, which
+            // would take up a recovery an entry block held: no block exists either.
+            host.entry_block_tick_for_test().expect("the sweep's tick");
+            assert_eq!(
+                host.entry_block_for_test(POLICY_INSTANCE_ALIAS)
+                    .expect("the instance's block"),
+                None,
+                "{case}"
+            );
             let (holder, queued) = host
                 .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
                 .expect("instance claims");
