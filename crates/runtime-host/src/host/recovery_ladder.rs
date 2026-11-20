@@ -365,6 +365,10 @@ pub(super) struct PendingRecoveryLadder {
     /// settlement takes a recovery held back for it (a direct run's, and every other trigger's,
     /// is no such run).
     scheduled_run: bool,
+    /// Workflow #490 ENTRY-A fix round 4 (ruling 4): a ladder of its instance's stretch of entry
+    /// blocks ran the rung that restarts the emulator already, so this climb skips that rung
+    /// (`recovery_rung_skipped_emulator_restarted_in_stretch`).
+    skip_emulator: bool,
 }
 
 impl PendingRecoveryLadder {
@@ -434,6 +438,16 @@ impl PendingRecoveryLadder {
         {
             self.start_rung = self.start_rung.max(index + 1);
         }
+    }
+
+    /// Workflow #490 ENTRY-A fix round 4 (ruling 4; `contracts/policy-suspension.md`, "Where a
+    /// block's recovery starts and when"): the climb does not run the rung that restarts the
+    /// emulator, which a ladder of its instance's stretch of entry blocks ran already; the rung's
+    /// `recovery_rung_finished` records it `skipped` with the outcome
+    /// `recovery_rung_skipped_emulator_restarted_in_stretch` (its plan lists it pending, as a plan
+    /// drill's does), so the climb ends after the application's restart.
+    pub(super) fn skip_emulator_restart(&mut self) {
+        self.skip_emulator = true;
     }
 
     pub(super) const fn holder_id(&self) -> HolderId {
@@ -1244,6 +1258,7 @@ impl HostShared {
             profile,
             drill: None,
             scheduled_run: false,
+            skip_emulator: false,
         };
         Ok((event, self.admit_recovery_ladder(pending)?))
     }
@@ -1333,6 +1348,7 @@ impl HostShared {
             profile,
             drill: None,
             scheduled_run: false,
+            skip_emulator: false,
         };
         self.admit_recovery_ladder(pending)
     }
@@ -1437,6 +1453,7 @@ impl HostShared {
                 profile,
                 drill: None,
                 scheduled_run: false,
+                skip_emulator: false,
             };
             if let Some(ladder) = self.admit_recovery_ladder(pending)? {
                 self.enqueue_ladder_claim(ladder)?;
@@ -1869,6 +1886,9 @@ impl HostShared {
                 if climb.restarts {
                     pending.start_at_application_restart();
                 }
+                if climb.skip_emulator {
+                    pending.skip_emulator_restart();
+                }
                 self.hold_entry_recovery(
                     resolved.instance_id(),
                     pending,
@@ -1880,6 +1900,9 @@ impl HostShared {
         let mut pending = self.task_ladder(request, resolved, trigger, &config, matched)?;
         if climb.restarts {
             pending.start_at_application_restart();
+        }
+        if climb.skip_emulator {
+            pending.skip_emulator_restart();
         }
         if let Some(until_unix_ms) = climb.paced {
             self.hold_entry_recovery(resolved.instance_id(), pending, until_unix_ms)?;
@@ -2003,6 +2026,7 @@ impl HostShared {
             profile,
             drill: None,
             scheduled_run: !trigger.direct,
+            skip_emulator: false,
         })
     }
 
@@ -2137,6 +2161,7 @@ impl HostShared {
             profile,
             drill: Some(mode),
             scheduled_run: false,
+            skip_emulator: false,
         };
         let pending = match self.admit_or_suppress_ladder(pending)? {
             Ok(pending) => pending,
@@ -2837,6 +2862,23 @@ impl HostShared {
                     tried.count(),
                 );
             }
+            // Workflow #490 ENTRY-A fix round 4 (ruling 4): the emulator is restarted at most once
+            // in a stretch of entry blocks. A climb a ladder of the stretch already restarted the
+            // emulator in does not run that rung: it is recorded skipped (its plan, as a plan
+            // drill's, lists it pending), and the climb ends after the application's restart.
+            if skipped.is_none() && rung == RecoveryRung::EmulatorRestart && pending.skip_emulator {
+                self.append_recovery_rung_finished(
+                    pending,
+                    rung,
+                    RecoveryRungOutcome::Skipped,
+                    None,
+                    Some(Outcome::new(
+                        HostCode::RecoveryRungSkippedEmulatorRestartedInStretch,
+                    )),
+                    None,
+                )?;
+                continue;
+            }
             // Workflow #386 SR-4a3 (T17b): a rung that would run into a blackout, or that a
             // blackout covers, does not start: the ladder ends with the suppression `blackout`
             // and releases its key (the caller), and is not continued after the blackout. A
@@ -2898,18 +2940,23 @@ impl HostShared {
                     readiness_window_ms,
                     readiness_backoff_ms,
                     readiness_poll_ms,
-                } => self.recovery_emulator_restart(
-                    pending,
-                    &resolved,
-                    &EmulatorRestartBounds {
-                        stop_bound_ms: *stop_bound_ms,
-                        start_bound_ms: *start_bound_ms,
-                        readiness_window_ms: *readiness_window_ms,
-                        readiness_backoff_ms,
-                        readiness_poll_ms: *readiness_poll_ms,
-                    },
-                    key,
-                )?,
+                } => {
+                    // Workflow #490 ENTRY-A fix round 4 (ruling 4): the instance's stretch of
+                    // entry blocks notes that one of its ladders restarted the emulator.
+                    self.note_entry_emulator_restart(pending)?;
+                    self.recovery_emulator_restart(
+                        pending,
+                        &resolved,
+                        &EmulatorRestartBounds {
+                            stop_bound_ms: *stop_bound_ms,
+                            start_bound_ms: *start_bound_ms,
+                            readiness_window_ms: *readiness_window_ms,
+                            readiness_backoff_ms,
+                            readiness_poll_ms: *readiness_poll_ms,
+                        },
+                        key,
+                    )?
+                }
             };
             // #411 B37 (A35-S1): a busy end may run the return-home rung again after a hold;
             // each run's attempt is handled here, until one that is not busy.
@@ -2987,8 +3034,7 @@ impl HostShared {
                         )?;
                         return self.finish_interrupted_ladder_as(
                             pending,
-                            key,
-                            reason,
+                            rung_reason_outcome(pending, key, reason),
                             tried.count(),
                             ClimbEnd::UpdateDialog,
                         );
@@ -3298,19 +3344,25 @@ impl HostShared {
         }
         // Workflow #490 ENTRY-A fix round 2: an interruption is no failure of an entry block's
         // recovery, which is held again (fix round 3: as a later climb of its stretch).
-        self.finish_interrupted_ladder_as(pending, key, reason, rungs_tried, ClimbEnd::Interrupted)
+        self.finish_interrupted_ladder_as(
+            pending,
+            rung_reason_outcome(pending, key, reason),
+            rungs_tried,
+            ClimbEnd::Interrupted,
+        )
     }
 
     /// The end of an interrupted climb (`finish_interrupted_ladder`), its rung recorded already:
     /// `recovery_ladder_finished` `exhausted` at Warning, whose outcome (ledger revision 3,
-    /// category warning) carries the interruption `reason` as its cause; `climb` says what ended it
-    /// for an entry block (Workflow #490 ENTRY-A fix round 3: a holding interruption, or the game's
-    /// update dialog, after which the block's ladder is not climbed again in its stretch).
+    /// category warning) carries the interruption's outcome `cause` (the rung's reason as
+    /// `rung_reason_outcome` builds it) as its cause; `climb` says what ended it for an entry block
+    /// (Workflow #490 ENTRY-A fix round 3: a holding interruption, or the game's update dialog,
+    /// after which the block's ladder is not climbed again in its stretch). Fix round 4: it takes
+    /// the outcome, not the reason's spelling (the outcome guard's G2).
     fn finish_interrupted_ladder_as(
         &self,
         pending: &PendingRecoveryLadder,
-        key: &HostKey,
-        reason: &'static str,
+        cause: Outcome,
         rungs_tried: u8,
         climb: ClimbEnd,
     ) -> RuntimeHostResult<()> {
@@ -3320,7 +3372,7 @@ impl HostShared {
             RuntimeLifecyclePhase::RecoveryLadderFinished {
                 ladder_result: RecoveryLadderOutcome::Exhausted,
                 rungs_tried,
-                outcome: Some(interrupted(rung_reason_outcome(pending, key, reason))),
+                outcome: Some(interrupted(cause)),
             },
             climb,
         )

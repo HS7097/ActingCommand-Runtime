@@ -1046,7 +1046,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.77",
-      "description": "Workflow #490 ENTRY-A (contracts/scheduling-blackout.md, Order of the deferrals, position 4b; contracts/policy-suspension.md, A failure at the entry): the candidate's instance (instance_id, the instance alias) is entry-blocked. A scheduled run there (its task task_id, its dispatch decision_id) failed at its entry, its main package having executed no step, with failure_code, a code of class pack_logic_mismatch, and its settlement settled that failure as a condition of the instance (or as the pair's own failure) at observed_at_unix_ms. Every candidate of the instance is deferred with no wake of its own, owed reruns, immediate reruns, remedy requests and the fact refresh (fact_refresh_pending with this code as gate_code) included, but a store update package's task, which passes as at position 4a, until a recovery ladder of the instance ends recovered or environment_ready, a run on the instance succeeds (a client's or the Lab's run too), a resume lifts a pause of it or the global one, a blackout covers it, a fence takes it, or the Runtime restarts. A recovery the block held when it ends is dropped with its trigger's recovery_ladder_suppressed cooldown once more. Other instances are not affected. The not-running row of the schedule explanation carries it with the evaluation since which it holds.",
+      "description": "Workflow #490 ENTRY-A (contracts/scheduling-blackout.md, Order of the deferrals, position 4b; contracts/policy-suspension.md, A failure at the entry): the candidate's instance (instance_id, the instance alias) is entry-blocked. A scheduled run there (its task task_id, its dispatch decision_id) failed at its entry, its main package having executed no step, with failure_code, a code of class pack_logic_mismatch, and its settlement settled that failure as a condition of the instance (fix round 4: every such failure; none counts against its rule) at observed_at_unix_ms. Every candidate of the instance is deferred with no wake of its own, owed reruns, immediate reruns, remedy requests and the fact refresh (fact_refresh_pending with this code as gate_code) included, but a store update package's task, which passes as at position 4a, until a recovery ladder of the instance ends recovered or environment_ready, a run on the instance succeeds (a client's or the Lab's run too), a resume lifts a pause of it or the global one, a blackout covers it, a fence takes it, or the Runtime restarts. A recovery the block held when it ends is dropped with its trigger's recovery_ladder_suppressed cooldown once more. Other instances are not affected. The not-running row of the schedule explanation carries it with the evaluation since which it holds.",
       "common_causes": "A package left the game on a screen no package of the instance knows, so the next task's entry, its prerequisite or return-home layer, could not reach its entry page; the block's recovery is the ladder that failure entered, or for a failure the configured exclusion list keeps from starting a ladder by itself, the ladder the block starts under the trigger item that takes the failure's class. A block set while no run was let in on the instance since its previous block ended is climbed from the first rung that restarts the application; every climb of a stretch of blocks after its first waits scheduling.unavailable_probe's interval from the previous climb's end and the instance's cool-down window, whatever ended the previous climb (fix round 3); after the game's update dialog ended a climb nothing climbs again in the stretch.",
       "handling": "None while the recovery runs, waits for its cool-down's end or its next climb, or is tried again after a transient refusal. When instance_entry_blocked_awaiting_person or instance_entry_blocked_recovery_failed was recorded, bring the game to a known screen and run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance."
     },
@@ -1105,7 +1105,7 @@
       "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from (a dialog of an outage that has not ended, an update the game asks for), or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control), or the ladder's worker panicked.",
       "handling": "Look at the instance. After exhausted the Runtime tries again by itself on a growing interval; after update_dialog the game's client must be updated (the store update task does it where the catalogue has one); after worker_panicked it has stopped trying, and the worker's panic_caught record names the panic. Bring the game to a known screen, then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
     },
-    "instance_entry_yielding": {
+    "instance_entry_task_waiting": {
       "category": "info",
       "ladder_class": "none",
       "owner": "runtime-host",
@@ -1116,6 +1116,8 @@
         "task_id": "required",
         "decision_id": "required",
         "observed_at_unix_ms": "required",
+        "count": "required",
+        "next_eligible_unix_ms": "required",
         "failure_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
@@ -1126,9 +1128,85 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.77",
-      "description": "Workflow #490 ENTRY-A fix round 3 (contracts/policy-suspension.md, A failure at the entry, The pair yields its turn): the candidate's task task_id yields its turn on its instance (instance_id, the instance alias). Its scheduled run decision_id failed at its entry with failure_code and set the instance's latest entry block at observed_at_unix_ms; that block has ended, and no run of another task has started or been settled on the instance since. In the allocation order the task goes behind every other candidate of its instance (whose order, and every other candidate's, is unchanged), and of a device of several it contends only while no other candidate of its member does; a candidate that ranked behind it took the instance this round, so it waits, with no wake of its own, the fact refresh naming this code as its gate. When no other candidate of the instance can be dispatched it is dispatched as any candidate is.",
-      "common_causes": "The task's own entry may be broken (a prerequisite or return-home layer that never reaches its page), so the instance lets its other tasks in first: their runs show whether the instance lets a task in, which is the only evidence that a failure at the entry is the task's own.",
-      "handling": "None: another task of the instance runs first, and the task is due again by its own trigger. A failure at its entry after another scheduled run was let in on the instance is the task's own and settles by its rule's on_failure."
+      "description": "Workflow #490 ENTRY-A fix round 4, ruling 2 (contracts/policy-suspension.md, A failure at the entry, A pair that keeps failing at its entry): the candidate's task task_id failed at its entry on its instance (instance_id, the instance alias) count times in a row in the activity window its admissions were committed in, with the same packages; the latest such run (decision_id, failure_code) settled at observed_at_unix_ms. After the n-th the task is not dispatched on that instance before scheduling.unavailable_probe's interval for n (first_interval_ms, times factor for each further one, at most max_interval_ms) has passed since that settlement, and never past the window's end: next_eligible_unix_ms, when the candidate wakes. The fact refresh names this code as its gate_code. The instance's other tasks are not held. The count starts again when a scheduled run of the task on the instance settles any other way, when the window ends, when its packages change, at a restart, or when a store update task's run succeeds on the instance. No failure at the entry counts against its rule.",
+      "common_causes": "The task's own entry is broken (a prerequisite or return-home layer that never reaches its page), or the instance's game stays on a screen no package knows; each failure at the entry blocks the instance until its recovery.",
+      "handling": "None: the task is due again at next_eligible_unix_ms. When it keeps failing while other tasks get in, it is set aside for its window (instance_entry_task_set_aside) and a person is told."
+    },
+    "instance_entry_task_set_aside": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "decision_id": "required",
+        "observed_at_unix_ms": "required",
+        "count": "required",
+        "limit_count": "required",
+        "window_end_unix_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.77",
+      "description": "Workflow #490 ENTRY-A fix round 4, ruling 3 (contracts/policy-suspension.md, A failure at the entry, A pair that keeps failing at its entry): the candidate's task task_id is set aside on its instance (instance_id, the instance alias) until the end of the activity window its admissions were committed in, window_end_unix_ms, when the candidate wakes. In that window count of its failures at the entry, with the same packages, came although the instance had let another scheduled run in (its main package started after an entry check it passed, or it succeeded; a store update task's success is none) since the task's previous failure at the entry there, which reached its rule's on_failure.escalation_threshold, limit_count; decision_id, failure_code and observed_at_unix_ms name the latest. The fact refresh names this code as its gate_code. Nothing else follows: the rule is not paused, its streak is not touched, the next window starts from nothing, and the instance's other tasks are not held. A person was told once by instance_entry_task_set_aside_reported.",
+      "common_causes": "The task's own entry is broken (a prerequisite or return-home layer that never reaches its page from the instance's home page), while the instance's other tasks get in.",
+      "handling": "Look at the task's package and its entry on the instance; a package change starts its count again at its next failure. Nothing to do for the instance: the task is dispatched again after window_end_unix_ms."
+    },
+    "instance_entry_task_set_aside_reported": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "decision_id": "required",
+        "observed_at_unix_ms": "required",
+        "count": "required",
+        "limit_count": "required",
+        "window_end_unix_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.77",
+      "description": "Workflow #490 ENTRY-A fix round 4, ruling 3: a person is told, once per task, instance and activity window, that the task task_id is set aside on the instance instance_id until the window's end, window_end_unix_ms: count of its failures at the entry in the window came although the instance had let another scheduled run in since its previous one, and count reached its rule's on_failure.escalation_threshold, limit_count. decision_id, failure_code and observed_at_unix_ms name the failure that reached it. Recorded as a runtime.failed record under the instance's links and handed to the daemon's log, at the settlement of that failure; the task's candidates on the instance wait with instance_entry_task_set_aside until the window ends. Nothing else follows: no pause of the rule, no change to its streak, nothing that outlives the window.",
+      "common_causes": "The task's own entry is broken (a prerequisite or return-home layer that never reaches its page from the instance's home page), while the instance's other tasks get in.",
+      "handling": "Look at the task's package and its entry on the instance (the records of the failures named); repair the package if it is broken. The task is dispatched again after window_end_unix_ms whatever is done."
+    },
+    "recovery_rung_skipped_emulator_restarted_in_stretch": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.77",
+      "description": "Workflow #490 ENTRY-A fix round 4, ruling 4 (contracts/policy-suspension.md, Where a block's recovery starts and when): an entry-blocked instance's ladder did not run its emulator_restart rung, because a ladder of the instance's stretch of entry blocks (blocks with no run let in between them) ran that rung already: the emulator is restarted at most once in a stretch, and the climb ends after the application's restart (exhausted when the startup package does not reach its page). The rung's recovery_rung_finished outcome, rung_result skipped; the climb's recovery_ladder_started plan lists the rung pending, as a plan drill's does (no skip reason word is added to the ledger). A new stretch, after a run was let in, may restart the emulator once again.",
+      "common_causes": "The instance's game stays on a screen no package knows through a stretch of entry blocks; the stretch's first climb that reached the emulator's rung restarted it already.",
+      "handling": "None: the climb goes on as configured otherwise. When the stretch lasts, a person is told by instance_entry_blocked_awaiting_person."
     },
     "action_id_issue_failed": {
       "category": "error",

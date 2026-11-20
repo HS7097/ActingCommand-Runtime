@@ -330,12 +330,16 @@ the policy outcome gate a settlement blocks under, so no evaluation sees the run
 without its block; admission does not judge it again. The idle plan counts such a decision due
 (eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
 and its look ahead does not read this position. The not-running row of the schedule explanation
-names it, since the first evaluation that deferred the instance so. Once the block has ended (fix
-round 3), the pair whose failure set it yields its turn on the instance until a run of another task
-starts or is settled there: it is no deferral of this order but its place in the allocation order,
-behind the instance's other candidates, and a candidate it yielded to that takes the instance
-leaves it waiting `instance_entry_yielding` with no wake of its own
-([policy-suspension.md](policy-suspension.md), "The pair yields its turn");
+names it, since the first evaluation that deferred the instance so. Then (fix round 4, rulings 2
+and 3; [policy-suspension.md](policy-suspension.md), "A pair that keeps failing at its entry"), on
+an instance not blocked or for a store update task that passes the block, a candidate whose pair
+(instance, catalog task) failed at its entry n times in a row waits `instance_entry_task_waiting`
+(`count`, `next_eligible_unix_ms`) until `scheduling.unavailable_probe`'s interval for n has passed
+since that failure's settlement, and one set aside for its window waits
+`instance_entry_task_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the window's
+end; each wakes at its end and neither holds past the window's end; a fact refresh names the code
+as its `gate_code`. Only that task waits: the instance's other candidates are not held, and no rule
+that orders tasks changes;
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";

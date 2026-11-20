@@ -30,7 +30,7 @@ use crate::failure_identity::{
     RERUN_ONLY_BACKEND_FAILURES, content_hash_prefix, encode_failure_base, entry_checked,
     entry_passed, failed_at_entry, failure_accumulates, failure_detail_fingerprint, failure_key,
     failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
-    navigation_failure_code, navigation_layer_failure, own_entry_identity,
+    navigation_failure_code, navigation_layer_failure,
 };
 use crate::suspension_lift::{
     LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
@@ -65,10 +65,9 @@ pub(super) struct ScheduledResolution {
 /// Workflow #490 ENTRY-A: a failed scheduled run's input for its settlement and, when the run
 /// failed at its entry (`failed_at_entry`), its failure does not accumulate and the instance's
 /// recovery ladder takes it at the task stage, what its start knew of its instance (`entry`): the
-/// settlement then settles it as a condition of the instance and blocks the instance. ENTRY-A2:
-/// when that failure is its pair's own, the input is written as a failure that accumulates
-/// (`own_entry_identity`), which the settlement settles as such, blocking the instance all the
-/// same; `entry` is [`EntrySettlement::TargetStarted`] for a run whose main package started.
+/// settlement then settles it as a condition of the instance and blocks the instance (fix round 4,
+/// ruling 1: always; it never counts against its rule); `entry` is
+/// [`EntrySettlement::TargetStarted`] for a run whose main package started.
 pub(super) struct ScheduledFailure {
     pub(super) input: PolicyExecutionInput,
     pub(super) entry: Option<EntrySettlement>,
@@ -210,16 +209,14 @@ impl HostShared {
 
     /// Registers a scheduled run's decision as it enters the scheduled path, with what is known
     /// then of its instance's entry blocks (Workflow #490 ENTRY-A), marking the run `run_id` as
-    /// one whose settlement is to come and (fix round 3, ruling 2) the start of a run of
-    /// `task_id`, the run's catalog task, on its instance.
+    /// one whose settlement is to come.
     pub(super) fn register_scheduled_resolution(
         &self,
         decision_id: &str,
-        task_id: &str,
         run_id: RunId,
         instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
-        let marks = self.entry_settlement_pending(run_id, decision_id, task_id, instance_id)?;
+        let marks = self.entry_settlement_pending(run_id, decision_id, instance_id)?;
         lock(
             &self.scheduled_resolutions,
             HostLocation::RegisterScheduledResolution,
@@ -742,10 +739,10 @@ impl HostShared {
             )
         };
         let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
-        // Workflow #490 ENTRY-A: the run checked its entry and its main package never started.
-        // ENTRY-A2: any other run whose chain was resolved started its main package, which clears
-        // its pair's mark; fix round 3 (ruling 1): one that started it after an entry check it
-        // passed was let in on its instance.
+        // Workflow #490 ENTRY-A: the run checked its entry and its main package never started. Any
+        // other run whose chain was resolved started its main package, which starts its pair's
+        // count from nothing (fix round 4); one that started it after an entry check it passed was
+        // let in on its instance (fix round 3, kept for ruling 3 of fix round 4).
         let at_entry = main.resolved && failed_at_entry(&rows, gated);
         let started = (main.resolved && !at_entry).then(|| EntrySettlement::TargetStarted {
             entered: entry_passed(&rows),
@@ -797,57 +794,16 @@ impl HostShared {
                     entry: started,
                 });
             }
-            // ENTRY-A2 ("Whose failure"; fix round 3, ruling 1): unless it is its pair's own: the
-            // pair's task's last scheduled run failed at its entry too, with the same packages, in
-            // the same activity window, and the instance let another scheduled run in since that
-            // failure (its main package started after its entry check, or it succeeded). What a
-            // recovery did is no evidence. Such a failure is written as one that accumulates (its
-            // `F` the run's error frame, or the pair's previous identity with the same prefix), so
-            // it counts toward `escalation_threshold`.
-            let marks = resolution.marks;
-            // The end of the activity window the run's admission was committed in.
+            // Fix round 4 (ruling 1): every such failure settles so; none counts against its rule.
+            // The end of the activity window the run's admission was committed in is its pair's
+            // window (rulings 2 and 3).
             let window_end = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?
                 .dispatch_window_end(decision_id)?
                 .unwrap_or_default();
-            let own = self.entry_failure_own(
-                context.lease_token().instance_id(),
-                context.instance_alias(),
-                context.catalog_task_id(),
-                &identity.packages(),
-                window_end,
-            )?;
-            let failure_identity = if own {
-                // Fix round 1: an own failure's identity carries the content members an ordinary
-                // failure's carries, the game root's data files (`g`) included when the game has
-                // a root to read, so a repair of a root page or interrupt definition lifts the
-                // pair's pause as a changed package does.
-                if !identity
-                    .layers
-                    .iter()
-                    .any(|layer| matches!(layer, IdentityLayer::StandardPackRoot(_)))
-                    && let Some(root_hash) = self
-                        .standard_packs
-                        .root()
-                        .and_then(|root| standard_pack_root_hash(&root.join(&main.game)))
-                {
-                    identity
-                        .layers
-                        .push(IdentityLayer::StandardPackRoot(root_hash));
-                }
-                let current = locate_error_frame(context.run_id(), query)?;
-                own_entry_identity(
-                    &identity,
-                    current.as_ref().map(LedgerArtifactReference::sha256),
-                    previous.as_ref().map(|(previous, _)| previous.as_str()),
-                )
-            } else {
-                identity.encode()
-            };
             return Ok(ScheduledFailure {
-                input: failed(Some(failure_identity)),
+                input: failed(Some(identity.encode())),
                 entry: Some(EntrySettlement::AtEntry {
-                    marks,
-                    own,
+                    marks: resolution.marks,
                     window_end,
                 }),
             });

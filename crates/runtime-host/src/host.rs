@@ -5287,7 +5287,7 @@ impl RuntimeHost {
     }
 
     /// Workflow #490 ENTRY-A: a recovery of `instance_alias` ended its entry block, as a ladder's
-    /// `recovered` end does (fix round 3, ruling 1: whichever rung recovered it, no evidence).
+    /// `recovered` end does, whichever rung recovered it.
     #[cfg(test)]
     pub(crate) fn recover_instance_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         let shared =
@@ -5315,28 +5315,12 @@ impl RuntimeHost {
         shared.entry_climbs_for_test(instance_id)
     }
 
-    /// Workflow #490 ENTRY-A fix round 3: the task whose pair yields its turn on `instance_alias`,
-    /// if one does (ruling 2).
-    #[cfg(test)]
-    pub(crate) fn entry_yielding_for_test(
-        &self,
-        instance_alias: &str,
-    ) -> RuntimeHostResult<Option<String>> {
-        let shared =
-            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryBlockForTest)?;
-        let instance_id = shared
-            .resolve_instance(instance_alias)
-            .map_err(|failure| *failure.error)?
-            .instance_id();
-        shared.entry_yielding_for_test(instance_id)
-    }
-
     /// Workflow #490 ENTRY-A fix rounds 2 and 3: a scheduled run was let in on `instance_alias`
     /// (its main package started after its entry check), as its settlement tells the entry blocks.
     #[cfg(test)]
     pub(crate) fn let_run_in_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         let shared =
-            self.shared_ref(crate::codes::test_spellings::TestLocation::StartRunForTest)?;
+            self.shared_ref(crate::codes::test_spellings::TestLocation::LetRunInForTest)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
@@ -5400,16 +5384,22 @@ impl RuntimeHost {
             .load(Ordering::Acquire))
     }
 
-    /// Workflow #490 ENTRY-A2: the mark of `task_id` on `instance_alias`, if it is set (fix round
-    /// 3): the scheduled runs the instance had let in when the failure that set it settled.
+    /// Workflow #490 ENTRY-A fix round 4 (rulings 2 and 3): the pair of `task_id` on
+    /// `instance_alias`, if its latest scheduled run failed at its entry: its failures at the entry
+    /// in a row and against it, when it may be dispatched again, and whether it is set aside.
     #[cfg(test)]
-    pub(crate) fn entry_mark_for_test(
+    pub(crate) fn entry_pair_for_test(
         &self,
         instance_alias: &str,
         task_id: &str,
-    ) -> RuntimeHostResult<Option<u64>> {
-        self.shared_ref(crate::codes::test_spellings::TestLocation::EntryMarkForTest)?
-            .entry_mark_for_test(instance_alias, task_id)
+    ) -> RuntimeHostResult<Option<entry_blocks::EntryPairForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryPairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.entry_pair_for_test(instance_id, task_id)
     }
 
     /// Workflow #490 ENTRY-A: `instance_alias`'s entry block, if it has one: the gate the

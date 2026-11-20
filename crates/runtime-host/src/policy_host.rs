@@ -4279,6 +4279,18 @@ impl PolicyHost {
                         refresh,
                     ));
                 }
+                // Workflow #490 ENTRY-A fix round 4 (rulings 2 and 3; position 4b): the task's
+                // scheduled runs keep failing at their entry on the instance: it waits there after
+                // each failure, or is set aside until its activity window ends; each wakes at its
+                // end. The instance's other tasks are not held.
+                if let Some(waiting) = entry_blocked.pair_deferral(
+                    &intent.instance_id,
+                    &intent.task_id,
+                    time.unix_ms,
+                    refresh,
+                ) {
+                    return Ok(waiting);
+                }
                 // Workflow #429 R-8 (position 5, after `pack_registry_not_loaded`, which #389 U-3
                 // adds): the instance's pack schedule closes the package the candidate's task
                 // runs; it wakes when the covering row ends.
@@ -6047,21 +6059,6 @@ impl PolicyHost {
             })
     }
 
-    /// Workflow #490 ENTRY-A2, tests: the catalog task of a dispatch, as its execution record
-    /// names it.
-    #[cfg(test)]
-    pub(crate) fn execution_task_id_for_test(&self, decision_id: &str) -> RuntimeHostResult<&str> {
-        self.seen_dispatches
-            .get(decision_id)
-            .map(|dispatch| dispatch.data.task_id.as_str())
-            .ok_or_else(|| {
-                request(
-                    HostCode::PolicyDispatchUnknown,
-                    HostLocation::ReadPolicyDispatchInstance,
-                )
-            })
-    }
-
     pub(crate) fn active_performance_workloads(
         &self,
     ) -> RuntimeHostResult<Vec<PerformanceControlWorkload>> {
@@ -6335,10 +6332,11 @@ impl PolicyHost {
             .entry_condition(&catalog.compiled, &intent, admission, input)
     }
 
-    /// Workflow #490 ENTRY-A2 fix round 2 (ruling 4a): the end of the activity window `decision_id`'s
-    /// admission was committed in (`PolicyControlState::admission_window_end`, the end a condition
-    /// of its run expires at); `None` for a dispatch that is unknown, not admitted or already has
-    /// its record, as [`Self::entry_condition`].
+    /// Workflow #490 ENTRY-A: the end of the activity window `decision_id`'s admission was
+    /// committed in (`PolicyControlState::admission_window_end`, the end a condition of its run
+    /// expires at), the window of its pair's count of failures at the entry (fix round 4, rulings 2
+    /// and 3); `None` for a dispatch that is unknown, not admitted or already has its record, as
+    /// [`Self::entry_condition`].
     pub(crate) fn dispatch_window_end(&self, decision_id: &str) -> RuntimeHostResult<Option<u64>> {
         let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
             return Ok(None);
@@ -6360,6 +6358,32 @@ impl PolicyHost {
         self.control
             .admission_window_end(&catalog.compiled, &intent, admission)
             .map(Some)
+    }
+
+    /// Workflow #490 ENTRY-A fix round 4 (ruling 3): the `on_failure.escalation_threshold` of
+    /// `decision_id`'s task in the dispatch's catalog generation, the count of failures at the
+    /// entry that sets its pair aside for its window; `u16::MAX` for a dispatch this host does not
+    /// know or a task the generation does not hold, so nothing is set aside then.
+    pub(crate) fn dispatch_escalation_threshold(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<u16> {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return Ok(u16::MAX);
+        };
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        Ok(catalog
+            .compiled
+            .dispatch_task(&dispatch.data.task_id)
+            .map_or(u16::MAX, |task| task.on_failure.escalation_threshold))
+    }
+
+    /// Workflow #490 ENTRY-A fix round 4 (ruling 5): whether `task_id` is a store update package's
+    /// task, as UPD-1's remedy table reads it (a table not built holds none).
+    pub(crate) fn is_store_task(&self, task_id: &str) -> bool {
+        self.remedies
+            .table()
+            .is_some_and(|table| table.store_tasks().contains(task_id))
     }
 
     /// Workflow #386 SR-2b-1: after the record of `data` is committed with the decision

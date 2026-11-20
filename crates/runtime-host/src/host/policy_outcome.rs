@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::entry_blocks::EntrySettlement;
+use super::entry_blocks::{EntryRule, EntrySettlement};
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
@@ -2044,11 +2044,11 @@ impl HostShared {
         )
     }
 
-    /// Workflow #490 ENTRY-A and A2: `entry` is what the failure path knew of a scheduled run
+    /// Workflow #490 ENTRY-A: `entry` is what the failure path knew of a scheduled run
     /// ([`super::failure_settlement::ScheduledFailure`]): one that failed at its entry, whose failure
-    /// the instance's recovery ladder takes, with what its start knew of its instance and whether
-    /// the failure is its pair's own, or one whose main package started; every other settlement
-    /// passes `None`.
+    /// the instance's recovery ladder takes, with what its start knew of its instance and the end
+    /// of its admission's activity window, or one whose main package started; every other
+    /// settlement passes `None`.
     fn record_policy_dispatch_outcome_under_gate(
         &self,
         decision_id: &str,
@@ -2091,16 +2091,13 @@ impl HostShared {
                     policy.admitted_at(decision_id)?,
                 )
             };
-            // Workflow #490 ENTRY-A and A2, tests: a settlement armed to be one of a run that failed
-            // at its entry, judged against the instance's marks now (a failure that is its pair's
-            // own written as one that accumulates), or of a run whose main package started.
+            // Workflow #490 ENTRY-A, tests: a settlement armed to be one of a run that failed at
+            // its entry, with the instance's marks now, or of a run whose main package started.
             #[cfg(test)]
-            let (entry, armed_input) = match entry {
-                None => self.entry_settlement_for_test(decision_id, input)?,
-                entry => (entry, None),
+            let entry = match entry {
+                None => self.entry_settlement_for_test(decision_id)?,
+                entry => entry,
             };
-            #[cfg(test)]
-            let input = armed_input.as_ref().unwrap_or(input);
             let sample = self.runtime_clock_sample()?;
             let clock = lock(
                 &self.policy_dispatch_clocks,
@@ -2189,11 +2186,10 @@ impl HostShared {
             // Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"):
             // a run that failed at its entry, which no configured condition ended, settles as a
             // condition of its instance: its identity's `F` marked `i…`, its counts given back, no
-            // streak, no retry, no pause and no rerun owed. ENTRY-A2: unless the failure is its
-            // pair's own, which settles as the failure that accumulates it was written as.
+            // streak, no retry, no pause and no rerun owed. Fix round 4 (ruling 1): every one.
             let entry_input = match decision {
                 ConditionDecision::Ordinary
-                    if matches!(entry, Some(EntrySettlement::AtEntry { own: false, .. })) =>
+                    if matches!(entry, Some(EntrySettlement::AtEntry { .. })) =>
                 {
                     entry_failure_input(input)
                 }
@@ -2293,13 +2289,26 @@ impl HostShared {
             // run (Workflow #429 R-6b2).
             let settlement = settlement_of(&policy, &data)?;
             let rerun_signals = policy.take_rerun_signals();
+            // Workflow #490 ENTRY-A fix round 4 (rulings 3 and 5): what the policy knows of the
+            // run's task, which its pair's count reads: its rule's `escalation_threshold` (only for
+            // a failure at the entry) and whether it is a store update package's task (only for a
+            // success).
+            let entry_rule = EntryRule {
+                threshold: if matches!(entry, Some(EntrySettlement::AtEntry { .. })) {
+                    policy.dispatch_escalation_threshold(decision_id)?
+                } else {
+                    u16::MAX
+                },
+                store_task: matches!(data.outcome, PolicyExecutionOutcome::Succeeded { .. })
+                    && policy.is_store_task(&data.task_id),
+            };
             drop(policy);
-            // Workflow #490 ENTRY-A and A2: a run recorded now sets or clears its pair's mark, and
-            // one that failed at its entry blocks its instance, under the policy outcome gate the
-            // evaluation reads the blocks under. The execution is committed, so a failure here is
-            // fatal, as the settlement facts' is.
+            // Workflow #490 ENTRY-A: a run recorded now counts in or starts again its pair's
+            // count, and one that failed at its entry blocks its instance, under the policy outcome
+            // gate the evaluation reads the blocks under. The execution is committed, so a failure
+            // here is fatal, as the settlement facts' is.
             if recorded_now {
-                self.settle_entry(&data, entry, context)
+                self.settle_entry(&data, entry, context, entry_rule)
                     .map_err(RuntimeHostError::into_fatal)?;
             }
             if let Some(settlement) = settlement {

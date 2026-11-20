@@ -451,10 +451,11 @@ impl FailureIdentity {
         matches!(self.frame, IdentityFrame::Entry(_))
     }
 
-    /// Workflow #490 ENTRY-A2: the packages the identity names with their content hashes, which a
-    /// pair's mark of a failure at its entry compares: the main package and each declared
-    /// prerequisite and return-home layer (not a navigation layer or the game root's data, which
-    /// only a failure in such a layer names).
+    /// Workflow #490 ENTRY-A: the packages the identity names with their content hashes, which a
+    /// pair's count of its failures at the entry compares (fix round 4, rulings 2 and 3: a change
+    /// of them starts the count from nothing): the main package and each declared prerequisite and
+    /// return-home layer (not a navigation layer or the game root's data, which only a failure in
+    /// such a layer names).
     pub(crate) fn packages(&self) -> String {
         let mut packages = format!("m{}", self.main.encode());
         for layer in self.layers.iter().filter(|layer| {
@@ -518,30 +519,6 @@ pub(crate) fn entry_identity(identity: &str) -> Option<String> {
     };
     parsed.frame = IdentityFrame::Entry(digest);
     Some(parsed.encode())
-}
-
-/// Workflow #490 ENTRY-A2 (`contracts/policy-suspension.md`, "A failure at the entry", "Whose
-/// failure"): the identity of a failure at the entry that is its pair's own, written as a failure
-/// that accumulates: `identity` (built as for a failure that does not accumulate) with its `F` the
-/// run's error frame (`frame_sha256`, `na` without one); or `previous`, the pair's latest failure,
-/// when that one accumulates and has the same prefix. The error frames are not compared: the same
-/// prefix after a successful recovery is the same problem, so such failures repeat their identity
-/// and count toward `escalation_threshold`.
-pub(crate) fn own_entry_identity(
-    identity: &FailureIdentity,
-    frame_sha256: Option<&str>,
-    previous: Option<&str>,
-) -> String {
-    if let Some(previous) = previous
-        && FailureIdentity::parse(previous).is_some_and(|previous| {
-            previous.accumulates() && previous.prefix() == identity.prefix()
-        })
-    {
-        return previous.to_owned();
-    }
-    let mut own = identity.clone();
-    own.frame = IdentityFrame::of_artifact(frame_sha256);
-    own.encode()
 }
 
 /// The event types of one run that the identity reads (§12.4, R25-1): its entry facts, step
@@ -675,10 +652,11 @@ pub(crate) fn failed_at_entry(rows: &[PersistedEvent], gated: bool) -> bool {
     checked
 }
 
-/// Workflow #490 ENTRY-A fix round 3 (ruling 1; `contracts/policy-suspension.md`, "Whose
-/// failure"): whether a run's main package started after an entry check it passed (an
-/// `EntryTargetDisposition` `Started` among its rows): the instance let it in. A run that checks no
-/// entry starts its main package whatever the screen, which proves nothing of it.
+/// Workflow #490 ENTRY-A fix round 3, kept by fix round 4 for its ruling 3
+/// (`contracts/policy-suspension.md`, "A pair that keeps failing at its entry"): whether a run's
+/// main package started after an entry check it passed (an `EntryTargetDisposition` `Started`
+/// among its rows): the instance let it in. A run that checks no entry starts its main package
+/// whatever the screen, which proves nothing of it.
 pub(crate) fn entry_passed(rows: &[PersistedEvent]) -> bool {
     rows.iter().filter_map(semantic_fact).any(|fact| {
         matches!(

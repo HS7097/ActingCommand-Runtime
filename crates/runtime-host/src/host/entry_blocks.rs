@@ -22,18 +22,21 @@
 //!   instance and a fence that takes it. A recovery the block held when it ends, and (fix round 3,
 //!   ruling 7) one a newer recovery replaced, is dropped with the record AVAIL-1 writes for every
 //!   recovery it drops (`record_dropped_held_recovery`).
-//! - **Whose failure** (fix round 3, ruling 1: what a recovery did is no evidence of anything). A
-//!   pair (instance, catalog task) is marked while its task's last scheduled run failed at its
-//!   entry, with the packages its identity names, the activity window its admission was committed
-//!   in and how many scheduled runs the instance had let in (`entered`) when that failure settled.
-//!   The pair's next failure at the entry is its own only when its mark has the same packages and
-//!   window and another scheduled run was let in on the instance since (its main package started
-//!   after an entry check it passed, or it succeeded): the instance let another task in while it
-//!   kept this pair out. Every other failure at the entry is a condition. Any settlement of the
-//!   pair's run that is not a failure at the entry, and one that paused the pair, clear the mark.
-//! - **The pair yields its turn** (fix round 3, ruling 2). When a block ends, the pair whose failure
-//!   set it yields its turn on the instance (`EntryBlocks::yielding`, read by the evaluation with the
-//!   blocks) until a run of another task starts there or is settled.
+//! - **No failure at the entry counts against its rule** (fix round 4, ruling 1). Every one settles
+//!   the same way, as a condition of the instance: no streak, no `on_failure`, the admission given
+//!   back, the instance blocked. There is no "pair's own" failure.
+//! - **A pair that keeps failing at its entry** (fix round 4, rulings 2, 3 and 5). Per pair
+//!   (instance, catalog task) the host counts, for the packages its failure identity names and the
+//!   activity window its admission was committed in, its failures at the entry in a row
+//!   (`EntryPair::in_a_row`): after the n-th the pair is not dispatched on the instance before
+//!   `scheduling.unavailable_probe`'s interval for n has passed since that failure's settlement;
+//!   and those of them that came although the instance had let another scheduled run in since the
+//!   pair's previous one (`EntryPair::against`, by the scheduled runs let in, `entered`): once they
+//!   reach the rule's `escalation_threshold` the pair is set aside until its window's end and a
+//!   person is told once (`instance_entry_task_set_aside_reported`). Any other settlement of the
+//!   pair's scheduled run, another window, other packages and a restart start it from nothing; a
+//!   store update task's success starts every pair of its instance from nothing and is no run let
+//!   in for them. Nothing else follows: no pause, no streak, nothing that outlives the window.
 //! - **Where a climb starts and when** (fix round 3, rulings 3 and 5). A stretch of the instance
 //!   runs from its first block since a run was last let in (a scheduled run's main package started
 //!   after its entry check, a scheduled run, a client's or the Lab's run succeeded) until the next
@@ -45,6 +48,10 @@
 //!   with nothing let in, `exhausted`, a holding interruption). A person's pause holds every climb
 //!   and its lifting ends the block; after the game's update dialog ended a rung's run (ruling 4)
 //!   nothing climbs again in the stretch; after a panicked worker nothing climbs again in the block.
+//!   Fix round 4 (ruling 4): once a ladder of the stretch's blocks ran the rung that restarts the
+//!   emulator, every later climb of the stretch skips that rung
+//!   (`recovery_rung_skipped_emulator_restarted_in_stretch`), so it ends after the application's
+//!   restart.
 //! - **Its way out.** A held recovery is taken up by the lease sweep (`take_up_entry_recoveries`,
 //!   after the unavailable instances' probes; the mechanism of Workflow #489 AVAIL-1) once it is due
 //!   and nothing holds the instance. A transient obstacle (the admission's capacity refusal,
@@ -62,14 +69,15 @@
 //!   settlement leaves no block. A recovery of the run's own failure that ended before the
 //!   settlement acts with the block that settlement sets.
 //!
-//! Memory only: a restart starts with no block, no mark, no yield and no stretch (its preparation
-//! proves the instance again and its startup package runs where one is configured). A leaf lock.
+//! Memory only: a restart starts with no block, no pair's count or wait and no stretch (its
+//! preparation proves the instance again and its startup package runs where one is configured). A
+//! leaf lock.
 
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::unavailable_probe::ProbeHold;
 use super::*;
 use crate::codes::{EntryRecoveryEnd, HostCode, HostLocation};
-use crate::entry_block::{EntryBlockGate, EntryBlockGates};
+use crate::entry_block::{EntryBlockGate, EntryBlockGates, EntryPairGate};
 use crate::failure_identity::{FailureIdentity, identifier_text};
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 use actingcommand_runtime_config::UnavailableProbeConfig;
@@ -87,22 +95,29 @@ pub(super) struct EntryMarks {
 }
 
 /// Workflow #490 ENTRY-A: what a scheduled run's settlement tells its instance's block and its
-/// pair's mark. A settlement without one (a stop, a reconciled or interrupted run, a run whose
+/// pair's count. A settlement without one (a stop, a reconciled or interrupted run, a run whose
 /// chain was not resolved, a failure of another class) is no failure at the entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EntrySettlement {
-    /// The run failed at its entry, with what its start knew of its instance; `own` when the
-    /// failure is its pair's own ([`HostShared::entry_failure_own`]); `window_end` the end of the
-    /// activity window its admission was committed in (`0` when the policy knows none).
-    AtEntry {
-        marks: EntryMarks,
-        own: bool,
-        window_end: u64,
-    },
+    /// The run failed at its entry, with what its start knew of its instance; `window_end` the
+    /// end of the activity window its admission was committed in (`0` when the policy knows
+    /// none). Fix round 4 (ruling 1): it is never its rule's failure.
+    AtEntry { marks: EntryMarks, window_end: u64 },
     /// The run's main package started, whatever its end; `entered` (fix round 3) when it started
     /// after an entry check it passed (an `EntryTargetDisposition` `Started`), which lets the run
     /// in on its instance.
     TargetStarted { entered: bool },
+}
+
+/// Fix round 4 (rulings 3 and 5): what the policy knows of a settled scheduled run's task, which
+/// its pair's count reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EntryRule {
+    /// The task's `on_failure.escalation_threshold` in the dispatch's catalog generation
+    /// (`u16::MAX` when the generation holds no such task: nothing is set aside then).
+    pub(super) threshold: u16,
+    /// The task is a store update package's (UPD-1's remedy table).
+    pub(super) store_task: bool,
 }
 
 /// Fix round 3 (rulings 3, 4 and 5): how the climb of a block that a scheduled run's failure at
@@ -115,17 +130,35 @@ pub(super) struct EntryClimb {
     /// A later climb of the instance's stretch (or one in a stretch the update dialog stopped):
     /// held, never admitted at once, due no sooner than this time.
     pub(super) paced: Option<u64>,
+    /// Fix round 4 (ruling 4): a ladder of the instance's stretch ran the rung that restarts the
+    /// emulator already, so this climb skips it.
+    pub(super) skip_emulator: bool,
 }
 
-/// A pair's mark: its task's last scheduled run failed at its entry.
-struct EntryFailureMark {
-    /// Fix round 3 (ruling 1): the scheduled runs the instance had let in when that failure
-    /// settled.
-    entered: u64,
-    /// The packages its failure identity named ([`FailureIdentity::packages`]).
+/// Fix round 4 (rulings 2 and 3): a pair's failures at the entry in its activity window, with the
+/// same packages, while its scheduled runs keep failing there.
+#[derive(Debug, Clone)]
+struct EntryPair {
+    /// The packages its latest failure's identity named ([`FailureIdentity::packages`]).
     packages: String,
-    /// The end of the activity window its admission was committed in.
+    /// The end of the activity window its failures' admissions were committed in (`0`: unknown).
     window_end: u64,
+    /// The latest failure: its dispatch, its code and its execution record's observation time.
+    decision_id: String,
+    failure_code: CodeStr,
+    observed_at_unix_ms: u64,
+    /// Ruling 2: its failures at the entry in a row, and the time before which it is not
+    /// dispatched again (the latest's observation time plus the interval for that count).
+    in_a_row: u32,
+    until_unix_ms: u64,
+    /// Ruling 3: the scheduled runs the instance had let in when the latest failure settled, and
+    /// the failures that came although that count had grown since the pair's previous one.
+    entered: u64,
+    against: u32,
+    /// Ruling 3: the rule's `escalation_threshold`, and whether `against` reached it, which sets
+    /// the pair aside until `window_end`.
+    threshold: u16,
+    set_aside: bool,
 }
 
 /// Test only: what the next settlement is armed to be.
@@ -218,6 +251,9 @@ struct Stretch {
     last_end_unix_ms: u64,
     /// Fix round 3 (ruling 4): the game's update dialog ended one of its climbs: no climb again.
     update_dialog: bool,
+    /// Fix round 4 (ruling 4): a ladder of its blocks ran the rung that restarts the emulator: its
+    /// later climbs skip that rung.
+    emulator_restarted: bool,
 }
 
 impl Stretch {
@@ -228,6 +264,7 @@ impl Stretch {
             climbs: 0,
             last_end_unix_ms: 0,
             update_dialog: false,
+            emulator_restarted: false,
         }
     }
 
@@ -241,14 +278,15 @@ impl Stretch {
     }
 }
 
-/// The blocks, the marks, the yields and the stretches (memory only). A leaf lock: nothing else is
+/// The blocks, the pairs' counts and the stretches (memory only). A leaf lock: nothing else is
 /// locked while it is held.
 #[derive(Default)]
 pub(super) struct EntryBlocks {
     blocked: BTreeMap<InstanceId, EntryBlock>,
     ended: BTreeMap<InstanceId, u64>,
-    /// Fix round 3 (ruling 1): the scheduled runs let in on the instance, as their settlements
-    /// tell (a success, a main package started after an entry check it passed).
+    /// Fix round 3, kept by fix round 4 for ruling 3 alone: the scheduled runs let in on the
+    /// instance, as their settlements tell (a success, a main package started after an entry check
+    /// it passed), but a store update task's success (ruling 5).
     entered: BTreeMap<InstanceId, u64>,
     /// Fix round 3 (rulings 3 and 5): the runs let in on the instance: those of `entered`, and a
     /// run that succeeded there that is not the Runtime's own (a client's or the Lab's).
@@ -257,13 +295,15 @@ pub(super) struct EntryBlocks {
     ended_let_in: BTreeMap<InstanceId, u64>,
     /// The instance's stretch of blocks, while one runs.
     stretches: BTreeMap<InstanceId, Stretch>,
-    /// Fix round 3 (ruling 2): the gate of the instance's latest block that ended, while its pair
-    /// (`task_id`) yields its turn there.
-    yielding: BTreeMap<InstanceId, EntryBlockGate>,
-    /// The pairs' marks, by instance alias and catalog task.
-    entry_failed: BTreeMap<(String, String), EntryFailureMark>,
+    /// Fix round 4 (rulings 2 and 3): the pairs whose latest scheduled runs failed at their entry,
+    /// by instance and catalog task.
+    pairs: BTreeMap<(InstanceId, String), EntryPair>,
     /// The scheduled runs started whose settlement has not come yet, with their dispatch.
     settling: BTreeMap<RunId, String>,
+    /// Fix round 4 (ruling 4): the scheduled runs whose own recovery ran the rung that restarts the
+    /// emulator before their settlement, with no stretch yet to note it in: the block that
+    /// settlement sets notes it.
+    emulator_runs: BTreeSet<RunId>,
     /// A recovery held for a scheduled run whose settlement has not come yet (its instance not
     /// blocked yet), by the run: the settlement takes it when it blocks the instance and lets it go
     /// otherwise.
@@ -305,14 +345,12 @@ impl EntryBlocks {
     }
 
     /// Ends the block of `instance_id`, if it has one, and returns the recovery it held; counted
-    /// for a settlement still to come. Fix round 3 (ruling 2): the pair whose failure set it yields
-    /// its turn there.
+    /// for a settlement still to come.
     fn end(&mut self, instance_id: InstanceId) -> Option<HeldEntryRecovery> {
         bump(&mut self.ended, instance_id);
         let block = self.blocked.remove(&instance_id)?;
         self.ended_let_in
             .insert(instance_id, count(&self.let_in, instance_id));
-        self.yielding.insert(instance_id, block.gate);
         block.held
     }
 
@@ -328,16 +366,60 @@ impl EntryBlocks {
         }
     }
 
-    /// Fix round 3 (ruling 2): a run of the task `task_id` started or was settled on
-    /// `instance_id`: the yield of another task's pair there ends.
-    fn note_task_run(&mut self, instance_id: InstanceId, task_id: &str) {
-        if self
-            .yielding
-            .get(&instance_id)
-            .is_some_and(|gate| gate.task_id != task_id)
-        {
-            self.yielding.remove(&instance_id);
-        }
+    /// Fix round 4 (rulings 2 and 3): the pair `key` failed at its entry, settled as `data`
+    /// (`failure` its failure) in the activity window ending at `window_end`, under its rule's
+    /// `threshold`. Its counts go on from its previous failure at the entry when that one named the
+    /// same packages in the same window, else start at this one: one more in a row, and one more
+    /// against it when the instance let another scheduled run in since the previous one. It waits
+    /// `config`'s interval for its count in a row from this settlement, and is set aside until the
+    /// window's end once the count against it reaches `threshold` (never without a known window).
+    /// Returns the pair when this failure set it aside, which a person is told of.
+    fn pair_failed(
+        &mut self,
+        key: (InstanceId, String),
+        data: &PolicyExecutionEventData,
+        failure: &actingcommand_contract::PolicyFailureRecord,
+        window_end: u64,
+        threshold: u16,
+        config: UnavailableProbeConfig,
+    ) -> Option<EntryPair> {
+        let packages = failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse)
+            .map(|identity| identity.packages())
+            .unwrap_or_default();
+        let entered = count(&self.entered, key.0);
+        let (in_a_row, against, was_set_aside) = self
+            .pairs
+            .get(&key)
+            .filter(|pair| pair.packages == packages && pair.window_end == window_end)
+            .map_or((1, 0, false), |pair| {
+                (
+                    pair.in_a_row.saturating_add(1),
+                    pair.against
+                        .saturating_add(u32::from(entered > pair.entered)),
+                    pair.set_aside,
+                )
+            });
+        let set_aside = window_end > 0 && against >= u32::from(threshold);
+        let pair = EntryPair {
+            packages,
+            window_end,
+            decision_id: data.decision_id.clone(),
+            failure_code: actingcommand_contract::scheduled_failure_code_str(&failure.outcome),
+            observed_at_unix_ms: data.observed_at_unix_ms,
+            in_a_row,
+            until_unix_ms: data
+                .observed_at_unix_ms
+                .saturating_add(config.interval_ms(in_a_row)),
+            entered,
+            against,
+            threshold,
+            set_aside,
+        };
+        self.pairs.insert(key, pair.clone());
+        (set_aside && !was_set_aside).then_some(pair)
     }
 
     /// Fix round 3 (ruling 3): whether the end of `ladder`'s climb counts in its instance's
@@ -426,6 +508,13 @@ fn claim_retry_wait_ms(refusals: u32) -> u64 {
 #[cfg(test)]
 pub(crate) type EntryBlockForTest = (EntryBlockGate, bool, Option<u64>);
 
+/// Fix round 4, test only: a pair whose latest scheduled run failed at its entry, as a test reads
+/// it: its failures at the entry in a row (ruling 2), those that came although another scheduled
+/// run was let in since the previous one (ruling 3), the time before which it is not dispatched on
+/// the instance (ruling 2), and whether it is set aside until its window's end (ruling 3).
+#[cfg(test)]
+pub(crate) type EntryPairForTest = (u32, u32, u64, bool);
+
 impl HostShared {
     /// The marks of `instance_id` now.
     #[cfg(test)]
@@ -433,21 +522,17 @@ impl HostShared {
         Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.marks(instance_id))
     }
 
-    /// A scheduled run `run_id` of the dispatch `decision_id` of the catalog task `task_id` on
-    /// `instance_id` starts (its resolution is registered): the marks of its instance now, which
-    /// its settlement compares; its settlement is due, so a recovery held for it is kept until
-    /// then; and (fix round 3, ruling 2) a run of another task starts there, so the pair that
-    /// yields its turn there yields no longer.
+    /// A scheduled run `run_id` of the dispatch `decision_id` on `instance_id` starts (its
+    /// resolution is registered): the marks of its instance now, which its settlement compares;
+    /// its settlement is due, so a recovery held for it is kept until then.
     pub(super) fn entry_settlement_pending(
         &self,
         run_id: RunId,
         decision_id: &str,
-        task_id: &str,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<EntryMarks> {
         let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
         blocks.settling.insert(run_id, decision_id.to_owned());
-        blocks.note_task_run(instance_id, task_id);
         Ok(blocks.marks(instance_id))
     }
 
@@ -465,133 +550,111 @@ impl HostShared {
     /// Fix round 3 (rulings 3, 4 and 5): how the climb of a block of `instance_id` set now goes:
     /// from the application restart when nothing was let in since its previous block ended; held
     /// until the stretch's paced time when the stretch had a climb already (or the update dialog
-    /// stopped its climbs).
+    /// stopped its climbs); fix round 4 (ruling 4): without the emulator's rung when a ladder of
+    /// the stretch ran it already.
     pub(super) fn entry_climb(&self, instance_id: InstanceId) -> RuntimeHostResult<EntryClimb> {
         let config = self.unavailable_probe_config()?;
         let blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
-        let paced = blocks
-            .stretches
-            .get(&instance_id)
+        let stretch = blocks.stretches.get(&instance_id);
+        let paced = stretch
             .filter(|stretch| stretch.climbs > 0 || stretch.update_dialog)
             .map(|stretch| stretch.paced_until(config).unwrap_or(0));
         Ok(EntryClimb {
             restarts: blocks.restart_due(instance_id),
             paced,
+            skip_emulator: stretch.is_some_and(|stretch| stretch.emulator_restarted),
         })
     }
 
-    /// Fix round 3 (ruling 1; `contracts/policy-suspension.md`, "Whose failure"): whether a failure
-    /// at the entry of `task_id` on `instance_alias` (`instance_id`), whose identity names
-    /// `packages` and whose admission was committed in the activity window ending at
-    /// `window_end`, is the pair's own: the pair's mark is set (its task's last scheduled run
-    /// failed at its entry) with the same packages, in the same window, and the instance let
-    /// another scheduled run in since that failure. Nothing else is evidence: not a recovery of
-    /// any kind, not a count of conditions, not who held the instance's key.
-    pub(super) fn entry_failure_own(
-        &self,
-        instance_id: InstanceId,
-        instance_alias: &str,
-        task_id: &str,
-        packages: &str,
-        window_end: u64,
-    ) -> RuntimeHostResult<bool> {
-        let blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
-        let entered = count(&blocks.entered, instance_id);
-        Ok(blocks
-            .entry_failed
-            .get(&(instance_alias.to_owned(), task_id.to_owned()))
-            .is_some_and(|mark| {
-                mark.packages == packages && mark.window_end == window_end && entered > mark.entered
-            }))
-    }
-
-    /// Workflow #490 ENTRY-A: what the execution record `data`, recorded now, tells its pair's mark
-    /// and its instance's block (`entry` what the settlement knew of the run, `context` the run
-    /// when the settlement had it). A success or a main package started after an entry check lets
-    /// a run in on the instance (fix round 3: the evidence count); a run of another task ends the
-    /// yield of the pair there; a failure at the entry sets the pair's mark unless it paused the
-    /// pair, and every other settlement clears it; a failure at the entry blocks the instance when
-    /// it settled as a condition or as the pair's own failure (a configured condition of
-    /// `scheduling.rerun` blocks nothing).
+    /// Workflow #490 ENTRY-A: what the execution record `data`, recorded now, tells its pair's
+    /// count and its instance's block (`entry` what the settlement knew of the run, `context` the
+    /// run when the settlement had it, `rule` what the policy knows of its task). A success or a
+    /// main package started after an entry check lets a run in on the instance (fix round 4,
+    /// ruling 5: a store update task's success lets none in for the pairs and starts every pair of
+    /// the instance from nothing). A failure at the entry, which the settlement settled as a
+    /// condition of the instance (fix round 4, ruling 1: always), counts in its pair
+    /// ([`EntryBlocks::pair_failed`]; a person is told when it sets the pair aside) and blocks the
+    /// instance; any other settlement of the pair's run starts the pair from nothing (a configured
+    /// condition of `scheduling.rerun` blocks nothing). Fix round 4 (ruling 6): a recovery held for
+    /// a run whose settlement does not block the instance is let go with its record.
     pub(super) fn settle_entry(
         &self,
         data: &PolicyExecutionEventData,
         entry: Option<EntrySettlement>,
         context: Option<&PolicyRunContext>,
+        rule: EntryRule,
     ) -> RuntimeHostResult<()> {
-        let key = (data.instance_id.clone(), data.task_id.clone());
         let failure = match &data.outcome {
             PolicyExecutionOutcome::Failed { failure } => Some(failure),
             PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
                 None
             }
         };
-        let paused = failure.is_some_and(|failure| {
-            failure.disposition == actingcommand_contract::PolicyFailureDisposition::PausedTask
-        });
-        let let_in = matches!(data.outcome, PolicyExecutionOutcome::Succeeded { .. })
-            || entry == Some(EntrySettlement::TargetStarted { entered: true });
+        let succeeded = matches!(data.outcome, PolicyExecutionOutcome::Succeeded { .. });
+        let let_in = succeeded || entry == Some(EntrySettlement::TargetStarted { entered: true });
         let at_entry = match entry {
-            Some(EntrySettlement::AtEntry {
-                marks,
-                own,
-                window_end,
-            }) => Some((marks, own, window_end)),
+            Some(EntrySettlement::AtEntry { marks, window_end }) => Some((marks, window_end)),
             Some(EntrySettlement::TargetStarted { .. }) | None => None,
         };
-        let blocks_instance = match (at_entry, failure) {
-            (Some((_, own, _)), Some(failure)) => {
-                crate::policy_control::entry_blocked(failure)
-                    || (own && failure.condition.is_none())
+        let blocked_by = match (at_entry, failure) {
+            (Some(at_entry), Some(failure)) if crate::policy_control::entry_blocked(failure) => {
+                Some((at_entry, failure))
             }
-            _ => false,
+            _ => None,
         };
         let run = context.map(|context| (context.run_id(), context.correlation_id()));
         let instance = self.settled_instance(data, context)?;
-        {
+        let config = self.unavailable_probe_config()?;
+        let (set_aside, dropped) = {
             let mut guard = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             let blocks = &mut *guard;
-            if let Some(instance_id) = instance {
-                if let_in {
-                    blocks.note_let_in(instance_id, true);
-                }
-                blocks.note_task_run(instance_id, &data.task_id);
-            }
+            let mut dropped = None;
             if let Some((run_id, _)) = run {
                 blocks.settling.remove(&run_id);
                 // A recovery held for this run, or its own that ended without recovering, is the
                 // block's only when this settlement blocks the instance (`block_instance_entry`);
-                // any other lets it go, as it went before ENTRY-A.
-                if !blocks_instance {
-                    blocks.cooled.remove(&run_id);
+                // any other lets it go, the held one recorded as dropped (fix round 4, ruling 6).
+                if blocked_by.is_none() {
+                    dropped = blocks.cooled.remove(&run_id);
                     blocks.unrecovered.remove(&run_id);
+                    blocks.emulator_runs.remove(&run_id);
                 }
             }
-            match at_entry {
-                Some((_, _, window_end)) if !paused => {
-                    let packages = failure
-                        .and_then(|failure| failure.failure_identity.as_deref())
-                        .and_then(FailureIdentity::parse)
-                        .map(|identity| identity.packages())
-                        .unwrap_or_default();
-                    let entered =
-                        instance.map_or(0, |instance_id| count(&blocks.entered, instance_id));
-                    blocks.entry_failed.insert(
-                        key,
-                        EntryFailureMark {
-                            entered,
-                            packages,
+            let set_aside = match instance {
+                Some(instance_id) => {
+                    if succeeded && rule.store_task {
+                        blocks.note_let_in(instance_id, false);
+                        blocks
+                            .pairs
+                            .retain(|(pair_instance, _), _| *pair_instance != instance_id);
+                    } else if let_in {
+                        blocks.note_let_in(instance_id, true);
+                    }
+                    let key = (instance_id, data.task_id.clone());
+                    match blocked_by {
+                        Some(((_, window_end), failure)) => blocks.pair_failed(
+                            key,
+                            data,
+                            failure,
                             window_end,
-                        },
-                    );
+                            rule.threshold,
+                            config,
+                        ),
+                        None => {
+                            blocks.pairs.remove(&key);
+                            None
+                        }
+                    }
                 }
-                _ => {
-                    blocks.entry_failed.remove(&key);
-                }
-            }
+                None => None,
+            };
+            (set_aside, dropped)
+        };
+        self.record_dropped_entry_recoveries([dropped])?;
+        if let (Some(instance_id), Some(pair)) = (instance, set_aside) {
+            self.record_entry_set_aside(instance_id, &data.task_id, &pair)?;
         }
-        let (true, Some((marks, _, _)), Some(failure)) = (blocks_instance, at_entry, failure)
-        else {
+        let Some(((marks, _), failure)) = blocked_by else {
             return Ok(());
         };
         self.block_instance_entry(
@@ -631,6 +694,9 @@ impl HostShared {
     /// starts the instance's stretch when none runs, counts there a climb of the run's own
     /// recovery that ended before with no stretch to count it in (fix round 3, ruling 3), and
     /// climbs from the application restart when nothing was let in since the previous block ended.
+    /// Fix round 4: a recovery held for the run when anything ended a block since the run's start
+    /// is let go with its record (ruling 6); the run's own recovery that ran the emulator's rung
+    /// before this settlement is noted in the stretch (ruling 4).
     fn block_instance_entry(
         &self,
         data: &PolicyExecutionEventData,
@@ -654,23 +720,29 @@ impl HostShared {
             let mut guard = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             let blocks = &mut *guard;
             let now = blocks.marks(instance_id);
-            let (cooled, failed) = match run {
+            let (cooled, failed, emulator) = match run {
                 Some((run_id, _)) => (
                     blocks.cooled.remove(&run_id),
                     blocks.unrecovered.remove(&run_id),
+                    blocks.emulator_runs.remove(&run_id),
                 ),
-                None => (None, None),
+                None => (None, None, false),
             };
             if now.ended != marks.ended {
                 // A recovery or a run of the instance succeeded, a resume came, a blackout covered
-                // it or a fence took it after the run began: nothing is left to block.
-                return Ok(());
+                // it or a fence took it after the run began: nothing is left to block, and a
+                // recovery held for the run is let go (fix round 4, ruling 6: recorded).
+                drop(guard);
+                return self.record_dropped_entry_recoveries([cooled]);
             }
             let restarts = blocks.restart_due(instance_id);
-            blocks
+            let stretch = blocks
                 .stretches
                 .entry(instance_id)
                 .or_insert_with(|| Stretch::new(now_unix_ms));
+            if emulator {
+                stretch.emulator_restarted = true;
+            }
             let uncounted = cooled.as_ref().and_then(|held| held.climbed).or_else(|| {
                 failed
                     .as_ref()
@@ -798,6 +870,30 @@ impl HostShared {
             blocks.end(instance_id)
         };
         self.record_dropped_entry_recoveries([dropped])
+    }
+
+    /// Fix round 4 (ruling 4): a recovery `ladder` is about to run the rung that restarts the
+    /// emulator. When it is one of the ladders of its instance's stretch (a scheduled run's own,
+    /// or one of a block's own recoveries), the stretch notes it, and its later climbs skip that
+    /// rung; a scheduled run's own that climbs before its settlement set the stretch's first block
+    /// is noted for that settlement (by the run).
+    pub(super) fn note_entry_emulator_restart(
+        &self,
+        ladder: &PendingRecoveryLadder,
+    ) -> RuntimeHostResult<()> {
+        let instance_id = ladder.instance_id();
+        let mut guard = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let blocks = &mut *guard;
+        if blocks.counts_climb(instance_id, ladder) {
+            if let Some(stretch) = blocks.stretches.get_mut(&instance_id) {
+                stretch.emulator_restarted = true;
+            }
+        } else if let Some(run_id) = ladder.task_run()
+            && blocks.settling.contains_key(&run_id)
+        {
+            blocks.emulator_runs.insert(run_id);
+        }
+        Ok(())
     }
 
     /// Fix round 3, test only: a scheduled run was let in on `instance_id`, as its settlement
@@ -1168,12 +1264,17 @@ impl HostShared {
             let ladder = {
                 let mut guard = lock(&self.entry_blocks, HostLocation::TakeUpEntryRecoveries)?;
                 let blocks = &mut *guard;
-                let (paced, stopped) = blocks
-                    .stretches
-                    .get(&instance_id)
-                    .map_or((None, false), |stretch| {
-                        (stretch.paced_until(config), stretch.update_dialog)
-                    });
+                let (paced, stopped, skip_emulator) =
+                    blocks
+                        .stretches
+                        .get(&instance_id)
+                        .map_or((None, false, false), |stretch| {
+                            (
+                                stretch.paced_until(config),
+                                stretch.update_dialog,
+                                stretch.emulator_restarted,
+                            )
+                        });
                 let Some(block) = blocks.blocked.get_mut(&instance_id) else {
                     continue;
                 };
@@ -1206,6 +1307,10 @@ impl HostShared {
                 if restarts {
                     ladder.start_at_application_restart();
                 }
+                // Fix round 4 (ruling 4): the emulator is restarted at most once in a stretch.
+                if skip_emulator {
+                    ladder.skip_emulator_restart();
+                }
                 ladder
             };
             self.admit_held_recovery(ladder)?;
@@ -1213,10 +1318,10 @@ impl HostShared {
         Ok(())
     }
 
-    /// The blocked instances and (fix round 3, ruling 2) the pairs that yield their turn, by
-    /// alias, as the evaluation reads them.
+    /// The blocked instances and (fix round 4, rulings 2 and 3) the pairs whose latest scheduled
+    /// runs failed at their entry, by alias, as the evaluation reads them.
     pub(super) fn entry_block_gates(&self) -> RuntimeHostResult<EntryBlockGates> {
-        let (blocked, yielding) = {
+        let (blocked, pairs) = {
             let blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             (
                 blocks
@@ -1225,27 +1330,71 @@ impl HostShared {
                     .map(|(instance_id, block)| (*instance_id, block.gate.clone()))
                     .collect::<Vec<_>>(),
                 blocks
-                    .yielding
+                    .pairs
                     .iter()
-                    .map(|(instance_id, gate)| (*instance_id, gate.clone()))
+                    .map(|((instance_id, task_id), pair)| {
+                        (
+                            *instance_id,
+                            task_id.clone(),
+                            EntryPairGate {
+                                decision_id: pair.decision_id.clone(),
+                                failure_code: pair.failure_code.clone(),
+                                observed_at_unix_ms: pair.observed_at_unix_ms,
+                                in_a_row: pair.in_a_row,
+                                until_unix_ms: pair.until_unix_ms,
+                                window_end_unix_ms: pair.window_end,
+                                set_aside: pair.set_aside.then_some((pair.against, pair.threshold)),
+                            },
+                        )
+                    })
                     .collect::<Vec<_>>(),
             )
         };
-        if blocked.is_empty() && yielding.is_empty() {
+        if blocked.is_empty() && pairs.is_empty() {
             return Ok(EntryBlockGates::default());
         }
         let instances = lock(&self.registered_instances, HostLocation::InstanceEntryBlock)?;
-        let by_alias = |gates: Vec<(InstanceId, EntryBlockGate)>| {
-            gates
-                .into_iter()
-                .filter_map(|(instance_id, gate)| {
-                    instances
-                        .get(&instance_id)
-                        .map(|instance| (instance.instance_alias.clone(), gate))
-                })
-                .collect::<BTreeMap<_, _>>()
+        let alias = |instance_id: &InstanceId| {
+            instances
+                .get(instance_id)
+                .map(|instance| instance.instance_alias.clone())
         };
-        Ok(EntryBlockGates::new(by_alias(blocked), by_alias(yielding)))
+        let blocked = blocked
+            .into_iter()
+            .filter_map(|(instance_id, gate)| alias(&instance_id).map(|alias| (alias, gate)))
+            .collect::<BTreeMap<_, _>>();
+        let pairs = pairs
+            .into_iter()
+            .filter_map(|(instance_id, task_id, gate)| {
+                alias(&instance_id).map(|alias| ((alias, task_id), gate))
+            })
+            .collect::<BTreeMap<_, _>>();
+        Ok(EntryBlockGates::new(blocked, pairs))
+    }
+
+    /// Fix round 4 (ruling 3): `instance_entry_task_set_aside_reported` of the task `task_id` on
+    /// `instance_id`, whose failure at the entry, `pair`'s latest, set it aside until the end of
+    /// its activity window: a person is told once, by a warning record under the instance.
+    fn record_entry_set_aside(
+        &self,
+        instance_id: InstanceId,
+        task_id: &str,
+        pair: &EntryPair,
+    ) -> RuntimeHostResult<()> {
+        let outcome = Outcome::new(HostCode::InstanceEntryTaskSetAsideReported)
+            .operation(HostLocation::InstanceEntryBlock)
+            .instance_id(identifier_text(&instance_id))
+            .task_id(task_id)
+            .decision_id(pair.decision_id.as_str())
+            .observed_at_unix_ms(pair.observed_at_unix_ms)
+            .count(pair.against)
+            .limit_count(pair.threshold)
+            .window_end_unix_ms(pair.window_end);
+        let outcome = match pair.failure_code.registered() {
+            Some(code) => outcome.failure_code(code),
+            None => outcome,
+        };
+        self.record_entry_block_warning(instance_id, outcome)
     }
 
     /// `instance_entry_blocked_awaiting_person` of `instance_id`, blocked by `gate` within a
@@ -1338,98 +1487,62 @@ impl HostShared {
         Ok(())
     }
 
-    /// Test only: what the next settlement of the dispatch `decision_id`, failed or succeeded as
-    /// `input`, was armed to be; taken once. A run armed as failed at its entry is judged as the
-    /// live settlement judges one (fix round 3, ruling 1), against the instance's marks now (the
-    /// live settlement reads them at the run's start, which the replays exercise) and the activity
-    /// window of its admission: when it is its pair's own, the input returned is `input` with its
-    /// identity written as a failure that accumulates (no error frame). A run armed as past its
-    /// entry started its main package after its entry check.
+    /// Test only: what the next settlement of the dispatch `decision_id` was armed to be; taken
+    /// once. A run armed as failed at its entry carries the instance's marks now (the live
+    /// settlement reads them at the run's start, which the replays exercise) and the activity
+    /// window of its admission; one armed as past its entry started its main package after its
+    /// entry check.
     #[cfg(test)]
     pub(super) fn entry_settlement_for_test(
         &self,
         decision_id: &str,
-        input: &PolicyExecutionInput,
-    ) -> RuntimeHostResult<(Option<EntrySettlement>, Option<PolicyExecutionInput>)> {
+    ) -> RuntimeHostResult<Option<EntrySettlement>> {
         let armed = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
             .settle_for_test
             .take();
         let Some(armed) = armed else {
-            return Ok((None, None));
+            return Ok(None);
         };
         if armed == SettleForTest::PastEntry {
-            return Ok((Some(EntrySettlement::TargetStarted { entered: true }), None));
+            return Ok(Some(EntrySettlement::TargetStarted { entered: true }));
         }
-        let (instance_alias, task_id, previous, window_end) = {
+        let (instance_alias, window_end) = {
             let policy = lock(self.policy()?, HostLocation::InstanceEntryBlock)?;
-            let instance_alias = policy.execution_instance_id(decision_id)?.to_owned();
-            let task_id = policy.execution_task_id_for_test(decision_id)?.to_owned();
-            let previous = policy
-                .latest_failure(&task_id, &instance_alias)
-                .and_then(|(identity, _)| identity.map(str::to_owned));
-            let window_end = policy.dispatch_window_end(decision_id)?.unwrap_or_default();
-            (instance_alias, task_id, previous, window_end)
+            (
+                policy.execution_instance_id(decision_id)?.to_owned(),
+                policy.dispatch_window_end(decision_id)?.unwrap_or_default(),
+            )
         };
         let instance_id = self
             .resolve_instance(&instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
-        let marks = self.entry_marks(instance_id)?;
-        let not_own = Some(EntrySettlement::AtEntry {
-            marks,
-            own: false,
+        Ok(Some(EntrySettlement::AtEntry {
+            marks: self.entry_marks(instance_id)?,
             window_end,
-        });
-        let PolicyExecutionInput::Failed {
-            outcome,
-            failure_identity: Some(identity),
-            class,
-        } = input
-        else {
-            return Ok((not_own, None));
-        };
-        let Some(parsed) = FailureIdentity::parse(identity) else {
-            return Ok((not_own, None));
-        };
-        if !self.entry_failure_own(
-            instance_id,
-            &instance_alias,
-            &task_id,
-            &parsed.packages(),
-            window_end,
-        )? {
-            return Ok((not_own, None));
-        }
-        Ok((
-            Some(EntrySettlement::AtEntry {
-                marks,
-                own: true,
-                window_end,
-            }),
-            Some(PolicyExecutionInput::Failed {
-                outcome: outcome.clone(),
-                failure_identity: Some(crate::failure_identity::own_entry_identity(
-                    &parsed,
-                    None,
-                    previous.as_deref(),
-                )),
-                class: *class,
-            }),
-        ))
+        }))
     }
 
-    /// Test only: the pair of `task_id` on `instance_alias`'s mark, if it is set: the scheduled
-    /// runs the instance had let in when the failure that set it settled.
+    /// Fix round 4, test only: the pair of `task_id` on `instance_id`, if its latest scheduled run
+    /// failed at its entry: its failures at the entry in a row, those against it (ruling 3), the
+    /// time before which it is not dispatched, and whether it is set aside.
     #[cfg(test)]
-    pub(super) fn entry_mark_for_test(
+    pub(super) fn entry_pair_for_test(
         &self,
-        instance_alias: &str,
+        instance_id: InstanceId,
         task_id: &str,
-    ) -> RuntimeHostResult<Option<u64>> {
+    ) -> RuntimeHostResult<Option<EntryPairForTest>> {
         Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
-            .entry_failed
-            .get(&(instance_alias.to_owned(), task_id.to_owned()))
-            .map(|mark| mark.entered))
+            .pairs
+            .get(&(instance_id, task_id.to_owned()))
+            .map(|pair| {
+                (
+                    pair.in_a_row,
+                    pair.against,
+                    pair.until_unix_ms,
+                    pair.set_aside,
+                )
+            }))
     }
 
     /// Test only: the entry block of `instance_id`, if it has one.
@@ -1489,19 +1602,6 @@ impl HostShared {
             .stretches
             .get(&instance_id)
             .map(|stretch| (stretch.climbs, stretch.last_end_unix_ms)))
-    }
-
-    /// Fix round 3, test only: the task whose pair yields its turn on `instance_id`, if one does
-    /// (ruling 2).
-    #[cfg(test)]
-    pub(super) fn entry_yielding_for_test(
-        &self,
-        instance_id: InstanceId,
-    ) -> RuntimeHostResult<Option<String>> {
-        Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
-            .yielding
-            .get(&instance_id)
-            .map(|gate| gate.task_id.clone()))
     }
 }
 

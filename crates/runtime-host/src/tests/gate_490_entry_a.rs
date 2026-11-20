@@ -21,23 +21,17 @@
 //!   unblocks the instance, and the due task is dispatched again.
 //! - T5 (a step failure as before) is the existing tests, unchanged.
 //!
-//! ENTRY-A2 (the coordinator's ruling of 11-20 23:57 JST): a failure at the entry is the instance's
-//! condition only while nothing says it is the pair's own (fix round 3 replaces what says it).
-//!
-//! - (c) a run of the task whose main package started clears the pair's mark: its next failure at
-//!   the entry, after a recovery, is a condition again;
-//! - (d) an instance unblocked by a pause set and lifted, not by a recovery: the next failure at the
-//!   entry is a condition again.
-//!
-//! (a), (b) and (e), fix round 1's F4, fix round 2's R3 (b) and R4 (b) and (c) tested the evidence
-//! fix round 3 removes (a recovery as evidence, what ran first, the conditions in a row and the
-//! bound) and are gone; R3 (b)'s replay became K1 (b), R4 (a) became K1 (d). None was on main.
+//! ENTRY-A2's tests (a) to (e), fix round 1's F4, fix round 2's R3 (b) and R4 (a) to (c), and fix
+//! round 3's K1 (a) to (d) and K2 (a) and (b) tested whose failure a failure at the entry is (a
+//! recovery, what ran first, the conditions in a row, another task let in) and the pair's yield of
+//! its turn; fix round 4 removes both (no failure at the entry counts against its rule), and they
+//! are gone. None was on main.
 //!
 //! The policy-level tests settle with the host's test hook that arms the next settlement as one of a
-//! run that failed at its entry, judged as the live settlement judges it (the live settlement tells
-//! that from the run's own records, which the replays exercise), or as one whose main package
-//! started after its entry check; a recovery is told to the blocks as the end of their block (the
-//! replays run real ladders). No clock is read in this file.
+//! run that failed at its entry (the live settlement tells that from the run's own records, which
+//! the replays exercise), or as one whose main package started after its entry check; a recovery
+//! is told to the blocks as the end of their block (the replays run real ladders). No clock is read
+//! in this file, and every bounded wait takes `GATE_WAIT`.
 //!
 //! Fix round 1 (the coordinator's work order of 11-21 after the independent review of #1853):
 //!
@@ -56,13 +50,11 @@
 //!   (`instance_entry_blocked_awaiting_person`, one code, one cause), its recovery still held;
 //! - F3 (item 3): a store update package's task of an entry-blocked instance is dispatched.
 //!
-//! Fix round 2 (the coordinator's work order of 11-21 after the second independent review; the
-//! policy-level tests tell a recovery whether its climb restarted the application, and a run's
-//! main package that started, as the ladder's end and the settlement tell them):
+//! Fix round 2 (the coordinator's work order of 11-21 after the second independent review):
 //!
 //! - R1 (ruling 1): a capture backend failure in a prerequisite layer of a scheduled run under the
-//!   shipped defaults is no failure at the entry: settled as before this slice (no mark, no block,
-//!   no refund), its ladder the one its trigger item starts;
+//!   shipped defaults is no failure at the entry: settled as before this slice (no count of
+//!   failures at the entry, no block, no refund), its ladder the one its trigger item starts;
 //! - R2 (ruling 2): the first block climbs as configured; one set with nothing let in since the
 //!   previous block ended climbs from the application restart; one after a run got in as
 //!   configured;
@@ -76,23 +68,34 @@
 //! - R7 (ruling 7): a claim the queue refuses for many ticks is tried again on the growing
 //!   interval, its refusal recorded once.
 //!
-//! Fix round 3 (the coordinator's work order of 11-21 after the third independent review; what a
-//! recovery did is no evidence of anything):
+//! Fix round 3 (the coordinator's work order of 11-21 after the third independent review):
 //!
-//! - K1 (ruling 1): the pair's second failure at the entry with another scheduled run let in
-//!   between is its own; one after a recovery that restarted the application, with nothing let
-//!   in, is a condition (the production path); two pairs failing in turn after recoveries, nothing
-//!   ever let in, are never their own through four failures; another activity window is a
-//!   condition whatever got in;
-//! - K2 (ruling 2): the pair that set the block yields its turn to another dispatchable task and
-//!   runs when it is the only one; the production path's replay pauses a broken first-sorted pair
-//!   by its rule's `on_failure` once the healthy task got in;
 //! - K3 (ruling 3): a later climb of a stretch waits the interval after a `recovered` that let
 //!   nothing in, and after an interruption by business capacity; after a run got in the next
 //!   block's climb does not wait (and starts as configured, ruling 5);
 //! - K4 (ruling 4): the game's update dialog ends the climb, a person is told once with its word,
 //!   nothing climbs again in the stretch, and the store update task is dispatched on the blocked
 //!   instance.
+//!
+//! Fix round 4 (the coordinator's work order of 11-21 after the fourth independent review; a
+//! failure at the entry never counts against its rule):
+//!
+//! - M1 (ruling 1): a pair's second and third failures at the entry, another scheduled run let in
+//!   before each, leave its rule's streak at zero and its rule not paused under a threshold of 1;
+//! - M2 (ruling 2): after its first failure the pair waits the first interval while another due
+//!   task runs, after its second twice that, and a run of the pair that settles otherwise starts it
+//!   from nothing;
+//! - M3 (ruling 3): at the threshold the pair is set aside until its window's end and a person is
+//!   told once, and it is dispatched again after the window; a failure with nothing let in since
+//!   the previous one does not count; two broken pairs and a healthy task: the healthy task runs
+//!   and both pairs are set aside in turn;
+//! - M4 (ruling 4): the second climb of a stretch skips the emulator's rung, the first climb of a
+//!   new stretch does not;
+//! - M5 (ruling 5): a store update task's success between two failures at the entry clears the
+//!   wait and counts toward nothing;
+//! - M6 (the lease end's two in-memory flags): on a page graph with no prerequisite chain, a
+//!   failure before its main package started is a failure at the entry at its lease end, one after
+//!   it is not.
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
@@ -134,7 +137,7 @@ const RUN_MS: u64 = 75_000;
 const NEXT_DISPATCH_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000 + 1_000;
 /// The ladder's cool-down window left when the replayed run fails (T3).
 const COOLDOWN_LEFT_MS: u64 = 600_000;
-/// ENTRY-A2: the second task of the same rule on the policy instance, of a lower priority.
+/// The second task of the same rule on the policy instance, of a lower priority.
 const OTHER: &str = "fixture.other";
 /// The catalog fixture's `on_failure.retry_backoff_ms`: a first failure's backoff.
 const BACKOFF_MS: u64 = 30_000;
@@ -153,7 +156,7 @@ const MINUTE_MS: u64 = 60_000;
 /// F3: past the longest interval the catalog fixture's activity profile samples after an
 /// admission (five minutes) from the ordinary task's admission.
 const ACTIVITY_INTERVAL_PAST_MS: u64 = 10 * MINUTE_MS;
-/// K1 (d): a day, so the next admission is in the next activity window of the budget fixture's
+/// M1: a day, so the next admission is in the next activity window of the budget fixture's
 /// profile (one window a day).
 const DAY_MS: u64 = 86_400_000;
 /// K3 (fix round 3, ruling 3): `scheduling.unavailable_probe`'s first and longest interval in the
@@ -163,8 +166,16 @@ const PACED_MS: u64 = 7_200_000;
 /// R3, R5: the instance's own startup package.
 const STARTUP: &str = "neutral.test.startup";
 /// R3, R5: the shipped `scheduling.unavailable_probe.first_interval_ms`, the wait before a
-/// block's climb after its first exhausted one.
+/// block's climb after its first exhausted one; fix round 4 (ruling 2): a pair's wait after its
+/// first failure at the entry in a row, doubling (the shipped `factor` 2) after each further one.
 const FIRST_INTERVAL_MS: u64 = 60_000;
+/// Fix round 4 (ruling 7): the bound of every wait on a channel in this file, as `gate_480_pg2b`'s;
+/// it only bounds a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(120);
+/// Fix round 4: a run that fails at its entry at once (the settlement hook's policy-level runs).
+const ENTRY_RUN_MS: u64 = 1_000;
+/// Fix round 4 (M3 c): a third task of the budget fixture's rule, between `TASK` and `OTHER`.
+const BROKEN: &str = "fixture.broken";
 
 // ---- The policy-level fixture.
 
@@ -193,6 +204,24 @@ fn two_tasks(escalation_threshold: u16) -> CatalogSources {
         .as_array_mut()
         .expect("the tasks")
         .push(other);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
+    sources
+}
+
+/// Fix round 4 (M3 c): [`two_tasks`] with a third task, `BROKEN`, of the same rule under its own
+/// procedure (the fixture manifest's third binding), ranked between them (priority 75), due at
+/// every evaluation too.
+fn three_tasks(escalation_threshold: u16) -> CatalogSources {
+    let mut sources = two_tasks(escalation_threshold);
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the task fixture");
+    let mut broken = tasks["tasks"][1].clone();
+    broken["id"] = json!(BROKEN);
+    broken["procedure_ref"] = json!("procedure.detect");
+    broken["priority"] = json!(75);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("the tasks")
+        .push(broken);
     sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
     sources
 }
@@ -295,11 +324,12 @@ fn block_reason(
         .map(|reason| reason.outcome.clone())
 }
 
-/// Fix round 3 (ruling 2): the `instance_entry_yielding` reason of `task_id` on the policy instance
-/// in `evaluation`.
-fn yield_reason(
+/// Fix round 4 (rulings 2 and 3): the reason `code` of `task_id` on the policy instance in
+/// `evaluation`.
+fn reason_of(
     evaluation: &actingcommand_policy::PolicyEvaluation,
     task_id: &str,
+    code: HostCode,
 ) -> Option<Outcome> {
     evaluation
         .decisions
@@ -309,7 +339,7 @@ fn yield_reason(
                 && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
         })
         .flat_map(|decision| decision.reasons.iter())
-        .find(|reason| reason.outcome.is(HostCode::InstanceEntryYielding))
+        .find(|reason| reason.outcome.is(code))
         .map(|reason| reason.outcome.clone())
 }
 
@@ -350,13 +380,8 @@ fn assert_settled_at_entry_with(failure: &PolicyFailureRecord, code: &str) {
     );
 }
 
-/// [`assert_settled_at_entry`] but for the pair's counters, which a condition keeps as the pair's
-/// latest real failure left them.
-fn assert_a_condition_at_entry(failure: &PolicyFailureRecord) {
-    assert_condition_at_entry_with(failure, PAGE_UNKNOWN);
-}
-
-/// [`assert_a_condition_at_entry`] of a failure whose code is `code`.
+/// [`assert_settled_at_entry_with`] but for the rule's counters, which a condition keeps as the
+/// pair's latest failure of another kind left them.
 fn assert_condition_at_entry_with(failure: &PolicyFailureRecord, code: &str) {
     let condition = failure.condition.expect("a condition");
     assert!(condition.refunded, "{failure:?}");
@@ -529,7 +554,7 @@ fn entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_th
     }
 }
 
-// ---- ENTRY-A2: whose failure.
+// ---- The pairs' runs at the policy level.
 
 /// The clock moved to `at` and the next dispatch on the policy instance evaluated and admitted
 /// there: its intent.
@@ -539,42 +564,38 @@ fn admit_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64) 
 }
 
 /// `intent`'s run, `RUN_MS` long, settled as one that failed at its entry in its prerequisite
-/// layer (the input the live settlement builds before it judges whose failure it is): its
-/// execution record.
+/// layer (the input the live settlement builds): its execution record.
 fn settle_at_entry(
     host: &RuntimeHost,
     clock: &ManualRuntimeClock,
     intent: &DispatchIntent,
 ) -> actingcommand_contract::PolicyExecutionEventData {
-    clock.advance(RUN_MS);
+    settle_at_entry_after(host, clock, intent, RUN_MS)
+}
+
+/// Fix round 4: [`settle_at_entry`] of a run `run_ms` long.
+fn settle_at_entry_after(
+    host: &RuntimeHost,
+    clock: &ManualRuntimeClock,
+    intent: &DispatchIntent,
+    run_ms: u64,
+) -> actingcommand_contract::PolicyExecutionEventData {
+    clock.advance(run_ms);
     host.settle_next_policy_run_at_entry_for_test()
         .expect("arm the settlement");
     host.record_policy_dispatch_outcome(&intent.decision_id, &at_entry(intent))
         .expect("the settlement")
 }
 
-/// The record of a failure at the entry that is its pair's own: a failure that accumulates, the
-/// `streak`-th of its identity in a row, with no condition (its counts stay taken), its identity's
-/// `F` neither unique nor an entry failure's (no error frame here: `na`).
-fn assert_own(failure: &PolicyFailureRecord, streak: u16) {
-    assert_eq!(failure.condition, None, "{failure:?}");
-    assert_eq!(
-        (failure.consecutive_same_error, failure.escalation_streak),
-        (streak, streak),
-        "{failure:?}"
-    );
-    assert_eq!(failure.outcome.code().as_str(), PAGE_UNKNOWN);
-    let identity = failure
-        .failure_identity
-        .as_deref()
-        .and_then(FailureIdentity::parse)
-        .expect("a v2 failure identity");
-    assert!(
-        identity.accumulates() && !identity.at_entry(),
-        "{identity:?}"
-    );
-    assert_eq!(identity.frame, IdentityFrame::None);
-    assert!(!crate::policy_control::entry_blocked(failure));
+/// Fix round 4: `intent`'s run, `ENTRY_RUN_MS` long, succeeded: its execution record.
+fn succeed(
+    host: &RuntimeHost,
+    clock: &ManualRuntimeClock,
+    intent: &DispatchIntent,
+) -> actingcommand_contract::PolicyExecutionEventData {
+    clock.advance(ENTRY_RUN_MS);
+    host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+        .expect("the success")
 }
 
 /// The policy instance's entry block, which must be set: its gate.
@@ -585,15 +606,8 @@ fn blocked_by(host: &RuntimeHost) -> crate::entry_block::EntryBlockGate {
         .0
 }
 
-/// `TASK`'s mark on the policy instance, if it is set (fix round 3): the scheduled runs the instance
-/// had let in when the failure that set it settled.
-fn mark(host: &RuntimeHost) -> Option<u64> {
-    host.entry_mark_for_test(POLICY_INSTANCE_ALIAS, TASK)
-        .expect("the pair's mark")
-}
-
-/// A recovery of the policy instance ended its block (at whichever rung: fix round 3, ruling 1, no
-/// evidence): the instance is not blocked after it.
+/// A recovery of the policy instance ended its block (at whichever rung): the instance is not
+/// blocked after it.
 fn recover(host: &RuntimeHost) {
     host.recover_instance_for_test(POLICY_INSTANCE_ALIAS)
         .expect("the recovery's success");
@@ -605,132 +619,297 @@ fn recover(host: &RuntimeHost) {
     );
 }
 
-/// A pause of every instance set and lifted by a client, as a person does.
-fn pause_and_resume(host: &RuntimeHost) {
-    let mut client = TestClient::connect(host);
-    client.set_receipt_read_timeout();
-    let scope = actingcommand_contract::SchedulingPauseScope::Global;
-    let pause = client.request(RuntimeOperation::PauseScheduling {
-        scope: scope.clone(),
-        pause_reason: actingcommand_contract::SchedulingPauseReason::new("entry_check")
-            .expect("pause reason"),
-        drain_timeout_ms: 1_000,
-        pause_mode: actingcommand_contract::SchedulingPauseMode::Stand,
-    });
-    let receipt = client.send(&pause);
-    assert_eq!(
-        receipt.state(),
-        RuntimeReceiptState::Completed,
-        "{receipt:?}"
-    );
-    let resume = client.request(RuntimeOperation::ResumeScheduling {
-        scope,
-        expected: None,
-    });
-    let receipt = client.send(&resume);
-    assert_eq!(
-        receipt.state(),
-        RuntimeReceiptState::Completed,
-        "{receipt:?}"
-    );
+/// Fix round 4 (rulings 2 and 3): `task_id`'s pair on the policy instance, if its latest scheduled
+/// run failed at its entry: its failures at the entry in a row, those against it, the time before
+/// which it is not dispatched and whether it is set aside.
+fn pair(host: &RuntimeHost, task_id: &str) -> Option<(u32, u32, u64, bool)> {
+    host.entry_pair_for_test(POLICY_INSTANCE_ALIAS, task_id)
+        .expect("the pair")
 }
 
-/// ENTRY-A2 (c): a failure at the entry marks the pair; a recovery succeeds; the task's next run
-/// starts its main package after its entry check and fails in a step (a failure that accumulates,
-/// settled as before), which clears the mark and blocks nothing (and, fix round 3, counts as a run
-/// let in on the instance). After another recovery and the step failure's backoff, the task's next
-/// failure at the entry is a condition again (keeping the step failure's counters): its previous
-/// run did not fail at its entry, so no mark says its entry is broken.
+/// Fix round 4 (ruling 3): the `instance_entry_task_set_aside_reported` warnings of `host`.
+fn set_aside_reports(host: &RuntimeHost) -> Vec<Outcome> {
+    failed_outcomes(host, HostCode::InstanceEntryTaskSetAsideReported)
+}
+
+/// M1 (ruling 1; the settlement hook, two tasks, `escalation_threshold` 1): `TASK` fails at its
+/// entry; while it waits, `OTHER` is dispatched and succeeds (a scheduled run let in); `TASK`'s
+/// second failure at the entry comes once its wait has passed; `OTHER` is let in again (the pair
+/// being set aside for the window, ruling 3), and `TASK`'s third failure at the entry comes the
+/// next day. Each is a condition of the instance: the rule's counters 0, `continue`, no retry, no
+/// pause cause, its count given back, no failure streak in the pair's value record, the instance
+/// blocked by it. No failure at the entry counts against its rule, whatever got in between.
 #[test]
-fn entry_a2_c_a_run_that_started_its_main_package_clears_the_mark() {
+fn entry_m1_failures_at_the_entry_with_another_run_let_in_before_each_never_count_against_the_rule()
+{
     let root = TempDir::new().expect("tempdir");
     let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-    host.activate_policy_catalog(&sources(3))
+    host.activate_policy_catalog(&two_tasks(1))
         .expect("activate the catalog");
     let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    let settled = settle_at_entry(&host, &clock, &first);
+    assert_eq!(first.task_id, TASK, "the task comes first");
+    let mut settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
     assert_settled_at_entry(&failure_of(&settled));
-    assert_eq!(mark(&host), Some(0));
-    recover(&host);
+    for (seed, next_day) in [(101, false), (103, true)] {
+        recover(&host);
+        let other = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, seed);
+        assert_eq!(other.task_id, OTHER, "the task waits, the other runs");
+        let succeeded = succeed(&host, &clock, &other);
+        let at = if next_day {
+            POLICY_NOW_UNIX_MS + DAY_MS
+        } else {
+            (settled.observed_at_unix_ms + FIRST_INTERVAL_MS)
+                .max(succeeded.observed_at_unix_ms + 1_000)
+        };
+        let next = admit_at(&host, &clock, at, seed + 1);
+        assert_eq!(next.task_id, TASK, "{seed}");
+        settled = settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+        let failure = failure_of(&settled);
+        assert_settled_at_entry(&failure);
+        let record = latest_value_record(&host);
+        assert!(record.failure_streak.is_none(), "no streak: {record:?}");
+        assert_eq!(blocked_by(&host).decision_id, next.decision_id);
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
 
-    let second = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 101);
-    clock.advance(RUN_MS);
+/// M2 (ruling 2; the settlement hook, two tasks, `escalation_threshold` 3): `TASK` fails at its
+/// entry and waits the shipped first interval from that settlement. A recovery ends the block; a
+/// second later `OTHER` is dispatched, and `TASK` waits `instance_entry_task_waiting` (count 1,
+/// `next_eligible_unix_ms` the wait's end, the failing run named); a millisecond before the end it
+/// still waits, at it it is dispatched and fails at its entry again: twice the interval now. At
+/// that end its next run's main package starts after its entry check and fails in a step: the pair
+/// starts from nothing, and after the step failure's backoff `TASK` is dispatched with no wait.
+#[test]
+fn entry_m2_the_pair_waits_its_doubling_interval_while_another_task_runs_and_a_run_past_its_entry_clears_it()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&two_tasks(3))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(first.task_id, TASK);
+    let mut intent = first;
+    let mut settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    for (count, seed) in [(1_u32, 101), (2, 103)] {
+        let interval = FIRST_INTERVAL_MS << (count - 1);
+        let until = settled.observed_at_unix_ms + interval;
+        assert_eq!(pair(&host, TASK), Some((count, 0, until, false)), "{count}");
+        recover(&host);
+        let at = settled.observed_at_unix_ms + 1_000;
+        advance_manual_clock_to(&clock, at);
+        let evaluation = evaluate(&host, at, seed);
+        assert!(
+            dispatched(&evaluation, OTHER),
+            "another due task runs: {evaluation:#?}"
+        );
+        assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
+        let waiting = reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting)
+            .unwrap_or_else(|| panic!("the task waits: {evaluation:#?}"));
+        assert_eq!(
+            waiting.value("instance_id"),
+            Some(&json!(POLICY_INSTANCE_ALIAS))
+        );
+        assert_eq!(waiting.value("task_id"), Some(&json!(TASK)));
+        assert_eq!(
+            waiting.value("decision_id"),
+            Some(&json!(intent.decision_id))
+        );
+        assert_eq!(waiting.value("count"), Some(&json!(count)));
+        assert_eq!(waiting.value("next_eligible_unix_ms"), Some(&json!(until)));
+        advance_manual_clock_to(&clock, until - 1);
+        let before = evaluate(&host, until - 1, seed + 100);
+        assert!(
+            !dispatched(&before, TASK),
+            "not before its end: {before:#?}"
+        );
+        intent = admit_at(&host, &clock, until, seed + 1);
+        assert_eq!(intent.task_id, TASK, "{count}");
+        if count == 1 {
+            settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+        }
+    }
+    clock.advance(ENTRY_RUN_MS);
     host.settle_next_policy_run_past_its_entry_for_test()
         .expect("arm the settlement");
-    let failure = failure_of(
-        &host
-            .record_policy_dispatch_outcome(&second.decision_id, &in_a_step())
-            .expect("the settlement"),
-    );
+    let settled = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &in_a_step())
+        .expect("the settlement");
+    let failure = failure_of(&settled);
     assert_eq!(failure.condition, None);
     assert_eq!(
-        failure.disposition,
-        PolicyFailureDisposition::RetryScheduled
+        failure.retry_at_unix_ms,
+        Some(settled.observed_at_unix_ms + BACKOFF_MS),
+        "the rule's backoff"
     );
-    assert_eq!(mark(&host), None, "the run started its main package");
-    assert_eq!(
-        host.entry_block_for_test(POLICY_INSTANCE_ALIAS)
-            .expect("the instance's block"),
-        None,
-        "a step failure blocks nothing"
+    assert_eq!(pair(&host, TASK), None, "the run started its main package");
+    let retry_at = settled.observed_at_unix_ms + BACKOFF_MS;
+    advance_manual_clock_to(&clock, retry_at);
+    let evaluation = evaluate(&host, retry_at, 200);
+    assert!(
+        dispatched(&evaluation, TASK),
+        "no wait of its entry: {evaluation:#?}"
     );
-    let retry_at = failure.retry_at_unix_ms.expect("its backoff");
-    recover(&host);
-
-    let third = admit_at(&host, &clock, retry_at, 102);
-    let settled = settle_at_entry(&host, &clock, &third);
-    let failure = failure_of(&settled);
-    assert_a_condition_at_entry(&failure);
     assert_eq!(
-        (failure.consecutive_same_error, failure.escalation_streak),
-        (1, 1),
-        "the step failure's counters, as they were"
-    );
-    assert_eq!(blocked_by(&host).decision_id, third.decision_id);
-    assert_eq!(
-        mark(&host),
-        Some(1),
-        "marked again, the task's own run past its entry counted as let in"
+        reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskWaiting),
+        None
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }
 
-/// ENTRY-A2 (d): a failure at the entry marks the pair and blocks the instance; a person's pause of
-/// every instance, set and lifted, ends the block, and no recovery ran. The task's next failure at
-/// the entry is a condition again (its count given back, the pair's counters none): nothing was let
-/// in between (fix round 3, ruling 1).
+/// M3 (a) (ruling 3; the settlement hook, two tasks, `escalation_threshold` 2): `TASK` fails at its
+/// entry three times, `OTHER` dispatched and succeeding while it waits before the second and the
+/// third. The second counts once against it, the third twice: it reaches the threshold, so `TASK`
+/// is set aside until its activity window's end and one `instance_entry_task_set_aside_reported`
+/// names the task, the count, the threshold and the window's end. An hour later `TASK` waits
+/// `instance_entry_task_set_aside` and `OTHER` is dispatched; after the window's end `TASK` is
+/// dispatched again; no person is told again.
 #[test]
-fn entry_a2_d_an_instance_unblocked_by_a_lifted_pause_meets_a_condition_again() {
+fn entry_m3_a_at_the_threshold_the_pair_is_set_aside_until_its_windows_end_and_a_person_is_told_once()
+ {
     let root = TempDir::new().expect("tempdir");
     let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-    host.activate_policy_catalog(&sources(3))
+    host.activate_policy_catalog(&two_tasks(2))
         .expect("activate the catalog");
     let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    let settled = settle_at_entry(&host, &clock, &first);
-    assert_settled_at_entry(&failure_of(&settled));
-    assert_eq!(blocked_by(&host).decision_id, first.decision_id);
-    assert_eq!(mark(&host), Some(0));
+    assert_eq!(first.task_id, TASK);
+    let mut settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    let window_end = failure_of(&settled)
+        .condition
+        .expect("a condition")
+        .expires_at_unix_ms;
+    let mut last = first;
+    for (against, seed) in [(1_u32, 101), (2, 103)] {
+        recover(&host);
+        let other = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, seed);
+        assert_eq!(other.task_id, OTHER);
+        succeed(&host, &clock, &other);
+        let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
+        last = admit_at(&host, &clock, until, seed + 1);
+        assert_eq!(last.task_id, TASK);
+        settled = settle_at_entry_after(&host, &clock, &last, ENTRY_RUN_MS);
+        assert_settled_at_entry(&failure_of(&settled));
+        let (in_a_row, counted, _, set_aside) = pair(&host, TASK).expect("the pair");
+        assert_eq!(
+            (in_a_row, counted, set_aside),
+            (against + 1, against, against == 2)
+        );
+    }
+    let reports = set_aside_reports(&host);
+    let [report] = reports.as_slice() else {
+        panic!("one person told: {reports:#?}");
+    };
+    assert_eq!(report.value("task_id"), Some(&json!(TASK)));
+    assert_eq!(report.value("decision_id"), Some(&json!(last.decision_id)));
+    assert_eq!(report.value("count"), Some(&json!(2)));
+    assert_eq!(report.value("limit_count"), Some(&json!(2)));
+    assert_eq!(report.value("window_end_unix_ms"), Some(&json!(window_end)));
 
-    pause_and_resume(&host);
-    assert_eq!(
-        host.entry_block_for_test(POLICY_INSTANCE_ALIAS)
-            .expect("the instance's block"),
-        None,
-        "the lifted pause ends the block"
-    );
+    recover(&host);
+    let later = settled.observed_at_unix_ms + 3_600_000;
+    assert!(later < window_end);
+    advance_manual_clock_to(&clock, later);
+    let evaluation = evaluate(&host, later, 200);
+    assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
+    assert!(dispatched(&evaluation, OTHER), "{evaluation:#?}");
+    let aside = reason_of(&evaluation, TASK, HostCode::InstanceEntryTaskSetAside)
+        .unwrap_or_else(|| panic!("the task is set aside: {evaluation:#?}"));
+    assert_eq!(aside.value("window_end_unix_ms"), Some(&json!(window_end)));
+    assert_eq!(aside.value("count"), Some(&json!(2)));
+    assert_eq!(aside.value("limit_count"), Some(&json!(2)));
 
-    let second = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 101);
-    assert_eq!(second.task_id, TASK);
-    let settled = settle_at_entry(&host, &clock, &second);
-    assert_settled_at_entry(&failure_of(&settled));
-    assert_eq!(blocked_by(&host).decision_id, second.decision_id);
-    assert_eq!(mark(&host), Some(0));
-    let record = latest_value_record(&host);
+    let next_window = window_end + 1_000;
+    advance_manual_clock_to(&clock, next_window);
+    let evaluation = evaluate(&host, next_window, 201);
     assert!(
-        record.daily_counts.iter().all(|count| count.count == 0),
-        "both counts given back: {record:?}"
+        dispatched(&evaluation, TASK),
+        "dispatched again after the window: {evaluation:#?}"
     );
+    assert_eq!(set_aside_reports(&host).len(), 1, "told once");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// M3 (b) (ruling 3; the settlement hook, one task, `escalation_threshold` 1): `TASK` fails at its
+/// entry three times in a row, each once its wait has passed, nothing let in on the instance
+/// between them: none counts against it, it is never set aside and no person is told.
+#[test]
+fn entry_m3_b_a_failure_with_nothing_let_in_since_the_previous_one_does_not_count() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&sources(1))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    for (in_a_row, seed) in [(2_u32, 101), (3, 102)] {
+        recover(&host);
+        let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
+        let next = admit_at(&host, &clock, until, seed);
+        settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+        let (counted_in_a_row, against, _, set_aside) = pair(&host, TASK).expect("the pair");
+        assert_eq!((counted_in_a_row, against, set_aside), (in_a_row, 0, false));
+    }
+    assert!(set_aside_reports(&host).is_empty(), "no one told");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// M3 (c) (ruling 3; the settlement hook, three tasks, `escalation_threshold` 1): `TASK` and
+/// `BROKEN` fail at their entry each time; `OTHER` succeeds. `TASK` fails; while it waits `BROKEN`
+/// is dispatched and fails; while both wait `OTHER` runs and is let in. `TASK`'s next failure, then
+/// `BROKEN`'s, each came after a run let in: each pair is set aside for the window in turn, a
+/// person told once of each, and `OTHER` is dispatched and runs again.
+#[test]
+fn entry_m3_c_two_broken_pairs_and_a_healthy_task_the_healthy_task_runs_and_both_are_set_aside_in_turn()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&three_tasks(1))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(first.task_id, TASK);
+    let task_settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    recover(&host);
+    let broken = admit_at(&host, &clock, task_settled.observed_at_unix_ms + 1_000, 101);
+    assert_eq!(
+        broken.task_id, BROKEN,
+        "the task waits, the broken one goes"
+    );
+    let broken_settled = settle_at_entry_after(&host, &clock, &broken, ENTRY_RUN_MS);
+    recover(&host);
+    let other = admit_at(
+        &host,
+        &clock,
+        broken_settled.observed_at_unix_ms + 1_000,
+        102,
+    );
+    assert_eq!(other.task_id, OTHER, "both wait, the healthy task runs");
+    succeed(&host, &clock, &other);
+    for (task_id, settled, seed) in [(TASK, &task_settled, 103), (BROKEN, &broken_settled, 104)] {
+        let next = admit_at(
+            &host,
+            &clock,
+            settled.observed_at_unix_ms + FIRST_INTERVAL_MS,
+            seed,
+        );
+        assert_eq!(next.task_id, task_id);
+        settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+        let (_, against, _, set_aside) = pair(&host, task_id).expect("the pair");
+        assert_eq!((against, set_aside), (1, true), "{task_id}");
+        recover(&host);
+    }
+    let reports = set_aside_reports(&host);
+    let told = reports
+        .iter()
+        .filter_map(|report| report.value("task_id").cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(told, vec![json!(TASK), json!(BROKEN)], "one each, in turn");
+    let at = broken_settled.observed_at_unix_ms + FIRST_INTERVAL_MS + 10_000;
+    let other = admit_at(&host, &clock, at, 105);
+    assert_eq!(other.task_id, OTHER, "the healthy task runs");
+    succeed(&host, &clock, &other);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }
@@ -767,11 +946,15 @@ struct Replay {
 
 /// Fix round 2: what a replay's host is configured with beyond the ladder fixture's: the
 /// configuration actingd assembles (`None`: the test host's), and the instance's startup package
-/// when it is not the scheduled package.
+/// when it is not the scheduled package. Fix round 4: `unchained`, a `main` that declares no
+/// prerequisite (a page graph whose entry check is its own, M6); `emulator`, the instance has
+/// emulator control and a discovery binding, so a ladder's emulator rung runs (M4).
 #[derive(Default)]
 struct Setup<'a> {
     manifest: Option<RuntimeConfigManifest>,
     startup: Option<&'a Pack<'a>>,
+    unchained: bool,
+    emulator: bool,
 }
 
 fn replay(return_home: &Pack<'_>, manual_clock: bool) -> Replay {
@@ -798,7 +981,7 @@ fn replay_configured(return_home: &Pack<'_>, manual_clock: bool, setup: Setup<'_
 fn shipped<'a>(ladder: Value) -> Setup<'a> {
     Setup {
         manifest: Some(silence_manifest(ladder, json!([]), &[])),
-        startup: None,
+        ..Setup::default()
     }
 }
 
@@ -822,7 +1005,7 @@ fn paced<'a>(ladder: Value) -> Setup<'a> {
             subsystems: Vec::new(),
             parameters,
         }),
-        startup: None,
+        ..Setup::default()
     }
 }
 
@@ -845,7 +1028,13 @@ fn replay_with(scene: &Scene<'_>, manual_clock: bool) -> Replay {
 /// [`replay_with`] on a host `setup` configures (fix round 2).
 fn replay_set_up(scene: &Scene<'_>, manual_clock: bool, setup: Setup<'_>) -> Replay {
     let root = TempDir::new().expect("tempdir");
-    let main = route(MAIN, "menu", "done", OPEN, Some(LEAD));
+    let main = route(
+        MAIN,
+        "menu",
+        "done",
+        OPEN,
+        (!setup.unchained).then_some(LEAD),
+    );
     let (mut host_config, request) =
         ladder_setup_with_packages(root.path(), &main.zip(), &scene.return_home.zip());
     if let Some(startup) = setup.startup {
@@ -888,6 +1077,11 @@ fn replay_set_up(scene: &Scene<'_>, manual_clock: bool, setup: Setup<'_>) -> Rep
         )),
     )
     .expect("physical runtime host");
+    if setup.emulator {
+        // The emulator rung's readiness passes once its Start ran (Android boots, the opens pass).
+        state.observed_open.store(true, Ordering::Release);
+        bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, instance_id(), &state);
+    }
     let context = admit_ladder_run(&host, &request);
     Replay {
         root,
@@ -1997,25 +2191,13 @@ fn stretch(host: &RuntimeHost) -> Option<(u64, bool)> {
         .expect("the instance's stretch")
 }
 
-/// R4: `TASK` dispatched and admitted at `at` fails at its entry: its execution record.
-fn fail_at(
-    host: &RuntimeHost,
-    clock: &ManualRuntimeClock,
-    at: u64,
-    seed: u64,
-) -> actingcommand_contract::PolicyExecutionEventData {
-    let intent = admit_at(host, clock, at, seed);
-    assert_eq!(intent.task_id, TASK);
-    settle_at_entry(host, clock, &intent)
-}
-
 /// R1 (ruling 1; the shipped defaults, system clock): the game is on `shop`; `main`'s entry
 /// `menu` is not seen, so its prerequisite `lead` runs as its layer, and the run's second capture,
 /// in that layer, fails in the capture backend (`capture_backend_operation_failed`, class
 /// `environment_fault`, which the shipped item `task_capture_backend` takes). It is no failure at
 /// the entry, whatever the triggers say of its code: settled as before this slice, with no
-/// condition (its identity's `F` unique, not `i…`), its admission kept, no mark and no block; its
-/// lease end starts the ladder its trigger item names, as before.
+/// condition (its identity's `F` unique, not `i…`), its admission kept, no count of failures at
+/// the entry and no block; its lease end starts the ladder its trigger item names, as before.
 #[test]
 fn entry_r1_a_capture_backend_failure_in_a_prerequisite_layer_is_settled_as_before() {
     let replay = replay_with(
@@ -2055,7 +2237,11 @@ fn entry_r1_a_capture_backend_failure_in_a_prerequisite_layer_is_settled_as_befo
         record.daily_counts.iter().any(|count| count.count > 0),
         "the admission is kept: {record:?}"
     );
-    assert_eq!(mark(&replay.host), None, "no mark");
+    assert_eq!(
+        pair(&replay.host, TASK),
+        None,
+        "no count of failures at the entry"
+    );
     assert!(!replay.blocked(), "no block");
     wait_for_ladder_end(&replay.host, POLICY_INSTANCE_ALIAS);
     let triggers = replay.ladder_triggers();
@@ -2070,12 +2256,11 @@ fn entry_r1_a_capture_backend_failure_in_a_prerequisite_layer_is_settled_as_befo
 
 /// R2 (ruling 2, kept by fix round 3's ruling 5; the settlement hook, `escalation_threshold` 3):
 /// the first block since the Runtime started climbs as its trigger item says. A recovery ends it
-/// and lets nothing in, so the task's next failure at the entry (a condition) sets a block that
-/// climbs from the application restart. That block ends the same way, a scheduled run's main
-/// package then starts on the instance after its entry check, and the task's next failure at the
-/// entry sets a block that climbs as configured; fix round 3 (ruling 1): with that run let in since
-/// the task's previous failure at the entry, this failure is the pair's own, and it blocks the
-/// instance all the same.
+/// and lets nothing in, so the task's next failure at the entry (once its wait has passed, fix
+/// round 4) sets a block that climbs from the application restart. That block ends the same way,
+/// a scheduled run's main package then starts on the instance after its entry check, and the
+/// task's next failure at the entry sets a block that climbs as configured; each failure is a
+/// condition (fix round 4, ruling 1: never the rule's failure).
 #[test]
 fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_application_restart()
 {
@@ -2084,7 +2269,7 @@ fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_a
     host.activate_policy_catalog(&sources(3))
         .expect("activate the catalog");
     let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    let mut settled = settle_at_entry(&host, &clock, &first);
+    settle_at_entry(&host, &clock, &first);
     assert_eq!(
         restarts(&host),
         Some(false),
@@ -2096,13 +2281,10 @@ fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_a
             host.let_run_in_for_test(POLICY_INSTANCE_ALIAS)
                 .expect("a run's main package starts");
         }
-        let next = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, seed);
-        settled = settle_at_entry(&host, &clock, &next);
-        if let_in {
-            assert_own(&failure_of(&settled), 1);
-        } else {
-            assert_settled_at_entry(&failure_of(&settled));
-        }
+        let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
+        let next = admit_at(&host, &clock, until, seed);
+        let settled = settle_at_entry(&host, &clock, &next);
+        assert_settled_at_entry(&failure_of(&settled));
         assert_eq!(blocked_by(&host).decision_id, next.decision_id);
         assert_eq!(restarts(&host), Some(from_restart), "{seed}");
     }
@@ -2112,19 +2294,21 @@ fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_a
 
 /// R3 (a) (rulings 2 and 3 of fix round 2, kept by fix round 3; the live settlement on a fake
 /// device, manual clock): the game is on `away`, which `lead` does not know. The scheduled run
-/// fails at its entry: a condition, the pair marked. The first block since the Runtime started
-/// climbs as configured, from the return-home rung: the bound return-home package leaves `away` for
-/// `done` and the ladder ends `recovered` there, which ends the block. At the task's next
-/// occurrence (the cool-down window opened again) the same task meets `done`, which `lead` does not
-/// know, and fails at its entry again: a condition again, nothing let in between, the mark kept.
-/// Its block was set with nothing let in since the previous one ended: its run's recovery, a later
-/// climb of the stretch (fix round 3, ruling 3), is held until the shipped first interval after
-/// the first climb's end, and at the window's end it climbs from the application restart, the
-/// return-home rung skipped before its start rung; the startup package does not know `done`
-/// either, the climb ends `exhausted`, and one person is told, with the time of the block's next
-/// climb.
+/// fails at its entry: a condition, the pair's first in a row. The first block since the Runtime
+/// started climbs as configured, from the return-home rung: the bound return-home package leaves
+/// `away` for `done` and the ladder ends `recovered` there, which ends the block. At the task's
+/// next occurrence (the cool-down window opened again) the same task meets `done`, which `lead`
+/// does not know, and fails at its entry again: a condition again, its second in a row. Its block
+/// was set with nothing let in since the previous one ended: its run's recovery, a later climb of
+/// the stretch (fix round 3, ruling 3), is held, due no later than the cool-down window's end (fix
+/// round 4: the shipped first interval after the first climb's end has passed long since, so the
+/// lease sweep's own tick may already have moved it to the window's end, which the window asks
+/// anyway: the cause of fix round 3's red run, which read the earlier time); at the window's end it
+/// climbs from the application restart, the return-home rung skipped before its start rung; the
+/// startup package does not know `done` either, the climb ends `exhausted`, and one person is
+/// told, with the time of the block's next climb.
 #[test]
-fn entry_r3_a_a_recovery_at_the_return_home_rung_is_no_evidence_and_the_next_block_climbs_from_the_application_restart()
+fn entry_r3_a_after_a_recovery_at_the_return_home_rung_the_next_block_climbs_from_the_application_restart()
  {
     let replay = replay_with(
         &Scene {
@@ -2137,7 +2321,11 @@ fn entry_r3_a_a_recovery_at_the_return_home_rung_is_no_evidence_and_the_next_blo
     );
     replay.fail_at_entry();
     assert_settled_at_entry(&replay.execution());
-    assert_eq!(mark(&replay.host), Some(0), "the pair is marked");
+    assert_eq!(
+        pair(&replay.host, TASK).map(|(in_a_row, against, _, _)| (in_a_row, against)),
+        Some((1, 0)),
+        "the pair's first failure at the entry"
+    );
     assert_eq!(replay.restarts(), Some(false), "the first block");
     wait_for_ladder_end(&replay.host, POLICY_INSTANCE_ALIAS);
     assert_eq!(
@@ -2172,13 +2360,22 @@ fn entry_r3_a_a_recovery_at_the_return_home_rung_is_no_evidence_and_the_next_blo
     );
     replay.fail_at_entry_of(&second);
     assert_settled_at_entry(&replay.execution_of(second.decision_id()));
-    assert_eq!(mark(&replay.host), Some(0), "the mark stays");
+    assert_eq!(
+        pair(&replay.host, TASK).map(|(in_a_row, against, _, _)| (in_a_row, against)),
+        Some((2, 0)),
+        "its second in a row, nothing let in between"
+    );
     let (gate, _, held) = replay.block();
     assert_eq!(gate.decision_id, second.decision_id());
+    assert!(
+        held.is_some_and(|until| until == first_end + FIRST_INTERVAL_MS || until == window_until),
+        "the block holds its run's recovery, paced from the first climb's end and kept to the \
+         cool-down window's end: {held:?}"
+    );
     assert_eq!(
-        held,
-        Some(first_end + FIRST_INTERVAL_MS),
-        "the block holds its run's recovery, paced from the first climb's end"
+        started_plans(&replay.host).len(),
+        1,
+        "not climbed before the window's end"
     );
     assert_eq!(
         replay.restarts(),
@@ -2220,97 +2417,6 @@ fn entry_r3_a_a_recovery_at_the_return_home_rung_is_no_evidence_and_the_next_blo
         "the block's next climb: {failed:?}"
     );
     replay.close();
-}
-
-/// K1 (b) (fix round 3, ruling 1; the live settlement on a fake device, manual clock; fix round 2's
-/// R3 (b) turned round): the instance's `pack_logic` item starts its climbs at the application
-/// restart (rung 2) and its own startup package leaves `away` for `done`: the first block's ladder
-/// stops the application, the startup package recovers, and the ladder ends `recovered` having
-/// restarted the application. At the task's next occurrence the same task meets `done` and fails
-/// at its entry again. Nothing was let in on the instance between the two failures, and what the
-/// recovery did is no evidence: the failure is a condition (counters 0, its count given back, `F`
-/// `i…`), the mark kept, and it blocks the instance, holding its run's recovery until the stretch's
-/// first interval after the first climb's end.
-#[test]
-fn entry_k1_b_after_a_recovery_that_restarted_the_application_and_nothing_let_in_a_failure_at_the_entry_is_a_condition()
- {
-    let startup = route(STARTUP, "away", "done", AWAY_TO_DONE, None);
-    let replay = replay_set_up(
-        &Scene {
-            return_home: &route(RETURN_HOME, "away", "done", AWAY_TO_DONE, None),
-            lead: &lead(),
-            registry_return_home: None,
-            screens: vec![AWAY, DONE],
-        },
-        true,
-        Setup {
-            startup: Some(&startup),
-            ..shipped(restart_first())
-        },
-    );
-    replay.fail_at_entry();
-    assert_settled_at_entry(&replay.execution());
-    assert_eq!(mark(&replay.host), Some(0), "the pair is marked");
-    wait_for_ladder_end(&replay.host, POLICY_INSTANCE_ALIAS);
-    assert_eq!(
-        finished_ladders(&replay.host),
-        vec![RecoveryLadderOutcome::Recovered]
-    );
-    assert!(
-        rung_outcomes(&all_events(&replay.host)).contains(&(
-            RecoveryRung::ApplicationRestart,
-            RecoveryRungOutcome::Recovered,
-            None
-        )),
-        "the startup package recovers after the application's stop"
-    );
-    assert!(!replay.blocked(), "the recovery ends the block");
-    let (climbs, first_end) = replay.climbs();
-    assert_eq!(climbs, 1, "the first climb of the stretch");
-
-    let second = admit_scheduled_at(
-        &replay.host,
-        replay.manual_clock(),
-        &replay.request,
-        NEXT_DISPATCH_UNIX_MS,
-        301,
-    );
-    replay.fail_at_entry_of(&second);
-    let failure = replay.execution_of(second.decision_id());
-    assert_settled_at_entry(&failure);
-    assert_eq!(mark(&replay.host), Some(0), "the mark stays");
-    let (gate, _, held) = replay.block();
-    assert_eq!(gate.decision_id, second.decision_id());
-    assert_eq!(
-        held,
-        Some(first_end + FIRST_INTERVAL_MS),
-        "the block holds its run's recovery"
-    );
-    replay.close();
-}
-
-/// K1 (d) (fix round 3, ruling 1: the same activity window; the settlement hook,
-/// `escalation_threshold` 2; fix round 2's R4 (a) turned round): the task's failure at the entry
-/// is a condition; a recovery, and another scheduled run let in on the instance; the task's next
-/// failure at the entry, the next day, is in another activity window of the profile: a condition,
-/// not the pair's own, whatever got in between.
-#[test]
-fn entry_k1_d_a_failure_at_the_entry_in_another_activity_window_is_a_condition() {
-    let root = TempDir::new().expect("tempdir");
-    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-    host.activate_policy_catalog(&sources(2))
-        .expect("activate the catalog");
-    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    let settled = settle_at_entry(&host, &clock, &first);
-    assert_settled_at_entry(&failure_of(&settled));
-    recover(&host);
-    host.let_run_in_for_test(POLICY_INSTANCE_ALIAS)
-        .expect("a run's main package starts");
-    let settled = fail_at(&host, &clock, POLICY_NOW_UNIX_MS + DAY_MS, 101);
-    assert_settled_at_entry(&failure_of(&settled));
-    assert_eq!(blocked_by(&host).decision_id, settled.decision_id);
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close the host");
 }
 
 /// R5 (ruling 5; the live path on a fake device, manual clock): the instance's `pack_logic` item
@@ -2465,8 +2571,8 @@ fn entry_r5_b_a_panicked_worker_tells_a_person_and_nothing_climbs_again() {
 
 /// R6 (ruling 6; the settlement hook, `escalation_threshold` 3): the task's failure at the entry
 /// blocks the instance and begins its stretch; a recovery ends the block and lets nothing in, and
-/// the stretch runs on; the task's next failure at the entry blocks the
-/// instance again, in the same stretch. A millisecond before the stretch has lasted
+/// the stretch runs on; the task's next failure at the entry (once its wait has passed, fix round
+/// 4) blocks the instance again, in the same stretch. A millisecond before the stretch has lasted
 /// `attention_after_ms` the sweep's tick tells no one; at that time one
 /// `instance_entry_blocked_awaiting_person` names the block's run and the stretch's length; later
 /// ticks tell no one again.
@@ -2478,7 +2584,7 @@ fn entry_r6_two_blocks_chained_by_a_recovery_that_let_nothing_in_tell_a_person_o
     host.activate_policy_catalog(&sources(3))
         .expect("activate the catalog");
     let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    let settled = settle_at_entry(&host, &clock, &first);
+    settle_at_entry(&host, &clock, &first);
     let (since, told) = stretch(&host).expect("the first block begins a stretch");
     assert!(!told);
     recover(&host);
@@ -2487,7 +2593,8 @@ fn entry_r6_two_blocks_chained_by_a_recovery_that_let_nothing_in_tell_a_person_o
         Some((since, false)),
         "a recovery that let nothing in does not end the stretch"
     );
-    let second = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 101);
+    let (_, _, until, _) = pair(&host, TASK).expect("the pair waits");
+    let second = admit_at(&host, &clock, until, 101);
     settle_at_entry(&host, &clock, &second);
     assert_eq!(blocked_by(&host).decision_id, second.decision_id);
     assert_eq!(stretch(&host), Some((since, false)), "the same stretch");
@@ -2602,293 +2709,20 @@ fn entry_r7_a_claim_the_queue_refuses_is_tried_again_on_a_growing_interval_and_r
 
 // ---- Fix round 3.
 
-/// K1 (a) (ruling 1; the settlement hook, `escalation_threshold` 3): two tasks of the rule, `TASK`
-/// first. Its failure at the entry is a condition and marks the pair; a recovery ends the block,
-/// `TASK` yields its turn (ruling 2), and `OTHER` is dispatched and succeeds: the instance let
-/// another scheduled run in. `TASK`'s next failure at the entry, in the same activity window, is
-/// its own: a failure that accumulates (counters 1, `retry_scheduled` at the rule's backoff, no
-/// condition), and it blocks the instance again.
-#[test]
-fn entry_k1_a_a_failure_at_the_entry_after_another_scheduled_run_got_in_is_the_pairs_own() {
-    let root = TempDir::new().expect("tempdir");
-    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-    host.activate_policy_catalog(&two_tasks(3))
-        .expect("activate the catalog");
-    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    assert_eq!(first.task_id, TASK, "the task comes first");
-    let settled = settle_at_entry(&host, &clock, &first);
-    assert_settled_at_entry(&failure_of(&settled));
-    assert_eq!(mark(&host), Some(0), "the pair is marked");
-    recover(&host);
-
-    let other = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 101);
-    assert_eq!(other.task_id, OTHER, "the pair yields its turn");
-    clock.advance(RUN_MS);
-    let succeeded = host
-        .record_policy_dispatch_outcome(&other.decision_id, &PolicyExecutionInput::Succeeded)
-        .expect("the other task's success");
-    assert_eq!(
-        host.entry_yielding_for_test(POLICY_INSTANCE_ALIAS)
-            .expect("the yield"),
-        None,
-        "another task's run ends the yield"
-    );
-
-    let second = admit_at(&host, &clock, succeeded.observed_at_unix_ms + 1_000, 102);
-    assert_eq!(second.task_id, TASK);
-    let settled = settle_at_entry(&host, &clock, &second);
-    let failure = failure_of(&settled);
-    assert_own(&failure, 1);
-    assert_eq!(
-        failure.disposition,
-        PolicyFailureDisposition::RetryScheduled
-    );
-    assert_eq!(
-        failure.retry_at_unix_ms,
-        Some(settled.observed_at_unix_ms + BACKOFF_MS),
-        "the rule's backoff"
-    );
-    assert_eq!(blocked_by(&host).decision_id, second.decision_id);
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close the host");
-}
-
-/// K1 (c) (ruling 1; the settlement hook, `escalation_threshold` 1, so a failure that were its
-/// pair's own would pause it at once): two tasks of the rule fail at their entry in turn, each
-/// after a recovery ended the block the other's failure set (the pair whose failure set it yielding
-/// its turn, ruling 2); nothing is ever let in on the instance. Through four failures at the entry,
-/// each pair's second included, none is anyone's own: each is a condition (counters 0, no pause)
-/// and blocks the instance.
-#[test]
-fn entry_k1_c_two_pairs_failing_in_turn_after_recoveries_with_nothing_let_in_are_never_their_own() {
-    let root = TempDir::new().expect("tempdir");
-    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-    host.activate_policy_catalog(&two_tasks(1))
-        .expect("activate the catalog");
-    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    assert_eq!(first.task_id, TASK);
-    let mut settled = settle_at_entry(&host, &clock, &first);
-    assert_settled_at_entry(&failure_of(&settled));
-    for (seed, expected) in [(101, OTHER), (102, TASK), (103, OTHER)] {
-        recover(&host);
-        let next = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, seed);
-        assert_eq!(
-            next.task_id, expected,
-            "the pair whose failure set the block yields its turn"
-        );
-        settled = settle_at_entry(&host, &clock, &next);
-        assert_settled_at_entry(&failure_of(&settled));
-        assert_eq!(blocked_by(&host).decision_id, next.decision_id);
-    }
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close the host");
-}
-
-/// K2 (a) (ruling 2; the settlement hook): `TASK` fails at its entry and blocks the instance; a
-/// recovery ends the block, and `TASK` yields its turn there. With `OTHER`, a lower-ranked task due
-/// too, the evaluation dispatches `OTHER`, and `TASK` waits `instance_entry_yielding`, naming the
-/// run whose failure set the block, its failure and since when. With no other task (a fresh root),
-/// `TASK` is dispatched: it runs when none other can, and nothing names the yield.
-#[test]
-fn entry_k2_a_the_pair_that_set_the_block_yields_its_turn_and_runs_when_it_is_the_only_one() {
-    for alone in [false, true] {
-        let root = TempDir::new().expect("tempdir");
-        let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
-        let catalog = if alone { sources(3) } else { two_tasks(3) };
-        host.activate_policy_catalog(&catalog)
-            .expect("activate the catalog");
-        let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-        assert_eq!(first.task_id, TASK, "{alone}");
-        let settled = settle_at_entry(&host, &clock, &first);
-        assert_settled_at_entry(&failure_of(&settled));
-        recover(&host);
-        assert_eq!(
-            host.entry_yielding_for_test(POLICY_INSTANCE_ALIAS)
-                .expect("the yield"),
-            Some(TASK.to_owned()),
-            "{alone}"
-        );
-        let at = settled.observed_at_unix_ms + 1_000;
-        advance_manual_clock_to(&clock, at);
-        let evaluation = evaluate(&host, at, 101);
-        if alone {
-            assert!(
-                dispatched(&evaluation, TASK),
-                "the only task runs: {evaluation:#?}"
-            );
-            assert_eq!(yield_reason(&evaluation, TASK), None);
-        } else {
-            assert!(
-                dispatched(&evaluation, OTHER),
-                "the other task goes first: {evaluation:#?}"
-            );
-            assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
-            let reason = yield_reason(&evaluation, TASK)
-                .unwrap_or_else(|| panic!("the task yields its turn: {evaluation:#?}"));
-            assert_eq!(
-                reason.value("instance_id"),
-                Some(&json!(POLICY_INSTANCE_ALIAS))
-            );
-            assert_eq!(reason.value("task_id"), Some(&json!(TASK)));
-            assert_eq!(reason.value("decision_id"), Some(&json!(first.decision_id)));
-            assert_eq!(reason.value("failure_code"), Some(&json!(PAGE_UNKNOWN)));
-            assert_eq!(
-                reason.value("observed_at_unix_ms"),
-                Some(&json!(settled.observed_at_unix_ms))
-            );
-        }
-        assert!(host.fatal_error().expect("runtime health").is_none());
-        host.close().expect("close the host");
-    }
-}
-
-/// K2 (b): the catalog fixture's task, its rule's `escalation_threshold` 1, and `OTHER`, a second
-/// task of a lower priority under its own procedure, due at every evaluation; version 2.
-fn replay_two_tasks() -> CatalogSources {
-    let mut sources = policy_sources(2);
-    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the task fixture");
-    tasks["tasks"][0]["on_failure"]["escalation_threshold"] = json!(1);
-    let mut other = tasks["tasks"][0].clone();
-    other["id"] = json!(OTHER);
-    other["procedure_ref"] = json!("procedure.observe-b");
-    other["priority"] = json!(50);
-    other["trigger"] = json!({
-        "kind": "clock",
-        "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 1,
-                     "anchor_ms": 0}
-    });
-    other["cooldown_ms"] = json!(0);
-    other["produces"] = json!([]);
-    other["instance_overrides"] = json!([]);
-    tasks["tasks"]
-        .as_array_mut()
-        .expect("the tasks")
-        .push(other);
-    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
-    sources
-}
-
-/// K2 (b) (ruling 2 with ruling 1; the production path's replay on a fake device, manual clock;
-/// the successor of fix round 2's R3 (b)): the game is on `away`, which `lead` does not know. The
-/// scheduled run of `TASK` fails at its entry: a condition, the pair marked; its block's ladder
-/// recovers at the return-home rung (to `done`) and ends the block. The catalog then holds `TASK`,
-/// whose rule's `escalation_threshold` is 1, and `OTHER`, ranked below it. At `TASK`'s next
-/// occurrence both are due: `TASK` yields its turn (`instance_entry_yielding`) and `OTHER` is
-/// dispatched, admitted and succeeds, the instance letting it in. At the next evaluation `TASK`,
-/// first-sorted, is dispatched; its scheduled run meets `done`, which `lead` does not know, and
-/// fails at its entry again. The live settlement finds the pair's previous run failed at its entry
-/// with the same packages in the same window and another scheduled run let in between: the failure
-/// is the pair's own, settled by its rule's `on_failure` (`paused_task`, `repeated_failure`, no
-/// condition), and it blocks the instance.
-#[test]
-fn entry_k2_b_a_broken_first_sorted_pair_is_paused_after_the_healthy_task_got_in() {
-    let replay = replay_with(
-        &Scene {
-            return_home: &route(RETURN_HOME, "away", "done", AWAY_TO_DONE, None),
-            lead: &lead(),
-            registry_return_home: None,
-            screens: vec![AWAY, DONE],
-        },
-        true,
-    );
-    replay.fail_at_entry();
-    assert_settled_at_entry(&replay.execution());
-    assert_eq!(mark(&replay.host), Some(0), "the pair is marked");
-    wait_for_ladder_end(&replay.host, POLICY_INSTANCE_ALIAS);
-    assert_eq!(
-        finished_ladders(&replay.host),
-        vec![RecoveryLadderOutcome::Recovered]
-    );
-    assert!(!replay.blocked(), "the recovery ends the block");
-    replay
-        .host
-        .activate_policy_catalog(&replay_two_tasks())
-        .expect("activate the two tasks");
-
-    let clock = replay.manual_clock();
-    advance_manual_clock_to(clock, NEXT_DISPATCH_UNIX_MS);
-    replay
-        .host
-        .capacity_sampler_for_test()
-        .expect("capacity owner")()
-    .expect("capacity sample at the evaluation");
-    let evaluation = evaluate(&replay.host, NEXT_DISPATCH_UNIX_MS, 301);
-    assert!(!dispatched(&evaluation, TASK), "{evaluation:#?}");
-    assert_eq!(
-        yield_reason(&evaluation, TASK).and_then(|reason| reason.value("decision_id").cloned()),
-        Some(json!(replay.context.decision_id())),
-        "the pair whose failure set the block yields its turn: {evaluation:#?}"
-    );
-    let intent = evaluation
-        .dispatch_intents
-        .iter()
-        .find(|intent| intent.task_id == OTHER && intent.instance_id == POLICY_INSTANCE_ALIAS)
-        .cloned()
-        .unwrap_or_else(|| panic!("the healthy task is dispatched: {evaluation:#?}"));
-    let chain = evaluation
-        .reason_chains
-        .iter()
-        .find(|chain| chain.id == intent.reason_chain_id)
-        .cloned()
-        .expect("its reason chain");
-    record_policy_approval(&replay.host, &intent);
-    let PolicyDispatchAdmission::Granted { context } = replay
-        .host
-        .admit_policy_dispatch(&intent, &chain, &policy_context(&replay.host, &intent))
-        .expect("the admission")
-    else {
-        panic!("the healthy task is granted");
-    };
-    clock.advance(RUN_MS);
-    replay
-        .host
-        .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
-        .expect("the healthy task's success");
-    replay
-        .host
-        .release_policy_dispatch_lease_for_test(&context)
-        .expect("end the dispatch's lease");
-
-    let third = admit_scheduled_at(
-        &replay.host,
-        clock,
-        &replay.request,
-        NEXT_DISPATCH_UNIX_MS + ACTIVITY_INTERVAL_PAST_MS,
-        302,
-    );
-    replay.fail_at_entry_of(&third);
-    let failure = replay.execution_of(third.decision_id());
-    assert_eq!(failure.outcome.code().as_str(), PAGE_UNKNOWN);
-    assert_eq!(failure.condition, None, "the pair's own: {failure:?}");
-    assert_eq!(failure.consecutive_same_error, 1, "{failure:?}");
-    assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);
-    assert_eq!(
-        crate::policy_control::pause_cause(&failure).map(crate::codes::PauseCause::as_str),
-        Some("repeated_failure")
-    );
-    let identity = failure
-        .failure_identity
-        .as_deref()
-        .and_then(FailureIdentity::parse)
-        .expect("a v2 failure identity");
-    assert!(
-        identity.accumulates() && !identity.at_entry(),
-        "{identity:?}"
-    );
-    assert_eq!(replay.block().0.decision_id, third.decision_id());
-    wait_for_ladders_finished(&replay.host, 2);
-    replay.close();
-}
-
 /// K3 (a) (ruling 3; the live path on a fake device, manual clock, `scheduling.unavailable_probe`'s
-/// first interval two hours): the scheduled run fails at its entry; its block's first climb, as
-/// configured, recovers at the return-home rung (to `done`) with nothing let in: one climb of the
-/// stretch, ended then. At the task's next occurrence, an hour later, it fails at its entry again;
-/// its lease end, a later climb of the same stretch, admits no ladder: the block holds the
-/// recovery until the interval after the first climb's end. A millisecond before, the sweep's tick
-/// takes up nothing; at that time it climbs, from the application restart (ruling 5).
+/// first and longest interval two hours; fix round 4: so a pair's own wait is two hours too): the
+/// instance's `pack_logic` item starts its climbs at the application restart and its startup
+/// package leaves `away` for `done`. The ladder's cool-down window has half an hour left when the
+/// scheduled run fails at its entry, so its block holds the first climb until the window's end;
+/// there it climbs, the startup package recovers and the ladder ends `recovered` with nothing let
+/// in: one climb of the stretch, ended then. When the task's own wait has passed it meets `done`
+/// and fails at its entry again; its lease end, a later climb of the same stretch, admits no
+/// ladder: the block holds the recovery until the interval after the first climb's end, half an
+/// hour after the pair's wait. A millisecond before, the sweep's tick takes up nothing; at that
+/// time it climbs, from the application restart (ruling 5).
 #[test]
 fn entry_k3_a_a_later_climb_after_a_recovery_that_let_nothing_in_waits_its_interval() {
+    let startup = route(STARTUP, "away", "done", AWAY_TO_DONE, None);
     let replay = replay_set_up(
         &Scene {
             return_home: &route(RETURN_HOME, "away", "done", AWAY_TO_DONE, None),
@@ -2897,10 +2731,13 @@ fn entry_k3_a_a_later_climb_after_a_recovery_that_let_nothing_in_waits_its_inter
             screens: vec![AWAY, DONE],
         },
         true,
-        paced(json!({})),
+        Setup {
+            startup: Some(&startup),
+            ..paced(restart_first())
+        },
     );
-    replay.fail_at_entry();
-    assert_settled_at_entry(&replay.execution());
+    let window = replay.hold_a_recovery(30 * MINUTE_MS);
+    replay.tick_at(window);
     wait_for_ladder_end(&replay.host, POLICY_INSTANCE_ALIAS);
     assert_eq!(
         finished_ladders(&replay.host),
@@ -2910,13 +2747,14 @@ fn entry_k3_a_a_later_climb_after_a_recovery_that_let_nothing_in_waits_its_inter
     let (climbs, first_end) = replay.climbs();
     assert_eq!(climbs, 1);
     let paced_until = first_end + PACED_MS;
-    assert!(paced_until > NEXT_DISPATCH_UNIX_MS);
+    let (_, _, until, _) = pair(&replay.host, TASK).expect("the pair waits");
+    assert!(until < paced_until, "the pair's wait ends first");
 
     let second = admit_scheduled_at(
         &replay.host,
         replay.manual_clock(),
         &replay.request,
-        NEXT_DISPATCH_UNIX_MS,
+        until,
         301,
     );
     replay.fail_at_entry_of(&second);
@@ -2968,7 +2806,7 @@ fn entry_k3_b_after_a_climb_business_capacity_interrupted_the_next_waits_its_int
     replay.fail_at_entry();
     assert_settled_at_entry(&replay.execution());
     at_check
-        .recv_timeout(Duration::from_secs(60))
+        .recv_timeout(GATE_WAIT)
         .expect("the climb's holding check before its first step");
     let available_bytes = Arc::new(AtomicU64::new(0));
     replay
@@ -3016,9 +2854,9 @@ fn entry_k3_b_after_a_climb_business_capacity_interrupted_the_next_waits_its_int
 /// hours): the game is on `away`, which no package of the instance knows. The scheduled run fails
 /// at its entry, its block's first climb ends `exhausted`: one climb of the stretch. A client's
 /// run leaves `away` for `menu` and succeeds: it ends the block and lets a run in, which ends the
-/// stretch. The game is on `away` again; at the task's next occurrence it fails at its entry: its
-/// block, the first of a new stretch, climbs as configured, from the return-home rung, at once
-/// from its lease end, with nothing held.
+/// stretch. The game is on `away` again; once the task's own wait has passed (fix round 4) it
+/// fails at its entry: its block, the first of a new stretch, climbs as configured, from the
+/// return-home rung, at once from its lease end, with nothing held.
 #[test]
 fn entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_as_configured() {
     let replay = replay_set_up(
@@ -3081,11 +2919,14 @@ fn entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_
     );
 
     away.store(true, Ordering::Release);
+    // Fix round 4 (ruling 2): the task is dispatched once its own wait (two hours here) has
+    // passed; the client's run does not end it.
+    let (_, _, until, _) = pair(&replay.host, TASK).expect("the pair waits");
     let second = admit_scheduled_at(
         &replay.host,
         replay.manual_clock(),
         &replay.request,
-        NEXT_DISPATCH_UNIX_MS,
+        until,
         301,
     );
     replay.fail_at_entry_of(&second);
@@ -3263,4 +3104,462 @@ fn entry_k4_the_update_dialog_ends_the_climb_tells_a_person_once_and_nothing_cli
     assert!(!dispatched(&update, TASK), "{update:#?}");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
+}
+
+// ---- Fix round 4.
+
+/// M4: the emulator's Stops and Starts so far.
+fn emulator_actions(state: &FakeState) -> Vec<actingcommand_contract::EmulatorInstanceAction> {
+    state
+        .emulator_actions
+        .lock()
+        .expect("fake emulator actions lock")
+        .clone()
+}
+
+/// M4: nothing holds or waits for the policy instance's key (a ladder's handed-off startup run
+/// included).
+fn wait_for_instance_free(host: &RuntimeHost) {
+    wait_until("the instance's key free", || {
+        let (holder, queued) = host
+            .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("instance claims");
+        holder.is_none() && queued.is_empty()
+    });
+}
+
+/// M4 (ruling 4; the live path on a fake device with emulator control, manual clock): the game is
+/// on `away`, which no package of the instance knows. The scheduled run fails at its entry; its
+/// block's first climb runs every rung, the emulator's Stop and Start included. At the task's next
+/// occurrence it fails at its entry again, nothing let in between: the stretch's second climb starts
+/// at the application restart and skips the emulator's rung (planned pending, as a plan drill's;
+/// recorded `skipped` with `recovery_rung_skipped_emulator_restarted_in_stretch`); the emulator is
+/// not stopped again. A client's run then leaves `away` and succeeds, which lets a run in and ends
+/// the stretch; the task's next failure at the entry begins a new stretch, whose first climb plans
+/// the emulator's rung as
+/// configured and restarts the emulator once more.
+#[test]
+fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() {
+    use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    let replay = replay_set_up(
+        &Scene {
+            return_home: &route(RETURN_HOME, "shop", "done", NOWHERE_STEPS, None),
+            lead: &lead(),
+            registry_return_home: None,
+            screens: vec![AWAY],
+        },
+        true,
+        Setup {
+            emulator: true,
+            ..Setup::default()
+        },
+    );
+    let away = Arc::new(AtomicBool::new(true));
+    let from = Arc::new(AtomicUsize::new(0));
+    let (seen_away, seen_from) = (Arc::clone(&away), Arc::clone(&from));
+    *replay.state.pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(move |_: usize, inputs: usize| {
+            let screen = if !seen_away.load(Ordering::Acquire)
+                && inputs > seen_from.load(Ordering::Acquire)
+            {
+                MENU
+            } else {
+                AWAY
+            };
+            vec![(0, screen)]
+        }));
+    replay.fail_at_entry();
+    assert_settled_at_entry(&replay.execution());
+    wait_for_ladders_finished(&replay.host, 1);
+    wait_for_instance_free(&replay.host);
+    assert_eq!(
+        emulator_actions(&replay.state),
+        [Stop, Start],
+        "the stretch's first climb restarts the emulator"
+    );
+    let plans = started_plans(&replay.host);
+    assert_eq!(
+        plans.first().and_then(|(_, plan)| plan.last()),
+        Some(&planned(RecoveryRung::EmulatorRestart, None))
+    );
+
+    let second = admit_scheduled_at(
+        &replay.host,
+        replay.manual_clock(),
+        &replay.request,
+        NEXT_DISPATCH_UNIX_MS,
+        301,
+    );
+    replay.fail_at_entry_of(&second);
+    assert_settled_at_entry(&replay.execution_of(second.decision_id()));
+    wait_until("the stretch's second climb", || {
+        replay.tick();
+        started_plans(&replay.host).len() == 2
+    });
+    wait_for_ladders_finished(&replay.host, 2);
+    wait_for_instance_free(&replay.host);
+    let plans = started_plans(&replay.host);
+    let (trigger, plan) = &plans[1];
+    assert_eq!(trigger.run_id, Some(second.run_id()));
+    assert_eq!(
+        *plan,
+        vec![
+            planned(
+                RecoveryRung::ReturnHome,
+                Some(RecoveryRungSkipReason::BeforeStartRung),
+            ),
+            planned(RecoveryRung::ApplicationRestart, None),
+            planned(RecoveryRung::EmulatorRestart, None),
+        ],
+        "from the application restart, the emulator's rung planned as a plan drill's is"
+    );
+    assert!(
+        rung_outcomes(&all_events(&replay.host)).contains(&(
+            RecoveryRung::EmulatorRestart,
+            RecoveryRungOutcome::Skipped,
+            Some(
+                HostCode::RecoveryRungSkippedEmulatorRestartedInStretch
+                    .as_str()
+                    .to_owned()
+            )
+        )),
+        "{:?}",
+        rung_outcomes(&all_events(&replay.host))
+    );
+    assert_eq!(
+        emulator_actions(&replay.state),
+        [Stop, Start],
+        "not restarted again in the stretch"
+    );
+
+    from.store(
+        replay.state.input_count.load(Ordering::Acquire),
+        Ordering::Release,
+    );
+    away.store(false, Ordering::Release);
+    let receipt = manual_run(&replay.host, replay.root.path());
+    assert!(
+        matches!(
+            receipt.result(),
+            Some(RuntimeResult::ContainedTaskCompleted {
+                task_result: TaskOutcome::Success,
+                ..
+            })
+        ),
+        "{receipt:?}"
+    );
+    assert_eq!(
+        replay
+            .host
+            .entry_climbs_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("the instance's stretch"),
+        None,
+        "a run let in ends the stretch"
+    );
+    away.store(true, Ordering::Release);
+    let third = admit_scheduled_at(
+        &replay.host,
+        replay.manual_clock(),
+        &replay.request,
+        NEXT_DISPATCH_UNIX_MS + 2 * 3_600_000,
+        302,
+    );
+    replay.fail_at_entry_of(&third);
+    assert_settled_at_entry(&replay.execution_of(third.decision_id()));
+    wait_until("the new stretch's first climb", || {
+        started_plans(&replay.host).len() == 3
+    });
+    let plans = started_plans(&replay.host);
+    let (trigger, plan) = &plans[2];
+    assert_eq!(trigger.run_id, Some(third.run_id()));
+    assert_eq!(
+        plan.first(),
+        Some(&planned(RecoveryRung::ReturnHome, None)),
+        "as configured"
+    );
+    assert_eq!(
+        plan.last(),
+        Some(&planned(RecoveryRung::EmulatorRestart, None)),
+        "a new stretch may restart the emulator once again"
+    );
+    wait_for_ladders_finished(&replay.host, 3);
+    wait_for_instance_free(&replay.host);
+    assert_eq!(emulator_actions(&replay.state), [Stop, Start, Stop, Start]);
+    replay.close();
+}
+
+/// M5: [`store_sources`] with the ordinary task's `on_failure.escalation_threshold` 1.
+fn store_sources_threshold_one() -> CatalogSources {
+    let mut sources = store_sources();
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the task fixture");
+    tasks["tasks"][0]["on_failure"]["escalation_threshold"] = json!(1);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the task bytes");
+    sources
+}
+
+/// M5 (ruling 5; policy level, gate_upd1's store update task, `scheduling.unavailable_probe`'s first
+/// interval two hours, the ordinary task's `escalation_threshold` 1): the ordinary task fails at its
+/// entry and waits two hours. The game asks for an update; the store update task passes the block,
+/// is dispatched and succeeds: every pair of the instance starts from nothing, so the ordinary
+/// task's wait is gone, and the success is no run let in for the pairs. Its run having ended the
+/// block, the ordinary task is dispatched twenty minutes later, well inside its old wait, and fails
+/// at its entry again: its first in a row, none against it, not set aside, no person told.
+#[test]
+fn entry_m5_a_store_update_success_between_two_failures_at_the_entry_clears_the_wait_and_counts_toward_nothing()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let ordinary = neutral_contained_task_package(true);
+    let store = super::gate_store_fg2::store_package();
+    let mut procedures = Vec::new();
+    for (index, (procedure, package)) in [
+        ("procedure.observe", ordinary.as_slice()),
+        (STORE_PROCEDURE, store.as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = root.path().join(format!("bound-{index}.zip"));
+        fs::write(&path, package).expect("write the package");
+        procedures.push(
+            ProcedureBinding::new(
+                procedure,
+                "operation.observe",
+                vec!["after_observation".to_owned()],
+            )
+            .expect("procedure binding")
+            .with_package_path(path.to_string_lossy()),
+        );
+    }
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let manifest = paced(json!({})).manifest.expect("the configuration");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(ProcedureManifest::new(procedures).expect("manifest"))
+            .with_config_manifest(manifest),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&store_sources_threshold_one())
+        .expect("activate the catalog");
+    let evaluate_at = |at: u64, seed: u64| {
+        advance_manual_clock_to(&clock, at);
+        host.evaluate_policy_cycle_with_test_inputs(
+            &update_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: clock.monotonic_ms(),
+            },
+            seed,
+            PolicyTrigger::Recovery,
+        )
+        .expect("evaluate the policy")
+        .evaluation
+        .expect("a full evaluation")
+    };
+    let grant = |evaluation: &actingcommand_policy::PolicyEvaluation, task_id: &str| {
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == task_id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{task_id} is dispatched: {evaluation:#?}"));
+        let chain = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .cloned()
+            .expect("its reason chain");
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &chain, &policy_context(&host, &intent))
+            .expect("the admission")
+        else {
+            panic!("{task_id} is granted");
+        };
+        (intent, context)
+    };
+
+    let first = evaluate_at(POLICY_NOW_UNIX_MS + 1_000, 1);
+    let ordinary_intent = first
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == TASK)
+        .cloned()
+        .unwrap_or_else(|| panic!("the ordinary task: {first:#?}"));
+    record_policy_approval(&host, &ordinary_intent);
+    let (intent, context) = grant(&first, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    assert_settled_at_entry(&failure_of(&settled));
+    host.release_policy_dispatch_lease_for_test(&context)
+        .expect("end the dispatch's lease");
+    assert_eq!(
+        pair(&host, TASK),
+        Some((1, 0, settled.observed_at_unix_ms + PACED_MS, false)),
+        "it waits two hours"
+    );
+
+    advance_manual_clock_to(&clock, POLICY_NOW_UNIX_MS + MINUTE_MS);
+    host.record_application_update_for_test(POLICY_INSTANCE_ALIAS, true)
+        .expect("the game asks for an update");
+    let store_at = POLICY_NOW_UNIX_MS + ACTIVITY_INTERVAL_PAST_MS;
+    let update = evaluate_at(store_at, 2);
+    let (store_intent, store_context) = grant(&update, STORE_TASK);
+    succeed(&host, &clock, &store_intent);
+    host.release_policy_dispatch_lease_for_test(&store_context)
+        .expect("end the dispatch's lease");
+    assert_eq!(
+        pair(&host, TASK),
+        None,
+        "every pair of the instance starts again"
+    );
+    host.record_application_update_for_test(POLICY_INSTANCE_ALIAS, false)
+        .expect("the game is up to date");
+    // The store update task's run succeeded on the instance, which ends its block
+    // (`append_contained_task_terminal`); the hook settles no run.
+    recover(&host);
+
+    let again = evaluate_at(store_at + ACTIVITY_INTERVAL_PAST_MS, 3);
+    assert!(
+        settled.observed_at_unix_ms + PACED_MS > store_at + ACTIVITY_INTERVAL_PAST_MS,
+        "inside the old wait"
+    );
+    let (intent, context) = grant(&again, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+    assert_settled_at_entry(&failure_of(&settled));
+    host.release_policy_dispatch_lease_for_test(&context)
+        .expect("end the dispatch's lease");
+    let (in_a_row, against, _, set_aside) = pair(&host, TASK).expect("the pair");
+    assert_eq!((in_a_row, against, set_aside), (1, 0, false));
+    assert!(set_aside_reports(&host).is_empty(), "no one told");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// M6 (the lease end's in-memory flags, `RunEntry`'s `checked` and `started`; the live path on a
+/// fake device, manual clock): `main` declares no prerequisite, so its page graph's own entry check
+/// is its gate, and the run's bound return-home package leaves `away` for `menu`. The game is on
+/// `shop`. A first run fails at its entry while the cool-down window holds its recovery, and a
+/// recovery ends its block with nothing let in. The task's next run checks its entry, cannot reach
+/// it and fails before its main package started: its lease end judges it a failure at the entry
+/// (`checked`), so its block's climb starts at once from the application restart. A recovery ends
+/// that block. The game is on `away`: the next run checks its entry, its return-home package brings
+/// it to `menu`, its main package starts and fails on `shop`: no failure at the entry, settled
+/// with no condition, and its lease end (`started`) admits its ladder at once, as configured.
+#[test]
+fn entry_m6_on_a_page_graph_without_a_chain_the_lease_end_tells_a_failure_before_its_main_package_from_one_after()
+ {
+    let replay = replay_set_up(
+        &Scene {
+            return_home: &route(RETURN_HOME, "away", "menu", BACK_STEPS, None),
+            lead: &lead(),
+            registry_return_home: None,
+            screens: vec![SHOP],
+        },
+        true,
+        Setup {
+            unchained: true,
+            ..Setup::default()
+        },
+    );
+    let started = Arc::new(AtomicBool::new(false));
+    let base = Arc::new(AtomicUsize::new(0));
+    let (seen_started, seen_base) = (Arc::clone(&started), Arc::clone(&base));
+    *replay.state.pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(move |_: usize, inputs: usize| {
+            let screen = if seen_started.load(Ordering::Acquire) {
+                match inputs.saturating_sub(seen_base.load(Ordering::Acquire)) {
+                    0 => AWAY,
+                    1 => MENU,
+                    _ => SHOP,
+                }
+            } else {
+                SHOP
+            };
+            vec![(0, screen)]
+        }));
+    replay.manual_clock().advance(1);
+    replay
+        .host
+        .open_recovery_cooldown_for_test(
+            POLICY_INSTANCE_ALIAS,
+            replay.now_unix_ms() + COOLDOWN_LEFT_MS,
+        )
+        .expect("the ladder's cool-down window");
+    replay.fail_at_entry();
+    assert!(
+        crate::policy_control::entry_blocked(&replay.execution()),
+        "a failure at the entry: {:?}",
+        replay.execution()
+    );
+    recover(&replay.host);
+    assert!(replay.ladders().is_empty(), "the cool-down held its ladder");
+
+    let second = admit_scheduled_at(
+        &replay.host,
+        replay.manual_clock(),
+        &replay.request,
+        NEXT_DISPATCH_UNIX_MS,
+        301,
+    );
+    replay.fail_at_entry_of(&second);
+    assert!(crate::policy_control::entry_blocked(
+        &replay.execution_of(second.decision_id())
+    ));
+    wait_until("the block's climb", || {
+        replay.tick();
+        !started_plans(&replay.host).is_empty()
+    });
+    let plans = started_plans(&replay.host);
+    let [(trigger, plan)] = plans.as_slice() else {
+        panic!("one climb: {plans:#?}");
+    };
+    assert_eq!(trigger.run_id, Some(second.run_id()));
+    assert_eq!(
+        *plan,
+        from_the_application_restart(),
+        "judged at the entry at its lease end"
+    );
+    wait_for_ladders_finished(&replay.host, 1);
+    recover(&replay.host);
+
+    base.store(
+        replay.state.input_count.load(Ordering::Acquire),
+        Ordering::Release,
+    );
+    started.store(true, Ordering::Release);
+    let third = admit_scheduled_at(
+        &replay.host,
+        replay.manual_clock(),
+        &replay.request,
+        NEXT_DISPATCH_UNIX_MS + 2 * 3_600_000,
+        302,
+    );
+    replay.fail_at_entry_of(&third);
+    let failure = replay.execution_of(third.decision_id());
+    assert!(
+        !crate::policy_control::entry_blocked(&failure),
+        "after its main package started: {failure:?}"
+    );
+    assert_eq!(failure.condition, None, "{failure:?}");
+    wait_until("the run's own climb", || {
+        started_plans(&replay.host).len() == 2
+    });
+    let plans = started_plans(&replay.host);
+    let (trigger, plan) = &plans[1];
+    assert_eq!(trigger.run_id, Some(third.run_id()));
+    assert_eq!(
+        plan.first(),
+        Some(&planned(RecoveryRung::ReturnHome, None)),
+        "as configured, at once from its lease end"
+    );
+    wait_for_ladders_finished(&replay.host, 2);
+    replay.close();
 }

@@ -311,14 +311,34 @@ actingcommand_contract::outcome_codes! {
         /// the update dialog no climb again in the stretch, after a panicked worker none in the
         /// block (keys as above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
-        /// Info (Workflow #490 ENTRY-A fix round 3). The candidate's task yields its turn on its
-        /// instance: its failure at the entry set the instance's latest block, which has ended, and
-        /// no run of another task has started there since; a candidate of the instance that ranked
-        /// behind it took the instance this round, with no wake of its own, the fact refresh
-        /// naming it as its gate (keys `instance_id`, `task_id` the yielding task, `decision_id`
-        /// its run whose failure set the block, `failure_code` that failure, `observed_at_unix_ms`
-        /// when it set the block).
-        InstanceEntryYielding => "instance_entry_yielding": info / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
+        /// entry on its instance `count` times in a row in its activity window, the latest
+        /// (`decision_id`, `failure_code`, settled at `observed_at_unix_ms`) less than
+        /// `scheduling.unavailable_probe`'s interval for `count` ago: it is not dispatched there
+        /// before `next_eligible_unix_ms` (never after the window's end), when it wakes; the fact
+        /// refresh names it as its gate (keys `instance_id`, `task_id` as well).
+        InstanceEntryTaskWaiting => "instance_entry_task_waiting": info / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 3). The candidate's task is set aside on
+        /// its instance until its activity window ends (`window_end_unix_ms`), when it wakes: in
+        /// that window `count` of its failures at the entry came although the instance had let
+        /// another scheduled run in since its previous one, reaching its rule's
+        /// `escalation_threshold` (`limit_count`); its latest `decision_id`, `failure_code`,
+        /// `observed_at_unix_ms` (keys `instance_id`, `task_id` as well). The fact refresh names it
+        /// as its gate.
+        InstanceEntryTaskSetAside => "instance_entry_task_set_aside": info / none,
+        /// Warning (Workflow #490 ENTRY-A fix round 4, ruling 3). A person is told, once, that a
+        /// task is set aside on its instance until its activity window ends
+        /// (`window_end_unix_ms`): `count` of its failures at the entry in that window came
+        /// although the instance had let another scheduled run in since its previous one, which
+        /// reached its rule's `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`,
+        /// `decision_id`, `failure_code`, `observed_at_unix_ms` of the failure that reached it.
+        InstanceEntryTaskSetAsideReported => "instance_entry_task_set_aside_reported": warning / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 4). An entry-blocked instance's ladder
+        /// did not run its emulator restart rung: a ladder of the instance's stretch of entry
+        /// blocks (blocks with no run let in between them) has run that rung already, and the
+        /// emulator is restarted at most once in a stretch (the rung's `recovery_rung_finished`
+        /// outcome, `skipped`; the climb's plan lists the rung pending, as a plan drill's does).
+        RecoveryRungSkippedEmulatorRestartedInStretch => "recovery_rung_skipped_emulator_restarted_in_stretch": info / none,
         // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
@@ -3007,13 +3027,15 @@ pub(crate) mod test_spellings {
             SettleAtEntryForTest => "settle_at_entry_for_test",
             EntryBlockForTest => "entry_block_for_test",
             EntryBlockTickForTest => "entry_block_tick_for_test",
-            // Workflow #490 ENTRY-A2: a test settles the next run as one whose main package
-            // started, ends a recovery of an instance and reads a pair's mark.
+            // Workflow #490 ENTRY-A: a test settles the next run as one whose main package started
+            // after its entry check, ends a recovery of an instance and (fix round 4) reads a
+            // pair's failures at the entry and its wait.
             SettlePastEntryForTest => "settle_past_entry_for_test",
             RecoverInstanceForTest => "recover_instance_for_test",
-            EntryMarkForTest => "entry_mark_for_test",
-            // The coordinator's ruling of 11-21 00:22 JST: a test starts another run.
-            StartRunForTest => "start_run_for_test",
+            EntryPairForTest => "entry_pair_for_test",
+            // Workflow #490 ENTRY-A fix round 3: a test lets a scheduled run in on an instance, as
+            // its settlement tells the entry blocks.
+            LetRunInForTest => "let_run_in_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.

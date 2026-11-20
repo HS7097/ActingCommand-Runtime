@@ -161,22 +161,6 @@ impl Contenders<'_> {
                 .is_some_and(|handover| handover.holds(candidate.work_index))
     }
 
-    /// Workflow #490 ENTRY-A fix round 3 ([`InstanceHolds::yield_turn`]): whether `candidate`
-    /// yields its turn to another of `contending`, the device's contenders, of its own member.
-    fn yields(
-        &self,
-        candidate: &PlacementCandidate,
-        contending: &[(usize, &PlacementCandidate)],
-    ) -> bool {
-        self.instance_holds
-            .yielding(&candidate.task_id, &candidate.instance_id)
-            .is_some()
-            && contending.iter().any(|(_, other)| {
-                other.instance_id == candidate.instance_id
-                    && other.work_index != candidate.work_index
-            })
-    }
-
     /// Whether `work_index` is `device`'s chain successor.
     fn is_successor(&self, device: &str, work_index: usize) -> bool {
         self.handovers
@@ -245,7 +229,7 @@ impl DeviceRound {
         if selected_devices.contains_key(&self.device) {
             return None;
         }
-        let contending = queue
+        let seats = queue
             .iter()
             .enumerate()
             .skip(self.start)
@@ -254,13 +238,7 @@ impl DeviceRound {
                 ordering.groups.device(&candidate.instance_id) == self.device
                     && contenders.admits(candidate, &self.device)
             })
-            .collect::<Vec<_>>();
-        // Workflow #490 ENTRY-A fix round 3: a task that yields its turn contends only while no
-        // other candidate of its member does; otherwise it takes its turn at its place.
-        let seats = contending
-            .iter()
-            .filter(|(_, candidate)| !contenders.yields(candidate, &contending))
-            .map(|(place, candidate)| ordering.seat(*place, candidate))
+            .map(|(place, candidate)| ordering.seat(place, candidate))
             .collect::<Vec<_>>();
         let front = ordering
             .fronts
