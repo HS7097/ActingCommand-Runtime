@@ -333,19 +333,30 @@ at the entry is the instance's condition only while nothing says it is the pair'
   condition, counts given back, no streak, the instance blocked) and sets the mark. So does one of
   a pair whose mark is set when no recovery of the instance succeeded since the marked run began
   (the instance was unblocked by a pause set and lifted, or by a client's or the Lab's run that
-  succeeded) or when the packages differ (the pair's content changed).
+  succeeded), when another run started on the instance between the latest successful recovery
+  and this run (see below), or when the packages differ (the pair's content changed); the mark
+  stays set.
 - *The pair's own.* A failure at the entry of a pair whose mark is set, with the same packages,
-  when a recovery of the instance succeeded since the marked run began (the run started from a
-  recovered instance), is the pair's own. Only a recovery ladder of the instance that ended
-  `recovered` or `environment_ready` counts as that recovery; a resume, a run's success and a
-  restart do not. Such a failure settles down the ordinary path of a failure that accumulates: its
+  is the pair's own only when its run started from a recovered instance: a recovery of the
+  instance succeeded since the marked run began, and (the coordinator's ruling of 11-21 00:22 JST)
+  no other run started on the instance between the latest such recovery and this run's start (a
+  scheduled run, a client's or the Lab's run; the Runtime's own startup or recovery package's run,
+  a rung's, is not counted). The Runtime counts in its memory, per instance, the runs started since
+  its latest successful recovery; no record, fact or status member holds the count. Evidence
+  against the pair needs the pair to have started from a recovered instance, since a run between
+  the recovery and it may have left the screen it met; the cost is that a pair that is never the
+  first run after a recovery keeps meeting conditions, each costing one recovery. Only a recovery
+  ladder of the instance that ended `recovered` or `environment_ready` counts as that recovery; a
+  resume, a run's success and a restart do not. Such a failure settles down the ordinary path of a
+  failure that accumulates: its
   identity is written as one ("Failure identity", `F` the run's error frame or `na`, or the pair's
   previous identity whole when it accumulates and has the same prefix, so two in a row repeat it
   without comparing frames), it carries no `condition`, its counts stay taken, it counts toward
   `escalation_threshold` and `retry_limit` as a step failure does (performance pressure as for any
   failure), its disposition is `retry_scheduled` with the rule's `retry_backoff_ms` or `paused_task`,
   and it ends the pair's owed rerun as any ordinary failure does. The immediate rerun (R22) treats
-  it as a step failure's: nothing reruns it before its backoff has passed. It blocks the instance
+  it as a step failure's: it reruns the pair once its backoff has passed and the block has ended
+  (at once after the recovery when `retry_backoff_ms` is 0). It blocks the instance
   all the same (the screen it left is not known), so its lease end's recovery follows as for every
   failure at the entry, and it keeps the mark set.
 - *The mark's end.* A settlement of the pair's run whose main package started (its entry worked:
@@ -353,8 +364,14 @@ at the entry is the instance's condition only while nothing says it is the pair'
   success, and a settlement that pauses the pair clear the mark.
 
 So a pair whose entry is broken is paused after `escalation_threshold` own failures, the first
-failure of the episode (a condition) not counted; each attempt costs at most one recovery, and
-between its attempts its backoff holds it while the instance's other tasks run.
+failure of the episode (a condition) not counted, each attempt costing one recovery; the bound is
+the threshold, not the backoff. The instance's other tasks run between the pair's attempts only
+when the rule sets a backoff, which holds the pair (`policy_retry_backoff_active`); without one the
+immediate rerun takes the pair first after each recovery until its threshold pauses it. With the
+recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0, `escalation_threshold` 2) that is
+three runs that fail at the entry, each followed by one recovery: the first a condition, the second
+the pair's own (`retry_scheduled`), the third its own again with the same identity, which pauses
+it (`repeated_failure`).
 
 **The block.** The settlement of a failure at the entry, a condition or the pair's own, then
 blocks the instance, under the policy outcome gate the evaluation reads the blocks under: from then on every candidate of the instance (owed reruns,

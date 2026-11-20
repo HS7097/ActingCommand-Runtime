@@ -11854,6 +11854,14 @@ impl HostShared {
         if host {
             control.note_host_package();
         }
+        // Workflow #490 ENTRY-A2 (`entry_blocks.rs`): a scheduled run, a client's or the Lab's run
+        // starts on the instance; the Runtime's own startup or recovery package's run is not
+        // counted. A failure at the entry is its pair's own only when no such run started between
+        // the instance's latest successful recovery and its run's start. Counted before the run
+        // enters the registry, so a failure here leaves nothing registered.
+        if !host {
+            self.note_entry_run_started(instance_id)?;
+        }
         active.insert(request_id, Arc::clone(&control));
         drop(active);
         Ok(ActiveContainedRun {

@@ -235,17 +235,16 @@ impl HostShared {
         )?;
         match (withdrawn, failed) {
             (None, _) => {
-                // Workflow #490 ENTRY-A: a recovery held back with the instance goes to the entry
-                // blocks (`hold_entry_recovery`): an entry-blocked instance's block takes it up at
-                // its cool-down's end (the window in force read again), and the settlement of the
-                // failed run its trigger names, still to come, adopts it; nothing else takes it up,
-                // so for any other instance it is dropped with the unavailability, as before.
+                // Workflow #490 ENTRY-A: a recovery held back with the instance is handed to its
+                // entry block when it is entry-blocked, which takes it up at its cool-down's end
+                // (the window in force read again); for any other instance it is dropped with the
+                // unavailability, as before (`hand_over_held_recovery`).
                 let held = instances
                     .remove(&instance_id)
                     .and_then(|instance| instance.held);
                 drop(instances);
                 if let Some(held) = held {
-                    self.hold_entry_recovery(instance_id, held.ladder, held.until_unix_ms)?;
+                    self.hand_over_held_recovery(instance_id, held.ladder, held.until_unix_ms)?;
                 }
             }
             (Some(since_unix_ms), failed) => {

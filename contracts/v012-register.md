@@ -43028,9 +43028,10 @@ hold; the replay test runs a client's run on a blocked instance).
    since its fix round, the step reads the instance's cool-down window in force again
    (`cooldown_window_until`) and keeps the recovery held until a later window's end. When AVAIL-1
    holds it for an unavailable instance, AVAIL-1's probe takes it up; a probe that passes, or any
-   other way out of the unavailable set, hands it to the entry blocks (`track_unavailability`
-   calls `hold_entry_recovery`) instead of dropping it, so an instance that was unavailable and
-   entry-blocked still has its recovery coming once it is available. A ladder that ends `exhausted`, or one a
+   other way out of the unavailable set, hands it to the instance's entry block when it is
+   entry-blocked (`track_unavailability` calls `hand_over_held_recovery`) instead of dropping it, so
+   an instance that was unavailable and entry-blocked still has its recovery coming once it is
+   available; for any other instance it is dropped as AVAIL-1 drops it. A ladder that ends `exhausted`, or one a
    blackout or an admission refusal drops, leaves the instance blocked and raises
    `instance_entry_blocked_awaiting_person` once per block (AVAIL-1's way: a warning record and the
    daemon's log).
@@ -43054,7 +43055,13 @@ hold; the replay test runs a client's run on a blocked instance).
    status member; a restart forgets it). A failure at the entry of a marked pair with the same
    packages, after a recovery of the instance succeeded since the marked run began (a ladder
    `recovered` or `environment_ready`, `note_entry_recovered`; a resume or a run's success is not
-   one), is the pair's own (`entry_failure_own`): it is written as a failure that accumulates
+   one), when (the coordinator's ruling of 11-21 00:22 JST) no other run started on the instance
+   between the latest such recovery and this run's start (`EntryMarks.started`, a count per
+   instance of the runs `begin_contained_run` starts that are not the Runtime's own startup or
+   recovery package's, reset by `note_entry_recovered`), is the pair's own (`entry_failure_own`):
+   evidence against the pair needs it to have started from a recovered instance, at the cost that a
+   pair never first after a recovery keeps meeting conditions, one recovery each. It is written as a
+   failure that accumulates
    (`own_entry_identity`: `F` the run's error frame or `na`, or the pair's previous identity whole
    when that one accumulates and has the same prefix; frames not compared) and settles down the
    ordinary path (no condition, counts kept, `consecutive_same_error` and `escalation_streak`,
@@ -43062,10 +43069,14 @@ hold; the replay test runs a client's run on a blocked instance).
    step failure once its backoff has passed); it blocks the instance all the same and keeps the
    mark. Any other failure at the entry is ENTRY-A's condition and sets the mark. A settlement of the
    pair whose main package started (`EntrySettlement::TargetStarted`, told from the run's rows), a
-   success and a settlement that pauses the pair clear it (`HostShared::settle_entry`). So a pair
-   whose entry is broken is paused after `escalation_threshold` own failures, the first failure of
-   the episode not counted; each attempt costs at most one recovery and its backoff lets the
-   instance's other tasks run between attempts.
+   success and a settlement that pauses the pair clear it (`HostShared::settle_entry`); a condition
+   after another run keeps it set. So a pair whose entry is broken is paused after
+   `escalation_threshold` own failures, the first failure of the episode not counted, each attempt
+   costing one recovery; the bound is the threshold (the ruling of 00:22): other tasks run between
+   the pair's attempts only when its rule sets a backoff, and without one R22 reruns it first after
+   each recovery. With the recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0,
+   `escalation_threshold` 2): three runs failing at the entry and three recoveries, the third run
+   pausing the pair.
 
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`):
@@ -43088,7 +43099,7 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 | Part | Where |
 |---|---|
 | Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`) |
-| Whose failure (A2) | `crates/runtime-host/src/failure_identity.rs` (`FailureIdentity::packages`, `own_entry_identity`); `host/entry_blocks.rs` (`EntrySettlement`, `EntryMarks.recovered`, `entry_failure_own`, `settle_entry`, `note_entry_recovered`); `host/failure_settlement.rs` (`build_scheduled_failure_identity`); `host/policy_outcome.rs` (the condition only for a failure not the pair's own); `host/recovery_ladder.rs` (`append_recovery_ladder_fact`) |
+| Whose failure (A2) | `crates/runtime-host/src/failure_identity.rs` (`FailureIdentity::packages`, `own_entry_identity`); `host/entry_blocks.rs` (`EntrySettlement`, `EntryMarks.recovered` and `.started`, `entry_failure_own`, `settle_entry`, `note_entry_recovered`, `note_entry_run_started`, `hand_over_held_recovery`); `host/contained_task.rs` (`begin_contained_run`); `host/failure_settlement.rs` (`build_scheduled_failure_identity`); `host/policy_outcome.rs` (the condition only for a failure not the pair's own); `host/recovery_ladder.rs` (`append_recovery_ladder_fact`) |
 | Settlement and replay | `crates/runtime-host/src/host/policy_outcome.rs` (`record_policy_dispatch_outcome_under_gate`, `entry_failure_input`); `policy_control.rs` (`entry_blocked`, `entry_condition`, `condition_window_end`, `commit_paced_execution`); `policy_host.rs` (`entry_condition`) |
 | The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`, `track_unavailability`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
 | The gate | `crates/runtime-host/src/entry_block.rs`; `policy_host.rs` (`PolicyEvaluationContext::entry_blocked`, `evaluate`); `host/policy_dispatch.rs` |
@@ -43107,6 +43118,7 @@ clock read in the gate file).
 | `entry_a2_b_own_failures_pause_the_pair_at_its_threshold_and_a_recovery_unblocks` (A2 b) | Threshold 2: condition, recovery, own (1), recovery, own at the backoff's end with the same identity (2): `paused_task`, `repeated_failure`, the mark cleared, the instance blocked; the next recovery unblocks it, nothing of the paused pair is dispatched and no `instance_entry_blocked` is left |
 | `entry_a2_c_a_run_that_started_its_main_package_clears_the_mark` (A2 c) | Condition and mark; recovery; a run past its entry failing in a step clears the mark and blocks nothing; after another recovery the next failure at the entry is a condition again (the step failure's counters kept) and marks the pair again |
 | `entry_a2_d_an_instance_unblocked_by_a_lifted_pause_meets_a_condition_again` (A2 d) | Condition and mark; a global pause set and lifted by a client ends the block, no recovery; the next failure at the entry is a condition again (counters 0, both counts given back) |
+| `entry_a2_e_a_failure_after_another_run_started_first_is_a_condition_and_the_mark_stays` (A2 e, the ruling of 00:22) | Threshold 2: condition and mark; recovery (no run started since); another run starts first; the task's failure at the entry is a condition (counters 0, count given back, no streak, blocked), the mark kept; after the next recovery the task's run is first and its failure at the entry is its own (counters 1, `retry_scheduled`), blocking the instance. The replays also show a client's run counted and none counted after a recovery |
 
 Test 5 is the existing tests, unchanged in what they assert. Touched: `gate_373_nav3a.rs`, whose
 `Pack::zip` is now `pub(super)` (the gate file builds its packages with it); nothing else. The
@@ -43141,7 +43153,7 @@ owes that pair a rerun until the window's end, and a settlement it repeats for a
 record exists (a crash between the record and its completion) is refused
 (`policy_execution_identity_conflict`). A record of an own failure at the entry (A2) is an ordinary
 accumulating failure in the existing format, which v0.12.75 replays as it is (its streak, backoff
-or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。但同一条规则在恢复成功之后又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（这段时间这台上的其他任务照常跑），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则，不再无限循环。
+or pause kept). In the release notes' language: 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复或运行时重启；被冷却压下的恢复到点会接着做，恢复失败就记一条警告 `instance_entry_blocked_awaiting_person` 等人处理。但同一条规则在恢复成功之后、作为这台上的第一次运行又在进门时失败，就算这条规则自己的问题：照普通失败记连败、不退次数、按 `retry_backoff_ms` 退避（退避大于 0 时这台上的其他任务先跑；推荐的 0 退避下恢复后先重跑它），实例照样被挡、等恢复；连到 `escalation_threshold` 次就停掉这条规则（推荐配置下第三次进门失败时停），不再无限循环。恢复后先有别的运行开始过，再失败的仍算实例的条件。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

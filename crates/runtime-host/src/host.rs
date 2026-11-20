@@ -5295,6 +5295,35 @@ impl RuntimeHost {
         shared.note_entry_recovered(instance_id)
     }
 
+    /// Workflow #490 ENTRY-A2: a run of another task (a scheduled run, a client's or the Lab's run)
+    /// started on `instance_alias`, as `begin_contained_run` tells the entry blocks.
+    #[cfg(test)]
+    pub(crate) fn start_run_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::StartRunForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.note_entry_run_started(instance_id)
+    }
+
+    /// Workflow #490 ENTRY-A2: the runs started on `instance_alias` since its latest successful
+    /// recovery, as the entry blocks count them.
+    #[cfg(test)]
+    pub(crate) fn entry_runs_started_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<u64> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryMarkForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.entry_runs_started_for_test(instance_id)
+    }
+
     /// Workflow #490 ENTRY-A2: the mark of `task_id` on `instance_alias`, if it is set: the
     /// instance's successful recoveries when the run that set it began.
     #[cfg(test)]

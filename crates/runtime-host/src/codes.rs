@@ -2993,6 +2993,8 @@ pub(crate) mod test_spellings {
             SettlePastEntryForTest => "settle_past_entry_for_test",
             RecoverInstanceForTest => "recover_instance_for_test",
             EntryMarkForTest => "entry_mark_for_test",
+            // The coordinator's ruling of 11-21 00:22 JST: a test starts another run.
+            StartRunForTest => "start_run_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.

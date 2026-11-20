@@ -33,7 +33,10 @@
 //! - (c) a run of the task whose main package started clears the pair's mark: its next failure at
 //!   the entry, after a recovery, is a condition again;
 //! - (d) an instance unblocked by a pause set and lifted, not by a recovery: the next failure at the
-//!   entry is a condition again.
+//!   entry is a condition again;
+//! - (e) (the ruling of 11-21 00:22 JST) another run starts first after the recovery: the task's next
+//!   failure at the entry is a condition, the mark kept; once the task's run is the first after the
+//!   next recovery, its failure at the entry is its own.
 //!
 //! The policy-level tests settle with the host's test hook that arms the next settlement as one of a
 //! run that failed at its entry, judged as the live settlement judges it (the live settlement tells
@@ -752,6 +755,59 @@ fn entry_a2_d_an_instance_unblocked_by_a_lifted_pause_meets_a_condition_again() 
     host.close().expect("close the host");
 }
 
+/// ENTRY-A2 (e; the coordinator's ruling of 11-21 00:22 JST): a failure at the entry marks the pair;
+/// a recovery succeeds, and another task's run starts on the instance first (and succeeds); the
+/// task's next failure at the entry did not start from a recovered instance, so it is a condition
+/// as a first one is: no streak, its count given back, the instance blocked, the mark still set.
+/// After the next recovery the task's run is the first on the instance, and its failure at the
+/// entry is its own. (The settlement here is judged against the instance's marks at the
+/// settlement, which stand for the run's start: only the other run's start is told.)
+#[test]
+fn entry_a2_e_a_failure_after_another_run_started_first_is_a_condition_and_the_mark_stays() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&sources(2))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    let settled = settle_at_entry(&host, &clock, &first);
+    assert_settled_at_entry(&failure_of(&settled));
+    assert_eq!(mark(&host), Some(0));
+    recover(&host);
+    assert_eq!(
+        host.entry_runs_started_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("the runs started"),
+        0
+    );
+
+    host.start_run_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("another task's run starts first");
+    let second = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 101);
+    let settled = settle_at_entry(&host, &clock, &second);
+    assert_settled_at_entry(&failure_of(&settled));
+    let record = latest_value_record(&host);
+    assert!(
+        record.daily_counts.iter().all(|count| count.count == 0),
+        "its count given back: {record:?}"
+    );
+    assert!(record.failure_streak.is_none(), "no streak: {record:?}");
+    assert_eq!(blocked_by(&host).decision_id, second.decision_id);
+    assert_eq!(mark(&host), Some(1), "the mark stays set");
+
+    recover(&host);
+    let third = admit_at(&host, &clock, settled.observed_at_unix_ms + 1_000, 102);
+    let settled = settle_at_entry(&host, &clock, &third);
+    let failure = failure_of(&settled);
+    assert_own(&failure, 1);
+    assert_eq!(
+        failure.disposition,
+        PolicyFailureDisposition::RetryScheduled,
+        "the first own failure, below the threshold of 2"
+    );
+    assert_eq!(blocked_by(&host).decision_id, third.decision_id);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
 // ---- The replays on a fake device.
 
 const LEAD_STEPS: &[(&str, &str, &str)] = &[("go", "shop", "menu")];
@@ -977,11 +1033,23 @@ fn entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_fai
     );
     assert_eq!(attention.value("failure_code"), Some(&json!(PAGE_UNKNOWN)));
 
+    let started_before = replay
+        .host
+        .entry_runs_started_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("the runs started");
     let receipt = manual_run(&replay.host, replay.root.path());
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,
         "a client's run on a blocked instance is not refused: {receipt:?}"
+    );
+    assert_eq!(
+        replay
+            .host
+            .entry_runs_started_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("the runs started"),
+        started_before + 1,
+        "ENTRY-A2: a client's run counts as a run started since the latest recovery"
     );
     assert!(
         matches!(
@@ -1095,6 +1163,14 @@ fn entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblo
             .expect("the instance's block"),
         None,
         "the recovery's success ends the block"
+    );
+    assert_eq!(
+        replay
+            .host
+            .entry_runs_started_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("the runs started"),
+        0,
+        "ENTRY-A2: no run started since the recovery (its rung's run is the Runtime's own)"
     );
     assert!(failed_outcomes(&replay.host, HostCode::InstanceEntryBlockedAwaitingPerson).is_empty());
 

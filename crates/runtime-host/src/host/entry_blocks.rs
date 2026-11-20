@@ -37,7 +37,9 @@
 //!   (instance, catalog task) keeps here whether its task's last scheduled run failed at its entry
 //!   (its mark: what that run's start knew of the instance's recoveries, and the packages its
 //!   identity names). A failure at the entry of a pair whose mark is set, with the same packages,
-//!   after a recovery of the instance succeeded since that run began, is the pair's own: it settles
+//!   after a recovery of the instance succeeded since that run began and (the ruling of 11-21 00:22
+//!   JST) with no other run started on the instance between that recovery and its own start (the
+//!   count `begin_contained_run` keeps here), is the pair's own: it settles
 //!   as a failure that accumulates (`failure_identity::own_entry_identity`) and blocks the instance
 //!   all the same. A run of the task whose main package started, a settlement that pauses the pair
 //!   and a success clear the mark; packages that changed make it count for nothing.
@@ -60,6 +62,10 @@ pub(super) struct EntryMarks {
     ended: u64,
     unrecovered: u64,
     recovered: u64,
+    /// ENTRY-A2 (the coordinator's ruling of 11-21 00:22 JST): the runs started on the instance
+    /// since its latest successful recovery (a scheduled run, a client's or the Lab's; not the
+    /// Runtime's own startup or recovery package's run).
+    started: u64,
 }
 
 /// Workflow #490 ENTRY-A and A2: what a scheduled run's settlement tells its instance's block and
@@ -114,6 +120,8 @@ pub(super) struct EntryBlocks {
     unrecovered: BTreeMap<InstanceId, u64>,
     /// ENTRY-A2: the instance's recovery ladders that ended `recovered` or `environment_ready`.
     recovered: BTreeMap<InstanceId, u64>,
+    /// ENTRY-A2: the runs started on the instance since its latest successful recovery.
+    started: BTreeMap<InstanceId, u64>,
     /// ENTRY-A2: the pairs' marks, by instance alias and catalog task.
     entry_failed: BTreeMap<(String, String), EntryFailureMark>,
     /// The latest ladder of an instance not blocked (yet) that its cool-down suppressed, with the
@@ -131,6 +139,7 @@ impl EntryBlocks {
             ended: self.ended.get(&instance_id).copied().unwrap_or(0),
             unrecovered: self.unrecovered.get(&instance_id).copied().unwrap_or(0),
             recovered: self.recovered.get(&instance_id).copied().unwrap_or(0),
+            started: self.started.get(&instance_id).copied().unwrap_or(0),
         }
     }
 }
@@ -148,9 +157,12 @@ impl HostShared {
 
     /// ENTRY-A2: whether a failure at the entry of `task_id` on `instance_alias`, whose run's start
     /// knew `marks` and whose identity names `packages`, is the pair's own: the pair's mark is set
-    /// (its task's last scheduled run failed at its entry) with the same packages, and a recovery of
-    /// the instance succeeded since that run began. A block ended by anything else (a run's success,
-    /// a resume) is no evidence against the pair.
+    /// (its task's last scheduled run failed at its entry) with the same packages, a recovery of the
+    /// instance succeeded since that run began, and (the coordinator's ruling of 11-21 00:22 JST) no
+    /// other run started on the instance between the latest such recovery and this run's start: the
+    /// run started from a recovered instance. A block ended by anything else (a run's success, a
+    /// resume) is no evidence against the pair, nor is a failure after another run, which may have
+    /// left the screen the run met.
     pub(super) fn entry_failure_own(
         &self,
         instance_alias: &str,
@@ -161,7 +173,19 @@ impl HostShared {
         Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
             .entry_failed
             .get(&(instance_alias.to_owned(), task_id.to_owned()))
-            .is_some_and(|mark| mark.packages == packages && marks.recovered > mark.recovered))
+            .is_some_and(|mark| {
+                mark.packages == packages && marks.recovered > mark.recovered && marks.started == 0
+            }))
+    }
+
+    /// ENTRY-A2: a run started on `instance_id` (a scheduled run, a client's or the Lab's run;
+    /// `begin_contained_run` calls it for every run but the Runtime's own startup or recovery
+    /// package's): counted until the instance's next successful recovery.
+    pub(super) fn note_entry_run_started(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let started = blocks.started.entry(instance_id).or_insert(0);
+        *started = started.saturating_add(1);
+        Ok(())
     }
 
     /// Workflow #490 ENTRY-A and A2: what the execution record `data`, recorded now, tells its
@@ -192,8 +216,23 @@ impl HostShared {
             Some(EntrySettlement::AtEntry { marks, own }) => Some((marks, own)),
             Some(EntrySettlement::TargetStarted) | None => None,
         };
+        let blocks_instance = match (at_entry, failure) {
+            (Some((_, own)), Some(failure)) => {
+                crate::policy_control::entry_blocked(failure)
+                    || (own && failure.condition.is_none())
+            }
+            _ => false,
+        };
         {
             let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+            // A ladder its cool-down suppressed at this run's lease end, kept for this settlement:
+            // only a settlement that blocks the instance takes it (`block_instance_entry`); any
+            // other lets it go, as it went before ENTRY-A.
+            if !blocks_instance && let Some(run_id) = run_id {
+                blocks
+                    .cooled
+                    .retain(|_, (cooled_run, _)| *cooled_run != run_id);
+            }
             if succeeded || paused || entry == Some(EntrySettlement::TargetStarted) {
                 blocks.entry_failed.remove(&key);
             } else if let Some((marks, _)) = at_entry {
@@ -211,18 +250,15 @@ impl HostShared {
                 );
             }
         }
-        let (Some((marks, own)), Some(failure)) = (at_entry, failure) else {
+        let (true, Some((marks, _)), Some(failure)) = (blocks_instance, at_entry, failure) else {
             return Ok(());
         };
-        if crate::policy_control::entry_blocked(failure) || (own && failure.condition.is_none()) {
-            self.block_instance_entry(
-                data,
-                actingcommand_contract::scheduled_failure_code_str(&failure.outcome),
-                run_id,
-                marks,
-            )?;
-        }
-        Ok(())
+        self.block_instance_entry(
+            data,
+            actingcommand_contract::scheduled_failure_code_str(&failure.outcome),
+            run_id,
+            marks,
+        )
     }
 
     /// Blocks the instance of `data`, a run's execution record settled now as failed at its entry
@@ -297,6 +333,8 @@ impl HostShared {
         let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
         let recovered = blocks.recovered.entry(instance_id).or_insert(0);
         *recovered = recovered.saturating_add(1);
+        // No run has started since this recovery.
+        blocks.started.remove(&instance_id);
         let ended = blocks.ended.entry(instance_id).or_insert(0);
         *ended = ended.saturating_add(1);
         blocks.blocked.remove(&instance_id);
@@ -372,6 +410,28 @@ impl HostShared {
             block.held = Some(held);
         } else if let Some(run_id) = run_id {
             blocks.cooled.insert(instance_id, (run_id, held));
+        }
+        Ok(())
+    }
+
+    /// A recovery Workflow #489 AVAIL-1 held back with `instance_id` while it was unavailable,
+    /// which the instance's leaving the unavailable set lets go (`track_unavailability`): an
+    /// entry-blocked instance's block takes it over, to take it up at `until_unix_ms` (the window
+    /// in force read again then); for any other instance it is dropped, as AVAIL-1 drops it.
+    pub(super) fn hand_over_held_recovery(
+        &self,
+        instance_id: InstanceId,
+        ladder: PendingRecoveryLadder,
+        until_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        if let Some(block) = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
+            .blocked
+            .get_mut(&instance_id)
+        {
+            block.held = Some(HeldEntryRecovery {
+                ladder,
+                until_unix_ms,
+            });
         }
         Ok(())
     }
@@ -575,6 +635,17 @@ impl HostShared {
                 class: *class,
             }),
         ))
+    }
+
+    /// Test only: the runs started on `instance_id` since its latest successful recovery.
+    #[cfg(test)]
+    pub(super) fn entry_runs_started_for_test(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<u64> {
+        Ok(lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
+            .marks(instance_id)
+            .started)
     }
 
     /// Test only: whether the pair of `task_id` on `instance_alias` is marked as failed at its

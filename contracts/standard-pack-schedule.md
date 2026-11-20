@@ -756,11 +756,15 @@ can do something irreversible").
   owes no rerun and never counts toward `escalation_threshold`, so a rule whose threshold is 1 is
   not paused by it; the instance waits for its recovery (`instance_entry_blocked`) and the rule is
   due again by its own trigger once it is unblocked. ENTRY-A2 ("Whose failure"): when the same
-  rule then fails at its entry again after a recovery of the instance succeeded, the failure is
-  the rule's own: it keeps its admission, waits for `retry_backoff_ms` (the instance's other rules
-  run meanwhile), counts toward `escalation_threshold` and still waits for a recovery, so a rule
-  whose entry is broken is paused after `escalation_threshold` such failures, and a threshold of 1
-  pauses it at the first. No package or rule changes for it.
+  rule then fails at its entry again as the first run on the instance after a recovery of it
+  succeeded, the failure is the rule's own: it keeps its admission, counts toward
+  `escalation_threshold`, waits for `retry_backoff_ms` (the instance's other rules run meanwhile
+  only when it is above 0; with the recommended 0 the rule is rerun first after the next
+  recovery) and still waits for a recovery, so a rule whose entry is broken is paused after
+  `escalation_threshold` such failures (with the recommended `on_failure`, at its third failure at
+  the entry, each failure followed by one recovery), and a threshold of 1 pauses it at the first. A failure at the
+  entry after another run started first on the instance is a condition again. No package or rule
+  changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is
