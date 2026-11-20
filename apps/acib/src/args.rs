@@ -12,13 +12,16 @@
 //! acib orientation <device> [--via <reader>]               [--timeout-ms <ms>]
 //! acib running     <device> --bundle <id>                  [--timeout-ms <ms>]
 //! acib launch      <device> --bundle <id> [--relaunch]     [--timeout-ms <ms>]
-//! acib stop        <device> --bundle <id>                  [--timeout-ms <ms>]
+//! acib stop        <device> --bundle <id> [--via <kill>] [--wait-ms <ms>] [--timeout-ms <ms>]
 //! acib probe       <device> [--wait-ms <ms>]               [--timeout-ms <ms>]
 //! ```
 //!
 //! (ACIB-3b, second round) `<name>` is one remote service's name as the discovery handshake
 //! lists it (ASCII letters and digits, `.`, `-` and `_`); `--wait-ms` is how long `probe` waits
-//! for each of its ways (1 to [`MAX_WAIT_MS`], default [`DEFAULT_WAIT_MS`]).
+//! for each of its ways (1 to [`MAX_WAIT_MS`], default [`DEFAULT_WAIT_MS`]). (ACIB-3d) `<kill>`
+//! is one of the words of [`StopWay`] (default [`DEFAULT_STOP_WAY`]), the way `stop` sends its
+//! kill requests; of `stop`, `--wait-ms` is how long it waits for the answers to them, of a way
+//! that asks for answers (1 to [`MAX_WAIT_MS`], default [`DEFAULT_KILL_WAIT_MS`]).
 //!
 //! `<device>` is `--device <n>`, the device's usbmuxd session number as `acib devices` lists
 //! it, or, in its place, `--device-key <key> --key-salt-env <NAME>`: the listed device whose
@@ -36,7 +39,7 @@
 //! variable name that cannot be one, a bundle identifier that cannot be one, an option the
 //! command does not take.
 
-use crate::answer::{CommandName, Reader, Way};
+use crate::answer::{CommandName, Reader, StopWay, Way};
 use crate::key;
 use crate::redact;
 
@@ -60,6 +63,14 @@ pub const STANDARD_OUTPUT: &str = "-";
 const RELAUNCH: &str = "--relaunch";
 /// How long `probe` waits for each way when `--wait-ms` does not say.
 pub const DEFAULT_WAIT_MS: u64 = 4_000;
+/// (ACIB-3d, fix round 1) The way `stop` sends its kill requests when `--via` does not say: the
+/// form that is known, the library's own (the pid as a 32-bit number), its answer waited for.
+/// `archived` is sent only when `--via` names it: how the phone reads that form the library's
+/// source does not show (README).
+pub const DEFAULT_STOP_WAY: StopWay = StopWay::Primitive;
+/// (ACIB-3d) How long `stop` waits for the answers to its kill requests, of a way that asks for
+/// them, when `--wait-ms` does not say.
+pub const DEFAULT_KILL_WAIT_MS: u64 = 5_000;
 /// The longest wait `--wait-ms` takes.
 pub const MAX_WAIT_MS: u64 = 120_000;
 /// The longest service name `--service` takes.
@@ -126,10 +137,14 @@ pub enum Request {
         bundle: String,
         relaunch: bool,
     },
-    /// `stop`: the application's own processes ended (not its extensions').
+    /// `stop`: the application's own processes ended (not its extensions'), (ACIB-3d) their kill
+    /// requests sent the way `via` names, their answers, of a way that asks for them, waited for
+    /// `wait_ms`.
     Stop {
         device: Target,
         bundle: String,
+        via: StopWay,
+        wait_ms: u64,
     },
     /// `services --service <name>`: what the discovery handshake says of one service.
     ServiceByName {
@@ -206,6 +221,24 @@ impl Request {
             | Self::Probe { .. } => None,
         }
     }
+
+    /// (ACIB-3d) The way `stop` sends its kill requests; `None` of every other command.
+    pub fn stop_way(&self) -> Option<StopWay> {
+        match self {
+            Self::Stop { via, .. } => Some(*via),
+            Self::Devices(_)
+            | Self::Info(_)
+            | Self::Services(_)
+            | Self::Images(_)
+            | Self::Apps { .. }
+            | Self::Screenshot { .. }
+            | Self::Orientation { .. }
+            | Self::Running { .. }
+            | Self::Launch { .. }
+            | Self::ServiceByName { .. }
+            | Self::Probe { .. } => None,
+        }
+    }
 }
 
 /// A parsed command line.
@@ -242,9 +275,9 @@ struct Options {
 /// one, `--device` beside `--device-key`, one of `--device-key` and `--key-salt-env` without
 /// the other, `--binding-salt-env` without `--key-salt-env` or on another command than
 /// `devices`, `--relaunch` on another command than `launch`, `--service` on another command than
-/// `services` or not written as a service's name, `--wait-ms` on another command than `probe` or
-/// outside 1 to [`MAX_WAIT_MS`]). Every option but `--relaunch` takes the argument after it as
-/// its value, whatever it is.
+/// `services` or not written as a service's name, `--wait-ms` on another command than `probe`
+/// and (ACIB-3d) `stop` or outside 1 to [`MAX_WAIT_MS`]). Every option but `--relaunch` takes the
+/// argument after it as its value, whatever it is.
 pub fn parse(arguments: &[String]) -> Option<Invocation> {
     let (command, given) = arguments.split_first()?;
     let mut options = Options::default();
@@ -359,7 +392,8 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
         (None, Some(key), Some(salt_variable)) => Target::Key { key, salt_variable },
         _ => return None,
     };
-    // The options only `services` (`--service`) and `probe` (`--wait-ms`) take, and the others.
+    // The options only `services` (`--service`) and `probe` and (ACIB-3d) `stop` (`--wait-ms`)
+    // take, and the others.
     let own = (service, wait_ms);
     let request = match (
         command,
@@ -419,9 +453,14 @@ fn on_a_device(command: &str, options: Options) -> Option<Request> {
                 relaunch,
             }
         }
-        ("stop", None, None, None, None, Some(bundle), false, (None, None)) => Request::Stop {
+        ("stop", None, None, None, via, Some(bundle), false, (None, wait_ms)) => Request::Stop {
             device: target,
             bundle,
+            via: match via {
+                None => DEFAULT_STOP_WAY,
+                Some(word) => StopWay::from_word(&word)?,
+            },
+            wait_ms: wait_ms.unwrap_or(DEFAULT_KILL_WAIT_MS),
         },
         ("probe", None, None, None, None, None, false, (None, wait_ms)) => Request::Probe {
             device: target,
@@ -1223,6 +1262,10 @@ mod tests {
     /// `running`, `launch` and `stop` take a device (by its number or by its key) and
     /// `--bundle`, in any order, with `--timeout-ms`; `launch` takes `--relaunch`, a flag
     /// without a value, anywhere among its options; each names its command and its device.
+    /// (ACIB-3d) `stop` takes `--via` with a word of [`StopWay`] (without it, fix round 1:
+    /// `primitive`, the known form; `archived` only when named) and
+    /// `--wait-ms` of 1 to [`MAX_WAIT_MS`] (without it: [`DEFAULT_KILL_WAIT_MS`]), in any order,
+    /// and names its way; no other command has a way of `stop`.
     #[test]
     fn the_application_commands_take_a_device_and_a_bundle() {
         assert_eq!(
@@ -1249,8 +1292,52 @@ mod tests {
                 request: Request::Stop {
                     device: Target::Number(4),
                     bundle: BUNDLE.to_owned(),
+                    via: StopWay::Primitive,
+                    wait_ms: DEFAULT_KILL_WAIT_MS,
                 },
                 timeout_ms: 9_000,
+            })
+        );
+        for way in StopWay::ALL {
+            let stop = request(&[
+                "stop",
+                "--via",
+                way.word(),
+                "--device",
+                "4",
+                "--wait-ms",
+                "120000",
+                "--bundle",
+                BUNDLE,
+            ]);
+            assert_eq!(
+                stop,
+                Some(Request::Stop {
+                    device: Target::Number(4),
+                    bundle: BUNDLE.to_owned(),
+                    via: way,
+                    wait_ms: MAX_WAIT_MS,
+                }),
+                "{way:?}"
+            );
+            assert_eq!(stop.as_ref().and_then(Request::stop_way), Some(way));
+            assert_eq!(stop.as_ref().and_then(Request::via), None);
+        }
+        assert_eq!(
+            request(&[
+                "stop",
+                "--device",
+                "4",
+                "--bundle",
+                BUNDLE,
+                "--wait-ms",
+                "1"
+            ]),
+            Some(Request::Stop {
+                device: Target::Number(4),
+                bundle: BUNDLE.to_owned(),
+                via: DEFAULT_STOP_WAY,
+                wait_ms: 1,
             })
         );
         let launch = |relaunch| Request::Launch {
@@ -1307,6 +1394,8 @@ mod tests {
                 Request::Stop {
                     device: key_target(),
                     bundle: BUNDLE.to_owned(),
+                    via: DEFAULT_STOP_WAY,
+                    wait_ms: DEFAULT_KILL_WAIT_MS,
                 },
                 CommandName::Stop,
             ),
@@ -1318,9 +1407,14 @@ mod tests {
             assert_eq!(expected.name(), name);
             assert_eq!(expected.device(), None);
             assert_eq!(expected.via(), None);
+            assert_eq!(
+                expected.stop_way(),
+                (name == CommandName::Stop).then_some(DEFAULT_STOP_WAY)
+            );
         }
         assert_eq!(launch(true).name(), CommandName::Launch);
         assert_eq!(launch(true).device(), Some(5));
+        assert_eq!(launch(true).stop_way(), None);
     }
 
     /// `--bundle` is required by `running`, `launch` and `stop` and taken by no other command;
@@ -1414,6 +1508,72 @@ mod tests {
                 "app",
             ],
             vec!["RUNNING", "--device", "3", "--bundle", BUNDLE],
+            // (ACIB-3d) `stop`'s `--via` takes only its own words, once; its `--wait-ms` 1 to
+            // the most; `running` and `launch` take neither.
+            vec!["stop", "--device", "3", "--bundle", BUNDLE, "--via", ""],
+            vec![
+                "stop", "--device", "3", "--bundle", BUNDLE, "--via", "ARCHIVED",
+            ],
+            vec![
+                "stop",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--via",
+                "instruments",
+            ],
+            vec![
+                "stop", "--device", "3", "--bundle", BUNDLE, "--via", "library", "--via", "library",
+            ],
+            vec![
+                "stop",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--wait-ms",
+                "0",
+            ],
+            vec![
+                "stop",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--wait-ms",
+                "120001",
+            ],
+            vec![
+                "running", "--device", "3", "--bundle", BUNDLE, "--via", "archived",
+            ],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--via",
+                "primitive",
+            ],
+            vec![
+                "launch",
+                "--device",
+                "3",
+                "--bundle",
+                BUNDLE,
+                "--wait-ms",
+                "10",
+            ],
+            vec![
+                "screenshot",
+                "--device",
+                "3",
+                "--out",
+                "a.png",
+                "--via",
+                "archived",
+            ],
             // The device flags, refused as before.
             vec!["running", "--bundle", BUNDLE],
             vec![
