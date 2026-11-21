@@ -628,7 +628,9 @@ pub(crate) struct IdlePlanner {
 impl IdlePlanner {
     /// One idle check of the instance `alias` at `now_unix_ms`, with its idle keys in effect
     /// `config`, what it shows `view` and the scheduler's latest plan for it `plan` (none before
-    /// the first evaluated cycle). The step to take, if any.
+    /// the first evaluated cycle). The step to take, if any. Tests only (#486 ASLEEP-1: the host
+    /// checks with [`Self::check_with_due_task`]), with no due task.
+    #[cfg(test)]
     pub(crate) fn check(
         &mut self,
         alias: &str,
@@ -640,13 +642,15 @@ impl IdlePlanner {
         self.check_with_due_task(alias, config, view, plan, now_unix_ms, None)
     }
 
-    /// [`Self::check`], with `due_task` the task the plan counts due (#484 IDLE-W2), which a wake
-    /// for it names. #486 ASLEEP-1 (register §1.497, ruling 6): a wake whose work starts the
-    /// instance's emulator is kept unanswered ([`UnansweredWake`]) until a check finds a scheduled
-    /// run admitted on the instance after it (`view.latest_admission`) or other idle keys
-    /// (`config`); while it stands the instance's emulator is not stopped again, and the first
-    /// check that would have stopped it makes its one warning due
-    /// ([`Self::take_withheld_stop`]).
+    /// One idle check of the instance `alias` at `now_unix_ms`, with its idle keys in effect
+    /// `config`, what it shows `view` and the scheduler's latest plan for it `plan` (none before
+    /// the first evaluated cycle), and `due_task` the task the plan counts due (#484 IDLE-W2),
+    /// which a wake for it names. The step to take, if any. #486 ASLEEP-1 (register §1.497,
+    /// ruling 6): a wake whose work starts the instance's emulator is kept unanswered
+    /// ([`UnansweredWake`]) until a check finds a scheduled run admitted on the instance after it
+    /// (`view.latest_admission`) or other idle keys (`config`); while it stands the instance's
+    /// emulator is not stopped again, and the first check that would have stopped it makes its
+    /// one warning due ([`Self::take_withheld_stop`]).
     pub(crate) fn check_with_due_task(
         &mut self,
         alias: &str,
