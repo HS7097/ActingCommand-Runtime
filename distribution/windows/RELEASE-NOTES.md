@@ -78,7 +78,7 @@ and artifact names bind the complete source SHA.
     **编排器不再写标记**（`crates/policy/src/compose.rs`），成员留着可读、不起作用（`crates/policy/src/schema.rs` 435–446）：v0.12.60 到 v0.12.76 编出的目录代带着它，启动时重编每一代、核哈希（`policy_host.rs` 8537 `read_generation`，对不上是致命的 `catalog_generation_content_mismatch`），所以照读照算哈希；`schedule.json` 的规则写这个成员照旧拒，V1 文档照旧拒。
     **新的一代目录**：在用的那一代里有任务带这个成员的，那个根这一版编出来的哈希不同，部署后启动的第一次工作台检查（在那一轮评估之前）启用新的一代（`catalog.activated`，版本是账本头加 1）；在用的一代没有任务带它的，哈希一样，什么都不启用。部署之前看状态根里在用那一代的 `tasks` 文档有没有 `"irreversible_reach": true`，就知道会不会换代。
     **启用一代目录重置的**（都只在内存里，启动时本来就空）：无进展守卫、随机延迟表、按哈希重建的补救表，本版又多两样：进门失败各对的计数和等待（上面）、闲置计划记着的没回应的唤醒（上面）；封顶片段、每日预算、冷却、运行状态按任务号，不变；派发的决策标识按新哈希算。
-    **照旧拒的**：目标检查对管着这类包的条目（`goal_governs_irreversible`），内核准入对这类包上的 `variables`（`variables_on_irreversible`），`standard-pack check` 的 `variable_irreversible_by_root` 和工作台判这样的变量不适用，都原样（共用 `IrreversiblePackages`，读不了的包照旧把整个根算成不可逆），要不要放开由主人定。
+    **照旧拒的**：目标检查对管着这类包的条目（`goal_governs_irreversible`），内核准入对这类包上的 `variables`（`variables_on_irreversible`），`standard-pack check` 的 `variable_irreversible_by_root` 和工作台判这样的变量不适用，都原样（共用 `IrreversiblePackages`，读不了的包照旧把整个根算成不可逆），主人 11-21 定了把这两道也拆掉（看板 #455），下一版做；本版照旧拒。
     读不了的包照旧由 `standard_pack_package_unreadable` 告诉人，它不再给任务打标记。
   - **`resource verify`**（GOALS-PACK-1，§1.498；`contracts/resource-verify.md`，`contracts/standard-pack-goals.md`「Before any pack carries the file」）：打包那一步在 `package bundle` 写完包以后，用资源工具的 `check_bundle_goals`（`crates/resource-tooling/src/bundle_goals.rs`，`standard-pack check` 和 `package bundle --goals` 用的同一套 `goal_issues`）检查仓里的 `goals.json`。
     被拒的文件让这一步失败，每个问题一条 `standard_pack_root_invalid`（`game`、`path`、`standard_pack_problem`、`json_pointer`、`step`），同一轮里索引和拷贝的检查照跑，然后在出 zip 之前停（work 目录里留下不带这个文件的 `bundle/`，没有 `out/`、没有 zip）；版本 1 的文件只有一条 `goal_version_retired`。
@@ -102,7 +102,7 @@ and artifact names bind the complete source SHA.
   - **目标**（G-R2x，§1.499）：策略 `evaluator.rs`（删掉标记那一支）、`compose.rs`（不写标记、不再走传播它的那一遍）、`schema.rs`（成员留着、不起作用）、`validation.rs`、`codes.rs`、`lib.rs`；宿主 `host/standard_pack_schedule.rs`（`held_otherwise` 不再比标记）；契约库 `standard_pack_goals.rs` 和 `crates/lab-ops/src/packs.rs` 只改注释。
   - **`resource verify`**（GOALS-PACK-1，§1.498）：资源工具新文件 `bundle_goals.rs`；Lab 的 `resource_verify.rs`（计数）、`resource_verify/bundle.rs`（检查、放进、声明）、`resource_verify/steps.rs`（读的根文件）。
   - **CI**（FLK-17，不占登记节）：只改 `.github/workflows/ci.yml` 的 host-lab 两个时限和说明。
-  - **这些都不替人拿主意**：进门失败只是不再算到规则头上，最坏是晚跑到窗尾，不暂停什么；睡着只改叫醒的时机，不改派什么；G-R2s 照主人的话撤回，另两道拒绝等主人定；`resource verify` 只检查、照原样带上文件。
+  - **这些都不替人拿主意**：进门失败只是不再算到规则头上，最坏是晚跑到窗尾，不暂停什么；睡着只改叫醒的时机，不改派什么；G-R2s 照主人的话撤回，另两道拒绝本版留着（主人 11-21 定了拆，下一版做）；`resource verify` 只检查、照原样带上文件。
 
 - **部署和退路**：照 v0.12.76 那次的做法，用在线 v0.12.76 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
   救急模块（`crates/lab-rescue`）本版一个文件没改，所以留存的 v0.12.76 副本做的和本版的一样。没有账本那一步：两边账本都是 [3, 9]。部署时要知道的，从各登记节的「At deploy」收在一起：
@@ -129,7 +129,7 @@ and artifact names bind the complete source SHA.
     **门测试 M4（模拟器一段里只重启一次）连着四个头超时、最后两个头通过，原因两位实现者都没找到**；现在一边推时钟一边等，Runtime 锁死成致命错时等待当场失败并报出原因。生产用真时钟，那一级的每个等待都有上限（就绪等待到 `readiness_window_ms` 为止）。§1.495 那几件不在本版（上面）。
   - **睡着**（ASLEEP-1）：**闲置停模拟器还没在真模拟器上跑过**：两条回放是真的闲置检查停假模拟器、真的唤醒把它起起来；总览上线以后在一台实例上打开。**触发时刻还没到、到时预算仍然用完的任务，会在触发时刻把实例白叫醒一次**，之后兜底让模拟器一直开到有调度运行被准入（以后的一片让计划按触发时刻读后面的门）；
     兜底的「被准入」含事实刷新的读数，也含准入后被拒或失败的运行；只有客户端或 Lab 的运行的实例，叫醒以后不会再被停（没有调度运行来回应它）。
-  - **目标**（G-R2x）：目标检查和变量对会做不可逆操作的包的两道拒绝留着，等主人定；「根组不起来的游戏当作没有目标」不在撤回之列，原样留着。生产上 11-21 读的四台都没有目标记录，所以这一片还没有在生产上改过任何一个权重。
+  - **目标**（G-R2x）：目标检查和变量对会做不可逆操作的包的两道拒绝本版留着（主人 11-21 定了拆，下一版做）；「根组不起来的游戏当作没有目标」不在撤回之列，原样留着。生产上 11-21 读的四台都没有目标记录，所以这一片还没有在生产上改过任何一个权重。
   - **`resource verify`**（GOALS-PACK-1）：**不按包的内容声明修订**：包里声明了 `variables` 或 `lines`、又没有 `goals.json` 的仓，仍只声明 3（带 `notices/` 是 10）：带 `variables` 的，今天的安装工具在计划里以 `variable_undeclared` 拒，更早的收下、它的 Runtime 跑不了；带 `lines` 的，没有安装工具查，区间低于 21 的收下、它的 Runtime 每次运行都拒。只有 `standard-pack build` 按内容声明。
     「这样的 zip 安装工具放得下」只是调了安装工具计划里那两道判定来证，没有跑真的放置计划；文件被拒的那次 work 目录里留下不带它的 `bundle/`；发版的 zip 带上它还欠资源侧换脚本（上面）。
   - **host-lab 作业**：这一次只是腾地方。#1859 最后一个头（带着 #1853）的 host-lab 用了 36 分 48 秒，新的上限是作业 60、测试一步 50 分钟；每一片都往这个作业里加测试，把它拆成几份的是看板 #499，还没排。
