@@ -295,6 +295,60 @@ fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
         .collect()
 }
 
+/// Workflow #490 ENTRY-A fix round 6 (ruling 4): the game root's files the page recognition of
+/// its packages reads beside each package's own (the shared pages, interrupts and navigation),
+/// which a placement replaces as root files.
+const RECOGNITION_FILES: [&str; 3] = [
+    STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE,
+];
+
+/// Workflow #490 ENTRY-A fix round 6 (ruling 4): what the workbench compares of a game in use to
+/// tell that its packages changed without a catalogue's activation, which frees the entry pairs
+/// (`clear_entry_pairs`): the mark of `bundle.json` (the root's index of its packs, which holds
+/// each pack's file and byte counts and no digest, and which `place` writes again only when its
+/// bytes change), the marks of the recognition files ([`RECOGNITION_FILES`]) and the marks of
+/// each registered package's declaration files ([`DECLARATION_FILES`]; `place` replaces a
+/// package's directory whole, so a placement of a package writes both files again).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairMarks {
+    bundle: FileMark,
+    recognition: Vec<DeclarationMark>,
+    packages: BTreeMap<String, Vec<DeclarationMark>>,
+}
+
+impl PairMarks {
+    /// The marks of `game_marks`' game, whose root directory is `directory`.
+    fn of(game_marks: &GameMarks, directory: &Path) -> Self {
+        Self {
+            bundle: game_marks.bundle,
+            recognition: RECOGNITION_FILES
+                .iter()
+                .map(|file| match file_mark(&directory.join(file)) {
+                    Ok(mark) => DeclarationMark::Read(mark),
+                    Err(_) => DeclarationMark::Failed,
+                })
+                .collect(),
+            packages: game_marks.packages.clone(),
+        }
+    }
+
+    /// Whether these marks tell a change since `kept`: another `bundle.json` or recognition file,
+    /// or a package marked both times whose marks differ. A package marked only now (the first
+    /// check after a start marks none, the registry not read yet) or only then is no change by
+    /// itself: its registration is `bundle.json`'s.
+    fn changed_since(&self, kept: &Self) -> bool {
+        self.bundle != kept.bundle
+            || self.recognition != kept.recognition
+            || self.packages.iter().any(|(package_id, marks)| {
+                kept.packages
+                    .get(package_id)
+                    .is_some_and(|then| then != marks)
+            })
+    }
+}
+
 /// The scheduler workbench of one host (composer mode).
 pub(super) struct StandardPackWorkbench {
     /// The configuration manifest's subsystems each `requires` must name; `None` when the host
@@ -337,6 +391,11 @@ struct WorkbenchState {
     bound: BTreeMap<String, StandardPackBinding>,
     /// The marks of each game in use when the last composition read it.
     marks: BTreeMap<String, GameMarks>,
+    /// Workflow #490 ENTRY-A fix round 6 (ruling 4): the marks of each game's packages as the
+    /// check that last compared them for the entry pairs saw them ([`PairMarks`]), kept apart
+    /// from the composition's own, so a change frees the pairs at one check only, whether or
+    /// not a composition follows.
+    pair_marks: BTreeMap<String, PairMarks>,
     /// G-R2s: the packages each game root registered when the workbench last read it, each with
     /// its directory: whose declaration files the next check marks.
     packages: BTreeMap<String, BTreeMap<String, PathBuf>>,
@@ -385,13 +444,13 @@ const GOALS_UNREADABLE_KEY: &str = "goals:unreadable";
 /// shared with the workbench until its next read of a root replaces it.
 pub(super) type StandardPackVariables = Arc<VariableTable>;
 
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): at a check whose composition is refused (as a whole, or no
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): at a check whose composition is refused (as a whole, or no
 /// refused game can be taken out), notes as uncomposed `failed`, the games whose own root failed
 /// at this check (fix round 3), and every game in use whose marks this check did not find equal to
 /// those of its last composed read (`state.marks`): a game whose files have not changed since is
 /// composed in the active generation as it is now, its marks those of its declarations; any other
-/// may have changed into something the active generation does not mark. A game whose metadata
+/// may have changed into something the active generation does not hold. A game whose metadata
 /// failed has no marks here, so it is noted too. A failed root whose other games compose is
 /// [`held_otherwise`]'s instead.
 fn note_uncomposed(
@@ -412,12 +471,13 @@ fn note_uncomposed(
 /// while a game's own root fails, the games in use whose tasks the active generation `active` does
 /// not hold as `composition`, the other games' roots as they are now, composes them: a task of the
 /// game (its instance bound to it in `bound`) in `active` that `composition` does not compose with
-/// the same id and procedure, or that `composition` marks irreversible (`irreversible_reach`) and
-/// `active` does not. Any other game's tasks run in the active generation as its files give them
-/// now as far as the mark goes, so its goals stay in effect, also at the first check after a start
-/// (when the workbench holds no marks yet). A game whose root failed is in no `composition`, so
-/// each of its tasks in `active` names it too. Fix round 4: the check records each other game
-/// voided this way, one `resource_target_root_uncomposed` naming it at each check that voids it.
+/// the same id and procedure. Any other game's tasks run in the active generation as its files
+/// give them now, so its goals stay in effect, also at the first check after a start (when the
+/// workbench holds no marks yet). A game whose root failed is in no `composition`, so each of its
+/// tasks in `active` names it too. Fix round 4: the check records each other game voided this way,
+/// one `resource_target_root_uncomposed` naming it at each check that voids it. Workflow #455
+/// G-R2x (register §1.499): the irreversible mark is compared no more (no composition writes it,
+/// and nothing reads it in an active generation of before that carries it).
 fn held_otherwise(
     composition: &StandardPackComposition,
     active: Option<&CompiledCatalog>,
@@ -442,10 +502,9 @@ fn held_otherwise(
         let Some(binding) = bound.get(instance_id) else {
             continue;
         };
-        let held = composed.get(task.id.as_str()).is_some_and(|now| {
-            now.procedure_ref == task.procedure_ref
-                && (task.is_irreversible_reach() || !now.is_irreversible_reach())
-        });
+        let held = composed
+            .get(task.id.as_str())
+            .is_some_and(|now| now.procedure_ref == task.procedure_ref);
         if !held {
             games.insert(binding.game_id.clone());
         }
@@ -1132,6 +1191,36 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #490 ENTRY-A fix round 5 (ruling 5): a placement can replace a registered
+        // package's files without changing the rules a composition activates, and a scheduled run
+        // takes its package as the registry places it when it is dispatched, so a pair's packages
+        // can change while no catalogue becomes active. A game in use whose packages changed
+        // since the last check frees every pair as an activation does (`clear_entry_pairs`): a
+        // pair that waits or is set aside is dispatched again. Fix round 6 (ruling 4): compared
+        // with the marks this comparison kept last ([`PairMarks`]), not the composition's (which
+        // only a composition that succeeds updates), so one change frees the pairs once, while a
+        // game root is broken or a composition refused too; a game whose root failed at this
+        // check keeps its last marks. Before the check's early return: the recognition files are
+        // none of the composition's marks.
+        if let Some(root) = &root {
+            let now = marks
+                .iter()
+                .map(|(game, game_marks)| {
+                    (game.clone(), PairMarks::of(game_marks, &root.join(game)))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let changed = now.iter().any(|(game, marked)| {
+                state
+                    .pair_marks
+                    .get(game)
+                    .is_some_and(|kept| marked.changed_since(kept))
+            });
+            state.pair_marks.retain(|game, _| games.contains(game));
+            state.pair_marks.extend(now);
+            if changed {
+                self.clear_entry_pairs()?;
+            }
+        }
         // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again
         // even when nothing changed, so a root that reads again ends it.
         if failed_roots.is_empty()
@@ -1304,9 +1393,9 @@ impl HostShared {
             }
         }
         // G-R2s (register §1.369): a package of a composed game whose declaration could not be
-        // read marks every task of its game; it is recorded once while it stays unreadable, with
-        // the reader's refusal as its cause when the reader refused it, and again only after it
-        // has read once.
+        // read is recorded once while it stays unreadable, with the reader's refusal as its cause
+        // when the reader refused it, and again only after it has read once. G-R2x (register
+        // §1.499): it marks no task; this record is what tells a person.
         let unreadable = composition
             .unreadable_packages()
             .iter()
@@ -1488,6 +1577,16 @@ impl HostShared {
             {
                 read_marks.insert(package_id.clone(), package.marks.clone());
                 directories.insert(package_id.clone(), package.directory.clone());
+            }
+            // Workflow #490 ENTRY-A fix round 6 (ruling 4): a package the entry pairs' marks do
+            // not hold yet (the first check after a start marks no package before the registry is
+            // read) is compared from this read's marks at the next check.
+            if let Some(kept) = state.pair_marks.get_mut(game) {
+                for (package_id, package_marks) in &read_marks {
+                    kept.packages
+                        .entry(package_id.clone())
+                        .or_insert_with(|| package_marks.clone());
+                }
             }
             if let Some(game_marks) = marks.get_mut(game) {
                 game_marks.packages = read_marks;
@@ -2006,8 +2105,8 @@ pub struct StandardPackSchedulePreview {
     pub unclassified: usize,
     /// One `standard_pack_root_invalid` per refusal of a `schedule.json`; Workflow #455 G-R2s fix
     /// round 1: and one `standard_pack_package_unreadable` per package of a composed game whose
-    /// declaration could not be read (every task of that game carries the irreversible mark, so
-    /// no goal weighs it), with the reader's refusal as its cause, by game, then package id.
+    /// declaration could not be read (G-R2x: it marks no task), with the reader's refusal as its
+    /// cause, by game, then package id.
     pub problems: Vec<Outcome>,
     /// The games in use whose game root is broken (listed with their problem in check-config's
     /// `standard_packs`), left out of the preview.
@@ -2087,9 +2186,9 @@ pub fn preview_standard_pack_schedule(
             preview.games = composition.games().to_vec();
             // Workflow #453 S5b: the digest the workbench's `CompositionRecord::of` records.
             preview.rules_digest = Some(composition.rules_digest().to_owned());
-            // G-R2s fix round 1: a package of a composed game whose declaration could not be
-            // read marks every task of its game, so no goal weighs any of them; check-config
-            // shows each such package, with the reader's refusal as its cause.
+            // G-R2s fix round 1: check-config shows each package of a composed game whose
+            // declaration could not be read, with the reader's refusal as its cause (G-R2x: it
+            // marks no task).
             for (game, packages) in composition.unreadable_packages() {
                 for package_id in packages {
                     preview

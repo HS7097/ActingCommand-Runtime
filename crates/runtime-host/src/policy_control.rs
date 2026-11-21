@@ -77,6 +77,33 @@ pub(crate) fn pause_cause(failure: &PolicyFailureRecord) -> Option<PauseCause> {
     Some(cause)
 }
 
+/// Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): whether the
+/// settlement that wrote `failure` settled it as a failure at its run's entry, a condition of the
+/// run's instance: a condition whose failure identity's `F` is an entry failure's (`i…`). Read from
+/// the record's own members, so a replay reads what the live settlement wrote; such a record owes
+/// no rerun, and the live settlement blocks the run's instance.
+pub(crate) fn entry_blocked(failure: &PolicyFailureRecord) -> bool {
+    failure.condition.is_some()
+        && failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse)
+            .is_some_and(|identity| identity.at_entry())
+}
+
+/// Workflow #490 ENTRY-A fix round 5 (ruling 1): whether `input` is a failure whose identity's `F`
+/// is an entry failure's (`i…`): with a condition, a failure at the entry, which settles as any
+/// task's, a sensitive task's too.
+fn input_at_entry(input: &PolicyExecutionInput) -> bool {
+    matches!(
+        input,
+        PolicyExecutionInput::Failed {
+            failure_identity: Some(identity),
+            ..
+        } if FailureIdentity::parse(identity).is_some_and(|identity| identity.at_entry())
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyExecutionInput {
     Succeeded,
@@ -1425,10 +1452,16 @@ impl PolicyControlState {
         } = timing;
         let compared_ms = budget_elapsed_ms.unwrap_or(runtime_ms);
         let (task, _) = task_and_profile(catalog, intent)?;
+        // Workflow #490 ENTRY-A fix round 5 (ruling 1): a failure at the entry (its condition and
+        // its identity's `F` an entry failure's, as the record keeps them) settles as any task's,
+        // a sensitive task's too: its main package executed no step, so the sensitive rule (pause
+        // at the first failure) does not apply and the record says so (`sensitive` false), as the
+        // record of any other task's failure at the entry does.
+        let sensitive = task.sensitive && !(condition.is_some() && input_at_entry(input));
         // Only a recoverable failure of a task that is not sensitive settles by a condition: its
         // record continues, and a sensitive or severe failure pauses (register S1).
         if condition.is_some()
-            && (task.sensitive
+            && (sensitive
                 || !matches!(
                     input,
                     PolicyExecutionInput::Failed {
@@ -1490,13 +1523,13 @@ impl PolicyControlState {
                         escalation_streak: previous
                             .map_or(0, |previous| previous.escalation_streak),
                         performance_tax_exempt: class == PolicyFailureClass::Recoverable
-                            && !task.sensitive
+                            && !sensitive
                             && perf_context.pressure_observed(),
                         retry_attempt: 0,
                         disposition: PolicyFailureDisposition::Continue,
                         retry_at_unix_ms: None,
                         runtime_ms,
-                        sensitive: task.sensitive,
+                        sensitive,
                         perf_context: Box::new(perf_context.clone()),
                         condition,
                     },
@@ -1655,24 +1688,10 @@ impl PolicyControlState {
         {
             return Ok(ConditionDecision::Ordinary);
         }
-        // The admission was committed inside this window (`commit_admission`), under the same
-        // catalog generation, so it is found again.
-        let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
-            .map_err(|_| {
-                fatal(
-                    HostCode::PolicyActivityDayOverflow,
-                    HostLocation::ClassifyPolicyOutcome,
-                )
-            })?
-            .ok_or_else(|| {
-                fatal(
-                    HostCode::PolicyActivityWindowClosed,
-                    HostLocation::ClassifyPolicyOutcome,
-                )
-            })?;
+        let window_end = condition_window_end(profile, admission)?;
         let pair = (intent.task_id.clone(), intent.instance_id.clone());
         let count = match self.condition_reruns.get(&pair) {
-            Some(owed) if owed.expires_at_unix_ms == window.until_unix_ms => {
+            Some(owed) if owed.expires_at_unix_ms == window_end => {
                 owed.count.checked_add(1).ok_or_else(|| {
                     fatal(
                         HostCode::PolicyFailureCountOverflow,
@@ -1686,14 +1705,56 @@ impl PolicyControlState {
             return Ok(ConditionDecision::Exhausted {
                 count,
                 limit: rule.max_per_occurrence,
-                window_end_unix_ms: window.until_unix_ms,
+                window_end_unix_ms: window_end,
             });
         }
         Ok(ConditionDecision::Condition(PolicyConditionSettlement {
             refunded: rule.refund_counts,
             count,
-            expires_at_unix_ms: window.until_unix_ms,
+            expires_at_unix_ms: window_end,
         }))
+    }
+
+    /// Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): the
+    /// condition the first settlement of `intent`'s run settles by when the run failed at its entry:
+    /// its counts given back whatever `scheduling.rerun.refund_counts` says, `count` 1 (it adds to
+    /// no series of the pair's condition terminations: it owes no rerun) and the end of the activity
+    /// window the run was admitted in. `None` for a success, a stop and a severe failure, which
+    /// settle as before. Fix round 5 (ruling 1): a sensitive task's too: its main package did not
+    /// start, so nothing sensitive was begun. The record keeps it, so a replay never calls this.
+    pub(crate) fn entry_condition(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<Option<PolicyConditionSettlement>> {
+        let PolicyExecutionInput::Failed {
+            class: PolicyFailureClass::Recoverable,
+            ..
+        } = input
+        else {
+            return Ok(None);
+        };
+        let (_, profile) = task_and_profile(catalog, intent)?;
+        Ok(Some(PolicyConditionSettlement {
+            refunded: true,
+            count: 1,
+            expires_at_unix_ms: condition_window_end(profile, admission)?,
+        }))
+    }
+
+    /// Workflow #490 ENTRY-A2 fix round 2 (ruling 4a): the end of the activity window of `intent`'s
+    /// profile its admission `admission` was committed in: the `expires_at_unix_ms` a condition of
+    /// its run carries, which a pair's conditions in a row at the entry do not outlive.
+    pub(crate) fn admission_window_end(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+    ) -> RuntimeHostResult<u64> {
+        let (_, profile) = task_and_profile(catalog, intent)?;
+        condition_window_end(profile, admission)
     }
 
     /// Test builds: [`Self::commit_paced_execution`] of a record settled on its wall time.
@@ -1862,6 +1923,13 @@ impl PolicyControlState {
         // pair (a success, or an ordinary failure, the exhausted one included) ends the pair's
         // condition terminations and owes none. Workflow #429 R-6b: so does a stopped run, whose
         // dispatch served the rerun owed before it.
+        // Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): a run
+        // that failed at its entry owes no rerun and leaves the pair's owed rerun as it was: the
+        // task is a candidate again by its own trigger once its instance is no longer blocked.
+        let at_entry = matches!(
+            &data.outcome,
+            PolicyExecutionOutcome::Failed { failure } if entry_blocked(failure)
+        );
         let owed = match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } | PolicyExecutionOutcome::Stopped { .. } => {
                 None
@@ -1874,12 +1942,14 @@ impl PolicyControlState {
                 })
             }
         };
-        match owed {
-            Some(owed) => {
-                self.condition_reruns.insert(key.clone(), owed);
-            }
-            None => {
-                self.condition_reruns.remove(&key);
+        if !at_entry {
+            match owed {
+                Some(owed) => {
+                    self.condition_reruns.insert(key.clone(), owed);
+                }
+                None => {
+                    self.condition_reruns.remove(&key);
+                }
             }
         }
         match &data.outcome {
@@ -2398,6 +2468,32 @@ fn task_and_profile<'a>(
             )
         })?;
     Ok((task, profile))
+}
+
+/// Workflow #386 SR-2b-1, #490 ENTRY-A: the end of the activity window of `profile` the admission
+/// `admission` was committed in (the pair's bookkeeping window), a condition's
+/// `expires_at_unix_ms`. The admission was committed inside this window (`commit_admission`), under
+/// the same catalog generation, so it is found again.
+fn condition_window_end(
+    profile: &ActivityProfile,
+    admission: &PolicyAdmissionRecord,
+) -> RuntimeHostResult<u64> {
+    Ok(
+        activity_window_at(profile, admission.activity.admitted_at_unix_ms)
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyActivityDayOverflow,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })?
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyActivityWindowClosed,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })?
+            .until_unix_ms,
+    )
 }
 
 pub(crate) fn active_activity_window(

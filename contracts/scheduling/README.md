@@ -1081,8 +1081,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
   `expected_amount_milli`; [resource-targets.md](../resource-targets.md), "Resource weights (v2)"),
   `W(k,p)` its effective weight `B_p + Γ` (the base weight plus a covering goal's shortfall
-  weight; Workflow #455 G-R2s, since 0.12.60: `B_p` alone for a task that carries the irreversible
-  mark, [resource-targets.md](../resource-targets.md), "A task that can do something
+  weight; Workflow #455 G-R2s gave `B_p` alone to a task that carried the irreversible mark from
+  0.12.60 to 0.12.76, and G-R2x, 0.12.77, withdrew it: such a task reads `B_p + Γ` as every task
+  does, [resource-targets.md](../resource-targets.md), "A task that can do something
   irreversible"), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
   SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
   "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
@@ -1184,7 +1185,7 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
     ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
     conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
     produces a pool weighed above 0 on its instance (a model price or a goal's shortfall, which
-    weighs no task that carries the irreversible mark, G-R2s; a pool
+    since G-R2x, 0.12.77, weighs a task that carries the irreversible mark too; a pool
     verified worthless is weighed 0) and whose latest run there did not fail is *released*
     (`zero_tier: released`). It takes part in the allocation after every unjudged and every
     positive judged candidate of the business tier, of every instance, a promotion not lifting
@@ -1344,9 +1345,10 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   allowance (the gate's own available amount, its projection less the consumption step 3
   counts as not shown yet, less `at_least`, at least 0), and a run cap from them (at most 1000);
   a task that produces a pool an active goal covers also carries the goal's gap
-  ([../remedies.md](../remedies.md), section 4, "Spend values"); since Workflow #455 G-R2s
-  (0.12.60) a task that carries the irreversible mark carries the values of an instance without a
-  record instead: no gap and no goal term in its run cap. An allowance below the task's
+  ([../remedies.md](../remedies.md), section 4, "Spend values"); from Workflow #455 G-R2s
+  (0.12.60) until G-R2x (0.12.77) a task that carried the irreversible mark carried the values of
+  an instance without a record instead; since G-R2x it carries the goal's gap as every task does.
+  An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
 
 ## Shared Run Limits (Workflow #427-B)
@@ -2030,14 +2032,14 @@ transaction state.
 
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
-Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution. A run a `StopInstanceRun` stopped (Workflow #429 R-6b, since 0.12.55; [../policy-suspension.md](../policy-suspension.md), "A stopped run") receives none of the failure handling above: no backoff, streak, escalation, pause or ladder, no condition and no owed rerun, and the Runtime's own reruns its dispatch served end with it (since 0.12.55).
+Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution. A run a `StopInstanceRun` stopped (Workflow #429 R-6b, since 0.12.55; [../policy-suspension.md](../policy-suspension.md), "A stopped run") receives none of the failure handling above: no backoff, streak, escalation, pause or ladder, no condition and no owed rerun, and the Runtime's own reruns its dispatch served end with it (since 0.12.55). A scheduled run that failed at its entry (Workflow #490 ENTRY-A, since 0.12.77; register §1.494; [../policy-suspension.md](../policy-suspension.md), "A failure at the entry": its main package executed no step, its failure came from the gate, a prerequisite or return-home layer or the home entry's check, does not accumulate, its code's class is `pack_logic_mismatch` whatever the ladder's `exclude_codes` say of it, and its instance's block has a recovery for it; a code of any other class, the capture backend's, the device link's or a fence's, is settled as before) is a condition of its instance, not a failure of its task: no backoff, streak, escalation, pause or immediate rerun, the counts its admission took given back (so a task's runs of the day are spent only by runs whose entry was reached), and no owed rerun; its instance is blocked until a recovery or a run of it succeeds, a resume lifts a pause of it, a blackout covers it at the lease sweep's tick, a fence takes it or the Runtime restarts ([../scheduling-blackout.md](../scheduling-blackout.md), "Order of the deferrals", position 4b, `instance_entry_blocked`; a store update package's task passes; a recovery the block held when it ends is dropped with its trigger's `recovery_ladder_suppressed` `cooldown` once more). The block's recovery is admitted, held through a cool-down or a transient refusal and tried again (a claim the queue refused on a growing interval, one second to one minute); it climbs from the first rung that restarts the application when no run was let in on the instance since its previous block ended; the first climb of a stretch of blocks with nothing let in between them starts as before, and every later one waits `scheduling.unavailable_probe`'s interval for the stretch's climbs from the previous climb's end, never before the cool-down window ends, whatever ended the previous climb (but a person's pause, under which nothing climbs and whose lifting ends the block); one that ends `exhausted` tells a person once per block and is followed by such a later climb; one the game's update dialog ended tells a person once and nothing climbs again in the stretch (the store update task passes); and a stretch that lasted `scheduling.unavailable_probe.attention_after_ms` is brought to a person once. Fix round 4 ("A pair that keeps failing at its entry"): no failure at the entry counts against its rule; a pair (instance, catalog task) that fails at its entry n times in a row in an activity window is not dispatched on that instance before `scheduling.unavailable_probe`'s interval for n has passed since the end of the block the latest failure set and of any later block of the instance (since the latest settlement until a block ends; `instance_entry_task_waiting`), and once its failures that came although another scheduled run was let in reach its rule's `escalation_threshold` it is set aside until the window's end (`instance_entry_task_set_aside`) and a person is told once (`instance_entry_task_set_aside_reported`); the instance's other tasks run meanwhile, first when a block ends, a store update task's success starts every pair of its instance from nothing, and a catalogue that becomes active starts every pair from nothing. The emulator is restarted at most once in a stretch of blocks. No rule is paused by failures at its entry, however long a condition lasts. A failure in a step of the main package is settled, rerun, counted and paused as before.
 
 ### Optional run-count bounds
 
 SS-3 (since 0.12.30; Alice's ruling 100 on Workflow #386: dispatch follows live account state, and there is no "run task X N times"; register §1.212). In an `actingcommand.scheduling.v2` catalog a task's `loop_budget` may be left out, and so may each of its three items, `daily_limit`, `window_iteration_limit` and `max_runtime_ms`, on its own; so may each of an activity profile's `daily_budget`, `max_window_iterations` and `session_max_ms`. V1 keeps all six required (`missing_required_field` at the member). In V1 and V2 a bound that is written is a value: an explicit `null` is refused (`type_mismatch`), as the V2 schemas declare and as for an effect's `amount`; it is never read as "not written". A bound that is written applies exactly as before, and must still be above 0 (`loop_budget_missing`); a catalog that writes all of them serializes, hashes, admits, settles and records byte for byte as before. A bound that is not written is no dimension:
 
 - **Admission** reserves nothing for it and never refuses on it (`policy_budget_exhausted` names only a written dimension). The dispatch intent carries only the written items in `prerequisites` (`daily_limit`, `window_iteration_limit`, `max_runtime_ms`), and the intent check requires each one it carries to be above 0 and the intent's expected duration to be within a carried `max_runtime_ms`.
-- **The budget receipt** of `policy.dispatch_admitted` and `policy.dispatch_completed` carries neither member of an unwritten dimension (`task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms` and the three activity pairs); a carried dimension holds both members with the count between 1 and the limit, as before, and a receipt with one member of a pair is invalid. The receipt is part of the admission record those two events carry (and the retry round of `policy.control_state_recorded` keeps), and the global ledger query's public projection hands it on unchanged as `PublicPayload.policy_admission`, which reaches clients through runtime-client. The Runtime keeps no count for an unwritten dimension, and a condition rerun's refund gives back only the counts the admission took.
+- **The budget receipt** of `policy.dispatch_admitted` and `policy.dispatch_completed` carries neither member of an unwritten dimension (`task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms` and the three activity pairs); a carried dimension holds both members with the count between 1 and the limit, as before, and a receipt with one member of a pair is invalid. The receipt is part of the admission record those two events carry (and the retry round of `policy.control_state_recorded` keeps), and the global ledger query's public projection hands it on unchanged as `PublicPayload.policy_admission`, which reaches clients through runtime-client. The Runtime keeps no count for an unwritten dimension, and a condition rerun's refund gives back only the counts the admission took. Workflow #490 ENTRY-A (since 0.12.77): a run that failed at its entry gives back its four counts the same way, whatever `scheduling.rerun.refund_counts` says; budgets are still taken at admission, and an immediate rerun of a step failure still costs one.
 - **The retry round** does not judge an unwritten dimension; retries stay bounded by `on_failure` and the round's window.
 - **Settlement** never rewrites a run to `policy_runtime_budget_exceeded` on an unwritten runtime dimension: without `max_runtime_ms` (and `session_max_ms`) a window's cumulative runtime has no bound. The per-run deadline (the contained-task response bound and the package's own timeout) is unchanged, and so are failure retries and escalation, the per-occurrence rerun limit, the recovery ladder, in-pack loop caps and concurrency.
 - **Expected duration E** has no ceiling without `max_runtime_ms` ("Settlement Feedback And Eligibility Age").
@@ -2829,7 +2831,10 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   - *the emulator stopped* (`instance_not_running` at `read_instance_state`; also an emulator
     control's or an idle action's stop, which drops the facts, `invalidate_backend_selfcheck_facts`
     in `emulator_instance.rs`): the watch restarts a configured instance (`start_emulator` on,
-    `watch_emulator` → `restart_watched_emulator`), the idle wake starts the one its action stopped,
+    `watch_emulator` → `restart_watched_emulator`), the idle wake starts the one its action stopped
+    (#486 ASLEEP-1, since 0.12.77: such an instance is asleep, not unavailable, while nothing else
+    withdrew or holds it, "An asleep instance" below; the evaluation judges it as if it were
+    available, and the wake comes for a task that would be dispatched),
     and once the emulator runs with Android and an ADB port the watch recognizes it (`needs_recognition`
     for a pending binding, `unprepared_on_reported_port` for one bound here without self-check
     facts), each request at most `emulator_control.restart_attempts` within `restart_window_ms`
@@ -2969,6 +2974,61 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   object `{}`, and so between its probes, except right after a probe whose own open failed, which
   shows that `failed` entry until the next probe drops it. And the records above. No console shows
   the probes yet. Memory only: a restart starts the set again at the gate's next decision.
+
+## An asleep instance (#486 ASLEEP-1, since 0.12.77)
+
+Register §1.497 (the coordinator's rulings 1 to 8 of 11-21 on board #486; the owner's words behind
+them, 11-02: 「没有任务时直接关闭模拟器」). An instance whose emulator its idle action stopped
+(`stop_emulator`, or `auto`'s highest tier) loses its availability with the stop: the stop drops
+its self-check facts and the backend self-check gate withdraws it (`backend_selfcheck:unchecked`).
+Before this slice the evaluation blocked every candidate of it at placement (`instance_unavailable`),
+before any later gate, so the idle plan counted such a candidate due whatever its budget, backoff,
+benefit or pool lines said, and the idle wake started the emulator for a task the next evaluation
+then held back; the idle check stopped it again, with no end.
+
+- **Asleep.** An instance is asleep while its idle action stops or holds its emulator stopped (the
+  idle planner's `stop_emulator` phases: asked for and not ended, its claim holding the key while
+  the stop runs, and done, its wake not come; `IdlePlanner::emulators_held_stopped`) and nothing but
+  that stop withdrew its availability: the availability in effect is the backend self-check gate's
+  withdrawal (the projection's word `self_check`, so its configured seed is available and no device
+  link, device state or device system withdrew it), no fence holds it, and it is no instance the
+  probes above take up (a self-check or a preparation step of its own that failed). An instance the
+  projection holds available is never asleep. The host gives the evaluation the asleep instances as
+  the cycle starts (`HostShared::asleep_for_policy`, `InstanceHolds::mark_asleep`). No fact changes:
+  `session.instance.available` stays `false`, and nothing is dispatched to it.
+- **Judged as available, nothing selected.** The evaluation judges each candidate of an asleep
+  instance as it judges an available instance's: the rest of placement, the order of the deferrals
+  ([scheduling-blackout.md](../scheduling-blackout.md)), the benefit gate, the pool lines and the
+  capped order, the no-progress guard, the ranking, and its recognition maintenance package's own
+  gates. Each candidate carries the decision, reason and wake of the gate that holds it. The one
+  candidate the round would select there is not selected: its decision is deferred with
+  `instance_asleep_wake_due` (`instance_id` its alias) and the evaluation's time as its wake (so
+  the evaluation's own wake is now). It takes its instance and its device for the round, so the
+  candidates behind it wait as behind a selected one (`instance_already_selected`,
+  `device_group_waiting` `selected`, `capped_not_head`); a recognition maintenance package picked so
+  makes its waiting candidates name `instance_asleep_wake_due` as their gate, with no wake. What
+  judging does short of selecting still happens (the admission's preview, a clock slot's random
+  delay drawn and noted, a suspension's lift check); nothing a dispatch alone causes does: no
+  dispatch intent, reason chain or dispatch decision record, no shared run slot taken, no chain step
+  settled as dispatched, no `capped_spend` and no pass of its capped block for its round (its
+  episode does not advance past it), no no-progress basis captured, no budget counted.
+- **The idle plan** follows: the decision above is due and is the task the wake names
+  (`idle_wake_cause` `task_due`); every other decision counts as on an available instance (a spent
+  budget: not due, its wake the release). Fix round 1 (the coordinator's ruling 2 of the round): on
+  an instance whose idle action in effect can stop its emulator (`stop_emulator`, or `auto` with its
+  emulator start), a decision a gate without a time holds (the benefit gate, the no-progress guard,
+  a pool's lines) is not due and names no wake, whatever next time its trigger names; on any other
+  instance it names its own wake as before. The wake is the emulator's start, then the startup
+  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+- **After a Runtime start** (fix round 1, ruling 5) the instance is asleep as before it: the start
+  restores it stopped with its wake, withdraws its availability (`backend_selfcheck:unchecked`) and
+  does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
+  the unavailable instances above), so its withdrawal is the gate's `self_check` and the probes do
+  not hold it.
+- **Not asleep.** An instance whose application `close_app` closed (it stays available, and #484's
+  look ahead and its fix round 2 hold for it as before); an instance unavailable for any other cause
+  (its candidates are blocked at placement as before); an instance whose emulator a person stopped.
+  An asleep instance under a person's pause waits for the pause's end as every idle instance does.
 
 ## Runtime Boundary
 

@@ -49,7 +49,12 @@ loop and activity budgets, the activity's sampled interval after its previous ad
 (`policy_activity_interval_active`) and the activity windows still apply, and every rerun
 consumes the budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
 its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
-page-graph task is rerun at once as a linear one is.
+page-graph task is rerun at once as a linear one is. Since 0.12.77 (Workflow #490 ENTRY-A) a
+failure at the run's entry (a code of class `pack_logic_mismatch`) is no failure of the task and is
+never rerun at once ("A failure at the entry" below): it settles as a condition, with no retry, and
+blocks its instance; every such failure settles so (fix round 4: none counts against its rule).
+Its pair then waits a growing interval before it is dispatched on that instance again ("A pair that
+keeps failing at its entry").
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -108,7 +113,7 @@ The live settlement of a scheduled run whose main package was admitted, as `line
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `n<I><H>` | Workflow #373 NAV-5 (M-373 §8.5): the navigation, recovery chain or interrupt layer package a navigation failure happened in (the last `EntryRecoveryFailed` of a layer with role `navigation_hop`, `recovery_chain` or `interrupt_handler`), or the package a `contained_task_navigation_package_invalid` names; `I` and `H` as above, `H` at the path the registry of the run's game gives it. Absent when the failure happened in no such layer. |
 | `g<H>` | Workflow #373 NAV-5 (M-373 §8.5): the first 12 hex digits of SHA-256 over the run's game root's `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent file adds nothing), `x` when they could not be read. Present, after `n`, on a failure whose code starts with `contained_task_navigation_` or `contained_task_interrupt_`, or that happened in such a layer; absent on every other failure. |
-| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
+| `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate; since 0.12.77 (Workflow #490 ENTRY-A) `i` and the same digits for such a failure at the run's entry that the settlement settled as a condition of the instance ("A failure at the entry"); it does not accumulate either, and (fix round 4) every failure at the entry is written so. |
 
 The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 NAV-5: was
 214 before `n` and `g`), without whitespace or control characters. A segment out of the order
@@ -223,7 +228,12 @@ Every other failure is rerun only: its `F` is unique, so it never repeats the pr
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
 the start not on the first step, `contained_task_linear_application_unconfirmed`, device and
 backend errors, operator pause, cancellation and deadline, the task timeout and recognition
-errors.
+errors. Since 0.12.77 (Workflow #490 ENTRY-A) such a failure at the run's entry whose code's
+class is `pack_logic_mismatch` (raised by the entry's own layers, whatever `exclude_codes` says of
+its code) and that its instance's block has a recovery for is not rerun either: it settles as a
+condition of the instance ("A failure at the entry" below), always (fix round 4: it never
+accumulates and never counts against its rule). A failure of any other class met at the entry (the
+capture backend's, the device link's, a fence's) is rerun only, as before.
 
 The restart segment (R25-1): the run had a `launch` or `restart` application effect
 (`application.intent`) and no `StepFinished` after the last one names a main-interface page
@@ -237,7 +247,9 @@ severe. The task terminal, its severity and the `application.*` records are unch
 startup reconciliation still settles from the terminal's severity.
 
 A severe failure, a sensitive task, an exceeded runtime budget and an interrupted settlement
-pause at the first failure, as before. Since Workflow #361 M6 an interrupted settlement (a
+pause at the first failure, as before; since 0.12.77 (Workflow #490 ENTRY-A fix round 5, ruling 1)
+not for a failure at the entry: a sensitive task's failure at the entry settles as any task's ("A
+failure at the entry"). Since Workflow #361 M6 an interrupted settlement (a
 scheduled run the daemon's own end cut short, settled at the next start as
 `policy_settlement_interrupted`) is recorded the same way but does not hold the pair: it is
 no failure of the task, so the restart that recorded it lifts it (see "Lifting"). Only the
@@ -252,6 +264,478 @@ clears the pair's streak and immediate-rerun round; a block that repeats is boun
 round instead. A linear run that ends on a select step's `on_empty` key (Workflow #463 K1,
 [linear-steps.md](linear-steps.md), "Select steps") or on an ending page (Workflow #463 K2, since
 0.12.61, [linear-steps.md](linear-steps.md), "Endings") is a success in the same way.
+
+## A failure at the entry (Workflow #490 ENTRY-A, since 0.12.77)
+
+Register §1.494; the coordinator's work order of 11-20 on board #490, its constraint of 23:18 JST
+and the rulings of its four fix rounds (11-21), not the owner's words. The production defect of
+11-20 (v0.12.75): a package left a game on a screen no package knows; every task due after it
+failed at its entry, was rerun at once (R22) until its runs of the day were spent, a rule whose
+`escalation_threshold` is 1 was paused by one such failure, and once nothing failed any more
+nothing triggered a recovery. The harms kept out: an instance left blocked with nothing to end it
+and nobody told; a rule paused, or kept from running beyond its window's end, by failures at its
+entry; a task that never runs again; a ladder started where the configuration deliberately
+excluded one; an instance or its emulator restarted again and again for nothing.
+
+**Which failures.** The live settlement of a scheduled run decides it, from what it already reads
+for the failure identity ("Failure identity"), and writes the result into the record (below). A
+run failed at its entry when all of these hold:
+
+- its main package was admitted and its prerequisite chain resolved (not the `prepare` scope:
+  a refusal of the chain is a configuration problem and accumulates as before);
+- it checked its entry and its main package never started: a gated run (a prerequisite chain, a
+  page-graph run's entry check) or a home entry's preflight (an `EntryRecoveryDecision` among its
+  rows), and no `EntryTargetDisposition` `Started`, so the main package executed no step. The
+  scopes are `gate` and `pre:<I>`, and the home entry's check and its recovery package (which
+  "Scope and step" counts as `main` for a `linear_steps` run without a chain);
+- its failure does not accumulate ("Which failures accumulate": the navigation and interrupt
+  failures that accumulate in every scope stay accumulating failures of the task);
+- **its code's class is `pack_logic_mismatch`** (fix round 2, ruling 1): the entry's own layers
+  (its prerequisite chain, its return-home layer, its entry check) judged the screen not to be what
+  their packages expect. Nothing else is a failure at the entry, whatever the ladder's triggers say
+  of its code: a code of any other class (the capture backend's four, `environment_fault`, which
+  the shipped item `task_capture_backend` takes; the device link's `device_link_lost`; a fence's
+  `instance_resources_fenced`; a configuration's `declaration_error` codes; a vision provider's)
+  sets no mark, blocks nothing and gives nothing back: it is settled exactly as before ENTRY-A,
+  rerun at once (R22), its ladder the one its trigger item starts at its lease end, if any. The
+  class is the code's own (`ladder_class`); no code is named in the decision;
+- its instance's block has a recovery for it: the run's ladder rules allow a ladder at the task
+  stage at all (not a direct run, a physical instance, `stuck_recovery` on) and a trigger item
+  takes the class at the task stage, matched with `exclude_codes` not read (fix round 1: the
+  block's recovery is the block's own trigger; with the shipped triggers `pack_logic`). Otherwise
+  the failure settles as before ENTRY-A: an instance with no recovery is never blocked;
+- its policy class is `recoverable` (a code the Runtime raises only as fatal, or a terminal its
+  failure point marked `failure_severe`, is `severe` and settles as before). A sensitive task's
+  failure is one too (fix round 5, ruling 1): its main package did not start, so nothing
+  sensitive was begun.
+
+So with the shipped configuration the set is every code of class `pack_logic_mismatch` that the
+gate, a prerequisite or return-home layer, the home entry's check or its recovery package end a run
+with, the excluded ones included: `contained_task_page_unknown`,
+`contained_task_recognition_failed`, `contained_task_home_entry_not_matched`,
+`contained_task_home_recovery_binding_missing`, `contained_task_prerequisite_entry_unmatched`,
+`contained_task_prerequisite_step_limit`, `contained_task_prerequisite_final_page_missing`,
+`contained_task_return_home_entry_unmatched`, a layer's own `page_confirmation_failed`,
+`contained_task_linear_intermediate_unobserved`, `contained_task_step_unconfirmed` and
+`contained_task_guard_refused`. A run the start's reconciliation settles from its terminal (its
+settlement was interrupted) has no failure identity and settles as before. *A known gap, not
+fixed in this slice* (fix round 6, ruling 6): a failure at the entry that a reconciliation settles
+(the process died between the run's terminal state and its settlement, or the online settlement
+of a run whose worker channel was abandoned) is settled from its terminal, so it counts against
+its rule as any failure did before ENTRY-A (its streak, its `on_failure`): a rule whose
+`escalation_threshold` is 1 is paused by it until its package's content changes. The ledger holds
+what would tell it (the run's `EntryRecoveryDecision` and whether its main package started, its
+`task.semantic` rows with the run's links); what forbids settling it as a condition is the
+ledger's own rule that a failure settled from a terminal state carries an empty failure identity,
+so the record cannot carry the entry mark `~fi`.
+
+**Settlement.** Every such run settles by the condition path ("Condition termination and owed
+reruns", "Settlement"): its record carries `condition` with `refunded` true whatever
+`scheduling.rerun.refund_counts` says, `count` 1 and the end of the activity window it was admitted
+in; it adds to no failure streak and no escalation (the pair's counters stay as they were), keeps
+the disposition `continue` with no `retry_at_unix_ms` (so R22 does not rerun it), cannot pause its
+pair whatever `escalation_threshold` says, gives back the four counts its admission took, and its
+runtime is not counted. It owes no rerun: the pair's owed rerun stays as it was, and the task is a
+candidate again by its own trigger and cooldown once its instance is no longer blocked and its own
+wait has passed ("A pair that keeps failing at its entry"). Its failure identity is written as for
+a failure that does not accumulate, with the frame mark `i` in place of `u` (the same digest of the
+decision id): `<base>~v2~…~fi<12 hex>`. That mark is how the record says it: a replay reads
+`condition` and the mark from the record, owes no rerun, and never reads the configuration. No
+member and no word of the record is added; the record's outcome keeps its code. A sensitive task's
+failure at the entry settles the same way (fix round 5, ruling 1; before it, such a failure paused
+the pair at once and lifted only when the package changed): the sensitive rule is not applied, so
+its record's `sensitive` is `false`, as every other record of a failure at the entry, which the
+record's own check requires of a record that continues. *Before a rollback to 0.12.76* (fix round
+6, ruling 5): a v0.12.76 Runtime judges whether a task is sensitive by the catalogue generation the
+dispatch ran under, not by the record, and refuses a sensitive task's record that carries a
+condition, so it stops at its start (`policy_execution_record_mismatch`) on one it compares; a start
+with a start mark compares only the execution records after the decision memory's last value
+record (`policy.control_state_recorded` or `policy.activity_state_recorded`), and this build writes
+the pair's value record right after each settlement, so only a record whose value record was never
+written (the process stopped between the two) stands there; a start that replays the whole
+ledger (none of a start mark) compares every record. What a person checks, in two steps: (1)
+whether any catalogue generation activated since this version was deployed (the
+`catalog.activated` records since the deploy, each naming its generation; the generation's tasks)
+holds a task whose `sensitive` is `true`; if none, nothing more to check and the rollback is safe
+as far as this goes; (2) if one does, whether the ledger holds, after its last
+`policy.control_state_recorded` or `policy.activity_state_recorded` record, a
+`policy.execution_recorded` record of such a task (`task_id`) whose `failure` carries `condition`
+and whose `failure.failure_identity` ends in `~fi` and twelve hex digits; with one there, a
+v0.12.76 start stops on it, and with a start that replays the whole ledger any such record of the
+ledger stops it.
+
+**No failure at the entry counts against its rule** (fix round 4, ruling 1). The earlier rounds
+judged some failures at the entry the pair's own (after a recovery, then after another task was let
+in) and settled them by the rule's `on_failure`; each version of that evidence still paused a
+healthy rule for another's fault (a task that leaves the game on a screen no return home can
+leave, a store update, two broken pairs taking turns), and such a pause lifts only when the
+package's content changes. So there is no "pair's own" failure: every failure at the entry settles
+as above, whatever ran between, and a pair whose entry is broken is held back by two things that
+end by themselves (below). The worst a wrong judgement can do is cost one rule the rest of one
+activity window.
+
+**A pair that keeps failing at its entry** (fix round 4, rulings 2, 3 and 5). The Runtime keeps in
+its memory, per pair (instance, catalog task), its failures at the entry while its scheduled runs
+keep failing there, with the packages the latest failure's identity names (the main package and
+each declared prerequisite and return-home layer with its content hash) and the activity window
+its admission was committed in (the `expires_at_unix_ms` its condition carries). No record, fact or
+status member holds them.
+
+- *The count in a row and the wait* (ruling 2). Each failure at the entry counts one more in a row
+  when the pair's previous one named the same packages in the same window, else it is the first.
+  After the n-th the pair is not dispatched on that instance before `scheduling.unavailable_probe`'s
+  interval for n (`first_interval_ms`, times `factor` for each further one, at most
+  `max_interval_ms`; shipped: one minute, two, four, … thirty; fix round 5, ruling 3 (i): past
+  `max_interval_ms` one more `first_interval_ms` for each further failure in a row, thirty-one,
+  thirty-two, …, so two pairs of an instance whose counts differ never come due together and the
+  one that has just failed again comes after the others) has passed since the end of the block
+  that failure set, whatever ends it (the coordinator's addition to fix round 4); until a block
+  ends, and when none ended since the failure (it set none), since its settlement; and never past
+  the window's end. At every block's end the pairs of the instance with a count in a row wait from
+  that end in turn (fix round 7, ruling 1, which replaces fix round 6's rule; fix round 8, ruling
+  1): first the pairs whose failures did not set the block, in the order of their latest failure
+  at the entry, the one that failed longest ago first (equal times by the task's id, so the order
+  is the same on every run), then the pairs whose failures set or renewed the block, in the same
+  order among themselves; the pair at place n waits n `first_interval_ms` from that end, and a
+  pair that set the block waits its own interval when that is later; a pair set aside takes no
+  place; a wait still running is never shortened (the later time stands). With no other pair, the
+  pair that set the block waits its own interval, as above. So after every block the pairs come
+  due one at a time, least recently failed first and those that set the block last, and a pair
+  the outage left with a long interval waits its turn, not that interval. Any rule that decides a
+  pair's wait from intervals alone lets the evaluation's order pick among the pairs that come due
+  together: under fix rounds 5 and 6 broken pairs could take turns ahead of a healthy pair for
+  hours (the seventh review: a broken pair at four in a row first in the order, a second with none
+  and a healthy pair at six, about eight hours), and fix round 7 left the pairs that set the block
+  at their own interval, so one whose interval was a minute came due with the first turn and,
+  first in the evaluation's order, ran again first. *The bound:* after an outage a healthy pair is
+  let in after each broken pair ahead of it in the order has failed once more at most, about one
+  block each. In a stretch that let nothing in, a block lasts about half an hour from its sixth on
+  ("The worst cases").
+  The candidate waits `instance_entry_task_waiting` (info; `instance_id`,
+  `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` of the latest failure, `count` the
+  failures in a row, `next_eligible_unix_ms` the wait's end) and wakes then; a fact refresh names the
+  code as its `gate_code`; the schedule explanation's candidate rows show it. Position 4b of the
+  order of the deferrals ([scheduling-blackout.md](scheduling-blackout.md)) holds it, after the
+  instance's block: the instance's other tasks are not held and run meanwhile. *A run let in ends
+  every wait* (fix round 5, ruling 3 (ii)): a scheduled run let in on the instance (the event that
+  counts below; not a store update task's run, not a client's or the Lab's run) sets the count in a
+  row of every pair of that instance back to none and ends its wait at once, and a later block's
+  end sets it none; what counts against a pair, its window and its packages stay, so its next
+  failure at the entry is one more against it. No pair waits for another to be dispatched.
+- *Set aside for the window* (ruling 3). Of those failures, the Runtime counts the ones that came
+  although the instance had let another scheduled run in since the pair's previous failure at the
+  entry: one that succeeded, or one whose main package started after an entry check it passed (an
+  `EntryTargetDisposition` `Started` among its rows); a run whose package checks no entry starts its
+  main package whatever the screen and is counted only when it succeeds; a client's or the Lab's run
+  is no scheduled run; a store update task's run is none, whether it succeeds (ruling 5) or its
+  main package starts and it fails (fix round 5, ruling 4). When that count reaches the
+  rule's `on_failure.escalation_threshold` (the catalogue requires it of every task, 1 to 1000; where
+  a rule's decision gives no `on_failure`, `standard-pack adopt` writes the neutral `{pause, 1, 0,
+  2}`, so 2), the pair is not dispatched on that instance again until the end of the activity
+  window its admission was in: the candidate waits `instance_entry_task_set_aside` (info; the same
+  values but `count` the failures against it, `limit_count` the threshold and `window_end_unix_ms`)
+  and wakes at the window's end, and a person is told once per pair and window, by
+  `instance_entry_task_set_aside_reported` (a warning `runtime.failed` record under the instance,
+  handed to the daemon's log; the task, the count, the threshold and the window's end), and again
+  when the pair is set aside again after a catalogue's activation, a changed package or a Runtime
+  start cleared its counts (fix round 5, ruling 6). A pair whose
+  window the policy does not know is never set aside. Nothing else follows: no pause of the rule, no
+  change to its streak, nothing that outlives the window; the next window starts from nothing.
+- *Its end.* The counts and the wait start from nothing when a scheduled run of the pair settles any
+  other way (its main package started, a success, a stop, an interrupted settlement, a failure of
+  another class or before its chain was resolved), when the window its admission was in ends, when
+  its packages change (at its next failure, which then counts from one), at a restart (memory only),
+  and (ruling 5) when a store update task's run succeeds on the instance, for every pair of the
+  instance: the game is another version. That success still ends the block and the stretch as any
+  run's success does. A catalogue that becomes active (an activation or a rollback; the
+  coordinator's addition to fix round 4) clears every pair's count, wait and being set aside at
+  once, of every instance (the Runtime's one active catalogue serves them all): it may bind other
+  packages to the pair's task, and the pairs' packages are not compared there. A placement can
+  replace a registered package's files without changing the rules a composition activates (a
+  scheduled run takes its package as the registry places it when it is dispatched), so (fix round
+  5, ruling 5) the scheduler workbench's check that finds a package of a game in use changed frees
+  every pair the same way. Fix round 6 (ruling 4): the check compares, per game in use, the length
+  and modification time of `bundle.json` (the root's index of its packs: it holds each pack's file
+  and byte counts, no digest, and `place` writes it again only when its bytes change), of the
+  recognition files `pages.json`, `interrupts.json` and `navigation.json`, and of each registered
+  package's `control.json` and `resources/operations/resources.json` (`place` replaces a
+  package's directory whole, so every file of a placed package is written anew), with what this
+  comparison kept at the check before, not with the marks of the last composition that succeeded:
+  one change frees the pairs at one check, also while another game's root is broken or a
+  composition is refused. The registered packages whose two files are compared are those of the
+  last composition that succeeded (fix round 7, ruling 3): until a composition has succeeded
+  since the start (while a game root has been broken or every composition refused since then),
+  only the root's `bundle.json` and the three recognition files are compared, so a change of a
+  package's files that leaves those alone is not seen until then. Not seen either: a change by
+  hand to a package's other files (a task file, a
+  template) that leaves those two files as they were, a change of `tables/`, `loading/`,
+  `notices/` or the root's other files, and in configured mode (no workbench) anything but a
+  catalogue's activation. A client's run, a
+  recovery, a resume and a blackout end the block but leave the counts as they are (the wait then
+  runs from that end, above).
+
+**The worst cases** (fix round 4, ruling 3; fix round 5, ruling 3). Shipped values
+(`first_interval_ms` 60 000, `factor` 2, `max_interval_ms` 1 800 000,
+`recovery_ladder.cooldown_secs` 600), climbs that end within about two minutes and a recovery that
+brings the game home each time (a pair whose own entry is broken), runs short:
+
+- *A broken pair with a healthy task due* (two broken pairs ahead of the healthy one; a healthy
+  task that never failed has no wait). The first broken pair fails at about 0; its block ends at
+  about 2 and it waits its minute, the second broken pair fails at about 2 and its block's climb,
+  held by the cool-down window, ends at about 12; the healthy task runs then and is let in, which
+  ends both waits: the first pair fails at about 13, the first against it (a threshold of 1 sets
+  it aside there), and the second at about 23 after the next climb (set aside there under 1).
+  With the recommended `on_failure` (threshold 2) they are set aside at about 33 and 43, the
+  healthy task running at every block's end. As fix round 4 (case (c) of fix round 5).
+- *After a long outage* (fix round 5, cases (a) and (b); times as the turn order of fix rounds 7
+  and 8 gives them). Every pair of the instance waits the maximum from the outage's last block's end (minute 0
+  here), the broken one first in the evaluation's order. At 30 it fails again, its next wait
+  thirty-one minutes; its climb (the stretch's pace is thirty minutes too) ends its block at about
+  32, and the healthy pairs take turns: the first runs at about 33 and is let in, every wait ends,
+  the broken pair fails at about 34 (one against it: set aside under a threshold of 1), its next
+  block, a new stretch's, waits for the cool-down window and ends at about 42, the second healthy
+  pair runs then, and the broken pair's next failure at about 43 is the second against it (set
+  aside under the recommended threshold 2). With two broken pairs ahead of one healthy pair the
+  healthy pair runs at about 33 when its latest failure is older than the second broken pair's,
+  else that pair fails at 33 (its turn first), its block ends at about 64 and the healthy pair
+  runs at about 65; each broken pair's next failure is then one against it. Fix round 6's rule
+  gave 62 and 94.
+- *A new broken pair ahead of healthy pairs the outage left with long waits* (fix round 6, ruling
+  3; the sixth review's case: two healthy pairs at six and ten in a row, waiting thirty and
+  thirty-four minutes from the outage's end at 0, a broken pair with no count first in the order).
+  The broken pair fails at about 0; its block's climb, held by the stretch's pace, ends at about
+  32; the healthy pairs take turns, one and two first intervals, and the broken pair, whose
+  failure set the block, the third (fix round 8; fix round 7 gave it its own minute, so it came
+  due with the first healthy pair and, first in the evaluation's order, failed again first): the
+  first healthy pair runs at about 33 (34 when the pair with the longer wait failed longest ago:
+  its own wait still runs past its turn) and is let in, the broken pair fails at about 34, the
+  first against it (set aside there under a threshold of 1); under 2 its block's climb, a new
+  stretch's, waits for the cool-down window to about 42, the second healthy pair runs then and
+  the broken pair is set aside at about 43 (fix round 7: 65, 66, 74 and 75). With two such new
+  broken pairs first, the second fails at 32 (it has no wait), its block ends at about 64, and the
+  first healthy pair runs at about 65 (fix round 7: 97; fix round 6: 129). Before fix round 6
+  every block's end pushed the healthy pairs back by their own thirty minutes and more: some
+  three hours for six, five and a half for ten.
+- *Broken pairs at different counts ahead of a healthy pair* (fix round 7; the seventh review's
+  cases; times as fix round 8 gives them). A broken pair at four in a row first in the order, a
+  second with none and a healthy pair at six: the second fails at 0 (its block ends at about 32);
+  the healthy pair runs at about 33 when its latest failure is older than the first broken
+  pair's, else that pair fails at 33 (its turn first), its block ends at about 64 and the healthy
+  pair runs at about 65 (fix round 7: 65 either way; fix round 6: about 478, the two broken pairs
+  taking turns ahead of it). Three broken pairs at two, eight and none ahead of a healthy pair at
+  ten: the healthy pair runs at about 65 to 97 by the order of their latest failures (fix round 6:
+  about 1100).
+- *A broken pair with nothing else due.* Nothing is ever let in, so nothing counts against it and
+  it is never set aside, whatever the threshold. It fails at about 0, 3, 14, 26, 40 and 58 minutes
+  (each wait from its block's end, each later climb held by the stretch's pace and the ten-minute
+  cool-down window), then its wait is thirty minutes and one more for each further failure in a
+  row (fix round 5, ruling 3 (i)): at about 90, 123, 157, …, about thirty-five failures in a day's
+  window (fifty before fix round 5). Each costs the instance one short run that is given back, one
+  block and one climb of the stretch from the application restart (the game stopped and started
+  and its startup package run; the emulator restarted at most once in the stretch, "When"), and the
+  stretch's attention tells a person after `attention_after_ms`. A known bound, not changed (the
+  coordinator's ruling 7 of fix round 5; register §1.494).
+- *Every task failing at its entry for hours* (a condition nothing mends). No scheduled run gets
+  in, so no failure counts against any pair and nobody is set aside, whatever the threshold. Each
+  pair waits after each block's end (one minute doubling to thirty, then one more each, by its own
+  count), the stretch's climbs are paced (about six in its first hour, then two an hour) and the
+  emulator is restarted at most once in the stretch. At each block's end the pairs take turns a
+  minute apart, least recently failed first and the pair whose failure set the block last, at
+  its own interval when that is later (fix round 7, ruling 1; fix round 8, ruling 1). When the
+  condition ends (a climb recovers, a person's run succeeds, a resume), the pair whose turn is
+  first runs a minute after that block's end (later while its own wait still runs); once one
+  scheduled run gets in, every other pair's wait ends and they run at once, in the evaluation's
+  order.
+
+**The block.** The settlement of a failure at the entry, a condition, then blocks the instance,
+under the policy outcome gate the evaluation reads the blocks under: from then
+on every candidate of the instance (owed reruns, immediate reruns, remedy requests and the fact
+refresh included) waits with `instance_entry_blocked` ([scheduling-blackout.md](scheduling-blackout.md),
+"Order of the deferrals", position 4b), but a store update package's task, which passes as it
+passes position 4a: an instance whose game asks for an update fails every entry, and only that task
+can end it; its success ends the block as any run's does. The block ends when a recovery ladder of
+the instance ends `recovered` or `environment_ready`, when any run on the instance succeeds (a
+scheduled run, a store update task's, a client's or the Lab's run, a startup package, a rung's run),
+when a resume lifts the instance's pause or the global one, when a blackout covers the instance at
+the lease sweep's tick or a fence takes it, or at a restart (memory only: the start prepares and
+self-checks the instance again, and nothing of the screen is known to be wrong). Anything of these
+between the run's start and its settlement leaves no block. A recovery the block held when it ends
+is dropped with the record Workflow #489 AVAIL-1 writes for every recovery it drops (fix round 2,
+ruling 9): its trigger's `recovery_ladder_suppressed` `cooldown` once more, under the ladder's links,
+`until_unix_ms` the time it was held to; so is (fix round 3, ruling 7) a held recovery a newer one
+replaces, at each place a recovery is held with a block or for a settlement still to come, and (fix
+round 4, ruling 6) a recovery held for a run whose settlement does not block the instance, or whose
+settlement finds that something ended a block since the run's start. The recovery's own runs and a
+client's or the Lab's run are not scheduled candidates: the block never holds them.
+
+**Where a block's recovery starts and when** (fix round 2, ruling 2; fix round 3, rulings 3, 5 and
+6; fix round 4, ruling 4).
+
+- *A stretch* of the instance runs from its first block since a run was last let in on it (a
+  scheduled run let in as above, or a run there that is not the Runtime's own startup or rung run
+  and succeeded: a scheduled run's, a client's or the Lab's; or since the Runtime started) until the
+  next such run: blocks that something ended (a recovery, a resume, a blackout, a fence) and that
+  came back with nothing let in are one stretch, measured on the Runtime's clock. Memory only.
+- *Where.* A block set when no run was let in on the instance since its previous block ended is
+  climbed from the first rung that restarts the application: the first rung, in the rungs the
+  instance climbs (its profile's, else the section's), whose kind is `application_restart` or
+  `emulator_restart`, the rungs before it skipped `before_start_rung`; whatever ended the previous
+  block let nothing in, so the return home that has just failed is not run again. Any other block
+  (the first since the Runtime started, one after a run got in, a client's or the Lab's successful
+  run included) is climbed from its trigger item's `start_rung`, as configured. A later start the
+  item names is kept, and rungs that hold no such kind are climbed as configured. The rung is told
+  by its kind, never by a name or a position.
+- *When.* The first climb of a stretch starts as before. Every later climb of the same stretch (the
+  block's own climb after an exhausted one, an interrupted climb held again, the first climb of a
+  later block of the stretch) waits `scheduling.unavailable_probe`'s interval for the number of
+  climbs the stretch has had (`first_interval_ms`, times `factor` for each further one, at most
+  `max_interval_ms`), counted from the previous climb's end, and never comes before the instance's
+  cool-down window ends, **whatever ended the previous climb**: `recovered` or `environment_ready`
+  after which nothing was let in, `exhausted`, or an interruption by business capacity, a drain or a
+  shutdown. The lease end of a failure whose climb would be such a later one admits no ladder: it
+  holds it for the block (the lease sweep takes it up). A person's pause is the one exception:
+  nothing climbs under it, and its lifting ends the block. After a panicked worker nothing climbs
+  again in the block; after the game's update dialog nothing climbs again in the stretch ("A
+  recovery that ended without recovering").
+- *The emulator at most once in a stretch* (fix round 4, ruling 4). Once a ladder of the stretch's
+  blocks (a blocking run's own ladder or one of a block's own recoveries) has run the rung that
+  restarts the emulator, every later climb of that stretch skips it: the rung's
+  `recovery_rung_finished` records it `skipped` with the outcome
+  `recovery_rung_skipped_emulator_restarted_in_stretch` (the climb's `recovery_ladder_started` plan
+  lists it `pending`, as a plan drill's does: no word is added to the ledger's skip reasons, which a
+  v0.12.76 reader would refuse), so the climb ends after the application's restart, `exhausted`
+  when the startup package does not reach its page. A new stretch (after a run was let in) may
+  restart the emulator once again; a restart of the Runtime starts with no stretch.
+- *What the lease end reads* (ruling 6). The failure's lease end knows whether its settlement will
+  judge the failure at the entry from what the host already holds of the run in memory, and reads no
+  ledger: the code's class, the run's chain (its scheduled resolution), and the run's own entry facts
+  as its control noted them when they were recorded (an `EntryRecoveryDecision`: it checked its
+  entry; an `EntryTargetDisposition` `Started`: its main package started), the code's accumulation
+  judged outside the restart segment, which only makes more failures accumulate. So it never says
+  "at the entry" of a failure its settlement settles otherwise; nothing is read, and nothing can fail
+  to be read, under the instance's admission lock. A ladder its lease end admits at once starts at
+  the application restart when the block will; a held one is started there when it is taken up.
+- *A night of a condition nothing mends* (shipped values: `first_interval_ms` 60 000, `factor` 2,
+  `max_interval_ms` 1 800 000, `recovery_ladder.cooldown_secs` 600; climbs that end within about two
+  minutes). The stretch's climbs start at about 0, 10, 20, 30 and 40 minutes (the cool-down window,
+  ten minutes from each climb's start, is the longer wait while the interval is one to eight
+  minutes) and 58 minutes (sixteen minutes after the fifth's end): six in the first hour; then every
+  thirty minutes after the previous climb's end: one in the second hour (about 1:30), two in every
+  hour after (about 2:02, 2:34, 3:06, …), some twenty in eight hours. The first climb runs as
+  configured: the return-home package, then (failing) the application's stop, start and startup
+  package, then (on an emulator with control) the emulator's stop and start and the startup package:
+  the one emulator restart of the night (fix round 4, ruling 4). Every later one starts at the
+  application restart: it stops and starts the game and runs the startup package, and ends there,
+  `exhausted` when that fails, the emulator's rung recorded skipped
+  (`recovery_rung_skipped_emulator_restarted_in_stretch`; a handset has the first two rungs only). A climb that ends `recovered` (a startup package that reaches its
+  page while the condition stays) ends the block; the next due task then fails at its entry, a
+  condition, and its block's climb is paced the same way; each pair waits after its failures and
+  none is set aside, nothing being let in. A person is told once per block whose climb ended
+  `exhausted` and once per stretch after `attention_after_ms` (an hour); no rule is paused.
+
+**The way out.** No block without an end and without a person told:
+
+- *Its trigger.* The failure's lease end entered the ladder as a failed run's does (but for a later
+  climb of a stretch, held as above). For a failure `exclude_codes` keeps from starting a ladder by
+  itself the lease end starts none, but prepares the ladder of the block's own trigger (the run's
+  trigger, the item the class's matching gives with the exclusions not read, `pack_logic` with the
+  shipped triggers) and keeps it for the run's settlement, which takes it as the block's held
+  recovery, due at once (or at the stretch's paced time), or lets it go when the run did not fail
+  at its entry. A recovery held for a run whose settlement is still to come is kept by that run, so
+  no other run's (a manual run's) ladder displaces it, and none is kept for a run that settles
+  nothing (a direct run). `exclude_codes` keeps excluding a code from starting a ladder at its lease
+  end: an excluded code failing after the main package started starts no ladder at all.
+- *Held, then taken up.* A ladder its cool-down suppressed is held with the block and admitted when
+  the cool-down ends, as without the cool-down, by the lease sweep's step after the unavailable
+  instances' probes (Workflow #489 AVAIL-1's mechanism, a new request, causation, holder and claim
+  for it); the window in force is read again then, and a later window (another ladder's climb, a
+  `triggered` admission) keeps one that respects the cool-down held until its end. A recovery
+  AVAIL-1 held for an instance unavailable by its device self-check is taken up by AVAIL-1's probe;
+  when the instance leaves that set (a probe passed) the block takes the recovery over instead of
+  dropping it. While the instance is unavailable its candidates answer `instance_unavailable`,
+  which the evaluation gives at placement, before the order of the deferrals. While a pause or an
+  idle stop owns the instance, a held recovery stays held, nothing recorded (a resume ends the
+  block; the idle wake lets it be taken up).
+- *A blackout.* A blackout that covers a blocked instance ends the block at the lease sweep's next
+  tick, whatever its recovery is doing, and its held recovery is dropped (recorded as above):
+  nothing is dispatched during the blackout, and after it the first due task tries its entry anew
+  and, failing, blocks the instance and triggers again; SR-4a3 is kept (no ladder of an earlier
+  trigger after the blackout). A recovery whose admission or climb a covering blackout suppressed
+  ends the block at once; one a blackout only coming within its rung's time limit stopped is held
+  until that blackout's end, and the block ends once the blackout covers the instance.
+- *A transient obstacle.* A recovery refused by the admission's capacity refusal (business
+  capacity from the performance sample), by another ladder that holds or waits for the instance
+  (`already_running`), or by a later preparation that superseded its own, and a climb a holding
+  interruption ended (a pause, business capacity, a drain or a shutdown: `recovery_ladder_finished`
+  `exhausted` at Warning with `recovery_ladder_interrupted`), is no failure of the recovery: the
+  block stays, the recovery stays held and its admission is tried again once nothing holds the
+  instance and, for an interrupted climb, as a later climb of the stretch ("When"); no person is
+  told of an interruption. The sweep judges capacity and another ladder before it tries, so nothing
+  is recorded while either refuses; a held preparation's ladder is admitted naming the instance's
+  latest preparation (AVAIL-1), so the supersession it met is not met again; so none of them records
+  per tick, and none warns by itself.
+- *A claim the queue refuses* (fix round 2, ruling 7). Tried again no more often than once a second
+  at first, the interval doubling at each refusal in the block to at most once a minute, while the
+  block lasts; the refusal is recorded (its `runtime.failed` lifecycle record, as before ENTRY-A)
+  when it first occurs in the block and when its cause (the refusal's code) changes, none per
+  retry. Each try is a claim request of the queue, which writes its own request and denial
+  (`lease.requested`, `scheduler.denied`), so at the longest interval the queue's trace of a refusal
+  that does not end is two records a minute.
+- *A fence.* A fence that takes the instance ends the block and drops its held recovery: the fence
+  and its own recheck own the instance from there.
+- *A recovery that ended without recovering* (fix round 2, ruling 5; fix round 3, rulings 3 and 4).
+  One of the block's own recoveries (the blocking runs' lease ends' ladders, the recoveries the block
+  held, took over or admitted) that ends without recovering leaves the instance blocked and brings it
+  to a person's attention once per block: `instance_entry_blocked_recovery_failed` (a warning
+  `runtime.failed` record under the instance, handed to the daemon's log), with how it ended
+  (`entry_recovery_end`), the trigger item the ladder was admitted under (`trigger_rule`, when it had
+  one) and, when another climb comes, its earliest time (`next_occurrence_unix_ms`). `exhausted` (its
+  rungs ran and failed, or a busy or screen hold's limit stopped it): **the block tries again by
+  itself**, its next climb starting at the application restart and paced as every later climb of the
+  stretch ("When"), and so on while the block lasts. `update_dialog` (the game's update dialog ended
+  a rung's run, UPD-1, which ends the ladder `exhausted` at Warning with `recovery_ladder_interrupted`):
+  the block's ladder is not climbed again in that stretch (a held recovery is let go, recorded), no
+  `next_occurrence_unix_ms`; the store update task passes the block as it passes position 4a, and its
+  success ends the block. On an installation whose catalogue has no store update task nothing ends
+  that block by itself: the instance stays blocked (position 4a holds it too, the update fact being
+  true), nothing touches the device again, and the person told is told once more by the stretch's
+  attention after `attention_after_ms`; a person updates the game and runs a task or resumes the
+  instance (a resume ends the block), or the Runtime's restart forgets it. `worker_panicked`: no
+  `next_occurrence_unix_ms`, and nothing climbs again in that block, as AVAIL-1's probe after a panic
+  (a resume, a run's success or a restart ends the block). A scheduled run's own recovery that ended
+  so before the run's settlement does the same with the block that settlement sets; a ladder of
+  another trigger does not make the block warn. No configuration key is added.
+- *The emulator's restarts.* A climb that reaches the `emulator_restart` rung stops and starts the
+  emulator through the control owner on its key; it neither adds to nor clears the emulator watch's
+  bound (`emulator_control.restart_attempts` within `restart_window_ms`, which counts the watch's own
+  restarts, and which a person's emulator control clears). Since fix round 4 (ruling 4) a stretch
+  restarts the emulator at most once, so a night of a condition nothing mends restarts it once,
+  where v0.12.76 restarted it at most a few times and fix round 3's head about twenty times. The
+  stretch's climbs are bounded by their pace and the instance's cool-down window
+  (`recovery_ladder.cooldown_secs`): with the shipped values about six in the first hour of a
+  stretch and two an hour from the third hour on ("A night of a condition nothing mends"), each
+  recorded (`recovery_ladder_started`, `recovery_ladder_finished`), a person told once per block and
+  once per stretch. A night of them therefore uses up no restart bound and leaves no instance that
+  nothing brings back and nobody is told of.
+- *The attention* (fix round 2, ruling 6). An instance blocked in a stretch ("A stretch") that
+  lasted `scheduling.unavailable_probe.attention_after_ms` is brought to a person's attention once
+  per stretch, whatever holds it, a recovery still held or climbing included:
+  `instance_entry_blocked_awaiting_person` (the same kind of record), with `elapsed_ms` the
+  stretch's length and `limit_ms` the threshold. As AVAIL-1's attention for an unavailable
+  instance, it is not raised while a pause (the instance's own or the global one), a fence or an
+  idle stop owns the instance; its clock runs on, so it is raised at the first tick nothing owns the
+  instance and the instance is still blocked. The one key serves AVAIL-1's unavailable instances
+  and the entry blocks; no key is added.
+- *Both.* One code, one cause: `instance_entry_blocked_recovery_failed` at most once per block and
+  `instance_entry_blocked_awaiting_person` at most once per stretch, each when its own condition
+  first holds, so a block may raise both, in the order their conditions came.
+
+**Status.** No member of the status is added (a v0.12.75 reader refuses a status with a member it
+does not know). The not-running row of `ScheduleExplanation` carries it: its `why` is
+`instance_entry_blocked` with the blocking run's `task_id`, `decision_id`, `failure_code` and
+`observed_at_unix_ms`, and its `since_unix_ms` the first evaluation that deferred the instance so.
+A pair that waits or is set aside shows on its candidate rows (`instance_entry_task_waiting`,
+`instance_entry_task_set_aside`, with until when); no member of any answer is added for them.
 
 ## A failure that pauses at its first occurrence (Workflow #463 U1)
 

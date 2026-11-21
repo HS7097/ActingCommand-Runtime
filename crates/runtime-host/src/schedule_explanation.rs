@@ -182,6 +182,16 @@ struct InstanceRows {
 /// (review-1845): a hold with a time of its own (a cooldown) lets such a task through no earlier
 /// than that time, so its wake is the later of the cooldown's end and the later position's
 /// release, none when either names none.
+///
+/// #486 ASLEEP-1 fix round 1 (register §1.497; `contracts/runtime-config.md`, "What wakes an idle
+/// instance"): on an instance whose idle action in effect can stop its emulator (`stop_emulator`,
+/// and `auto` where that tier is allowed: `HostShared::idle_emulator_stops_for_policy`), a decision
+/// a gate without a time holds (the benefit-held set below) contributes no wake either, whatever
+/// next time its trigger names: that time would start a stopped emulator when nothing can be
+/// dispatched. Nothing is lost but the lead: every evaluation judges an asleep instance as an
+/// available one, so the evaluation in which the task can be dispatched counts it due. This holds
+/// for the plan the stop is decided by too, since a wake only ever moves earlier. On every other
+/// instance the plan is as before.
 #[derive(Debug, Default)]
 struct IdleDraft {
     task_due: bool,
@@ -197,7 +207,8 @@ impl IdleDraft {
     /// `held_ahead`: the decision's entry of [`IdleHeldAhead`], when a hold of the instance hides
     /// a later position that holds it back. `update_held`: the instance waits for its client update
     /// and the decision is no store update task's
-    /// ([`crate::application_update::IdleUpdateHold::holds`]).
+    /// ([`crate::application_update::IdleUpdateHold::holds`]). `stops_emulator` (#486 ASLEEP-1 fix
+    /// round 1): the instance's idle action in effect can stop its emulator.
     fn add(
         &mut self,
         decision: &TaskDecision,
@@ -205,6 +216,7 @@ impl IdleDraft {
         held_back: Option<Option<u64>>,
         held_ahead: Option<Option<u64>>,
         update_held: bool,
+        stops_emulator: bool,
     ) {
         // UPD-1 (design §4.2; fix round 1, review M1): on an instance that waits for its client
         // update, a decision other than the store update task's is neither due nor a wake,
@@ -290,7 +302,12 @@ impl IdleDraft {
             self.reading_due = earliest(self.reading_due, at);
         } else {
             self.task_due |= due;
-            self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);
+            // #486 ASLEEP-1 fix round 1: on an instance whose idle action can stop its emulator, a
+            // decision a gate without a time holds names no wake, whatever its trigger's next time.
+            let wakes_nothing = benefit_held && stops_emulator;
+            if !wakes_nothing {
+                self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);
+            }
             if due {
                 let selected = decision.state == SchedulingDecisionState::Selected;
                 if self
@@ -377,6 +394,7 @@ impl ScheduleExplanationTable {
     /// instance deferred while a later position would hold them back ([`IdleHeldAhead`]); UPD-1 fix
     /// round 1 (review M1), the instances position 4a holds as the evaluation ran and the store
     /// update tasks it lets through.
+    #[cfg(test)]
     pub(crate) fn record_gated(
         &mut self,
         evaluation: &PolicyEvaluation,
@@ -384,6 +402,29 @@ impl ScheduleExplanationTable {
         evaluated_at_unix_ms: u64,
         expected: &ExpectedRuntimeOf<'_>,
         gates: IdleGates<'_>,
+    ) {
+        self.record_stopping(
+            evaluation,
+            catalog_hash,
+            evaluated_at_unix_ms,
+            expected,
+            gates,
+            &BTreeSet::new(),
+        );
+    }
+
+    /// `record_gated` with, #486 ASLEEP-1 fix round 1 (register §1.497), `stops_emulator`: the
+    /// instances whose idle action in effect can stop their emulator, by alias
+    /// (`HostShared::idle_emulator_stops_for_policy`), whose idle plan takes no wake from a
+    /// decision a gate without a time holds ([`IdleDraft`]). Only the idle plan reads it.
+    pub(crate) fn record_stopping(
+        &mut self,
+        evaluation: &PolicyEvaluation,
+        catalog_hash: &str,
+        evaluated_at_unix_ms: u64,
+        expected: &ExpectedRuntimeOf<'_>,
+        gates: IdleGates<'_>,
+        stops_emulator: &BTreeSet<String>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -406,6 +447,7 @@ impl ScheduleExplanationTable {
                     .and_then(|tasks| tasks.get(&decision.task_id))
                     .copied(),
                 gates.update_hold.holds(decision),
+                stops_emulator.contains(alias),
             );
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {

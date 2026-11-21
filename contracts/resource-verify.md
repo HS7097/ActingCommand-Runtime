@@ -25,6 +25,15 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
   - (Workflow #444 NOTICES-3) the notices directory `notices/`, the package author's notice
     texts, given as `--notices` when present; the bundle's root, the zip and the installed root
     then hold it too, and the zip's `interfaces.json` declares `package` [10, 10];
+  - (Workflow #455 GOALS-PACK-1, since 0.12.77; register [v012-register.md](v012-register.md)
+    §1.498) `goals.json`, the game's goal declaration
+    ([standard-pack-goals.md](standard-pack-goals.md)), when present: checked by the one goal check
+    once the bundle is written and laid beside `bundle.json` (the `bundle` step below); the zip,
+    the read-back and the installed root then hold it too, and the zip's `interfaces.json` declares
+    `package` [14, 14], the highest of 3, 10 (with `notices/`) and 14 (with `goals.json`). The
+    command reads no pack's content for its declaration: a pack that declares `variables` or a
+    shared read's `lines` does not raise it; only `standard-pack build` raises its declaration by
+    content ("The `package` revision" below);
   - `packs/<package_id>/`, the bundle index v4 `path` form;
   - `declaration-exclusions.json`;
   - `regression/`, the regression cases. Their contract, reader and runner are
@@ -40,11 +49,17 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
   - No untracked file anywhere.
   - No ignored file under `packs/` or `regression/`, and no ignored root input.
   - Every file under `packs/` and `regression/` and every root input (the five above,
-    `declaration-exclusions.json` and `manifest.yaml`) is the committed blob, byte for byte (no
-    filters).
+    `declaration-exclusions.json`, `manifest.yaml` and, Workflow #455 GOALS-PACK-1, `goals.json`)
+    is the committed blob, byte for byte (no filters).
 
   Otherwise the command fails the `checkout` step (`resource_verify_checkout_dirty`), and no
-  other step runs: nothing read from such a tree is bound to the commit.
+  other step runs: nothing read from such a tree is bound to the commit. (Workflow #455
+  GOALS-PACK-1, 0.12.77: since `goals.json` is a root input, a commit without the file whose work
+  tree holds a `goals.json` that git ignores fails here, where 0.12.76 and before passed over the
+  file: the person sees `resource_verify_checkout_dirty` with `dirty_problem`
+  `ignored_in_read_path`, its `first_path` `goals.json` when no other read path is ignored, and
+  every content step `not_run`, until the file is committed or taken out of the work tree. It is
+  the one case in which a repository without the file is not verified as before.)
 - **`--base`.** Without it, the declarations are every tracked `packs/**/*.json` plus the root
   declaration files the commit tracks (`applications.json`, `maintenance.json`,
   `declaration-exclusions.json`, `pages.json`, `interrupts.json`, `navigation.json`): the CI's
@@ -118,14 +133,15 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
 | `pins` | the rule of the resource repositories' `resource-declarations.yml:67-101`, typed: every file `git ls-files -z -- 'packs/*.json' '*procedure-manifest*.json'` lists carries no member named `package_digest`, and a file under `packs/` no member named exactly `sha256`, at any depth; every member is visited, a duplicated member each time; a BOM is accepted. Each hit is one `resource_verify_pin_committed` (`path`, `json_pointer` per RFC 6901, `member`); a file that is not UTF-8 JSON is `resource_declaration_invalid` naming it. The Runtime names a package by its path and ignores these keys until PKG-S1b refuses them again ([selection-graph.md](selection-graph.md), the select step's `policy`). | new; a JSON walk | identical rule |
 | `admission` | the layout of `packs/` (`bundle.ps1:221-234`): pack directories and `packs/README.md` only, `applications.json`, `maintenance.json` and `packs/` present; for **every** pack: admitted as `package preflight` admits it, its `package_id` the directory name, its game `applications.json`'s and its server declared there. Every refused pack is listed: `package_invalid` (caused by the admission's own code) or `resource_verify_layout_invalid` for the layout and identity rules. | `package_cli::preflight_admission` (`contained_resources::load` + `PreparedContainedTask::from_bundle`) | superset of CI's touched-pack load; equal to `bundle.ps1:259-289`, but lists every refused pack |
 | `format` | `package fmt --check` of every pack directory: one `package_fmt_check_failed` per pack with unformatted files, with `path` and `unformatted` | `package_tool::canonical_changes` | identical |
-| `bundle` | `bundle.ps1:189-465` with the root files and the installed root, under `--work`: `packs-root/` (the pack directories staged), `bundle/` (`package bundle` with `applications.json`, `maintenance.json`, the source and the root files present, and (Workflow #444 NOTICES-3) the repository root's `notices/` as `--notices` when it holds one, found as the root files are), the index and copy checks (`resource_verify_bundle_mismatch`), `out/<game>-resources-<sha7>.zip` (entries in ordinal order, `/`-separated, the `notices/` files among them, with `interfaces.json` `{schema_version actingcommand.component-interfaces.v1, speaks {package [3, 3]}, validated_with {repository HS7097/ActingCommand-Runtime, commit <runtime_head>}}` beside `bundle.json`, LF-terminated; `package` [10, 10], the contract crate's `NOTICES_PACKAGE_REVISION`, when the bundle carries `notices/`) and `out/SHA256SUMS` (`<hex>  <name>\n`), `read-back/<game>/` (the same entries and bytes, and `interfaces.json` as written: `resource_verify_readback_mismatch`), `installed/<game>/` (the root files beside `bundle.json`, the `notices/` files in `notices/`, each `packs/<id>/` as `<id>/`) checked by `standard-pack check` (its `root_files` must be `bundle.json` and the root files given, and its `notices` the count and bytes of the zip's `notices/` files, absent without them; its warnings `package_bundle_entry_page_unlisted`, `package_bundle_interrupt_page_shadowed` (since 0.12.28) and `package_bundle_remedy_invalid` are carried), and every read-back pack admitted again, stating the indexed `package_id`, server and entry task. Without `notices/` every byte the step writes is what it wrote before NOTICES-3. | `actingcommand_resource_tooling::package_bundle`, `check_standard_pack_root`, `package_cli::preflight_admission`, `zip` | for a release script that checked the zip layout, it replaces that check by the installed root the Runtime's registry reads |
+| `bundle` | `bundle.ps1:189-465` with the root files and the installed root, under `--work`: `packs-root/` (the pack directories staged), `bundle/` (`package bundle` with `applications.json`, `maintenance.json`, the source and the root files present, and (Workflow #444 NOTICES-3) the repository root's `notices/` as `--notices` when it holds one, found as the root files are), the index and copy checks (`resource_verify_bundle_mismatch`), `out/<game>-resources-<sha7>.zip` (entries in ordinal order, `/`-separated, the `notices/` files among them, with `interfaces.json` `{schema_version actingcommand.component-interfaces.v1, speaks {package [3, 3]}, validated_with {repository HS7097/ActingCommand-Runtime, commit <runtime_head>}}` beside `bundle.json`, LF-terminated; `package` [10, 10], the contract crate's `NOTICES_PACKAGE_REVISION`, when the bundle carries `notices/`) and `out/SHA256SUMS` (`<hex>  <name>\n`), `read-back/<game>/` (the same entries and bytes, and `interfaces.json` as written: `resource_verify_readback_mismatch`), `installed/<game>/` (the root files beside `bundle.json`, the `notices/` files in `notices/`, each `packs/<id>/` as `<id>/`) checked by `standard-pack check` (its `root_files` must be `bundle.json` and the root files given, and its `notices` the count and bytes of the zip's `notices/` files, absent without them; its warnings `package_bundle_entry_page_unlisted`, `package_bundle_interrupt_page_shadowed` (since 0.12.28) and `package_bundle_remedy_invalid` are carried), and every read-back pack admitted again, stating the indexed `package_id`, server and entry task. Without `notices/` every byte the step writes is what it wrote before NOTICES-3. Workflow #455 GOALS-PACK-1 (0.12.77): with `goals.json` at the repository's top, once `package bundle` wrote `bundle/` the file is held to the game root it makes by the one goal check ([standard-pack-goals.md](standard-pack-goals.md), "Who reads it"; `check_bundle_goals`); a refused file fails the step with every problem, each `standard_pack_root_invalid` (`game`, `path` the repository's file, `standard_pack_problem`, `json_pointer`, `step`) in file order; the index and copy checks then still run on `bundle/` without the file, so that the same run names their failures too (fix round 1), and the step stops before the zip: no `out/` and no zip is written, and the `bundle/` the step made stays in the work directory, without the file; an accepted one is laid in `bundle/` beside `bundle.json` byte for byte (a root file of the index and copy checks), the zip, the read-back and the installed root carry it, `standard-pack check` of the installed root reads it among its `root_files`, the counts name it (`goals`), and `interfaces.json` declares `package` [14, 14] (`GOALS_PACKAGE_REVISION`), the highest of 3, 10 with `notices/` and 14 with the file (no pack's content is read for it). Without `goals.json` every byte the step writes is what it wrote before (a `goals.json` that git ignores fails the `checkout` step first, "Clean" above). | `actingcommand_resource_tooling::package_bundle`, `check_bundle_goals`, `check_standard_pack_root`, `package_cli::preflight_admission`, `zip` | for a release script that checked the zip layout, it replaces that check by the installed root the Runtime's registry reads |
 
 The index and copy checks (`resource_verify_bundle_mismatch`, its `bundle_problem`):
 `index_schema` (bundle.json is no bundle v4 index); `maintenance_differs` (the maintenance read
 back, from the answer and from `bundle.json`, differs from `maintenance.json`, order of members
 aside); `root_file_differs` (the bundle root holds other entries than `applications.json`,
-`bundle.json`, `packs`, the root files given and (Workflow #444 NOTICES-3) `notices` when the
-repository holds it, or a root file differs from its source);
+`bundle.json`, `packs`, the root files given, (Workflow #444 NOTICES-3) `notices` when the
+repository holds it and (Workflow #455 GOALS-PACK-1) the accepted `goals.json` the step laid, or a
+root file differs from its source);
 `applications_differs` (the bundled `applications.json` bytes, the index's game, or a game that is
 no directory name); `source_differs`; `pack_list_differs` (the indexed packs are not the pack
 directories, or a pack's path, server or entry task differs from its source); `pack_copy_differs`
@@ -197,7 +213,7 @@ carries `step` where its code declares the key.
   | pins | `files` |
   | admission | `packs`, `admitted` |
   | format | `packs`, `json_files`, `unformatted` (files) |
-  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`) |
+  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`, or (Workflow #455 GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them); (Workflow #455 GOALS-PACK-1) `goals {game, path, entries}` when the step accepted and laid the repository's `goals.json`: the game whose root it was held to, `goals.json`, and how many entries of each type of version 2 it holds, every type named (`{heading, note, resource, tier, variable}`); absent otherwise, so that the counts of a repository without the file are as before |
 
 - **No prose.** Messages appear only on the CLI's human line and in developer lines on stderr.
   Failures and warnings are outcome envelopes with typed values. Paths are absolute and native for
@@ -247,13 +263,14 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
 - **One function.** It runs the steps above, `tools` to `bundle`, every one of them, on the one
   function `resource verify` runs them on, its work under `<out>/work/` as `resource verify`'s is
   under `--work` (`packs-root/`, `bundle/`, `out/`, `read-back/`, `installed/`). `resource verify`
-  runs them as before, so its report is the same for the same input. The build differs in five
-  things only:
+  runs them as before, so its report is the same for the same input. The build differs in four
+  things only (Workflow #455 GOALS-PACK-1, 0.12.77: `goals.json`, which the build alone carried,
+  giving it to `package bundle` as `--goals`, is checked and carried by the `bundle` step of both
+  rows, "Steps" above, and is a root input of both):
   - the checkout's read paths are every input its bundle carries: besides those of "Clean" above,
-    `schedule.json`, `display-layout.json`, `loading.json`, `goals.json`, `pack-catalog.json`
-    (Workflow #477 PC-1; `ui.json` before it) and every file under `loading/`, `notices/` and
-    `tables/`, each the committed blob and none an ignored file;
-  - `package bundle` is given `goals.json` too when the repository holds it (`--goals`);
+    `schedule.json`, `display-layout.json`, `loading.json`, `pack-catalog.json` (Workflow #477
+    PC-1; `ui.json` before it) and every file under `loading/`, `notices/` and `tables/`, each the
+    committed blob and none an ignored file;
   - the repository's tables, `tables/<table_id>.json` at its root, read as the Runtime reads a game
     root's tables (`read_standard_pack_tables`; a refused table fails the `bundle` step with its
     `standard_pack_table_invalid` or `standard_pack_table_unreadable` and is not carried), go into
@@ -274,7 +291,7 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
     `package bundle` still has no flag for the catalog: the build adds it to the zip, as it adds
     the tables;
   - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
-    revision" below), not resource verify's 3 or 10.
+    revision" below), not resource verify's 3, 10 or (Workflow #455 GOALS-PACK-1) 14.
 - **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an
   untracked file or an ignored file where the build reads, so every build has a commit and a tree.
   `--commit`, when given, must be HEAD. There is no `--base`.
@@ -294,9 +311,10 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
   while they are written leaves no file under a final name. Fix round 2: a rename that fails half
   way can leave the zip, or the zip and `SHA256SUMS`, under their final names without `build.json`.
   `build.json` is the mark of a complete build: it is there only beside the other two, and a reader
-  takes a directory without it as incomplete. For a commit whose repository holds no
-  `goals.json`, no table and no `pack-catalog.json` and whose packs need no revision above 3, the zip is
-  `resource verify`'s zip of that commit, byte for byte.
+  takes a directory without it as incomplete. For a commit whose repository holds no table and no
+  `pack-catalog.json` and whose packs need no revision above 3, the zip is `resource verify`'s zip
+  of that commit, byte for byte (Workflow #455 GOALS-PACK-1: with or without `goals.json`, which
+  both rows carry and declare 14 for).
 - **Steps that did not all pass** write no product: `resource_build_failed`
   (`failed_step_count`), caused by the steps' outcome (`resource_verify_failed` with each failed
   step's first failure, or the precondition's own code, `resource_verify_checkout_dirty` for a dirty
@@ -484,9 +502,10 @@ its file is matched in the whole file, so a structure of another meaning that us
 member name there would raise the number. None is known that the readers accept. A JSON file
 that does not read needs nothing here (the `format` step refuses it). A feature that adds a
 `package` revision adds its row, in its own slice
-(`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule: 3, or 10
-with `notices/`; the two rows can therefore declare different revisions for one commit (a follow-up
-slice on `resource verify`).
+(`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule, the highest
+of 3, 10 with `notices/` and (Workflow #455 GOALS-PACK-1, register §1.498) 14 with `goals.json`;
+it reads no pack's content for it, so the two rows can still declare different revisions for one
+commit (a follow-up slice on `resource verify`).
 
 ## What stays in the wrapper
 

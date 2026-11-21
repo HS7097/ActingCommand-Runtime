@@ -362,6 +362,15 @@ impl HostShared {
             };
             policy.publish_active(catalog);
             drop(policy);
+            // Workflow #490 ENTRY-A fix round 4 (the coordinator's addition): the catalogue now
+            // active may bind other packages, so every pair's count of failures at the entry, its
+            // wait and its being set aside start from nothing. The transition is committed, so a
+            // failure here stops the Runtime.
+            if let Err(error) = self.clear_entry_pairs() {
+                let error = error.into_fatal();
+                self.fatal.mark(error.clone())?;
+                return Err(error);
+            }
             self.policy_wakes.raise(outcome.event_type());
             let post = self
                 .synchronize_fact_store()
@@ -378,6 +387,10 @@ impl HostShared {
                 self.fatal.mark(error.clone())?;
                 return Err(error);
             }
+            // #486 ASLEEP-1 (register §1.497, ruling 6): a catalog's activation answers every wake
+            // the idle planner kept as unanswered, so the next idle check may stop such an
+            // emulator again.
+            lock(&self.idle, HostLocation::SwitchActivePolicyCatalog)?.forget_unanswered_wakes();
             Ok(generation)
         })();
         if let Err(error) = &result

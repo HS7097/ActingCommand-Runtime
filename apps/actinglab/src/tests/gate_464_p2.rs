@@ -377,11 +377,14 @@ fn p2_the_build_carries_resource_verifys_zip_and_verifys_report_is_as_before() {
 
 // G, P2 second item: a committed `notices/` makes the build's zip declare `package` [10, 10], and
 // a committed `goals.json` (no entry) [14, 14], in its `interfaces.json` and in `build.json`; the
-// zip carries `goals.json` byte for byte. `resource verify` of the commit with `goals.json` still
-// leaves it out and declares 10, as before. Revisions 13 and 14 (adapted, renamed from
+// zip carries `goals.json` byte for byte. Revisions 13 and 14 (adapted, renamed from
 // `p2_notices_give_package_10_and_goals_give_12`): the train 0.12.61a made `goals.json` version 2
 // and its revision 14, and `package bundle --goals` refuses a version 1 file
-// (`goal_version_retired`), so the file is version 2 and the range [14, 14].
+// (`goal_version_retired`), so the file is version 2 and the range [14, 14]. Workflow #455
+// GOALS-PACK-1 (adapted, its name kept: the requirement makes `resource verify` carry the file,
+// where this test pinned that it left it out and declared 10): `resource verify` of the commit with
+// `goals.json` carries it byte for byte too, lists it among its root files and declares [14, 14],
+// the highest of what its root carries (the notices directory's 10, the file's 14).
 #[test]
 fn p2_notices_give_package_10_and_goals_give_14() {
     let fixture = Fixture::new();
@@ -425,16 +428,16 @@ fn p2_notices_give_package_10_and_goals_give_14() {
     let (verified, report) = fixture.verify("goals-verify");
     assert_eq!(verified.exit_code(), 0, "{}", verified.envelope_json());
     let counts = &step(&report, "bundle")["counts"];
-    assert_eq!(counts["package_revision"], 10);
-    assert_eq!(counts["root_files"], json!([]));
+    assert_eq!(counts["package_revision"], 14);
+    assert_eq!(counts["root_files"], json!(["goals.json"]));
     let entries = zip_entries(
         &fixture
             .work("goals-verify")
             .join("out")
             .join(zip_name(&head)),
     );
-    assert!(!entries.contains_key("goals.json"), "{:?}", entries.keys());
-    assert_eq!(declared_package(&entries), json!([10, 10]));
+    assert_eq!(entries.get("goals.json"), Some(&goals));
+    assert_eq!(declared_package(&entries), json!([14, 14]));
 }
 
 // G, P2 third item, and the ruling on `--out`: a tree with a tracked change, and one with an

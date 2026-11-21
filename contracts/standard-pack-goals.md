@@ -238,12 +238,39 @@ for that game, and a reader of the declaration says why.
   (`standard_pack_root_invalid` with its first problem, `path` the file given, every problem in the
   message), `--out` not written; an accepted one is laid beside `bundle.json` byte for byte. The
   operation table's row `package bundle` has the parameter `goals`; the MCP server serves it as the
-  row says. `package bundle` writes no `interfaces.json`, and `resource verify`'s `bundle` step does
-  not pass the file in G-R1: a bundle that carries it is declared `package` [12, 12] by its packer,
-  since Workflow #463 V1 fix round 3 [14, 14], the revision of version 2. A version 1 file refuses
-  the bundle `goal_version_retired`.
-  `resource verify` passes over a `goals.json` in a repository without a word: a warning would need
-  an outcome code, which G-R1 does not add ("Before any pack carries the file").
+  row says. `package bundle` writes no `interfaces.json`: a bundle that carries the file is declared
+  `package` [12, 12] by its packer (G-R1), since Workflow #463 V1 fix round 3 [14, 14], the
+  revision of version 2 (`GOALS_PACKAGE_REVISION`). A version 1 file refuses the bundle
+  `goal_version_retired`.
+- **`actinglab resource verify` and `actinglab standard-pack build`** (Workflow #455 GOALS-PACK-1,
+  Runtime 0.12.77, register [v012-register.md](v012-register.md) §1.498;
+  [resource-verify.md](resource-verify.md), the `bundle` step): a resource repository is one game
+  root, its root files at its top; when it holds `goals.json`, the `bundle` step of both rows
+  checks the file once `package bundle` wrote the bundle, with the check above, called, not copied
+  (the resource tooling's `check_bundle_goals`: the file read as `standard-pack check` reads it,
+  through its bound plus one byte, and `goal_issues`, which holds an accepted file to the root the
+  bundle makes: the composed schedule's pools and rules, every package of `bundle.json` and the
+  variables the bundle's packs declare). A refused file fails the step with every problem, each
+  `standard_pack_root_invalid` with `game`, `path` (the repository's file), `standard_pack_problem`,
+  `json_pointer` and `step`, in file order, as `standard-pack check` gives them; the step's index
+  and copy checks still run in the same run, and no zip is written; a version 1 file is so refused
+  with its one problem, `goal_version_retired`, as `package bundle --goals` refuses it. An
+  accepted file is laid beside `bundle.json` byte for byte, as
+  `package bundle --goals` lays it; the zip, its read-back and the installed root the step checks
+  with `standard-pack check` carry it; the step's counts name it (`goals`: the game, the path and
+  how many entries of each type); and it is a read path of the `checkout` precondition, so the file
+  a zip carries is the committed blob. `resource verify`'s `interfaces.json` declares `package`
+  [14, 14] for it, the highest of 3, 10 (with `notices/`) and 14 (with `goals.json`): it reads no
+  pack's content, so a pack that declares `variables` or a shared read's `lines` does not raise
+  it; only `standard-pack build` raises its declaration by content, and declares the revision its
+  content needs, 14 at least with the file. A repository without the file is verified, bundled and
+  declared byte for byte as before, with one exception: a `goals.json` in the work tree that git
+  ignores now fails `resource verify`'s `checkout` precondition (`resource_verify_checkout_dirty`,
+  `dirty_problem` `ignored_in_read_path`, no content step run), where 0.12.76 and before passed
+  over it ([resource-verify.md](resource-verify.md), "Clean"). No outcome code is added. (In
+  0.12.76 and before, `resource verify` passed over the file without a word and left it out of its
+  zip, and `standard-pack build` gave it to `package bundle --goals`, which names only the first
+  problem of a refused file.)
 - **The installer's `place`** (the Lab's rescue module) takes `goals.json` from a bundle zip as a root
   file, placed last among them (after `schedule.json`, whose pools and rules its entries name), and
   sets it aside as `goals.json.old-<ms>` when the game root holds one and a later zip carries none;
@@ -259,8 +286,11 @@ for that game, and a reader of the declaration says why.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
-  as this check does, with the same reader and the same rule, for the composer's irreversible mark
-  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  as this check does, with the same reader and the same rule; since Workflow #455 G-R2x (0.12.77,
+  register §1.499) that reading serves the warning for a package that cannot be read
+  (`standard_pack_package_unreadable`) and the variables' judgement (from 0.12.60 to 0.12.76 it
+  served the composer's irreversible mark too,
+  [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
   Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
   `goals.json` too, where it reads every package's declaration (and so do the offline readers that
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
@@ -358,8 +388,9 @@ without one, as it does today.
      visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.369) the rules that
      follow a rule are every rule, not held, whose trigger has a chain link to it as the evaluator
      reads one (a `dependency_completed` reached only through `all` whose `terminal_states` holds
-     `succeeded`), the lists the composer's irreversible mark reads
-     ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
+     `succeeded`), the lists the policy crate's `standard_pack_rule_followers` gives (before G-R2x
+     the composer's irreversible mark read them too,
+     [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
      with a value of its own, one whose link also accepts another end and one behind a complete rule
      count too, not only the followers the coverage lists as riding (`benefit_followers`).
      **A limit that the slice which makes a tier act must lift first:** a rule whose trigger depends
@@ -368,24 +399,27 @@ without one, as it does today.
      followed here, although a governed rule that runs more often can let it run more often too.
      Before a tier can scale anything, the check judges every rule whose trigger depends on the
      governed rule's completion.
-     A `resource` entry can still push such a package indirectly: its pool may be produced by a
-     rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
-     check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
-     belongs to the scheduler, and this check leaves it to the evaluator: **a goal's shortfall
-     never raises the weight of a rule whose package can do something irreversible**. Workflow
-     #455 G-R2s (0.12.60, register §1.369) builds it: the composer marks such a rule's tasks
-     (`irreversible_reach`, [standard-pack-schedule.md](standard-pack-schedule.md), "The
-     irreversible mark") and the evaluator weighs a marked candidate as on an instance without a
-     target record ([resource-targets.md](resource-targets.md), "A task that can do something
-     irreversible"), for every version of the record. **One copy of the rule:** the contract
+     A `resource` entry can push such a package indirectly: its pool may be produced by a rule of
+     that package, and a goal's shortfall raises the weight of what produces the pool. The check
+     does not refuse such an entry (it would forbid goals on ordinary pools). **Since Workflow #455
+     G-R2x (0.12.77, register §1.499) a goal's shortfall raises such a rule like any other**: the
+     line Workflow #455 G-R2s (0.12.60, register §1.369) had the scheduler keep (the composer's
+     `irreversible_reach` and the evaluator weighing a marked candidate as on an instance without a
+     target record) is withdrawn ([resource-targets.md](resource-targets.md), "A task that can do
+     something irreversible"; [standard-pack-schedule.md](standard-pack-schedule.md), "The
+     irreversible mark"), and the lists of the rules that follow a rule are this check's own since.
+     **This check's own refusal stands until the owner decides** whether goals and variables may
+     govern such packages: an entry that governs one is `goal_governs_irreversible` as below.
+     **One copy of the rule:** the contract
      crate's `IrreversiblePackages` (a capability is irreversible when any package of the root
      marks it; a package is irreversible when it provides such a capability or, since G-R2s fix
      round 3 (the coordinator's ruling of 11-14), when a remedy declaration of its mappings lists
      one, every capability the remedy lists judged from the declarations alone; a package that
      could not be read leaves every package of the root counting as irreversible; the walk over the
      rules that follow a rule) is what `GoalReferences::new` holds and what the composer takes per
-     game root, and the policy crate's `standard_pack_rule_followers` gives both the same lists of
-     followers; there is no second implementation. So an entry that reaches a package whose
+     game root (since G-R2x for its unreadable-package warning alone), and the policy crate's
+     `standard_pack_rule_followers` gives the check its lists of followers; there is no second
+     implementation. So an entry that reaches a package whose
      blocked run asks for an irreversible provider (since Workflow #463 V1 a `variable` entry
      whose variable it declares), a `tier` over its rule, and a `tier` over a rule it follows are
      `goal_governs_irreversible` too.
@@ -408,8 +442,27 @@ without one, as it does today.
 
 ## Before any pack carries the file
 
-What a later slice owes before any standard pack carries `goals.json` (G-R1 fix round 1):
+What G-R1 fix round 1 said a later slice owed before any standard pack carries `goals.json` is
+built for the repository's verification (Workflow #455 GOALS-PACK-1, Runtime 0.12.77, register
+[v012-register.md](v012-register.md) §1.498; "Who reads it"): `resource verify` checks a
+repository's `goals.json` with the one check, names an accepted file in its answer and fails on a
+refused one with every problem; its `bundle` step carries an accepted file in the zip it makes
+under `--work`, beside `bundle.json`, byte for byte; and that zip's `interfaces.json` declares
+`package` [14, 14] for it, which the installer's `place` takes. That zip is the verification's, not
+a release: the four resource repositories make their release zips with `actinglab package bundle`
+from their own release script, not with `resource verify` and not with `standard-pack build` (the
+resource side's answer of 11-21; the Runtime side has not read those repositories). So this slice
+gives the repository's verification the check and the file; a release carries `goals.json` only
+once the resource side changes its release script (below). The Tools owe nothing more for the file: `standard-pack build` has carried an
+accepted one and declared the revision its content needs since 0.12.61, and `package bundle
+--goals` lays one. What is still owed, by the resource side:
 
-- `resource verify` checks a repository's `goals.json` and the packer declares the revision. Today
-  its `bundle` step neither passes the file nor declares `package` 12 (14 since Workflow #463 V1
-  fix round 3, for version 2), and it says nothing of a `goals.json` it finds.
+- its release script moves to `standard-pack build`, or gives the file to `package bundle --goals`
+  and writes `package` 14 at least into the zip's `interfaces.json` itself (`package bundle` writes
+  none), so that its release zip carries an accepted `goals.json` and declares the revision;
+- its CI's `resource verify` checks and carries the file only once its pinned Tools are 0.12.77 or
+  later: an earlier `resource verify` leaves the file out of its zip and says nothing of it;
+- a zip that carries the file and declares `package` [14, 14] is placed by the installers of
+  0.12.61 and later; the installer of 0.12.60 (`package` [3, 12]) and every earlier one refuse it in
+  the plan at their `package` edge (`interface_edge`), before the hold and any write;
+- the resource-side review of every file ("What is not this file's", item 3).

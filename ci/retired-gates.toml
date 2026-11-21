@@ -1501,3 +1501,89 @@ test = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_de
 ruling = "Workflow #489 AVAIL-1 (0.12.76; register §1.493; the coordinator's work order of 11-20, item 4: the status member RuntimeInstanceStatus.unavailable takes the runtime-client revision the registry asks for, 14, declared [12, 14])"
 reason = "Renamed: the name gave the range [12, 13] and the row of revision 13, while the test asserts the declaration [12, 14] and the rows of revision 12 (its floor 12) and 14 (the range), so the name said a range the build no longer declares."
 covered_by = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_14_and_its_rows_say_so, in the apps.toml row of #480 PG-2e: the declaration speaks runtime-client [12, 14], the row of revision 12 says min is 12 and the row of revision 14 declares [12, 14]."
+
+# policy.toml, the row of Workflow #455 G-R2s (the withdrawn rule's policy half; Workflow #455 G-R2x).
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t1_a_marked_candidate_under_each_record_equals_it_without_a_record"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 1: G-R2s is withdrawn, the evaluator weighs every candidate alike)"
+reason = "Removed: it pinned that a candidate whose task carries irreversible_reach is weighed under each record as without one, with resource_target_package_irreversible; the ruling withdraws that and retires the code."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t1_a_task_that_carried_the_mark_is_weighed_as_without_it, in the policy.toml row of #455 G-R2x: under a v2 and a v3 record such a candidate has the decision and dispatch reasons of the task without the mark."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t2_every_unmarked_candidate_keeps_its_numbers"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 1 and its test 3)"
+reason = "Renamed and adapted: it also asserted that the marked task's numbers differ from the unmarked catalog's, which the ruling withdraws; the unmarked task's half is kept."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t3_every_other_candidate_keeps_its_numbers, in the policy.toml row of #455 G-R2x: task B's numbers equal those of the catalog without the mark under v1, v2 and v3, and task A's too."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t3_named_tasks_and_an_override_are_void_for_the_marked_task_only"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 1 and its test 2)"
+reason = "Removed: it pinned that a target's named tasks and its override are void for a marked task; the ruling withdraws that."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t2_a_v1_record_that_names_a_task_that_carried_the_mark_applies_to_it, in the policy.toml row of #455 G-R2x: a v1 adjust and override naming such a task apply to it as to the task without the mark."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t4_the_composer_marks_irreversible_packages_and_the_chain_heads_they_ride_with"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 2: the composer writes no mark)"
+reason = "Removed: it pinned the composer's mark on irreversible packages and the chain heads they ride with; the ruling withdraws the mark."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one, in the policy.toml row of #455 G-R2x: the same fixture composes no member and the documents, hash and digest of the root without an irreversible package; the refusal of a rule that writes the member is kept."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t5_an_unreadable_package_marks_every_task_of_its_game_and_warns_once"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, rulings 2 and 4)"
+reason = "Removed: it pinned that an unreadable package marks every task of its game; the ruling withdraws the mark and keeps the warning."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one, in the policy.toml row of #455 G-R2x: an unreadable package composes no member and warns standard_pack_package_unreadable once naming it."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t6_the_forward_projection_reads_the_mark"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 1)"
+reason = "Removed: it pinned that the forward projection does not lift a marked task; the ruling withdraws that."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t1_a_task_that_carried_the_mark_is_weighed_as_without_it, in the policy.toml row of #455 G-R2x: the projection's first step runs the task carrying the mark that a strong goal lifts."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t7_the_mark_follows_every_chain_link_the_evaluator_reads"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 2: the walk that spread the mark is no longer run for the composer)"
+reason = "Removed: it pinned which chain heads the composer marks; the ruling withdraws the mark. The goal check's half of the same chain links stays in actingcommand-resource-tooling::lib::gate_455_gr2s::gr2s_t7_the_goal_check_reads_the_same_chain_links, unchanged."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one, in the policy.toml row of #455 G-R2x: a chain head whose follower is irreversible carries no member."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t8_the_run_caps_goal_term_reads_the_mark"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 1: the dispatch's values)"
+reason = "Removed: it pinned that a marked task's run cap has no goal term; the ruling withdraws that."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t1_a_task_that_carried_the_mark_is_weighed_as_without_it, in the policy.toml row of #455 G-R2x: gate_ss6's goal-driven task carrying the mark gets gap_remaining 55 and run_cap 6 as without it."
+
+[[retired]]
+fragment = "policy"
+test = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2s_t9_a_remedy_that_lists_an_irreversible_capability_marks_its_package_and_its_chain"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 2)"
+reason = "Removed: it pinned the composer's mark on a package whose remedy lists an irreversible capability; the ruling withdraws the mark. The rule itself (IrreversiblePackages) stays for the goal check and the variables' judgement, pinned by the resource tools' gr2s_r3 test, unchanged."
+covered_by = "actingcommand-policy::lib::tests::gate_455_gr2s::gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one, in the policy.toml row of #455 G-R2x: a package irreversible by its remedy composes no member."
+
+# host.toml, the row of Workflow #455 G-R2s (the withdrawn rule's host half; Workflow #455 G-R2x).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, rulings 2 and 4)"
+reason = "Removed: it pinned that the workbench's composition marks the tasks of an irreversible or unreadable package; the ruling withdraws the mark and keeps the warning."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2x_host_an_unreadable_package_is_warned_and_no_package_marks_a_task, in the host.toml row of #455 G-R2x: the root is read again on a changed declaration file, no task carries the member, and an unreadable package is recorded once with its cause."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_check_config_composes_the_mark"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, ruling 2)"
+reason = "Renamed and inverted: check-config's composition marks no task any more."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2x_host_check_config_composes_no_mark, in the host.toml row of #455 G-R2x."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on"
+ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, rulings 2 and 4)"
+reason = "Renamed and adapted: the package whose metadata fails no longer marks its game; the warning and the check that goes on are kept."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on, in the host.toml row of #455 G-R2x."

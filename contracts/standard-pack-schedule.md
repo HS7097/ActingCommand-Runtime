@@ -425,7 +425,9 @@ ledger.
 each game root that holds `schedule.json`, that file's bytes, the root as
 `read_standard_pack_root` reads it, the bundle's `maintenance[]` entries and, Workflow #455 G-R2s
 (since 0.12.60), which packages of the root can do something irreversible and which could not be
-read (`IrreversiblePackages`, a required input without a default: "The irreversible mark" below);
+read (`IrreversiblePackages`, a required input without a default; since Workflow #455 G-R2x,
+0.12.77, the composer reads only which could not be read, for its warning: "The irreversible
+mark" below);
 the subsystems `requires` must name, or none (the tools); the catalog version. The composer stays
 pure: its caller reads the packages.
 
@@ -461,9 +463,10 @@ pure: its caller reads the packages.
    task does not carry `limited`); SCHED-C1a (since 0.12.52): and one that carries
    `fixed_value_milli` gains `benefit_fixed_value_milli` with its value ("The fixed value" above;
    the composed task carries neither `fixed_value_milli` nor `fixed_value_origin`, and a composed
-   pool no `valuation_origin`); Workflow #455 G-R2s (since 0.12.60): a rule whose package, or a
-   rule that follows it by a chain link (directly or further down), can do something
-   irreversible gains `irreversible_reach: true` ("The irreversible mark" below), judged or not.
+   pool no `valuation_origin`); Workflow #455 G-R2s (0.12.60 to 0.12.76): a rule whose package, or
+   a rule that follows it by a chain link (directly or further down), could do something
+   irreversible gained `irreversible_reach: true`; since Workflow #455 G-R2x (0.12.77) no rule
+   gains it ("The irreversible mark" below).
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an
@@ -529,15 +532,36 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
 
 ## The irreversible mark
 
-Workflow #455 G-R2s (since 0.12.60; register §1.369; the coordinator's rulings of 11-14 on board
-#455). A resource goal raises the weight of whatever produces its pool, and a rule of a package
-that can do something irreversible (retire, scrap, spend what cannot be had back) may be among the
-producers. The goal check ([standard-pack-goals.md](standard-pack-goals.md)) refuses an entry that
-governs such a package, but cannot refuse a goal on an ordinary pool such a package also produces,
-so the scheduler keeps the line: **a goal never raises the weight of a task whose package can do
-something irreversible.** The composer marks the task; the evaluator weighs a marked candidate as
-on an instance without a target record ([resource-targets.md](resource-targets.md), "A task that
-can do something irreversible").
+**Withdrawn by Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's withdrawal of
+11-21 on board #455, on the owner's decisions 79 and 234).** Workflow #455 G-R2s (0.12.60;
+register §1.369) had the composer mark every task whose package could do something irreversible
+(retire, scrap, spend what cannot be had back), and every rule such a package's rule followed, so
+that a goal on an ordinary pool such a package also produces never raised its weight. Since
+0.12.77 **a goal raises the weight of every task that produces its pool, a package that can do
+something irreversible included** ([resource-targets.md](resource-targets.md), "A task that can do
+something irreversible"):
+
+- **The composer writes no mark.** No composed task carries `irreversible_reach`, whatever the
+  root's packages declare; the walk that spread the mark (the rules a chain link leads from, the
+  remedies' capabilities, the unreadable package of a root) is no longer run for the composer. A
+  root composes the documents, the catalog hash and the rules digest it composes with no
+  irreversible package. A rule of `schedule.json` that writes `irreversible_reach` itself is still
+  refused (`schedule_invalid` at `/rules/<i>/irreversible_reach`), so the member is passed through
+  to no task. A V2 catalog may carry the member, as a generation of 0.12.60 to 0.12.76 does; it is
+  read and hashed as before and has no effect ([scheduling/v2/README.md](scheduling/v2/README.md)).
+- **What stays of the irreversible declaration** until the owner decides whether goals and
+  variables may govern such packages: a capability's `irreversible` mark in a package's
+  declaration; the goal check's refusal of an entry that governs such a package
+  (`goal_governs_irreversible`, [standard-pack-goals.md](standard-pack-goals.md)); kernel
+  admission's `variables_on_irreversible`; `standard-pack check`'s `variable_irreversible_by_root`
+  and the judgement that such a variable does not apply
+  ([package-variables.md](package-variables.md)); the remedy layer's own rules. They share the rule
+  below, which this section kept as G-R2s wrote it.
+- **The composer's input stays required.** It reads only which packages of the root could not be
+  read, for its warning `standard_pack_package_unreadable` (below), which is what tells a person
+  that a package's declaration could not be read now that no task is marked for it.
+
+What G-R2s wrote of the rule, its readers and the workbench's re-read, as it stands:
 
 - **The rule, one copy.** The contract crate's `IrreversiblePackages` is made only from what a
   reader read of every package `bundle.json` registers: each package with the capabilities its
@@ -552,51 +576,29 @@ can do something irreversible").
   ([remedies.md](remedies.md)). The Runtime's reader gives both (`read_remedy_declarations`, its
   `declared_capabilities`). The goal check (`GoalReferences::new`) holds the same type; there is
   no second implementation.
-- **The mark.** The composer writes the task member `irreversible_reach: true` on every composed
-  task of a rule (not held) whose package counts as irreversible, and on every task of a rule that
-  a rule running such a package follows, directly or further down. **A rule follows another** when
-  its trigger has a chain link to it as the evaluator reads one (`required_predecessors`,
+- **The rules that follow a rule** (G-R2s fix rounds 1 and 3; the lists the composer's mark
+  walked until G-R2x, the goal check's alone since). **A rule follows another** when its trigger
+  has a chain link to it as the evaluator reads one (`required_predecessors`,
   [scheduling/README.md](scheduling/README.md), "Ties and chain heads"): a `dependency_completed`
   reached from the trigger's root only through `all` whose `terminal_states` holds `succeeded`,
   whatever else it accepts and whether it writes `since_own_run`, a link to the rule itself
   excepted, both rules not held. A follower with its own `produces` or its own value, one linked by
   a link that also accepts another end, and one behind a complete rule all count; they are not
-  only the followers the coverage lists (`benefit_followers`, "Coverage" above). G-R2s fix round 1
-  (the independent review): which follower rides with which head the evaluator decides by each
-  run's state (the link whose latest run succeeded and is not served yet, its dispatch against the
-  next link's), which no composition knows; **so the composer takes the safe side and counts every
-  chain link of that kind**, walked through further followers (each once, so a cycle ends the
-  walk). **What the mark follows, exactly** (fix round 3): the chain links, each a
-  `dependency_completed` reached from a rule's trigger through `all` whose `terminal_states`
-  accepts `succeeded`, walked in the direction from a rule to its followers (a rule is marked when
-  a rule that follows it counts as irreversible; a follower is not marked for the rule it
-  follows); and a package's remedy capabilities (the rule above), so
-  a rule whose package's remedy leads to an irreversible provider is marked and the mark spreads up
-  the chain by the same walk. **What it does not follow**, each another dispatch the evaluator
-  judges by its own weight, which a goal on the rule does not raise:
-  - a `dependency_completed` under `any` or `not`, or one that does not accept `succeeded`: the
-    evaluator reads it as no chain link, so the follower never rides with the rule and is
-    dispatched only when its own trigger holds, weighed by its own value;
-  - a trigger on a fact or a capacity (a reading the rule's run may change): the follower runs
-    when its own reading says so, weighed by its own value, not because the rule was weighed;
-  - a declared `prerequisite_package_id`. **Known limit:** a prerequisite package runs inside the
-    dependent run, so a goal that raises the dependent rule raises it too; the resource side
-    declares no irreversible package as a prerequisite, and the review of resource pull requests
-    holds that line until a later slice checks it.
-
-  One copy of the lists and the walk: the policy crate's `standard_pack_rule_followers` gives each rule the rules
-  that follow it, and the contract crate's `IrreversiblePackages::followers_irreversible` walks
-  them; the goal check holds a `tier` entry's rule to the same lists (`GoalRule::followers`,
+  only the followers the coverage lists (`benefit_followers`, "Coverage" above): which follower
+  rides with which head the evaluator decides by each run's state, which no composition knows, so
+  every chain link of that kind counts, walked through further followers (each once, so a cycle
+  ends the walk). Not followed: a `dependency_completed` under `any` or `not` or one that does not
+  accept `succeeded`, a trigger on a fact or a capacity, and a declared `prerequisite_package_id`.
+  One copy of the lists and the walk: the policy crate's `standard_pack_rule_followers` gives each
+  rule the rules that follow it, and the contract crate's `IrreversiblePackages::followers_irreversible`
+  walks them; the goal check holds a `tier` entry's rule to them (`GoalRule::followers`,
   [standard-pack-goals.md](standard-pack-goals.md)). A package that is no package the reader read
-  counts as irreversible. **While any package of a game root could not be read, every composed
-  task of that game is marked** (a capability it might mark is unknown), and the composition warns
-  `standard_pack_package_unreadable` once per such package (keys `game`, `package_id`), after its
-  other warnings. The member is absent when false, so a root with no irreversible package composes
-  the bytes, the catalog hash and the rules digest of before; a root with one composes one new
-  generation. A rule of `schedule.json` that writes `irreversible_reach` itself is refused
-  (`schedule_invalid` at `/rules/<i>/irreversible_reach`), as the other composer-only members are.
-  A V2 catalog written by hand may carry the member; no composer writes one, and such a catalog is
-  not covered by the line.
+  counts as irreversible there.
+- **A package that could not be read.** Its capabilities are unknown, so the rule counts every
+  package of its root as irreversible (`counts_irreversible`, the safe side the goal check and the
+  variables' judgement read). The composition warns `standard_pack_package_unreadable` once per such
+  package (keys `game`, `package_id`), after its other warnings; until 0.12.76 every composed task of
+  that game was marked too, and since 0.12.77 none is.
 - **Who reads the packages.** The Runtime's workbench, check-config and `actingd suspended`
   (`compose_configured_standard_packs`, check-config's preview) and the resource tools
   (`standard-pack check`, `standard-pack compose`, `package bundle --schedule`) read each
@@ -607,7 +609,7 @@ can do something irreversible").
   cause (fix round 1); and, fix round 1, **check-config shows it**: its `standard_pack_schedule`
   preview lists one `standard_pack_package_unreadable` per such package of a composed game in its
   `problems`, with the reader's refusal as its cause, and each is one of check-config's notes, so a
-  game whose goals are all void is visible before the Runtime starts.
+  package whose declaration cannot be read is visible before the Runtime starts.
 - **The offline pack rows** (`actingctl packs`, and `ac_packs`, which answers the same rows;
   the coordinator's ruling 2 of 11-14) compose with their own reading of each registered package's
   `control.json` (the reading their `irreversible` row member uses, giving each provided capability
@@ -616,17 +618,15 @@ can do something irreversible").
   cannot be read is unreadable there (its `package_binding_unreadable`, at its row or, for a
   package without a row, once after the rows). **Limit:** a package the Runtime's reader refuses for
   a reason outside what lab-ops reads (another file of the package, its operation declaration) is
-  unreadable to the Runtime only, so there the offline rows' composition can mark fewer tasks than
-  the Runtime's; check-config, the forward projection and the dispatch are the Runtime's and are the
-  truth. For a root whose packages both read, the two inputs are equal (one rule, the same marks)
-  but for the remedies (fix round 3): they are declared in a package's operation, which lab-ops
-  does not read, so the offline rows give every package no remedy capability and do not mark a
-  package for its remedies (one more case of the limit above). The rows' own `irreversible` member
-  keeps its meaning: the package's own declaration.
+  unreadable to the Runtime only; and lab-ops does not read the remedies (fix round 3), declared in
+  a package's operation. Since G-R2x the composition marks no task by either input, so the offline
+  rows' composition and the Runtime's are the same; check-config, the forward projection and the
+  dispatch are the Runtime's and are the truth. The rows' own `irreversible` member keeps its
+  meaning: the package's own declaration.
 - **Three scopes of one word.** `irreversible` means today: the package's own declaration (the
   `actingctl packs` row member), the whole root's (a capability any package of the root marks:
-  the goal check and this mark), and the providers bound on an instance (the remedy layer's
-  request flag, [remedies.md](remedies.md) §2.3). This mark uses the whole root's.
+  the goal check and the variables' judgement; G-R2s's mark used it too), and the providers bound
+  on an instance (the remedy layer's request flag, [remedies.md](remedies.md) §2.3).
 - **The workbench reads the declarations again** when a package's declaration files change (the
   coordinator's ruling 1 of 11-14). The marks it compares at each check ("The scheduler workbench"
   below) are, per game in use, those of `schedule.json` and `bundle.json`, since Workflow #463 V2
@@ -648,47 +648,50 @@ can do something irreversible").
   readable again when one of its marked files changes. A metadata failure on a marked file (other
   than its absence) is a mark of its own and never stops the check: the root is read once and that
   package is unreadable there. Each package's files are marked just before the reader reads it, and
-  those marks are the ones the next check compares, so no root keeps unmarked tasks from an earlier
-  read while a marked file is known to have changed.
-- **Limits at deploy** (fix round 1, point 6). Any package `bundle.json` registers that the reader
-  cannot read marks every task of its game and so voids every goal of that game until it reads,
-  with one `standard_pack_package_unreadable` per package: a held package left half made, a package
+  those marks are the ones the next check compares, so no root keeps the declarations of an earlier
+  read while a marked file is known to have changed. Since G-R2x the re-read serves the warning and
+  the variables' judgement; the composition it gives is the one of before, so it activates nothing
+  new.
+- **Unreadable packages at deploy** (fix round 1, point 6; since G-R2x a package that cannot be read
+  voids no goal). Any package `bundle.json` registers that the reader cannot read is one
+  `standard_pack_package_unreadable` until it reads: a held package left half made, a package
   registered but not placed yet, and a package that marks a capability irreversible without the
   `parameters` the reader requires of one ([remedies.md](remedies.md)). Before a deploy, run
   `actinglab standard-pack check --root <game root>` over each game root and look for that
-  warning. While a package's file is locked for a moment during its replacement, the check that
-  meets it can mark the whole game for about one check interval (a minute by default) and activate
-  a generation twice (marked, then unmarked again). During a hot placement a root can also be
-  refused for one check (up to a minute: `bundle.json` or `schedule.json` half written); its game's
-  goals are void for that long (round 2, below).
-- **A game whose root cannot be composed has no goals in effect until it composes** (round 2, the
-  coordinator's ruling of 11-14). Where the workbench keeps the active generation because a check
-  cannot compose (a root whose metadata cannot be read, a damaged root, a composition refused as a
-  whole, a refusal that cannot be narrowed to a game it composed), that generation may lack the
-  mark of a package changed since; so noted games' candidates are computed as on an instance
-  without a target record (`resource_target_root_uncomposed`,
-  [resource-targets.md](resource-targets.md), "A task that can do something irreversible"). The
-  rules (fix rounds 3 and 4, the coordinator's rulings of 11-14): **while a game's own root fails**
-  (its metadata, or its read), the check records it once, goes on for the other games (they are
-  marked, read and composed as ever) and does not activate their composition (the failed game
-  keeps the active generation's rules); it voids the failed games and, **as a rule, every other
-  game the active generation holds otherwise**: one whose tasks the active generation does not
-  hold as that composition gives them (a task of the game the composition does not compose with
-  the same id and procedure, or one the composition marks and the active generation does not), so
-  a task newly marked in a composition that cannot be activated takes no goal's boost. The check
-  records each game it voids that way, one `resource_target_root_uncomposed` (info, `game`) per
-  such game at each check that voids it, as a `standard_pack_read` record. One failing root voids
-  only its own game and the games the active generation holds otherwise, at the first check after
-  a start too (when the workbench holds no marks). **A composition refused as a whole**, or a
-  refusal no round can narrow, voids the failed games and every game in use whose files the check
-  did not find unchanged since its last composed read: at the first check after a start, which
-  holds no marks, every game in use. A refusal as a whole is recorded once per set of files
-  composed, as one `standard_pack_root_invalid` per composed game naming that game and its
-  `schedule.json` (it named no game before, which broke its catalog entry), as check-config gives
-  it. A root's metadata failure (`standard_pack_root_unreadable`) is recorded again after that
-  game's root has composed in between. The notes are memory only and end at the first composition
-  of every game that succeeds; while one is held, each check reads and composes again even when
-  nothing changed.
+  warning. During a hot placement a root can be refused for one check (up to a minute:
+  `bundle.json` or `schedule.json` half written); its game's goals are void for that long ("A game
+  whose root cannot be composed", below).
+
+## A game whose root cannot be composed
+
+**A game whose root cannot be composed has no goals in effect until it composes** (Workflow #455
+G-R2s round 2, 0.12.60, the coordinator's ruling of 11-14; under "The irreversible mark" until
+0.12.77, standing on its own since Workflow #455 G-R2x, register §1.499, which withdrew the mark and
+left this rule exactly as it was). Where the workbench keeps the active generation because a check
+cannot compose (a root whose metadata cannot be read, a damaged root, a composition refused as a
+whole, a refusal that cannot be narrowed to a game it composed), that generation may not hold a
+game as its files give it now; so noted games' candidates are computed as on an instance without a
+target record (`resource_target_root_uncomposed`, [resource-targets.md](resource-targets.md), "A
+game whose root cannot be composed"). The rules (fix rounds 3 and 4, the coordinator's rulings of
+11-14): **while a game's own root fails** (its metadata, or its read), the check records it once,
+goes on for the other games (their files are marked, read and composed as ever) and does not
+activate their composition (the failed game keeps the active generation's rules); it voids the
+failed games and, **as a rule, every other game the active generation holds otherwise**: one of
+whose tasks the active generation holds one that composition does not compose with the same id
+and procedure (until 0.12.77 also one the composition marked irreversible and the active
+generation did not; that comparison went with the mark). The check records each game it voids
+that way, one `resource_target_root_uncomposed` (info, `game`) per such game at each check that
+voids it, as a `standard_pack_read` record. One failing root voids only its own game and the games
+the active generation holds otherwise, at the first check after a start too (when the workbench
+holds no file marks). **A composition refused as a whole**, or a refusal no round can narrow,
+voids the failed games and every game in use whose files the check did not find unchanged since
+its last composed read: at the first check after a start, which holds no file marks, every game in
+use. A refusal as a whole is recorded once per set of files composed, as one
+`standard_pack_root_invalid` per composed game naming that game and its `schedule.json` (it named
+no game before, which broke its catalog entry), as check-config gives it. A root's metadata
+failure (`standard_pack_root_unreadable`) is recorded again after that game's root has composed in
+between. The notes are memory only and end at the first composition of every game that succeeds;
+while one is held, each check reads and composes again even when nothing changed.
 
 ## Tools
 
@@ -747,6 +750,35 @@ can do something irreversible").
   only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
   compose` and the Runtime's workbench do not report it.
+- **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.77, register
+  §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"). A rule's
+  `daily_limit` is spent at each admission, and an immediate rerun of a failure in a step of its
+  package costs one, as before. A run that failed at its entry (its package executed no step: the
+  game was on a screen its gate, prerequisite or return-home layer could not leave, a code of class
+  `pack_logic_mismatch`, whatever the ladder's `exclude_codes` say of it, so a prerequisite's entry
+  not reached and a return-home layer's recheck not passed count too; a capture backend's or device
+  link's failure there does not) gives its admission back, is not rerun at once, owes no rerun and
+  never counts toward `escalation_threshold`, so a rule whose threshold is 1 is not paused by it;
+  the instance waits for its recovery (`instance_entry_blocked`; a store update rule's task still
+  runs) and the rule is due again by its own trigger once it is unblocked. Fix round 4: no failure
+  at the entry counts against the rule, whatever ran between. A rule that keeps failing at its
+  entry on an instance waits there after each failure, counted from the end of the instance's
+  block (one minute, doubling to thirty with the shipped values), while the instance's other
+  rules run first, and once its failures that came although another rule got in reach its
+  `escalation_threshold` it is set aside on that instance until its activity window ends, a
+  person told once; it is not paused, and the next window starts from nothing. With the
+  recommended `on_failure` (threshold 2) and a healthy rule due, a rule whose entry is broken is
+  set aside at about its third failure in the window (about fourteen minutes), with a threshold
+  of 1 at its second (about three minutes); alone on the instance it is never set aside.
+  Activating a catalogue (a mended package) starts every such count from nothing at once, and so
+  (fix rounds 5 and 6) does a placement that changes a package of a game in use without changing
+  the rules: the workbench's next check finds it by the length and modification time of
+  `bundle.json`, of `pages.json`, `interrupts.json` and `navigation.json` and of each registered
+  package's `control.json` and `resources/operations/resources.json`, compared with what that
+  comparison kept at the check before, so once per change, while another game's root is broken
+  too (a change by hand of a package's other files alone is not seen, nor, until a composition has
+  succeeded since the start, a change of a package's two files alone: the packages compared are
+  the last successful composition's). No package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

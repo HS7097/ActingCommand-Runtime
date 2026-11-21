@@ -236,11 +236,11 @@ pub struct EvaluationFacts {
 /// shorten a list, so a refresh would be asked for at every evaluation and never served. Memory
 /// only: none of it enters a snapshot or decision identity.
 ///
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): also the instances whose resource target record the Runtime
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): also the instances whose resource target record the Runtime
 /// leaves out whole, because the scheduler workbench cannot compose their game's root
-/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as a marked
-/// candidate is, as on an instance without a target record, with the reason
+/// ([`LeftOutFacts::void_targets`]): every candidate of such an instance is computed as on an
+/// instance without a target record, with the reason
 /// `resource_target_root_uncomposed`. Fix round 3: the void is part of the decision identity
 /// (`targets_void_decision_id`) of such a candidate on an instance that holds a target record
 /// (fix round 4: only there, where it changes the decision); it enters no snapshot.
@@ -366,9 +366,14 @@ pub struct RunSlots {
 /// of a held instance but an exempt task is ever left eligible and unselected. The Runtime passes
 /// them when it evaluates a cycle ([`evaluate_with_instance_holds`]); every other entry point has
 /// none. Memory only: none of it enters a snapshot or a decision identity.
+///
+/// #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep instance"): beside
+/// the holds, the instances the Runtime names asleep ([`InstanceHolds::mark_asleep`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstanceHolds {
     holds: BTreeMap<String, WholeInstanceHold>,
+    /// #486 ASLEEP-1: the instances asleep, by alias.
+    asleep: BTreeSet<String>,
 }
 
 /// One held instance of [`InstanceHolds`] (named apart from the fact refresh's [`InstanceHold`]).
@@ -404,6 +409,32 @@ impl InstanceHolds {
         self.holds
             .get(instance_id)
             .filter(|hold| !hold.exempt_tasks.contains(task_id))
+    }
+
+    /// #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep instance"):
+    /// names `instance_id` asleep: its emulator stands stopped by its idle action, and nothing but
+    /// that stop withdrew its availability. While its snapshot holds it unavailable, an evaluation
+    /// judges it as if it were available, through every gate an available instance's candidates
+    /// go through, and selects nothing on it: the candidate the round would select there carries
+    /// `instance_asleep_wake_due` with the evaluation's time as its wake, and no dispatch is made.
+    /// Naming an instance whose snapshot holds it available changes nothing.
+    pub fn mark_asleep(&mut self, instance_id: impl Into<String>) {
+        self.asleep.insert(instance_id.into());
+    }
+
+    /// #486 ASLEEP-1: the instances of `instances` named asleep whose snapshot holds them
+    /// unavailable, each held available in `instances` (the evaluation's own projection of its
+    /// input, never the input) so that the evaluation judges it as an available instance; every
+    /// other snapshot is left as it is.
+    fn judge_asleep_as_available(&self, instances: &mut [InstanceSnapshot]) -> BTreeSet<String> {
+        let mut judged = BTreeSet::new();
+        for instance in instances {
+            if !instance.available && self.asleep.contains(&instance.instance_id) {
+                instance.available = true;
+                judged.insert(instance.instance_id.clone());
+            }
+        }
+        judged
     }
 }
 
@@ -1830,7 +1861,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .map(|state| ((state.task_id.as_str(), state.instance_id.as_str()), state))
         .collect();
 
-    let effective_facts = project_time_validity(catalog, facts, time)?;
+    let mut effective_facts = project_time_validity(catalog, facts, time)?;
+    // #486 ASLEEP-1 (register §1.497): an asleep instance is judged as if it were available
+    // (placement, the order of the deferrals, the benefit gate, the pool lines, the no-progress
+    // guard, the ranking, its fact refresh's own gates); the round selects nothing on it below.
+    let asleep = instance_holds.judge_asleep_as_available(&mut effective_facts.instances);
     let facts = &effective_facts;
 
     let catalog_bundle = catalog.catalog();
@@ -2386,6 +2421,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     let mut reason_chains = Vec::new();
     // (reason chain index, work index) of every selected candidate, for its decision record.
     let mut selected = Vec::new();
+    // #486 ASLEEP-1: the (task, instance) of each candidate the round would have selected on an
+    // asleep instance, which its capped block does not pass for its round.
+    let mut woken_for = BTreeSet::<(String, String)>::new();
 
     // Workflow #437 ORD-1b (`contracts/scheduling/README.md`, "Order within one device"): with the
     // order inputs, a device of several selects among its contenders by the order within one
@@ -2713,6 +2751,44 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             }
             continue;
         }
+        // #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep
+        // instance"): the candidate the round would select on an asleep instance is the task the
+        // instance is woken for. It is not selected: it waits with `instance_asleep_wake_due` and
+        // the evaluation's time as its wake, and nothing a dispatch alone causes happens (no
+        // intent, no reason chain and no decision record, no shared run slot, no chain step, no
+        // capped spend and no pass of its capped block). It takes its instance and its device for
+        // the round as a selected candidate does, so every candidate behind it waits as behind one;
+        // a fact refresh's names it as its gate, with no wake.
+        if asleep.contains(candidate.instance_id.as_str()) {
+            let task_work = &mut work[candidate.work_index];
+            task_work.state = SchedulingDecisionState::Deferred;
+            task_work
+                .reasons
+                .push(asleep_reason(&candidate.instance_id));
+            task_work.next_wake_unix_ms = Some(time.unix_ms);
+            if refresh {
+                refresh_gates.insert(
+                    candidate.work_index,
+                    RefreshGate::Temporary {
+                        gate: Some(PolicyCode::InstanceAsleepWakeDue.code()),
+                        wake: None,
+                    },
+                );
+            }
+            if let Some(slot) = &candidate.capped {
+                selected_blocks.insert(
+                    candidate.instance_id.clone(),
+                    (slot.pool_id.clone(), candidate.task_id.clone()),
+                );
+            }
+            selected_devices.insert(
+                device_groups.device(&candidate.instance_id).to_owned(),
+                (candidate.instance_id.clone(), candidate.task_id.clone()),
+            );
+            woken_for.insert((candidate.task_id.clone(), candidate.instance_id.clone()));
+            selected_instances.insert(candidate.instance_id);
+            continue;
+        }
         let mut reasons = work[candidate.work_index].reasons.clone();
         // Workflow #411 B15 R2: the read-only parameters the run receives; Workflow #411 B8: a
         // task that opts in adds its schedule values to the same reason, with or without one.
@@ -2794,7 +2870,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     }
     // SS-2h fix 1 (b): a capped block's candidate that a gate of its own refused is passed for its
     // round; a whole-instance hold as the cycle starts (the Runtime's positions 1-2 and 4, UPD-1's
-    // hold), the Runtime's random delay and a chain step pass none.
+    // hold), the Runtime's random delay and a chain step pass none. #486 ASLEEP-1: nor does the
+    // candidate an asleep instance is woken for: no gate of its own refused it, and it is not
+    // dispatched, so its episode does not advance past it.
     capped::settle(
         capped,
         &work,
@@ -2802,6 +2880,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             instance_holds.held(task_id, instance_id).is_some()
                 || refresh_inputs
                     .is_some_and(|inputs| inputs.instance_holds.contains_key(instance_id))
+                || woken_for.contains(&(task_id.to_owned(), instance_id.to_owned()))
         },
         &successor_waits,
     );
@@ -4361,17 +4440,17 @@ struct StagedCandidate {
     target: TargetEffect,
     /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
     base: Option<crate::resource_targets::ResourceTerm>,
-    /// Workflow #455 G-R2s: the instance's target record is left out for this candidate (its
-    /// task carries the irreversible mark, or, round 2, its game's root cannot be composed), and
-    /// why: it reads its instance resolved without a record.
+    /// Workflow #455 G-R2s round 2: the instance's target record is left out for this candidate
+    /// (its game's root cannot be composed), and why: it reads its instance resolved without a
+    /// record. Workflow #455 G-R2x (register §1.499): a task's irreversible mark leaves nothing
+    /// out any more.
     left_out: Option<LeftOutWhy>,
 }
 
-/// Workflow #455 G-R2s: why a candidate's instance's target record is left out for it.
+/// Workflow #455 G-R2s round 2: why a candidate's instance's target record is left out for it.
+/// G-R2x (register §1.499) withdrew the other why, the task's irreversible mark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LeftOutWhy {
-    /// Its task carries the composer's irreversible mark.
-    Irreversible,
     /// Round 2: the Runtime cannot compose its game's root ([`LeftOutFacts::targets_void`]).
     RootUncomposed,
 }
@@ -4380,7 +4459,6 @@ impl LeftOutWhy {
     /// The candidate's one reason that says so.
     fn reason(self) -> DecisionReason {
         match self {
-            Self::Irreversible => irreversible_left_out_reason(),
             Self::RootUncomposed => uncomposed_left_out_reason(),
         }
     }
@@ -4504,15 +4582,14 @@ fn apply_priority_selection(
         .map_err(PolicyEvaluationError::invalid)?;
         instance_targets.insert(instance_id.as_str(), resolved);
     }
-    // Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
-    // something irreversible"): a goal never raises the weight of a task whose package can do
-    // something irreversible. A candidate whose task carries the composer's mark, on an instance
-    // that holds a target record, reads its instance resolved once more as without the record
-    // (its server- or game-scoped note kept), so every number of it is the one of an instance
-    // without a record; the record's own resolution, which every other candidate reads, is left
-    // as it is. Round 2: every candidate of an instance whose game's root the Runtime cannot
-    // compose ([`LeftOutFacts::targets_void`]) is computed the same way, with its own reason; it
-    // takes that reason even when its task carries the mark too.
+    // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game
+    // whose root cannot be composed"): every candidate of an instance whose game's root the
+    // Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
+    // record, reads its instance resolved once more as without the record (its server- or
+    // game-scoped note kept), so every number of it is the one of an instance without a record;
+    // the record's own resolution, which every other candidate reads, is left as it is. Workflow
+    // #455 G-R2x (register §1.499): the task's irreversible mark (`irreversible_reach`) is read
+    // no more; such a candidate reads the record's own resolution as every candidate does.
     let mut left_out = BTreeMap::<usize, LeftOutWhy>::new();
     let mut unrecorded = BTreeMap::<&str, crate::resource_targets::InstanceTargets>::new();
     for candidate in &candidates {
@@ -4524,8 +4601,6 @@ fn apply_priority_selection(
         };
         let why = if context.left_out.targets_void(&candidate.instance_id) {
             LeftOutWhy::RootUncomposed
-        } else if catalog_task(catalog, &candidate.task_id)?.is_irreversible_reach() {
-            LeftOutWhy::Irreversible
         } else {
             continue;
         };
@@ -8084,8 +8159,8 @@ fn deterministic_decision_id(
 /// hashes before the identity it extends.
 const TARGETS_VOID_IDENTITY_PART: &[u8] = b"targets-void";
 
-/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): the decision identity of a candidate of an instance that
+/// Workflow #455 G-R2s fix round 3 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): the decision identity of a candidate of an instance that
 /// holds a target record, the record left out whole because its game's root cannot be composed
 /// ([`LeftOutFacts::targets_void`]): its [`deterministic_decision_id`] `decision_id`
 /// hashed once more after [`TARGETS_VOID_IDENTITY_PART`]. The void changes the decision, and a
@@ -8119,28 +8194,12 @@ fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
     }
 }
 
-/// Workflow #455 G-R2s (register §1.369; `contracts/resource-targets.md`, "A task that can do
-/// something irreversible"): the reason of a candidate whose task carries the composer's
-/// irreversible mark, on an instance that holds a target record: the record is left out for it.
-/// It stands where the record's policy-level reason would, after the reasons of the instance's
-/// resolution without the record and before the base term's `resource_weights`.
-fn irreversible_left_out_reason() -> DecisionReason {
-    reason(
-        PolicyCode::ResourceTargetPackageIrreversible,
-        format!(
-            "task marked {}: its package, or a rule that follows it, can do something \
-             irreversible; the instance's resource targets are left out and it is weighed as on \
-             an instance without a record",
-            crate::IRREVERSIBLE_REACH_MEMBER
-        ),
-    )
-}
-
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): the reason of a candidate of an instance whose game's root the
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): the reason of a candidate of an instance whose game's root the
 /// Runtime cannot compose ([`LeftOutFacts::targets_void`]), on an instance that holds a target
 /// record: the record is left out for it until a composition of its game succeeds. It stands
-/// where [`irreversible_left_out_reason`] stands.
+/// where the record's policy-level reason would, after the reasons of the instance's resolution
+/// without the record and before the base term's `resource_weights`.
 fn uncomposed_left_out_reason() -> DecisionReason {
     reason(
         PolicyCode::ResourceTargetRootUncomposed,
@@ -8167,6 +8226,18 @@ fn device_group_selected_reason(
         format!(
             "device_group_wait=selected alias={winner} task_id={winner_task}: another member of \
              the device won it for the evaluation round"
+        ),
+    )
+}
+
+/// #486 ASLEEP-1 (register §1.497): the reason of the candidate the round would have selected on
+/// the asleep instance `instance_id`: `instance_asleep_wake_due`.
+fn asleep_reason(instance_id: &str) -> DecisionReason {
+    reason_with(
+        Outcome::new(PolicyCode::InstanceAsleepWakeDue).instance_id(instance_id),
+        format!(
+            "instance_id={instance_id}: the instance is asleep, and this task is what it is woken \
+             for"
         ),
     )
 }

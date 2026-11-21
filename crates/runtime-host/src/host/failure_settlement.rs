@@ -21,15 +21,16 @@
 //! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
 use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
+use super::entry_blocks::{EntryMarks, EntrySettlement};
 use super::policy_outcome::{SettlementRead, policy_dispatch_intent};
 use super::*;
 use crate::codes::{BreakInProblem, HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, MISSING_HASH,
     RERUN_ONLY_BACKEND_FAILURES, content_hash_prefix, encode_failure_base, entry_checked,
-    failure_accumulates, failure_detail_fingerprint, failure_key, failure_rows, failure_step,
-    identifier_text, in_restart_segment, locate_error_frame, navigation_failure_code,
-    navigation_layer_failure,
+    entry_passed, failed_at_entry, failure_accumulates, failure_detail_fingerprint, failure_key,
+    failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
+    navigation_failure_code, navigation_layer_failure,
 };
 use crate::suspension_lift::{
     LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
@@ -56,6 +57,27 @@ pub(super) struct ResolvedLayer {
 pub(super) struct ScheduledResolution {
     /// `None` until the main package is admitted.
     main: Option<ScheduledMain>,
+    /// Workflow #490 ENTRY-A: what the run's start knew of its instance's entry blocks and
+    /// recoveries, which its settlement compares when the run failed at its entry.
+    marks: EntryMarks,
+}
+
+/// Workflow #490 ENTRY-A: a failed scheduled run's input for its settlement and, when the run
+/// failed at its entry (`failed_at_entry`), its failure does not accumulate and the instance's
+/// recovery ladder takes it at the task stage, what its start knew of its instance (`entry`): the
+/// settlement then settles it as a condition of the instance and blocks the instance (fix round 4,
+/// ruling 1: always; it never counts against its rule); `entry` is
+/// [`EntrySettlement::TargetStarted`] for a run whose main package started.
+pub(super) struct ScheduledFailure {
+    pub(super) input: PolicyExecutionInput,
+    pub(super) entry: Option<EntrySettlement>,
+}
+
+impl ScheduledFailure {
+    /// A failure settled as before ENTRY-A.
+    fn ordinary(input: PolicyExecutionInput) -> Self {
+        Self { input, entry: None }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -185,16 +207,24 @@ impl HostShared {
         ))
     }
 
-    /// Registers a scheduled run's decision as it enters the scheduled path.
+    /// Registers a scheduled run's decision as it enters the scheduled path, with what is known
+    /// then of its instance's entry blocks (Workflow #490 ENTRY-A), marking the run `run_id` as
+    /// one whose settlement is to come.
     pub(super) fn register_scheduled_resolution(
         &self,
         decision_id: &str,
+        run_id: RunId,
+        instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
+        let marks = self.entry_settlement_pending(run_id, decision_id, instance_id)?;
         lock(
             &self.scheduled_resolutions,
             HostLocation::RegisterScheduledResolution,
         )?
-        .insert(decision_id.to_owned(), ScheduledResolution::default());
+        .insert(
+            decision_id.to_owned(),
+            ScheduledResolution { main: None, marks },
+        );
         Ok(())
     }
 
@@ -548,13 +578,15 @@ impl HostShared {
 
     /// The policy execution input of a failed scheduled run (§12.4): the failure identity of a
     /// run whose main package was admitted (`linear_steps` or, Workflow #390 EXEC-3, page
-    /// graph), or the original input for any other run. A fatal error is marked.
+    /// graph), or the original input for any other run; Workflow #490 ENTRY-A: with what its start
+    /// knew of its instance when it failed at its entry ([`ScheduledFailure`]). A fatal error is
+    /// marked.
     pub(super) fn scheduled_failure_identity(
         &self,
         context: &PolicyRunContext,
         failure: &RequestFailure,
         input: PolicyExecutionInput,
-    ) -> RuntimeHostResult<PolicyExecutionInput> {
+    ) -> RuntimeHostResult<ScheduledFailure> {
         let result = self.build_scheduled_failure_identity(context, failure, input);
         if let Err(error) = &result
             && error.is_fatal()
@@ -564,19 +596,82 @@ impl HostShared {
         result
     }
 
+    /// Workflow #490 ENTRY-A fix round 3 (ruling 6): at the failed lease end of the scheduled run
+    /// `run_id`, before its settlement, whether its failure `code` is one the settlement will judge
+    /// a failure at its entry, taken from what the host holds of the run in memory and reading no
+    /// ledger: its chain was resolved (`ScheduledMain::resolved`), it checked its entry (a
+    /// prerequisite chain, or `entry`'s `checked`: an `EntryRecoveryDecision` it recorded) and its
+    /// main package never started (`entry`'s `started`: no `EntryTargetDisposition` `Started`
+    /// recorded), and the code does not accumulate in the scope such a run fails in (the gate's or
+    /// a layer's with a chain, `main` without one: `failure_accumulates`, outside the restart
+    /// segment, which only lets more accumulate). So it never says "at the entry" for a run the
+    /// settlement settles otherwise, and the settlement's own judgement stands. The code's class is
+    /// the caller's to judge. A run whose settlement is not to come is no such run.
+    pub(super) fn scheduled_run_at_entry(
+        &self,
+        run_id: RunId,
+        code: &actingcommand_contract::outcome::CodeStr,
+        entry: super::contained_task::RunEntry,
+    ) -> RuntimeHostResult<bool> {
+        Ok(self
+            .scheduled_run_entry_checked(run_id, entry)?
+            .is_some_and(|gated| {
+                let scope = if gated { "gate" } else { "main" };
+                !failure_accumulates(code, scope, false)
+            }))
+    }
+
+    /// Workflow #490 ENTRY-A fix round 5 (CI on fix round 4's head: `gate_387_d1c`'s cell "the
+    /// code excluded"): the first half of [`Self::scheduled_run_at_entry`], from what the host
+    /// holds of the run `run_id` in memory: its chain was resolved, it checked its entry and its
+    /// main package never started (`entry`). `Some(gated)` then (`gated`: a prerequisite chain or a
+    /// page graph's own entry check), else `None`. The lease end of a failure the exclusion list
+    /// keeps from starting a ladder stages the block's own recovery only for such a run: a run
+    /// that started its main package never blocks its instance, so nothing is staged for it and
+    /// nothing is let go at its settlement.
+    pub(super) fn scheduled_run_entry_checked(
+        &self,
+        run_id: RunId,
+        entry: super::contained_task::RunEntry,
+    ) -> RuntimeHostResult<Option<bool>> {
+        if entry.started {
+            return Ok(None);
+        }
+        let Some(decision_id) = self.entry_settling_dispatch(run_id)? else {
+            return Ok(None);
+        };
+        let shape = lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(&decision_id)
+        .and_then(|resolution| resolution.main.as_ref())
+        .filter(|main| main.resolved)
+        .map(|main| (!main.layers.is_empty(), main.linear));
+        let Some((layered, linear)) = shape else {
+            return Ok(None);
+        };
+        let gated = layered || (!linear && entry.checked);
+        Ok((gated || entry.checked).then_some(gated))
+    }
+
     fn build_scheduled_failure_identity(
         &self,
         context: &PolicyRunContext,
         failure: &RequestFailure,
         input: PolicyExecutionInput,
-    ) -> RuntimeHostResult<PolicyExecutionInput> {
+    ) -> RuntimeHostResult<ScheduledFailure> {
         let (outcome, class) = match input {
             PolicyExecutionInput::Failed { outcome, class, .. } => (outcome, class),
-            PolicyExecutionInput::Succeeded => return Ok(PolicyExecutionInput::Succeeded),
+            PolicyExecutionInput::Succeeded => {
+                return Ok(ScheduledFailure::ordinary(PolicyExecutionInput::Succeeded));
+            }
             // Workflow #429 R-6b2 (register §1.314 R6B-4): a stop is no failure of its task: no
             // failure identity is computed for it.
             PolicyExecutionInput::Stopped { outcome } => {
-                return Ok(PolicyExecutionInput::Stopped { outcome });
+                return Ok(ScheduledFailure::ordinary(PolicyExecutionInput::Stopped {
+                    outcome,
+                }));
             }
         };
         let code = scheduled_failure_code_str(&outcome);
@@ -604,7 +699,8 @@ impl HostShared {
         };
         // §12.6 point 4: a dispatch that already has its execution record keeps its failure.
         if let Some(recorded) = recorded {
-            return recorded_failure_input(recorded, outcome, class);
+            return recorded_failure_input(recorded, outcome, class)
+                .map(ScheduledFailure::ordinary);
         }
         // Workflow #378 A2-P: the failure's outcome is recorded as it is; only the identity
         // beside it is built here.
@@ -630,13 +726,13 @@ impl HostShared {
                 )
                 .with_native_detail(format!("decision_id={decision_id}")),
             )?;
-            return Ok(failed(None));
+            return Ok(ScheduledFailure::ordinary(failed(None)));
         };
         // A main package that was not admitted (its mode is unknown) records no identity.
         // Workflow #390 EXEC-3 (FCM E-02): a page-graph package records one as a `linear_steps`
         // package does, so its failure is rerun at once (R22) by the same rules.
         let Some(main) = resolution.main else {
-            return Ok(failed(None));
+            return Ok(ScheduledFailure::ordinary(failed(None)));
         };
         // LN-5 (#422, LEAN-L §3.3): each of the run's selections is read from the store page by
         // page at the head.
@@ -644,17 +740,30 @@ impl HostShared {
             crate::recovery_read::read_through_head(&self.ledger, &query)
                 .map_err(|_| ledger_error(HostLocation::ReadFailureIdentityRows))
         };
-        let (rows, scope, operation) = if main.resolved {
+        let (rows, scope, operation, gated) = if main.resolved {
             let rows = failure_rows(context.run_id(), query)?;
             // A page-graph run's entry check is its gate, and its entry recovery package its
             // layer (EXEC-3).
             let gated = !main.layers.is_empty() || (!main.linear && entry_checked(&rows));
             let (scope, operation) = failure_step(&rows, gated);
-            (rows, scope, operation)
+            (rows, scope, operation, gated)
         } else {
-            (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
+            (
+                Vec::new(),
+                "prepare".to_owned(),
+                "prepare".to_owned(),
+                false,
+            )
         };
         let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
+        // Workflow #490 ENTRY-A: the run checked its entry and its main package never started. Any
+        // other run whose chain was resolved started its main package, which starts its pair's
+        // count from nothing (fix round 4); one that started it after an entry check it passed was
+        // let in on its instance (fix round 3, kept for ruling 3 of fix round 4).
+        let at_entry = main.resolved && failed_at_entry(&rows, gated);
+        let started = (main.resolved && !at_entry).then(|| EntrySettlement::TargetStarted {
+            entered: entry_passed(&rows),
+        });
         // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
         // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
         // rule in where the failure arose, so the startup recovery and the ledger read the same
@@ -685,7 +794,36 @@ impl HostShared {
             frame: IdentityFrame::unique(decision_id),
         };
         if rerun_only_backend || !failure_accumulates(&code, &scope, restart_segment) {
-            return Ok(failed(Some(identity.encode())));
+            // Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"):
+            // a failure that does not accumulate, of a run whose main package executed no step and
+            // whose failure came from its entry (a prerequisite or return-home layer, the gate, the
+            // home entry's check or its recovery package), is a condition of the instance when the
+            // instance's block has a recovery for it: fix round 1, the trigger item that takes its
+            // class whatever `exclude_codes` says; fix round 2 (ruling 1), only a failure of class
+            // `pack_logic_mismatch` (raised by the entry's own layers) is one; any other (the
+            // capture backend's, the device link's, a fence's) is settled as before ENTRY-A
+            // (`entry_failure_recovered`). The settlement settles it so and blocks the instance.
+            if !(at_entry
+                && self.entry_failure_recovered(context.lease_token().instance_id(), &code)?)
+            {
+                return Ok(ScheduledFailure {
+                    input: failed(Some(identity.encode())),
+                    entry: started,
+                });
+            }
+            // Fix round 4 (ruling 1): every such failure settles so; none counts against its rule.
+            // The end of the activity window the run's admission was committed in is its pair's
+            // window (rulings 2 and 3).
+            let window_end = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?
+                .dispatch_window_end(decision_id)?
+                .unwrap_or_default();
+            return Ok(ScheduledFailure {
+                input: failed(Some(identity.encode())),
+                entry: Some(EntrySettlement::AtEntry {
+                    marks: resolution.marks,
+                    window_end,
+                }),
+            });
         }
         let current = if scope == "prepare" {
             None
@@ -700,7 +838,10 @@ impl HostShared {
             })
         });
         let Some((previous_identity, previous_decision)) = previous else {
-            return Ok(failed(Some(identity.encode())));
+            return Ok(ScheduledFailure {
+                input: failed(Some(identity.encode())),
+                entry: started,
+            });
         };
         let (comparison, previous_run) =
             self.compare_error_frames(&previous_decision, current.as_ref())?;
@@ -731,7 +872,10 @@ impl HostShared {
                 previous_identity
             }
         };
-        Ok(failed(Some(failure_identity)))
+        Ok(ScheduledFailure {
+            input: failed(Some(failure_identity)),
+            entry: started,
+        })
     }
 
     /// Workflow #373 NAV-5 (M-373 §8.5): the navigation segments of a settled failure's

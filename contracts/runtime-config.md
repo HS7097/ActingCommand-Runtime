@@ -145,7 +145,7 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
 | `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
 | `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend`, `task_capture_backend` |
-| `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched`, `device_link_lost` |
+| `recovery_ladder.exclude_codes` | list of codes or `prefix*`: a failure whose code it names starts no ladder by itself; since 0.12.77 (Workflow #490 ENTRY-A) such a code of class `pack_logic_mismatch` that a scheduled run meets at its entry blocks the instance, whose own recovery climbs under the item that takes the class, the list not read ([emulator-control.md](emulator-control.md), "Triggers"; [policy-suspension.md](policy-suspension.md), "A failure at the entry") | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched`, `device_link_lost` |
 | `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
 | `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |
 | `recovery_ladder.rules.already_running` | `suppress` \| `queue` | `suppress` |
@@ -1414,6 +1414,68 @@ stopped by the idle action itself, a reconnect that failed, a hold that ended be
 availability came back) is still woken for a task that cannot be dispatched, at its trigger's next
 time or at once as before this slice, a spent budget included: the look ahead never reads a
 candidate the placement blocks. That is an issue of its own.
+
+An instance whose emulator its idle action stopped is asleep, not unavailable (#486 ASLEEP-1,
+since 0.12.77, [v012-register.md](v012-register.md) §1.497; the first case above). While its idle
+action stops or holds its emulator stopped and nothing but that stop withdrew its availability
+(its configured seed available; no fence, no device link, device state or device system
+withdrawal; no failed self-check or preparation step of its own), the evaluation judges it as if
+it were available and selects nothing on it ([scheduling/README.md](scheduling/README.md), "An
+asleep instance"): every candidate carries the decision of the gate that holds it, and the one the
+round would select there waits with `instance_asleep_wake_due` and the evaluation's time as its
+wake. The plan counts that one due and names it, so the wake comes at once for a task that would be
+dispatched (the emulator's start, then the startup package), and counts every other decision as on
+an available instance: a spent budget, a backoff or the activity interval wakes the instance at its
+release less the lead, and a candidate whose trigger has not come at its trigger's time less the
+lead. The instances `close_app` closed are not asleep; the case of one whose reconnect or self-check
+failed after `close_app` is AVAIL-1's ([scheduling/README.md](scheduling/README.md), "An unavailable
+instance is probed again"). A pause holds an asleep instance's wake as any `stop_emulator` wake
+(PAUSE-AUTO above).
+
+A decision a gate without a time holds wakes no instance whose emulator the idle action can stop
+(#486 ASLEEP-1 fix round 1, the coordinator's ruling 2 of the round). On an instance whose idle
+action in effect is `stop_emulator`, or `auto` with `stop_emulator` within its reach (its startup
+package and its configured emulator start in effect), a decision the benefit gate holds (its benefit
+unknown or not positive), the no-progress guard holds or a pool's lines hold contributes no wake to
+the idle plan, whatever next time its trigger names: that time would start a stopped emulator when
+nothing can be dispatched. This holds for the plan the action itself is decided by, since a wake
+only ever moves earlier, so the wake fixed at the stop is already without them. Nothing is lost but
+the lead: every evaluation judges an asleep instance as available, so the evaluation in which such
+a task can be dispatched finds it due and wakes the instance. A decision a time-bound gate holds
+keeps contributing that gate's release, and one whose trigger has not come its trigger's time. On an
+instance whose idle action is `close_app`, `none`, or `auto` without its emulator start, the plan is
+as before.
+
+A Runtime start keeps an asleep instance asleep (#486 ASLEEP-1 fix round 1, ruling 5). The start
+restores the instance stopped with its wake (IDLE-1P above), withdraws its availability as for every
+device self-checked instance (`backend_selfcheck:unchecked`), and does not prepare it: its emulator
+is stopped, so the start's preparation could only fail and take the instance into the unavailable
+instances the probes take up, which are not asleep. So after the start it is asleep with its wake,
+judged as available, never selected, and woken for the task that would be selected, as before the
+start; its wake's configured start prepares it.
+
+What is known and not changed here (#486 ASLEEP-1 fix round 1, ruling 3): a task whose trigger has
+not come when the plan sets the wake, and whose budget will still be spent at that time, wakes an
+asleep instance at its trigger's time for nothing (the plan reads the later positions as of the
+evaluation, not as of the trigger's time); the rule below then keeps the emulator running until a
+scheduled run is admitted on the instance, and `instance_idle_stop_withheld` says so. A later slice
+lets the plan read the later positions as of the trigger's time.
+
+A wake that started the emulator must be answered (#486 ASLEEP-1, ruling 6; the bound on what the
+rule above does not foresee). After an idle wake whose configured start started the instance's
+emulator (the autostart claim drove its Start; one that found the emulator running started
+nothing), the idle check does not stop that emulator again until a scheduled run has been admitted
+on the instance since the wake (its admission counts, whatever follows: a run admitted and then
+refused or failed answers the wake, and so does the admission of the instance's fact refresh
+reading): under `auto` the tier stops at `close_app` (a rest and `close_app` as before), under
+`stop_emulator` nothing is taken. The first check that would otherwise have
+stopped it records one `instance_idle_stop_withheld` warning for that wake (`operation`
+`check_idle_instances`; `alias`, `idle_action` `stop_emulator`, `idle_wake_cause`, `task_id` with
+`task_due`, `at_unix_ms` when the wake was queued; a `device_state_observed` record under the
+instance and the same report line). The status has no idle row, so nothing else says it. The
+memory is the idle planner's and in memory only: a scheduled run admitted on the instance after
+the wake, a Runtime start, a catalog's activation and another `idle` configuration of the instance
+end it. No key is added.
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

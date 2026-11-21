@@ -1267,9 +1267,10 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   pool it consumes, or produces a pool an active goal covers; no opt-in) also holds
   `session.dispatch.schedule.spend_allowance.<i>`, `session.dispatch.schedule.gap_remaining.<j>`
   and `session.dispatch.schedule.run_cap`, each an `integer` with the same members
-  ([remedies.md](remedies.md), section 4, "Spend values"). Workflow #455 G-R2s (since 0.12.60):
-  the run of a task that carries the irreversible mark holds the values of an instance without a
-  target record: no `gap_remaining.<j>`, and a `run_cap` without a goal term
-  ([resource-targets.md](resource-targets.md), "A task that can do something irreversible").
+  ([remedies.md](remedies.md), section 4, "Spend values"). Workflow #455 G-R2s (0.12.60 to
+  0.12.76) gave the run of a task that carried the irreversible mark the values of an instance
+  without a target record; since Workflow #455 G-R2x (0.12.77, register §1.499) such a run holds
+  them as every run does ([resource-targets.md](resource-targets.md), "A task that can do something
+  irreversible").
 - The overlay is never stored: it appends no record, takes no active fact identity (0 rows in the
   capacity ledger) and is not visible to `InstanceFactSnapshot` or `ac_facts`.

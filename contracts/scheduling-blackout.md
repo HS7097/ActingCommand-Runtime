@@ -311,6 +311,38 @@ store update task that ranks first never leaves the instance's other candidates 
 unselected. A candidate the closure is asked about is answered by positions 1 to 4 first, as
 above;
 
+**4b.** the instance is entry-blocked (`instance_entry_blocked`, values `instance_id`, `task_id`,
+`decision_id`, `failure_code` and `observed_at_unix_ms`; Workflow #490 ENTRY-A, since 0.12.77,
+register §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"): a
+scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`, a
+code of class `pack_logic_mismatch`, since `observed_at_unix_ms`), and no recovery or run of the
+instance has succeeded since, no resume lifted a pause of it, no blackout covered it at the lease
+sweep's tick and no fence took it, and the Runtime did not restart. Every candidate of the instance waits, an owed rerun, an immediate rerun, a remedy
+request or retry and a chain's successor included, with no wake of its own: the block's end is
+followed by a lease end (the ladder's, the run's, the resume's reconnect), which wakes the
+evaluation. A store update package's task passes, as it passes 4a (fix round 1: an instance whose
+game asks for an update fails every entry, and only that task can end it; its success ends the
+block as any run's does). The fact refresh's deferral names this code as its `gate_code`. Other
+instances are not held. As for 4a, the round's candidates settled before it asks the closure wait
+with this reason too (`InstanceHolds`, the store update tasks let through); an instance 4a holds
+keeps 4a's hold. The evaluation reads the blocks under
+the policy outcome gate a settlement blocks under, so no evaluation sees the run's settlement
+without its block; admission does not judge it again. The idle plan counts such a decision due
+(eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
+and its look ahead does not read the block (it reads the pairs' waits below: #486 ASLEEP-1 fix
+round 2, "The idle plan behind a hold"). The not-running row of the schedule explanation
+names it, since the first evaluation that deferred the instance so. Then (fix round 4, rulings 2
+and 3; [policy-suspension.md](policy-suspension.md), "A pair that keeps failing at its entry"), on
+an instance not blocked or for a store update task that passes the block, a candidate whose pair
+(instance, catalog task) failed at its entry n times in a row waits `instance_entry_task_waiting`
+(`count`, `next_eligible_unix_ms`) until `scheduling.unavailable_probe`'s interval for n has passed
+since the end of the block that failure set and of any later block of the instance (since its
+settlement until a block ends), and one set aside for its window waits
+`instance_entry_task_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the window's
+end; each wakes at its end and neither holds past the window's end; a fact refresh names the code
+as its `gate_code`. Only that task waits: the instance's other candidates are not held, and no rule
+that orders tasks changes;
+
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";
    built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed
@@ -368,7 +400,13 @@ the Runtime ends the evaluation, any other goes to the daemon's log as a skipped
 ([runtime-config.md](runtime-config.md)). This look ahead serves the idle plan alone: the order above, the
 reason and wake each deferral answers, the not-run explanation, the clock-slot records of Workflow
 #372 K2 and the budgets' accounting are what they were. A position added to the order is added to
-the look ahead (`PolicyHost::evaluate`, `look_ahead`). A candidate that the evaluation blocks
+the look ahead (`PolicyHost::evaluate`, `look_ahead`). Of position 4b (Workflow #490 ENTRY-A) the
+look ahead reads, after 4a, a pair's wait and its being set aside, on an instance not blocked or
+for a store update task that passes the block, with its end as the release (#486 ASLEEP-1 fix
+round 2: otherwise a plan made while the idle action's own claim held the key counted the waiting
+task due, and the instance, its emulator just stopped, was woken at once for a task that could
+not be dispatched until the wait's end); not the block itself, whose candidate counts due. A
+candidate that the evaluation blocks
 before this order because its instance is unavailable (`instance_unavailable`: a start withholds
 the availability until its self-check, and a pause a start restored keeps it withheld until the
 resume's reconnect) reaches no position, so on an instance the idle action closed, while positions
@@ -380,6 +418,21 @@ candidate as before fix round 2, whether or not the instance is available again:
 idle action closed that is unavailable and under no hold is still woken for a task that cannot be
 dispatched, a spent budget included, as the look ahead never reads a candidate the placement
 blocks (what this slice leaves, an issue of its own).
+
+**An asleep instance** (#486 ASLEEP-1, since 0.12.77; register §1.497;
+[scheduling/README.md](scheduling/README.md), "An asleep instance"). An instance whose emulator its
+idle action stops or holds stopped, and whose availability nothing but that stop withdrew, is not
+blocked at placement: its candidates go through the rest of placement and through this order as an
+available instance's do, positions 1 to 9 included (the closure is asked; a pause, a held key, a
+blackout, a budget, a backoff or the activity interval defers them with its own code and wake, and
+the look ahead above reads positions 3 to 8 behind a hold as for any instance). Only the
+candidate the round would then select is not selected: it waits with `instance_asleep_wake_due`
+and the evaluation's time as its wake, and takes the instance (and its device) for the round, so
+a candidate behind it waits as behind a selected one; no intent is made for it, so nothing of
+admission runs. The clock-slot trace writes no record for it either (fix round 1, ruling 8): its
+deferral is the allocation's, after the closure let it through, so no closure deferral is captured
+for it, it is no placement block, and it has no intent to be owed. An instance unavailable for any
+other cause is blocked at placement as before.
 
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
 lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,

@@ -506,6 +506,9 @@ impl HostShared {
             if manual {
                 self.record_person_wait_entered(instance_id)?;
             }
+            // Workflow #490 ENTRY-A fix round 1: the fence ends the instance's entry block and
+            // drops its held recovery; the fence and its own recheck own the instance from here.
+            self.end_entry_block(instance_id)?;
         }
         Ok(fence)
     }

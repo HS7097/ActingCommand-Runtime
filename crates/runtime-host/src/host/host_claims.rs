@@ -204,6 +204,15 @@ fn instance_worker_loop(
             } => Some((pending.instance_id, pending.probe)),
             _ => None,
         };
+        // Workflow #490 ENTRY-A fix round 1: a recovery ladder whose worker panics ended without
+        // recovering, which an entry block it was the recovery of tells a person.
+        let ladder = match &job {
+            WorkerJob::HostClaim {
+                work: HostClaimWork::RecoveryLadder(pending),
+                ..
+            } => Some(PendingRecoveryLadder::clone(pending)),
+            _ => None,
+        };
         // Fix 2 (re-review L-3): the lane is taken out first, so a failure to issue the failure
         // links (a global fault) still ends a policy run's registration, left abandoned for the
         // reconciliation, never working, and the Runtime is marked fatal.
@@ -241,6 +250,16 @@ fn instance_worker_loop(
                 let probe_ended = probe.map_or(Ok(()), |(instance_id, probe)| {
                     shared.end_panicked_unavailable_probe(instance_id, probe)
                 });
+                // Workflow #490 ENTRY-A fix round 1: a panicked recovery ladder ended without
+                // recovering; an entry block it was a recovery of tells a person
+                // (`note_entry_recovery_failed`). Its failure is kept as the probe's is.
+                let ladder_ended = ladder.as_ref().map_or(Ok(()), |ladder| {
+                    shared.note_entry_recovery_failed(
+                        ladder,
+                        crate::codes::EntryRecoveryEnd::WorkerPanicked,
+                    )
+                });
+                let ended = probe_ended.and(ladder_ended);
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
@@ -249,10 +268,10 @@ fn instance_worker_loop(
                         RuntimeErrorCode::RuntimeHalted,
                     );
                     shared.fatal.mark(error.clone())?;
-                    probe_ended?;
+                    ended?;
                     return Err(error);
                 }
-                if let Err(error) = probe_ended {
+                if let Err(error) = ended {
                     let error = error.into_fatal();
                     shared.fatal.mark(error.clone())?;
                     return Err(error);

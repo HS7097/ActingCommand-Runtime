@@ -1899,8 +1899,13 @@ impl HostShared {
             self.reconcile_pending_policy_settlements()?;
         }
         // IDLE-1P (#405): the instances the idle action closed as this cycle starts, read before
-        // any other lock of the cycle is taken.
+        // any other lock of the cycle is taken. #486 ASLEEP-1: with them, the instances whose
+        // emulator it stops or holds stopped.
         let idle_closed = self.idle_closed_for_policy()?;
+        let held_stopped = self.idle_emulators_held_stopped()?;
+        // #486 ASLEEP-1 fix round 1: the instances whose idle action in effect can stop their
+        // emulator, whose idle plans take no wake from a decision a gate without a time holds.
+        let idle_stops_emulator = self.idle_emulator_stops_for_policy()?;
         // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
         // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
         // catalog. Nothing in configured mode. ISO-PE: it reads the monotonic clock as the cycle
@@ -1946,11 +1951,16 @@ impl HostShared {
             availability_withdrawals,
             dispatches_read,
             queue_wait_starts,
+            entry_blocked,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
                 HostLocation::SnapshotPolicyOutcomeState,
             )?;
+            // Workflow #490 ENTRY-A: the entry-blocked instances, read under the gate a settlement
+            // blocks its instance under, so no evaluation sees a run's settlement without its
+            // block.
+            let entry_blocked = self.entry_block_gates()?;
             let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
             // this cycle's inputs are projected (Workflow #308 slice 5b). Workflow #437 ORD-1c:
@@ -2010,6 +2020,7 @@ impl HostShared {
                 availability_withdrawals,
                 dispatches_read,
                 queue_wait_starts,
+                entry_blocked,
             )
         };
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
@@ -2057,6 +2068,11 @@ impl HostShared {
         let control_gates = |instance_alias: &str| {
             scheduling_pause.control_gates(instance_alias, fenced_aliases.contains(instance_alias))
         };
+        // #486 ASLEEP-1 (register §1.497): the instances asleep as this cycle's inputs were
+        // projected (their emulator stopped by their idle action, and nothing but that stop
+        // withdrew their availability), which the evaluation judges as if they were available.
+        let asleep =
+            self.asleep_for_policy(&held_stopped, &availability_withdrawals, &fenced_aliases)?;
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
@@ -2165,6 +2181,9 @@ impl HostShared {
                     dispatches_read,
                     standard_pack_variables: standard_pack_variables.as_deref(),
                     availability_withdrawals: &availability_withdrawals,
+                    asleep: &asleep,
+                    idle_stops_emulator: &idle_stops_emulator,
+                    entry_blocked: &entry_blocked,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

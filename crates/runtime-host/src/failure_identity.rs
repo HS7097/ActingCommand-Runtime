@@ -353,12 +353,17 @@ impl IdentityLayer {
 }
 
 /// F: the error frame's artifact digest, `na` without a frame, or `u…` for a failure that does
-/// not accumulate (unique per dispatch, so it never repeats the previous identity).
+/// not accumulate (unique per dispatch, so it never repeats the previous identity). Workflow #490
+/// ENTRY-A: `i…`, the same digest as `u…`, for such a failure that its run met at its entry and
+/// that its settlement settled as a condition of the run's instance (it does not accumulate
+/// either); the settlement's replay reads it from the record (`entry_blocked` in
+/// `policy_control.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IdentityFrame {
     Frame(String),
     None,
     Unique(String),
+    Entry(String),
 }
 
 impl IdentityFrame {
@@ -382,6 +387,7 @@ impl IdentityFrame {
             Self::Frame(digest) => format!("f{digest}"),
             Self::None => "fna".to_owned(),
             Self::Unique(digest) => format!("fu{digest}"),
+            Self::Entry(digest) => format!("fi{digest}"),
         }
     }
 
@@ -392,6 +398,9 @@ impl IdentityFrame {
         }
         if let Some(unique) = rest.strip_prefix('u') {
             return is_hex(unique, FRAME_HEX).then(|| Self::Unique(unique.to_owned()));
+        }
+        if let Some(entry) = rest.strip_prefix('i') {
+            return is_hex(entry, FRAME_HEX).then(|| Self::Entry(entry.to_owned()));
         }
         is_hex(rest, FRAME_HEX).then(|| Self::Frame(rest.to_owned()))
     }
@@ -427,9 +436,38 @@ impl FailureIdentity {
         format!("{}~{}", self.prefix(), self.frame.encode())
     }
 
-    /// Whether this failure accumulates toward suspension: its frame mark is not unique.
+    /// Whether this failure accumulates toward suspension: its frame mark is neither unique nor,
+    /// Workflow #490 ENTRY-A, an entry failure's.
     pub(crate) const fn accumulates(&self) -> bool {
-        !matches!(self.frame, IdentityFrame::Unique(_))
+        !matches!(
+            self.frame,
+            IdentityFrame::Unique(_) | IdentityFrame::Entry(_)
+        )
+    }
+
+    /// Workflow #490 ENTRY-A: whether this is the identity of a failure its run met at its entry
+    /// that its settlement settled as a condition of the run's instance (its frame mark `i…`).
+    pub(crate) const fn at_entry(&self) -> bool {
+        matches!(self.frame, IdentityFrame::Entry(_))
+    }
+
+    /// Workflow #490 ENTRY-A: the packages the identity names with their content hashes, which a
+    /// pair's count of its failures at the entry compares (fix round 4, rulings 2 and 3: a change
+    /// of them starts the count from nothing): the main package and each declared prerequisite and
+    /// return-home layer (not a navigation layer or the game root's data, which only a failure in
+    /// such a layer names).
+    pub(crate) fn packages(&self) -> String {
+        let mut packages = format!("m{}", self.main.encode());
+        for layer in self.layers.iter().filter(|layer| {
+            matches!(
+                layer,
+                IdentityLayer::Declared(_) | IdentityLayer::ReturnHome { .. }
+            )
+        }) {
+            packages.push('~');
+            packages.push_str(&layer.encode());
+        }
+        packages
     }
 
     /// The identity a recorded failure identity string encodes, or `None` for any other text.
@@ -468,6 +506,19 @@ impl FailureIdentity {
             frame: IdentityFrame::parse(frame)?,
         })
     }
+}
+
+/// Workflow #490 ENTRY-A: `identity`, the identity of a failure that does not accumulate (its `F`
+/// unique, `u…`), with its `F` marked as an entry failure's (`i…`, the same digest); `None` for
+/// any other text.
+pub(crate) fn entry_identity(identity: &str) -> Option<String> {
+    let mut parsed = FailureIdentity::parse(identity)?;
+    let digest = match &parsed.frame {
+        IdentityFrame::Unique(digest) => digest.clone(),
+        IdentityFrame::Frame(_) | IdentityFrame::None | IdentityFrame::Entry(_) => return None,
+    };
+    parsed.frame = IdentityFrame::Entry(digest);
+    Some(parsed.encode())
 }
 
 /// The event types of one run that the identity reads (§12.4, R25-1): its entry facts, step
@@ -576,6 +627,44 @@ pub(crate) fn entry_checked(rows: &[PersistedEvent]) -> bool {
         matches!(
             semantic_fact(event),
             Some(TaskSemanticFact::EntryRecoveryDecision { .. })
+        )
+    })
+}
+
+/// Workflow #490 ENTRY-A (`contracts/policy-suspension.md`, "A failure at the entry"): whether a
+/// run's failure came from its entry: the run checked its entry (`gated`: a prerequisite chain's
+/// gate or a page-graph run's entry check; or the rows hold an `EntryRecoveryDecision`, a home
+/// entry's preflight), and its main package never started (no `EntryTargetDisposition`
+/// `Started`), so it executed no step of the main package. The `prepare` scope is the caller's: it
+/// has no rows and is no entry failure.
+pub(crate) fn failed_at_entry(rows: &[PersistedEvent], gated: bool) -> bool {
+    let mut checked = gated;
+    for fact in rows.iter().filter_map(semantic_fact) {
+        match fact {
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::Started,
+                ..
+            } => return false,
+            TaskSemanticFact::EntryRecoveryDecision { .. } => checked = true,
+            _ => {}
+        }
+    }
+    checked
+}
+
+/// Workflow #490 ENTRY-A fix round 3, kept by fix round 4 for its ruling 3
+/// (`contracts/policy-suspension.md`, "A pair that keeps failing at its entry"): whether a run's
+/// main package started after an entry check it passed (an `EntryTargetDisposition` `Started`
+/// among its rows): the instance let it in. A run that checks no entry starts its main package
+/// whatever the screen, which proves nothing of it.
+pub(crate) fn entry_passed(rows: &[PersistedEvent]) -> bool {
+    rows.iter().filter_map(semantic_fact).any(|fact| {
+        matches!(
+            fact,
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::Started,
+                ..
+            }
         )
     })
 }

@@ -43049,6 +43049,1150 @@ item 3's stop condition, and its addition of 00:50 JST, item 6; not the owner's 
   the outcome catalogue's texts of the three codes changed and the index was regenerated (it did
   not change) and checked current.
 
+### 1.494 Slice #490 ENTRY-A (0.12.77): a run that failed at its entry is a condition of its instance, not a failure of its task; the instance is entry-blocked until a recovery or a run succeeds (Workflow #490, a production defect of 11-20; the rules below are the coordinator's rulings on board #490, in the work order, in its constraint of 23:18 JST after the review of #1852, in its ruling of 23:57 JST (ENTRY-A2: whose failure a failure at the entry is) and in the work orders of its four fix rounds of 11-21, not the owner's words; coordinator work order `rd-1120/brief-490-entry-a.md` after the read-only study `rd-1120/study-490-entry-failures.md`; stacked on #1852, merged at its head `fd177368`, its fix round 1, then on main `7dbbf9f0`, `9fd92503` (fix round 2) and `f6e2cd26` (fix rounds 3 and 4, the merge of the 0.12.76 release))
+
+This section takes 1.494, after AVAIL-1's §1.493, on whose code it stands (the ladder's held
+recovery and the lease sweep's step). It ships in 0.12.77 (fix round 2: 0.12.76 goes out first,
+without it; none of its codes is in `released/0.12.76.json`). It takes three rules of the planned
+ENTRY-B (where a block's recovery starts, a block that tries again by itself, the attention
+measured over a stretch of blocks: "Fix round 2" below); §1.495 stays free for the rest of ENTRY-B.
+Fix round 3 replaces the evidence of whose failure a failure at the entry is (what a recovery did
+is no evidence; only another task let in while the pair was kept out), adds the pair's yield of its
+turn, paces every later climb of a stretch, stops the climbs after the game's update dialog and
+reads the lease end's question in memory ("Fix round 3" below); where an earlier rule below says
+otherwise, fix round 3 decides. Fix round 4 removes the judgement itself: no failure at the
+entry counts against its rule; a pair that keeps failing at its entry waits a growing interval
+and is set aside for its window with a person told, and the emulator is restarted at most once
+in a stretch ("Fix round 4" below); where an earlier rule says otherwise, fix round 4 decides.
+
+**What happened** (v0.12.75). A package left a game on a screen no package knows. Every task due
+after it failed at its entry (`contained_task_page_unknown`, 0 steps of its main package): such a
+failure never accumulates, so its identity's `F` was unique, its streak 1, and the immediate rerun
+(R22) dispatched it again within seconds until its runs of the day were spent (the counts are taken
+at admission); a rule whose `escalation_threshold` is 1 was paused by one such failure; the fact
+refresh failed too; and once the runs were spent nothing failed, so nothing triggered a recovery,
+and one instance stood still for two hours.
+
+**What it rests on** (read in the code of `f3d39bbd`; the study's references are of `960406f0`).
+The study's references hold as given (`failure_accumulates` 198-211; the streak and disposition
+`policy_control.rs` 1516-1582; `immediate_retry_pairs` 2020-2082; the condition refund 1893-1899;
+`run_gated` 316, `gate_layer` 348, `close_open` 616-644; `ladder_at_lease_end` 1658-1761;
+`application_update.rs` 58, 92), with two corrections: the cool-down's suppression no longer only
+drops the ladder (AVAIL-1 holds it for an instance unavailable by its self-check), and "scope not
+`main`" alone misses the home entry's preflight of a `linear_steps` run without a chain, which
+"Scope and step" counts as `main` although the main package has not started. The live settlement
+already reads the run's own rows for the identity (`failure_rows`), so the entry failures are told
+from what the settlement has: no ledger member is needed (the work order's first stop condition
+does not hold). The condition path gives the admission back (`refund_admission_counts`), and a run
+whose main package executed no step never ran its task, so no task runs more often than its
+`daily_limit` (the second does not hold). The block is a gate of the policy evaluation only: a
+ladder's rung runs, a client's and the Lab's runs are no scheduled candidates (the third does not
+hold; the replay test runs a client's run on a blocked instance).
+
+**The rule.**
+1. *Which failures* (`failure_settlement.rs`, `failed_at_entry`): a scheduled run whose main
+   package was admitted and chain resolved, that checked its entry (a gate: a prerequisite chain or
+   a page-graph entry check; or an `EntryRecoveryDecision` of the home entry's preflight) and never
+   started its main package (no `EntryTargetDisposition` `Started`), whose failure does not
+   accumulate, and that the instance's ladder takes at the task stage by the rule the lease end
+   reads (`task_trigger_item`, one function for both). Scopes `gate`, `pre:<I>` and the home entry's
+   check and recovery package. Codes, with the shipped triggers: class `pack_logic_mismatch` met
+   there (`contained_task_page_unknown`, `contained_task_recognition_failed`,
+   `contained_task_home_entry_not_matched`, `contained_task_home_recovery_binding_missing`, a layer's
+   `page_confirmation_failed`, `contained_task_linear_intermediate_unobserved`,
+   `contained_task_step_unconfirmed`, `contained_task_guard_refused`, …) and the item
+   `task_capture_backend`'s four codes; the exclusions keep `contained_task_prerequisite_*` and
+   `contained_task_return_home_entry_unmatched` out. No code is named in the decision. (Fix round
+   1 replaces the last condition and lets those codes in: "Fix round 1" below.)
+2. *Settlement* (`policy_outcome.rs`, `PolicyControlState::entry_condition`): when no configured
+   condition ended the run, its record carries `condition` {`refunded` true, `count` 1, the window's
+   end}; no streak, no escalation, `continue`, no retry (R22 does not rerun it), no pause whatever
+   `escalation_threshold` says, the four counts given back, no runtime counted, no rerun owed (the
+   pair's owed rerun stays as it was). The identity's `F` is `i` and the unique digest
+   (`IdentityFrame::Entry`, `entry_identity`); `policy_control::entry_blocked` reads condition and
+   mark from the record, so a replay owes no rerun and never reads the configuration.
+3. *The block* (`host/entry_blocks.rs`; `entry_block.rs`; position 4b): set by the settlement under
+   the policy outcome gate, read by the evaluation under it; every candidate of the instance (the
+   fact refresh included) waits `instance_entry_blocked`, and the round's settled candidates too
+   (`InstanceHolds`). Ended by a ladder `recovered` or `environment_ready`, any run on the instance
+   that succeeded (`append_contained_task_terminal`), a resume of the instance or the global one
+   (`requests.rs`), a restart (memory only). A scheduled run's start keeps the instance's marks, so a
+   recovery or a run that succeeded before the settlement leaves no block, and a recovery that
+   already failed raises the attention with it. The idle plan counts the deferral due: no idle action
+   closes a blocked instance.
+4. *The way out.* The lease end entered the ladder; nothing of the ladder changes. A ladder its
+   cool-down suppressed is held with the block (or kept for the failed run's settlement, by the run
+   its trigger names) and admitted at the cool-down's end by `take_up_entry_recoveries`, the lease
+   sweep's step after AVAIL-1's probes, through AVAIL-1's `admit_held_recovery` (since its fix
+   round, a request id, a causation id, a holder and a claim request of its own) and `probe_hold` (a
+   pause, a fence or an idle stop drops it, a blackout makes it wait); as AVAIL-1's release does
+   since its fix round, the step reads the instance's cool-down window in force again
+   (`cooldown_window_until`) and keeps the recovery held until a later window's end. When AVAIL-1
+   holds it for an unavailable instance, AVAIL-1's probe takes it up; a probe that passes, or any
+   other way out of the unavailable set, hands it to the instance's entry block when it is
+   entry-blocked (`track_unavailability` calls `hand_over_held_recovery`) instead of dropping it, so
+   an instance that was unavailable and entry-blocked still has its recovery coming once it is
+   available; for any other instance it is dropped as AVAIL-1 drops it. A ladder that ends `exhausted`, or one a
+   blackout or an admission refusal drops, leaves the instance blocked and raises
+   `instance_entry_blocked_awaiting_person` once per block (AVAIL-1's way: a warning record and the
+   daemon's log; fix round 1, items 2 and 7, changes both: a blackout or a refusal no longer warns,
+   and a recovery that ended without recovering raises `instance_entry_blocked_recovery_failed`).
+5. *The status* (the constraint of 23:18): no member is added to `RuntimeInstanceStatus` or to any
+   other type a v0.12.75 reader decodes with unknown members refused. The not-running row of
+   `ScheduleExplanation` (`why` with `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms`;
+   `since_unix_ms`) and the candidate rows carry it; the ledger holds the records. An instance both
+   unavailable (AVAIL-1's set, since its fix round also after a failed step of a connection
+   preparation) and entry-blocked answers one reason, `instance_unavailable` (its
+   `availability_source`): the evaluation blocks an unavailable instance's candidates at placement,
+   before it asks the order of the deferrals where position 4b stands, and the instance cannot be
+   dispatched to before a probe or another preparation proves it; once it is available and still
+   blocked its candidates answer `instance_entry_blocked`.
+6. *Whose failure (ENTRY-A2; the coordinator's ruling of 11-20 23:57 JST after the report of the
+   first head, `8f8a260d`).* Production had that day seven rules that fail at their entry or
+   prerequisite from a good home page every time; as conditions they would loop (refunded,
+   blocked, recovered, top candidate again) and hold their instance for ever. The Host keeps in
+   memory, per instance alias and catalog task, a mark: the task's last scheduled run failed at its
+   entry, with the instance's successful recoveries when that run began and the packages its
+   identity names (`EntryBlocks::entry_failed`, `FailureIdentity::packages`; no record, fact or
+   status member; a restart forgets it). A failure at the entry of a marked pair with the same
+   packages, after a recovery of the instance succeeded since the marked run began (a ladder
+   `recovered` or `environment_ready`, `note_entry_recovered`; a resume or a run's success is not
+   one), when (the coordinator's ruling of 11-21 00:22 JST) no other run started on the instance
+   between the latest such recovery and this run's start (`EntryMarks.started`, a count per
+   instance of the runs `begin_contained_run` starts that are not the Runtime's own startup or
+   recovery package's, reset by `note_entry_recovered`), is the pair's own (`entry_failure_own`):
+   evidence against the pair needs it to have started from a recovered instance, at the cost that a
+   pair never first after a recovery keeps meeting conditions, one recovery each. It is written as a
+   failure that accumulates
+   (`own_entry_identity`: `F` the run's error frame or `na`, or the pair's previous identity whole
+   when that one accumulates and has the same prefix; frames not compared) and settles down the
+   ordinary path (no condition, counts kept, `consecutive_same_error` and `escalation_streak`,
+   `retry_scheduled` with the rule's backoff or `paused_task`, the owed rerun ended, R22 as for a
+   step failure once its backoff has passed); it blocks the instance all the same and keeps the
+   mark. Any other failure at the entry is ENTRY-A's condition and sets the mark. A settlement of the
+   pair whose main package started (`EntrySettlement::TargetStarted`, told from the run's rows), a
+   success and a settlement that pauses the pair clear it (`HostShared::settle_entry`); a condition
+   after another run keeps it set. So a pair whose entry is broken is paused after
+   `escalation_threshold` own failures, the first failure of the episode not counted, each attempt
+   costing one recovery; the bound is the threshold (the ruling of 00:22): other tasks run between
+   the pair's attempts only when its rule sets a backoff, and without one R22 reruns it first after
+   each recovery. With the recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0,
+   `escalation_threshold` 2): three runs failing at the entry and three recoveries, the third run
+   pausing the pair. (Fix round 1 writes what orders the pair and bounds it whatever runs first:
+   below.)
+
+**Fix round 1** (the coordinator's work order of 11-21 after the independent review of #1853,
+`rd-1121/review-1853.md`; the rulings are the coordinator's, not the owner's words). It replaces
+rule 1's last condition, rule 4's ends of a recovery and rule 6's evidence, and adds:
+
+1. *The failures production has* (the review's "missed"). The shipped `exclude_codes` name
+   `contained_task_prerequisite_*` and `contained_task_return_home_entry_unmatched`, exactly the
+   failures of the 11-19 storm and of the seven rules that fail daily, so they stayed rerun at once.
+   Now a failure at the entry raised by the run's own entry (its prerequisite chain, its
+   return-home layer, its entry check) is an entry failure whatever the ladder's trigger
+   configuration says of its code. How it is told: by the code's `ladder_class`
+   `pack_logic_mismatch` (those layers judged the screen not what their packages expect; no code is
+   named). Every other failure met at the entry (`environment_fault`: `device_link_lost`, a
+   fence's `instance_resources_fenced`, the capture backend's codes, which its own item
+   `task_capture_backend` takes; a configuration's `declaration_error`) keeps the old third
+   condition, the ladder's configuration with its exclusions. The ladder rules of the instance
+   still decide whether a task-stage ladder may run at all (a physical instance, `stuck_recovery`
+   on): a fixture instance blocks nothing, as before. The block's recovery is the block's own
+   trigger: the lease end, which the exclusion keeps from starting a ladder, prepares the ladder
+   of the run's trigger under the item `LadderConfig::classify_unexcluded` gives (the shipped
+   triggers: `pack_logic`, the rule that takes a page-unknown failure of a task; the rungs as
+   configured) and keeps it for the run's settlement, which takes it as the block's held recovery,
+   due at once, admitted at the lease sweep's next tick (`ladder_at_lease_end`, `task_ladder`,
+   `entry_trigger_item`, `entry_failure_recovered`). No key, rule name or interface revision.
+2. *No block without an end and a person told* (the review's findings 1 and 2), in
+   `append_recovery_ladder_fact`'s reading of the ladder's facts (`entry_effect`),
+   `enqueue_ladder_claim`, the worker's panic branch (`host_claims.rs`), `fence_instance` and
+   `take_up_entry_recoveries`: a recovery a blackout covering the instance suppressed ends the block
+   and is dropped (one a coming blackout stopped is held until its end, and the block ends once the
+   blackout covers the instance; SR-4a3 as it is); a recovery the admission's capacity refusal,
+   `already_running`, a refused claim or a superseded preparation refused stays held and is tried at
+   the next tick (while capacity refuses or another ladder holds the instance the sweep keeps it
+   without trying, nothing recorded), never a failure and never a warning by itself; a recovery
+   that ended `exhausted` or whose worker panicked tells a person once per block
+   (`instance_entry_blocked_recovery_failed`, item 7); a fence ends the block and drops its
+   recovery; and a block that lasted `scheduling.unavailable_probe.attention_after_ms` tells a
+   person once per block whatever holds it (`instance_entry_blocked_awaiting_person` with
+   `elapsed_ms` and `limit_ms`; the one key serves AVAIL-1 and the entry blocks). The block counts
+   only its own recoveries' failures (`EntryBlock::recoveries`, the trigger correlations of the
+   blocking runs and of the recoveries it held), and a scheduled run's own recovery that failed
+   before its settlement (`EntryBlocks::unrecovered`, by the run); a recovery held for a run whose
+   settlement is to come is kept by the run (`EntryBlocks::cooled`, by run, only while the run is
+   `settling`), never for a direct run's ladder (`PendingRecoveryLadder::task_run`, its new
+   `scheduled_run`).
+3. *Store update tasks* pass position 4b as they pass 4a (`policy_host.rs`, `entry_block::hold`):
+   an instance whose game asks for an update fails every entry; that task's success ends the
+   block as any run's does.
+4. *ENTRY-A2's evidence*: only a ladder that ended `recovered` counts (`environment_ready` ends the
+   block, no evidence); "nothing ran first" also counts every key of the instance granted to a
+   person's or a client's claim (a client's lease, a Lab operation's, an input lifecycle's; a direct
+   run's is counted once at its run's start; `grant_prepared_lease_with_links`); an own failure's
+   identity carries the game root's data files `g` when the game has a standard-pack root; and the
+   bound: the mark counts the pair's failures at the entry in a row settled as conditions since it
+   last started its main package, and once they reach its rule's `escalation_threshold`
+   (`PolicyHost::dispatch_escalation_threshold`, the dispatch's catalog generation) every later
+   failure at the entry after a recovery that ended `recovered` is the pair's own, whatever ran
+   first. Worst case with the recommended `on_failure` (`retry_limit` 1, `retry_backoff_ms` 0,
+   `escalation_threshold` 2), the pair not assumed first: paused by its fourth failure at the entry,
+   each after a recovered ladder (two conditions, two own failures with one identity); a failure
+   after an unblocking that was no recovery is a condition that costs no own count and needs a
+   person or another run each time. What orders the pair after the block is the evaluation's
+   allocation order, the activity's interval and each rule's trigger and cooldown, not the failure.
+   All in the Host's memory.
+5. *The production path tested*: the replay F5 settles the second failure at the entry through
+   `failure_settlement.rs` (the marks its run's start read before `begin_contained_run` counted it,
+   the real error frame, the previous identity), which fails if the count were read after the
+   increment.
+6. *On #1852's second fix round* (merged with main `7dbbf9f0`): an instance leaves AVAIL-1's set
+   at the gate's decision with no probe in flight, at a probe's start that does not run, and at a
+   probe's settlement; at each, a recovery held with it goes to its entry block when it is
+   entry-blocked (`leave_held_recovery`, `hand_over_held_recovery` returning it otherwise) and is
+   then not recorded as dropped; for any other instance AVAIL-1's drop and its record are
+   unchanged. A held recovery replaced (`hold_cooled_down_recovery`) or dropped by a pause, a fence
+   or an idle stop is AVAIL-1's as on main. A recovery ladder whose worker panics is noted beside a
+   panicked probe, its failure kept and returned after the panic's record, as the probe's is.
+7. *One code, one cause* (the coordinator's ruling of 11-21 02:02 JST, after the fix round's
+   first report): the two ways a block comes to a person are two codes. The catch-all keeps
+   `instance_entry_blocked_awaiting_person`, its `elapsed_ms` and `limit_ms` now required; a
+   recovery of the block that ended without recovering raises `instance_entry_blocked_recovery_failed`
+   with how it ended (`entry_recovery_end`, a new vocabulary: `exhausted`, `worker_panicked`) and
+   the trigger item the ladder was admitted under (`trigger_rule`, when it had one): the Runtime
+   has stopped trying, a person looks at the instance. Each is raised at most once per block, when
+   its own condition first holds (`EntryBlock::recovery_failed` beside `awaiting_person`;
+   `EntryBlocks::unrecovered` keeps how the run's own recovery ended); a block may raise both, in
+   the order their conditions came ([policy-suspension.md](policy-suspension.md), "Both"). The
+   panic branch passes `worker_panicked`, the ladder's finished fact `exhausted`
+   (`note_entry_recovery_failed`, `PendingRecoveryLadder::rule`). Nothing else changes.
+
+**Fix round 2** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix2.md`, after
+the second independent review of #1853, `rd-1121/review-1853-fix1.md`; the rulings are the
+coordinator's, not the owner's words; where one changes an earlier ruling it says so). The harms
+kept out: an instance left blocked with nothing to end it, a healthy rule paused for another's
+fault, a ladder started where the configuration deliberately excluded one. It replaces fix round
+1's item 1 for other classes, item 2's end of a recovery, item 4's evidence and bound, and item
+7's "the Runtime has stopped trying":
+
+1. *What a failure at the entry is* (the review's first finding). Only a failure whose code's class
+   is `pack_logic_mismatch` (`entry_class`, `ladder_class_of`; no code named). The branch of
+   `entry_trigger_item` that asked the triggers for other classes is gone: a code of any other class
+   met at the entry (the capture backend's four, which `task_capture_backend` takes; the device
+   link's; a fence's; a configuration's) sets no mark, blocks nothing, refunds nothing and is
+   settled exactly as before ENTRY-A, its ladder the one its trigger item starts at its lease end.
+2. *Where a block's recovery starts* (taken from ENTRY-B). A block set while no run's main package
+   has started on the instance since the instance's previous block ended climbs from the first rung
+   that restarts the application; any other block (the first since the Runtime started, one after a
+   run got in) from its trigger item's start, as configured; rungs with no such kind as configured.
+   Such a rung is told by its kind: `RungConfig::action` is `application_restart` or
+   `emulator_restart` (`restarts_application`, `PendingRecoveryLadder::start_at_application_restart`,
+   which raises `start_rung` to its position in the rungs the instance climbs, keeping a later start
+   the item names). The Host counts per instance the runs whose main package started, as their
+   settlements tell (a scheduled run's success or a failure past its entry, `EntryBlocks::let_in`),
+   and the count when the instance's block last ended (`ended_let_in`); a block set when they are
+   equal climbs from the restart (`EntryBlock::restarts`). The lease end of the failure that will
+   set it knows it already (`lease_end_restarts`: the code's class, the instance's state, then the
+   run's own records as the settlement reads them, `scheduled_run_failed_at_entry`), so a ladder it
+   admits at once starts there too; a held one is started there when the sweep takes it up. A
+   client's or the Lab's run is not settled by the policy and is not counted as let in.
+3. *Evidence* (changes fix round 1's item 4). Only a ladder that ended `recovered` and in that climb
+   ran a rung that restarts the application (`RungsTried::restarted`, passed with the climb's end,
+   `ClimbEnd`, `append_ladder_fact_as`) is evidence: `note_entry_recovered(restarted)` counts it in
+   `EntryBlocks::recovered` and resets the runs counted since. A `recovered` at the return-home
+   rung ends the block and is no evidence; `environment_ready` stays no evidence.
+4. *The bound* (the review's second finding). (a) A pair's conditions in a row do not outlive the
+   activity window they were settled in: the mark keeps the window's end its conditions expire at
+   (the end `condition_window_end` gives the dispatch's admission, the `expires_at_unix_ms` its
+   records carry; `PolicyHost::dispatch_window_end`, `PolicyControlState::admission_window_end`),
+   and a mark of another window counts for nothing, so the next failure at the entry counts from one
+   (it is a condition). (b) The bound's proviso: the conditions in a row reached the rule's
+   `escalation_threshold`, and since the pair's previous failure at the entry either a ladder of (3)
+   ended or another run's main package started on the instance (`EntryMarks.let_in`). Worst case
+   within one window, the pair not assumed first: with the recommended `on_failure` (`retry_limit`
+   1, `retry_backoff_ms` 0, `escalation_threshold` 2) paused by its fourth failure at the entry (two
+   conditions, two own failures with one identity), each own one after an application restart that
+   recovered the instance or another run let in; by its third when it is first after such a
+   recovery. A rule whose threshold is 1 is paused by its second failure at the entry in a window at
+   the most, only when between the two an application restart recovered the instance or another
+   run's main package got in; a rule failing once a day is a condition each day.
+5. *A recovery that ended without recovering* (changes fix round 1's item 2). `exhausted`: the
+   person is told once per block as before, and the block tries again by itself
+   (`EntryBlock::recovery_ended`): its next climb, from the application restart, is held until the
+   wait `scheduling.unavailable_probe` gives the block's n-th exhausted climb (`interval_ms`:
+   `first_interval_ms`, times `factor`, at most `max_interval_ms`) counted from that climb's end,
+   and never before the instance's cool-down window ends whatever its item says of the window
+   (`HeldEntryRecovery::retry`); and so on while the block lasts; the warning carries the earliest
+   time (`next_occurrence_unix_ms`, an existing key). `worker_panicked`: no further climb in that
+   block (`EntryBlock::panicked`), the person told, as AVAIL-1's probe after a panic. A climb a
+   holding interruption ended (`finish_interrupted_ladder`: a pause, business capacity, a drain, a
+   shutdown, an update dialog's end of a rung's run) is no such end: it is held again, no person
+   told, and not taken up before the cool-down window its climb opened ends
+   (`hold_interrupted_entry_recovery`, `EntryEffect::Interrupted`), so an obstacle that ends every
+   climb does not start one after another; while a pause or an idle stop owns the instance a held
+   recovery stays held, nothing recorded (fix round 1 dropped it). No configuration key. *What bounds an instance's
+   emulator restarts*: the emulator watch's `emulator_control.restart_attempts` within
+   `restart_window_ms` counts the watch's own restarts only (a person's emulator control clears
+   it); a ladder's `emulator_restart` rung drives the control owner directly, neither counted there
+   nor clearing it. The block's climbs are bounded by their wait and the cool-down window
+   (`recovery_ladder.cooldown_secs`): with the shipped values, at the longest wait two climbs an
+   hour, each recorded, a person told once per block and once per stretch. A night of them uses up
+   no bound and leaves no instance in a state board issue #495 lists (restarts used up, nobody
+   told): the work order's stop condition does not hold.
+6. *The attention* (changes fix round 1's catch-all). It measures a stretch: from the first block
+   since a run's main package last started on the instance (or since the Runtime started) until a
+   run's main package starts there (`EntryBlocks::stretches`, on the Runtime's clock, set at a
+   block when none runs and ended by `note_let_in`); blocks that something ended and that came back
+   with nothing let in are one stretch; `instance_entry_blocked_awaiting_person` once per stretch,
+   `elapsed_ms` the stretch's length. Under a person's pause it does what AVAIL-1's attention does
+   for an unavailable instance (`probe_unavailable_instances`): nothing is raised while a pause (the
+   instance's or the global one), a fence or an idle stop owns the instance (`ProbeHold::Owned`),
+   and the clock runs on, so it is raised at the first tick nothing owns it; the same here. Measured
+   on the Runtime's clock since this round: fix round 1 measured a block from its execution record's
+   time, which a dispatch admitted at an evaluation's time can put on another clock (the red
+   replays of fix round 1).
+7. *A claim the queue refuses* (the review's "could", raised). Tried again no more often than
+   once a second at first, the interval doubling to at most once a minute, while the block lasts
+   (`hold_refused_entry_recovery`, `claim_retry_wait_ms`, the block's `refusals`); its
+   `runtime.failed` lifecycle record written when it first occurs in a block and when its cause
+   (the refusal's code) changes, none per retry. Each try is a claim request of the queue, whose own
+   `lease.requested` and `scheduler.denied` stay (two records a minute at the longest interval). The
+   other transient refusals are judged before anything is recorded: business capacity and another
+   ladder by the sweep before it tries (the same `admit_capacity` the admission asks); a held
+   preparation's ladder is admitted naming the instance's latest preparation, so a supersession is
+   not met again; a pause now holds a recovery without trying. None records per tick.
+8. *What "ran first" counts* gains the keys granted to a person's emulator control and to the
+   automatic start (`ClaimKind::EmulatorControl`, `ClaimKind::Autostart`, in
+   `grant_prepared_lease_with_links`).
+9. *A held recovery let go when its block ends is recorded*: `EntryBlocks::end` returns it and
+   `record_dropped_entry_recovery` writes AVAIL-1's record for every recovery it drops
+   (`record_dropped_held_recovery`: the trigger's `recovery_ladder_suppressed` `cooldown` once more,
+   under the ladder's links, `until_unix_ms` the time it was held to).
+10. *A blackout* ends a block at the lease sweep's tick whatever its recovery is doing (fix round 1
+   ended only a block holding a recovery there), so the contracts' sentence holds as written.
+
+**Fix round 3** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix3.md`, after
+the third independent review of #1853, `rd-1121/review-1853-fix2.md`; the rulings are the
+coordinator's, not the owner's words). Three reviews each found a way in which "a recovery
+succeeded, so the next failure at the entry is the pair's own" paused a healthy rule (a return home
+that mended nothing; an application restart whose startup package reaches its page while every
+feature still refuses; an instance with no startup package), and two ways an instance is restarted
+every ten minutes through a night (a climb the game's update dialog ends; blocks that follow one
+another with nothing let in). The harms kept out: an instance left blocked with nothing to end it
+and nobody told; a healthy rule paused for another's fault; a ladder started where the
+configuration excluded one; an instance or its emulator restarted again and again for nothing.
+
+1. *Evidence* (replaces rule 6's evidence, fix round 1's item 4 and fix round 2's items 3, 4 and 8).
+   A scheduled run's failure at its entry is the pair's own only when both hold: (a) the pair's
+   previous scheduled run failed at its entry too (its mark), with the same packages, in the same
+   activity window; (b) between those two failures another scheduled run was let in on the
+   instance: its settlement was a success, or its main package started after an entry check it
+   passed (`EntrySettlement::TargetStarted { entered }`, `failure_identity::entry_passed`; a run
+   whose package checks no entry starts its main package whatever the screen and proves nothing of
+   it unless it succeeds). The mark keeps the count of such runs at its failure's settlement
+   (`EntryFailureMark::entered`), and the judgement compares it with the count at the next
+   failure's (`EntryBlocks::entered`, `HostShared::entry_failure_own`), both under the policy
+   outcome gate. Any settlement of the pair's run that is not a failure at the entry clears the
+   mark. Removed with what only served the old evidence: the recovery count (`EntryMarks.recovered`,
+   `EntryBlocks::recovered`, `note_entry_recovered`'s count, `RungsTried::restarted`,
+   `ClimbEnd::restarted`, `EntryEffect::Recovered`), the count of runs started and keys granted
+   (`EntryMarks.started`, `EntryBlocks::started`, `note_entry_run_started` and its calls in
+   `begin_contained_run` and `grant_prepared_lease_with_links`, which `lease.rs` no longer touches),
+   the conditions in a row (`EntryFailureMark::conditions`) and the bound
+   (`PolicyHost::dispatch_escalation_threshold`); the test seams `start_run_for_test` and
+   `entry_runs_started_for_test`; their tests (below) and their contract text. What the pair's own
+   failure does is unchanged.
+2. *The pair yields its turn* (new). After a block ends (`EntryBlocks::end`), the pair whose failure
+   at the entry set it (the block's gate) yields its turn on the instance (`EntryBlocks::yielding`,
+   read with the blocks under the policy outcome gate, `EntryBlockGates`, handed to the evaluator
+   as `InstanceHolds::yield_turn` by `entry_block::hold`). The evaluator moves its candidate behind
+   the last other candidate of its instance in the allocation order, every other candidate keeping
+   its order (`yield_turns`); on a device of several it is no contender while another candidate of
+   its member contends (`Contenders::yields`). When a candidate that ranked behind it took the
+   instance it waits `instance_entry_yielding` (new code, info, its one cause: this yield), no wake,
+   a fact refresh naming it as its gate (`hold_unasked` of the yield's hold). The yield ends when a
+   run of another task starts on the instance (`entry_settlement_pending`) or is settled there
+   (`settle_entry`). No rule that orders tasks changed: it is the one new rule, applied to the
+   yielding pair alone.
+3. *Every later climb of a stretch is paced* (replaces fix round 2's item 5's wait). A stretch runs
+   from the instance's first block since a run was last let in (a scheduled run let in as in 1, or
+   a run there that is not the Runtime's own and succeeded: `note_entry_success`, called by
+   `append_contained_task_terminal` with the run's control's host mark) until the next such run;
+   `EntryBlocks::let_in` counts both. Its climbs that ended (`recovered`, `environment_ready`,
+   `exhausted`, the update dialog, a holding interruption: `note_entry_climb_ended_block`,
+   `note_entry_recovery_failed`, `hold_interrupted_entry_recovery`; a panicked worker's not) count
+   in `Stretch::climbs` with the latest end; a climb of a scheduled run's own recovery that ended
+   before its settlement, with no stretch to count it in yet, is counted by the block that
+   settlement sets (`FailedEntryRecovery::counted`, `HeldEntryRecovery::climbed`). Every later climb
+   is due no sooner than `scheduling.unavailable_probe`'s interval for the stretch's climbs from the
+   latest end (`Stretch::paced_until`) and never before the cool-down window ends
+   (`take_up_entry_recoveries`); the lease end of a failure whose climb would be a later one admits
+   no ladder and holds it (`ladder_at_lease_end`, `EntryClimb::paced`). A person's pause holds every
+   climb and its lifting ends the block, as before; a panicked worker: no further climb in the block,
+   as before. The night under the shipped values: six climbs in the stretch's first hour (about 0,
+   10, 20, 30, 40, 58 minutes), one in the second (about 1:30), two an hour after, some twenty in
+   eight hours ([policy-suspension.md](policy-suspension.md), "A night of a condition nothing
+   mends"); none uses up the emulator watch's bound.
+4. *The application's update dialog.* A rung's run the game's update dialog ended
+   (`ClimbEnd::UpdateDialog`, passed by UPD-1's existing branch through
+   `finish_interrupted_ladder_as`; no code compared anew) ends the climb as before and no longer as
+   an interruption: `EntryEffect::UpdateDialog` tells a person once
+   (`instance_entry_blocked_recovery_failed` with the new word `update_dialog` of
+   `entry_recovery_end`, which is this slice's and unreleased; one code, one cause stays "the block's
+   recovery ended without recovering"), lets a held recovery go (recorded) and stops the stretch's
+   climbs (`Stretch::update_dialog`). The store update task passes the block and its success ends
+   it. Without such a task in the catalogue the instance stays blocked (position 4a holds it too),
+   nothing touches the device again, and the stretch's attention tells the person again after an
+   hour; a person's update and run, a resume or a restart ends it.
+5. *Where a block's ladder starts* (fix round 2's item 2) stays, with "let in" as 3 defines it, so a
+   client's or the Lab's successful run starts the next block as configured.
+6. *The read at the lease end.* `scheduled_run_failed_at_entry` (a read of the run's records under
+   the instance's admission lock, unbounded, fatal on failure) is gone. `scheduled_run_at_entry`
+   decides from memory only: the run's scheduled resolution (its chain resolved, layered, linear)
+   and its entry facts as its control noted them when they were recorded
+   (`ContainedRunControl::note_entry_fact`, `RunEntry`, carried by `LadderTrigger`), the code's
+   accumulation judged outside the restart segment, so it never says "at the entry" of a failure
+   its settlement settles otherwise. No ledger is read there, so no bound and no failed read exist.
+7. *A held recovery replaced is recorded* (`EntryBlock::hold`, the cool-down's, the refused
+   claim's, the interrupted climb's and AVAIL-1's hand-over to a block, and the run's held one taken
+   by its block; a replacement in `cooled` too): AVAIL-1's record of a dropped recovery.
+8. *Tests*: below.
+9. *Texts*: [policy-suspension.md](policy-suspension.md) ("A failure at the entry": four harms,
+   "Whose failure", "The pair yields its turn", "The worst cases", "Where a block's recovery starts
+   and when", "The way out"), [scheduling-blackout.md](scheduling-blackout.md) (after 4b),
+   [scheduling/README.md](scheduling/README.md) (the failure paragraph; "Order within one device",
+   the contenders), [standard-pack-schedule.md](standard-pack-schedule.md),
+   [runtime-interface.md](runtime-interface.md), the catalogue (the new code, the word, the three
+   codes' texts). The worst cases: with the recommended `on_failure` a pair is paused by its third
+   failure at the entry in a window at the earliest, with a threshold of 1 by its second at the
+   earliest, each time only once another scheduled run got in between; in a condition nothing mends
+   no rule is paused however long it lasts.
+
+**Fix round 4** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix4.md`, after
+the fourth independent review of #1853, `rd-1121/review-1853-fix3.md`; the rulings are the
+coordinator's, not the owner's words). Four reviews tightened the evidence by which a failure at
+the entry was judged the pair's own, and each found a way a healthy rule was paused for another's
+fault (the last: a task that leaves the game on a screen no return home can leave, a store update,
+two broken pairs taking turns). The fault was in the consequence: such a failure fed the rule's
+streak and `on_failure`, and the pause lifts only when the package's content changes. This round
+removes the consequence. The harms kept out: an instance left blocked with nothing to end it and
+nobody told; a rule paused, or kept from running beyond its window's end, by failures at its
+entry; a task that never runs again; an instance or its emulator restarted again and again for
+nothing.
+
+1. *No failure at the entry counts against its rule* (replaces fix round 3's rulings 1 and 2 and
+   every earlier ruling on a pair's own failure). Every failure at the entry (as the slice defines
+   it) settles as a condition: no streak, no `on_failure`, the admission given back, the instance
+   blocked and recovered as before. Removed: `EntrySettlement::AtEntry`'s `own`,
+   `HostShared::entry_failure_own`, the own failure's identity (`own_entry_identity` and the
+   settlement's branch that wrote it with `g`), the mark (`EntryFailureMark`, `entry_failed`), the
+   yield (`EntryBlocks::yielding`, `note_task_run`, `EntryBlockGates`' yields,
+   `InstanceHolds::yield_turn`, `yielding`, `YieldingTask`, `yield_turns`, `Contenders::yields`: the
+   policy crate is main's again), the code `instance_entry_yielding` (unreleased), the test seams
+   `entry_mark_for_test`, `entry_yielding_for_test` and `execution_task_id_for_test`, their tests
+   (below) and contract text. The count of scheduled runs let in (`EntryBlocks::entered`,
+   `EntrySettlement::TargetStarted { entered }`, `failure_identity::entry_passed`) stays for item 3
+   alone.
+2. *The pair waits longer each time* (new). `EntryBlocks::pairs`, by instance and catalog task:
+   the packages the latest failure's identity names, the window its admission was in, the
+   failures at the entry in a row (`EntryPair::in_a_row`) and the time before which the pair is not
+   dispatched on the instance: `scheduling.unavailable_probe`'s `interval_ms(n)` for the n-th
+   (`EntryPair::interval_ms`) after the latest failure's observation time (`EntryBlocks::pair_failed`,
+   from `settle_entry` under the policy outcome gate), and since the coordinator's addition (below)
+   after the end of the block that failure set and of any later block of the instance
+   (`EntryBlocks::end`). The evaluation reads the pairs with the
+   blocks (`entry_block_gates`, `EntryPairGate`) and defers the pair's candidate at position 4b,
+   after the block, with `instance_entry_task_waiting` (new code, info; `count`,
+   `next_eligible_unix_ms`) and a wake at its end, never past the window's end
+   (`EntryBlockGates::pair_deferral`, called in the eligibility closure of `policy_host.rs`). The
+   count starts again when a scheduled run of the pair settles any other way, in another window,
+   with other packages (compared at the next failure), at a restart, at a store update task's
+   success on the instance (item 5), and at a catalogue's activation (the addition, below). No
+   rule that orders tasks changes: it is a deferral of
+   one candidate, which wakes.
+3. *Set aside for the window* (new). The failures that came although the instance had let another
+   scheduled run in since the pair's previous failure at the entry (`EntryPair::against`: the
+   instance's `entered` now above the one the previous failure kept). When they reach the rule's
+   `on_failure.escalation_threshold` (`PolicyHost::dispatch_escalation_threshold`, the dispatch's
+   catalog generation; the catalogue requires one of every task, 1 to 1000, and `standard-pack
+   adopt` writes the neutral `{pause, 1, 0, 2}` where a decision gives none, so 2; `u16::MAX`, never
+   reached, when the generation holds no such task) the pair is set aside until the window's end:
+   its candidate waits `instance_entry_task_set_aside` (new code, info; `count`, `limit_count`,
+   `window_end_unix_ms`) and wakes then, and a person is told once by
+   `instance_entry_task_set_aside_reported` (new code, warning; a `runtime.failed` record under the
+   instance with the same values, `record_entry_set_aside`). A pair whose window is unknown is never
+   set aside, so nothing this round adds keeps a pair from running past its window's end. Nothing
+   else follows. The worst cases ([policy-suspension.md](policy-suspension.md), "The worst
+   cases"; since the coordinator's addition, below): a broken first-sorted pair with a healthy task
+   due fails at about 0 minutes, the healthy task gets in when its block ends (about 2), and the
+   pair is set aside at its second failure (about 3 minutes) under a threshold of 1, at its third
+   (about 14 minutes, after the next block, held by the cool-down window, ends at about 12 and the
+   healthy task gets in again) under the recommended `on_failure` (threshold 2); alone on its
+   instance it is never set aside under either, failing at about 0, 3, 14, 26, 40 and 58 minutes,
+   then about every 32 (about fifty failures in a day's window, each a given-back run, a block and
+   a paced climb from the application restart); every task failing at its entry for hours sets
+   nobody aside under either, and each pair runs again within thirty minutes of the end of the
+   block that ends the condition.
+4. *The emulator at most once in a stretch* (the review's "could", raised). `Stretch::emulator_restarted`,
+   set when a ladder of the stretch (`counts_climb`) is about to run the rung that restarts the
+   emulator (`note_entry_emulator_restart`, before `recovery_emulator_restart`); a scheduled run's
+   own ladder that gets there before its settlement set the stretch is noted by the run
+   (`EntryBlocks::emulator_runs`) and the block that settlement sets takes it. A later climb of the
+   stretch is marked (`PendingRecoveryLadder::skip_emulator_restart`, from `EntryClimb::skip_emulator`
+   at the lease end and from the stretch at the sweep's take-up) and does not run the rung: it
+   records the rung's `recovery_rung_finished` `skipped` with the outcome
+   `recovery_rung_skipped_emulator_restarted_in_stretch` (new code, info), its plan listing the rung
+   `pending` as a plan drill's does, and ends after the application's restart. No skip reason word
+   is added: `RecoveryRungSkipReason` is a closed vocabulary of a persisted record that a v0.12.76
+   reader would refuse a new word of, which would move `ledger`. A new stretch may restart the
+   emulator once again. The night of a condition nothing mends, shipped values: climbs at about 0,
+   10, 20, 30, 40 and 58 minutes, one in the second hour (about 1:30), then two an hour; the first
+   climbs as configured (the return home, the application's restart, the emulator's restart: the
+   night's one), every later one starts at the application's restart (the game stopped and started,
+   the startup package run) and ends there.
+5. *A store update task's success* (`EntryRule::store_task`, `PolicyHost::is_store_task`, UPD-1's
+   remedy table) raises no `entered` (it still lets a run in for the stretch, as before) and starts
+   every pair of the instance from nothing. It still ends the block and the stretch.
+6. *A staged recovery let go at the settlement is recorded* (the review's third must): a recovery
+   held for the run (`cooled`) when the settlement does not block the instance, and when the block
+   was ended during the run (`block_instance_entry`'s early return), goes to
+   `record_dropped_entry_recoveries` as every other drop does.
+7. *The gate tests' wait* (the review's first must): the gate file's one channel wait takes
+   `GATE_WAIT` (120 s, as `gate_480_pg2b`'s); it reads no clock and sleeps nowhere
+   (`gate_tests_are_deterministic`). The outcome guard's G2 (`finish_interrupted_ladder_as`'s
+   string `reason`, fix round 3's, which CI's `light` also refused) takes the interruption's outcome
+   instead (`cause`), built by `rung_reason_outcome` as its neighbour does.
+8. *Tests*: below. The red tests of fix round 3's head: `entry_r3_a` read the held recovery's due
+   time after the lease sweep's own tick could already have moved it to the cool-down window's end,
+   which the window asks anyway (the test's expectation was wrong, the code's wait right: the
+   effective time is the later of the paced time and the window); `entry_k1_b` read a hold the
+   sweep had already taken up (its paced time long past) and goes with item 1; `entry_k2_b`
+   recorded a second catalogue's approval under the fixture's one approval id
+   (`approval_target_identity_conflict`, the test's own fixture) and goes with item 1.
+9. *Texts*: [policy-suspension.md](policy-suspension.md) ("A failure at the entry": the harms,
+   "Settlement", "No failure at the entry counts against its rule", "A pair that keeps failing at
+   its entry", "The worst cases", "The emulator at most once in a stretch", the night, the
+   emulator's restarts, "Status"; the identity's `g` and `F` rows; R22),
+   [scheduling-blackout.md](scheduling-blackout.md) (4b), [scheduling/README.md](scheduling/README.md)
+   (the failure paragraph, the receipt, "Order within one device" back to main's),
+   [standard-pack-schedule.md](standard-pack-schedule.md), [runtime-interface.md](runtime-interface.md),
+   [emulator-control.md](emulator-control.md) (the skip), the catalogue (the four new codes, the
+   removed one, `instance_entry_blocked`'s text) and the stale texts the review lists
+   (`failure_identity.rs`, this section's cells, `codes.rs`'s test spellings).
+
+**The coordinator's addition to fix round 4** (11-21, before the fifth review; the coordinator's
+words, not the owner's):
+
+1. *The pair's wait runs from the end of the block its failure set* (whatever ends it), so the pair
+   is kept out for its interval after the instance can be dispatched to again: with a healthy task
+   due, the healthy task runs first after the first block ends, and the pair's second failure
+   already counts against it. `EntryPair::interval_ms`; `EntryBlocks::end` takes the time the block
+   ends (`end_entry_block`, `note_entry_success`, `note_entry_climb_ended_block`) and sets every
+   pair of the instance to wait at least its interval from then. That reaches beyond the words in
+   one case: a pair whose wait passed during a later block (another pair's) waits again from that
+   block's end. Without it two broken pairs take turns at each block's end, each one's wait having
+   passed during the other's block, while a healthy task waits the whole window: nothing is ever
+   let in, so neither is ever set aside. A failure that set no block (`block_instance_entry`'s
+   early return) waits from its settlement until a block ends, as before. Never past the window's
+   end.
+2. *A catalogue that becomes active frees the pairs* (`clear_entry_pairs`, from
+   `switch_policy_catalog` once the new catalogue is published: an activation, a rollback,
+   `standard-pack adopt`'s): comparing each pair's packages there would mean measuring every task's
+   packages at the switch, more than a few lines, so every pair of every instance (the host's one
+   active catalogue serves them all) starts from nothing, its count, its wait and its being set
+   aside. Blocks and stretches stay. A failure here, after the transition is committed, stops the
+   Runtime, as the switch's other steps do.
+3. *Tests*: M2 renamed and rewritten (the healthy task runs before the pair's second attempt), M3
+   (a) to (c) with blocks of three minutes (M3 (c): the first pair's wait passes during the second
+   pair's block), K3 (a) rewritten (the first interval an hour, the longest two: a pair's first
+   wait from its block's end and the stretch's first interval would end together), M7 new; the
+   codes' texts (`instance_entry_task_waiting`, `instance_entry_task_set_aside`, their handling),
+   the index checked current; the texts of item 9.
+
+**Fix round 5** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix5.md`, after
+the fifth independent review of #1853, `rd-1121/review-1853-fix4.md`, and CI's `host-lab` on fix
+round 4's head; the rulings are the coordinator's, not the owner's words):
+
+1. *A sensitive task's failure at the entry is a condition too* (`PolicyControlState::entry_condition`
+   no longer excepts it; `preview_paced_settlement` takes a condition of a sensitive task whose
+   identity's `F` is an entry failure's, `input_at_entry`). Its main package did not start, so
+   nothing sensitive was begun; its settlement, block, staged recoveries and pair's wait are any
+   task's. The sensitive rule is not applied, so the record's `sensitive` is `false` (the
+   contract's record check refuses a sensitive record that continues; no member, no word, `ledger`
+   does not move). A rollback to 0.12.76 can stop at its start on such a record: the exact
+   condition, and what a person checks before rolling back, is fix round 6's item 5 below. Other
+   classes stay: a failure at the
+   entry whose policy class is `severe` (a code the Runtime raises only as fatal, or a terminal its
+   failure point marked `failure_severe`) settles as before; of the 68 codes of class
+   `pack_logic_mismatch` none is in the static severe list (`is_severe_policy_failure`, 155
+   codes), and `failure_severe` is set only where the run's error was fatal or poisoned the Runtime
+   (any code: then it pauses at once, as before) and by a linear step that met an unrecorded screen
+   (`contained_task_linear_unrecorded_screen`, raised in the `main` scope only, never at the
+   entry).
+2. *M4* ends its first block with a recovery (the review's point) and awaits each climb's end as
+   the other replays do (`wait_for_ladders_finished`).
+3. *Pairs at the maximum no longer come due together.* (i) `pair_interval_ms`: past
+   `max_interval_ms` one more `first_interval_ms` per further failure in a row (the window's end
+   still bounds it). (ii) `EntryBlocks::let_pairs_go`: the scheduled run let in that raises
+   `entered` (not a store update task's, not a client's or the Lab's) sets every pair of the
+   instance to none in a row and ends its wait at once; `against`, the window, the packages and
+   being set aside stay; a block's end sets no wait on such a pair (`EntryBlocks::end`). No order
+   by which pair failed longest ago, no pair waiting for another.
+4. *A store update task's run is never evidence* (`EntryRule::store_task` whatever the run's end;
+   `settle_entry`): its main package started and it failed counts for the stretch only.
+5. *Found and fixed.* (a) A placement can replace a registered package's files without changing
+   the rules a composition activates (a scheduled run takes its package as the registry places it
+   at dispatch): the workbench's check that finds a package's declaration files changed frees
+   every pair as an activation does (`check_standard_pack_rules`, `clear_entry_pairs`). (b) The
+   start's (and the online) reconciliation settles a run from its terminal with no identity, so a
+   failure at the entry it settles counts against the rule (streak, `on_failure`); not changed in
+   this round: a known gap, below. Fix round 6 (ruling 6) corrects the reason this round gave: the
+   ledger does hold what would tell it (the run's `EntryRecoveryDecision` and whether its main
+   package started, `task.semantic` rows with the run's links, which the live settlement already
+   reads from the ledger); what forbids it is the ledger's rule that a failure settled from a
+   terminal state carries an empty failure identity, so the record cannot carry the mark `~fi`. (c)
+   After an exhausted climb the
+   block's `restarts` is set (`EntryBlocks::recovery_ended`), so every later climb of the block,
+   held, taken up or prepared by a later failure's lease end (a store update task's), starts at the
+   application restart.
+6. *"Told once"* is true again: once per pair and window, and again after an activation, a changed
+   package or a Runtime start cleared the counts (`codes.rs`, the catalogue's text after its first
+   sentence, so the index stays current, the contract).
+7. *Known bounds, not changed.* A broken pair alone is never set aside: about thirty-five failures in
+   a day's window with 3 (i) (fifty before), each a given-back short run, a block and a climb from
+   the application restart, a person told after the stretch's hour. Every catalogue's activation
+   (and since this round a changed package) frees every pair, so a broken pair fails its threshold
+   plus one more times after each. A failure at the entry the reconciliation settles counts
+   against its rule (5 (b)).
+
+CI on fix round 4's head (`848491b2`), the coordinator's addition: `gate_387_d1c`'s cell "the code
+excluded" saw the record of a staged recovery let go at the settlement (fix round 4, ruling 6) of a
+run that started its main package: the lease end now stages the block's own recovery only for a run
+that checked its entry and never started its main package (`scheduled_run_entry_checked`). M1
+admitted `OTHER` two seconds after `TASK`, inside the test configuration's five-second lease the
+settlement hook does not release: every policy-level admission now follows the previous run's
+lapsed lease (`LEASE_LAPSED_MS`). M4 ran out its 120-second wait before the admission the review
+named. host-lab's limits rise to job 60, Test 50 (`.github/workflows/ci.yml`; fix round 6: no
+longer this slice's change, the same limits being main's since pull request #1857, whose file this
+slice takes word for word).
+
+**Fix round 6** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix6.md`, after
+the sixth independent review of #1853, `rd-1121/review-1853-fix5.md`, and CI's `host-lab` on fix
+round 5's head, which finished with M4 and M6 red; the rulings are the coordinator's, not the
+owner's words):
+
+1. *M6 is a wrong test*: with `unchained`, `main`'s entry was one page that is not `home`, with no
+   prerequisite and no phase, so the kernel requires no entry check, the run recorded no entry
+   decision and failed in `main` (CI: `consecutive_same_error` 1, a main identity). `main`'s entry
+   is now the set `{menu}` (as nav3a's `menu_entry_main`): its run checks its entry and uses the
+   bound return-home package there.
+2. *M4 and the slow replays.* M4's 120-second wait that ran out (CI, both heads) was its first
+   `wait_for_ladders_finished`, for the first climb's end and release, before fix round 5's
+   `recover`: that climb ran the instance's startup package twice (the application's rung and the
+   emulator's), and the startup package was the scheduled package `main`, which checks its entry;
+   on the manual clock each run of such a package as a rung's startup package took about a minute
+   or more on CI (K4 with one such run about 61 s, R3 (a) about 108 s, K3 (c) with two about 200
+   s); the same package on the system clock (the first replay) and a startup package that checks no
+   entry (K3 (a), K3 (b), R5 (a)) were fast. Where in the run the real time passes was not located.
+   K3 (c), R3 (a), M4 and M6 now run a startup package that checks no entry (R3 (a) one from `menu`
+   to `shop`, which does not know `done`, so its climb still ends `exhausted`), K4 gate_373_nav6's
+   `away_to_home`, whose direct run meets the update dialog at its first look as UPD-1 A9's does.
+   The test's sequence changed, not the code.
+3. *At a block's end, the other pairs wait a moment* (`EntryBlocks::end`, `EntryBlock::setters`).
+   **As built, not as worded:** the pairs whose failures set the block wait their own interval; a
+   pair whose failure did not set it waits from that end one `first_interval_ms` at most (its own
+   when shorter) when its own interval is longer than the longest interval of the pairs that set
+   it, and its own interval otherwise; a wait still running is never shortened. As worded (one
+   first interval at most for every pair that did not set the block), two broken pairs ahead of a
+   healthy one at the same count take turns ahead of it at every block's end, the other broken
+   pair, whose own wait has passed, coming due with the healthy one a minute later and ahead of it
+   in the evaluation's order, until their own waits outlast a block (about ten failures in a row
+   each; the seventh review: the healthy pair at about 257 minutes in case (b)); three broken
+   pairs take turns for the whole window. (Fix round 7 corrects this item's earlier sentence,
+   which said two take turns for the whole window; it replaces this rule by the turn order, item 1
+   of "Fix round 7".) Built so, the review's case is as the ruling wants it (the
+   healthy pairs, whose intervals are longer than the broken pair's, wait one first interval) and
+   case (b) as round 5 left it. Walk (shipped values, minutes, climbs of about two minutes, the
+   ten-minute cool-down window): (a) the broken pair fails at 30, its block ends at 32, the
+   healthy pairs run at 62 (their thirty minutes are not longer than its thirty-one), the broken
+   pair is set aside at 63 (threshold 1) or 66 (2); (b) the healthy pair runs at 94, the broken
+   pairs are set aside at 95 and 97 (1) or 108 and 117 (2); (c) the healthy task runs at 12, the
+   broken pairs are set aside at 13 and 22 (1) or 33 and 42 (2); (d) unchanged, about thirty-five
+   failures a day; (e) at each block's end the setter waits its own interval and is the last to
+   come due; when the condition ends, a pair whose interval is longer than the last setter's runs
+   a minute later, else the shortest own wait; the review's case (healthy pairs at six and ten in
+   a row waiting thirty and thirty-four minutes from the outage's end at 0, a broken pair with no
+   count first in the order): the broken pair fails at 0 and 33 (its blocks end at 32 and 64), the
+   first healthy pair runs at 65, the broken pair is set aside at 66 (1) or 75 (2).
+4. *The changed package frees the pairs once* (`check_standard_pack_rules`, `PairMarks`,
+   `WorkbenchState::pair_marks`): compared with the marks this comparison kept at the check before,
+   not the composition's (which only a composition that succeeds updates: while one game root
+   failed, or a composition was refused, every check cleared every pair again and a person was told
+   again at each threshold), and before the check's early return; a game whose root failed at a
+   check keeps its last marks; a package the first read registers is compared from that read's
+   marks. Compared, per game in use: `bundle.json`'s length and modification time (the root's index
+   of its packs, verified: it holds each pack's `file_count` and `byte_count`, no digest, and
+   `place` writes it again only when its bytes change, an item whose digest is unchanged being
+   left alone), those of `pages.json`, `interrupts.json` and `navigation.json`, and those of each
+   registered package's `control.json` and `resources/operations/resources.json` (`place` replaces
+   a package's directory whole, writing every file anew, so a placement of a package moves both).
+   Not seen: a change by hand to a package's other files that leaves those two alone, a change of
+   `tables/`, `loading/`, `notices/` or the root's other files, and configured mode (no workbench:
+   only an activation frees the pairs there).
+5. *The rollback sentence is exact* (the contract's "Settlement"): a v0.12.76 Runtime judges
+   whether a task is sensitive by the catalogue generation of the dispatch, not by the record, and
+   refuses a sensitive task's record that carries a condition (`policy_execution_record_mismatch`);
+   at a start with a start mark it compares only the execution records after the decision memory's
+   last value record, and this build writes the pair's value record right after each settlement;
+   a start that replays the whole ledger compares every record. Before a rollback: (1) whether any
+   catalogue generation activated since this version was deployed holds a task with `sensitive`
+   true (none: nothing to check); (2) if one does, whether a `policy.execution_recorded` of such a
+   task whose `failure` carries `condition` and whose `failure.failure_identity` ends in `~fi` and
+   twelve hex digits stands after the ledger's last `policy.control_state_recorded` or
+   `policy.activity_state_recorded`.
+6. *The reconciliation's gap is in the contract* ("Which failures"): a failure at the entry a
+   reconciliation settles counts against its rule, so a rule whose threshold is 1 is paused by it
+   until its package changes; the reason is corrected (fix round 5, 5 (b) above). Not fixed in this
+   slice.
+7. *Texts*: `instance_entry_task_set_aside`'s description and handling, and
+   `instance_entry_task_set_aside_reported`'s handling, name the changed package (a placement)
+   beside the activation; `instance_entry_task_waiting`'s description says what ruling 3 changed
+   (after the first sentence: the index unchanged, checked current); the contract's paragraph about
+   every task failing says what is true after ruling 3.
+8. *`.github/workflows/ci.yml`*: no longer changed by this slice; after the stack merge (item 9)
+   it is the merged side's word for word.
+9. *The stack*: merged with pull request #1858's branch, which holds main with #1857's limits and
+   #1856.
+
+**Fix round 7** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix7.md`, after
+the seventh independent review of #1853, `rd-1121/review-1853-fix6.md`, and the coordinator's
+addition after CI's `host-lab` on fix round 6's head, where P4 and M4 failed; the rulings are the
+coordinator's, not the owner's words):
+
+1. *The order at a block's end is a turn order* (`EntryBlocks::end`; it replaces fix round 6's
+   rule, item 3 above). Rounds 5 and 6 each left a way in which broken pairs take turns ahead of a
+   healthy pair for hours: a rule that decides a pair's wait from intervals alone lets the
+   evaluation's order pick among the pairs that come due together (the seventh review: a broken
+   pair at four in a row first in the order, a second with none and a healthy pair at six, about
+   478 minutes; three broken pairs at two, eight and none ahead of a healthy pair at ten, about
+   1100). Now the pairs whose failures set or renewed the block (`EntryBlock::setters`) wait their
+   own interval from its end; the other pairs of the instance whose count in a row is above none,
+   but a pair set aside (no place, left as it is), are ordered by their latest failure at the entry
+   (`EntryPair::observed_at_unix_ms`: `pair_failed` builds the pair anew at every failure with the
+   execution record's observation time, and nothing else writes it), the one that failed longest
+   ago first, equal times by the task's id (the map's order, kept by a stable sort); the first
+   waits one first interval (`scheduling.unavailable_probe`'s, as fix round 6 reads it) from the
+   end, the second two, the third three; a running wait is never shortened, and the window's end
+   bounds every wait where it is read. *Its bound, in plain words* (fix round 8, ruling 2, once the
+   pairs that set the block take the places after the others, item 1 of "Fix round 8"): after an
+   outage a healthy pair is let in after each broken pair ahead of it in the order has failed once
+   more at most, about one block each; in a stretch that let nothing in a block lasts about half
+   an hour from its sixth on. (As built in this round, with the setters at their own interval, the
+   pair that set the latest block could run first again while its own interval was not longer than
+   the healthy pair's turn, so a broken pair with no count first in the order failed twice before
+   the healthy pair's turn: cases (d) and (e) below.) Walk (shipped
+   values, the review's model: climbs of about two minutes, the cool-down window from a climb's
+   start, the first healthy run): (a) one broken pair and healthy pairs at the maximum, 33 (fix
+   round 6: 62); (b) two broken pairs ahead of one healthy, 33 or 65 by the order of their latest
+   failures (94); (c) two broken pairs and a task that never failed, 12 (12); (d) the sixth
+   review's case, 65 (65: the broken pair's own minute and the first healthy pair's turn come due
+   together and it is first in the evaluation's order); (e) the same with two such new broken
+   pairs first, 97 (129); the seventh review's first counterexample, 65 (478); its second, 65 to
+   97 (1100). The review proposed the setters last in the order, which would give (d) 33 and (e)
+   65; the ruling keeps their own interval, built as written.
+2. *The texts say what is true*: item 3 of fix round 6 above no longer says that ruling 3 as worded
+   makes two broken pairs take turns for the whole window (they stop once their own waits outlast a
+   block; three do not); the contract's "A pair that keeps failing at its entry" and "The worst
+   cases", the comment of `end`, and `instance_entry_task_waiting`'s description (after its first
+   sentence: the index unchanged, checked current) describe the turn order and its bound.
+3. *The package marks before the first composition that succeeded* (the contract's "Its end";
+   `standard-pack-schedule.md` too): the registered packages whose `control.json` and
+   `resources/operations/resources.json` are compared are the last successful composition's
+   (`WorkbenchState::packages`, set only after a composition succeeded), so until one has succeeded
+   since the start (a game root broken or every composition refused since then) only the root's
+   `bundle.json` and the three recognition files are compared, and a change of a package's files
+   that leaves those alone is not seen until then.
+4. *P4 tightened* (the seventh review's "可以改"): the pair is set aside before the first check
+   that compares the marks (after the first check, whose activation of the first catalogue clears
+   every pair itself) and that check leaves it; the check that frees it activates no catalogue (the
+   ledger's `catalog.activated` records counted).
+5. *CI on fix round 6's head* (the coordinator's addition): P4 panicked in the contract crate (an
+   outcome integer above `i64::MAX`): the test seam `seed_entry_pair_for_test` set a seeded pair
+   aside until `u64::MAX`, which the set-aside reason carries as `window_end_unix_ms`. The seam now
+   sets it aside until a day after the Runtime clock's time and takes the latest failure's time;
+   its other members are real times or small counts. In production a pair's window end is the end
+   of the activity window its admission was committed in (`condition_window_end`:
+   `activity_window_at(profile, admitted_at_unix_ms).until_unix_ms`, a time within a day or so of
+   the admission on the Runtime clock), or `0` when the policy knows none: never above `i64::MAX`.
+   M4 ran out its 120-second wait again, at its third climb (the new stretch's first, the second
+   emulator restart on the fake): its two earlier climbs ended within seconds (the log prints both
+   moves of the manual clock, the second at the third admission). The emulator rung's readiness wait
+   (`await_recovery_readiness`, its retry `await_recovery_retry`) sleeps `readiness_poll_ms` in real
+   time and reads the Runtime clock for its backoff and its window; on the manual clock nothing
+   moves that clock while the ladder sleeps (the kernel's waits move it, `ManualRuntimeClock::pause`;
+   the ladder's sleeps do not), so a readiness attempt that does not pass at once never ends. The
+   replays that climb that rung quickly run on the system clock (`gate_390_drill1`,
+   `instance_workers`'s emulator fixture, `gate_480_pg2b`). M4 now waits for the rung's second Stop
+   and Start, then for the climb's end while the manual clock moves a second at each look
+   (`wait_for_ladders_finished_moving`); the test's sequence changed, not the code.
+
+**Fix round 8** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix8.md`, after
+fix round 7's report; the rulings are the coordinator's, not the owner's words):
+
+1. *The pairs that set the block come last in the turn order* (`EntryBlocks::end`). At a block's
+   end the pairs of the instance whose count in a row is above none, but a pair set aside (no
+   place; one whose failure set the block still waits its own interval, as before), take places:
+   first the pairs whose failures did not set the block, as in fix round 7 (latest failure at the
+   entry oldest first, equal times by the task's id), then the pairs whose failures set or renewed
+   it (`EntryBlock::setters`), in the same order among themselves. The pair at place n waits n
+   first intervals from the end, and a pair that set the block waits its own interval when that
+   is later; a wait still running is never shortened; the window's end bounds every wait where it
+   is read. With no other pair, a pair that set the block waits its own interval, as before. Fix
+   round 7 left the setters at their own interval: with a short one (a pair's first failures, one
+   first interval) a setter came due with the first turn, and the evaluation's order could put it
+   first again. Walk (shipped values; fix round 7's model, the latest failures of the outage's
+   pairs taken in every order, and the seventh review's minute model, those failures tied and
+   ordered by name): (a) 33 (fix round 7: 33); (b) 33 or 65 by the order of the latest failures,
+   65 in the review's model (33 or 65); (c) 12 (12); (d) 33, 34 when the healthy pair with the
+   longer wait failed longest ago (its own thirty-four minutes outlast its first turn; the review's
+   model 33) (65); (e) 65 (97); the review's first counterexample 33 or 65, 65 in its model (65);
+   its second 65 to 97, 97 in its model (65 to 97). The review expected 33, 65, 12, 33, 65 for
+   (a) to (e): the same, but for the order of the latest failures in (b) and (d).
+2. *The bound* (the contract's "A pair that keeps failing at its entry", item 1 of fix round 7
+   above, the comment of `end`): after an outage a healthy pair is let in after each broken pair
+   ahead of it in the order has failed once more at most, about one block each. The contract's
+   "The worst cases" and `instance_entry_task_waiting`'s description (after its first sentence:
+   the index unchanged, checked current) describe the order with the setters last.
+3. *M4's third climb* (ruling 3). **Not found:** where and why the third climb stops. Established
+   by reading: (i) K3 (c), on the same replay fixture and manual clock without emulator control,
+   runs the same sequence up to the emulator's rung (an exhausted climb, a client's run that lets
+   a run in, the clock moved about two hours, a failure at the entry whose climb runs the
+   return-home and application rungs as configured) and ends; so the third climb stops in its
+   emulator rung or after it. (ii) That rung's first readiness attempt passes on the fake as it
+   does at the first climb: the Start leaves Android up (`android_down` false), the foreground
+   query answers the assigned application, the Start binds the endpoint again, the emulator status
+   read fails (no scripted read) and, the binding being bound, the opens go on, and the opens pass
+   (`observed_open`); so the retry wait (`await_recovery_retry`), which sleeps in real time and
+   reads the Runtime clock, is not entered by the code as read, and fix round 7's account is not
+   shown (nor refuted). (iii) No worker panic shows in the test's output on fix round 6's head (a
+   panicked ladder records no end and keeps its key until its lease lapses on the Runtime clock).
+   Fix round 7's moving clock stays, as `gate_382_h4` drives the same readiness wait on a manual
+   clock (the clock moved at each look while the climb runs), but the cause did not show that it is
+   the right drive here; the test's two waits of the third climb now fail at once with a fatal
+   error the Runtime latched (`assert_runtime_alive`), so a red run names such a stop instead of
+   a wait's bound. No code changed for M4. **Production:** on the system clock every
+   wait of the rung reads the clock its sleeps spend: the readiness wait ends at
+   `readiness_window_ms` (`recovery_environment_not_ready`), a busy or screen hold at its end, the
+   ADB waits at their bounds, and a ladder whose worker panicked frees its key when its lease
+   lapses; the state that holds the test cannot hold a production ladder without end.
+
+**Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
+class `none`; fix round 2: `since` 0.12.77):
+
+| Code | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `instance_entry_blocked` | a candidate of an entry-blocked instance waits (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason | none |
+| `instance_entry_blocked_awaiting_person` | (fix round 1, item 7; fix round 2, item 6) an entry-blocked instance's stretch of blocks lasted `scheduling.unavailable_probe.attention_after_ms`, whatever holds it, no pause, fence or idle stop owning it (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `elapsed_ms`, `limit_ms`, `failure_code?`) | warns, once per stretch (a `runtime.failed` record) | none |
+| `instance_entry_blocked_recovery_failed` | (fix round 1, item 7; fix round 2, item 5; fix round 3, item 4) one of an entry-blocked instance's own recoveries ended without recovering; after `exhausted` the block climbs again by itself, paced, after `update_dialog` nothing climbs again in the stretch, after `worker_panicked` nothing in the block (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms`, `entry_recovery_end`, `trigger_rule?`, `next_occurrence_unix_ms?` the next climb's earliest time, `failure_code?`) | warns, once per block (a `runtime.failed` record) | none |
+| `instance_entry_task_waiting` | (fix round 4, item 2) the candidate's task failed at its entry on its instance `count` times in a row in its window; it is not dispatched there before `next_eligible_unix_ms` (`instance_id`, `task_id`, `decision_id`, `observed_at_unix_ms` of the latest, `count`, `next_eligible_unix_ms`, `failure_code?`); a fact refresh names it as `gate_code` | info, a decision's reason, with a wake | none |
+| `instance_entry_task_set_aside` | (fix round 4, item 3) the candidate's task is set aside on its instance until its window's end: `count` of its failures at the entry came although another scheduled run was let in, reaching `limit_count`, its rule's `escalation_threshold` (`window_end_unix_ms`, the values above); a fact refresh names it as `gate_code` | info, a decision's reason, with a wake | none |
+| `instance_entry_task_set_aside_reported` | (fix round 4, item 3) a person is told once that the task is set aside on the instance until `window_end_unix_ms` (`count`, `limit_count`, the latest failure's values) | warns, once per pair and window, and again after an activation, a changed package or a Runtime start cleared the counts (fix round 5) (a `runtime.failed` record) | none |
+| `recovery_rung_skipped_emulator_restarted_in_stretch` | (fix round 4, item 4) a later climb of a stretch of entry blocks did not run the emulator's rung, which a ladder of the stretch ran already | info, a skipped rung's `recovery_rung_finished` outcome | none |
+
+Locations `instance_entry_block` and `take_up_entry_recoveries`. No word. Fix round 1, item 7: the
+value keys `entry_recovery_end` (vocabulary `entry_recovery_end`, `crates/runtime-host/src/codes.rs`
+`EntryRecoveryEnd`: `exhausted`, `worker_panicked`) and `trigger_rule` (a name: the ladder
+trigger item's id). Fix round 2 adds no code: `instance_entry_blocked_recovery_failed` takes the
+existing key `next_occurrence_unix_ms` (optional), and the texts of the three codes, the two
+locations and the vocabulary say what this round changes; the index was regenerated and checked
+current. Fix round 3 adds the code `instance_entry_yielding` (existing keys only) and the word
+`update_dialog` of `entry_recovery_end` (`EntryRecoveryEnd::UpdateDialog`; the vocabulary is this
+slice's and unreleased), rewrites the three codes' texts, and regenerated the index (checked
+current). Fix round 4 removes `instance_entry_yielding` (unreleased) and adds
+`instance_entry_task_waiting`, `instance_entry_task_set_aside`,
+`instance_entry_task_set_aside_reported` and `recovery_rung_skipped_emulator_restarted_in_stretch`
+(existing keys only: `count`, `limit_count`, `next_eligible_unix_ms`, `window_end_unix_ms`; no
+word, no vocabulary, no key), rewrites `instance_entry_blocked`'s text, and regenerated the index
+(checked current).
+
+**Interfaces.** None moves. `runtime-client` stays [12, 14] as AVAIL-1 leaves it (its fix round
+takes its own member out): no answer gains a member, and a new code and new value keys in a
+schedule explanation's `why` are read by every revision (`CodeStr` is any text, `Outcome`'s values a
+map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is text inside
+`failure_identity`, a token member every revision decodes. `actingd-config` does not move.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| Which failures | `crates/runtime-host/src/failure_identity.rs` (`failed_at_entry`, `IdentityFrame::Entry`, `entry_identity`, `accumulates`, `at_entry`); `host/failure_settlement.rs` (`ScheduledFailure`, `ScheduledResolution.marks`); `host/recovery_ladder.rs` (`task_trigger_item`, `ladder_takes_failure`, since fix round 1 `entry_failure_recovered`) |
+| Whose failure (A2) | Removed by fix round 4 (item 1): `FailureIdentity::packages` stays for a pair's count; `own_entry_identity`, `entry_failure_own`, the mark and the settlement's branch for an own failure are gone |
+| Settlement and replay | `crates/runtime-host/src/host/policy_outcome.rs` (`record_policy_dispatch_outcome_under_gate`, `entry_failure_input`); `policy_control.rs` (`entry_blocked`, `entry_condition`, `condition_window_end`, `commit_paced_execution`); `policy_host.rs` (`entry_condition`) |
+| The block, its ends, the held recovery, the attention | `crates/runtime-host/src/host/entry_blocks.rs`; `host/recovery_ladder.rs` (`append_recovery_ladder_fact`, `PendingRecoveryLadder::task_run`); `host/unavailable_probe.rs` (`hold_cooled_down_recovery`, `track_unavailability`); `host/contained_task.rs` (`append_contained_task_terminal`, `run_scheduled_contained_task`); `host/requests.rs`; `host.rs` (`lease_sweep_loop`) |
+| The gate | `crates/runtime-host/src/entry_block.rs`; `policy_host.rs` (`PolicyEvaluationContext::entry_blocked`, `evaluate`); `host/policy_dispatch.rs` |
+| Fix round 1 | `crates/runtime-config/src/recovery_ladder.rs` (`LadderConfig::classify_unexcluded`); `host/recovery_ladder.rs` (`task_trigger_settings`, `entry_trigger_item`, `entry_failure_recovered`, `task_ladder`, `ladder_at_lease_end`, `entry_effect`, `enqueue_ladder_claim`, `PendingRecoveryLadder` `scheduled_run` and its accessors); `host/entry_blocks.rs` (`settling`, `cooled` by run, `unrecovered`, `recoveries`, `take_up_entry_recoveries`); `host/host_claims.rs` (the panic); `host/resource_fence.rs` (`fence_instance`); `entry_block.rs` and `policy_host.rs` (store update tasks). Fix round 3 removed this round's conditions in a row, its threshold and `g`, and `host/lease.rs` is main's again |
+| Fix round 2 | `host/recovery_ladder.rs` (`entry_class`, `entry_trigger_item` for one class, `restarts_application`, `PendingRecoveryLadder::start_at_application_restart`, `ClimbEnd`, `append_ladder_fact_as`, `entry_effect`, `finish_interrupted_ladder`, `enqueue_ladder_claim`, `request_ladder_claim`); `host/entry_blocks.rs` (`EntrySettlement::AtEntry.window_end`, the mark's `window_end`, `let_in`, `ended_let_in`, `restart_due`, `stretches`, `restarts`, `panicked`, `refusals`, `hold_refused_entry_recovery`, `take_up_entry_recoveries`); `host/failure_settlement.rs` (the window's end); `policy_host.rs` (`dispatch_window_end`); `policy_control.rs` (`admission_window_end`); `host.rs` (the test seams). Fix round 3 removed `lease_end_restarts`, `RungsTried::restarted`, `scheduled_run_failed_at_entry`, `EntryMarks.let_in`, the block's `exhausted` and the two claim kinds in `host/lease.rs` |
+| Fix round 3 | `crates/policy/src/evaluator.rs` (`InstanceHolds::yield_turn`, `yielding`, `YieldingTask`, `yield_turns`, the yield's reason behind the instance's winner) and `evaluator/device_order.rs` (`Contenders::yields`); `entry_block.rs` (`EntryBlockGates` with the yields, `hold`); `host/entry_blocks.rs` (`EntryMarks` with `ended` alone, `EntrySettlement::TargetStarted { entered }`, `EntryClimb`, `EntryFailureMark::entered`, `entered`, `yielding`, `note_task_run`, `Stretch::climbs`, `last_end_unix_ms`, `update_dialog`, `paced_until`, `counts_climb`, `climb_ended`, `EntryBlocks::recovery_ended`, `EntryBlock::hold`, `entry_climb`, `entry_failure_own`, `settle_entry`, `note_entry_success`, `note_entry_climb_ended_block`, `record_dropped_entry_recoveries`, `take_up_entry_recoveries`); `failure_identity.rs` (`entry_passed`); `host/failure_settlement.rs` (`scheduled_run_at_entry`, the evidence); `host/contained_task.rs` (`RunEntry`, `ContainedRunControl::note_entry_fact`, `record_entry_fact`, the success's let-in); `host/recovery_ladder.rs` (`LadderTrigger::entry`, `ladder_at_lease_end`, `lease_end_entry_climb`, `ClimbEnd` as an enum, `EntryEffect::UpdateDialog`, `finish_interrupted_ladder_as`); `codes.rs` (`InstanceEntryYielding`, `EntryRecoveryEnd::UpdateDialog`); `host.rs` (the test seams `entry_climbs_for_test`, `entry_yielding_for_test`). Fix round 4 removed the policy crate's changes (`evaluator.rs`, `evaluator/device_order.rs` are main's again), the yields, `note_task_run`, `entry_failure_own`, the evidence in `failure_settlement.rs`, `InstanceEntryYielding` and `entry_yielding_for_test` |
+| Fix round 4 | `host/entry_blocks.rs` (`EntrySettlement::AtEntry` without `own`, `EntryRule`, `EntryPair`, `EntryBlocks::pairs`, `pair_failed`, `emulator_runs`, `Stretch::emulator_restarted`, `EntryClimb::skip_emulator`, `settle_entry`, `block_instance_entry`'s recorded drops, `note_entry_emulator_restart`, `record_entry_set_aside`, `entry_block_gates`, `take_up_entry_recoveries`); `entry_block.rs` (`EntryPairGate`, `EntryBlockGates::pair_deferral`); `policy_host.rs` (the eligibility closure, `dispatch_escalation_threshold`, `is_store_task`); `host/policy_outcome.rs` (the rule handed to `settle_entry`); `host/recovery_ladder.rs` (`PendingRecoveryLadder::skip_emulator`, `skip_emulator_restart`, the skipped emulator rung, `finish_interrupted_ladder_as`' `cause`); `host/failure_settlement.rs` (the evidence removed); `failure_identity.rs` (`own_entry_identity` removed); `codes.rs` (the four codes, the test spellings); `host.rs` (`entry_pair_for_test`). The coordinator's addition: `host/entry_blocks.rs` (`EntryPair::interval_ms`, `EntryBlocks::end` with the block's end time, `clear_entry_pairs`); `host/policy_catalog.rs` (`switch_policy_catalog` calls `clear_entry_pairs`) |
+| Fix round 5 | `policy_control.rs` (`entry_condition` for a sensitive task, `input_at_entry`, `preview_paced_settlement`'s `sensitive`); `host/entry_blocks.rs` (`pair_interval_ms`, `EntryBlocks::let_pairs_go`, `end` skipping a pair with none in a row, `settle_entry` for a store update task and a run let in, `recovery_ended` setting `restarts`, the test seam `note_entry_let_in_for_test`); `host/policy_outcome.rs` (`EntryRule::store_task` whatever the end); `host/failure_settlement.rs` (`scheduled_run_entry_checked`); `host/recovery_ladder.rs` (the excluded code's staged recovery only for a run that checked its entry); `host/standard_pack_schedule.rs` (`check_standard_pack_rules` frees the pairs when a package's declaration files changed); `codes.rs` (two texts); `.github/workflows/ci.yml` (host-lab's limits; fix round 6: main's again) |
+| Fix round 6 | `host/entry_blocks.rs` (`EntryBlock::setters`, `EntryBlocks::end` with the configuration's first interval, its callers, the test seam `seed_entry_pair_for_test`); `host/standard_pack_schedule.rs` (`PairMarks`, `RECOGNITION_FILES`, `WorkbenchState::pair_marks`, the comparison before the check's early return, a first read's package marks); `host.rs` (`seed_entry_pair_for_test`); the outcome catalogue's texts (three codes) |
+| Fix round 7 | `host/entry_blocks.rs` (`EntryBlocks::end`'s turn order; the test seam `seed_entry_pair_for_test` with the latest failure's time and a real window end); `host.rs` (`seed_entry_pair_for_test`); `instance_entry_task_waiting`'s description |
+| Fix round 8 | `host/entry_blocks.rs` (`EntryBlocks::end`: the setters' places after the others; the test seam `seed_entry_setter_for_test`); `host.rs` (`seed_entry_setter_for_test`); `instance_entry_task_waiting`'s description |
+| Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md); fix round 2: [emulator-control.md](emulator-control.md) ("Triggers") and [runtime-config.md](runtime-config.md) (`recovery_ladder.exclude_codes`) on what an excluded code does |
+
+**Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
+clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `entry_a_t1_a_failure_at_the_entry_settles_as_a_condition_and_blocks_the_instance` (1) | The budget fixture's run settled as one at its entry: a condition (refunded, count 1, `continue`, counters 0, no retry, no pause cause, identity `…~fi…`); the value record holds no count for the day, no streak, no owed rerun; the instance blocked by that run; a second later nothing is dispatched there, the task waits `instance_entry_blocked` with its values, no `failure_retry_immediate`; the not-running row says it since that evaluation |
+| `entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_the_entry` (2) | `escalation_threshold` 1: at the entry a condition, not paused, blocked; in a step `paused_task`, `repeated_failure`, nothing blocked |
+| `entry_a_t1_t3_t4_a_failure_at_the_entry_blocks_until_a_run_succeeds_and_a_failed_ladder_tells_a_person` (1, 3, 4) | On a fake device, a page graph whose prerequisite layer does not know the screen fails with `contained_task_page_unknown` before any input: a condition, the instance blocked, one ladder by `pack_logic`; the ladder ends `exhausted`, still blocked, one `instance_entry_blocked_recovery_failed` naming the run (fix round 1, item 7: `entry_recovery_end` `exhausted`, `trigger_rule` `pack_logic`; no `instance_entry_blocked_awaiting_person`); a client's run on the blocked instance completes and its success ends the block |
+| `entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblocks` (3) | Ten minutes of cool-down left: one suppression, no ladder, the block holds the recovery; nothing a millisecond before the end; at the end the ladder starts with the run's trigger, its return-home rung recovers, the block ends; the due task is dispatched at its next occurrence |
+
+ENTRY-A2's tests (a) to (e) (whose failure): fix round 3 removed (a), (b) and (e), fix round 4
+(c) and (d), with the mark; none was on main.
+
+Test 5 is the existing tests, unchanged in what they assert. Touched: `gate_373_nav3a.rs`, whose
+`Pack::zip` is now `pub(super)` (the gate file builds its packages with it); nothing else. The
+existing tests of a scheduled run on a fixture instance (`fixture_simulation`) meet no ladder and
+are unchanged; `prq_a_prerequisite_that_meets_an_unknown_page_…` now settles as a condition and
+blocks its instance, which it does not assert. No golden re-recorded; no gate retired.
+
+Fix round 1's tests (host gate map, the second row "#490 ENTRY-A"):
+
+| Test | What it shows |
+|---|---|
+| `entry_a_f1_a_prerequisite_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The shipped defaults, a fake device on `shop`: the declared prerequisite ends on `done`, the run fails with `contained_task_prerequisite_entry_unmatched` (excluded): a condition (`…~fi…`, no retry, nothing counted for the day, no streak), the instance blocked; the block's own ladder (the run's trigger, `pack_logic` by class) is admitted, climbs and ends `exhausted`; still blocked, one person told (item 7: one `instance_entry_blocked_recovery_failed`, `exhausted`, `pack_logic`) |
+| `entry_a_f1_b_return_home_entry_unmatched_under_the_shipped_defaults_blocks_and_starts_its_ladder` (item 1) | The same with the prerequisite's return-home layer ending away from the prerequisite's entry: `contained_task_return_home_entry_unmatched` (excluded) |
+| `entry_a_f2_a_covering_blackout_ends_the_block_and_drops_its_held_recovery` (item 2) | The recovery held by the cool-down; a blackout covering the instance ends the block at the next tick; no ladder of the run's trigger, past the blackout's end too; no attention |
+| `entry_a_f2_a_capacity_refusal_is_tried_again_and_then_admitted` (item 2) | Hard capacity pressure at the cool-down's end: nothing admitted and nothing recorded (one suppression, the cool-down's), the recovery held and due, no attention; capacity back, the next tick admits it, it recovers and the block ends |
+| `entry_a_f2_a_fence_ends_the_block_and_drops_its_held_recovery` (item 2) | A fence ends the block and drops the held recovery; no ladder of the run's trigger, no attention |
+| `entry_a_f2_a_block_that_lasts_the_threshold_tells_a_person_once_with_its_recovery_held` (item 2) | The shipped `attention_after_ms`: nothing a millisecond before, one `instance_entry_blocked_awaiting_person` with `elapsed_ms` and `limit_ms` at it, the recovery still held, none more after, and no `instance_entry_blocked_recovery_failed` (item 7) |
+| `entry_a_f3_a_store_update_task_of_an_entry_blocked_instance_is_dispatched` (item 3) | Policy level: the ordinary task's failure at the entry blocks the instance; with the update fact true the store update task is dispatched, its decision without `instance_entry_blocked`, the ordinary task not, the block kept |
+| `entry_a2_f4_conditions_in_a_row_at_the_threshold_make_the_next_failure_the_pairs_own` (item 4; removed by fix round 3 with the bound) | Threshold 2, the settlement hook: two conditions each after another run first; after the next recovery, another run first again, the failure is the pair's own (counters 1, `retry_scheduled`) |
+
+Fix round 1's F5 (the live settlement) moved to fix round 2's R3 (b), which a recovery that
+restarted the application now needs; it was never on main, so no retirement is owed.
+The exhausted ladder of item 2 is F1's and `entry_a_t1_t3_t4_…`'s. The hook tests A2 (a) to (e) are
+gone (fix rounds 3 and 4).
+Adapted for fix round 1: `gate_387_d1c.rs`'s `h4_g6_g7_…` case "the code excluded" (the routine
+run fails at its entry with an excluded code of class `pack_logic_mismatch`: the exclusion still
+starts no ladder at the lease end, and the block's own ladder now climbs under `pack_logic` as the
+defaults' does, the ruling's intended change); `gate_373_nav3a.rs`'s `SHOP` is `pub(super)`.
+Item 7 (one code, one cause) changes what `entry_a_t1_t3_t4_…`, F1 (a) and (b) and the threshold's
+test assert as above; the tests that assert no attention (T3, the three other F2 tests) now
+assert neither warning.
+
+Fix round 2's tests (host gate map, the third row "#490 ENTRY-A"):
+
+| Test | What it shows |
+|---|---|
+| `entry_r1_a_capture_backend_failure_in_a_prerequisite_layer_is_settled_as_before` (1) | The shipped defaults, a fake device on `shop`: the run's second capture, in its prerequisite layer, fails in the capture backend (`capture_backend_operation_failed`): no condition, `F` unique, the admission kept, no mark, no block, one ladder by `task_capture_backend`, no warning |
+| `entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_application_restart` (2) | The settlement hook: the first block climbs as configured; after a recovery at the return-home rung and nothing let in, the next climbs from the application restart; after another and a run let in, the next as configured |
+| `entry_r3_a_after_a_recovery_at_the_return_home_rung_the_next_block_climbs_from_the_application_restart` (3, 2, 5; renamed by fix round 4) | On a fake device, the live path: a `recovered` at the return-home rung (the climb's first rung pending); the same task's next failure at its entry is a condition (the pair's second in a row), its held recovery due no later than the cool-down window's end and not climbed before it, then climbing from the application restart (`return_home` skipped `before_start_rung`), ending `exhausted`, still blocked, one `instance_entry_blocked_recovery_failed` with `next_occurrence_unix_ms` |
+| `entry_r3_b_a_recovery_that_restarted_the_application_makes_the_next_failure_at_the_entry_the_pairs_own` (3) | On a fake device, `pack_logic` from rung 2 and a startup package from `away` to `done`: the ladder recovers at the application restart rung (evidence, no run counted since); the next failure at the entry is the pair's own by the marks its start read (fix round 1's F5): no condition, `consecutive_same_error` 1, an accumulating identity with `g`, the instance blocked holding its run's recovery |
+| `entry_r4_a_conditions_in_a_row_start_again_in_the_next_activity_window` (4a) | Threshold 2, each block ended at the return-home rung with a run let in: two conditions the same day, and the next failure the next day a condition again |
+| `entry_r4_b_the_bound_holds_with_another_run_let_in_and_no_recovery_that_is_evidence` (4b) | Threshold 2, a run let in after each failure, no evidence: condition, condition, then the pair's own (counters 1, `retry_scheduled`), blocking |
+| `entry_r4_c_the_bound_is_not_reached_with_neither` (4b) | Threshold 2, nothing let in and no evidence: four conditions |
+| `entry_r5_a_an_exhausted_climb_tells_a_person_waits_and_climbs_again_by_itself` (5) | On a fake device, `pack_logic` from rung 2: the first climb ends `exhausted`, one warning whose `next_occurrence_unix_ms` is its end plus the shipped first interval, the next climb held then; at that time the cool-down window holds it on to the window's end; there the block's own second climb (the run's trigger, from the application restart) recovers on the mended screen and ends the block; one warning in all |
+| `entry_r5_b_a_panicked_worker_tells_a_person_and_nothing_climbs_again` (5) | The block's recovery's worker panics: one warning `worker_panicked` with no next climb, the block holding nothing, no climb then or two hours later |
+| `entry_r6_two_blocks_chained_by_a_recovery_that_let_nothing_in_tell_a_person_once_at_the_stretchs_threshold` (6) | The settlement hook: a block, a recovery at the return-home rung with nothing let in, a second block in the same stretch; no attention a millisecond before the stretch's threshold, one at it (the second block's run, `elapsed_ms` the threshold), none more |
+| `entry_r7_a_claim_the_queue_refuses_is_tried_again_on_a_growing_interval_and_recorded_once` (7) | The queue refusing ladder claims (a test seam answering a full queue): tried again after 1, 2, 4 and 8 seconds, nothing a millisecond before each, one `lease_queue_full` record in all; once claims are taken the ladder recovers and the block ends |
+
+Changed by fix round 2: `gate_387_d1c.rs`'s `h4_g6_g7_…` case "the code excluded" is restored to
+"no ladder" (ruling 10's test: the routine run's package is a `linear_steps` package without a
+chain or a home entry check, so its failure comes after its main package started; fix round 1's
+expectation assumed a failure at the entry and was red); `entry_a_t3_…` asserts the runs counted
+stay 1 after a recovery at the return-home rung (ruling 3); the F2 blackout test runs on the
+configuration actingd assembles (the test host's key table held no `scheduling.blackout.host`) and
+asserts the drop's record (ruling 9); the F2 threshold test reads the stretch's start (ruling 6);
+F3 evaluates the update past the profile's sampled activity interval; the hook tests' recovery is
+one that restarted the application. `gate_480_pg2b`'s pause in the middle of a climb raises no
+`instance_entry_blocked_recovery_failed`: its fixture's run fails in its main package's first step,
+so nothing is blocked, and since this round an interrupted climb is no failure of a block's
+recovery anyway (a person's pause interrupts it; it is held, and the resume ends the block).
+
+Fix round 3's tests (host gate map, the fourth row "#490 ENTRY-A"; 30 tests in the four rows). It
+removed, none of them on main so no retirement is owed: A2 (a), (b), (e), F4, R4 (b), (c) (the
+evidence and the bound it removes); R3 (b) became K1 (b) (the same replay, now a condition) and
+R4 (a) became K1 (d) (the window). Changed: R2's third failure, with a scheduled run let in, is the
+pair's own; R3 (a) asserts the recovery held to the paced time instead of the evidence count; T3
+and the first replay lose the count of runs started (the first replay asserts the climbs of the
+stretch and the client's run ending it); A2 (c) and (d) read the mark's count of runs let in;
+`gate_387_d1c`'s cell "the code excluded" waits one sweep's tick before it asserts that no block
+and no ladder exist (the review's point).
+
+| Test | What it shows |
+|---|---|
+| `entry_k3_a_a_later_climb_after_a_recovery_that_let_nothing_in_waits_its_interval` (3; changed by fix round 4 and its addition) | First interval an hour, longest two, `pack_logic` from rung 2: the first climb ends `exhausted`, the second, an hour later on the mended screen, recovers at the application restart; the pair waits its hour from that end; then the second failure's lease end admits no ladder, the block holds it to the second climb's end plus the stretch's second interval (two hours); nothing a millisecond before, the climb at it, from the application restart |
+| `entry_k3_b_after_a_climb_business_capacity_interrupted_the_next_waits_its_interval` (3) | Capacity refusing at the climb's first step check: interrupted, no one told; no climb past the cool-down window nor a millisecond before the interval, the climb at it |
+| `entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_as_configured` (3, 5) | A client's successful run ends the block and the stretch; once the pair's wait has passed (fix round 4) the next block climbs at once from its lease end, from the return-home rung (`restarts` false) |
+| `entry_k4_the_update_dialog_ends_the_climb_tells_a_person_once_and_nothing_climbs_again` (4) | The startup package meets the update dialog: rung failed with its code, ladder interrupted, one warning `update_dialog` with no next climb, nothing held, no climb twenty minutes later; the store update task dispatched on the blocked instance |
+
+Fix round 4's tests (host gate map, the fifth row "#490 ENTRY-A"; 31 tests in the five rows with
+the addition's M7). It
+removed, none of them on main so no retirement is owed: ENTRY-A2 (c), (d), K1 (a) to (d), K2 (a),
+(b) (item 1); it renamed R3 (a) and changed it (the held time, the cause of fix round 3's red run),
+R2 and R6 (each next run once the pair's wait has passed; R2's third failure a condition), K3 (a)
+(since the addition: an exhausted climb, then one that recovers, so the stretch's second interval
+outlasts the pair's first wait from its block's end) and K3 (c)
+(the next run once the pair's wait has passed), and K3 (b)'s channel wait (`GATE_WAIT`).
+
+| Test | What it shows |
+|---|---|
+| `entry_m1_failures_at_the_entry_with_another_run_let_in_before_each_never_count_against_the_rule` (1) | The settlement hook, two tasks, threshold 1: the second failure at the entry (after `OTHER` got in) and the third (the next day, `OTHER` in again) are conditions, counters 0, no pause cause, no streak, blocking |
+| `entry_m2_the_pair_waits_from_its_blocks_end_so_the_healthy_task_runs_first_and_a_run_past_its_entry_clears_it` (2; the addition) | Blocks of three minutes: `TASK`'s wait counts from its settlement while its block lasts and from the block's end after it; a second after that end `OTHER` runs and succeeds before `TASK`'s second attempt and `TASK` waits `instance_entry_task_waiting` (count 1, the first interval), still a millisecond before; its second failure counts once against it and the interval doubles from that block's end, `OTHER` first again; a run past its entry clears the pair |
+| `entry_m3_a_at_the_threshold_the_pair_is_set_aside_until_its_windows_end_and_a_person_is_told_once` (3) | Threshold 2, `OTHER` in after each block's end, before the second and third failures (each wait from its block's end): set aside at the third, one `instance_entry_task_set_aside_reported`, `instance_entry_task_set_aside` an hour later, dispatched after the window |
+| `entry_m3_b_a_failure_with_nothing_let_in_since_the_previous_one_does_not_count` (3) | Threshold 1, nothing let in: three failures in a row, each after its wait from its block's end, none against it, never set aside |
+| `entry_m3_c_two_broken_pairs_and_a_healthy_task_the_healthy_task_runs_and_both_are_set_aside_in_turn` (3; the addition) | Three tasks, threshold 1: the first broken pair's wait passes during the second's block, whose end starts both waits again; the healthy task runs while both wait; each is set aside in turn, one report each |
+| `entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next` (4) | Fake emulator: the stretch's first climb stops and starts the emulator; its second skips the rung (`recovery_rung_skipped_emulator_restarted_in_stretch`); after a client's run let in, the next stretch's first climb restarts it again |
+| `entry_m5_a_store_update_success_between_two_failures_at_the_entry_clears_the_wait_and_counts_toward_nothing` (5) | The store update task's success clears the ordinary task's two-hour wait; its next failure at the entry is the first in a row, none against it under a threshold of 1 |
+| `entry_m6_on_a_page_graph_without_a_chain_the_lease_end_tells_a_failure_before_its_main_package_from_one_after` (the two flags) | A page graph without a chain: a failure before its main package started climbs at once from the application restart (`checked`); one after it started is no failure at the entry and climbs as configured at once (`started`) |
+| `entry_m7_a_catalogue_with_a_changed_package_frees_a_set_aside_pair_at_once` (the addition, 2) | Threshold 1: `TASK` set aside at its second failure (`OTHER` in between), waiting `instance_entry_task_set_aside` after its block's end; a catalogue (version 2) in which `TASK` runs another package is activated: the pair is gone, and a second later, before the window's end, `TASK` is dispatched with neither reason |
+
+Fix round 5's tests (host gate map, the sixth row "#490 ENTRY-A"; 35 tests in the six rows, 31
+before this round). None removed. Changed: M1 (blocks of three minutes, each admission after the
+previous run's lease lapsed: the cause of its failure on fix round 4's head; `OTHER`'s success ends
+`TASK`'s wait), M2 (after `OTHER`'s success the wait has ended and `TASK`'s next failure is its
+first in a row again, one against it), M3 (a) (after each `OTHER` success the pair is `(0, n, 0,
+false)`, each failure its first in a row), M3 (c) and M7 (the next run once `OTHER`'s lease has
+lapsed, the waits having ended), R2 (the next run at its wait's end or, after the run let in, once
+the lease has lapsed; the test seam `let_run_in_for_test` ends the waits as a settlement does), M4
+(a recovery ends its first block; each climb awaited by its end), and the first replay (after its
+exhausted climb the block climbs from the application restart: 5 (c)).
+
+| Test | What it shows |
+|---|---|
+| `entry_n1_a_sensitive_tasks_failure_at_the_entry_settles_as_a_condition_and_never_pauses_its_rule` (1) | A sensitive task, threshold 1: its failure at the entry a condition (refunded, count 1, `continue`, counters 0, no pause cause, `…~fi…`), its record's `sensitive` false, no count for the day, no streak, the instance blocked |
+| `entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_let_in_ends_every_wait` (3, case (a)) | First and longest interval one minute, threshold 2: after an outage the three pairs at the maximum are due together; the broken one fails again and waits two minutes, so the healthy task runs in the round after; its success ends every wait (`(0, 0, 0, false)`), the broken one fails once against it, the healthy task runs again keeping that count (`(0, 1, 0, false)`), and the next failure sets it aside, one report |
+| `entry_n3_b_past_the_maximum_each_further_failure_in_a_row_waits_one_first_interval_more` (3 (i)) | First interval one minute, longest two: waits of one, two, three and four minutes after the first to the fourth failure in a row |
+| `entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_let_in` (4) | The store update task's main package starts and it fails: the ordinary pair as it was; its next failure the second in a row, none against it, not set aside |
+
+Fix round 6's tests (host gate map, the seventh row "#490 ENTRY-A"; 38 tests in the seven rows, 35
+before this round). None removed. Changed: M6 (`main`'s entry the set `{menu}`, ruling 1; its first
+run now checks its entry and runs the bound return-home package, which does not know `shop`, and
+fails at its entry); K3 (c), R3 (a), K4, M4 and M6 (the instance's startup package checks no entry,
+ruling 2). Ruling 3 as built moves no other expectation: in M2, M3 (a) to (c), M7, N3 (a), N3 (b)
+and R2 every pair that waits at a block's end set it or has an interval not longer than the
+setter's (in N3 (a) the first and longest interval are one minute, so one first interval and the
+pair's own are the same wait: N3 (a) does not tell the built rule from the worded one; P3 (b) does).
+
+| Test | What it shows |
+|---|---|
+| `entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_first_interval` (3, the review's case) | Thresholds 1 and 2, first interval one minute, longest thirty: two healthy pairs seeded at six and ten in a row waiting thirty and thirty-four minutes, the broken pair first in the order with none; at its block's end (thirty-one minutes) it waits its minute, the first healthy pair one first interval, the second its own wait still running; due together, the broken pair fails again; at that block's end it waits two minutes and both healthy pairs one; the first healthy pair is dispatched a minute later (the broken one waiting, count 2) and its success ends every wait; the broken pair is set aside at its next failure (1) or the one after, the other healthy pair let in between (2); one report |
+| `entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of_it` (3 as built, case (b)) | Threshold 1, first interval one minute, longest two: the three fail in turn, then the two broken ones again; at the second broken pair's block's end the first broken one waits its own two minutes (the setter's), the healthy one its one: the healthy pair is dispatched a minute later, both broken pairs waiting (count 2); the first broken pair is set aside at its next failure, one report |
+| `entry_p4_a_changed_package_frees_the_pairs_at_one_check_even_with_another_game_root_broken` (4) | Composer mode, a second game in use with no root: a seeded pair set aside; the package's `control.json` placed again with the same bytes and a later time: the next check frees the pair, the check after (the pair set aside again) does not; the same with the second game's root broken from the second check (its `schedule.json`'s metadata fails: every check reads, composes and activates nothing) |
+
+Fix round 7's tests (host gate map, the eighth row "#490 ENTRY-A"; 40 tests in the eight rows, 38
+before this round). None removed. Changed, each expectation derived from `EntryBlocks::end` as
+built: N3 (a) (at the outage's last block's end `BROKEN` waits two first intervals, the second
+turn, not one; at the next `OTHER` two), P3 (its seeds' latest failures at the same time, so the
+order takes them by the task's id; at the broken pair's second block's end `OTHER` waits two first
+intervals, not one), P3 (b) (at `OTHER`'s block's end `BROKEN` two first intervals and at `TASK`'s
+second block's end `OTHER` two, where fix round 6's rule gave one: the test tells the two rules
+apart), P4 (item 4; the seed's window end, item 5) and M4 (item 5). Unchanged after a walk of each:
+M1, M2, M3 (a) to (c), M7, N3 (b), N4, M5 and the replays (one failing pair at a block's end, or the
+others' counts in a row none).
+
+| Test | What it shows |
+|---|---|
+| `entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_first` (1) | Through the test seams, one task: five pairs seeded beside `TASK`'s, their ids sorting against the order of their latest failures and their counts in neither order, one with a wait running an hour, one set aside with the oldest failure; `TASK`'s failure sets the block; at its end `TASK` waits its own minute, the three others one, two and three first intervals in the order of their latest failures, the fourth keeps its running wait, the set-aside pair takes no place and is left as it was |
+| `entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_failed_once_more` (1, the seventh review's case) | Three tasks, first interval one minute, longest thirty: `TASK` fails four times in a row (the outage), `OTHER` seeded at six with a later latest failure, `BROKEN` with none; `BROKEN` fails, its block ends thirty-one minutes later (`BROKEN` its minute, `TASK` one first interval, `OTHER` two); `TASK` fails again (five in a row, sixteen minutes); at that block's end `OTHER` one first interval, `BROKEN` two: a minute later `OTHER` is dispatched while both broken pairs wait (counts 5 and 1), and its success ends every wait |
+
+Fix round 8's tests (host gate map, the eighth row "#490 ENTRY-A"; 40 tests, none added or
+removed). Changed, each expectation derived from `EntryBlocks::end` as built (a pair that set the
+block takes the place after the other pairs with a count in a row, at its own interval when that
+is later): Q1 (a) (the test seam `seed_entry_setter_for_test` counts a sixth seeded pair, `Q_F`,
+six in a row, its latest failure fifteen minutes before the admission, among the block's setters:
+at the block's end `Q_F` takes the fifth place and keeps its own thirty minutes, later than five
+first intervals, and `TASK` the sixth, six first intervals, later than its own minute; ordered by
+id, `TASK` would be the fifth); Q1 (b) (`BROKEN` three first intervals at its block's end, not its
+own minute, so `TASK` alone is due a minute after it); N3 (a) (`OTHER` three at the outage's last
+block's end; `TASK` three at its second block's end, not its own two, and its
+`next_eligible_unix_ms` with it); P3 (`TASK` three first intervals at its first block's end, so a
+minute after it `BROKEN` alone is due and runs while `TASK` (count 1) and `OTHER` (count 10) wait:
+the broken pair's second failure ahead of it is gone); P3 (b) (`OTHER` three at its block's end,
+`TASK` three at its second and `BROKEN` three at its second, where fix round 7 gave their own one
+or two minutes: the test tells the two rules apart); M3 (c) (`BROKEN`, which set the block, two
+first intervals, not its own one). Unchanged after a walk of each: M1, M2, M3 (a), M3 (b), M7,
+N3 (b), N4, M5, P4 and the replays (at each block's end the pair that set it is the only one with
+a count in a row, so it waits its own interval).
+
+**What is not changed.** A failure in a step of the main package is settled, rerun, counted and
+paused as before (A2 only clears the pair's mark when such a run started its main package);
+budgets are taken at admission and an immediate rerun of a step failure costs one; the failure
+identity's format (an own failure at the entry is written in the existing accumulating form); a manual or Lab run's entry failure blocks nothing and is answered as before; the ladder (its
+start, but where a block's recovery starts since fix round 2; its holds; its cool-down while it
+runs); for an instance that is not entry-blocked, every path of #1852 (its held recoveries and
+their drops); the start's reconciliation of an interrupted
+settlement (no identity: settled as before). No package, game or alias is named in code; no package
+needs a change; the records of a failed run keep their codes.
+
+**At deploy.** Nothing to configure. **A pair paused before the deploy by an entry failure** (a
+rule whose threshold is 1) stays paused until its package's content changes, as every pause; the
+deploy lifts nothing. **The pairs' counts and waits** (fix round 4) are memory: the deployed Runtime starts with none, and no failure at the entry counts against its rule from then on. **Fix round 1 at deploy:** the
+prerequisite and return-home failures the shipped `exclude_codes` name (the 11-19 storm's, the
+seven daily rules') now block their instance and start its block's own ladder instead of being
+rerun until the day's runs are spent; a block whose own recovery ended without recovering is told
+to a person (`instance_entry_blocked_recovery_failed`), and so is a block that lasts an hour (the
+shipped `attention_after_ms`; `instance_entry_blocked_awaiting_person`); a store update task runs
+on a blocked instance. **Fix round 2 at deploy:** a capture backend's failure at the entry is
+rerun at once again, as on v0.12.75; a block that comes back with nothing let in climbs from the
+application restart; a recovery at the return-home rung no longer counts against a rule; a block
+whose recovery ended `exhausted` climbs again by itself (shipped: after one minute, doubling, at
+most thirty, never inside the ten-minute cool-down); the hour's attention counts a stretch of
+blocks; a refused ladder claim is retried at most once a second, then a minute. **Fix round 3 at
+deploy:** a recovery of any kind no longer counts against a rule; a rule's failure at its entry is
+its own only once another scheduled run got in on the instance since its previous one; the rule
+whose failure blocked an instance lets the instance's other due rules go first after the block;
+every climb of a stretch after its first is paced (about six in its first hour, then two an hour);
+the update dialog stops a block's climbs until the store update task (or a person) ends the block.
+**Fix round 4 at deploy:** no failure at the entry counts against a rule any more; a rule that
+keeps failing at its entry waits on that instance (one minute, doubling to thirty, from the end of
+the instance's block) and, once it failed so often while other rules got in, is set aside there
+until its activity window ends, a person told; activating a catalogue frees every such rule at
+once; the emulator is restarted at most once in a stretch of blocks. **Fix round 5 at deploy:** a
+sensitive rule's failure at its entry no longer pauses it; past thirty minutes a rule that keeps
+failing at its entry waits a minute more each time; any other scheduled run that gets in on the
+instance (not a store update task's) ends every such rule's wait there at once; a store update
+task that fails after its main package started counts for no rule; a placement that changes a
+package frees every such rule as an activation does. **Fix round 6 at deploy:** a rule that keeps
+failing at its entry no longer holds back, for their own long waits, the rules an outage left
+waiting: after each of its blocks they wait a minute (its own interval, longer, keeps it last); a
+placement that changes a package frees every waiting or set-aside rule once, also while another
+game's root is broken. **Fix round 7 at deploy:** after each block the instance's other waiting
+rules come due one at a time, a minute apart, the one whose latest failure at the entry is oldest
+first (the rule whose failure set the block still waits its own interval), so a healthy rule an
+outage left waiting runs once each broken rule ahead of it has failed once more; until a
+composition has succeeded since the start, a placement is seen only by `bundle.json` and the
+recognition files. **Fix round 8 at deploy:** the rule whose failure set the block no longer waits
+only its own interval: it comes due after the instance's other waiting rules, a minute after the
+last of them at the earliest, so a healthy rule an outage left waiting is let in after each broken
+rule ahead of it has failed once more at most. **Before a rollback to 0.12.76** (fix round 6, item 5): look whether any
+catalogue generation activated since this version was deployed holds a task whose `sensitive` is
+true; if none, nothing more to check; if one does, look whether a `policy.execution_recorded` of
+such a task whose `failure` carries `condition` and whose `failure.failure_identity` ends in `~fi`
+and twelve hex digits stands after the ledger's last `policy.control_state_recorded` or
+`policy.activity_state_recorded`: then 0.12.76 stops at its start (`policy_execution_record_mismatch`;
+a start that replays the whole ledger stops on any such record of the ledger).
+Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or installed tool** (`runtime-client` 13; checked against
+`945727d4`: `CodeStr` deserializes any text, `Outcome`'s reader takes any value keys, and the
+schedule explanation's check is its shape rules alone): its status read of an entry-blocked
+instance is byte for byte as before, since the status gains nothing from this slice; its schedule
+explanation read (`ac_overview`'s not-running rows) decodes the new `why`; its deploy, place and
+post-check read the status only and meet nothing new; the ledger's new records (`runtime.failed`
+with the new codes, `policy.not_run_changed` naming `instance_entry_blocked`) are codes it reads as
+text, their values (`entry_recovery_end`, `trigger_rule` among them) a map it takes as it is. **A rollback to
+v0.12.75** passes the installer's edges as AVAIL-1's does; the blocks were memory and are gone, so
+the instance is scheduled again and the 11-20 storm can return; a record settled at the entry
+replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives no identity), so it
+owes that pair a rerun until the window's end, and a settlement it repeats for a dispatch whose
+record exists (a crash between the record and its completion) is refused
+(`policy_execution_identity_conflict`). Since fix round 4 every record of a failure at the entry is such a condition; a skipped
+emulator rung is a `recovery_rung_finished` with a new code, which v0.12.75 reads as text. In the release notes' language (0.12.77): 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，失败码属于 `pack_logic_mismatch` 类，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；取帧后端、设备连接、围栏这类别的类的失败照 v0.12.75 原样处理。这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复、黑窗盖住、围栏接手或运行时重启；挡结束时还留着的恢复会记一条丢弃。上一段挡结束以后这台还没有任何运行进去过（调度运行的主包过了进门检查开跑，或者调度、客户端、Lab 的运行成功）就又被挡，这次的恢复直接从“重启应用”那一级起。同一段挡（中间没有运行进去过）里，第一次爬梯照常，之后每一次都要等 `scheduling.unavailable_probe` 的间隔（出厂一分钟起、翻倍、最长三十分钟，从上一次爬梯结束算），也不早于冷却窗，不管上一次是恢复了、走完没成还是被容量、排空、关机打断；人暂停时不爬，放开就解挡。恢复走完没成（exhausted）记一条警告 `instance_entry_blocked_recovery_failed`，挡自己按上面的间隔再试；爬梯碰上游戏的更新弹窗，记一条同码警告（`entry_recovery_end` 为 `update_dialog`），这一段里不再爬，交给商店更新任务；工作线程崩了就不再试。进门失败一律不算规则自己的失败，不管中间有没有别的任务进去过：不进连败，不会让规则被挂起。同一条规则在这台上连着进门失败，每失败一次，下一次在这台上派出要多等一阵（出厂一分钟起、翻倍、最长三十分钟，从这台的挡结束时算起，不过活动窗的尽头；排程解释写 `instance_entry_task_waiting` 和到几点），挡一结束，这台上别的任务先跑；同一个活动窗里，在“这台放进过别的调度运行之后”又进门失败的次数够了规则的 `escalation_threshold`，就在这台上搁到这个活动窗结束（`instance_entry_task_set_aside`），并提醒人一次（`instance_entry_task_set_aside_reported`），下一个窗从头来。这一对的调度运行别的结局、换窗、换包、运行时重启、商店更新任务成功，都让它从头算；启用一份新的任务目录（含回滚）时，所有这样的计数、等待和搁置当即清空。一段挡（中间没有运行进去过）里模拟器最多重启一次，之后的爬梯到重启应用为止（模拟器那一级记 `recovery_rung_skipped_emulator_restarted_in_stretch`）。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；容量不够等一时的拒绝不记录、下一拍再试；队列拒收认领从一秒一次起、加倍到一分钟一次重试，同一段挡里同一种拒绝只记一条；“被挡太久”的提醒 `instance_entry_blocked_awaiting_person` 按一整段算（中间靠恢复解开又被挡、期间没有任务进去的连成一段），每段一条，人暂停、围栏、空闲停机期间不提醒；商店更新任务不被挡。一段挡结束时，失败设下这段挡的那条规则等自己的间隔；别的在等的规则按最近一次进门失败的先后排队，最久没失败的排最前，一分钟一个依次到期；放置换了包，所有这样的等待和搁置清空一次，另一个游戏根坏着时也只清一次（启动以来还没有成功组合过时，只看得出 `bundle.json` 和三个识别文件的变化）。
+
 ### 1.496 Slice #498 FACT-CAP (0.12.76): the instance fact store's bound follows its scopes; an instance near its bound is said so before the store refuses it (board #498; a defect read in production on 11-21: six instances held about 205 records against one bound of 256 for the whole host, and the store would have filled within days; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-498-fact-store-capacity.md`, on main `705e8222`, merged with main `7dbbf9f0`)
 
 This section takes 1.496: 1.493 is AVAIL-1's (merged while this slice was built), 1.494 and 1.495
@@ -43189,6 +44333,599 @@ readiness with that error, actingd writes it as its start refusal's daemon line 
 status 1, not 2, as the code's category is `error`; every later start of that build reads the same
 store and answers the same. In the release notes' language:
 实例事实库的上限改为按范围分别计：每个实例自己的事实最多 224 条，每个服务器、每个游戏各自最多 16 条（共享的事实只算一次）；加实例不再挤占别的实例。某实例自己的事实到上限的 80%（180 条）时先记一条警告 `fact_store_capacity_share_reached`；读数被拒时运行的失败记录里带上事实库拒绝的原因码。整机事实超过 256 条以后不能再回滚到 0.12.75 或更早的版本：那些版本启动时载入事实库会被拒（`fact_store_capacity_exceeded`），起不来。
+
+### 1.497 Slice #486 ASLEEP-1 (0.12.77): an instance whose emulator the idle action stopped is asleep, not unavailable; it is woken only for a task that would be dispatched, and a wake that started the emulator must be answered (board #486; the rules below are the coordinator's rulings 1 to 8 of 11-21, not the owner's words; the owner's words behind the slice, 11-02: 「没有任务时直接关闭模拟器」; coordinator work order `rd-1121/brief-486-asleep.md`; on main `f6e2cd26`)
+
+This section takes 1.497 (1.494 is pull request #1853's, 1.495 is reserved, 1.496 is on main). It
+ships in 0.12.77. [scheduling/README.md](scheduling/README.md) ("An asleep instance", new; "An
+unavailable instance is probed again", the stopped emulator's line) and
+[runtime-config.md](runtime-config.md) ("What wakes an idle instance", two paragraphs added) are the
+contract; [scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals") and
+[emulator-control.md](emulator-control.md) ("Idle stop (IDLE-1)") say what changes there.
+
+**The defect** (read in the code at main). The idle action `stop_emulator` stops the emulator, and
+the stop drops the instance's self-check facts (`invalidate_backend_selfcheck_facts`), so the
+backend self-check gate withdraws its availability (`backend_selfcheck:unchecked`) until a self-check
+passes after the idle wake has started the emulator. The evaluation blocked every candidate of an
+unavailable instance past its trigger at placement (`instance_unavailable`, `build_candidate`),
+before the order of the deferrals, the benefit gate, the pool lines and the ranking (the task's own
+cooldown and the no-progress guard come before placement and were read). The idle plan counted such
+a decision due when its trigger named no later time (an eligible decision with no wake of its own),
+and otherwise took its trigger's next time as the wake: the wake started the emulator and ran the
+startup package for a task the next evaluation held back (its budget spent, its benefit unknown, a
+pool line), the idle check stopped the emulator again, and the next evaluation counted the task due
+again, with no end. #484's look ahead reads positions 3 to 8 only behind a hold, and its fix round 2
+covers only an unavailable instance a hold holds; extending the look ahead would still leave a
+candidate the benefit gate, a pool's lines or the no-progress guard holds counted due.
+
+**The rule.**
+- *Asleep* (ruling 1). An instance is asleep while its idle action stops or holds its emulator
+  stopped (the planner's `stop_emulator` phases: asked for and not ended, its claim holding the key
+  while the stop runs, and done, its wake not come; `IdlePlanner::emulators_held_stopped`, read with
+  the closed instances as the cycle starts) and nothing but that stop withdrew its availability:
+  the projection's word of the withdrawal in effect is `self_check` (its configured seed available,
+  no device link, device state or device system withdrawal), no fence holds it (the cycle's fenced
+  aliases), and it is no instance AVAIL-1's probes take up (a failed self-check or preparation step
+  of its own) (`HostShared::asleep_for_policy`, `host/idle.rs`). The phase in which the stop still
+  runs counts: before the stop invalidates the facts the instance is available and so not asleep,
+  and its claim holds the key, so position 2 defers its candidates and the look ahead reads them as
+  for any held instance; after it, it is asleep. The host passes the set
+  (`PolicyEvaluationContext::asleep`) and names each instance in the evaluation's `InstanceHolds`
+  (`mark_asleep`). No fact changes.
+- *Judged as available, nothing selected* (ruling 2; `crates/policy/src/evaluator.rs`). The
+  evaluation holds each named instance whose snapshot is unavailable available in its own projection
+  of its input (`InstanceHolds::judge_asleep_as_available`), so placement, the order of the
+  deferrals (the closure is asked), the benefit gate, the pool lines and the capped order, the
+  no-progress guard, the ranking and its fact refresh's own gates (`own_gate`) read it as an
+  available instance's. In the allocation, the candidate the closure lets through on such an
+  instance is not selected: deferred, `instance_asleep_wake_due` (`instance_id` the alias), its wake
+  the evaluation's time; it takes the instance (`selected_instances`), its device
+  (`selected_devices`) and its capped block's place (`selected_blocks`) for the round, so the
+  candidates behind it wait as behind a selected one; a fact refresh picked so names the code as its
+  gate (`refresh_gates`, no wake). Kept out, each where it is made: no dispatch intent and no reason
+  chain (the selection path is not reached), so no dispatch decision record
+  (`append_decision_records` reads the selected chains), no admission and so no budget counted, no
+  random delay entry used, and no no-progress basis captured (`NoProgressMemory::capture` reads the
+  intents); no shared run slot (`round_slots.choose` not called); no chain step settled as
+  dispatched (`handover.settle(true)` not called; the successor reached counts as not dispatched);
+  no `capped_spend` reason, and its capped block is not passed for its round
+  (`capped::settle` skips the pairs in `woken_for`), so its episode does not advance past it; no
+  clock-slot `owed` record (written for intents only). What judging does short of selecting still
+  happens: the closure's admission preview, a random delay drawn at position 9 and the clock-slot
+  deferrals noted, a suspension's lift check.
+- *The idle plan* (ruling 3) follows: the decision above is due and named (`idle_due_task`); every
+  other decision counts as on an available instance, but for fix round 1's case (below: on an
+  instance whose idle action can stop its emulator, a decision a gate without a time holds names no
+  wake). The wake is unchanged: the emulator's start, then the startup package.
+- *Ruling 6, a wake that started the emulator must be answered* (`crates/runtime-host/src/idle_action.rs`).
+  A wake after `stop_emulator` with its configured start in effect is kept by the planner as
+  unanswered (`UnansweredWake`: its cause, the task it named, its time, the latest admission of a
+  scheduled run on the instance as it was queued, the idle keys in effect); the autostart claim that
+  drives the emulator's Start for an idle wake marks it started (`IdlePlanner::wake_started_emulator`,
+  called from `drive_autostart`); a claim that read the emulator running started nothing and binds
+  nothing (`gate_idle1p`'s N-1 case). While a started one stands, `decide` does not take
+  `stop_emulator`: under `auto` the tier is capped at `close_app` (a rest and `close_app` as before),
+  under a plain `stop_emulator` nothing is taken; the first such check makes one warning due
+  (`take_withheld_stop`), which the host records as `instance_idle_stop_withheld` (warning, its
+  cause, task, time; `check_idle`). The check reads the latest admission of a scheduled run on the
+  instance under the policy guard with the plan (`PolicyHost::idle_latest_admission`, the dispatch
+  journal's `admitted_sequence`, `IdleView::latest_admission`); a later one than the wake's, another
+  `idle` configuration of the instance (`IdleConfig` compared), a catalog's activation
+  (`forget_unanswered_wakes`, called after `switch_policy_catalog` commits) and a Runtime start (a new
+  planner) end it; a wake whose start met a hold (`wake_held`) is not kept. Memory only; no key; the
+  status has no idle row, so the warning is what a person reads. One word throughout (fix round 1,
+  ruling 4): a wake is answered by a scheduled run *admitted* on the instance; the admission counts
+  whatever follows it, so a run admitted and then refused or failed answers the wake, and so does the
+  admission of the instance's fact refresh reading (the journal holds its dispatch as any other).
+- *Ruling 7.* A paused asleep instance's wake is held as any `stop_emulator` wake (`start_held`,
+  `WakeHeld`); a blackout and a closed activity window are read through the order of the deferrals
+  and the plan as for any instance. Nothing is added for a person's own emulator start or stop.
+- *Codes.* Two added, both pending: `instance_asleep_wake_due` (policy, info, ladder class `none`,
+  exit 0: a scheduling decision reason, the candidate an asleep instance is woken for) and
+  `instance_idle_stop_withheld` (runtime-host, warning, ladder class `none`, exit 0: the idle check
+  did not stop an emulator a wake started, no scheduled run having been admitted since). The index
+  checked current. The planner and the plan decide by no new code: `IdleDraft::add` reads the
+  benefit-held set it read before (fix round 1 only adds whether the instance's idle action can stop
+  its emulator), and `capped::settle` reads the set of pairs, not the code.
+
+**What does not change.** With no asleep instance the evaluation, the plan and the explanation are
+byte for byte main's (ruling 4: the projection is not touched and the allocation branch is not
+reached). An instance `close_app` closed is not asleep (it stays available, and #484's look ahead
+and its fix round 2 hold for it as they are). The other case of the issue (an instance whose
+application `close_app` closed and whose reconnect or self-check then failed) is AVAIL-1's and is
+not changed: such an instance is not asleep; its decisions are blocked `instance_unavailable` as
+before, the plan wakes it once (due with no wake of its own, or at its trigger's next time), the
+wake's startup package's preparation fails and the instance is left awake and unavailable, which
+the probes take up (no loop). `session.instance.available`, every record and status, every
+interface revision, `actingd-config` (no key), `host.idle_state` (the memory of ruling 6 is not kept
+across a start). The look ahead and the fix round 2 path are untouched; `IdleDraft` changes only on
+an instance whose idle action can stop its emulator (fix round 1), so an instance under `close_app`,
+`none`, or `auto` without its emulator start gets main's plan byte for byte.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The input, the judging and the allocation | `crates/policy/src/evaluator.rs`: `InstanceHolds` (`asleep`, `mark_asleep`, `judge_asleep_as_available`), `evaluate_scheduling` (the projection, the asleep branch after the closure's answer, `woken_for` in `capped::settle`), `asleep_reason` |
+| The code | `crates/policy/src/codes.rs` (`PolicyCode::InstanceAsleepWakeDue`); `contracts/outcome-codes/policy.json` |
+| Who is asleep | `crates/runtime-host/src/host/idle.rs`: `idle_emulators_held_stopped`, `asleep_for_policy`; `crates/runtime-host/src/host/policy_dispatch.rs` (read at the cycle's start, after the fenced aliases); `crates/runtime-host/src/policy_host.rs` (`PolicyEvaluationContext::asleep`, `mark_asleep`) |
+| Ruling 6 | `crates/runtime-host/src/idle_action.rs` (`IdleView::latest_admission`, `UnansweredWake`, `WithheldStop`, `check_with_due_task`, `withhold_stop`, `wake_started_emulator`, `take_withheld_stop`, `forget_unanswered_wakes`); `crates/runtime-host/src/host/idle.rs` (`check_idle`, `withheld_stop_outcome`); `crates/runtime-host/src/host/emulator_autostart.rs` (`drive_autostart`); `crates/runtime-host/src/host/policy_catalog.rs` (`switch_policy_catalog`); `crates/runtime-host/src/policy_host.rs` (`idle_latest_admission`); `crates/runtime-host/src/codes.rs` (`IdleCode::StopWithheld`); `contracts/outcome-codes/runtime-host.json` |
+
+**Tests** (`crates/policy/src/tests/gate_486_asleep.rs`, policy gate map row "#486"; and
+`crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate map row "#486": the policy fixture
+instance on a host of its own, emulator-controlled and device self-checked, no idle action of its
+own; the pure planner under `stop_emulator` on the plans the host's evaluations leave; the stop's two
+ends on the host are the planner's idle phase after it, `hold_emulator_stopped_for_test`, and the
+gate's withdrawal, `publish_backend_selfcheck_unavailable_for_test`; no clock read in either file).
+
+| Test | What it shows |
+|---|---|
+| `asleep_t1_with_no_asleep_instance_the_evaluation_is_the_one_without_the_input` (1) | No instance named, an available one named, an unknown one named, with A available and unavailable: byte for byte and decision for decision (wakes too) the evaluation of `evaluate_with_owed_reruns` |
+| `asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_for` (2) | A asleep, two candidates: the first deferred `instance_asleep_wake_due` (its alias), wake the evaluation's time, no intent, no reason chain, no selection reason; the evaluation's wake now; the second equal to its decision behind the same candidate selected on A available |
+| `asleep_t3_a_gate_after_placement_decides_as_on_an_available_instance` (3) | A spent budget (the closure's deferral, its release as wake), an unknown benefit, a pool line (`would_cross_hard_line`): each decision equal to A available's, no intent |
+| `asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before` (4) | A unavailable, B named: A blocked `instance_unavailable` as without the input; B woken for its task |
+| `asleep_h5_a_spent_budget_does_not_start_the_stopped_emulator_before_its_release` (5) | `stop_emulator` taken with its wake at the release less the lead; asleep, every evaluation defers the task by its budget (not `instance_unavailable`), the plan counts it not due, no start, the wake kept |
+| `asleep_h6_a_candidate_whose_benefit_is_unknown_wakes_the_stopped_emulator_never` (6) | A judged task with no effect, its trigger a past `at` clock: the stop with no wake; asleep, `benefit_unknown` with no wake, no start, no wake at all |
+| `asleep_h7_a_task_due_while_asleep_starts_the_emulator_once_runs_and_sleeps_again` (7) | Past the release: the pick `instance_asleep_wake_due`, no intent, the plan names it; one wake (the emulator's start, then the startup package), none under its claims; prepared again (a person's self-check), the task is dispatched twice, and the next check stops the emulator again, with no warning |
+| `asleep_h8_one_idle_stretch_one_stop_and_one_start_at_the_release` (8) | A spent-budget task and a benefit-unknown task through one day: one stop, no start before the release less the lead, one start at it (`planned_time_reached`) |
+| `asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once` (9) | A wake whose start started nothing binds nothing; after one that started the emulator, no run admitted: no stop, one warning (cause, task, time), once; a run admitted after it lets the stop be taken; under `auto` `close_app` instead, warned, and a gap of one hour takes `close_app` unwarned; an activation, an idle change and a start each let the stop be taken |
+| `asleep_h10_a_start_keeps_the_asleep_instance_asleep_with_its_wake` (10) | After a seeding and a loading start, the instance asleep again: the evaluations defer the task by its budget, the restored planner keeps its wake and starts nothing |
+| `asleep_h11_an_asleep_instance_under_a_persons_pause_is_not_woken` (11) | Under a person's pause the task is due behind it and the wake is held (`WakeHeld`); once the start is free it comes |
+| `asleep_r1_the_hosts_own_check_stops_wakes_and_keeps_the_emulator_until_a_run_is_admitted` (fix round 1, ruling 7) | The real replay, the instance configured `stop_emulator` with its emulator start and a startup package, every check the host's own on its own plan: (i) the check stops the emulator, its wake at the release less the lead; asleep, the task is deferred by its budget, not `instance_unavailable`, and nothing wakes it; (ii) at the release less the lead the check queues the wake (`planned_time_reached`); (iii) its claim reads the emulator stopped and starts it (`drive_autostart`, `emulator_autostart_started`), and its startup package runs; (iv) with no run admitted the next night's checks take no idle action, the emulator is not stopped and the ledger holds one `instance_idle_stop_withheld`; (v) after the day's two runs are admitted the check stops it again, with no second warning |
+| `asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wake` (fix round 1, rulings 5, 7 and 2) | The stop, then a seeding and a loading start with the emulator stopped as the action left it (an open on its pending endpoint refused): restored stopped with its wake, in no unavailable instances' set, asleep (the task deferred by its budget) and not woken; its wake starts the emulator, the night's check withholds the stop once; a catalogue's activation answers the wake and the next check stops the emulator, its wake at the window's opening less the lead although the activated catalogue's judged task, held by the benefit gate, is on an interval clock |
+
+Adapted: none (test 12: the tests of the idle actions, of #484 and of AVAIL-1 are unchanged; the
+policy crate's `InstanceHolds` gains a private member, which no test builds by its fields).
+
+**Fix round 1** (coordinator work order `rd-1121/brief-486-asleep-fix1.md`, after the independent
+review `rd-1121/review-1859.md` and the first CI run, which stopped on one missing member; the
+coordinator's rulings 1 to 9 of the round).
+- *It compiles* (ruling 1). `HostShared::idle_view` names `latest_admission: None` (E0063 at
+  `host/idle.rs`); the check sets the one it read with the plan. Every other construction of a
+  structure the slice widened (`IdleView`, `InstanceIdle`, `PolicyEvaluationContext`,
+  `InstanceHolds`) and every caller of a function whose signature it changed was read for the same.
+- *An asleep instance can sleep again* (ruling 2; `schedule_explanation.rs`, `IdleDraft::add`). On
+  an instance whose idle action in effect can stop its emulator (`stop_emulator`, or `auto` with its
+  startup package and its configured emulator start in effect:
+  `HostShared::idle_emulator_stops_for_policy`, read as the cycle starts and passed as
+  `PolicyEvaluationContext::idle_stops_emulator` to `ScheduleExplanationTable::record_stopping`), a
+  decision a gate without a time holds (the benefit-held set: `benefit_unknown`,
+  `policy_benefit_nonpositive`, `policy_no_progress`, `pool_line_held`, `pool_lines_unspendable`)
+  contributes no wake to the idle plan, whatever next time its trigger names. The plan the stop is
+  decided by is the same plan, so the wake fixed at the stop is already without them. A decision a
+  time-bound gate holds keeps that gate's release, and one whose trigger has not come its trigger's
+  time. On every other instance the plan is main's byte for byte: the set holds no `close_app` or
+  `none` instance, and `record_gated` (kept for the tests) records with an empty set. Ruling 6 stays
+  as built for every cause of a wake.
+- *Known and not fixed* (ruling 3): a task whose trigger has not come when the plan sets the wake and
+  whose budget will still be spent at that time wakes the instance at the trigger's time for nothing
+  (the plan reads the later positions as of the evaluation); ruling 6 then keeps the emulator running
+  until a scheduled run is admitted, and `instance_idle_stop_withheld` is what a person reads. A later
+  slice lets the plan read the later positions as of the trigger's time.
+- *After a Runtime start* (ruling 5). The withdrawal's source after a start is the gate's
+  (`self_check`): the start publishes no seed for a device self-checked instance and withdraws it as
+  `backend_selfcheck:unchecked` (`withhold_policy_instance_availability`), and the instance's record
+  before the start was the stop's own `unchecked` withdrawal. What took it out of *asleep* was the
+  start's preparation: it opens the backends with no status read, which on a stopped emulator fails,
+  and a failed preparation takes the instance into the unavailable instances the probes take up,
+  which `asleep_for_policy` leaves out, so the instance was blocked `instance_unavailable` again and
+  woken for nothing (and its failed preparation could admit a ladder). Now
+  `prepare_physical_instances_on_start` (`resource_close.rs`) prepares no instance whose emulator its
+  restored idle action holds stopped (`idle_holds_emulator_stopped`; `restore_idle_state` runs
+  before it): withdrawn and not prepared, it is asleep after the start as before it, judged as
+  available, never selected and woken for the task that would be selected; its wake's configured
+  start prepares it, as the emulator watch and the probes already leave such an instance to its wake.
+- *Ruling 6's old tests* (ruling 6). Every test before this slice that stops and wakes through the
+  host passes unchanged: none expects a second stop after a wake whose claim drove the emulator's
+  Start with no run admitted. `gate_pause_auto` 2 and 4 and `gate_480_pg1` 4 start the emulator at a
+  wake and end there; `gate_r3`'s idle wake starts nothing (`start_emulator` off); `gate_idle1p` L-1,
+  L-2, L-3 and M-2 wake with no read scripted (the claim's read fails, nothing starts), N-1 and M-1
+  find the emulator running (nothing started, so nothing binds: N-1's second stop is taken), and
+  `gate_emu_bind` T5b recognizes a running emulator (`drive_recognition`, not `drive_autostart`); the
+  planner gates (`gate_idle1`, `gate_idle2_auto`, `gate_idle3`, `gate_idle_wg`, `gate_484_idle_w2`)
+  never call `wake_started_emulator`, so no wake of theirs binds a stop. The start that no longer
+  prepares a held-stopped instance changes none of their assertions either: `gate_idle1p` and
+  `gate_idle2_auto_host` restart such an instance with no policy instance to gate, and assert its
+  idle records, stops, starts and kept rows, which no preparation writes.
+- *Two things the review left open* (ruling 8). A clock slot writes no record for the task an asleep
+  instance is woken for: its deferral is the allocation's, after the closure let it through, so
+  `clock_slot::Deferrals::capture` captures nothing for it, the placement pass reads only `Blocked`
+  decisions, and the owed pass reads only pending intents, of which it has none. The lock order of
+  `asleep_for_policy`: it runs after the policy guard and the outcome and fact gates are released,
+  under the cycle's `detection_write_gate` alone (which nothing else takes), and takes
+  `registered_instances` and then `unavailable_instances`, one at a time; no path holds
+  `unavailable_instances` while it takes another lock, so it cannot meet an evaluation's locks.
+  `idle_emulator_stops_for_policy` takes `registered_instances`, then the configuration's lock, one
+  at a time, before the cycle's gates. Nothing to fix.
+- *Where.* `crates/runtime-host/src/host/idle.rs` (`idle_view`, `idle_emulator_stops_for_policy`),
+  `schedule_explanation.rs` (`IdleDraft::add`, `record_stopping`), `policy_host.rs`
+  (`PolicyEvaluationContext::idle_stops_emulator`), `host/policy_dispatch.rs`,
+  `host/resource_close.rs` (`prepare_physical_instances_on_start`); the word "admitted" in
+  `codes.rs`, `idle_action.rs`, `host/emulator_autostart.rs` and the two code fragments; the
+  contracts above.
+
+**Fix round 2** (coordinator work order `rd-1121/brief-486-asleep-fix2.md`, after CI's `lint` on
+fix round 1's head; stacked on pull request #1853, §1.494, merged at its head `d32cb7d1`).
+- *Lint.* `IdlePlanner::check` has had no caller outside the tests since the host checks with
+  `check_with_due_task`; it is built for tests only, as `record_gated` is. Clippy's run on fix round
+  1 named nothing else the slice touched.
+- *The merge.* Both sides kept: `PolicyEvaluationContext` carries `asleep`, `idle_stops_emulator`
+  and `entry_blocked`; a catalogue's activation clears #490's entry pairs and then this slice's
+  unanswered wakes, each its own state in the one activation path; a Runtime start begins both
+  empty; the scheduler workbench's package change clears the pairs alone, as it answers no wake.
+- *A pair's wait behind a hold* (`policy_host.rs`, `look_ahead`; `scheduling-blackout.md`, "The
+  idle plan behind a hold"). #490's position 4b added a pair's wait and its being set aside to the
+  order but not to #484's look ahead, so a plan made while a hold of positions 1 or 2 (the idle
+  action's own claim as it stops the emulator among them) deferred a waiting task counted it due,
+  and the instance, asleep after the stop, was woken at once for a task that cannot be dispatched
+  before the wait's end. The look ahead now reads them after 4a, on an instance not blocked or for
+  a store update task, their end the release; the block itself is still not read.
+- *Read against #490, nothing else to change.* An asleep instance selects nothing, so no block is
+  set on it. A blocked instance's candidates count due, so the idle check stops its emulator only
+  when none of them reaches 4b; #490 does not end a block at an idle stop (a recovery or a run that
+  succeeds, a resume, a blackout, a fence, a restart), and its held recovery waits while the idle
+  stop owns the instance; the first evaluation in which a candidate reaches the block wakes it, and
+  its startup package's success or the recovery ends the block. A waiting or set-aside pair is
+  deferred at 4b in the closure before the selection that names `instance_asleep_wake_due`, so it
+  is never the task an instance is woken for, and its end is its wake in the plan. A run admitted
+  and failed at its entry answers a wake; the instance may sleep again once the block ended, and is
+  woken for that pair no sooner than its wait's end.
+
+**At deploy.** No new key: nothing to configure. A v0.12.76 reader of the schedule explanation
+(`actingctl`, the MCP server, the console) meets one code it does not know,
+`instance_asleep_wake_due`, as a candidate row's `why` and in its `reasons`, on an instance whose
+emulator `stop_emulator` stopped, and only for the evaluation in which the wake is queued (the row's
+`next_wake_unix_ms` the evaluation's time); a code is carried as its spelling, so it reads it as an
+unknown code's text, as every new code of a release. `instance_idle_stop_withheld` is a
+`device_state_observed` record under the instance and a report line, read the same way. A rollback
+to v0.12.76 meets nothing kept on disk: the asleep set and ruling 6's memory are in memory only,
+`host.idle_state` keeps its shape, and the two codes stay in the ledger's records as codes that
+build does not know. Production runs `close_app` on every instance today, so nothing changes there
+until the coordinator sets `stop_emulator` or `auto` on an instance: the plan of a `close_app`
+instance is main's byte for byte (fix round 1), and the start prepares every instance it prepared
+before, since only a `stop_emulator` idle action holds an emulator stopped. In the release notes'
+language:
+被闲置动作停掉模拟器的实例改按「睡着」处理：调度照常判它的每个候选（次数、退避、收益、池子水位都照读），真能派的任务才把它唤醒（新原因码 `instance_asleep_wake_due`）；能停模拟器的实例上，被收益、无进展、池子水位这类没有时刻的门挡住的任务不再定唤醒时刻；Runtime 重启后，睡着的实例仍按睡着处理，启动时不再去连已停的模拟器。唤醒起了模拟器、之后一直没有排程任务被准入时，不再把模拟器停掉，记一条警告 `instance_idle_stop_withheld`。生产现在用的是关应用，不受影响。
+
+### 1.498 Slice #455 GOALS-PACK-1 (0.12.77): `resource verify` checks a repository's `goals.json` with the one goal check, its bundle carries an accepted one and its `interfaces.json` declares the revision the file needs (board #455; what [standard-pack-goals.md](standard-pack-goals.md), "Before any pack carries the file", said a later slice owes before any standard pack carries the file; the work order for goals by material, board #493, waits for it; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-455-goals-pack.md`, on main `f6e2cd26`)
+
+This section takes 1.498: 1.494 and 1.495 are taken by slices not yet on main and 1.497 by a slice
+in flight; they are left free. It ships in 0.12.77.
+[standard-pack-goals.md](standard-pack-goals.md) ("Who reads it", the row of `resource verify` and
+`standard-pack build`; "Before any pack carries the file") and
+[resource-verify.md](resource-verify.md) (the command's inputs, "Clean", the `bundle` step, the
+report's counts, `standard-pack build`, "The `package` revision") are the contract.
+
+**What was read in the code before building** (main `f6e2cd26`).
+- The steps run on one function, `run_steps` (`apps/actinglab/src/resource_verify.rs`), for both
+  rows: `resource verify` (`StepsFor::Verify`) and `standard-pack build` (`StepsFor::Build`). The
+  `bundle` step (`resource_verify/bundle.rs`, `bundle` and `lay_out`) makes the bundle (`package
+  bundle` into `<work>/bundle/`) and writes the zip's `interfaces.json`; `package bundle` writes
+  none.
+- `resource verify`'s declaration was `package` [3, 3], or [10, 10] when the repository holds
+  `notices/` (`package_revision(notices)`), decided in the verification and nowhere else: no
+  content of the zip raised it. Packages that declare `variables` (14), a shared read's `lines`
+  (21) and every other row of `revision.rs` raise only `standard-pack build`'s declaration
+  (`content_revision`, Workflow #464 P2), which counted `goals.json` at 14 already.
+- What `resource verify` read of a repository's root files: `applications.json`,
+  `maintenance.json` and, when present, `pages.json`, `interrupts.json`, `navigation.json`,
+  `schedule.json`, `display-layout.json`, `loading.json` with `loading/` and `notices/`, given to
+  `package bundle`; its `checkout` precondition bound `applications.json`, `maintenance.json`,
+  `pages.json`, `interrupts.json`, `navigation.json`, `declaration-exclusions.json`,
+  `manifest.yaml` and the files under `packs/` and `regression/` to their blobs. It neither read
+  nor bound `goals.json`. `standard-pack build` bound it and gave it to `package bundle` as
+  `--goals`, whose refusal names the first problem; the step relayed that refusal as its code
+  alone, without the word or the pointer.
+- A repository is one game root: `applications.json`'s game, its root files at its top. Two game
+  roots in one repository do not occur in this layout.
+
+**The rule.**
+- *The check, one implementation.* Once `package bundle` wrote the bundle, the `bundle` step of
+  both rows holds the repository's `goals.json` to the game root the bundle makes with the
+  resource tooling's `check_bundle_goals` (`crates/resource-tooling/src/bundle_goals.rs`): the
+  file read as `standard-pack check` reads it (`read_goals_file`, its bound plus one byte), judged
+  by `goal_issues` (the contract crate's reader and references, which `standard-pack check` and
+  `package bundle --goals` run) over the bundle's `bundle.json`, its root files (read by
+  `RootFileInputs`, as `package bundle` read them) and its packs below `packs/`, each problem given
+  by `goal_warnings`, as `standard-pack check` gives it. A refused file fails the step with every
+  problem, `standard_pack_root_invalid` (`game`, `path` the repository's file,
+  `standard_pack_problem`, `json_pointer`, `step`) in file order, as a refused root file fails it;
+  the step's index and copy checks still run in the same run, on `bundle/` without the file, so
+  that one run names every error of the step (fix round 1), and the step then stops before the zip.
+  Such a run leaves the `bundle/` it made, without the file, in the work directory; there is no
+  `out/` and no zip. A version 1 file has one problem, `goal_version_retired` at
+  `/schema_version`, as `package bundle --goals` refuses it. An accepted file is named in the
+  step's counts: `goals {game, path, entries}`, its entries counted by type, every type of
+  version 2 named.
+- *The bundle.* An accepted file is laid in `bundle/` beside `bundle.json`, the bytes the check read
+  (within its 1 MiB bound, so the whole file), as `package bundle --goals` lays it; the index and
+  copy checks, the zip, the read-back, the installed root and its `standard-pack check` take it as a
+  root file. The step gives `package bundle` no `--goals` any more: the problems of a refused file
+  are named by the step, every one; the file `bundle/` holds is the same.
+- *The declaration.* `resource verify`'s `interfaces.json` declares the highest of 3, 10 with
+  `notices/` and 14 (`GOALS_PACKAGE_REVISION`) with `goals.json`, so [14, 14] for a zip with the
+  file, which `BundleRevisionNeed::Goals` asks of it; `standard-pack build` declares its content's,
+  as before. A zip without the file declares what it declared before.
+- *Bound to the commit.* `goals.json` is a root input of both rows' `checkout` precondition (it was
+  `standard-pack build`'s only), so the file a zip carries is the committed blob, never an ignored
+  file. A repository without the file has the same files checked as before, with one exception
+  (fix round 1, found by the independent review): a commit without the file whose work tree holds
+  a `goals.json` that git ignores now fails `resource verify`'s `checkout` precondition, where
+  0.12.76 and before passed over the file. The person sees `resource_verify_checkout_dirty` with
+  `dirty_problem` `ignored_in_read_path` (its `first_path` `goals.json` when no other read path is
+  ignored) and every content step `not_run`, until the file is committed or taken out of the work
+  tree.
+- *Codes.* None added; no decision reads a code (the step decides by the check's verdict, an enum,
+  not by a code). `standard_pack_root_invalid` and the existing words of the file's problems name
+  every case. The outcome code index is unchanged and current. Fix round 1: the catalogue's
+  description of `standard_pack_root_invalid` (`contracts/outcome-codes/contract.json`) names
+  `goals.json` among the root files it reports, after its first sentence, so the index, built from
+  that sentence, stays as it is.
+
+**What does not change.** What `standard-pack check`, `package bundle --goals`, the installer's
+`place` and the Runtime's workbench do with the file; the file's format and its rules; the
+operation table (no parameter; the report gains the optional counts member `goals` and keeps its
+schema `actinglab.resource-verify.v1`, and the row's output is the command's report); every
+interface revision; `resource verify`'s report, zip and `interfaces.json` for a repository
+without the file (but for an ignored `goals.json` in its work tree, *Bound to the commit* above);
+`standard-pack build`'s zip and `build.json` (with an accepted file its zip holds
+the bytes `package bundle --goals` laid; with a refused one it fails as before, its failures now
+every problem with its values). No game, package or alias is named in code. The slices in flight
+(#1853 in `crates/runtime-host`, #486 in the policy evaluator and the host, and the slice on the
+goal check's treatment of irreversible packages) are not touched: `goal_issues` and its rules are
+called as they are, and no paragraph of the contracts about them changes.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The check of a written bundle's goals | `crates/resource-tooling/src/bundle_goals.rs`: `check_bundle_goals`, `BundleGoalsRequest`, `BundleGoals`, `BundleGoalsVerdict`; `lib.rs` exports them |
+| The step | `apps/actinglab/src/resource_verify/bundle.rs`: `bundle`, `lay_out`, `lay_goals`, `package_revision` |
+| The counts | `apps/actinglab/src/resource_verify.rs`: `Counts::Bundle` `goals`, `GoalsCounts` |
+| The read paths | `apps/actinglab/src/resource_verify/steps.rs`: `ROOT_INPUTS` gains `goals.json`, `BUILD_ROOT_INPUTS` loses it |
+| Texts | [standard-pack-goals.md](standard-pack-goals.md); [resource-verify.md](resource-verify.md) |
+
+**Tests** (`apps/actinglab/src/tests/gate_455_goals_pack.rs`, exec gate map row "#455
+GOALS-PACK-1"; neutral repositories made with git as RV-1's: game `neutral`, server `test`, two
+TOOL-1 packs, no `schedule.json`; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `goals_pack_a_repository_without_the_file_is_verified_as_before` (1) | 11 files checked; the bundle counts exactly RV-1's members (no `goals`, no root file, package 3, a zip of 9 entries); the zip's members RV-1's; `interfaces.json` `package` [3, 3] with this build's head; no `goals.json` in the zip or the installed root |
+| `goals_pack_an_accepted_file_is_named_carried_and_declared` (2) | A heading and a note: passed, 12 files checked; counts `goals` {neutral, `goals.json`, heading 1, note 1, resource 0, tier 0, variable 0}, root files [`goals.json`], package 14; a zip of 10 entries carrying the file byte for byte and declaring [14, 14], which this build's installer range holds (`package_edge_holds` over `distribution/windows/component-interfaces.json`) and which declares what the file asks (`BundleRevisionNeed::Goals`; [3, 3] does not: `goal_undeclared`); the installed root holds the file and `standard-pack check` lists it without a problem |
+| `goals_pack_a_refused_file_fails_with_every_problem_and_no_zip` (3) | A `resource` entry over a pool the root does not offer and a placement of a variable no pack declares: `resource_verify_failed`, the `bundle` step alone, its failures exactly `goal_pool_unknown` at `/entries/0/governs/pool` and `goal_variable_unknown` at `/entries/1/name`, each `standard_pack_root_invalid` with the game, the repository's file and the step, the first the top outcome's cause; fix round 1: pack B's directory also holds a file the bundle does not copy, and the same run's third failure is the copy check's `resource_verify_bundle_mismatch` `pack_copy_differs` naming `packs/<B>`; no zip, no `goals` in the counts; `standard-pack check` of a root holding the same file gives the same words at the same pointers in the same order |
+| `goals_pack_a_version_1_file_is_refused_as_the_bundle_refuses_it` (4) | Its one failure `goal_version_retired` at `/schema_version`, no zip; `package bundle --goals` refuses the same file `standard_pack_root_invalid` with the same word at the same pointer, `--out` not written |
+| `goals_pack_each_commit_is_verified_as_its_own_case` (5) | The work order's "two game roots in one repository" cannot be built (a repository is one game root); its nearest case: one repository's commit with the file, then the next without it, each verified on its own, the second answering what test 1 answers |
+
+Adapted: `gate_464_p2::p2_notices_give_package_10_and_goals_give_14`, its name kept: its last part
+pinned that `resource verify` left `goals.json` out of its zip and declared [10, 10]; the
+requirement makes it carry the file and declare [14, 14]. Every other test of `resource verify`
+(RV-1, NOTICES-3, P2, S3-7), of `package bundle` and of the installer's goals handling (G-R1,
+V1) holds as written. Fix round 1 extends test 3 (above): its failures are three, and the checks
+of the game, the path and the step read the `standard_pack_root_invalid` failures only.
+
+**Why, and what a release still needs** (fix round 1; coordinator work order
+`rd-1121/brief-1856-fix1.md`, after the independent review). The zip `resource verify` makes is the
+verification's, under `--work`, not a release: the four resource repositories make their release
+zips with `actinglab package bundle` from their own release script, not with `resource verify` and
+not with `standard-pack build` (the resource side's answer of 11-21; the Runtime side has not read
+those repositories). So this slice gives the repository's verification the check and the file; it
+does not put the file into a release. A release carries `goals.json` only once the resource side
+moves its release script to `standard-pack build` (which has carried an accepted file and declared
+the revision its content needs since 0.12.61), or has the script give the file to `package bundle
+--goals` and write `package` 14 at least into the zip's `interfaces.json` itself (`package bundle`
+writes none). That is owed by the resource side; the Tools owe nothing more for the file.
+
+**At deploy.** Nothing changes at the Runtime's start: no configuration, no record, no interface
+revision. A resource repository's CI checks `goals.json` and carries it in its verification's zip
+with `resource verify` only once its pinned Tools are 0.12.77 or later: an earlier `resource
+verify` leaves the file out of its zip and says nothing of it. A release zip carries the file
+only once the resource side changes its release script (above). A zip that carries the file and
+declares `package` [14, 14] is placed by the installers of 0.12.61 and later; the installer of
+0.12.60 (`package` [3, 12]) and every earlier one refuse it in the plan at their `package` edge
+(`interface_edge`), before the hold and any write. A gap this slice does not close (the
+independent review): `resource verify` reads no pack's content for its declaration, so a
+repository whose packs declare `variables` or a shared read's `lines` and that holds no
+`goals.json` is still declared `package` [3, 3] (or [10, 10] with `notices/`) by `resource
+verify`. With `variables`, today's installer refuses such a zip in its plan
+(`variable_undeclared`), and an older one takes it and its Runtime cannot run the pack; with
+`lines`, no installer checks it ([component-interfaces.md](component-interfaces.md), the `package`
+row 21): one whose range ends below 21 takes it and its Runtime refuses the pack at every run.
+Only `standard-pack build` declares by content. In the release notes' language:
+`resource verify` 现在检查资源仓里的 `goals.json`（用 `standard-pack check` 和 `package bundle --goals` 的同一套检查）：被拒的文件让打包一步失败，每个问题都列出来，这一步其余的索引和拷贝检查也照跑，不出 zip（工作目录里留下不带该文件的 `bundle/`）；通过的文件原样放进校验用的 zip（与 `bundle.json` 同级），`interfaces.json` 声明 `package` [14, 14]，报告的打包计数里写出它（各类条目数）。没有该文件的资源仓结果与以前相同，只有一处例外：工作树里有一个被 git 忽略的 `goals.json` 时，checkout 一步现在会失败（`resource_verify_checkout_dirty`，`ignored_in_read_path`），以前是通过。资源仓的 CI 要把钉住的 Tools 升到 0.12.77 或更高，校验才会检查并带上这个文件；资源仓发版用的是各仓自己脚本里的 `package bundle`，发版的 zip 要带上这个文件，还要资源侧把发版脚本换成 `standard-pack build`（或给 `package bundle` 传 `--goals` 并自己在 `interfaces.json` 里声明 14 以上）。带该文件的 zip 只有 0.12.61 及以后的安装器能放置。`resource verify` 仍不按包的内容声明修订：包里声明了变量或 `lines`、又没有 `goals.json` 的仓仍声明 3。
+
+### 1.499 Slice G-R2x (0.12.77): G-R2s is withdrawn: a goal raises the weight of every task that produces its pool, a package that can do something irreversible included (Workflow #455; the owner's audit of 11-21 found G-R2s against her own words, decision 79 of 10-28 and decision 234 of 11-18, quoted below; the rulings are the coordinator's withdrawal of 11-21 and its addition on the void of an uncomposed root, not the owner's words; coordinator work order `rd-1121/brief-455-gr2x.md`, on main `f6e2cd26`)
+
+This section takes 1.499: §1.494 is pull request #1853's, §1.495 is reserved, §1.496 is on main,
+§1.497 and §1.498 are slices in flight. [resource-targets.md](resource-targets.md) ("A task that can
+do something irreversible", rewritten; "A game whose root cannot be composed", a section of its own
+now) and [standard-pack-schedule.md](standard-pack-schedule.md) ("The irreversible mark",
+rewritten; "A game whose root cannot be composed", moved out of it) are the contract;
+[scheduling/README.md](scheduling/README.md), [scheduling/v2/README.md](scheduling/v2/README.md)
+and its `tasks.schema.json`, [standard-pack-goals.md](standard-pack-goals.md) (the sentences of the
+evaluator's line; fix round 1, the two that still named the composer's mark),
+[remedies.md](remedies.md) and [instance-fact-store.md](instance-fact-store.md) follow it.
+
+**What is withdrawn, and on whose words.** G-R2s (0.12.60, §1.369, the coordinator's rulings of
+11-14) built the line "a goal never raises the weight of a task whose package can do something
+irreversible": the composer marked such a task `irreversible_reach` (also a rule such a package
+follows by a chain link, a package whose remedies list an irreversible capability, and every task of
+a game root one of whose packages could not be read), and the evaluator weighed a marked candidate
+on an instance holding a target record as on an instance without one, with
+`resource_target_package_irreversible`. The owner's words it went against:
+- decision 79 (10-28): 「这个可以自主突破，并且这个自主突破需要是共通的，因为我在启用RT的调度后，这个账号就相当于直接交给RT了。」
+- decision 234 (11-18; premium currency and tickets spent by the scheduler): 「234，批准，好兄弟，可以跑，换句话说，只有跑了才知道符不符合我们的预期，否则全都是纸上谈兵。」
+
+In practice it also made a goal useless wherever a producing rule reached such a package through a
+chain or a remedy, and wherever one package of the root could not be read. The rulings: (1) the
+evaluator weighs every candidate alike; (2) the composer writes no mark and no longer runs the walk
+that spread it; (4) a package that cannot be read stays told by an existing warning; (5) the stored
+form keeps a start on 0.12.76's state and a rollback to it working; (6) the retired code leaves the
+catalogue as the catalogue's rules ask; (7) nothing names a game, package or alias. The
+coordinator's addition: the void of a game whose root cannot be composed (G-R2s round 2,
+`LeftOutFacts::void_targets`) is not withdrawn and stays exactly as it is; only its description
+moves out from under the irreversible task.
+
+**What is not changed (ruling 3, word for word).** "Nothing else of the irreversible declaration
+changes in this slice. A capability's `irreversible` mark in a package's declaration stays. The goal
+check still refuses an entry that governs such a package (`goal_governs_irreversible`), kernel
+admission still refuses `variables` on one (`variables_on_irreversible`), `standard-pack check`
+still reports `variable_irreversible_by_root`, and the workbench's judgement that such a variable
+does not apply stays: whether goals and variables may govern such packages is a question the
+coordinator has put to the owner, and until she answers those three stay exactly as they are, with
+the type they share (`IrreversiblePackages`, its rule for a package that could not be read
+included). The remedy layer's own rules stay."
+
+**Built.**
+- *The evaluator* (`crates/policy/src/evaluator.rs`, `apply_priority_selection`): the branch that
+  left a candidate's record out for its task's mark, the reason `LeftOutWhy::Irreversible` and
+  `irreversible_left_out_reason` are removed; the record's own resolution (`instance_targets`),
+  which every unmarked candidate read under G-R2s and was left as it was, is what a candidate of a
+  marked task reads now. The resolution without the record (`unrecorded`) is still computed, for
+  the void alone (`LeftOutWhy::RootUncomposed`, its reason, its decision identity, all unchanged).
+  A candidate whose task never carried the mark runs no line this slice changes, so it keeps its own
+  score-stage numbers and its net benefit. What can change on its instance (fix round 1, where this
+  said "byte for byte main's", which said too much) is the competition and every record that lists
+  competitors: the winner's lead (`rank_breakdown`'s `lead`), the decision record's rows of the
+  candidates passed over (`decision_candidate_not_selected`, their `total` and `behind_by`), the
+  order of a capped round by value per unit, the reserve gate and the heavy-scene slots, because a
+  candidate that carried the mark can now be raised by a goal. That is the purpose of the
+  withdrawal. On an instance without a target record nothing changes. The forward projection runs
+  the same score stage, so it weighs such a task alike too.
+- *The composer* (`crates/policy/src/compose.rs`): `irreversible_rules`, the `marked` input of
+  `instantiate` and the member's write in `compose_task` are removed. The required input
+  `StandardPackGameFiles.irreversible` stays, read only for `unreadable()`, the composition's
+  `standard_pack_package_unreadable` warnings (`unreadable_packages`). A `schedule.json` rule that
+  writes `irreversible_reach` is still refused (`schedule_invalid` at it), so no composed task
+  carries it; `standard_pack_rule_followers` stays, the goal check's lists.
+- *The member* (`TaskSpec::irreversible_reach`) stays readable and without effect (ruling 5,
+  below); `TaskSpec::is_irreversible_reach`, which nothing reads now, is removed. A V1 document
+  that names it is still refused (`unknown_field`).
+- *The workbench* (`crates/runtime-host/src/host/standard_pack_schedule.rs`, `held_otherwise`):
+  the comparison of the mark (a task the present composition marked and the active generation did
+  not) is removed; with no composition writing the mark it was always true, so the function decides
+  as before for every generation, a 0.12.76 one included. The re-read of the declarations stays
+  (the variables' judgement and the warning read it).
+- *Codes.* `resource_target_package_irreversible` is retired (`status: retired`, `retired_in:
+  0.12.77`, its registry entry removed, as the outcome guard's G1 asks of a code a release produced
+  and this one does not; it was pending, so no release file binds it: `released/0.12.76.json` holds
+  no entry). Descriptions changed, no signature: `resource_target_root_uncomposed` (its own
+  section; the mark's comparison gone) and `standard_pack_package_unreadable` (it marks nothing; it
+  is what tells a person). The index was regenerated by hand and confirmed by
+  `ci/outcome_codes_index.py --check` ("is current").
+
+**Removed whole, and what had to stay.** Removed: the evaluator's special case and its reason; the
+composer's walk (`irreversible_rules`) and its write; `is_irreversible_reach`; the mark comparison
+of `held_otherwise`; the registry entry of the retired code. Kept because something else reads it:
+`IrreversiblePackages` with `counts_irreversible`, `followers_irreversible`, `package`,
+`irreversible_capabilities` and `unreadable` (the goal check through `GoalReferences`, the
+variables' judgement `judge_root_variables` and `check_root_variables`, the remedy table's
+`VariableTable::build`, the standard-pack trial's irreversible mark, the composer's warning);
+`DeclaredCapabilities` and `RemedyDeclarations::declared_capabilities` (the same readers);
+`standard_pack_rule_followers` (the goal check's `GoalRule::followers`); the workbench's
+declaration marks and re-read and lab-ops' `game_irreversibility` (the composer's required input,
+the variables); `IRREVERSIBLE_REACH_MEMBER` and the member (the stored form, the two refusals).
+
+**What tells a person that a package's declaration could not be read** (ruling 4). The existing
+warning `standard_pack_package_unreadable` (contract code, warning; `game`, `package_id`), kept:
+the composer gives it once per such package; the workbench records it once while the package
+stays unreadable, with the reader's refusal as its cause; check-config notes it in its
+`standard_pack_schedule` preview's problems; `actinglab standard-pack check`, `compose` and
+`package bundle --schedule` list it. Nothing new is added. What an unreadable package still does:
+the goal check counts every package of its root as irreversible, and the variables' judgement keeps
+the root's variables from applying (`package_unreadable`); a dispatched package the workbench could
+not read hands no variable value (`goal_value_package_unreadable`), as before.
+
+**The stored form** (ruling 5; read in the code). A composed task with the member persists in one
+place: the catalog generations of the state root (each `manifest.json` with its four documents),
+which `read_generation` (`crates/runtime-host/src/policy_host.rs`) compiles at a start, the active
+one and every one the start's dispatches and decision memories name, and refuses when the compiled
+hash is not the one its manifest records (`catalog_generation_content_mismatch`, fatal). The hash
+is `canonical::catalog_hash` over the deserialized documents, the member included. So the member
+must stay readable and kept as read, or a 0.12.76 generation would no longer load: it stays, with
+no effect, and `scheduling/v2/README.md` and `tasks.schema.json` say so. The composition record
+(`standard-packs.json`: rules digest, games, procedures, pools) holds no task member. Ledger
+records hold the catalog hash and version (activation, dispatch) and a dispatch's reasons as
+recorded; a code is read back as its spelling (`CodeStr`), so a 0.12.76 dispatch record that
+carries `resource_target_package_irreversible` is read as any record of a retired code. **A start
+on 0.12.76's state** reads every generation as above. **A rollback to 0.12.76** meets this build's
+generations without the member (0.12.76 reads a task without it as unmarked) and records with no
+new code, member or shape; its first workbench check composes the mark again and activates one new
+generation. **The catalog hash:** a root one of whose tasks carried the mark composes another
+catalog hash (the documents lose the member; t5 shows the two hashes differ), so at the first check
+after the deploy, which runs before that cycle's evaluation, the workbench activates one new
+generation (`catalog.activated`, version the ledger head plus one) for the whole composed catalog;
+an installation whose active generation carries no member composes the same hash and activates
+nothing. What that new hash resets: the SS-4 no-progress guards pin the hash, but they are memory
+only and a start has none; fix round 1 adds two more a new generation rebuilds, both memory only,
+so a start has neither: the random delay table, whose entries end when the generation changes
+(`RandomDelayTable::prune`, `crates/runtime-host/src/policy_host.rs`), and the remedy table, rebuilt
+for the new catalog hash (`RemedyState::table_due`, `crates/runtime-host/src/remedy.rs`); a kept
+capped episode is kept (its consumers key, task id, consumption and `benefit_limited`, is
+unchanged); daily budgets, cooldowns and run states are per task id, unchanged; the dispatches'
+decision identities hash the new catalog hash, as at every new generation.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2X-1 | `irreversible_reach` (`TaskSpec`, V2) | catalog member, readable, without effect | G-R2x | none (the composers of 0.12.60 to 0.12.76) | kept for the stored generations and their hashes; still refused on a `schedule.json` rule and in V1 |
+| GR2X-2 | `resource_target_package_irreversible` | policy code, retired | G-R2x | none since 0.12.77 | registry entry removed; pending, so bound by no release file |
+| GR2X-3 | `StandardPackGameFiles.irreversible` | composer input | G-R2x | its six callers | still required; read for `unreadable()` only |
+
+**Interface.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config` or
+`runtime-outcomes` shape changes (a member kept as it was, a code no longer emitted).
+
+**Tests** (policy and host gate rows "#455 G-R2x"; the gate files of G-R2s rewritten in place).
+
+| Test | What it shows |
+|---|---|
+| policy `gate_455_gr2s::gr2x_t1_a_task_that_carried_the_mark_is_weighed_as_without_it` (1) | On gate_ss1's catalog, a judged task carrying the member has under a v2 and a v3 record the whole decision and dispatch reasons of the task without it (term 2000 for both), no `resource_target_package_irreversible`; gate_ss6's goal-driven task carrying it gets `gap_remaining` 55 and `run_cap` 6 as without it; the forward projection lifts it as without it. Every way G-R2s made a package irreversible reached the evaluator only as this member, which t4 shows no composition writes |
+| policy `gr2x_t2_a_v1_record_that_names_a_task_that_carried_the_mark_applies_to_it` (2) | A v1 record naming it in `adjust` and in `override` mode: `resource_target_applied` or `resource_target_override`, and the whole decision, its wake included, of the task without the member |
+| policy `gr2x_t3_every_other_candidate_keeps_its_numbers` (3) | Task A carrying it, task B not, under v1, v2 and v3: both tasks' rank and score-stage reasons equal those of the catalog without it (task B's as G-R2s's t2 pinned them on main), task B's term the contract's 3021 under v2 and v3; without a record every decision of the two catalogs is the same |
+| policy `gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one` (4) | A root irreversible by its own declaration, the whole root's, a follower, a remedy or an unreadable package composes no member and the four documents byte for byte, the catalog hash and the rules digest of the same root with no irreversible package (what every release composes for that root, which `gate_rl1a`'s unchanged G-R2s test pins to the as-is documents and hash), the same warnings but one `standard_pack_package_unreadable` naming the unreadable package; a rule that writes the member is still refused |
+| policy `gr2x_t5_a_generation_composed_with_the_mark_is_read_and_its_hash_kept` (5) | The fixture root's 0.12.76 generation (this build's composition with the member on the four tasks G-R2s marked) compiles with the member kept and hashed, to another hash than this build's composition |
+| host `gate_455_gr2s::gr2x_host_an_unreadable_package_is_warned_and_no_package_marks_a_task` (6) | With one package unreadable before the start, the workbench composes and activates the root, no task carrying the member, and records `standard_pack_package_unreadable` once with the reader's refusal; a control file that marks a capability irreversible is read again and activates nothing |
+| host `gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on`, `gr2x_host_check_config_composes_no_mark` (6) | The metadata seam's package is named once with no cause, nothing activated; check-config's composition carries no member |
+
+Kept unchanged (test 7, ruling 3): the goal check's (the resource tools' `gate_455_gr2s::gr2s_t7`
+and `gr2s_r3`), the contract crate's and the variables' tests (`gate_463_v2`, lab-ops'
+`gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package`, actingd's
+`gate_rl1c::gr2s_check_config_notes_each_package_it_cannot_read`), and the void's
+(`gr2s_t10`, `gate_rl1b`'s `gr2s_r2` and `gr2s_r3` tests). Left the map, with their
+`[[retired]]` entries: G-R2s's policy t1 to t9 and its three host tests. Adapted, its name kept:
+`gate_rl1b::gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded` (a package
+that comes to provide an irreversible capability no longer makes its game held otherwise, so the
+test asserts that game B keeps its goal there and is voided and recorded when its `schedule.json`
+moves rule B to another package; the requirement deliberately changes what it pinned). No task
+fixture of any other gate file names the member, so none was touched for it.
+
+**At deploy.** Ruling 5's findings above: the start loads 0.12.76's generations, and a rollback
+starts on this build's state. **The scheduling of an instance really changes only when a pool that
+a task which carried the mark produces carries a target on that instance that is not met (another
+candidate's `resource_targets` reason on that instance shows that target `applied` with a `gap`
+above 0), or when a version 1 record on that instance names such a task** (fix round 1, made
+exact): that candidate is then raised by the goal, and may outrank the instance's other
+candidates; every other candidate keeps its own score-stage numbers and its net benefit, and what
+can change around it is the competition and the records that list competitors (*The evaluator*
+above); an instance without a target record is untouched. To see beforehand whether an
+installation has such an instance: the active
+generation's `tasks` document in the state root holds `"irreversible_reach": true` on the tasks
+that carried the mark; the instance's `session.resource_targets` record (its goals) shows whether
+it holds a target record; and in the running Runtime's schedule explanation (`actingctl schedule`,
+`ac_schedule`) each such candidate's row carries `resource_target_package_irreversible` among its
+`reasons` (unless cut, `reasons_omitted`), as do the `reasons` of the policy dispatch records of
+such candidates that were dispatched. A
+v0.12.76 reader of this build's decision records meets no new code (the retired one is no longer
+written) and a task without the member it already reads as unmarked. The first check after the
+deploy activates one new generation where the active one carries the member (above).
+
+**Limits.** The void of an uncomposed root stays, and its own reason ("the active generation may
+not hold the game as its files give it now") is now its only one; whether it should stay is not
+this slice's question. Fix round 1 rewrote the two sentences of `standard-pack-goals.md` that still
+named "the composer's irreversible mark" outside the evaluator's line: in "Who reads it", the
+workbench's reading of every package's declaration serves, since G-R2x, the warning for a package
+that cannot be read and the variables' judgement; in the followers' sentence of the first safety
+place, the lists are those `standard_pack_rule_followers` gives. No other paragraph of that file
+changed.
 
 ### 1.500 Slice #428 S168-LK (0.12.78): a step of a linear plan reads a list (board #428; the owner's rule of 11-15 that packages are made by recording, which gives step plans, while only a page graph could read a scrolling list; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-428-linear-read-list-k.md`, after the read-only study `rd-1121/study-linear-read-list.md` and the coordinator's disposition at its end; on main `f6e2cd26`, v0.12.76)
 

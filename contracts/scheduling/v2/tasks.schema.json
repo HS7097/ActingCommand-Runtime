@@ -189,7 +189,7 @@
           "maximum": 86400000
         },
         "irreversible_reach": {
-          "description": "Workflow #455 G-R2s: true marks a task whose package, or a rule that follows it by a chain link (directly or further down), can do something irreversible by its game root's declarations, or whose game root has a package that could not be read; a resource target never weighs its candidate, which is computed as on an instance without a target record. The standard-pack composer writes it and refuses a schedule.json rule that writes it. false is as without the member.",
+          "description": "Workflow #455 G-R2s, withdrawn by G-R2x (0.12.77): the irreversible mark the standard-pack composer of 0.12.60 to 0.12.76 wrote, true, on a task whose package could do something irreversible. Readable and without effect since 0.12.77: a catalog generation of those releases carries it and its catalog hash is computed over it; nothing reads its value, and a candidate of a task that carries it is weighed as every candidate. No composer writes it, and a schedule.json rule that writes it is refused.",
           "type": "boolean"
         },
         "reserves": {

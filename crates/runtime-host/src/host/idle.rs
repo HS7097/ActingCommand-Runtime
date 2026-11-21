@@ -151,7 +151,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation, IdleCode, IdleLocation, IdleWakeCause};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, KeptState,
-    REST_DECLARATION_MEMBER, REST_IDLE_ACTION, WakeWork,
+    REST_DECLARATION_MEMBER, REST_IDLE_ACTION, WakeWork, WithheldStop,
 };
 use actingcommand_contract::codes::SanitizationCode;
 use actingcommand_contract::outcome::Outcome;
@@ -327,6 +327,23 @@ fn wake_outcome(
     }
 }
 
+/// #486 ASLEEP-1 (register §1.497, ruling 6): `instance_idle_stop_withheld` for `alias`, the
+/// warning of a wake (`withheld`: why it came, the task it named, when it was queued) after which
+/// the idle check did not stop the instance's emulator again, no scheduled run having been
+/// admitted on the instance since.
+fn withheld_stop_outcome(alias: &str, withheld: &WithheldStop) -> Outcome {
+    let outcome = Outcome::new(IdleCode::StopWithheld)
+        .operation(IdleLocation::Check)
+        .alias(alias)
+        .idle_action(IdleAction::StopEmulator.as_str())
+        .idle_wake_cause(withheld.cause)
+        .at_unix_ms(withheld.woken_at_unix_ms);
+    match withheld.task_id.as_deref() {
+        Some(task_id) => outcome.task_id(task_id),
+        None => outcome,
+    }
+}
+
 /// A failure of one instance's idle action, `code` at `operation`, with `detail` as its foreign
 /// cause.
 fn idle_error(
@@ -419,8 +436,9 @@ impl HostShared {
         }
         // The scheduler's latest plan of each configured instance (IDLE-1P: its tasks and its
         // fact-refresh reading apart), (IDLE-3, #447) whether it fails to count the end of a run
-        // the policy dispatched on the instance and (#484 IDLE-W2) the task it counts due, all
-        // read under one policy guard.
+        // the policy dispatched on the instance, (#484 IDLE-W2) the task it counts due and (#486
+        // ASLEEP-1, ruling 6) the latest admission of a scheduled run on it, all read under one
+        // policy guard.
         let latest = {
             let read = |policy: &crate::policy_host::PolicyHost| {
                 configured
@@ -432,6 +450,7 @@ impl HostShared {
                                 policy.idle_plan(alias),
                                 !policy.idle_runs_counted(alias),
                                 policy.idle_due_task(alias),
+                                policy.idle_latest_admission(alias),
                             ),
                         )
                     })
@@ -458,9 +477,14 @@ impl HostShared {
             }
             // PAUSE-AUTO (0.12.34): whether an automatic start may start the emulator now.
             let hold = self.automatic_start_hold(&alias, IdleLocation::Check)?;
-            let (latest_plan, run_uncounted, latest_due_task) =
-                latest.get(&alias).cloned().unwrap_or((None, false, None));
-            let view = self.idle_view(instance_id, emulator_on, hold.is_some(), run_uncounted)?;
+            let (latest_plan, run_uncounted, latest_due_task, latest_admission) = latest
+                .get(&alias)
+                .cloned()
+                .unwrap_or((None, false, None, None));
+            let view = IdleView {
+                latest_admission,
+                ..self.idle_view(instance_id, emulator_on, hold.is_some(), run_uncounted)?
+            };
             let plan = plans.map_or(latest_plan, |given| given.get(&alias).copied());
             // #484 IDLE-W2: the task the plan counts due, which a wake for it names.
             let due_task = if plans.is_some() {
@@ -468,7 +492,27 @@ impl HostShared {
             } else {
                 latest_due_task
             };
-            let Some(step) = planner.check(&alias, &config, view, plan, now_unix_ms) else {
+            let step = planner.check_with_due_task(
+                &alias,
+                &config,
+                view,
+                plan,
+                now_unix_ms,
+                due_task.as_deref(),
+            );
+            // #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of a wake that started the
+            // instance's emulator, the first time the check did not stop that emulator again
+            // because no scheduled run has been admitted on the instance since. A record that
+            // fails is this instance's failure (#419).
+            if let Some(withheld) = planner.take_withheld_stop(&alias)
+                && let Err(error) = self.record_idle(
+                    self.idle_links(instance_id)?,
+                    withheld_stop_outcome(&alias, &withheld),
+                )
+            {
+                self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
+            }
+            let Some(step) = step else {
                 continue;
             };
             let pending = |work: IdleWork,
@@ -653,6 +697,84 @@ impl HostShared {
                     },
                 )
             })
+            .collect())
+    }
+
+    /// #486 ASLEEP-1 (register §1.497): the instances whose emulator their idle action stops or
+    /// holds stopped as a cycle starts (the planner's `stop_emulator` phases: the action asked for
+    /// and not ended, its claim holding the key while its stop runs, and the action done, its wake
+    /// not come), by alias; read with the closed instances, before any other lock of the cycle.
+    pub(super) fn idle_emulators_held_stopped(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        Ok(lock(&self.idle, IdleLocation::Check)?.emulators_held_stopped())
+    }
+
+    /// #486 ASLEEP-1 fix round 1 (register §1.497; `contracts/runtime-config.md`, "What wakes an
+    /// idle instance"): the instances whose idle action in effect can stop their emulator, by
+    /// alias: of the instances the idle check plans for (a registered physical instance with a
+    /// device system it can drive), each whose configuration names `stop_emulator`, or `auto`,
+    /// whose highest tier that is, with its startup package and its configured emulator start in
+    /// effect (the check's `IdleView::emulator_wakeable`). The idle plan of each takes no wake from
+    /// a decision a gate without a time holds (`schedule_explanation::IdleDraft::add`). Read as a
+    /// cycle starts, before the policy's lock; each lock is taken alone.
+    pub(super) fn idle_emulator_stops_for_policy(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        let instances = lock(&self.registered_instances, IdleLocation::Check)?
+            .values()
+            .filter(|instance| {
+                instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
+                    && instance.device_system_without_input_backend().is_none()
+            })
+            .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+            .collect::<Vec<_>>();
+        let startup_packages = self.startup_packages()?;
+        let mut stops = BTreeSet::new();
+        for (instance_id, alias) in instances {
+            let Some(config) = self.idle_settings(instance_id)? else {
+                continue;
+            };
+            if matches!(
+                config.action,
+                IdleAction::StopEmulator | IdleAction::Auto(_)
+            ) && startup_packages.contains_key(&instance_id)
+                && self.start_emulator_in_effect(instance_id)?
+            {
+                stops.insert(alias);
+            }
+        }
+        Ok(stops)
+    }
+
+    /// #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep instance"):
+    /// of `held_stopped` ([`Self::idle_emulators_held_stopped`]), the instances asleep as the
+    /// cycle's inputs were projected: the backend self-check gate alone withdrew the availability
+    /// in effect (`withdrawals`, the projection's word `self_check`: its configured seed is
+    /// available, and no device link, device state or device system withdrew it), no fence holds
+    /// it (`fenced`, the cycle's own), and it is no instance AVAIL-1's probes take up (a self-check
+    /// or a preparation step of its own that failed). An instance the projection holds available
+    /// is in no withdrawal, so it is never asleep. By alias.
+    pub(super) fn asleep_for_policy(
+        &self,
+        held_stopped: &BTreeSet<String>,
+        withdrawals: &crate::policy_host::AvailabilityWithdrawals,
+        fenced: &BTreeSet<String>,
+    ) -> RuntimeHostResult<BTreeSet<String>> {
+        if held_stopped.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let stopped = lock(&self.registered_instances, IdleLocation::Check)?
+            .values()
+            .filter(|instance| held_stopped.contains(&instance.instance_alias))
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
+            .collect::<Vec<_>>();
+        let probed = lock(&self.unavailable_instances, IdleLocation::Check)?;
+        Ok(stopped
+            .into_iter()
+            .filter(|(alias, instance_id)| {
+                withdrawals.get(alias).is_some_and(|withdrawal| {
+                    withdrawal.source == crate::codes::AvailabilitySource::SelfCheck
+                }) && !fenced.contains(alias)
+                    && !probed.contains_key(instance_id)
+            })
+            .map(|(alias, _)| alias)
             .collect())
     }
 
@@ -1004,6 +1126,8 @@ impl HostShared {
             emulator_wakeable: startup_package && configured_start,
             start_held,
             run_uncounted,
+            // #486 ASLEEP-1 (ruling 6): the check sets the latest admission it read with the plan.
+            latest_admission: None,
         })
     }
 
@@ -1920,6 +2044,18 @@ impl RuntimeHost {
         let shared = self.shared_ref(IdleLocation::Check)?;
         let policy = lock(shared.policy()?, IdleLocation::Check)?;
         Ok(policy.idle_due_task(alias))
+    }
+
+    /// #486 ASLEEP-1 (ruling 6), tests: the latest admission of a scheduled run on `alias` the
+    /// policy's dispatch journal holds (`PolicyHost::idle_latest_admission`), read under the policy
+    /// guard as the idle check reads it.
+    pub(crate) fn idle_latest_admission_for_test(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<Option<u64>> {
+        let shared = self.shared_ref(IdleLocation::Check)?;
+        let policy = lock(shared.policy()?, IdleLocation::Check)?;
+        Ok(policy.idle_latest_admission(alias))
     }
 
     /// #484 IDLE-W2 fix round 1, tests: runs `hook` once, on the instance's worker, when the next
