@@ -60,12 +60,14 @@ name: CI
 #   it. The runner kills a step that runs out of its own limit and fails it; the job is not
 #   cancelled. So `!cancelled()` holds and `steps.test.outcome` is `failure`, the two steps after
 #   it run, and the uploaded log is the log up to the kill.
+# - #71 FLK-17: in run 44827500729 (pull request #1853) host-lab's Test step was killed at its
+#   35-minute limit when the runtime-host library's test binary had finished 1801 of its 1816
+#   tests, and on main the passing runs of the whole job took 35m56s to 40m49s against its
+#   45-minute limit. So host-lab's job and Test limits each rose by 15 minutes; splitting the job
+#   is a later slice.
 # - light: job 15, Test 8. host-lab: job 60, Test 50. exec-core, exec-tooling, ledger,
 #   runtime-client, apps: job 35, Test 15. lint, flaky and gate have no such Test step and keep
 #   only their job limit.
-# - host-lab rose from job 45, Test 35 (#490 ENTRY-A fix round 5): the runtime-host lib has 1816
-#   tests and its passing runs on main ended within a minute of the old limit; splitting the job
-#   is a later slice.
 
 on:
   push:
@@ -359,8 +361,9 @@ jobs:
   host-lab:
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
-    # #71 FLK-13: its Test step took 20 to 23.5 minutes then (one run reached 29.6 and the old
-    # 35-minute job limit); 60 leaves the step's 50 and 10 for setup, build, attribution, upload.
+    # #71 FLK-13: its Test step takes 20 to 23.5 minutes (one run reached 29.6 and the old
+    # 35-minute job limit). FLK-17: 60 leaves the step's 50 and 10 for setup, build, attribution,
+    # upload.
     timeout-minutes: 60
     env:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog -p actingcommand-lab-rescue

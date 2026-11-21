@@ -22,8 +22,8 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3976 |
-| retired | 89 |
+| active | 3975 |
+| retired | 90 |
 | all | 4065 |
 
 ## Active codes by category
@@ -31,7 +31,7 @@ here.
 | Category | Codes |
 |---|---:|
 | success | 125 |
-| info | 225 |
+| info | 224 |
 | warning | 188 |
 | error | 3421 |
 | fatal | 17 |
@@ -40,12 +40,12 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 822 |
+| `common_causes` and `handling` both written | 821 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3150 |
 | `settled` | 154 |
-| `pending` | 3822 |
-| all active codes | 3976 |
+| `pending` | 3821 |
+| all active codes | 3975 |
 
 ## By owner
 
@@ -70,7 +70,7 @@ here.
 | [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
-| [policy](policy.md) | 119 | 117 | 56 | 0 |
+| [policy](policy.md) | 119 | 116 | 55 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
 | [resource-tooling](resource-tooling.md) | 115 | 114 | 38 | 0 |
@@ -82,4 +82,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4065 | 3976 | 822 | 154 |
+| all | 4065 | 3975 | 821 | 154 |

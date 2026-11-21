@@ -349,16 +349,19 @@ file then names `queue_wait` in `requires`. Refused, at the member: in a V1 docu
 `type_mismatch`; one outside the range `limit_exceeded`. A task without the member serializes,
 hashes and decides exactly as before.
 
-Workflow #455 G-R2s (since 0.12.60; register §1.369; [../../resource-targets.md](../../resource-targets.md),
-"A task that can do something irreversible"), V2 only: a task may carry `irreversible_reach`, a
-boolean. With `true` its package, or a rule that follows it by a chain link, can do something
-irreversible by its game root's declarations (or a package of the root could not be read), and a
-resource target never weighs its candidate: the candidate is computed as on an instance without a
-target record. The standard-pack composer writes it ([../../standard-pack-schedule.md](../../standard-pack-schedule.md),
-"The irreversible mark") and refuses a rule that writes it itself; a catalog written by hand may
-carry it. With `false` it is as without the member. A V1 document that names it is refused as an
-unknown field at the member. A task without the member serializes, hashes and decides exactly as
-before.
+Workflow #455 G-R2s (since 0.12.60; register §1.369), withdrawn by Workflow #455 G-R2x (0.12.77;
+register §1.499; [../../resource-targets.md](../../resource-targets.md), "A task that can do
+something irreversible"), V2 only: a task may carry `irreversible_reach`, a boolean. The
+standard-pack composer of 0.12.60 to 0.12.76 wrote it, `true`, on a task whose package could do
+something irreversible, and a resource target then never weighed its candidate. **Since 0.12.77
+the member has no effect**: it stays readable because a catalog generation those releases composed
+carries it, and the Runtime compiles at its start every generation its dispatches and decision
+memories name; it is read, kept as read and part of the catalog hash as before, and nothing reads
+its value, so a candidate of a task that carries it is weighed as every candidate. No composer
+writes it ([../../standard-pack-schedule.md](../../standard-pack-schedule.md), "The irreversible
+mark"), which still refuses a rule that writes it itself; a catalog written by hand may carry it.
+A V1 document that names it is refused as an unknown field at the member. A task without the
+member serializes, hashes and decides exactly as before.
 
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an

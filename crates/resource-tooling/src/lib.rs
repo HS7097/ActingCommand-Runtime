@@ -11,6 +11,9 @@
 mod adopt;
 mod api;
 mod authoring;
+// Workflow #455 GOALS-PACK-1: a resource repository's `goals.json` held to the game root a written
+// bundle makes, for `resource verify`'s and `standard-pack build`'s `bundle` step.
+mod bundle_goals;
 mod business_catalog;
 mod table_bindings;
 pub use table_bindings::{
@@ -222,6 +225,7 @@ pub use adopt::OtherPackagesWarnings;
 pub use adopt::{AdoptStage, AdoptStageTime, AdoptTimings};
 pub use api::*;
 pub use authoring::*;
+pub use bundle_goals::{BundleGoals, BundleGoalsRequest, BundleGoalsVerdict, check_bundle_goals};
 pub use business_catalog::*;
 // Workflow #463 AC-1: the word of the cases an adoption took.
 pub use codes::AdoptCasesState;

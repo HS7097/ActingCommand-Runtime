@@ -479,8 +479,7 @@ impl Bench {
     /// Places `bundle.json` registering `packages` and `schedule` (none removes the file).
     /// Workflow #455 G-R2s fix round 1: with a readable package, providing nothing, in the
     /// directory the bundle names for each package that has none yet, so the workbench reads every
-    /// package and marks no task (the whole-game mark of a package it cannot read is
-    /// `gate_455_gr2s`'s).
+    /// package (a package it cannot read is `gate_455_gr2s`'s).
     fn place(&self, game: &str, server: &str, packages: &[&str], schedule: Option<&Value>) {
         write_json(
             &self.path(game, "bundle.json"),
@@ -2037,19 +2036,26 @@ fn gr2s_r3_after_a_start_one_failing_root_voids_only_its_own_game() {
     bench.close();
 }
 
+/// Workflow #455 G-R2x (register §1.499): the package rule B runs once game B's `schedule.json`
+/// moves it, registered in place of [`PACKAGE_B`].
+const PACKAGE_B_NEXT: &str = "fixture.other-next";
+
 /// Fix round 4 (item 3, the coordinator's ruling on round 3's addition: kept as the rule, and
-/// recorded): game A's `bundle.json` is damaged and, at the same check, game B's package comes to
-/// provide a capability marked irreversible, so the composition the check makes of game B (and
-/// does not activate) marks rule B while the active generation does not: the active generation
-/// holds game B otherwise, and game B's goals are void too. Game A's and game B's candidates say
-/// why, game B's has the numbers of before any goal, and the check records one
-/// `resource_target_root_uncomposed` naming game B and none naming game A (game A's own root's
-/// record names it). Game A repaired, every game composes (rule B now carries the mark): neither
-/// candidate says its root is uncomposed, and nothing more is recorded.
+/// recorded), adapted by Workflow #455 G-R2x (register §1.499: the composer writes no irreversible
+/// mark, so the mark no longer makes the active generation hold a game otherwise): game A's
+/// `bundle.json` is damaged and, at the same check, game B's package comes to provide a capability
+/// marked irreversible. The composition the check makes of game B (and does not activate) gives
+/// rule B as the active generation holds it, so game B keeps its goal's numbers and nothing names
+/// it. Game B's `schedule.json` then moves rule B to another package: the active generation holds
+/// rule B with a procedure that composition does not give, so it holds game B otherwise and game
+/// B's goals are void too. Game A's and game B's candidates say why, game B's has the numbers of
+/// before any goal, and the check records one `resource_target_root_uncomposed` naming game B and
+/// none naming game A (game A's own root's record names it). Game A repaired, every game composes:
+/// neither candidate says its root is uncomposed, and nothing more is recorded.
 #[test]
 fn gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded() {
     let bench = gr2s_two_games();
-    let (before, _) = gr2s_goals_in_effect(&bench);
+    let (before, weighed) = gr2s_goals_in_effect(&bench);
     let recorded = |game: &str| {
         bench.reads_of(
             actingcommand_policy::PolicyCode::ResourceTargetRootUncomposed,
@@ -2073,6 +2079,14 @@ fn gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded()
     );
     let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 2 * INTERVAL_MS));
     assert!(a.2, "game A says why");
+    assert_eq!(b, weighed.1, "game B keeps its goal: nothing marks rule B");
+    assert!(recorded(GAME_B).is_empty(), "{:#?}", recorded(GAME_B));
+
+    let mut moved = schedule_b(100, true);
+    moved["rules"][0]["package_id"] = json!(PACKAGE_B_NEXT);
+    bench.place(GAME_B, SERVER_B, &[PACKAGE_B_NEXT], Some(&moved));
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    assert!(a.2, "game A says why");
     assert!(b.2, "game B says why");
     assert_eq!(
         (&b.0, &b.1),
@@ -2083,7 +2097,7 @@ fn gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded()
     assert!(recorded(GAME_A).is_empty(), "{:#?}", recorded(GAME_A));
 
     fs::write(&bundle, &good).expect("repair game A's bundle");
-    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 3 * INTERVAL_MS));
+    let (a, b) = gr2s_both(&bench.cycle(POLICY_NOW_UNIX_MS, 4 * INTERVAL_MS));
     assert!(!a.2 && !b.2, "every root composes");
     assert_eq!(recorded(GAME_B).len(), 1, "nothing more is recorded");
     assert!(recorded(GAME_A).is_empty());

@@ -444,13 +444,13 @@ const GOALS_UNREADABLE_KEY: &str = "goals:unreadable";
 /// shared with the workbench until its next read of a root replaces it.
 pub(super) type StandardPackVariables = Arc<VariableTable>;
 
-/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task that
-/// can do something irreversible"): at a check whose composition is refused (as a whole, or no
+/// Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A game whose
+/// root cannot be composed"): at a check whose composition is refused (as a whole, or no
 /// refused game can be taken out), notes as uncomposed `failed`, the games whose own root failed
 /// at this check (fix round 3), and every game in use whose marks this check did not find equal to
 /// those of its last composed read (`state.marks`): a game whose files have not changed since is
 /// composed in the active generation as it is now, its marks those of its declarations; any other
-/// may have changed into something the active generation does not mark. A game whose metadata
+/// may have changed into something the active generation does not hold. A game whose metadata
 /// failed has no marks here, so it is noted too. A failed root whose other games compose is
 /// [`held_otherwise`]'s instead.
 fn note_uncomposed(
@@ -471,12 +471,13 @@ fn note_uncomposed(
 /// while a game's own root fails, the games in use whose tasks the active generation `active` does
 /// not hold as `composition`, the other games' roots as they are now, composes them: a task of the
 /// game (its instance bound to it in `bound`) in `active` that `composition` does not compose with
-/// the same id and procedure, or that `composition` marks irreversible (`irreversible_reach`) and
-/// `active` does not. Any other game's tasks run in the active generation as its files give them
-/// now as far as the mark goes, so its goals stay in effect, also at the first check after a start
-/// (when the workbench holds no marks yet). A game whose root failed is in no `composition`, so
-/// each of its tasks in `active` names it too. Fix round 4: the check records each other game
-/// voided this way, one `resource_target_root_uncomposed` naming it at each check that voids it.
+/// the same id and procedure. Any other game's tasks run in the active generation as its files
+/// give them now, so its goals stay in effect, also at the first check after a start (when the
+/// workbench holds no marks yet). A game whose root failed is in no `composition`, so each of its
+/// tasks in `active` names it too. Fix round 4: the check records each other game voided this way,
+/// one `resource_target_root_uncomposed` naming it at each check that voids it. Workflow #455
+/// G-R2x (register §1.499): the irreversible mark is compared no more (no composition writes it,
+/// and nothing reads it in an active generation of before that carries it).
 fn held_otherwise(
     composition: &StandardPackComposition,
     active: Option<&CompiledCatalog>,
@@ -501,10 +502,9 @@ fn held_otherwise(
         let Some(binding) = bound.get(instance_id) else {
             continue;
         };
-        let held = composed.get(task.id.as_str()).is_some_and(|now| {
-            now.procedure_ref == task.procedure_ref
-                && (task.is_irreversible_reach() || !now.is_irreversible_reach())
-        });
+        let held = composed
+            .get(task.id.as_str())
+            .is_some_and(|now| now.procedure_ref == task.procedure_ref);
         if !held {
             games.insert(binding.game_id.clone());
         }
@@ -1393,9 +1393,9 @@ impl HostShared {
             }
         }
         // G-R2s (register §1.369): a package of a composed game whose declaration could not be
-        // read marks every task of its game; it is recorded once while it stays unreadable, with
-        // the reader's refusal as its cause when the reader refused it, and again only after it
-        // has read once.
+        // read is recorded once while it stays unreadable, with the reader's refusal as its cause
+        // when the reader refused it, and again only after it has read once. G-R2x (register
+        // §1.499): it marks no task; this record is what tells a person.
         let unreadable = composition
             .unreadable_packages()
             .iter()
@@ -2105,8 +2105,8 @@ pub struct StandardPackSchedulePreview {
     pub unclassified: usize,
     /// One `standard_pack_root_invalid` per refusal of a `schedule.json`; Workflow #455 G-R2s fix
     /// round 1: and one `standard_pack_package_unreadable` per package of a composed game whose
-    /// declaration could not be read (every task of that game carries the irreversible mark, so
-    /// no goal weighs it), with the reader's refusal as its cause, by game, then package id.
+    /// declaration could not be read (G-R2x: it marks no task), with the reader's refusal as its
+    /// cause, by game, then package id.
     pub problems: Vec<Outcome>,
     /// The games in use whose game root is broken (listed with their problem in check-config's
     /// `standard_packs`), left out of the preview.
@@ -2186,9 +2186,9 @@ pub fn preview_standard_pack_schedule(
             preview.games = composition.games().to_vec();
             // Workflow #453 S5b: the digest the workbench's `CompositionRecord::of` records.
             preview.rules_digest = Some(composition.rules_digest().to_owned());
-            // G-R2s fix round 1: a package of a composed game whose declaration could not be
-            // read marks every task of its game, so no goal weighs any of them; check-config
-            // shows each such package, with the reader's refusal as its cause.
+            // G-R2s fix round 1: check-config shows each package of a composed game whose
+            // declaration could not be read, with the reader's refusal as its cause (G-R2x: it
+            // marks no task).
             for (game, packages) in composition.unreadable_packages() {
                 for package_id in packages {
                     preview
