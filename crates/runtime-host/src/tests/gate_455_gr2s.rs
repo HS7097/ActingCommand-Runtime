@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #455 G-R2s gate tests, host half (0.12.60; register §1.369; coordinator work order
-// `rd-1114/brief-455-gr2s-irreversible-line.md` and the coordinator's ruling 1 of 11-14;
-// contracts/standard-pack-schedule.md, "The irreversible mark"): the scheduler workbench reads
-// every package of a game root's `bundle.json` with the package reader the goal check uses and
-// marks the composed tasks of an irreversible package; at each check it compares the marks
-// (length and modification time) of each registered package's declaration files, the control
-// file and the package's own manifest, and reads the root again when one changed, `bundle.json`
-// unchanged byte for byte. check-config's composition marks the same tasks.
+// Workflow #455 G-R2x gate tests, host half (0.12.77; register §1.499; coordinator work order
+// `rd-1121/brief-455-gr2x.md`, rulings 2 and 4; contracts/standard-pack-schedule.md, "The
+// irreversible mark"). G-R2s (0.12.60, register §1.369) is withdrawn: the scheduler workbench
+// still reads every package of a game root's `bundle.json` with the package reader the goal check
+// uses, and reads the root again when a registered package's declaration files change, but the
+// composition it activates marks no task, whatever a package declares; a package it cannot read
+// is told by the one existing warning, `standard_pack_package_unreadable`, recorded once while it
+// stays unreadable, with the reader's refusal as its cause. check-config's composition marks no
+// task either.
 //
 // A neutral fixture: one game root on disk with two rules in catalog-a's task shape, each running
 // the package of its own id, both real packages (`gate_442_rem1`'s); every declaration file's
@@ -190,8 +191,9 @@ impl Scene {
             .unwrap_or_else(|error| panic!("cycle at {monotonic_ms}: {error}"));
     }
 
-    /// The active composed generation's tasks that carry the irreversible mark, by id.
-    fn marked(&self) -> BTreeSet<String> {
+    /// The active composed generation's tasks by id, and those of them that carry the member
+    /// `irreversible_reach`.
+    fn tasks(&self) -> (BTreeSet<String>, BTreeSet<String>) {
         let (_, active) = self
             .host
             .policy_catalog_memory_for_test()
@@ -199,14 +201,15 @@ impl Scene {
         let compiled = active
             .and_then(|handle| handle.upgrade())
             .expect("an active compiled catalog");
-        compiled
-            .catalog()
-            .tasks
-            .tasks
-            .iter()
-            .filter(|task| task.is_irreversible_reach())
-            .map(|task| task.id.clone())
-            .collect()
+        let tasks = &compiled.catalog().tasks.tasks;
+        (
+            tasks.iter().map(|task| task.id.clone()).collect(),
+            tasks
+                .iter()
+                .filter(|task| task.irreversible_reach.is_some())
+                .map(|task| task.id.clone())
+                .collect(),
+        )
     }
 
     fn activations(&self) -> usize {
@@ -258,67 +261,31 @@ fn ids(tasks: &[&str]) -> BTreeSet<String> {
     tasks.iter().map(|task| (*task).to_owned()).collect()
 }
 
-// Ruling 1, host tests 1 to 4. The first check composes both rules unmarked. A second check, no
-// file changed, composes nothing new: the check returns before reading the root (`schedule.json`
-// is not opened again). SINK's control file is replaced in place by one of the same length that
-// marks `cap_x` irreversible, its time moved; `bundle.json` stays byte for byte: the next check
-// reads the root again and activates a generation in which SINK is marked and KEEP is not. The
-// reverse replacement takes the mark away. KEEP's control file is then broken: every task of the
-// game is marked and `standard_pack_package_unreadable` names KEEP, with the reader's refusal as
-// its cause. Fix round 1, point 5: it is recorded once across two checks that read the root again
-// while KEEP stays unreadable (SINK's control file only touched, `schedule.json` opened once more);
-// once KEEP reads again, the marks follow the declarations.
+// Host test 6 of the work order (rulings 2 and 4): KEEP's control file is broken before the
+// start. The first check composes and activates the root, both rules, neither carrying the
+// member, and records `standard_pack_package_unreadable` naming KEEP once, with the reader's
+// refusal as its cause. SINK's control file is then replaced in place by one of the same length
+// that marks `cap_x` irreversible, its time moved: the next check reads the root again and composes
+// it, still without a member, so the rules digest is the active generation's and nothing is
+// activated; KEEP, still unreadable, is not recorded again. KEEP readable again, the next check
+// composes the same rules and records nothing more.
 #[test]
-fn gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged() {
+fn gr2x_host_an_unreadable_package_is_warned_and_no_package_marks_a_task() {
     let packs = TempDir::new().expect("standard-pack root");
     let game = place_root(packs.path());
-    let bundle_bytes = fs::read(game.join("bundle.json")).expect("bundle bytes");
+    let keep = fs::read(control(&game, KEEP)).expect("KEEP's control bytes");
+    write_at(&control(&game, KEEP), b"{", at(5));
     let scene = Scene::start(packs.path());
 
     scene.cycle(0);
-    assert_eq!(scene.marked(), ids(&[]), "nothing is irreversible");
-    assert_eq!(scene.activations(), 1);
-    let reads = scene.schedule_reads();
-    scene.cycle(INTERVAL_MS);
-    assert_eq!(scene.activations(), 1, "nothing changed, nothing composed");
+    assert_eq!(scene.activations(), 1, "composed and activated");
     assert_eq!(
-        scene.schedule_reads(),
-        reads,
-        "the check returned before reading"
+        scene.tasks(),
+        (ids(&[KEEP, SINK]), ids(&[])),
+        "both rules, no member"
     );
-
-    let marked = sink_control(true);
-    assert_eq!(marked.len(), sink_control(false).len(), "the same length");
-    write_at(&control(&game, SINK), &marked, at(10));
-    scene.cycle(2 * INTERVAL_MS);
-    assert_eq!(
-        fs::read(game.join("bundle.json")).expect("bundle bytes"),
-        bundle_bytes,
-        "bundle.json is unchanged"
-    );
-    assert_eq!(scene.marked(), ids(&[SINK]), "the mark is read");
-    assert_eq!(scene.activations(), 2);
-
-    write_at(&control(&game, SINK), &sink_control(false), at(20));
-    scene.cycle(3 * INTERVAL_MS);
-    assert_eq!(scene.marked(), ids(&[]), "the mark is gone");
-    assert_eq!(scene.activations(), 3);
-
-    let keep = fs::read(control(&game, KEEP)).expect("KEEP's control bytes");
-    write_at(&control(&game, KEEP), b"{", at(30));
-    scene.cycle(4 * INTERVAL_MS);
-    assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "every task of the game");
-    let reads = scene.schedule_reads();
-    set_time(&control(&game, SINK), at(35));
-    scene.cycle(5 * INTERVAL_MS);
-    assert_eq!(
-        scene.schedule_reads(),
-        reads + 1,
-        "the second check read the root again"
-    );
-    assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "still every task");
     let unreadable = scene.reads_of(SharedCode::StandardPackPackageUnreadable);
-    assert_eq!(unreadable.len(), 1, "recorded once: {unreadable:#?}");
+    assert_eq!(unreadable.len(), 1, "{unreadable:#?}");
     assert_eq!(unreadable[0].value("game"), Some(&json!(GAME_A)));
     assert_eq!(unreadable[0].value("package_id"), Some(&json!(KEEP)));
     assert!(
@@ -329,29 +296,50 @@ fn gr2s_host_the_marks_follow_the_declaration_files_with_bundle_json_unchanged()
         "the reader's refusal: {unreadable:#?}"
     );
 
-    write_at(&control(&game, KEEP), &keep, at(40));
-    scene.cycle(6 * INTERVAL_MS);
+    let marked = sink_control(true);
+    assert_eq!(marked.len(), sink_control(false).len(), "the same length");
+    let reads = scene.schedule_reads();
+    write_at(&control(&game, SINK), &marked, at(10));
+    scene.cycle(INTERVAL_MS);
+    assert_eq!(scene.schedule_reads(), reads + 1, "the root is read again");
+    assert_eq!(scene.tasks(), (ids(&[KEEP, SINK]), ids(&[])), "no member");
+    assert_eq!(scene.activations(), 1, "the same rules, nothing activated");
     assert_eq!(
-        scene.marked(),
-        ids(&[]),
-        "readable again: the declarations' marks"
+        scene
+            .reads_of(SharedCode::StandardPackPackageUnreadable)
+            .len(),
+        1,
+        "recorded once while it stays unreadable"
+    );
+
+    write_at(&control(&game, KEEP), &keep, at(20));
+    scene.cycle(2 * INTERVAL_MS);
+    assert_eq!(scene.tasks(), (ids(&[KEEP, SINK]), ids(&[])));
+    assert_eq!(scene.activations(), 1);
+    assert_eq!(
+        scene
+            .reads_of(SharedCode::StandardPackPackageUnreadable)
+            .len(),
+        1,
+        "nothing more"
     );
     scene.close();
 }
 
-// Fix round 1, point 5: a declaration file whose metadata cannot be read (another error than its
-// absence; the gate tests' seam `DECLARATION_METADATA_FAILS_FOR_TEST`, for SINK's control file of
-// this test's own root) is a mark of its own. The check goes on and reads the root again, SINK
-// counts as unreadable without the reader running, so every task of the game is marked and
-// `standard_pack_package_unreadable` names SINK once, with no cause. Once the metadata reads again
-// the marks follow the declarations.
+// G-R2s fix round 1, point 5, under G-R2x: a declaration file whose metadata cannot be read
+// (another error than its absence; the gate tests' seam `DECLARATION_METADATA_FAILS_FOR_TEST`, for
+// SINK's control file of this test's own root) is a mark of its own. The check goes on and reads
+// the root again, SINK counts as unreadable without the reader running, and
+// `standard_pack_package_unreadable` names SINK once, with no cause; the composition is the one of
+// before, without a member, so nothing is activated. Once the metadata reads again nothing more is
+// recorded.
 #[test]
-fn gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_check_goes_on() {
+fn gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on() {
     let packs = TempDir::new().expect("standard-pack root");
     let game = place_root(packs.path());
     let scene = Scene::start(packs.path());
     scene.cycle(0);
-    assert_eq!(scene.marked(), ids(&[]), "nothing is irreversible");
+    assert_eq!(scene.tasks(), (ids(&[KEEP, SINK]), ids(&[])));
     let activations = scene.activations();
     let reads = scene.schedule_reads();
 
@@ -369,8 +357,8 @@ fn gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_chec
         reads + 1,
         "the check went on and read the root"
     );
-    assert_eq!(scene.marked(), ids(&[KEEP, SINK]), "every task of the game");
-    assert_eq!(scene.activations(), activations + 1);
+    assert_eq!(scene.tasks(), (ids(&[KEEP, SINK]), ids(&[])), "no member");
+    assert_eq!(scene.activations(), activations, "nothing activated");
     let unreadable = scene.reads_of(SharedCode::StandardPackPackageUnreadable);
     assert_eq!(unreadable.len(), 1, "{unreadable:#?}");
     assert_eq!(unreadable[0].value("game"), Some(&json!(GAME_A)));
@@ -381,14 +369,22 @@ fn gr2s_host_a_declaration_file_whose_metadata_fails_marks_its_game_and_the_chec
     );
 
     scene.cycle(2 * INTERVAL_MS);
-    assert_eq!(scene.marked(), ids(&[]), "the metadata reads again");
+    assert_eq!(scene.tasks(), (ids(&[KEEP, SINK]), ids(&[])));
+    assert_eq!(
+        scene
+            .reads_of(SharedCode::StandardPackPackageUnreadable)
+            .len(),
+        1,
+        "the metadata reads again"
+    );
     scene.close();
 }
 
-// Work order tests 6: check-config's composition (`compose_configured_standard_packs`) reads the
-// packages as the workbench does and marks SINK when its control file marks `cap_x`.
+// check-config's composition (`compose_configured_standard_packs`) reads the packages as the
+// workbench does and, SINK's control file marking `cap_x` irreversible, composes both rules
+// without a member.
 #[test]
-fn gr2s_host_check_config_composes_the_mark() {
+fn gr2x_host_check_config_composes_no_mark() {
     let packs = TempDir::new().expect("standard-pack root");
     let game = place_root(packs.path());
     write_at(&control(&game, SINK), &sink_control(true), at(10));
@@ -400,13 +396,16 @@ fn gr2s_host_check_config_composes_the_mark() {
     let schedule = crate::compose_configured_standard_packs(&host)
         .unwrap_or_else(|error| panic!("compose the configuration's rules: {error}"));
     let compiled = schedule.compiled().expect("the rules compose");
-    let marked = compiled
-        .catalog()
-        .tasks
-        .tasks
-        .iter()
-        .filter(|task| task.is_irreversible_reach())
-        .map(|task| task.id.clone())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(marked, ids(&[SINK]));
+    let tasks = &compiled.catalog().tasks.tasks;
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>(),
+        ids(&[KEEP, SINK])
+    );
+    assert!(
+        tasks.iter().all(|task| task.irreversible_reach.is_none()),
+        "{tasks:#?}"
+    );
 }

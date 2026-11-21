@@ -432,25 +432,21 @@ pub struct TaskSpec {
         deserialize_with = "written_bound"
     )]
     pub max_queue_wait_ms: Option<u64>,
-    /// Workflow #455 G-R2s (register §1.369, `actingcommand.scheduling.v2` only): `true` marks a
-    /// task whose package, or a rule that follows it by a chain link, can do something irreversible
-    /// by its game root's declarations, or whose game root has a package that could not be read
-    /// (`contracts/standard-pack-schedule.md`, "The irreversible mark"). A goal never raises such
-    /// a task's weight: its candidate is weighed as on an instance without a resource target
-    /// record (`contracts/resource-targets.md`, "A task that can do something irreversible").
-    /// The standard-pack composer writes it; a `schedule.json` rule that writes it is refused.
-    /// `false` is as without the member. Absent, the member serializes as nothing at all, so a
-    /// catalog without it keeps its hash.
+    /// Workflow #455 G-R2s (register §1.369, `actingcommand.scheduling.v2` only), withdrawn by
+    /// Workflow #455 G-R2x (register §1.499, 0.12.77): the irreversible mark the standard-pack
+    /// composer of 0.12.60 to 0.12.76 wrote, `true`, on a task whose package could do something
+    /// irreversible (`contracts/standard-pack-schedule.md`, "The irreversible mark"). It stays
+    /// readable and **has no effect**: a catalog generation those releases composed carries it,
+    /// its catalog hash is computed over it, and the Runtime compiles every generation its
+    /// dispatches and decision memories name at its start, so the member is read, kept as read
+    /// and hashed as before, and nothing reads its value. No composer writes it any more, a
+    /// `schedule.json` rule that writes it is still refused, and a V1 document that names it is
+    /// still refused as an unknown member. Absent, the member serializes as nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub irreversible_reach: Option<bool>,
 }
 
 impl TaskSpec {
-    /// G-R2s: whether the catalog marks the task as one a goal never weighs.
-    pub fn is_irreversible_reach(&self) -> bool {
-        self.irreversible_reach == Some(true)
-    }
-
     /// SS-2b: whether the catalog marks the task as judged by its net benefit.
     pub fn is_benefit_judged(&self) -> bool {
         self.benefit_judged == Some(true)

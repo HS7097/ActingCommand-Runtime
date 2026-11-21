@@ -43337,6 +43337,199 @@ row 21): one whose range ends below 21 takes it and its Runtime refuses the pack
 Only `standard-pack build` declares by content. In the release notes' language:
 `resource verify` 现在检查资源仓里的 `goals.json`（用 `standard-pack check` 和 `package bundle --goals` 的同一套检查）：被拒的文件让打包一步失败，每个问题都列出来，这一步其余的索引和拷贝检查也照跑，不出 zip（工作目录里留下不带该文件的 `bundle/`）；通过的文件原样放进校验用的 zip（与 `bundle.json` 同级），`interfaces.json` 声明 `package` [14, 14]，报告的打包计数里写出它（各类条目数）。没有该文件的资源仓结果与以前相同，只有一处例外：工作树里有一个被 git 忽略的 `goals.json` 时，checkout 一步现在会失败（`resource_verify_checkout_dirty`，`ignored_in_read_path`），以前是通过。资源仓的 CI 要把钉住的 Tools 升到 0.12.77 或更高，校验才会检查并带上这个文件；资源仓发版用的是各仓自己脚本里的 `package bundle`，发版的 zip 要带上这个文件，还要资源侧把发版脚本换成 `standard-pack build`（或给 `package bundle` 传 `--goals` 并自己在 `interfaces.json` 里声明 14 以上）。带该文件的 zip 只有 0.12.61 及以后的安装器能放置。`resource verify` 仍不按包的内容声明修订：包里声明了变量或 `lines`、又没有 `goals.json` 的仓仍声明 3。
 
+### 1.499 Slice G-R2x (0.12.77): G-R2s is withdrawn: a goal raises the weight of every task that produces its pool, a package that can do something irreversible included (Workflow #455; the owner's audit of 11-21 found G-R2s against her own words, decision 79 of 10-28 and decision 234 of 11-18, quoted below; the rulings are the coordinator's withdrawal of 11-21 and its addition on the void of an uncomposed root, not the owner's words; coordinator work order `rd-1121/brief-455-gr2x.md`, on main `f6e2cd26`)
+
+This section takes 1.499: §1.494 is pull request #1853's, §1.495 is reserved, §1.496 is on main,
+§1.497 and §1.498 are slices in flight. [resource-targets.md](resource-targets.md) ("A task that can
+do something irreversible", rewritten; "A game whose root cannot be composed", a section of its own
+now) and [standard-pack-schedule.md](standard-pack-schedule.md) ("The irreversible mark",
+rewritten; "A game whose root cannot be composed", moved out of it) are the contract;
+[scheduling/README.md](scheduling/README.md), [scheduling/v2/README.md](scheduling/v2/README.md)
+and its `tasks.schema.json`, [standard-pack-goals.md](standard-pack-goals.md) (the sentences of the
+evaluator's line; fix round 1, the two that still named the composer's mark),
+[remedies.md](remedies.md) and [instance-fact-store.md](instance-fact-store.md) follow it.
+
+**What is withdrawn, and on whose words.** G-R2s (0.12.60, §1.369, the coordinator's rulings of
+11-14) built the line "a goal never raises the weight of a task whose package can do something
+irreversible": the composer marked such a task `irreversible_reach` (also a rule such a package
+follows by a chain link, a package whose remedies list an irreversible capability, and every task of
+a game root one of whose packages could not be read), and the evaluator weighed a marked candidate
+on an instance holding a target record as on an instance without one, with
+`resource_target_package_irreversible`. The owner's words it went against:
+- decision 79 (10-28): 「这个可以自主突破，并且这个自主突破需要是共通的，因为我在启用RT的调度后，这个账号就相当于直接交给RT了。」
+- decision 234 (11-18; premium currency and tickets spent by the scheduler): 「234，批准，好兄弟，可以跑，换句话说，只有跑了才知道符不符合我们的预期，否则全都是纸上谈兵。」
+
+In practice it also made a goal useless wherever a producing rule reached such a package through a
+chain or a remedy, and wherever one package of the root could not be read. The rulings: (1) the
+evaluator weighs every candidate alike; (2) the composer writes no mark and no longer runs the walk
+that spread it; (4) a package that cannot be read stays told by an existing warning; (5) the stored
+form keeps a start on 0.12.76's state and a rollback to it working; (6) the retired code leaves the
+catalogue as the catalogue's rules ask; (7) nothing names a game, package or alias. The
+coordinator's addition: the void of a game whose root cannot be composed (G-R2s round 2,
+`LeftOutFacts::void_targets`) is not withdrawn and stays exactly as it is; only its description
+moves out from under the irreversible task.
+
+**What is not changed (ruling 3, word for word).** "Nothing else of the irreversible declaration
+changes in this slice. A capability's `irreversible` mark in a package's declaration stays. The goal
+check still refuses an entry that governs such a package (`goal_governs_irreversible`), kernel
+admission still refuses `variables` on one (`variables_on_irreversible`), `standard-pack check`
+still reports `variable_irreversible_by_root`, and the workbench's judgement that such a variable
+does not apply stays: whether goals and variables may govern such packages is a question the
+coordinator has put to the owner, and until she answers those three stay exactly as they are, with
+the type they share (`IrreversiblePackages`, its rule for a package that could not be read
+included). The remedy layer's own rules stay."
+
+**Built.**
+- *The evaluator* (`crates/policy/src/evaluator.rs`, `apply_priority_selection`): the branch that
+  left a candidate's record out for its task's mark, the reason `LeftOutWhy::Irreversible` and
+  `irreversible_left_out_reason` are removed; the record's own resolution (`instance_targets`),
+  which every unmarked candidate read under G-R2s and was left as it was, is what a candidate of a
+  marked task reads now. The resolution without the record (`unrecorded`) is still computed, for
+  the void alone (`LeftOutWhy::RootUncomposed`, its reason, its decision identity, all unchanged).
+  A candidate whose task never carried the mark runs no line this slice changes, so it keeps its own
+  score-stage numbers and its net benefit. What can change on its instance (fix round 1, where this
+  said "byte for byte main's", which said too much) is the competition and every record that lists
+  competitors: the winner's lead (`rank_breakdown`'s `lead`), the decision record's rows of the
+  candidates passed over (`decision_candidate_not_selected`, their `total` and `behind_by`), the
+  order of a capped round by value per unit, the reserve gate and the heavy-scene slots, because a
+  candidate that carried the mark can now be raised by a goal. That is the purpose of the
+  withdrawal. On an instance without a target record nothing changes. The forward projection runs
+  the same score stage, so it weighs such a task alike too.
+- *The composer* (`crates/policy/src/compose.rs`): `irreversible_rules`, the `marked` input of
+  `instantiate` and the member's write in `compose_task` are removed. The required input
+  `StandardPackGameFiles.irreversible` stays, read only for `unreadable()`, the composition's
+  `standard_pack_package_unreadable` warnings (`unreadable_packages`). A `schedule.json` rule that
+  writes `irreversible_reach` is still refused (`schedule_invalid` at it), so no composed task
+  carries it; `standard_pack_rule_followers` stays, the goal check's lists.
+- *The member* (`TaskSpec::irreversible_reach`) stays readable and without effect (ruling 5,
+  below); `TaskSpec::is_irreversible_reach`, which nothing reads now, is removed. A V1 document
+  that names it is still refused (`unknown_field`).
+- *The workbench* (`crates/runtime-host/src/host/standard_pack_schedule.rs`, `held_otherwise`):
+  the comparison of the mark (a task the present composition marked and the active generation did
+  not) is removed; with no composition writing the mark it was always true, so the function decides
+  as before for every generation, a 0.12.76 one included. The re-read of the declarations stays
+  (the variables' judgement and the warning read it).
+- *Codes.* `resource_target_package_irreversible` is retired (`status: retired`, `retired_in:
+  0.12.77`, its registry entry removed, as the outcome guard's G1 asks of a code a release produced
+  and this one does not; it was pending, so no release file binds it: `released/0.12.76.json` holds
+  no entry). Descriptions changed, no signature: `resource_target_root_uncomposed` (its own
+  section; the mark's comparison gone) and `standard_pack_package_unreadable` (it marks nothing; it
+  is what tells a person). The index was regenerated by hand and confirmed by
+  `ci/outcome_codes_index.py --check` ("is current").
+
+**Removed whole, and what had to stay.** Removed: the evaluator's special case and its reason; the
+composer's walk (`irreversible_rules`) and its write; `is_irreversible_reach`; the mark comparison
+of `held_otherwise`; the registry entry of the retired code. Kept because something else reads it:
+`IrreversiblePackages` with `counts_irreversible`, `followers_irreversible`, `package`,
+`irreversible_capabilities` and `unreadable` (the goal check through `GoalReferences`, the
+variables' judgement `judge_root_variables` and `check_root_variables`, the remedy table's
+`VariableTable::build`, the standard-pack trial's irreversible mark, the composer's warning);
+`DeclaredCapabilities` and `RemedyDeclarations::declared_capabilities` (the same readers);
+`standard_pack_rule_followers` (the goal check's `GoalRule::followers`); the workbench's
+declaration marks and re-read and lab-ops' `game_irreversibility` (the composer's required input,
+the variables); `IRREVERSIBLE_REACH_MEMBER` and the member (the stored form, the two refusals).
+
+**What tells a person that a package's declaration could not be read** (ruling 4). The existing
+warning `standard_pack_package_unreadable` (contract code, warning; `game`, `package_id`), kept:
+the composer gives it once per such package; the workbench records it once while the package
+stays unreadable, with the reader's refusal as its cause; check-config notes it in its
+`standard_pack_schedule` preview's problems; `actinglab standard-pack check`, `compose` and
+`package bundle --schedule` list it. Nothing new is added. What an unreadable package still does:
+the goal check counts every package of its root as irreversible, and the variables' judgement keeps
+the root's variables from applying (`package_unreadable`); a dispatched package the workbench could
+not read hands no variable value (`goal_value_package_unreadable`), as before.
+
+**The stored form** (ruling 5; read in the code). A composed task with the member persists in one
+place: the catalog generations of the state root (each `manifest.json` with its four documents),
+which `read_generation` (`crates/runtime-host/src/policy_host.rs`) compiles at a start, the active
+one and every one the start's dispatches and decision memories name, and refuses when the compiled
+hash is not the one its manifest records (`catalog_generation_content_mismatch`, fatal). The hash
+is `canonical::catalog_hash` over the deserialized documents, the member included. So the member
+must stay readable and kept as read, or a 0.12.76 generation would no longer load: it stays, with
+no effect, and `scheduling/v2/README.md` and `tasks.schema.json` say so. The composition record
+(`standard-packs.json`: rules digest, games, procedures, pools) holds no task member. Ledger
+records hold the catalog hash and version (activation, dispatch) and a dispatch's reasons as
+recorded; a code is read back as its spelling (`CodeStr`), so a 0.12.76 dispatch record that
+carries `resource_target_package_irreversible` is read as any record of a retired code. **A start
+on 0.12.76's state** reads every generation as above. **A rollback to 0.12.76** meets this build's
+generations without the member (0.12.76 reads a task without it as unmarked) and records with no
+new code, member or shape; its first workbench check composes the mark again and activates one new
+generation. **The catalog hash:** a root one of whose tasks carried the mark composes another
+catalog hash (the documents lose the member; t5 shows the two hashes differ), so at the first check
+after the deploy, which runs before that cycle's evaluation, the workbench activates one new
+generation (`catalog.activated`, version the ledger head plus one) for the whole composed catalog;
+an installation whose active generation carries no member composes the same hash and activates
+nothing. What that new hash resets: the SS-4 no-progress guards pin the hash, but they are memory
+only and a start has none; fix round 1 adds two more a new generation rebuilds, both memory only,
+so a start has neither: the random delay table, whose entries end when the generation changes
+(`RandomDelayTable::prune`, `crates/runtime-host/src/policy_host.rs`), and the remedy table, rebuilt
+for the new catalog hash (`RemedyState::table_due`, `crates/runtime-host/src/remedy.rs`); a kept
+capped episode is kept (its consumers key, task id, consumption and `benefit_limited`, is
+unchanged); daily budgets, cooldowns and run states are per task id, unchanged; the dispatches'
+decision identities hash the new catalog hash, as at every new generation.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GR2X-1 | `irreversible_reach` (`TaskSpec`, V2) | catalog member, readable, without effect | G-R2x | none (the composers of 0.12.60 to 0.12.76) | kept for the stored generations and their hashes; still refused on a `schedule.json` rule and in V1 |
+| GR2X-2 | `resource_target_package_irreversible` | policy code, retired | G-R2x | none since 0.12.77 | registry entry removed; pending, so bound by no release file |
+| GR2X-3 | `StandardPackGameFiles.irreversible` | composer input | G-R2x | its six callers | still required; read for `unreadable()` only |
+
+**Interface.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config` or
+`runtime-outcomes` shape changes (a member kept as it was, a code no longer emitted).
+
+**Tests** (policy and host gate rows "#455 G-R2x"; the gate files of G-R2s rewritten in place).
+
+| Test | What it shows |
+|---|---|
+| policy `gate_455_gr2s::gr2x_t1_a_task_that_carried_the_mark_is_weighed_as_without_it` (1) | On gate_ss1's catalog, a judged task carrying the member has under a v2 and a v3 record the whole decision and dispatch reasons of the task without it (term 2000 for both), no `resource_target_package_irreversible`; gate_ss6's goal-driven task carrying it gets `gap_remaining` 55 and `run_cap` 6 as without it; the forward projection lifts it as without it. Every way G-R2s made a package irreversible reached the evaluator only as this member, which t4 shows no composition writes |
+| policy `gr2x_t2_a_v1_record_that_names_a_task_that_carried_the_mark_applies_to_it` (2) | A v1 record naming it in `adjust` and in `override` mode: `resource_target_applied` or `resource_target_override`, and the whole decision, its wake included, of the task without the member |
+| policy `gr2x_t3_every_other_candidate_keeps_its_numbers` (3) | Task A carrying it, task B not, under v1, v2 and v3: both tasks' rank and score-stage reasons equal those of the catalog without it (task B's as G-R2s's t2 pinned them on main), task B's term the contract's 3021 under v2 and v3; without a record every decision of the two catalogs is the same |
+| policy `gr2x_t4_the_composer_writes_no_mark_and_composes_what_it_composed_without_one` (4) | A root irreversible by its own declaration, the whole root's, a follower, a remedy or an unreadable package composes no member and the four documents byte for byte, the catalog hash and the rules digest of the same root with no irreversible package (what every release composes for that root, which `gate_rl1a`'s unchanged G-R2s test pins to the as-is documents and hash), the same warnings but one `standard_pack_package_unreadable` naming the unreadable package; a rule that writes the member is still refused |
+| policy `gr2x_t5_a_generation_composed_with_the_mark_is_read_and_its_hash_kept` (5) | The fixture root's 0.12.76 generation (this build's composition with the member on the four tasks G-R2s marked) compiles with the member kept and hashed, to another hash than this build's composition |
+| host `gate_455_gr2s::gr2x_host_an_unreadable_package_is_warned_and_no_package_marks_a_task` (6) | With one package unreadable before the start, the workbench composes and activates the root, no task carrying the member, and records `standard_pack_package_unreadable` once with the reader's refusal; a control file that marks a capability irreversible is read again and activates nothing |
+| host `gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on`, `gr2x_host_check_config_composes_no_mark` (6) | The metadata seam's package is named once with no cause, nothing activated; check-config's composition carries no member |
+
+Kept unchanged (test 7, ruling 3): the goal check's (the resource tools' `gate_455_gr2s::gr2s_t7`
+and `gr2s_r3`), the contract crate's and the variables' tests (`gate_463_v2`, lab-ops'
+`gr2s_the_offline_input_follows_the_whole_root_rule_and_an_unreadable_package`, actingd's
+`gate_rl1c::gr2s_check_config_notes_each_package_it_cannot_read`), and the void's
+(`gr2s_t10`, `gate_rl1b`'s `gr2s_r2` and `gr2s_r3` tests). Left the map, with their
+`[[retired]]` entries: G-R2s's policy t1 to t9 and its three host tests. Adapted, its name kept:
+`gate_rl1b::gr2s_r4_a_game_the_active_generation_holds_otherwise_is_voided_and_recorded` (a package
+that comes to provide an irreversible capability no longer makes its game held otherwise, so the
+test asserts that game B keeps its goal there and is voided and recorded when its `schedule.json`
+moves rule B to another package; the requirement deliberately changes what it pinned). No task
+fixture of any other gate file names the member, so none was touched for it.
+
+**At deploy.** Ruling 5's findings above: the start loads 0.12.76's generations, and a rollback
+starts on this build's state. **The scheduling of an instance really changes only when a pool that
+a task which carried the mark produces carries a target on that instance that is not met (another
+candidate's `resource_targets` reason on that instance shows that target `applied` with a `gap`
+above 0), or when a version 1 record on that instance names such a task** (fix round 1, made
+exact): that candidate is then raised by the goal, and may outrank the instance's other
+candidates; every other candidate keeps its own score-stage numbers and its net benefit, and what
+can change around it is the competition and the records that list competitors (*The evaluator*
+above); an instance without a target record is untouched. To see beforehand whether an
+installation has such an instance: the active
+generation's `tasks` document in the state root holds `"irreversible_reach": true` on the tasks
+that carried the mark; the instance's `session.resource_targets` record (its goals) shows whether
+it holds a target record; and in the running Runtime's schedule explanation (`actingctl schedule`,
+`ac_schedule`) each such candidate's row carries `resource_target_package_irreversible` among its
+`reasons` (unless cut, `reasons_omitted`), as do the `reasons` of the policy dispatch records of
+such candidates that were dispatched. A
+v0.12.76 reader of this build's decision records meets no new code (the retired one is no longer
+written) and a task without the member it already reads as unmarked. The first check after the
+deploy activates one new generation where the active one carries the member (above).
+
+**Limits.** The void of an uncomposed root stays, and its own reason ("the active generation may
+not hold the game as its files give it now") is now its only one; whether it should stay is not
+this slice's question. Fix round 1 rewrote the two sentences of `standard-pack-goals.md` that still
+named "the composer's irreversible mark" outside the evaluator's line: in "Who reads it", the
+workbench's reading of every package's declaration serves, since G-R2x, the warning for a package
+that cannot be read and the variables' judgement; in the followers' sentence of the first safety
+place, the lists are those `standard_pack_rule_followers` gives. No other paragraph of that file
+changed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

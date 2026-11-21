@@ -286,8 +286,11 @@ for that game, and a reader of the declaration says why.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
-  as this check does, with the same reader and the same rule, for the composer's irreversible mark
-  ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  as this check does, with the same reader and the same rule; since Workflow #455 G-R2x (0.12.77,
+  register §1.499) that reading serves the warning for a package that cannot be read
+  (`standard_pack_package_unreadable`) and the variables' judgement (from 0.12.60 to 0.12.76 it
+  served the composer's irreversible mark too,
+  [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
   Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
   `goals.json` too, where it reads every package's declaration (and so do the offline readers that
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
@@ -385,8 +388,9 @@ without one, as it does today.
      visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.369) the rules that
      follow a rule are every rule, not held, whose trigger has a chain link to it as the evaluator
      reads one (a `dependency_completed` reached only through `all` whose `terminal_states` holds
-     `succeeded`), the lists the composer's irreversible mark reads
-     ([standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
+     `succeeded`), the lists the policy crate's `standard_pack_rule_followers` gives (before G-R2x
+     the composer's irreversible mark read them too,
+     [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
      with a value of its own, one whose link also accepts another end and one behind a complete rule
      count too, not only the followers the coverage lists as riding (`benefit_followers`).
      **A limit that the slice which makes a tier act must lift first:** a rule whose trigger depends
@@ -395,24 +399,27 @@ without one, as it does today.
      followed here, although a governed rule that runs more often can let it run more often too.
      Before a tier can scale anything, the check judges every rule whose trigger depends on the
      governed rule's completion.
-     A `resource` entry can still push such a package indirectly: its pool may be produced by a
-     rule of that package, and a goal's shortfall raises the weight of what produces the pool. The
-     check does not refuse such an entry (it would forbid goals on ordinary pools); the rule
-     belongs to the scheduler, and this check leaves it to the evaluator: **a goal's shortfall
-     never raises the weight of a rule whose package can do something irreversible**. Workflow
-     #455 G-R2s (0.12.60, register §1.369) builds it: the composer marks such a rule's tasks
-     (`irreversible_reach`, [standard-pack-schedule.md](standard-pack-schedule.md), "The
-     irreversible mark") and the evaluator weighs a marked candidate as on an instance without a
-     target record ([resource-targets.md](resource-targets.md), "A task that can do something
-     irreversible"), for every version of the record. **One copy of the rule:** the contract
+     A `resource` entry can push such a package indirectly: its pool may be produced by a rule of
+     that package, and a goal's shortfall raises the weight of what produces the pool. The check
+     does not refuse such an entry (it would forbid goals on ordinary pools). **Since Workflow #455
+     G-R2x (0.12.77, register §1.499) a goal's shortfall raises such a rule like any other**: the
+     line Workflow #455 G-R2s (0.12.60, register §1.369) had the scheduler keep (the composer's
+     `irreversible_reach` and the evaluator weighing a marked candidate as on an instance without a
+     target record) is withdrawn ([resource-targets.md](resource-targets.md), "A task that can do
+     something irreversible"; [standard-pack-schedule.md](standard-pack-schedule.md), "The
+     irreversible mark"), and the lists of the rules that follow a rule are this check's own since.
+     **This check's own refusal stands until the owner decides** whether goals and variables may
+     govern such packages: an entry that governs one is `goal_governs_irreversible` as below.
+     **One copy of the rule:** the contract
      crate's `IrreversiblePackages` (a capability is irreversible when any package of the root
      marks it; a package is irreversible when it provides such a capability or, since G-R2s fix
      round 3 (the coordinator's ruling of 11-14), when a remedy declaration of its mappings lists
      one, every capability the remedy lists judged from the declarations alone; a package that
      could not be read leaves every package of the root counting as irreversible; the walk over the
      rules that follow a rule) is what `GoalReferences::new` holds and what the composer takes per
-     game root, and the policy crate's `standard_pack_rule_followers` gives both the same lists of
-     followers; there is no second implementation. So an entry that reaches a package whose
+     game root (since G-R2x for its unreadable-package warning alone), and the policy crate's
+     `standard_pack_rule_followers` gives the check its lists of followers; there is no second
+     implementation. So an entry that reaches a package whose
      blocked run asks for an irreversible provider (since Workflow #463 V1 a `variable` entry
      whose variable it declares), a `tier` over its rule, and a `tier` over a rule it follows are
      `goal_governs_irreversible` too.
