@@ -5402,6 +5402,26 @@ impl RuntimeHost {
         shared.entry_pair_for_test(instance_id, task_id)
     }
 
+    /// Workflow #490 ENTRY-A fix round 6 (rulings 3 and 4): the pair of `task_id` on
+    /// `instance_alias` seeded as `in_a_row` failures at the entry in a row in an unknown window,
+    /// waiting until `until_unix_ms`, and with `set_aside` set aside (`(in_a_row, until_unix_ms,
+    /// set_aside)`).
+    #[cfg(test)]
+    pub(crate) fn seed_entry_pair_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+        seeded: (u32, u64, bool),
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryPairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.seed_entry_pair_for_test(instance_id, task_id, seeded)
+    }
+
     /// Workflow #490 ENTRY-A: `instance_alias`'s entry block, if it has one: the gate the
     /// evaluation reads, whether a person was told, and when its held recovery is due.
     #[cfg(test)]

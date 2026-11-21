@@ -767,8 +767,14 @@ can do something irreversible").
   recommended `on_failure` (threshold 2) and a healthy rule due, a rule whose entry is broken is
   set aside at about its third failure in the window (about fourteen minutes), with a threshold
   of 1 at its second (about three minutes); alone on the instance it is never set aside.
-  Activating a catalogue (a mended package) starts every such count from nothing at once. No
-  package or rule changes for it.
+  Activating a catalogue (a mended package) starts every such count from nothing at once, and so
+  (fix rounds 5 and 6) does a placement that changes a package of a game in use without changing
+  the rules: the workbench's next check finds it by the length and modification time of
+  `bundle.json`, of `pages.json`, `interrupts.json` and `navigation.json` and of each registered
+  package's `control.json` and `resources/operations/resources.json`, compared with what that
+  comparison kept at the check before, so once per change, while another game's root is broken
+  too (a change by hand of a package's other files alone is not seen). No package or rule changes
+  for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

@@ -295,6 +295,60 @@ fn declaration_marks(package: &Path) -> Vec<DeclarationMark> {
         .collect()
 }
 
+/// Workflow #490 ENTRY-A fix round 6 (ruling 4): the game root's files the page recognition of
+/// its packages reads beside each package's own (the shared pages, interrupts and navigation),
+/// which a placement replaces as root files.
+const RECOGNITION_FILES: [&str; 3] = [
+    STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE,
+];
+
+/// Workflow #490 ENTRY-A fix round 6 (ruling 4): what the workbench compares of a game in use to
+/// tell that its packages changed without a catalogue's activation, which frees the entry pairs
+/// (`clear_entry_pairs`): the mark of `bundle.json` (the root's index of its packs, which holds
+/// each pack's file and byte counts and no digest, and which `place` writes again only when its
+/// bytes change), the marks of the recognition files ([`RECOGNITION_FILES`]) and the marks of
+/// each registered package's declaration files ([`DECLARATION_FILES`]; `place` replaces a
+/// package's directory whole, so a placement of a package writes both files again).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairMarks {
+    bundle: FileMark,
+    recognition: Vec<DeclarationMark>,
+    packages: BTreeMap<String, Vec<DeclarationMark>>,
+}
+
+impl PairMarks {
+    /// The marks of `game_marks`' game, whose root directory is `directory`.
+    fn of(game_marks: &GameMarks, directory: &Path) -> Self {
+        Self {
+            bundle: game_marks.bundle,
+            recognition: RECOGNITION_FILES
+                .iter()
+                .map(|file| match file_mark(&directory.join(file)) {
+                    Ok(mark) => DeclarationMark::Read(mark),
+                    Err(_) => DeclarationMark::Failed,
+                })
+                .collect(),
+            packages: game_marks.packages.clone(),
+        }
+    }
+
+    /// Whether these marks tell a change since `kept`: another `bundle.json` or recognition file,
+    /// or a package marked both times whose marks differ. A package marked only now (the first
+    /// check after a start marks none, the registry not read yet) or only then is no change by
+    /// itself: its registration is `bundle.json`'s.
+    fn changed_since(&self, kept: &Self) -> bool {
+        self.bundle != kept.bundle
+            || self.recognition != kept.recognition
+            || self.packages.iter().any(|(package_id, marks)| {
+                kept.packages
+                    .get(package_id)
+                    .is_some_and(|then| then != marks)
+            })
+    }
+}
+
 /// The scheduler workbench of one host (composer mode).
 pub(super) struct StandardPackWorkbench {
     /// The configuration manifest's subsystems each `requires` must name; `None` when the host
@@ -337,6 +391,11 @@ struct WorkbenchState {
     bound: BTreeMap<String, StandardPackBinding>,
     /// The marks of each game in use when the last composition read it.
     marks: BTreeMap<String, GameMarks>,
+    /// Workflow #490 ENTRY-A fix round 6 (ruling 4): the marks of each game's packages as the
+    /// check that last compared them for the entry pairs saw them ([`PairMarks`]), kept apart
+    /// from the composition's own, so a change frees the pairs at one check only, whether or
+    /// not a composition follows.
+    pair_marks: BTreeMap<String, PairMarks>,
     /// G-R2s: the packages each game root registered when the workbench last read it, each with
     /// its directory: whose declaration files the next check marks.
     packages: BTreeMap<String, BTreeMap<String, PathBuf>>,
@@ -1132,6 +1191,36 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #490 ENTRY-A fix round 5 (ruling 5): a placement can replace a registered
+        // package's files without changing the rules a composition activates, and a scheduled run
+        // takes its package as the registry places it when it is dispatched, so a pair's packages
+        // can change while no catalogue becomes active. A game in use whose packages changed
+        // since the last check frees every pair as an activation does (`clear_entry_pairs`): a
+        // pair that waits or is set aside is dispatched again. Fix round 6 (ruling 4): compared
+        // with the marks this comparison kept last ([`PairMarks`]), not the composition's (which
+        // only a composition that succeeds updates), so one change frees the pairs once, while a
+        // game root is broken or a composition refused too; a game whose root failed at this
+        // check keeps its last marks. Before the check's early return: the recognition files are
+        // none of the composition's marks.
+        if let Some(root) = &root {
+            let now = marks
+                .iter()
+                .map(|(game, game_marks)| {
+                    (game.clone(), PairMarks::of(game_marks, &root.join(game)))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let changed = now.iter().any(|(game, marked)| {
+                state
+                    .pair_marks
+                    .get(game)
+                    .is_some_and(|kept| marked.changed_since(kept))
+            });
+            state.pair_marks.retain(|game, _| games.contains(game));
+            state.pair_marks.extend(now);
+            if changed {
+                self.clear_entry_pairs()?;
+            }
+        }
         // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again
         // even when nothing changed, so a root that reads again ends it.
         if failed_roots.is_empty()
@@ -1141,19 +1230,6 @@ impl HostShared {
             && state.uncomposed.is_empty()
         {
             return Ok(());
-        }
-        // Workflow #490 ENTRY-A fix round 5 (ruling 5): a placement can replace a registered
-        // package's files without changing the rules a composition activates, and a scheduled run
-        // takes its package as the registry places it when it is dispatched, so a pair's packages
-        // can change while no catalogue becomes active. A package of a game in use whose
-        // declaration files changed since the last check frees every pair as an activation does
-        // (`clear_entry_pairs`): a pair that waits or is set aside is dispatched again.
-        if state.marks.iter().any(|(game, kept)| {
-            marks
-                .get(game)
-                .is_some_and(|now| now.packages != kept.packages)
-        }) {
-            self.clear_entry_pairs()?;
         }
 
         let mut read = BTreeMap::new();
@@ -1501,6 +1577,16 @@ impl HostShared {
             {
                 read_marks.insert(package_id.clone(), package.marks.clone());
                 directories.insert(package_id.clone(), package.directory.clone());
+            }
+            // Workflow #490 ENTRY-A fix round 6 (ruling 4): a package the entry pairs' marks do
+            // not hold yet (the first check after a start marks no package before the registry is
+            // read) is compared from this read's marks at the next check.
+            if let Some(kept) = state.pair_marks.get_mut(game) {
+                for (package_id, package_marks) in &read_marks {
+                    kept.packages
+                        .entry(package_id.clone())
+                        .or_insert_with(|| package_marks.clone());
+                }
             }
             if let Some(game_marks) = marks.get_mut(game) {
                 game_marks.packages = read_marks;

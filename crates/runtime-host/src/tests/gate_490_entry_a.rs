@@ -117,11 +117,28 @@
 //! (`LEASE_LAPSED_MS`: M1 failed on fix round 4's head admitting a run two seconds after another);
 //! M4 ends its first block with a recovery (the review's M4) and waits for each climb's end as the
 //! other replays do.
+//!
+//! Fix round 6 (the coordinator's work order of 11-21 after the sixth independent review):
+//!
+//! - P3 (ruling 3, the review's case): after an outage that left two healthy pairs with long waits,
+//!   a broken pair with none, first in the order, holds them back one first interval after each of
+//!   its blocks, not their own interval; the first healthy pair runs a minute after the broken
+//!   pair's second block, and the broken pair is set aside at its next failure (threshold 1) or the
+//!   one after (threshold 2); P3 (b) (ruling 3 as built): two broken pairs ahead of a healthy one
+//!   do not take turns ahead of it, a pair whose interval is not longer than the setter's waiting
+//!   its own;
+//! - P4 (ruling 4): in composer mode a changed package frees the pairs at one check and not again
+//!   at the next, also while another game's root is broken.
+//!
+//! M6's `main` names its entry as the set `{menu}` (ruling 1); K3 (c), R3 (a), K4, M4 and M6 run a
+//! startup package that checks no entry (ruling 2), as K3 (a), K3 (b) and R5 (a) do.
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
 };
-use super::gate_373_nav6::{BLACK, Overlay, RED, entry_away_to_home, frame, script, update_root};
+use super::gate_373_nav6::{
+    BLACK, Overlay, RED, away_to_home, entry_away_to_home, frame, script, update_root,
+};
 use super::gate_386_sr2b1::{admit, failure_of, start};
 use super::gate_386_sr4a3::{once, silence_manifest};
 use super::gate_480_pg2b::hold_next_rung_step;
@@ -1493,6 +1510,389 @@ fn entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_
     host.close().expect("close the host");
 }
 
+// ---- Fix round 6 at the policy level and in the workbench.
+
+/// P3 (fix round 6, ruling 3, the sixth review's case; the settlement hook, three tasks,
+/// `scheduling.unavailable_probe`'s first interval one minute, its longest thirty and the shipped
+/// factor 2): an outage left `BROKEN` and `OTHER` (both healthy here) with six and ten failures at
+/// the entry in a row, waiting their thirty and thirty-four minutes from its last block's end, and
+/// `TASK`, first in the order and whose entry is broken, with none (the test seeds the two pairs).
+/// `TASK` fails at once; its block, whose climb the stretch's pace holds, ends thirty-one minutes
+/// after the outage: `TASK`, whose failure set it, waits its own minute; `BROKEN`, whose own wait
+/// has passed, one first interval, not thirty minutes; `OTHER` keeps its own wait, which still
+/// runs. `TASK` and `BROKEN` come due together and `TASK`, first in the order, fails again; after
+/// that block's end `TASK` waits its two minutes and both healthy pairs one: in the round a minute
+/// after it `TASK` waits (`count` 2) and `BROKEN` runs, and its success ends every wait. `TASK`'s
+/// next failure counts against it: under a threshold of 1 it is set aside there; under 2 the
+/// healthy `BROKEN` (its count in a row none) runs at that block's end and `TASK`'s next failure,
+/// the second against it, sets it aside. One person told each time.
+#[test]
+fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_first_interval() {
+    for threshold in [1_u16, 2] {
+        let root = TempDir::new().expect("tempdir");
+        let (host, clock) = start(
+            &root,
+            instance_id(),
+            POLICY_NOW_UNIX_MS,
+            paced_between(FIRST_INTERVAL_MS, 30 * MINUTE_MS, json!({})).manifest,
+        );
+        host.activate_policy_catalog(&three_tasks(threshold))
+            .expect("activate the catalog");
+        let outage_end = POLICY_NOW_UNIX_MS;
+        for (task_id, in_a_row, minutes) in [(BROKEN, 6_u32, 30_u64), (OTHER, 10, 34)] {
+            host.seed_entry_pair_for_test(
+                POLICY_INSTANCE_ALIAS,
+                task_id,
+                (in_a_row, outage_end + minutes * MINUTE_MS, false),
+            )
+            .expect("seed the pair");
+        }
+        let (first, _) = admit(&host, outage_end, 100, true);
+        assert_eq!(first.task_id, TASK, "the only task due");
+        settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+        let block_end = outage_end + 31 * MINUTE_MS;
+        recover_at(&host, &clock, block_end);
+        assert_eq!(
+            pair(&host, TASK),
+            Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
+            "its failure set the block: its own interval"
+        );
+        assert_eq!(
+            pair(&host, BROKEN),
+            Some((6, 0, block_end + FIRST_INTERVAL_MS, false)),
+            "one first interval at most, not its thirty minutes"
+        );
+        assert_eq!(
+            pair(&host, OTHER),
+            Some((10, 0, outage_end + 34 * MINUTE_MS, false)),
+            "its own wait still runs: never shortened"
+        );
+
+        let again = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, 101);
+        assert_eq!(
+            again.task_id, TASK,
+            "due with BROKEN, and first in the order"
+        );
+        let settled = settle_at_entry_after(&host, &clock, &again, ENTRY_RUN_MS);
+        let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+        assert_eq!(
+            pair(&host, TASK),
+            Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false))
+        );
+        for task_id in [BROKEN, OTHER] {
+            assert_eq!(
+                pair(&host, task_id).map(|(_, _, until, _)| until),
+                Some(block_end + FIRST_INTERVAL_MS),
+                "{task_id}: one first interval after the broken pair's block"
+            );
+        }
+        let at = block_end + FIRST_INTERVAL_MS;
+        advance_manual_clock_to(&clock, at);
+        let round = evaluate(&host, at, 102);
+        assert!(dispatched(&round, BROKEN), "{round:#?}");
+        let waiting = reason_of(&round, TASK, HostCode::InstanceEntryTaskWaiting)
+            .unwrap_or_else(|| panic!("the broken pair waits: {round:#?}"));
+        assert_eq!(waiting.value("count"), Some(&json!(2)));
+        let healthy = admit_at(&host, &clock, at, 103);
+        assert_eq!(healthy.task_id, BROKEN, "the first healthy pair");
+        let let_in = succeed(&host, &clock, &healthy);
+        for task_id in [TASK, OTHER] {
+            assert_eq!(
+                pair(&host, task_id),
+                Some((0, 0, 0, false)),
+                "{task_id}: a run let in ends every wait"
+            );
+        }
+
+        let next = admit_at(
+            &host,
+            &clock,
+            let_in.observed_at_unix_ms + LEASE_LAPSED_MS,
+            104,
+        );
+        assert_eq!(next.task_id, TASK, "first in the order, no longer held");
+        let settled = settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+        assert_eq!(
+            pair(&host, TASK)
+                .map(|(in_a_row, against, _, set_aside)| (in_a_row, against, set_aside)),
+            Some((1, 1, threshold == 1)),
+            "it came although a run was let in: one against it"
+        );
+        if threshold == 2 {
+            let block_end = settled.observed_at_unix_ms + BLOCK_MS;
+            recover_at(&host, &clock, block_end);
+            let healthy = admit_at(&host, &clock, block_end + 1_000, 105);
+            assert_eq!(healthy.task_id, BROKEN, "a healthy pair, with no wait");
+            let let_in = succeed(&host, &clock, &healthy);
+            let last = admit_at(
+                &host,
+                &clock,
+                let_in.observed_at_unix_ms + LEASE_LAPSED_MS,
+                106,
+            );
+            assert_eq!(last.task_id, TASK);
+            settle_at_entry_after(&host, &clock, &last, ENTRY_RUN_MS);
+            assert_eq!(
+                pair(&host, TASK).map(|(_, against, _, set_aside)| (against, set_aside)),
+                Some((2, true)),
+                "the second against it"
+            );
+        }
+        let reports = set_aside_reports(&host);
+        let [report] = reports.as_slice() else {
+            panic!("one person told: {reports:#?}");
+        };
+        assert_eq!(report.value("task_id"), Some(&json!(TASK)));
+        assert_eq!(report.value("count"), Some(&json!(threshold)));
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        host.close().expect("close the host");
+    }
+}
+
+/// P3 (b) (fix round 6, ruling 3 as built, case (b) of its walk: two broken pairs ahead of a
+/// healthy one; the settlement hook, three tasks, threshold 1, `scheduling.unavailable_probe`'s
+/// first interval one minute and its longest two): an outage, each block `BLOCK_MS`: `TASK`,
+/// `BROKEN` and `OTHER` fail at their entry in turn, each its first in a row, every other pair's
+/// one-minute interval not longer than the setter's, so each waits its own from each block's end;
+/// `TASK` and then `BROKEN` (both broken) fail again, their second in a row, two minutes. At
+/// `BROKEN`'s second block's end `TASK`, whose interval is that of the pair that set the block,
+/// waits its own two minutes, and `OTHER` its one: a minute later `OTHER` is dispatched while both
+/// broken pairs wait (one first interval for every pair that did not set the block, as ruling 3
+/// is worded, would make `TASK` due with `OTHER` and ahead of it, and the two broken pairs would
+/// take turns ahead of it at every block's end). `OTHER` succeeds, which ends every wait, and
+/// `TASK`'s next failure, one against it, sets it aside; one person told.
+#[test]
+fn entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of_it() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, clock) = start(
+        &root,
+        instance_id(),
+        POLICY_NOW_UNIX_MS,
+        paced_between(FIRST_INTERVAL_MS, 2 * FIRST_INTERVAL_MS, json!({})).manifest,
+    );
+    host.activate_policy_catalog(&three_tasks(1))
+        .expect("activate the catalog");
+    let (first, _) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(first.task_id, TASK);
+    let settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
+    let mut block_end = settled.observed_at_unix_ms + BLOCK_MS;
+    recover_at(&host, &clock, block_end);
+    for (task_id, seed) in [(BROKEN, 101), (OTHER, 102)] {
+        let intent = admit_at(&host, &clock, block_end + 1_000, seed);
+        assert_eq!(intent.task_id, task_id, "the outage");
+        let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+        block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+    }
+    for task_id in [TASK, BROKEN, OTHER] {
+        assert_eq!(
+            pair(&host, task_id),
+            Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
+            "{task_id}"
+        );
+    }
+    for (task_id, seed) in [(TASK, 103), (BROKEN, 104)] {
+        let intent = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, seed);
+        assert_eq!(intent.task_id, task_id, "first in the order of those due");
+        let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
+        block_end = settled.observed_at_unix_ms + BLOCK_MS;
+        recover_at(&host, &clock, block_end);
+    }
+    for task_id in [TASK, BROKEN] {
+        assert_eq!(
+            pair(&host, task_id),
+            Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false)),
+            "{task_id}: its own two minutes, the setter's interval"
+        );
+    }
+    assert_eq!(
+        pair(&host, OTHER),
+        Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
+        "its own minute"
+    );
+    let at = block_end + FIRST_INTERVAL_MS;
+    advance_manual_clock_to(&clock, at);
+    let round = evaluate(&host, at, 105);
+    assert!(dispatched(&round, OTHER), "the healthy pair: {round:#?}");
+    for task_id in [TASK, BROKEN] {
+        let waiting = reason_of(&round, task_id, HostCode::InstanceEntryTaskWaiting)
+            .unwrap_or_else(|| panic!("{task_id} waits: {round:#?}"));
+        assert_eq!(waiting.value("count"), Some(&json!(2)));
+    }
+    let healthy = admit_at(&host, &clock, at, 106);
+    assert_eq!(healthy.task_id, OTHER);
+    let let_in = succeed(&host, &clock, &healthy);
+    let next = admit_at(
+        &host,
+        &clock,
+        let_in.observed_at_unix_ms + LEASE_LAPSED_MS,
+        107,
+    );
+    assert_eq!(next.task_id, TASK);
+    settle_at_entry_after(&host, &clock, &next, ENTRY_RUN_MS);
+    assert_eq!(
+        pair(&host, TASK).map(|(_, against, _, set_aside)| (against, set_aside)),
+        Some((1, true)),
+        "set aside at its first failure against it"
+    );
+    let reports = set_aside_reports(&host);
+    let [report] = reports.as_slice() else {
+        panic!("one person told: {reports:#?}");
+    };
+    assert_eq!(report.value("task_id"), Some(&json!(TASK)));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// P4: the rule of game A's root, its package's id.
+const PLACED: &str = "fixture.placed";
+/// P4: the second game in use, which has no root (until a test breaks it), and its server.
+const GAME_P4: &str = "fixture-game-p4";
+const SERVER_P4: &str = "fixture-server-p4";
+
+/// P4: the modification time `seconds` after a fixed instant (no clock is read) given to the file
+/// at `path`.
+fn touch(path: &Path, seconds: u64) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| {
+            file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + seconds))
+        })
+        .expect("set the file's modification time");
+}
+
+/// P4 (fix round 6, ruling 4; composer mode, manual clock, one fake instance per game): game A's
+/// root holds one rule, `PLACED`, and its package; a second game is in use with no root. A pair is
+/// set aside on game A's instance (seeded). `PLACED`'s control file is placed again as it was (its
+/// bytes the same, its modification time moved, as `place` writes a package's directory anew): the
+/// rules do not change, so nothing is activated, and the check after clears the pairs. The pair is
+/// set aside again, and the next check, nothing changed since, leaves it. Then the same on a host
+/// whose second game's root is broken from the check after the first (its `schedule.json`'s
+/// metadata fails, the gate tests' seam): every check reads and composes again and activates
+/// nothing, and still one check clears the pairs and the next does not.
+#[test]
+fn entry_p4_a_changed_package_frees_the_pairs_at_one_check_even_with_another_game_root_broken() {
+    for broken in [false, true] {
+        let packs = TempDir::new().expect("standard-pack root");
+        let game = packs.path().join(super::gate_rl1b::GAME_A);
+        super::gate_rl1b::write_json(
+            &game.join("bundle.json"),
+            &super::gate_rl1b::bundle(
+                super::gate_rl1b::GAME_A,
+                super::gate_rl1b::SERVER_A,
+                &[PLACED],
+            ),
+        );
+        super::gate_rl1b::write_json(
+            &game.join("schedule.json"),
+            &super::gate_rl1b::schedule_a(&[(PLACED, PLACED, 100)]),
+        );
+        super::gate_442_rem1::write_package(&game.join(PLACED), PLACED, None, None);
+        let control = game.join(PLACED).join("control.json");
+        touch(&control, 0);
+        let mut facts = policy_facts();
+        facts.outcomes.clear();
+        facts.instances = [
+            (
+                POLICY_INSTANCE_ALIAS,
+                super::gate_rl1b::GAME_A,
+                super::gate_rl1b::SERVER_A,
+            ),
+            (POLICY_INSTANCE_ALIAS_B, GAME_P4, SERVER_P4),
+        ]
+        .into_iter()
+        .map(|(alias, game_id, server_id)| InstanceSnapshot {
+            instance_id: alias.to_owned(),
+            server_id: server_id.to_owned(),
+            game_id: game_id.to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec![
+                actingcommand_policy::STANDARD_PACK_OPERATION_ID.to_owned(),
+            ],
+            preferred_task_ids: Vec::new(),
+        })
+        .collect();
+        let state = TempDir::new().expect("state root");
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+        let host = RuntimeHost::start(
+            config(&state)
+                .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources()))
+                .with_runtime_clock(clock.clone())
+                .with_standard_packs_root(Some(packs.path().to_owned()))
+                .with_standard_pack_schedule(true),
+            Arc::new(FakeProvider::from_entries([
+                (
+                    POLICY_INSTANCE_ALIAS.to_owned(),
+                    instance_id(),
+                    Arc::new(FakeState::default()),
+                ),
+                (
+                    POLICY_INSTANCE_ALIAS_B.to_owned(),
+                    instance_id(),
+                    Arc::new(FakeState::default()),
+                ),
+            ])),
+        )
+        .expect("start the composer-mode host");
+        // One policy cycle with the monotonic clock at `checks` check intervals (the shipped
+        // `standard_packs.check_interval_ms`, a minute): its check runs first.
+        let check = |checks: u64| {
+            clock.set_unix_ms(POLICY_NOW_UNIX_MS);
+            clock.set_monotonic_ms(checks * MINUTE_MS);
+            host.capacity_sampler_for_test().expect("capacity owner")().expect("capacity sample");
+            host.evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &super::gate_rl1b::resources(&[super::gate_rl1b::POOL_A]),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                7,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("check {checks}: {error}"));
+        };
+        let set_aside = || {
+            host.seed_entry_pair_for_test(POLICY_INSTANCE_ALIAS, PLACED, (1, 0, true))
+                .expect("set the pair aside");
+            assert_eq!(pair(&host, PLACED), Some((1, 1, 0, true)), "{broken}");
+        };
+        let failing = packs.path().join(GAME_P4).join("schedule.json");
+        let seam = || {
+            crate::host::DECLARATION_METADATA_FAILS_FOR_TEST
+                .lock()
+                .expect("the metadata seam")
+        };
+
+        check(0);
+        if broken {
+            seam().insert(failing.clone());
+        }
+        check(1);
+        set_aside();
+        touch(&control, 10);
+        check(2);
+        assert_eq!(
+            pair(&host, PLACED),
+            None,
+            "{broken}: the changed package frees it"
+        );
+        set_aside();
+        check(3);
+        assert_eq!(
+            pair(&host, PLACED),
+            Some((1, 1, 0, true)),
+            "{broken}: nothing changed since, nothing freed"
+        );
+        seam().remove(&failing);
+        assert!(host.fatal_error().expect("runtime health").is_none());
+        host.close().expect("close the composer-mode host");
+    }
+}
+
 // ---- The replays on a fake device.
 
 const LEAD_STEPS: &[(&str, &str, &str)] = &[("go", "shop", "menu")];
@@ -1505,6 +1905,16 @@ const MANUAL: &str = "neutral.test.manual";
 /// unknown page.
 fn lead() -> Pack<'static> {
     route(LEAD, "shop", "menu", LEAD_STEPS, None)
+}
+
+/// Fix round 6 (ruling 2): the instance's startup package for a replay that climbs past the
+/// application restart on the manual clock, as K3 (a), K3 (b) and R5 (a) have it: a page graph
+/// from `menu` to `done` that checks no entry (one entry page, not `home`, no prerequisite, no
+/// phase), so on a screen it does not know it fails at its first look. The default, the scheduled
+/// package `main`, checks its entry: as a rung's startup package on the manual clock each of its
+/// runs took about a minute on CI (K3 (c), R3 (a), M4).
+fn quick_startup() -> Pack<'static> {
+    route(STARTUP, "menu", "done", OPEN, None)
 }
 
 /// A replay's host: the instance-workers ladder fixture's scheduled run (its request binding
@@ -1526,7 +1936,8 @@ struct Replay {
 /// Fix round 2: what a replay's host is configured with beyond the ladder fixture's: the
 /// configuration actingd assembles (`None`: the test host's), and the instance's startup package
 /// when it is not the scheduled package. Fix round 4: `unchained`, a `main` that declares no
-/// prerequisite (a page graph whose entry check is its own, M6); `emulator`, the instance has
+/// prerequisite (a page graph whose entry check is its own, M6; fix round 6: its entry the set
+/// `{menu}`, which the kernel checks); `emulator`, the instance has
 /// emulator control and a discovery binding, so a ladder's emulator rung runs (M4).
 #[derive(Default)]
 struct Setup<'a> {
@@ -1613,13 +2024,21 @@ fn replay_with(scene: &Scene<'_>, manual_clock: bool) -> Replay {
 /// [`replay_with`] on a host `setup` configures (fix round 2).
 fn replay_set_up(scene: &Scene<'_>, manual_clock: bool, setup: Setup<'_>) -> Replay {
     let root = TempDir::new().expect("tempdir");
-    let main = route(
-        MAIN,
-        "menu",
-        "done",
-        OPEN,
-        (!setup.unchained).then_some(LEAD),
-    );
+    // Fix round 6 (ruling 1): an unchained `main` names its entry as a set of pages, as nav3a's
+    // `menu_entry_main`: a single entry page that is not `home`, with no prerequisite and no
+    // phase, needs no entry check, so its run would record no entry decision and fail in `main`.
+    let main = if setup.unchained {
+        Pack {
+            package_id: MAIN,
+            mode: "navigable_route",
+            prerequisite: None,
+            entry: json!(["menu"]),
+            target: "done",
+            operations: OPEN,
+        }
+    } else {
+        route(MAIN, "menu", "done", OPEN, Some(LEAD))
+    };
     let (mut host_config, request) =
         ladder_setup_with_packages(root.path(), &main.zip(), &scene.return_home.zip());
     if let Some(startup) = setup.startup {
@@ -2171,6 +2590,8 @@ fn entry_a_t3_a_recovery_the_cooldown_held_back_is_taken_up_at_its_end_and_unblo
 /// `lead`'s step from `shop` to `done` (F1 a), and `back`'s from `away` to `done` (F1 b, F5).
 const TO_DONE: &[(&str, &str, &str)] = &[("go", "shop", "done")];
 const AWAY_TO_DONE: &[(&str, &str, &str)] = &[("back", "away", "done")];
+/// Fix round 6 (R3 (a)): a startup package's one step from `menu` to `shop`.
+const MENU_TO_SHOP: &[(&str, &str, &str)] = &[("open", "menu", "shop")];
 
 /// Every `recovery_ladder_suppressed` of the host as (reason, until).
 fn suppressions(host: &RuntimeHost) -> Vec<(RecoveryLadderSuppression, u64)> {
@@ -2900,11 +3321,14 @@ fn entry_r2_a_block_with_nothing_let_in_since_the_previous_one_climbs_from_the_a
 /// anyway: the cause of fix round 3's red run, which read the earlier time); at the window's end it
 /// climbs from the application restart, the return-home rung skipped before its start rung; the
 /// startup package does not know `done` either, the climb ends `exhausted`, and one person is
-/// told, with the time of the block's next climb.
+/// told, with the time of the block's next climb. Fix round 6 (ruling 2): that startup package
+/// checks no entry (a page graph from `menu` to `shop`, which does not know `done`, as
+/// [`quick_startup`] does not know `away`), so the climb does not take a minute.
 #[test]
 fn entry_r3_a_after_a_recovery_at_the_return_home_rung_the_next_block_climbs_from_the_application_restart()
  {
-    let replay = replay_with(
+    let startup = route(STARTUP, "menu", "shop", MENU_TO_SHOP, None);
+    let replay = replay_set_up(
         &Scene {
             return_home: &route(RETURN_HOME, "away", "done", AWAY_TO_DONE, None),
             lead: &lead(),
@@ -2912,6 +3336,10 @@ fn entry_r3_a_after_a_recovery_at_the_return_home_rung_the_next_block_climbs_fro
             screens: vec![AWAY, DONE],
         },
         true,
+        Setup {
+            startup: Some(&startup),
+            ..Setup::default()
+        },
     );
     replay.fail_at_entry();
     assert_settled_at_entry(&replay.execution());
@@ -3481,9 +3909,12 @@ fn entry_k3_b_after_a_climb_business_capacity_interrupted_the_next_waits_its_int
 /// run leaves `away` for `menu` and succeeds: it ends the block and lets a run in, which ends the
 /// stretch. The game is on `away` again; once the task's own wait has passed (fix round 4) it
 /// fails at its entry: its block, the first of a new stretch, climbs as configured, from the
-/// return-home rung, at once from its lease end, with nothing held.
+/// return-home rung, at once from its lease end, with nothing held. Fix round 6 (ruling 2): the
+/// instance's startup package checks no entry ([`quick_startup`]; it does not know `away`, so
+/// each climb still ends `exhausted`), so the test no longer waits minutes on its climbs.
 #[test]
 fn entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_as_configured() {
+    let startup = quick_startup();
     let replay = replay_set_up(
         &Scene {
             return_home: &route(RETURN_HOME, "shop", "done", NOWHERE_STEPS, None),
@@ -3492,7 +3923,10 @@ fn entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_
             screens: vec![AWAY],
         },
         true,
-        paced(json!({})),
+        Setup {
+            startup: Some(&startup),
+            ..paced(json!({}))
+        },
     );
     let away = Arc::new(AtomicBool::new(true));
     let from = Arc::new(AtomicUsize::new(0));
@@ -3586,7 +4020,9 @@ fn entry_k3_c_after_a_run_got_in_the_next_blocks_climb_does_not_wait_and_starts_
 /// update dialog, which ends the climb (`exhausted` at Warning, `recovery_ladder_interrupted`). One
 /// `instance_entry_blocked_recovery_failed` names it (`entry_recovery_end` `update_dialog`, no next
 /// climb), the block holds nothing, and twenty minutes later, past the cool-down window, the
-/// sweep's tick climbs nothing. The store update task is dispatched on the blocked instance.
+/// sweep's tick climbs nothing. The store update task is dispatched on the blocked instance. Fix
+/// round 6 (ruling 2): the startup package is gate_373_nav6's `away_to_home`, which checks no
+/// entry and meets the update dialog at its first look, not the scheduled package.
 #[test]
 fn entry_k4_the_update_dialog_ends_the_climb_tells_a_person_once_and_nothing_climbs_again() {
     let state = Arc::new(FakeState::default());
@@ -3596,6 +4032,14 @@ fn entry_k4_the_update_dialog_ends_the_climb_tells_a_person_once_and_nothing_cli
     // The scheduled run binds no return-home package, and the game names none.
     let request = ContainedTaskRequest::new(bound.package_path().to_owned())
         .expect("scheduled request without a return-home binding");
+    // Fix round 6 (ruling 2): the instance's startup package checks no entry (gate_373_nav6's
+    // `away_to_home`, whose direct run meets the update dialog as UPD-1 A9's does), so its run in
+    // the application's rung does not take a minute on the manual clock as the scheduled
+    // package's did.
+    let startup_path = temp.path().join("startup-package.zip");
+    fs::write(&startup_path, away_to_home()).expect("write the startup package");
+    let startup = ContainedTaskRequest::new(startup_path.to_string_lossy().into_owned())
+        .expect("the startup package");
     let store_path = temp.path().join("store-update.zip");
     fs::write(&store_path, super::gate_store_fg2::store_package()).expect("write the package");
     let procedures = ProcedureManifest::new(vec![
@@ -3637,6 +4081,10 @@ fn entry_k4_the_update_dialog_ends_the_climb_tells_a_person_once_and_nothing_cli
     let host = RuntimeHost::start(
         host_config
             .with_procedure_manifest(procedures)
+            .with_startup_packages(BTreeMap::from([(
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                startup,
+            )]))
             .with_standard_packs_root(Some(root.root.clone()))
             .with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(
@@ -3751,10 +4199,16 @@ fn emulator_actions(state: &FakeState) -> Vec<actingcommand_contract::EmulatorIn
 /// not stopped again. A client's run then leaves `away` and succeeds, which lets a run in and ends
 /// the stretch; the task's next failure at the entry begins a new stretch, whose first climb plans
 /// the emulator's rung as
-/// configured and restarts the emulator once more.
+/// configured and restarts the emulator once more. Fix round 6 (ruling 2; CI on fix round 5's
+/// head): the first `wait_for_ladders_finished` ran out its 120 seconds before the first climb
+/// ended; that climb ran the instance's startup package twice (the application's and the
+/// emulator's rung), and with the scheduled package `main` as that package (it checks its entry)
+/// each run took about a minute on the manual clock. The startup package now checks no entry
+/// ([`quick_startup`], which does not know `away` either, so every climb still ends `exhausted`).
 #[test]
 fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() {
     use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    let startup = quick_startup();
     let replay = replay_set_up(
         &Scene {
             return_home: &route(RETURN_HOME, "shop", "done", NOWHERE_STEPS, None),
@@ -3764,6 +4218,7 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
         },
         true,
         Setup {
+            startup: Some(&startup),
             emulator: true,
             ..Setup::default()
         },
@@ -4068,10 +4523,18 @@ fn entry_m5_a_store_update_success_between_two_failures_at_the_entry_clears_the_
 /// (`checked`), so its block's climb starts at once from the application restart. A recovery ends
 /// that block. The game is on `away`: the next run checks its entry, its return-home package brings
 /// it to `menu`, its main package starts and fails on `shop`: no failure at the entry, settled
-/// with no condition, and its lease end (`started`) admits its ladder at once, as configured.
+/// with no condition, and its lease end (`started`) admits its ladder at once, as configured. Fix
+/// round 6 (ruling 1; CI on fix round 5's head failed the first assertion): `main`'s entry is the
+/// set `{menu}`, which the kernel checks (a single entry page that is not `home`, with no
+/// prerequisite and no phase, needs no check, so the first run recorded no entry decision and
+/// failed in `main` with a streak); on `shop` its entry check runs the bound return-home package,
+/// which does not know `shop` either, so the run fails at its entry. Ruling 2: the instance's
+/// startup package checks no entry ([`quick_startup`], which does not know `shop`), so each climb
+/// ends `exhausted` at once.
 #[test]
 fn entry_m6_on_a_page_graph_without_a_chain_the_lease_end_tells_a_failure_before_its_main_package_from_one_after()
  {
+    let startup = quick_startup();
     let replay = replay_set_up(
         &Scene {
             return_home: &route(RETURN_HOME, "away", "menu", BACK_STEPS, None),
@@ -4081,6 +4544,7 @@ fn entry_m6_on_a_page_graph_without_a_chain_the_lease_end_tells_a_failure_before
         },
         true,
         Setup {
+            startup: Some(&startup),
             unchained: true,
             ..Setup::default()
         },

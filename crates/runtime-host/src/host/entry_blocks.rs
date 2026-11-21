@@ -44,7 +44,10 @@
 //!   scheduled run let in on the instance (the event that raises `entered`) ends every pair's wait
 //!   there and its count in a row at once (`EntryBlocks::let_pairs_go`); a store update task's run
 //!   is no such run whatever its end (ruling 4), and a changed package frees every pair as an
-//!   activation does (ruling 5, the scheduler workbench's check).
+//!   activation does (ruling 5, the scheduler workbench's check). Fix round 6 (ruling 3): at a
+//!   block's end only the pairs whose failures set it wait their own interval from that end; any
+//!   other waits one first interval at most when its own interval is longer than theirs, and its
+//!   own otherwise, its wait still running never shortened (`EntryBlocks::end`).
 //! - **Where a climb starts and when** (fix round 3, rulings 3 and 5). A stretch of the instance
 //!   runs from its first block since a run was last let in (a scheduled run's main package started
 //!   after its entry check, a scheduled run, a client's or the Lab's run succeeded) until the next
@@ -229,6 +232,9 @@ struct EntryBlock {
     /// A person was told one of the block's own recoveries ended without recovering
     /// (`instance_entry_blocked_recovery_failed`), once per block.
     recovery_failed: bool,
+    /// Fix round 6 (ruling 3): the catalog tasks whose failures at the entry set or renewed the
+    /// block, whose pairs wait their own interval from its end.
+    setters: BTreeSet<String>,
     held: Option<HeldEntryRecovery>,
     /// The trigger correlations of the block's own recoveries (the blocking runs' lease ends, the
     /// recoveries it held or took over): only one of these ending without recovering tells a
@@ -360,25 +366,54 @@ impl EntryBlocks {
 
     /// Ends the block of `instance_id`, if it has one, at `now_unix_ms` and returns the recovery it
     /// held; counted for a settlement still to come. Fix round 4 (the coordinator's addition to
-    /// ruling 2): every pair of the instance waits its interval from now at least, so the pair
-    /// whose failure set the block is kept out for its interval after the instance can be
-    /// dispatched to again, and a pair whose wait passed during a later block (another pair's)
-    /// waits again: two broken pairs cannot take turns while another task of the instance is due.
-    /// Fix round 5 (ruling 3 (ii)): a pair whose wait a scheduled run let in ended has none to
-    /// renew.
-    fn end(&mut self, instance_id: InstanceId, now_unix_ms: u64) -> Option<HeldEntryRecovery> {
+    /// ruling 2): the pair whose failure set the block waits its interval from now, so it is kept
+    /// out for its interval after the instance can be dispatched to again, and a pair whose wait
+    /// passed during a later block (another pair's) waits again: two broken pairs cannot take
+    /// turns while another task of the instance is due. Fix round 5 (ruling 3 (ii)): a pair whose
+    /// wait a scheduled run let in ended has none to renew. Fix round 6 (ruling 3, as built): the
+    /// pairs whose failures set the block (`EntryBlock::setters`) wait their own interval; a pair
+    /// whose failure did not set it waits from now `first_interval_ms` at most (its own interval
+    /// when that is shorter) when its own interval is longer than the longest interval of the
+    /// pairs that set it, and its own interval otherwise; its own wait still running is never
+    /// shortened. So a broken pair with a short interval that comes due first after an outage
+    /// holds the healthy pairs, whose counts the outage raised, back one first interval after
+    /// each of its blocks, not their own long interval, and the gap lets them run before it runs
+    /// again (ruling 3); and a second broken pair whose interval is the setter's (or shorter) is
+    /// not let ahead of a healthy pair after every block, as one first interval for every pair
+    /// that did not set the block would let it: two broken pairs ahead of a healthy one would take
+    /// turns at every block's end for the whole window, nothing let in, nothing counted.
+    fn end(
+        &mut self,
+        instance_id: InstanceId,
+        now_unix_ms: u64,
+        first_interval_ms: u64,
+    ) -> Option<HeldEntryRecovery> {
         bump(&mut self.ended, instance_id);
         let block = self.blocked.remove(&instance_id)?;
         self.ended_let_in
             .insert(instance_id, count(&self.let_in, instance_id));
-        for (_, pair) in self
+        let setters_ms = self
+            .pairs
+            .iter()
+            .filter(|((pair_instance, task_id), pair)| {
+                *pair_instance == instance_id
+                    && pair.in_a_row > 0
+                    && block.setters.contains(task_id)
+            })
+            .map(|(_, pair)| pair.interval_ms)
+            .max()
+            .unwrap_or(0);
+        for ((_, task_id), pair) in self
             .pairs
             .iter_mut()
             .filter(|((pair_instance, _), pair)| *pair_instance == instance_id && pair.in_a_row > 0)
         {
-            pair.until_unix_ms = pair
-                .until_unix_ms
-                .max(now_unix_ms.saturating_add(pair.interval_ms));
+            let wait_ms = if block.setters.contains(task_id) || pair.interval_ms <= setters_ms {
+                pair.interval_ms
+            } else {
+                pair.interval_ms.min(first_interval_ms)
+            };
+            pair.until_unix_ms = pair.until_unix_ms.max(now_unix_ms.saturating_add(wait_ms));
         }
         block.held
     }
@@ -849,6 +884,7 @@ impl HostShared {
                     .or_insert_with(|| EntryBlock {
                         gate: gate.clone(),
                         recovery_failed: false,
+                        setters: BTreeSet::new(),
                         held: None,
                         recoveries: BTreeSet::new(),
                         restarts,
@@ -857,6 +893,8 @@ impl HostShared {
                         refused,
                     });
                 block.gate = gate.clone();
+                // Fix round 6 (ruling 3): this pair's failure set (or renewed) the block.
+                block.setters.insert(data.task_id.clone());
                 if let Some((_, correlation)) = run {
                     block.recoveries.insert(correlation);
                 }
@@ -902,8 +940,12 @@ impl HostShared {
     /// Counted for a settlement still to come.
     pub(super) fn end_entry_block(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
-        let dropped = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?
-            .end(instance_id, now_unix_ms);
+        let first_interval_ms = self.unavailable_probe_config()?.interval_ms(1);
+        let dropped = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?.end(
+            instance_id,
+            now_unix_ms,
+            first_interval_ms,
+        );
         self.record_dropped_entry_recoveries([dropped])
     }
 
@@ -931,9 +973,10 @@ impl HostShared {
         let_in: bool,
     ) -> RuntimeHostResult<()> {
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        let first_interval_ms = self.unavailable_probe_config()?.interval_ms(1);
         let dropped = {
             let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
-            let dropped = blocks.end(instance_id, now_unix_ms);
+            let dropped = blocks.end(instance_id, now_unix_ms, first_interval_ms);
             if let_in {
                 blocks.note_let_in(instance_id, false);
             }
@@ -966,12 +1009,13 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let instance_id = ladder.instance_id();
         let ended_at_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        let first_interval_ms = self.unavailable_probe_config()?.interval_ms(1);
         let dropped = {
             let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             if blocks.counts_climb(instance_id, ladder) {
                 blocks.climb_ended(instance_id, ended_at_unix_ms);
             }
-            blocks.end(instance_id, ended_at_unix_ms)
+            blocks.end(instance_id, ended_at_unix_ms, first_interval_ms)
         };
         self.record_dropped_entry_recoveries([dropped])
     }
@@ -1649,6 +1693,43 @@ impl HostShared {
                     pair.set_aside,
                 )
             }))
+    }
+
+    /// Fix round 6, test only: the pair of `task_id` on `instance_id` as a run of failures at the
+    /// entry in an unknown window left it: `in_a_row` failures in a row (its interval the
+    /// configuration's for that count), waiting until `until_unix_ms`; with `set_aside`, one
+    /// failure against it under a threshold of 1, set aside to the end of time. It replaces the
+    /// pair's own.
+    #[cfg(test)]
+    pub(super) fn seed_entry_pair_for_test(
+        &self,
+        instance_id: InstanceId,
+        task_id: &str,
+        (in_a_row, until_unix_ms, set_aside): (u32, u64, bool),
+    ) -> RuntimeHostResult<()> {
+        let config = self.unavailable_probe_config()?;
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let entered = count(&blocks.entered, instance_id);
+        blocks.pairs.insert(
+            (instance_id, task_id.to_owned()),
+            EntryPair {
+                packages: String::new(),
+                window_end: if set_aside { u64::MAX } else { 0 },
+                decision_id: format!("seeded-{task_id}"),
+                failure_code: actingcommand_contract::scheduled_failure_code_str(&Outcome::new(
+                    actingcommand_contract::codes::SharedCode::ContainedTaskPageUnknown,
+                )),
+                observed_at_unix_ms: 0,
+                in_a_row,
+                interval_ms: pair_interval_ms(config, in_a_row),
+                until_unix_ms,
+                entered,
+                against: u32::from(set_aside),
+                threshold: 1,
+                set_aside,
+            },
+        );
+        Ok(())
     }
 
     /// Test only: the entry block of `instance_id`, if it has one.
