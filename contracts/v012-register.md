@@ -43705,10 +43705,13 @@ owner's words):
    when shorter) when its own interval is longer than the longest interval of the pairs that set
    it, and its own interval otherwise; a wait still running is never shortened. As worded (one
    first interval at most for every pair that did not set the block), two broken pairs ahead of a
-   healthy one at the same count take turns ahead of it for the whole window: at each block's end
-   the other broken pair, whose own wait has passed, comes due with the healthy one a minute later
-   and is ahead of it in the evaluation's order, so nothing is ever let in and neither broken pair
-   is ever set aside (case (b) below). Built so, the review's case is as the ruling wants it (the
+   healthy one at the same count take turns ahead of it at every block's end, the other broken
+   pair, whose own wait has passed, coming due with the healthy one a minute later and ahead of it
+   in the evaluation's order, until their own waits outlast a block (about ten failures in a row
+   each; the seventh review: the healthy pair at about 257 minutes in case (b)); three broken
+   pairs take turns for the whole window. (Fix round 7 corrects this item's earlier sentence,
+   which said two take turns for the whole window; it replaces this rule by the turn order, item 1
+   of "Fix round 7".) Built so, the review's case is as the ruling wants it (the
    healthy pairs, whose intervals are longer than the broken pair's, wait one first interval) and
    case (b) as round 5 left it. Walk (shipped values, minutes, climbs of about two minutes, the
    ten-minute cool-down window): (a) the broken pair fails at 30, its block ends at 32, the
@@ -43762,6 +43765,76 @@ owner's words):
 9. *The stack*: merged with pull request #1858's branch, which holds main with #1857's limits and
    #1856.
 
+**Fix round 7** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix7.md`, after
+the seventh independent review of #1853, `rd-1121/review-1853-fix6.md`, and the coordinator's
+addition after CI's `host-lab` on fix round 6's head, where P4 and M4 failed; the rulings are the
+coordinator's, not the owner's words):
+
+1. *The order at a block's end is a turn order* (`EntryBlocks::end`; it replaces fix round 6's
+   rule, item 3 above). Rounds 5 and 6 each left a way in which broken pairs take turns ahead of a
+   healthy pair for hours: a rule that decides a pair's wait from intervals alone lets the
+   evaluation's order pick among the pairs that come due together (the seventh review: a broken
+   pair at four in a row first in the order, a second with none and a healthy pair at six, about
+   478 minutes; three broken pairs at two, eight and none ahead of a healthy pair at ten, about
+   1100). Now the pairs whose failures set or renewed the block (`EntryBlock::setters`) wait their
+   own interval from its end; the other pairs of the instance whose count in a row is above none,
+   but a pair set aside (no place, left as it is), are ordered by their latest failure at the entry
+   (`EntryPair::observed_at_unix_ms`: `pair_failed` builds the pair anew at every failure with the
+   execution record's observation time, and nothing else writes it), the one that failed longest
+   ago first, equal times by the task's id (the map's order, kept by a stable sort); the first
+   waits one first interval (`scheduling.unavailable_probe`'s, as fix round 6 reads it) from the
+   end, the second two, the third three; a running wait is never shortened, and the window's end
+   bounds every wait where it is read. *Its bound, in plain words:* after an outage a healthy pair
+   runs once each broken pair ahead of it in the order has failed once more, about one block
+   each, and the pair that set the latest block may run first again while its own interval is not
+   longer than the healthy pair's turn and it stands before it in the evaluation's order (a
+   broken pair with no count first in the order fails twice before the healthy pair's turn); in a
+   stretch that let nothing in a block lasts about half an hour from its sixth on. Walk (shipped
+   values, the review's model: climbs of about two minutes, the cool-down window from a climb's
+   start, the first healthy run): (a) one broken pair and healthy pairs at the maximum, 33 (fix
+   round 6: 62); (b) two broken pairs ahead of one healthy, 33 or 65 by the order of their latest
+   failures (94); (c) two broken pairs and a task that never failed, 12 (12); (d) the sixth
+   review's case, 65 (65: the broken pair's own minute and the first healthy pair's turn come due
+   together and it is first in the evaluation's order); (e) the same with two such new broken
+   pairs first, 97 (129); the seventh review's first counterexample, 65 (478); its second, 65 to
+   97 (1100). The review proposed the setters last in the order, which would give (d) 33 and (e)
+   65; the ruling keeps their own interval, built as written.
+2. *The texts say what is true*: item 3 of fix round 6 above no longer says that ruling 3 as worded
+   makes two broken pairs take turns for the whole window (they stop once their own waits outlast a
+   block; three do not); the contract's "A pair that keeps failing at its entry" and "The worst
+   cases", the comment of `end`, and `instance_entry_task_waiting`'s description (after its first
+   sentence: the index unchanged, checked current) describe the turn order and its bound.
+3. *The package marks before the first composition that succeeded* (the contract's "Its end";
+   `standard-pack-schedule.md` too): the registered packages whose `control.json` and
+   `resources/operations/resources.json` are compared are the last successful composition's
+   (`WorkbenchState::packages`, set only after a composition succeeded), so until one has succeeded
+   since the start (a game root broken or every composition refused since then) only the root's
+   `bundle.json` and the three recognition files are compared, and a change of a package's files
+   that leaves those alone is not seen until then.
+4. *P4 tightened* (the seventh review's "可以改"): the pair is set aside before the first check
+   that compares the marks (after the first check, whose activation of the first catalogue clears
+   every pair itself) and that check leaves it; the check that frees it activates no catalogue (the
+   ledger's `catalog.activated` records counted).
+5. *CI on fix round 6's head* (the coordinator's addition): P4 panicked in the contract crate (an
+   outcome integer above `i64::MAX`): the test seam `seed_entry_pair_for_test` set a seeded pair
+   aside until `u64::MAX`, which the set-aside reason carries as `window_end_unix_ms`. The seam now
+   sets it aside until a day after the Runtime clock's time and takes the latest failure's time;
+   its other members are real times or small counts. In production a pair's window end is the end
+   of the activity window its admission was committed in (`condition_window_end`:
+   `activity_window_at(profile, admitted_at_unix_ms).until_unix_ms`, a time within a day or so of
+   the admission on the Runtime clock), or `0` when the policy knows none: never above `i64::MAX`.
+   M4 ran out its 120-second wait again, at its third climb (the new stretch's first, the second
+   emulator restart on the fake): its two earlier climbs ended within seconds (the log prints both
+   moves of the manual clock, the second at the third admission). The emulator rung's readiness wait
+   (`await_recovery_readiness`, its retry `await_recovery_retry`) sleeps `readiness_poll_ms` in real
+   time and reads the Runtime clock for its backoff and its window; on the manual clock nothing
+   moves that clock while the ladder sleeps (the kernel's waits move it, `ManualRuntimeClock::pause`;
+   the ladder's sleeps do not), so a readiness attempt that does not pass at once never ends. The
+   replays that climb that rung quickly run on the system clock (`gate_390_drill1`,
+   `instance_workers`'s emulator fixture, `gate_480_pg2b`). M4 now waits for the rung's second Stop
+   and Start, then for the climb's end while the manual clock moves a second at each look
+   (`wait_for_ladders_finished_moving`); the test's sequence changed, not the code.
+
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`; fix round 2: `since` 0.12.77):
 
@@ -43812,6 +43885,7 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 | Fix round 4 | `host/entry_blocks.rs` (`EntrySettlement::AtEntry` without `own`, `EntryRule`, `EntryPair`, `EntryBlocks::pairs`, `pair_failed`, `emulator_runs`, `Stretch::emulator_restarted`, `EntryClimb::skip_emulator`, `settle_entry`, `block_instance_entry`'s recorded drops, `note_entry_emulator_restart`, `record_entry_set_aside`, `entry_block_gates`, `take_up_entry_recoveries`); `entry_block.rs` (`EntryPairGate`, `EntryBlockGates::pair_deferral`); `policy_host.rs` (the eligibility closure, `dispatch_escalation_threshold`, `is_store_task`); `host/policy_outcome.rs` (the rule handed to `settle_entry`); `host/recovery_ladder.rs` (`PendingRecoveryLadder::skip_emulator`, `skip_emulator_restart`, the skipped emulator rung, `finish_interrupted_ladder_as`' `cause`); `host/failure_settlement.rs` (the evidence removed); `failure_identity.rs` (`own_entry_identity` removed); `codes.rs` (the four codes, the test spellings); `host.rs` (`entry_pair_for_test`). The coordinator's addition: `host/entry_blocks.rs` (`EntryPair::interval_ms`, `EntryBlocks::end` with the block's end time, `clear_entry_pairs`); `host/policy_catalog.rs` (`switch_policy_catalog` calls `clear_entry_pairs`) |
 | Fix round 5 | `policy_control.rs` (`entry_condition` for a sensitive task, `input_at_entry`, `preview_paced_settlement`'s `sensitive`); `host/entry_blocks.rs` (`pair_interval_ms`, `EntryBlocks::let_pairs_go`, `end` skipping a pair with none in a row, `settle_entry` for a store update task and a run let in, `recovery_ended` setting `restarts`, the test seam `note_entry_let_in_for_test`); `host/policy_outcome.rs` (`EntryRule::store_task` whatever the end); `host/failure_settlement.rs` (`scheduled_run_entry_checked`); `host/recovery_ladder.rs` (the excluded code's staged recovery only for a run that checked its entry); `host/standard_pack_schedule.rs` (`check_standard_pack_rules` frees the pairs when a package's declaration files changed); `codes.rs` (two texts); `.github/workflows/ci.yml` (host-lab's limits; fix round 6: main's again) |
 | Fix round 6 | `host/entry_blocks.rs` (`EntryBlock::setters`, `EntryBlocks::end` with the configuration's first interval, its callers, the test seam `seed_entry_pair_for_test`); `host/standard_pack_schedule.rs` (`PairMarks`, `RECOGNITION_FILES`, `WorkbenchState::pair_marks`, the comparison before the check's early return, a first read's package marks); `host.rs` (`seed_entry_pair_for_test`); the outcome catalogue's texts (three codes) |
+| Fix round 7 | `host/entry_blocks.rs` (`EntryBlocks::end`'s turn order; the test seam `seed_entry_pair_for_test` with the latest failure's time and a real window end); `host.rs` (`seed_entry_pair_for_test`); `instance_entry_task_waiting`'s description |
 | Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md); fix round 2: [emulator-control.md](emulator-control.md) ("Triggers") and [runtime-config.md](runtime-config.md) (`recovery_ladder.exclude_codes`) on what an excluded code does |
 
 **Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
@@ -43958,6 +44032,22 @@ pair's own are the same wait: N3 (a) does not tell the built rule from the worde
 | `entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of_it` (3 as built, case (b)) | Threshold 1, first interval one minute, longest two: the three fail in turn, then the two broken ones again; at the second broken pair's block's end the first broken one waits its own two minutes (the setter's), the healthy one its one: the healthy pair is dispatched a minute later, both broken pairs waiting (count 2); the first broken pair is set aside at its next failure, one report |
 | `entry_p4_a_changed_package_frees_the_pairs_at_one_check_even_with_another_game_root_broken` (4) | Composer mode, a second game in use with no root: a seeded pair set aside; the package's `control.json` placed again with the same bytes and a later time: the next check frees the pair, the check after (the pair set aside again) does not; the same with the second game's root broken from the second check (its `schedule.json`'s metadata fails: every check reads, composes and activates nothing) |
 
+Fix round 7's tests (host gate map, the eighth row "#490 ENTRY-A"; 40 tests in the eight rows, 38
+before this round). None removed. Changed, each expectation derived from `EntryBlocks::end` as
+built: N3 (a) (at the outage's last block's end `BROKEN` waits two first intervals, the second
+turn, not one; at the next `OTHER` two), P3 (its seeds' latest failures at the same time, so the
+order takes them by the task's id; at the broken pair's second block's end `OTHER` waits two first
+intervals, not one), P3 (b) (at `OTHER`'s block's end `BROKEN` two first intervals and at `TASK`'s
+second block's end `OTHER` two, where fix round 6's rule gave one: the test tells the two rules
+apart), P4 (item 4; the seed's window end, item 5) and M4 (item 5). Unchanged after a walk of each:
+M1, M2, M3 (a) to (c), M7, N3 (b), N4, M5 and the replays (one failing pair at a block's end, or the
+others' counts in a row none).
+
+| Test | What it shows |
+|---|---|
+| `entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_first` (1) | Through the test seams, one task: five pairs seeded beside `TASK`'s, their ids sorting against the order of their latest failures and their counts in neither order, one with a wait running an hour, one set aside with the oldest failure; `TASK`'s failure sets the block; at its end `TASK` waits its own minute, the three others one, two and three first intervals in the order of their latest failures, the fourth keeps its running wait, the set-aside pair takes no place and is left as it was |
+| `entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_failed_once_more` (1, the seventh review's case) | Three tasks, first interval one minute, longest thirty: `TASK` fails four times in a row (the outage), `OTHER` seeded at six with a later latest failure, `BROKEN` with none; `BROKEN` fails, its block ends thirty-one minutes later (`BROKEN` its minute, `TASK` one first interval, `OTHER` two); `TASK` fails again (five in a row, sixteen minutes); at that block's end `OTHER` one first interval, `BROKEN` two: a minute later `OTHER` is dispatched while both broken pairs wait (counts 5 and 1), and its success ends every wait |
+
 **What is not changed.** A failure in a step of the main package is settled, rerun, counted and
 paused as before (A2 only clears the pair's mark when such a run started its main package);
 budgets are taken at admission and an immediate rerun of a step failure costs one; the failure
@@ -44000,7 +44090,12 @@ package frees every such rule as an activation does. **Fix round 6 at deploy:** 
 failing at its entry no longer holds back, for their own long waits, the rules an outage left
 waiting: after each of its blocks they wait a minute (its own interval, longer, keeps it last); a
 placement that changes a package frees every waiting or set-aside rule once, also while another
-game's root is broken. **Before a rollback to 0.12.76** (fix round 6, item 5): look whether any
+game's root is broken. **Fix round 7 at deploy:** after each block the instance's other waiting
+rules come due one at a time, a minute apart, the one whose latest failure at the entry is oldest
+first (the rule whose failure set the block still waits its own interval), so a healthy rule an
+outage left waiting runs once each broken rule ahead of it has failed once more; until a
+composition has succeeded since the start, a placement is seen only by `bundle.json` and the
+recognition files. **Before a rollback to 0.12.76** (fix round 6, item 5): look whether any
 catalogue generation activated since this version was deployed holds a task whose `sensitive` is
 true; if none, nothing more to check; if one does, look whether a `policy.execution_recorded` of
 such a task whose `failure` carries `condition` and whose `failure.failure_identity` ends in `~fi`
@@ -44021,7 +44116,7 @@ replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives 
 owes that pair a rerun until the window's end, and a settlement it repeats for a dispatch whose
 record exists (a crash between the record and its completion) is refused
 (`policy_execution_identity_conflict`). Since fix round 4 every record of a failure at the entry is such a condition; a skipped
-emulator rung is a `recovery_rung_finished` with a new code, which v0.12.75 reads as text. In the release notes' language (0.12.77): 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，失败码属于 `pack_logic_mismatch` 类，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；取帧后端、设备连接、围栏这类别的类的失败照 v0.12.75 原样处理。这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复、黑窗盖住、围栏接手或运行时重启；挡结束时还留着的恢复会记一条丢弃。上一段挡结束以后这台还没有任何运行进去过（调度运行的主包过了进门检查开跑，或者调度、客户端、Lab 的运行成功）就又被挡，这次的恢复直接从“重启应用”那一级起。同一段挡（中间没有运行进去过）里，第一次爬梯照常，之后每一次都要等 `scheduling.unavailable_probe` 的间隔（出厂一分钟起、翻倍、最长三十分钟，从上一次爬梯结束算），也不早于冷却窗，不管上一次是恢复了、走完没成还是被容量、排空、关机打断；人暂停时不爬，放开就解挡。恢复走完没成（exhausted）记一条警告 `instance_entry_blocked_recovery_failed`，挡自己按上面的间隔再试；爬梯碰上游戏的更新弹窗，记一条同码警告（`entry_recovery_end` 为 `update_dialog`），这一段里不再爬，交给商店更新任务；工作线程崩了就不再试。进门失败一律不算规则自己的失败，不管中间有没有别的任务进去过：不进连败，不会让规则被挂起。同一条规则在这台上连着进门失败，每失败一次，下一次在这台上派出要多等一阵（出厂一分钟起、翻倍、最长三十分钟，从这台的挡结束时算起，不过活动窗的尽头；排程解释写 `instance_entry_task_waiting` 和到几点），挡一结束，这台上别的任务先跑；同一个活动窗里，在“这台放进过别的调度运行之后”又进门失败的次数够了规则的 `escalation_threshold`，就在这台上搁到这个活动窗结束（`instance_entry_task_set_aside`），并提醒人一次（`instance_entry_task_set_aside_reported`），下一个窗从头来。这一对的调度运行别的结局、换窗、换包、运行时重启、商店更新任务成功，都让它从头算；启用一份新的任务目录（含回滚）时，所有这样的计数、等待和搁置当即清空。一段挡（中间没有运行进去过）里模拟器最多重启一次，之后的爬梯到重启应用为止（模拟器那一级记 `recovery_rung_skipped_emulator_restarted_in_stretch`）。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；容量不够等一时的拒绝不记录、下一拍再试；队列拒收认领从一秒一次起、加倍到一分钟一次重试，同一段挡里同一种拒绝只记一条；“被挡太久”的提醒 `instance_entry_blocked_awaiting_person` 按一整段算（中间靠恢复解开又被挡、期间没有任务进去的连成一段），每段一条，人暂停、围栏、空闲停机期间不提醒；商店更新任务不被挡。一段挡结束时，失败设下这段挡的那条规则等自己的间隔、最后到期；别的规则自己的间隔比它长的只再等一分钟，不比它长的等自己的；放置换了包，所有这样的等待和搁置清空一次，另一个游戏根坏着时也只清一次。
+emulator rung is a `recovery_rung_finished` with a new code, which v0.12.75 reads as text. In the release notes' language (0.12.77): 任务在进门时就失败（主包一步没走，失败出在前置层、回主页层或进门检查，失败码属于 `pack_logic_mismatch` 类，且恢复阶梯会接手）不再算任务的失败：不进连败、不立即重跑、不会让“失败一次就停”的规则停掉，当天次数退还，也不欠补跑；取帧后端、设备连接、围栏这类别的类的失败照 v0.12.75 原样处理。这台实例被挡住（`instance_entry_blocked`），调度不再往上派任何任务，直到恢复成功、这台上有一次运行成功、有人暂停后恢复、黑窗盖住、围栏接手或运行时重启；挡结束时还留着的恢复会记一条丢弃。上一段挡结束以后这台还没有任何运行进去过（调度运行的主包过了进门检查开跑，或者调度、客户端、Lab 的运行成功）就又被挡，这次的恢复直接从“重启应用”那一级起。同一段挡（中间没有运行进去过）里，第一次爬梯照常，之后每一次都要等 `scheduling.unavailable_probe` 的间隔（出厂一分钟起、翻倍、最长三十分钟，从上一次爬梯结束算），也不早于冷却窗，不管上一次是恢复了、走完没成还是被容量、排空、关机打断；人暂停时不爬，放开就解挡。恢复走完没成（exhausted）记一条警告 `instance_entry_blocked_recovery_failed`，挡自己按上面的间隔再试；爬梯碰上游戏的更新弹窗，记一条同码警告（`entry_recovery_end` 为 `update_dialog`），这一段里不再爬，交给商店更新任务；工作线程崩了就不再试。进门失败一律不算规则自己的失败，不管中间有没有别的任务进去过：不进连败，不会让规则被挂起。同一条规则在这台上连着进门失败，每失败一次，下一次在这台上派出要多等一阵（出厂一分钟起、翻倍、最长三十分钟，从这台的挡结束时算起，不过活动窗的尽头；排程解释写 `instance_entry_task_waiting` 和到几点），挡一结束，这台上别的任务先跑；同一个活动窗里，在“这台放进过别的调度运行之后”又进门失败的次数够了规则的 `escalation_threshold`，就在这台上搁到这个活动窗结束（`instance_entry_task_set_aside`），并提醒人一次（`instance_entry_task_set_aside_reported`），下一个窗从头来。这一对的调度运行别的结局、换窗、换包、运行时重启、商店更新任务成功，都让它从头算；启用一份新的任务目录（含回滚）时，所有这样的计数、等待和搁置当即清空。一段挡（中间没有运行进去过）里模拟器最多重启一次，之后的爬梯到重启应用为止（模拟器那一级记 `recovery_rung_skipped_emulator_restarted_in_stretch`）。被排除表排除的前置、回主页进门失败也算进门失败，挡住实例并由挡自己起恢复；容量不够等一时的拒绝不记录、下一拍再试；队列拒收认领从一秒一次起、加倍到一分钟一次重试，同一段挡里同一种拒绝只记一条；“被挡太久”的提醒 `instance_entry_blocked_awaiting_person` 按一整段算（中间靠恢复解开又被挡、期间没有任务进去的连成一段），每段一条，人暂停、围栏、空闲停机期间不提醒；商店更新任务不被挡。一段挡结束时，失败设下这段挡的那条规则等自己的间隔；别的在等的规则按最近一次进门失败的先后排队，最久没失败的排最前，一分钟一个依次到期；放置换了包，所有这样的等待和搁置清空一次，另一个游戏根坏着时也只清一次（启动以来还没有成功组合过时，只看得出 `bundle.json` 和三个识别文件的变化）。
 
 ### 1.496 Slice #498 FACT-CAP (0.12.76): the instance fact store's bound follows its scopes; an instance near its bound is said so before the store refuses it (board #498; a defect read in production on 11-21: six instances held about 205 records against one bound of 256 for the whole host, and the store would have filled within days; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-498-fact-store-capacity.md`, on main `705e8222`, merged with main `7dbbf9f0`)
 

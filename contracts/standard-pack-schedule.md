@@ -776,8 +776,9 @@ while one is held, each check reads and composes again even when nothing changed
   `bundle.json`, of `pages.json`, `interrupts.json` and `navigation.json` and of each registered
   package's `control.json` and `resources/operations/resources.json`, compared with what that
   comparison kept at the check before, so once per change, while another game's root is broken
-  too (a change by hand of a package's other files alone is not seen). No package or rule changes
-  for it.
+  too (a change by hand of a package's other files alone is not seen, nor, until a composition has
+  succeeded since the start, a change of a package's two files alone: the packages compared are
+  the last successful composition's). No package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

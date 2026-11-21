@@ -44,10 +44,12 @@
 //!   scheduled run let in on the instance (the event that raises `entered`) ends every pair's wait
 //!   there and its count in a row at once (`EntryBlocks::let_pairs_go`); a store update task's run
 //!   is no such run whatever its end (ruling 4), and a changed package frees every pair as an
-//!   activation does (ruling 5, the scheduler workbench's check). Fix round 6 (ruling 3): at a
-//!   block's end only the pairs whose failures set it wait their own interval from that end; any
-//!   other waits one first interval at most when its own interval is longer than theirs, and its
-//!   own otherwise, its wait still running never shortened (`EntryBlocks::end`).
+//!   activation does (ruling 5, the scheduler workbench's check). Fix round 7 (ruling 1, which
+//!   replaces fix round 6's rule): at a block's end the pairs whose failures set it wait their own
+//!   interval from that end, and the other pairs take turns in the order of their latest failure
+//!   at the entry, the one that failed longest ago first: the first waits one first interval, the
+//!   second two, and so on, a wait still running never shortened, a pair set aside taking no
+//!   place (`EntryBlocks::end`).
 //! - **Where a climb starts and when** (fix round 3, rulings 3 and 5). A stretch of the instance
 //!   runs from its first block since a run was last let in (a scheduled run's main package started
 //!   after its entry check, a scheduled run, a client's or the Lab's run succeeded) until the next
@@ -155,7 +157,8 @@ struct EntryPair {
     packages: String,
     /// The end of the activity window its failures' admissions were committed in (`0`: unknown).
     window_end: u64,
-    /// The latest failure: its dispatch, its code and its execution record's observation time.
+    /// The latest failure: its dispatch, its code and its execution record's observation time
+    /// (fix round 7: the turn order at a block's end reads it, `EntryBlocks::end`).
     decision_id: String,
     failure_code: CodeStr,
     observed_at_unix_ms: u64,
@@ -367,21 +370,27 @@ impl EntryBlocks {
     /// Ends the block of `instance_id`, if it has one, at `now_unix_ms` and returns the recovery it
     /// held; counted for a settlement still to come. Fix round 4 (the coordinator's addition to
     /// ruling 2): the pair whose failure set the block waits its interval from now, so it is kept
-    /// out for its interval after the instance can be dispatched to again, and a pair whose wait
-    /// passed during a later block (another pair's) waits again: two broken pairs cannot take
-    /// turns while another task of the instance is due. Fix round 5 (ruling 3 (ii)): a pair whose
-    /// wait a scheduled run let in ended has none to renew. Fix round 6 (ruling 3, as built): the
-    /// pairs whose failures set the block (`EntryBlock::setters`) wait their own interval; a pair
-    /// whose failure did not set it waits from now `first_interval_ms` at most (its own interval
-    /// when that is shorter) when its own interval is longer than the longest interval of the
-    /// pairs that set it, and its own interval otherwise; its own wait still running is never
-    /// shortened. So a broken pair with a short interval that comes due first after an outage
-    /// holds the healthy pairs, whose counts the outage raised, back one first interval after
-    /// each of its blocks, not their own long interval, and the gap lets them run before it runs
-    /// again (ruling 3); and a second broken pair whose interval is the setter's (or shorter) is
-    /// not let ahead of a healthy pair after every block, as one first interval for every pair
-    /// that did not set the block would let it: two broken pairs ahead of a healthy one would take
-    /// turns at every block's end for the whole window, nothing let in, nothing counted.
+    /// out for its interval after the instance can be dispatched to again. Fix round 5 (ruling 3
+    /// (ii)): a pair whose wait a scheduled run let in ended (none in a row) has none to renew.
+    ///
+    /// Fix round 7 (ruling 1; it replaces fix round 6's rule): a turn order. The pairs whose
+    /// failures set or renewed the block (`EntryBlock::setters`) wait their own interval from now.
+    /// Every other pair of the instance with a count in a row above none, but one set aside (it
+    /// takes no place and is left as it is), takes a place in the order of its latest failure at
+    /// the entry (`EntryPair::observed_at_unix_ms`, which every failure sets), the one that failed
+    /// longest ago first, equal times by the task's id (the map's order, kept by a stable sort), so
+    /// the order is the same on every run: the first waits one `first_interval_ms` from now, the
+    /// second two, the third three, and so on. A wait still running is never shortened (the later
+    /// time stands), and the window's end bounds every wait where it is read (`pair_deferral`). So
+    /// after every block the other pairs come due one at a time, least recently failed first: a
+    /// pair the outage left with a long interval waits its turn, not that interval, and a healthy
+    /// pair runs once each broken pair ahead of it in the order has failed once more, about one
+    /// block each (a setter whose own interval is not longer than the healthy pair's place may
+    /// come due with or before it, and the evaluation's order decides between pairs due together).
+    /// A task that never failed has no pair: it keeps the first interval's gap after every block.
+    /// Any rule that decides a pair's wait from intervals alone (fix rounds 5 and 6) let the
+    /// evaluation's order pick among the pairs that came due together, so broken pairs could take
+    /// turns ahead of a healthy pair for hours.
     fn end(
         &mut self,
         instance_id: InstanceId,
@@ -392,28 +401,26 @@ impl EntryBlocks {
         let block = self.blocked.remove(&instance_id)?;
         self.ended_let_in
             .insert(instance_id, count(&self.let_in, instance_id));
-        let setters_ms = self
-            .pairs
-            .iter()
-            .filter(|((pair_instance, task_id), pair)| {
-                *pair_instance == instance_id
-                    && pair.in_a_row > 0
-                    && block.setters.contains(task_id)
-            })
-            .map(|(_, pair)| pair.interval_ms)
-            .max()
-            .unwrap_or(0);
+        let mut others = Vec::new();
         for ((_, task_id), pair) in self
             .pairs
             .iter_mut()
             .filter(|((pair_instance, _), pair)| *pair_instance == instance_id && pair.in_a_row > 0)
         {
-            let wait_ms = if block.setters.contains(task_id) || pair.interval_ms <= setters_ms {
-                pair.interval_ms
-            } else {
-                pair.interval_ms.min(first_interval_ms)
-            };
-            pair.until_unix_ms = pair.until_unix_ms.max(now_unix_ms.saturating_add(wait_ms));
+            if block.setters.contains(task_id) {
+                pair.until_unix_ms = pair
+                    .until_unix_ms
+                    .max(now_unix_ms.saturating_add(pair.interval_ms));
+            } else if !pair.set_aside {
+                others.push(pair);
+            }
+        }
+        // Stable: pairs that failed at the same time keep the map's order, by the task's id.
+        others.sort_by_key(|pair| pair.observed_at_unix_ms);
+        for (place, pair) in (1_u64..).zip(others) {
+            pair.until_unix_ms = pair
+                .until_unix_ms
+                .max(now_unix_ms.saturating_add(first_interval_ms.saturating_mul(place)));
         }
         block.held
     }
@@ -1697,29 +1704,37 @@ impl HostShared {
 
     /// Fix round 6, test only: the pair of `task_id` on `instance_id` as a run of failures at the
     /// entry in an unknown window left it: `in_a_row` failures in a row (its interval the
-    /// configuration's for that count), waiting until `until_unix_ms`; with `set_aside`, one
-    /// failure against it under a threshold of 1, set aside to the end of time. It replaces the
-    /// pair's own.
+    /// configuration's for that count), the latest observed at `latest_unix_ms` (fix round 7: the
+    /// turn order at a block's end reads it), waiting until `until_unix_ms`; with `set_aside`,
+    /// one failure against it under a threshold of 1, set aside until a day after the Runtime
+    /// clock's time now (fix round 7: CI on fix round 6's head; the end of time it had was no
+    /// integer an outcome takes, which refuses one above `i64::MAX`). It replaces the pair's own.
     #[cfg(test)]
     pub(super) fn seed_entry_pair_for_test(
         &self,
         instance_id: InstanceId,
         task_id: &str,
-        (in_a_row, until_unix_ms, set_aside): (u32, u64, bool),
+        (in_a_row, latest_unix_ms, until_unix_ms, set_aside): (u32, u64, u64, bool),
     ) -> RuntimeHostResult<()> {
+        const SEEDED_WINDOW_MS: u64 = 86_400_000;
         let config = self.unavailable_probe_config()?;
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
         let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
         let entered = count(&blocks.entered, instance_id);
         blocks.pairs.insert(
             (instance_id, task_id.to_owned()),
             EntryPair {
                 packages: String::new(),
-                window_end: if set_aside { u64::MAX } else { 0 },
+                window_end: if set_aside {
+                    now_unix_ms.saturating_add(SEEDED_WINDOW_MS)
+                } else {
+                    0
+                },
                 decision_id: format!("seeded-{task_id}"),
                 failure_code: actingcommand_contract::scheduled_failure_code_str(&Outcome::new(
                     actingcommand_contract::codes::SharedCode::ContainedTaskPageUnknown,
                 )),
-                observed_at_unix_ms: 0,
+                observed_at_unix_ms: latest_unix_ms,
                 in_a_row,
                 interval_ms: pair_interval_ms(config, in_a_row),
                 until_unix_ms,

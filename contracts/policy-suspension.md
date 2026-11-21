@@ -392,16 +392,25 @@ status member holds them.
   that failure set, whatever ends it (the coordinator's addition to fix round 4); until a block
   ends, and when none ended since the failure (it set none), since its settlement; and never past
   the window's end. At the end of a later block of the instance, one another pair's failure set,
-  the pair waits again from that end (fix round 6, ruling 3, as built): its own interval when that
-  is not longer than the longest interval of the pairs whose failures set the block, and
-  otherwise one `first_interval_ms` at most (its own when shorter); a wait still running is never
-  shortened. So the pair whose failure set a block is kept out for its own interval after the
-  instance can be dispatched to again and is the last of the waiting pairs to come due; a pair
-  the outage left with a long interval is held back one first interval after the block of a
-  broken pair with a short one, not its own long interval; and two broken pairs cannot take turns
-  ahead of a healthy pair at the same count. Ruling 3 as worded (one first interval at most for every pair whose failure did not
-  set the block) would let the second of two broken pairs ahead of a healthy one come due with
-  it a minute after every block, and so ahead of it, for the whole window.
+  the pair waits again from that end, in turn (fix round 7, ruling 1, which replaces fix round
+  6's rule): the pairs whose failures set or renewed the block wait their own interval; the other
+  pairs of the instance with a count in a row are put in the order of their latest failure at the
+  entry, the one that failed longest ago first (equal times by the task's id, so the order is the
+  same on every run), and the first waits one `first_interval_ms` from that end, the second two,
+  the third three, and so on; a pair set aside takes no place; a wait still running is never
+  shortened (the later time stands). So after every block the pairs come due one at a time, least
+  recently failed first, and a pair the outage left with a long interval waits its turn, not that
+  interval. Any rule that decides a pair's wait from intervals alone lets the evaluation's order
+  pick among the pairs that come due together: under fix rounds 5 and 6 broken pairs could take
+  turns ahead of a healthy pair for hours (the seventh review: a broken pair at four in a row
+  first in the order, a second with none and a healthy pair at six, about eight hours). *The
+  bound:* after an outage a healthy pair runs once each broken pair ahead of it in the order has
+  failed once more, about one block each; the pair that set the latest block may run first again
+  while its own interval is not longer than the healthy pair's turn (its first interval after its
+  first failure in a row, doubling at each further one) and it stands before the healthy pair in
+  the evaluation's order, so a broken pair with no count first in the order fails twice before
+  the healthy pair's turn. In a stretch that let nothing in, a block lasts about half an hour from
+  its sixth on ("The worst cases").
   The candidate waits `instance_entry_task_waiting` (info; `instance_id`,
   `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` of the latest failure, `count` the
   failures in a row, `next_eligible_unix_ms` the wait's end) and wakes then; a fact refresh names the
@@ -453,7 +462,12 @@ status member holds them.
   package's directory whole, so every file of a placed package is written anew), with what this
   comparison kept at the check before, not with the marks of the last composition that succeeded:
   one change frees the pairs at one check, also while another game's root is broken or a
-  composition is refused. Not seen: a change by hand to a package's other files (a task file, a
+  composition is refused. The registered packages whose two files are compared are those of the
+  last composition that succeeded (fix round 7, ruling 3): until a composition has succeeded
+  since the start (while a game root has been broken or every composition refused since then),
+  only the root's `bundle.json` and the three recognition files are compared, so a change of a
+  package's files that leaves those alone is not seen until then. Not seen either: a change by
+  hand to a package's other files (a task file, a
   template) that leaves those two files as they were, a change of `tables/`, `loading/`,
   `notices/` or the root's other files, and in configured mode (no workbench) anything but a
   catalogue's activation. A client's run, a
@@ -473,32 +487,42 @@ brings the game home each time (a pair whose own entry is broken), runs short:
   it aside there), and the second at about 23 after the next climb (set aside there under 1).
   With the recommended `on_failure` (threshold 2) they are set aside at about 33 and 43, the
   healthy task running at every block's end. As fix round 4 (case (c) of fix round 5).
-- *After a long outage* (fix round 5, cases (a) and (b)). Every pair of the instance waits the
-  maximum from the outage's last block's end (minute 0 here), the broken one first in the
-  evaluation's order. At 30 it fails again, its next wait thirty-one minutes; its climb (the
-  stretch's pace is thirty minutes too) ends its block at about 32, so the healthy pairs come due
-  at 62, before it, and the first one runs and is let in: every wait ends, the broken pair fails at
-  about 63 (one against it: set aside under a threshold of 1), the next block ends at about 65 and
-  the second healthy pair runs at once, and the broken pair's next failure at about 66 is the
-  second against it (set aside under the recommended threshold 2). With two broken pairs ahead of
-  one healthy pair, the second broken one fails at 62 too, its block ends at about 64, the healthy
-  pair runs at about 94 (its wait a minute shorter than theirs) and the two broken pairs are set
-  aside at about 94 and 96 (threshold 1) or 106 and 116 (threshold 2). Fix round 6 (ruling 3, as
-  built) keeps these times: the pairs there are at the same count as the setter, so they wait
-  their own interval.
+- *After a long outage* (fix round 5, cases (a) and (b); times as fix round 7's turn order gives
+  them). Every pair of the instance waits the maximum from the outage's last block's end (minute 0
+  here), the broken one first in the evaluation's order. At 30 it fails again, its next wait
+  thirty-one minutes; its climb (the stretch's pace is thirty minutes too) ends its block at about
+  32, and the healthy pairs take turns: the first runs at about 33 and is let in, every wait ends,
+  the broken pair fails at about 34 (one against it: set aside under a threshold of 1), its next
+  block, a new stretch's, waits for the cool-down window and ends at about 42, the second healthy
+  pair runs then, and the broken pair's next failure at about 43 is the second against it (set
+  aside under the recommended threshold 2). With two broken pairs ahead of one healthy pair the
+  healthy pair runs at about 33 when its latest failure is older than the second broken pair's,
+  else that pair fails at 33 (its turn first), its block ends at about 64 and the healthy pair
+  runs at about 65; each broken pair's next failure is then one against it. Fix round 6's rule
+  gave 62 and 94.
 - *A new broken pair ahead of healthy pairs the outage left with long waits* (fix round 6, ruling
   3; the sixth review's case: two healthy pairs at six and ten in a row, waiting thirty and
   thirty-four minutes from the outage's end at 0, a broken pair with no count first in the order).
   The broken pair fails at about 0; its block's climb, held by the stretch's pace, ends at about
-  32; it waits its minute and the healthy pairs one first interval (their own intervals are
-  longer), so at about 33 it runs again (first in the order) and fails, its next block ending at
-  about 64; then it waits two minutes and the healthy pairs one: the first healthy pair runs at
-  about 65 and is let in, the broken pair fails at about 66, the first against it (set aside there
-  under a threshold of 1); under 2 its block's climb waits for the cool-down window to about 72,
-  the second healthy pair runs at about 74 and the broken pair is set aside at about 75. Before fix
-  round 6 every block's end pushed the healthy pairs back by their own thirty minutes and more, and
-  they waited until the broken pair's count caught up with theirs: some three hours for six, five
-  and a half for ten.
+  32; it waits its own minute and the healthy pairs take turns, one and two first intervals, so
+  at about 33 it runs again (due with the first healthy pair and first in the evaluation's order)
+  and fails, its next block ending at about 64; then it waits two minutes and the healthy pairs
+  one and two: the first healthy pair runs at about 65 and is let in, the broken pair fails at
+  about 66, the first against it (set aside there under a threshold of 1); under 2 its block's
+  climb waits for the cool-down window to about 72, the second healthy pair runs at about 74 and
+  the broken pair is set aside at about 75 (as under fix round 6). With two such new broken pairs
+  first, the second fails at 32 (it has no wait), and again at 65 (its own minute and the first
+  turn due together): the first healthy pair runs at about 97 (fix round 6: 129). Before fix round
+  6 every block's end pushed the healthy pairs back by their own thirty minutes and more: some
+  three hours for six, five and a half for ten.
+- *Broken pairs at different counts ahead of a healthy pair* (fix round 7; the seventh review's
+  cases). A broken pair at four in a row first in the order, a second with none and a healthy
+  pair at six: the second fails at 0 (its block ends at about 32), one of the two at 33 (the
+  first's turn when its latest failure is older than the healthy pair's, else the second's own
+  minute), and the healthy pair runs at about 65 (fix round 6: about 478, the two broken pairs
+  taking turns ahead of it). Three broken pairs at two, eight and none ahead of a healthy pair at
+  ten: the healthy pair runs at about 65 to 97 by the order of their latest failures (fix round 6:
+  about 1100).
 - *A broken pair with nothing else due.* Nothing is ever let in, so nothing counts against it and
   it is never set aside, whatever the threshold. It fails at about 0, 3, 14, 26, 40 and 58 minutes
   (each wait from its block's end, each later climb held by the stretch's pace and the ten-minute
@@ -514,13 +538,12 @@ brings the game home each time (a pair whose own entry is broken), runs short:
   pair waits after each block's end (one minute doubling to thirty, then one more each, by its own
   count), the stretch's climbs are paced (about six in its first hour, then two an hour) and the
   emulator is restarted at most once in the stretch. At each block's end the pair whose failure set
-  it waits its own interval, a pair whose own interval is longer one minute, any other its own
-  (fix round 6, ruling 3, as built). When the condition ends (a climb recovers, a person's run
-  succeeds, a resume), the first pair in the evaluation's order whose wait from that block's end
-  has passed runs: one minute after it when a pair's interval is longer than the last setter's,
-  else the shortest own wait (at most thirty minutes and one per further failure), the last
-  setter coming due last; once one scheduled run gets in, every other pair's wait ends and they
-  run at once, in the evaluation's order.
+  it waits its own interval and the others take turns a minute apart, least recently failed first
+  (fix round 7, ruling 1). When the condition ends (a climb recovers, a person's run succeeds, a
+  resume), the pair whose turn is first runs a minute after that block's end (or the pair that
+  set the block, when its own interval is a minute too and it stands before it in the evaluation's
+  order); once one scheduled run gets in, every other pair's wait ends and they run at once, in the
+  evaluation's order.
 
 **The block.** The settlement of a failure at the entry, a condition, then blocks the instance,
 under the policy outcome gate the evaluation reads the blocks under: from then

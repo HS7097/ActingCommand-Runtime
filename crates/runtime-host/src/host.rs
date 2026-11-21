@@ -5404,14 +5404,15 @@ impl RuntimeHost {
 
     /// Workflow #490 ENTRY-A fix round 6 (rulings 3 and 4): the pair of `task_id` on
     /// `instance_alias` seeded as `in_a_row` failures at the entry in a row in an unknown window,
-    /// waiting until `until_unix_ms`, and with `set_aside` set aside (`(in_a_row, until_unix_ms,
+    /// the latest observed at `latest_unix_ms` (fix round 7), waiting until `until_unix_ms`, and
+    /// with `set_aside` set aside for a day (`(in_a_row, latest_unix_ms, until_unix_ms,
     /// set_aside)`).
     #[cfg(test)]
     pub(crate) fn seed_entry_pair_for_test(
         &self,
         instance_alias: &str,
         task_id: &str,
-        seeded: (u32, u64, bool),
+        seeded: (u32, u64, u64, bool),
     ) -> RuntimeHostResult<()> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::EntryPairForTest)?;
