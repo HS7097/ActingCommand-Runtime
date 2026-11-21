@@ -15,24 +15,24 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1777 locations are not in it, and 11 of the header's 42 owners have no fragment file and so no file
+1779 locations are not in it, and 11 of the header's 42 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3970 |
+| active | 3977 |
 | retired | 90 |
-| all | 4060 |
+| all | 4067 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 125 |
-| info | 221 |
-| warning | 186 |
+| info | 225 |
+| warning | 189 |
 | error | 3421 |
 | fatal | 17 |
 
@@ -40,12 +40,12 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 816 |
+| `common_causes` and `handling` both written | 823 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3150 |
 | `settled` | 154 |
-| `pending` | 3816 |
-| all active codes | 3970 |
+| `pending` | 3823 |
+| all active codes | 3977 |
 
 ## By owner
 
@@ -77,9 +77,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1182 | 1135 | 213 | 6 |
+| [runtime-host](runtime-host.md) | 1189 | 1142 | 220 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4060 | 3970 | 816 | 154 |
+| all | 4067 | 3977 | 823 | 154 |

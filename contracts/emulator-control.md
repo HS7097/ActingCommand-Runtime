@@ -600,11 +600,17 @@ The section's `triggers` are an ordered list of trigger items. An item names its
 `stability_warnings`), and `classes` (ladder classes of the outcome catalog) or `codes` (codes,
 or `prefix*`), with `start`, `start_rung` and `respect_cooldown` taken from `trigger_defaults`
 when it leaves them out. A code is matched as follows: when `exclude_codes` names it (or a
-prefix of it) nothing starts; otherwise the first item, in order, that names the stage and the
-code (or its prefix, by code) or the code's class in the embedded catalog (by class) starts the
-ladder; when none does, nothing starts and nothing is recorded. A code the embedded catalog does
-not list reads as class `none` and is recorded once per process as
-`recovery_ladder_code_unclassified` (warning, `raw_code`).
+prefix of it) its failure starts nothing by itself; otherwise the first item, in order, that names
+the stage and the code (or its prefix, by code) or the code's class in the embedded catalog (by
+class) starts the ladder; when none does, nothing starts and nothing is recorded. A code the
+embedded catalog does not list reads as class `none` and is recorded once per process as
+`recovery_ladder_code_unclassified` (warning, `raw_code`). Workflow #490 ENTRY-A (since 0.12.77,
+[policy-suspension.md](policy-suspension.md), "A failure at the entry"): an excluded code of class
+`pack_logic_mismatch` that a scheduled run meets at its entry, before its main package started,
+blocks the run's instance, and the block's own recovery climbs under the item that takes the
+class at the task stage, matched with `exclude_codes` not read (with the shipped triggers
+`pack_logic`); an excluded code failing after the main package started, or of any other class,
+still starts nothing.
 
 The defaults (M387 §7.1): `navigation_exhausted` (stage `task`, code
 `contained_task_navigation_recovery_exhausted`, `start_rung` 3: a navigation recovery chain
@@ -1263,7 +1269,13 @@ ID. Unknown fields are refused.
 `input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung`,
 `device_not_ready` (a handset's start gate held the rung's run before its first step;
 Workflow #398 M398 §6.4, §6.5, written from RD-4 on) or `drill_plan` (a plan drill did not run the rung; Workflow
-#390 DRILL-1). A ladder with no recovery package, no startup package and
+#390 DRILL-1). Since 0.12.77 (Workflow #490 ENTRY-A fix round 4, [policy-suspension.md](policy-suspension.md),
+"Where a block's recovery starts and when") the `emulator_restart` rung of an entry-blocked
+instance's ladder, after a ladder of the instance's stretch of entry blocks ran it already, is
+planned `pending` and recorded `skipped` in its `recovery_rung_finished` with the outcome
+`recovery_rung_skipped_emulator_restarted_in_stretch` and no new skip reason, as a plan drill's
+rungs are: the emulator is restarted at most once in a stretch. A ladder with no recovery package,
+no startup package and
 no emulator control records `recovery_ladder_started` (all rungs skipped), one
 `recovery_rung_finished` (`skipped`) per rung and `recovery_ladder_finished` (`exhausted`,
 `rungs_tried` 0).

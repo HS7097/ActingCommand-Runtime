@@ -750,6 +750,35 @@ while one is held, each check reads and composes again even when nothing changed
   only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
   compose` and the Runtime's workbench do not report it.
+- **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.77, register
+  §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"). A rule's
+  `daily_limit` is spent at each admission, and an immediate rerun of a failure in a step of its
+  package costs one, as before. A run that failed at its entry (its package executed no step: the
+  game was on a screen its gate, prerequisite or return-home layer could not leave, a code of class
+  `pack_logic_mismatch`, whatever the ladder's `exclude_codes` say of it, so a prerequisite's entry
+  not reached and a return-home layer's recheck not passed count too; a capture backend's or device
+  link's failure there does not) gives its admission back, is not rerun at once, owes no rerun and
+  never counts toward `escalation_threshold`, so a rule whose threshold is 1 is not paused by it;
+  the instance waits for its recovery (`instance_entry_blocked`; a store update rule's task still
+  runs) and the rule is due again by its own trigger once it is unblocked. Fix round 4: no failure
+  at the entry counts against the rule, whatever ran between. A rule that keeps failing at its
+  entry on an instance waits there after each failure, counted from the end of the instance's
+  block (one minute, doubling to thirty with the shipped values), while the instance's other
+  rules run first, and once its failures that came although another rule got in reach its
+  `escalation_threshold` it is set aside on that instance until its activity window ends, a
+  person told once; it is not paused, and the next window starts from nothing. With the
+  recommended `on_failure` (threshold 2) and a healthy rule due, a rule whose entry is broken is
+  set aside at about its third failure in the window (about fourteen minutes), with a threshold
+  of 1 at its second (about three minutes); alone on the instance it is never set aside.
+  Activating a catalogue (a mended package) starts every such count from nothing at once, and so
+  (fix rounds 5 and 6) does a placement that changes a package of a game in use without changing
+  the rules: the workbench's next check finds it by the length and modification time of
+  `bundle.json`, of `pages.json`, `interrupts.json` and `navigation.json` and of each registered
+  package's `control.json` and `resources/operations/resources.json`, compared with what that
+  comparison kept at the check before, so once per change, while another game's root is broken
+  too (a change by hand of a package's other files alone is not seen, nor, until a composition has
+  succeeded since the start, a change of a package's two files alone: the packages compared are
+  the last successful composition's). No package or rule changes for it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

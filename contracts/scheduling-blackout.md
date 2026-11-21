@@ -311,6 +311,37 @@ store update task that ranks first never leaves the instance's other candidates 
 unselected. A candidate the closure is asked about is answered by positions 1 to 4 first, as
 above;
 
+**4b.** the instance is entry-blocked (`instance_entry_blocked`, values `instance_id`, `task_id`,
+`decision_id`, `failure_code` and `observed_at_unix_ms`; Workflow #490 ENTRY-A, since 0.12.77,
+register §1.494; [policy-suspension.md](policy-suspension.md), "A failure at the entry"): a
+scheduled run there failed at its entry (`task_id`, `decision_id`, its failure `failure_code`, a
+code of class `pack_logic_mismatch`, since `observed_at_unix_ms`), and no recovery or run of the
+instance has succeeded since, no resume lifted a pause of it, no blackout covered it at the lease
+sweep's tick and no fence took it, and the Runtime did not restart. Every candidate of the instance waits, an owed rerun, an immediate rerun, a remedy
+request or retry and a chain's successor included, with no wake of its own: the block's end is
+followed by a lease end (the ladder's, the run's, the resume's reconnect), which wakes the
+evaluation. A store update package's task passes, as it passes 4a (fix round 1: an instance whose
+game asks for an update fails every entry, and only that task can end it; its success ends the
+block as any run's does). The fact refresh's deferral names this code as its `gate_code`. Other
+instances are not held. As for 4a, the round's candidates settled before it asks the closure wait
+with this reason too (`InstanceHolds`, the store update tasks let through); an instance 4a holds
+keeps 4a's hold. The evaluation reads the blocks under
+the policy outcome gate a settlement blocks under, so no evaluation sees the run's settlement
+without its block; admission does not judge it again. The idle plan counts such a decision due
+(eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
+and its look ahead does not read this position. The not-running row of the schedule explanation
+names it, since the first evaluation that deferred the instance so. Then (fix round 4, rulings 2
+and 3; [policy-suspension.md](policy-suspension.md), "A pair that keeps failing at its entry"), on
+an instance not blocked or for a store update task that passes the block, a candidate whose pair
+(instance, catalog task) failed at its entry n times in a row waits `instance_entry_task_waiting`
+(`count`, `next_eligible_unix_ms`) until `scheduling.unavailable_probe`'s interval for n has passed
+since the end of the block that failure set and of any later block of the instance (since its
+settlement until a block ends), and one set aside for its window waits
+`instance_entry_task_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the window's
+end; each wakes at its end and neither holds past the window's end; a fact refresh names the code
+as its `gate_code`. Only that task waits: the instance's other candidates are not held, and no rule
+that orders tasks changes;
+
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";
    built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed

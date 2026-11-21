@@ -936,4 +936,9 @@ outcome_keys! {
     // ---- #484 IDLE-W2 (register §1.488): why an idle instance's wake was queued
     // (`instance_idle_action`, operation `queue_idle_wake`); kept in codes mode. ----
     idle_wake_cause: vocab(idle_wake_cause),
+    // ---- Workflow #490 ENTRY-A fix round 1 (register §1.494): how an entry-blocked instance's own
+    // recovery ended without recovering, and the trigger item it was admitted under
+    // (`instance_entry_blocked_recovery_failed`); kept in codes mode. ----
+    entry_recovery_end: vocab(entry_recovery_end),
+    trigger_rule: name,
 }

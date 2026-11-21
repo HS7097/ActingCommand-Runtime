@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 pub(super) const ALIAS: &str = "neutral.instance";
 pub(super) const AWAY: [u8; 3] = [255, 0, 0];
 pub(super) const MENU: [u8; 3] = [0, 0, 255];
-const SHOP: [u8; 3] = [0, 255, 0];
+pub(super) const SHOP: [u8; 3] = [0, 255, 0];
 pub(super) const DONE: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 255, 0];
 const RESULT: [u8; 3] = [255, 0, 255];
@@ -183,8 +183,8 @@ impl Pack<'_> {
     }
 
     // The same files in one ZIP container (a source package: no `resources/manifest.json`), for a
-    // scheduled run whose package is a `.zip`.
-    fn zip(&self) -> Vec<u8> {
+    // scheduled run whose package is a `.zip` (Workflow #490 ENTRY-A's gate file too).
+    pub(super) fn zip(&self) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
         let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (path, value) in self.files() {

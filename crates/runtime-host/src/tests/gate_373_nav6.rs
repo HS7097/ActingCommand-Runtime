@@ -2211,8 +2211,8 @@ fn update_entry(page: &str, handler: &str) -> Value {
     entry
 }
 
-/// A game root whose `notice` is the update dialog.
-fn update_root(base: &Path) -> GameRoot {
+/// A game root whose `notice` is the update dialog (Workflow #490 ENTRY-A's gate file too).
+pub(super) fn update_root(base: &Path) -> GameRoot {
     let mut root = GameRoot::new(base);
     root.features()
         .pack(
