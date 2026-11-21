@@ -86,10 +86,10 @@ fn v1_the_build_declares_package_through_revision_14() {
     // Workflow #463 K2 (register §1.380) raises `max` to 15 in the same release, Workflow #477
     // PC-1 fix round 1 (register §1.438, 0.12.68) to 16, Workflow #463 KP-1 (register §1.448) to
     // 17, Workflow #463 K-c (register §1.454, 0.12.70) to 18, Workflow #463 INT-1 (register
-    // §1.473, 0.12.73) to 19, Workflow #463 SEL-2L (register §1.480, 0.12.74) to 20 and Workflow
-    // #463 SEL-GRID G2 (register §1.491, 0.12.76) to 21; the revision this test is about, 14,
-    // stays read.
-    assert_eq!(speaks.get("package"), Some(&[3, 21]));
+    // §1.473, 0.12.73) to 19, Workflow #463 SEL-2L (register §1.480, 0.12.74) to 20, Workflow
+    // #463 SEL-GRID G2 (register §1.491, 0.12.76) to 21 and Workflow #428 S168-LK (register
+    // §1.500, 0.12.78) to 22; the revision this test is about, 14, stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 22]));
     assert!(
         speaks
             .get("package")

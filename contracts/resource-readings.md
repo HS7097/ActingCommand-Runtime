@@ -606,12 +606,17 @@ read one position per frame into the same fact. An OCR field never becomes a fac
 ([ocr-fields.md](ocr-fields.md)). **Status:** built by
 S168-4, `package` revision 8 ([component-interfaces.md](component-interfaces.md)); a Runtime
 before 0.12.50 refuses a package that declares one (`UnknownField` at
-`/operations/<i>/read_list`).
+`/operations/<i>/read_list`). Workflow #428 S168-LK (Runtime 0.12.78, [v012-register.md](v012-register.md)
+§1.500): a step of a `linear_steps` task may read a list too, declared, read, ended and published
+as here ([linear-steps.md](linear-steps.md), "List reading steps"), `package` revision 22; a
+Runtime before 0.12.78 refuses such a step at admission (`contained_task_linear_invalid`,
+`reason=read_list`).
 
 ### Declaration
 
-A list is read by a step: an operation of a task schema `0.9` page-graph task whose effect is
-`read_list`, beside `click`, `application`, `select` and `wait`. The following is the operation
+A list is read by a step: an operation of a task schema `0.9` task whose effect is `read_list`,
+beside `click`, `application`, `select`, `wait` and, in a step plan, `key`; a page-graph task or
+(Workflow #428 S168-LK, since 0.12.78) a `linear_steps` task. The following is the operation
 only; the numbers and names are neutral examples, not values:
 
 ```json
@@ -628,7 +633,7 @@ only; the numbers and names are neutral examples, not values:
 
 | Member | Rule | Refusal @ pointer |
 | --- | --- | --- |
-| the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list` (and, from Workflow #428 S168-5b, `judge`); task schema `0.9` only; a page-graph task (`navigable_route`, phased or not); the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; `linear_steps`: `contained_task_linear_invalid`, `reason=read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
+| the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list`, (from Workflow #428 S168-5b) `judge` and (Workflow #463 KP-1, a step plan's) `key`; task schema `0.9` only; a page-graph task (`navigable_route`, phased or not) or (Workflow #428 S168-LK, since 0.12.78) a `linear_steps` task, which checks these members first and then the rules of [linear-steps.md](linear-steps.md), "List reading steps"; the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; another effect, a `key` included (since 0.12.78, in either mode): `InvalidValue` @ `/operations/<i>/read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
 | `to` | the `from` page: the step stays on its page | `InvalidValue` @ `/operations/<i>/to` |
 | `layout_id` | a `repeated_anchor` layout the task declares on the `from` page, whose `unknown_identity` is `reject` | `InvalidValue` @ `…/read_list/layout_id` |
 | `key_feature` | an `identity` feature of the layout; the scan's `identity_feature` | `…/read_list/key_feature` |
@@ -655,15 +660,15 @@ before the common operation checks (as it checks a wait step's members first), r
 | `from` | applies: the step's page, which is the page of its layout, so never `any` | the `layout_id` row above |
 | `to` | the `from` page | the `to` row above |
 | `read_list` | the effect | the rows above |
-| `click`, `application`, `select`, `wait`, `judge` | refused: exactly one effect | the first row above |
+| `click`, `application`, `select`, `wait`, `judge`, `key` | refused: exactly one effect (`key` since Workflow #428 S168-LK, 0.12.78, in either mode: a step plan admits a reading) | the first row above |
 | `guard` | required | the `guard` row above |
-| `when` | applies with its meaning ([resource-declarations.md](resource-declarations.md), "Task schema `0.9` candidate operations"): a step whose `when` does not hold is withdrawn and the page's next candidate is taken; it has not run, so the once-per-run rule below does not pass it over yet | as for every operation |
+| `when` | applies with its meaning ([resource-declarations.md](resource-declarations.md), "Task schema `0.9` candidate operations"): a step whose `when` does not hold is withdrawn and the page's next candidate is taken; it has not run, so the once-per-run rule below does not pass it over yet. A step plan refuses it as it refuses every step's ([linear-steps.md](linear-steps.md), `reason=when`) | as for every operation |
 | `retryable` | `false` or absent: the scan's moves are inputs, and a retry would repeat them | `true`: `InvalidValue` @ `/operations/<i>/retryable` |
 | `max_attempts`, `retry_interval_ms`, `on_error` | refused: the step is never retried, and after its moves the run does not recover within itself (section Reading) | `UnknownField` @ `/operations/<i>/<member>` |
 | `unguarded_trusted_coordinate`, `verify_template` | refused: the step declares its guard; `verify_template` is a click's source form of one | `UnknownField` @ `/operations/<i>/<member>` |
 | `expect_after`, `post_delay_ms`, `input_recheck`, `observation_window`, `on_guard_refused` | refused: the step confirms nothing after its moves (its end check is its evidence), has no tap to wait after or recheck, and a guard refusal on a viewport fails the scan | `UnknownField` @ `/operations/<i>/<member>` |
 | `max_runs`, `on_max_runs` | refused: the step runs once per run by its own rule (below) | `UnknownField` @ `/operations/<i>/<member>` |
-| `transition`, `optional` | refused: `linear_steps` members, and a list reading runs in a page graph | `UnknownField` @ `/operations/<i>/<member>` |
+| `transition`, `optional` | refused: `linear_steps` members, which a list reading takes in neither mode (since Workflow #428 S168-LK a step plan's reading too: it has no input whose intermediate state could be awaited, and its page is its list) | `UnknownField` @ `/operations/<i>/<member>` |
 | `threshold`, `method`, `mask`, `maskRange`, `rect_move`, `maa_task`, `maa_task_id` | refused by the gate's existing rule: only beside `verify_template`, which the step refuses | `UnconsumedField` @ the member |
 | `destructive` | refused, as on every operation | `UnconsumedField` @ the member |
 | `purpose`, `provenance`, `verified_live`, `effect` (the string member, not an effect), `timeout_ms`, `pre_delay_ms`, `pre_wait_freezes_ms`, `post_wait_freezes_ms`, `consumes`, `produces` | apply with their existing meaning: the gate checks their types and the kernel reads none of them (the scan paces its moves by its own `settle`); `purpose`, `consumes` and `produces` go to the step's primitive as for every operation ("Derived documents" below) | as for every operation |
@@ -696,7 +701,11 @@ against the recognition pack), and its other checks stand behind the gate's. A s
 stuck-recovery return-home or prerequisite
 package that declares one is refused as for readings
 (`contained_task_resource_reading_run_kind_unsupported`); a bound recovery entry and
-`recognize_only` take none.
+`recognize_only` take none. Workflow #428 S168-LK (since 0.12.78): a `linear_steps` task runs the
+same member checks first, in `TaskProgram::validate_linear` before its own rules, with the same
+refusals, and then the plan's rules ([linear-steps.md](linear-steps.md), "List reading steps");
+the references and the scan's static checks are the same; a step plan with a reading is no startup,
+return-home or prerequisite package either.
 
 Workflow #448 SBUD-1 (since 0.12.57; [v012-register.md](v012-register.md) §1.333): admission also
 compares the step's sampling with its scan's `max_ms`, capped by the task's `timeout_ms`, as for a
@@ -710,7 +719,9 @@ feature always makes compared. A larger need is refused with `recognition_sample
 operations are chosen without it, as for an operation whose `max_runs` 1 was reached with
 `on_max_runs` `next_candidate` ([README.md](README.md), "Per-run operation caps"). The static walk
 takes it as an edge from its page to the same page and then follows the page's next operation. A
-requested key set (`run_for_reading_keys`) never leaves one out: a page-graph package runs whole.
+requested key set (`run_for_reading_keys`) never leaves one out: a page-graph package runs whole,
+and (Workflow #428 S168-LK) a step plan runs every segment that holds a reading. A step of a step
+plan runs once by the plan.
 
 ### Reading
 
@@ -727,7 +738,8 @@ One `read_list` step runs:
    ordered by key, in ascending byte order.
 3. **End.** No `Return`, no `Confirm`, no tap. The kernel records the step's `StepFinished` with
    `page_label` its page as recognized on its last viewport (for a phased task, `phase` with
-   `completed: false`), and the run goes on.
+   `completed: false`), and the run goes on. Workflow #428 S168-LK: in a step plan the next step
+   decides on that last viewport, as the page graph chooses the page's next operation on it.
 
 The list holds only when every position was read. Otherwise it gives no reading:
 
@@ -892,6 +904,37 @@ with its input, as a scan's; a miss is its warning row. No record type and no me
 The rows are account data: they stay in the instance fact store and the ledger, and no Runtime
 path writes them anywhere else. Offline, `package dry-run` reads no list and reports the task's
 post-admission reading as `pending_real_execution`, as for a task with marks.
+
+### Offline
+
+Workflow #428 S168-LK (since 0.12.78; the coordinator's ruling 6 on board #428, for a later slice:
+the Lab's self-check of a recorded read step on saved frames). The kernel's
+`dry_run_list_reading(task, operation_id, frames)` runs one `read_list` step's scan over saved
+viewports, of a page-graph or a `linear_steps` package alike, and answers what the step's run
+records. The frames are as a select's scan dry run takes them ([selection-graph.md](selection-graph.md),
+"Offline"): the step's dispatched frame, then every capture the scan takes, in order; without a
+target consensus a viewport settles once two captures agree, so a forward run of viewports v0 … vn
+is the frames v0, v0, v1, v1, …, vn, vn. The dispatched frame must be the step's page
+(`select_page_mismatch`, as for a select's dry run). The scan and its rows are the run's own (one
+function, which the step of either mode calls), within the scan's `max_ms` and with no wait between
+captures; nothing is recorded, published or pressed. The answer, `ListReadingDryRun`, holds the
+list's declaration (the step, `fact_key`, `valid_for_ms`), the coverage viewports in order (each
+with its motion, frame, content offset, counts and the end check it read) and the list whole
+(its rows and confidence) or its miss (`reading_problem` and `count`), whose warning
+(`contained_task_resource_reading_unresolved` with `reading_id`, `fact_key`, `reading_problem` and
+`count`) it gives as a run writes it; the list's byte bound (`list_bytes_exceeded`) is the host's
+and is not judged. Beside the list it holds `unknown`, the positions the scan read but could not
+read whole, in first-seen order, each as a select's dry run lists an unknown position (its index in
+first-seen order, its place in content coordinates, the viewport that first read it, its cause
+`identity_unread`, `feature_unread` or `contradicted`, and the identity it kept, if any), so that
+a self-check can name the place that was not read: none for a list read whole, and for
+`list_position_unread` exactly the positions its `count` counts; a run records none of them. A
+failure of the scan is the error, with the stage `read_list`, as it ends a run; a move backward (a
+rewind or a corrective) or a capture past the last frame is `selection_scan_replay_frame_missing`,
+never a list. An operation that declares no list reading is
+`contained_task_resource_reading_invalid`, `<operation id>:read_list`; an operation the task does
+not declare is `contained_task_operation_missing`. It is in memory only: no Lab operation calls it
+in 0.12.78.
 
 ### Derived documents
 

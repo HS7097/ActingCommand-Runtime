@@ -75,6 +75,21 @@
 //! ([`ContainedTaskRuntime::key_input_support`]) and, where it does not, is refused before any
 //! capture, input or effect intent (`contained_task_linear_key_unsupported`). A task without a key
 //! step is admitted and run as before.
+//!
+//! Workflow #428 S168-LK (`contracts/linear-steps.md`, "List reading steps"; register §1.500; the
+//! coordinator's rulings): an operation's effect may be a list reading, `read_list`, declared as on
+//! the page graph (`contracts/resource-readings.md`, "List readings"): its `to` is its `from`, the
+//! one step whose page does not change. Admission runs the reading's member checks first
+//! (`TaskProgram::validate_list_reading_members`) and refuses a reading before a run of optional
+//! steps (`read_list_before_optional`) and as the plan's last step (`read_list_last`); a plan of a
+//! task that declares `field_lists` is refused (`field_lists`). The step reads its list from the
+//! frame on which its page passed, the first viewport, with the page graph's own scan
+//! ([`PreparedContainedTask::read_list_step`]): it has no input of its own, no arrival, no retry
+//! and no closing decision. It finishes on its page as recognized on its last viewport, which the
+//! next step decides on; a miss is the reading's warning and the run goes on; a failure of the scan
+//! ends the run with its code at the stage `read_list`. A plan with a reading counts no arrival for
+//! it in its sampling budget and never leaves out, for a requested key set, the segment that holds
+//! it. A task without a reading is admitted and run as before.
 
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
@@ -281,6 +296,11 @@ impl LinearPlan {
                     None,
                 )?;
             }
+            // Workflow #428 S168-LK: a list reading waits for no arrival; its scan's captures are
+            // compared with its `max_ms` in the preparation (SBUD-1), as on the page graph.
+            if matches!(step.effect, LinearEffect::ReadList) {
+                continue;
+            }
             let candidates = self.candidates(index, &handled);
             let arrival_ms = operation.effective_timing(control).timeout.milliseconds;
             let arrival_ms = match &step.transition {
@@ -366,7 +386,10 @@ impl LinearPlan {
 
     /// Workflow #384 D2-S2: the segments that reach no page `reads_on` accepts, as the first
     /// operation of each mapped to the operation after it. The entry page, where every segment
-    /// starts and ends, is no segment's own page.
+    /// starts and ends, is no segment's own page. Workflow #428 S168-LK: nor is a segment that
+    /// holds a list reading ever one of them, wherever its page is (on the entry page the reading
+    /// is a segment of its own): a requested key set never leaves a list reading out, as a
+    /// page-graph package runs whole.
     pub(super) fn segments_without_reads(
         &self,
         reads_on: impl Fn(&str) -> bool,
@@ -377,9 +400,10 @@ impl LinearPlan {
         self.reading_segments()
             .into_iter()
             .filter(|segment| {
-                !self.steps[segment.clone()]
-                    .iter()
-                    .any(|step| step.to != *entry && reads_on(step.to.as_str()))
+                !self.steps[segment.clone()].iter().any(|step| {
+                    matches!(step.effect, LinearEffect::ReadList)
+                        || (step.to != *entry && reads_on(step.to.as_str()))
+                })
             })
             .map(|segment| (segment.start, segment.end))
             .collect()
@@ -452,14 +476,16 @@ impl LinearFrom {
 }
 
 /// A step's one effect: a click, an application lifecycle action (Workflow #336 R24),
-/// (Workflow #463 K1) a select step's one tap on the candidate its attempt chose, or (Workflow
-/// #463 KP-1) the key a key step presses.
+/// (Workflow #463 K1) a select step's one tap on the candidate its attempt chose, (Workflow
+/// #463 KP-1) the key a key step presses, or (Workflow #428 S168-LK) a list reading, whose scan's
+/// moves are its only inputs.
 #[derive(Clone, Copy)]
 enum LinearEffect {
     Click,
     Application(ApplicationLifecycleAction),
     Select,
     Key(StepKey),
+    ReadList,
 }
 
 /// How one operation ended without a failure.
@@ -874,11 +900,23 @@ impl TaskProgram {
                 "stop_on_confirmation",
                 control.stop_on_confirmation == Some(false),
             ),
+            // Workflow #428 S168-LK (the coordinator's ruling 4): a field list groups OCR fields,
+            // which a step plan does not read.
+            (
+                super::field_list::FIELD_LISTS_MEMBER,
+                self.declares_field_lists(),
+            ),
         ] {
             if declared {
                 return Err(invalid(reason, None));
             }
         }
+        // Workflow #428 S168-LK: the members of every `read_list` step, as the page graph checks
+        // them before its operation checks (`contained_task_resource_reading_invalid`,
+        // `<operation id>:<member>`): at most 16 of them, a scheduling outcome, none of the members
+        // a reading refuses (another effect, a key included, a retry, `transition`, `optional`, …),
+        // a guard and `to` its `from` page.
+        self.validate_list_reading_members()?;
         let resolve = |page: &str| resolve_page_reference(&control.game, page, detector);
         // Workflow #336 R24: the application entry `any` is never resolved to a detector page.
         // Workflow #373 NAV-3b: a linear task keeps one entry page; a set is refused.
@@ -900,13 +938,6 @@ impl TaskProgram {
             // a confirmation's wait page and loading are admitted (`validate_loading`).
             if operation.declares_wait() {
                 return Err(invalid("wait", Some(operation)));
-            }
-            // Workflow #428 S168-4: a list reading is a page-graph step.
-            if operation.declares_read_list() {
-                return Err(invalid(
-                    super::list_reading::READ_LIST_MEMBER,
-                    Some(operation),
-                ));
             }
             // ACT-4: final-state targets are judged by the page-graph confirmation.
             if operation.declares_expected_targets() {
@@ -954,22 +985,25 @@ impl TaskProgram {
                 return Err(invalid("max_runs", Some(operation)));
             }
             // Workflow #463 KP-1: or a key step, whose word is one of the vocabulary's; a key beside
-            // another effect is `operation_effect`.
+            // another effect is `operation_effect`. Workflow #428 S168-LK: or a list reading, whose
+            // members were checked above (another effect beside it is refused there).
             let effect = match (
                 &operation.click,
                 &operation.application,
                 &operation.select,
                 &operation.key,
+                operation.declares_read_list(),
             ) {
-                (Some(_), None, None, None) => LinearEffect::Click,
-                (None, Some(application), None, None) => {
+                (Some(_), None, None, None, false) => LinearEffect::Click,
+                (None, Some(application), None, None, false) => {
                     LinearEffect::Application(application.action)
                 }
-                (None, None, Some(_), None) => LinearEffect::Select,
-                (None, None, None, Some(key)) => LinearEffect::Key(
+                (None, None, Some(_), None, false) => LinearEffect::Select,
+                (None, None, None, Some(key), false) => LinearEffect::Key(
                     StepKey::from_word(&key.key)
                         .ok_or_else(|| invalid("key_unknown", Some(operation)))?,
                 ),
+                (None, None, None, None, true) => LinearEffect::ReadList,
                 _ => return Err(invalid("operation_effect", Some(operation))),
             };
             if matches!(effect, LinearEffect::Application(_))
@@ -1004,10 +1038,14 @@ impl TaskProgram {
                     return Err(invalid("any_from", Some(operation)));
                 }
                 // Workflow #463 K1: a select step chooses on a page, so it never starts from any
-                // screen either; Workflow #463 KP-1: nor does a key step, whose guard is on a page.
+                // screen either; Workflow #463 KP-1: nor does a key step, whose guard is on a page;
+                // Workflow #428 S168-LK: nor does a list reading, whose list is on its page.
                 if matches!(
                     effect,
-                    LinearEffect::Click | LinearEffect::Select | LinearEffect::Key(_)
+                    LinearEffect::Click
+                        | LinearEffect::Select
+                        | LinearEffect::Key(_)
+                        | LinearEffect::ReadList
                 ) {
                     return Err(invalid("any_requires_application", Some(operation)));
                 }
@@ -1019,7 +1057,11 @@ impl TaskProgram {
                 [page] => resolve(page.as_str())?,
                 _ => return Err(invalid("destination", Some(operation))),
             };
-            if matches!(&from, LinearFrom::Page(page) if *page == to) {
+            // Workflow #428 S168-LK: a list reading alone stays on its page (its `to` is its
+            // `from`, checked with its members above).
+            if matches!(&from, LinearFrom::Page(page) if *page == to)
+                && !matches!(effect, LinearEffect::ReadList)
+            {
                 return Err(invalid("to_equals_from", Some(operation)));
             }
             let transition = match &operation.transition {
@@ -1132,6 +1174,14 @@ impl TaskProgram {
             if !matches!(&pair[1].from, LinearFrom::Page(from) if *from == pair[0].to) {
                 return Err(invalid("chain", Some(&self.operations[index + 1])));
             }
+            // Workflow #428 S168-LK: the operation before a run of optional steps chooses the next
+            // operation by the page its input reaches; a list reading has no such input.
+            if matches!(pair[0].effect, LinearEffect::ReadList) && pair[1].optional.is_some() {
+                return Err(invalid(
+                    "read_list_before_optional",
+                    Some(&self.operations[index]),
+                ));
+            }
             // After a stop the assigned application is not in the foreground, where the
             // foreground gate refuses every pointer input: only a launch or restart may follow.
             if matches!(
@@ -1150,6 +1200,11 @@ impl TaskProgram {
             }
         }
         let last = steps.len() - 1;
+        // Workflow #428 S168-LK: a list reading ends on its own page and leaves its last viewport
+        // to the next step; as the last step, no input and no wait would end the run on its target.
+        if matches!(steps[last].effect, LinearEffect::ReadList) {
+            return Err(invalid("read_list_last", Some(&self.operations[last])));
+        }
         if steps[last].to != target {
             return Err(invalid("target_page", Some(&self.operations[last])));
         }
@@ -1589,17 +1644,23 @@ impl PreparedContainedTask {
             if linear_main_interface(&self.control.game, &reached.page_label) {
                 run.restart_segment = false;
             }
+            // Workflow #428 S168-LK: a list reading arrives nowhere: its last viewport, a frame of
+            // the page the step before it arrived on, is neither handed to recognition again nor
+            // confirms an adjustment, as on the page graph; it is the next step's decision frame.
+            let read_list = matches!(step.effect, LinearEffect::ReadList);
             // Workflow #384 D2-S2 (model §3.5): the frame the step arrived on goes to
             // recognition when its page carries marks the run reads.
-            self.hand_off_reading_frame(
-                runtime,
-                ocr_collector,
-                &reached.page_label,
-                &reached.scene,
-                reached.captured_at,
-                RememberedOcrObservations::default(),
-                run.timing.pace(),
-            )?;
+            if !read_list {
+                self.hand_off_reading_frame(
+                    runtime,
+                    ocr_collector,
+                    &reached.page_label,
+                    &reached.scene,
+                    reached.captured_at,
+                    RememberedOcrObservations::default(),
+                    run.timing.pace(),
+                )?;
+            }
             // Workflow #463 K2 (`contracts/linear-steps.md`, "Endings"): an ending page passed, a
             // candidate only where the target page ends the path.
             let ending = plan.is_ending(&reached.page_label);
@@ -1607,7 +1668,7 @@ impl PreparedContainedTask {
             // it arrived on. Workflow #463 K2 fix round 1 (the coordinator's ruling): an operation
             // that arrives on an ending page confirms no adjustment, so the key's earlier record
             // stands; the frame's own readings were handed off above.
-            if !ending {
+            if !ending && !read_list {
                 self.confirm_resource_adjustments(runtime, ocr_collector, &operation.id, &reached)?;
             }
             dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
@@ -1799,6 +1860,30 @@ impl PreparedContainedTask {
                 }
                 LinearEffect::Application(action) => {
                     self.linear_application(runtime, run, step_index, operation, action)?;
+                }
+                // Workflow #428 S168-LK (`contracts/linear-steps.md`, "List reading steps"): the
+                // list is read from the frame on which the step's page passed, its first viewport,
+                // within its scan's `max_ms` (the step's window), as on the page graph: its moves
+                // are its only inputs, and it has no arrival, no retry and no closing decision. Its
+                // list, or its miss, is recorded at once; a failure of the scan ends the run with
+                // its code at the stage `read_list`. The step finishes on its page as recognized on
+                // its last viewport, on which the next step decides.
+                LinearEffect::ReadList => {
+                    let frame = observation.as_ref().ok_or_else(|| {
+                        ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
+                    })?;
+                    let prepared = operation.prepared_list.as_deref().ok_or_else(|| {
+                        invariant_broken(|outcome| outcome.pack_operation_id(operation.id.as_str()))
+                    })?;
+                    let last = self.read_list_step(
+                        runtime,
+                        operation,
+                        prepared,
+                        frame,
+                        (step_index, step_timing),
+                    )?;
+                    Self::linear_step_finished(runtime, step_index, operation, &last.page_label)?;
+                    return Ok(LinearStepEnd::Reached(Box::new(last)));
                 }
             }
             // Workflow #407 LOAD-4 (§5): the attempt's one allowance for its loading pages, shared

@@ -172,6 +172,9 @@ mod gate_428_s168_4;
 // Workflow #428 S168-LB1a: lists of up to 1024 rows, the scheduler's projection without lists and
 // long record lists, the instance fact read by key prefix, and the revisions.
 mod gate_428_s168_lb1a;
+// Workflow #428 S168-LK (register §1.500): a step plan's list is published and refused as a page
+// graph's.
+mod gate_428_s168_lk;
 // Workflow #450 FL-2: a field list's list is published, kept, refused and read through the host
 // as a `read_list` step's.
 mod gate_450_fl2;
