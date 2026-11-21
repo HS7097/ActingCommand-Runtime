@@ -2831,7 +2831,10 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   - *the emulator stopped* (`instance_not_running` at `read_instance_state`; also an emulator
     control's or an idle action's stop, which drops the facts, `invalidate_backend_selfcheck_facts`
     in `emulator_instance.rs`): the watch restarts a configured instance (`start_emulator` on,
-    `watch_emulator` → `restart_watched_emulator`), the idle wake starts the one its action stopped,
+    `watch_emulator` → `restart_watched_emulator`), the idle wake starts the one its action stopped
+    (#486 ASLEEP-1, since 0.12.77: such an instance is asleep, not unavailable, while nothing else
+    withdrew or holds it, "An asleep instance" below; the evaluation judges it as if it were
+    available, and the wake comes for a task that would be dispatched),
     and once the emulator runs with Android and an ADB port the watch recognizes it (`needs_recognition`
     for a pending binding, `unprepared_on_reported_port` for one bound here without self-check
     facts), each request at most `emulator_control.restart_attempts` within `restart_window_ms`
@@ -2971,6 +2974,61 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   object `{}`, and so between its probes, except right after a probe whose own open failed, which
   shows that `failed` entry until the next probe drops it. And the records above. No console shows
   the probes yet. Memory only: a restart starts the set again at the gate's next decision.
+
+## An asleep instance (#486 ASLEEP-1, since 0.12.77)
+
+Register §1.497 (the coordinator's rulings 1 to 8 of 11-21 on board #486; the owner's words behind
+them, 11-02: 「没有任务时直接关闭模拟器」). An instance whose emulator its idle action stopped
+(`stop_emulator`, or `auto`'s highest tier) loses its availability with the stop: the stop drops
+its self-check facts and the backend self-check gate withdraws it (`backend_selfcheck:unchecked`).
+Before this slice the evaluation blocked every candidate of it at placement (`instance_unavailable`),
+before any later gate, so the idle plan counted such a candidate due whatever its budget, backoff,
+benefit or pool lines said, and the idle wake started the emulator for a task the next evaluation
+then held back; the idle check stopped it again, with no end.
+
+- **Asleep.** An instance is asleep while its idle action stops or holds its emulator stopped (the
+  idle planner's `stop_emulator` phases: asked for and not ended, its claim holding the key while
+  the stop runs, and done, its wake not come; `IdlePlanner::emulators_held_stopped`) and nothing but
+  that stop withdrew its availability: the availability in effect is the backend self-check gate's
+  withdrawal (the projection's word `self_check`, so its configured seed is available and no device
+  link, device state or device system withdrew it), no fence holds it, and it is no instance the
+  probes above take up (a self-check or a preparation step of its own that failed). An instance the
+  projection holds available is never asleep. The host gives the evaluation the asleep instances as
+  the cycle starts (`HostShared::asleep_for_policy`, `InstanceHolds::mark_asleep`). No fact changes:
+  `session.instance.available` stays `false`, and nothing is dispatched to it.
+- **Judged as available, nothing selected.** The evaluation judges each candidate of an asleep
+  instance as it judges an available instance's: the rest of placement, the order of the deferrals
+  ([scheduling-blackout.md](../scheduling-blackout.md)), the benefit gate, the pool lines and the
+  capped order, the no-progress guard, the ranking, and its recognition maintenance package's own
+  gates. Each candidate carries the decision, reason and wake of the gate that holds it. The one
+  candidate the round would select there is not selected: its decision is deferred with
+  `instance_asleep_wake_due` (`instance_id` its alias) and the evaluation's time as its wake (so
+  the evaluation's own wake is now). It takes its instance and its device for the round, so the
+  candidates behind it wait as behind a selected one (`instance_already_selected`,
+  `device_group_waiting` `selected`, `capped_not_head`); a recognition maintenance package picked so
+  makes its waiting candidates name `instance_asleep_wake_due` as their gate, with no wake. What
+  judging does short of selecting still happens (the admission's preview, a clock slot's random
+  delay drawn and noted, a suspension's lift check); nothing a dispatch alone causes does: no
+  dispatch intent, reason chain or dispatch decision record, no shared run slot taken, no chain step
+  settled as dispatched, no `capped_spend` and no pass of its capped block for its round (its
+  episode does not advance past it), no no-progress basis captured, no budget counted.
+- **The idle plan** follows: the decision above is due and is the task the wake names
+  (`idle_wake_cause` `task_due`); every other decision counts as on an available instance (a spent
+  budget: not due, its wake the release). Fix round 1 (the coordinator's ruling 2 of the round): on
+  an instance whose idle action in effect can stop its emulator (`stop_emulator`, or `auto` with its
+  emulator start), a decision a gate without a time holds (the benefit gate, the no-progress guard,
+  a pool's lines) is not due and names no wake, whatever next time its trigger names; on any other
+  instance it names its own wake as before. The wake is the emulator's start, then the startup
+  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+- **After a Runtime start** (fix round 1, ruling 5) the instance is asleep as before it: the start
+  restores it stopped with its wake, withdraws its availability (`backend_selfcheck:unchecked`) and
+  does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
+  the unavailable instances above), so its withdrawal is the gate's `self_check` and the probes do
+  not hold it.
+- **Not asleep.** An instance whose application `close_app` closed (it stays available, and #484's
+  look ahead and its fix round 2 hold for it as before); an instance unavailable for any other cause
+  (its candidates are blocked at placement as before); an instance whose emulator a person stopped.
+  An asleep instance under a person's pause waits for the pause's end as every idle instance does.
 
 ## Runtime Boundary
 

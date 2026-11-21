@@ -179,6 +179,9 @@ mod tests {
     // Workflow #463 V3 (0.12.61; register §1.383): the record one `EditGoal` writes, and the goal
     // page's reading of a stored record.
     mod gate_463_v3;
+    // #486 ASLEEP-1 (0.12.77; register §1.497): an asleep instance is judged as if it were
+    // available, and nothing is selected on it.
+    mod gate_486_asleep;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'

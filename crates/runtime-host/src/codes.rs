@@ -3431,6 +3431,15 @@ actingcommand_contract::outcome_codes! {
         /// `run_idle_action`): the game declares no return-home package for the instance's
         /// server, so no rest runs; once per start and instance.
         Unsupported => "instance_idle_action_unsupported": warning / none,
+        /// Warning (#486 ASLEEP-1, since 0.12.77; register §1.497, ruling 6). An idle wake started
+        /// the instance's emulator (after `stop_emulator`), and no scheduled run has been
+        /// admitted on the instance since: the idle check that would have stopped the emulator
+        /// again does not (under `auto` it takes `close_app` at most). Once per such wake, the
+        /// first time (`operation` `check_idle_instances`). Keys `alias`, `idle_action`
+        /// (`stop_emulator`, the stop not taken), `idle_wake_cause` (why the wake came), `task_id`
+        /// (the task it named, with `task_due`), `at_unix_ms` (when it was queued). A
+        /// `device_state_observed` record under the instance and the same report line.
+        StopWithheld => "instance_idle_stop_withheld": warning / none,
     }
 }
 

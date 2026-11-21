@@ -387,6 +387,10 @@ impl HostShared {
                 self.fatal.mark(error.clone())?;
                 return Err(error);
             }
+            // #486 ASLEEP-1 (register §1.497, ruling 6): a catalog's activation answers every wake
+            // the idle planner kept as unanswered, so the next idle check may stop such an
+            // emulator again.
+            lock(&self.idle, HostLocation::SwitchActivePolicyCatalog)?.forget_unanswered_wakes();
             Ok(generation)
         })();
         if let Err(error) = &result

@@ -352,6 +352,14 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// projection resolved; set on the evaluator's own `instance_unavailable` reasons before the
     /// not-run explanation reads them.
     pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
+    /// #486 ASLEEP-1 (register §1.497): the instances asleep as the cycle's inputs were projected,
+    /// by alias (`HostShared::asleep_for_policy`): the evaluation judges each as if it were
+    /// available and selects nothing on it (`InstanceHolds::mark_asleep`).
+    pub(crate) asleep: &'a BTreeSet<String>,
+    /// #486 ASLEEP-1 fix round 1 (register §1.497): the instances whose idle action in effect can
+    /// stop their emulator, by alias (`HostShared::idle_emulator_stops_for_policy`): their idle
+    /// plan takes no wake from a decision a gate without a time holds. Only the plan reads it.
+    pub(crate) idle_stops_emulator: &'a BTreeSet<String>,
     /// Workflow #490 ENTRY-A (`scheduling-blackout.md`, "Order of the deferrals", position 4b):
     /// each instance a scheduled run's failure at its entry blocked, by alias, as the host held them
     /// when the cycle's inputs were read; every candidate of such an instance waits.
@@ -3724,6 +3732,18 @@ impl PolicyHost {
         .counts_every_run(latest_intent)
     }
 
+    /// #486 ASLEEP-1 (register §1.497, ruling 6): the ledger sequence of the latest admission of
+    /// a scheduled run on `alias` the dispatch journal holds (it keeps every open dispatch and each
+    /// pair's latest intent); none when it holds none. The idle check reads one later than a
+    /// wake's as that wake answered.
+    pub(crate) fn idle_latest_admission(&self, alias: &str) -> Option<u64> {
+        self.seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.data.instance_id == alias)
+            .filter_map(|dispatch| dispatch.admitted_sequence)
+            .max()
+    }
+
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
     /// explanation for `instance` (every instance when absent), with the selected decision's
     /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
@@ -3894,6 +3914,8 @@ impl PolicyHost {
             dispatches_read,
             standard_pack_variables,
             availability_withdrawals,
+            asleep,
+            idle_stops_emulator,
             entry_blocked,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
@@ -4057,6 +4079,12 @@ impl PolicyHost {
                 crate::fact_refresh::switch_cooldown_hold(alias, *until_unix_ms).reason_and_gate();
             instance_holds.hold(alias.clone(), reason, gate, BTreeSet::new());
         }
+        // #486 ASLEEP-1 (register §1.497; `scheduling/README.md`, "An asleep instance"): each
+        // instance asleep is judged as if it were available, and the candidate the round would
+        // select there waits as the task the instance is woken for (`instance_asleep_wake_due`).
+        for alias in asleep {
+            instance_holds.mark_asleep(alias.clone());
+        }
         // Workflow #429 R-8 (`scheduling-blackout.md`, "Order of the deferrals", position 5;
         // `instance-fact-store.md`, "Pack schedule facts"): each instance's pack schedule as this
         // evaluation's facts hold it, and the package each catalog task runs as the remedy table
@@ -4121,6 +4149,22 @@ impl PolicyHost {
                 && !store_tasks.contains(&intent.task_id)
             {
                 return Ok(Some(None));
+            }
+            // Position 4b's pair (Workflow #490 ENTRY-A fix round 4; #486 ASLEEP-1 fix round 2,
+            // `scheduling-blackout.md`, "The idle plan behind a hold"): on an instance not blocked,
+            // or for a store update task that passes the block, a task that waits after its
+            // failures at the entry, or is set aside for its window, is let through at that end.
+            // The block itself is not read: a blocked instance's candidate counts due.
+            if (entry_blocked.get(&intent.instance_id).is_none()
+                || store_tasks.contains(&intent.task_id))
+                && let Some(waiting) = entry_blocked.pair_deferral(
+                    &intent.instance_id,
+                    &intent.task_id,
+                    time.unix_ms,
+                    false,
+                )
+            {
+                return Ok(Some(deferred_wake(&waiting)));
             }
             // Positions 5 and 6.
             if let Some(deferral) = pack_schedule
@@ -4628,7 +4672,7 @@ impl PolicyHost {
                     .insert(decision.task_id.clone(), None);
             }
         }
-        self.explanation.record_gated(
+        self.explanation.record_stopping(
             &evaluation,
             active.compiled.catalog_hash(),
             time.unix_ms,
@@ -4663,6 +4707,9 @@ impl PolicyHost {
                     store_tasks: &store_tasks,
                 },
             },
+            // #486 ASLEEP-1 fix round 1: the instances whose idle plan takes no wake from a
+            // decision a gate without a time holds.
+            idle_stops_emulator,
         );
         // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
         // dispatches, replaced with the explanation it belongs to.

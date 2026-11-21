@@ -360,6 +360,14 @@ actingcommand_contract::outcome_codes! {
         /// without a record, until a composition of its game succeeds (no keys).
         ResourceTargetRootUncomposed => "resource_target_root_uncomposed": info / none,
         // ---- Workflow #455 G-R2s: end ----
+        // ---- #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep
+        // instance"): begin ----
+        /// Info. The candidate the round would select on an asleep instance (its emulator stands
+        /// stopped by its idle action, and nothing but that stop withdrew its availability): the
+        /// task the instance is woken for. It is not selected and has no dispatch; its wake is the
+        /// evaluation's time (key `instance_id` the candidate's alias).
+        InstanceAsleepWakeDue => "instance_asleep_wake_due": info / none,
+        // ---- #486 ASLEEP-1: end ----
     }
 }
 
