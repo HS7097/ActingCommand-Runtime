@@ -923,9 +923,15 @@ with its motion, frame, content offset, counts and the end check it read) and th
 (its rows and confidence) or its miss (`reading_problem` and `count`), whose warning
 (`contained_task_resource_reading_unresolved` with `reading_id`, `fact_key`, `reading_problem` and
 `count`) it gives as a run writes it; the list's byte bound (`list_bytes_exceeded`) is the host's
-and is not judged. A failure of the scan is the error, with the stage `read_list`, as it ends a run;
-a move backward (a rewind or a corrective) or a capture past the last frame is
-`selection_scan_replay_frame_missing`, never a list. An operation that declares no list reading is
+and is not judged. Beside the list it holds `unknown`, the positions the scan read but could not
+read whole, in first-seen order, each as a select's dry run lists an unknown position (its index in
+first-seen order, its place in content coordinates, the viewport that first read it, its cause
+`identity_unread`, `feature_unread` or `contradicted`, and the identity it kept, if any), so that
+a self-check can name the place that was not read: none for a list read whole, and for
+`list_position_unread` exactly the positions its `count` counts; a run records none of them. A
+failure of the scan is the error, with the stage `read_list`, as it ends a run; a move backward (a
+rewind or a corrective) or a capture past the last frame is `selection_scan_replay_frame_missing`,
+never a list. An operation that declares no list reading is
 `contained_task_resource_reading_invalid`, `<operation id>:read_list`; an operation the task does
 not declare is `contained_task_operation_missing`. It is in memory only: no Lab operation calls it
 in 0.12.78.

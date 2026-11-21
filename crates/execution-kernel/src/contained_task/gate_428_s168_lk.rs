@@ -28,7 +28,7 @@
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
-use actingcommand_contract::FactScalar;
+use actingcommand_contract::{FactScalar, ScanUnknownCause};
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
@@ -1073,4 +1073,44 @@ fn lk_the_offline_entry_answers_what_the_run_records_on_the_same_viewports() {
         dry_run_list_reading(&task, "close", settled(&viewports)).expect_err("close reads no list");
     assert_eq!(refused.code().as_str(), READING_INVALID);
     assert_eq!(refused.detail(), Some("close:read_list"));
+}
+
+// Test 8 (round 2 of the slice, the coordinator's disposition of the independent review): beside
+// the list, the offline entry answers the positions it could not read, so that a self-check of a
+// recorded read step can name the place that was not read. Over the seven cards' three viewports
+// the list is whole and no position is unknown. Over the list whose second card reads as nothing
+// the miss is `list_position_unread` with the count 1, and its one unknown position is that card:
+// the second in first-seen order (position 1), first read on the first viewport, its identity never
+// read (`identity_unread`, no identity).
+#[test]
+fn lk_the_offline_entry_names_each_position_it_could_not_read() {
+    let task = path_package();
+
+    let whole = dry_run_list_reading(&task, "read_members", settled(&three_viewports()))
+        .unwrap_or_else(|error| panic!("whole: the dry run answers: {error}"));
+    assert!(whole.list.is_ok(), "whole: {:?}", whole.list);
+    assert!(whole.unknown.is_empty(), "whole: {:?}", whole.unknown);
+
+    let unread = [list_with_an_unread_card()];
+    let missed = dry_run_list_reading(&task, "read_members", settled(&unread))
+        .unwrap_or_else(|error| panic!("unread: the dry run answers: {error}"));
+    assert_eq!(
+        missed.list,
+        Err(ListReadingMiss {
+            problem: ResourceReadingProblem::ListPositionUnread,
+            count: 1,
+        })
+    );
+    let [position] = missed.unknown.as_slice() else {
+        panic!("unread: one unknown position: {:?}", missed.unknown);
+    };
+    assert_eq!(
+        (
+            position.position_index,
+            position.first_read_viewport,
+            position.cause,
+            position.identity.as_deref()
+        ),
+        (1, 0, ScanUnknownCause::IdentityUnread, None)
+    );
 }

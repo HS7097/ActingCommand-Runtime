@@ -689,9 +689,9 @@ never optional, the scan's `end` and no `early_stop`, at most 16 readings in a t
 `scheduling_outcome`. Admission checks the reading's members first, as the page graph does
 (`contained_task_resource_reading_invalid`, `<operation id>:<member>`: an optional reading
 `optional`, an intermediate state `transition`, another effect beside it, a `key` or a `select`
-included, `read_list`, the 17th reading `operations`), then its references and its scan's static
-checks with the recognition pack, and then these rules (`contained_task_linear_invalid`,
-`operation=<id>`):
+included, `read_list`, the 17th reading `operations`), then the plan's rules below
+(`contained_task_linear_invalid`, `operation=<id>`), and only then, after the program's own checks,
+its references and its scan's static checks with the recognition pack. The plan's rules:
 
 | Rule | `reason` |
 |---|---|

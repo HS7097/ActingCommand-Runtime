@@ -871,10 +871,11 @@ pub fn dry_run_scan_decide(
 /// step of either mode calls), within the scan's `max_ms`, with no wait between captures; nothing
 /// is recorded, published or pressed. The answer is what the step's run records: the list whole or
 /// its miss (whose warning [`ListReadingDryRun::warning`] gives), with the list's declaration and
-/// the coverage viewports, each with its end check. A failure of the scan is the error, with the
-/// stage `read_list`, as it ends a run; a move backward or a capture past the last frame is
-/// `selection_scan_replay_frame_missing`, never a list. An operation that declares no list reading
-/// is `contained_task_resource_reading_invalid`, `<operation id>:read_list`.
+/// the coverage viewports, each with its end check, and the positions it could not read
+/// (`unknown`, which names where a miss of an unread position lies). A failure of the scan is the
+/// error, with the stage `read_list`, as it ends a run; a move backward or a capture past the last
+/// frame is `selection_scan_replay_frame_missing`, never a list. An operation that declares no list
+/// reading is `contained_task_resource_reading_invalid`, `<operation id>:read_list`.
 pub fn dry_run_list_reading(
     task: &PreparedContainedTask,
     operation_id: &str,
@@ -934,6 +935,7 @@ pub fn dry_run_list_reading(
         declaration: prepared.declaration(operation_id),
         viewports: scanned.viewports,
         list: scanned.list,
+        unknown: scanned.unknown,
     })
 }
 

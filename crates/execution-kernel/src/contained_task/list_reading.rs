@@ -36,7 +36,8 @@
 //! (`dry_run_list_reading`) calls and answers ([`ListReadingDryRun`]).
 
 use super::scan::{
-    RuntimeScanSource, ScanDeclaration, ScanDryRunViewport, ScanEnd, ScanSession, ScanSource,
+    RuntimeScanSource, ScanDeclaration, ScanDryRunUnknown, ScanDryRunViewport, ScanEnd,
+    ScanSession, ScanSource,
 };
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
@@ -192,12 +193,16 @@ pub(super) enum ListRead {
 /// `read_list` step's scan dry-run over saved viewports (`dry_run_list_reading`), answering what
 /// the step's run records: the list's declaration, the session's coverage viewports in order, each
 /// with the end check it read, and the list whole or its miss, as the run's `ListReading` record
-/// carries it. In memory only.
+/// carries it. Beside it (round 2 of the slice), `unknown`: the positions the scan read but could
+/// not read whole, in first-seen order, each as a select's dry run lists its unknown positions, so
+/// that a self-check can name the place that was not read; empty for a list read whole, and for
+/// `list_position_unread` the positions its count counts. In memory only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListReadingDryRun {
     pub declaration: ListReadingDeclaration,
     pub viewports: Vec<ScanDryRunViewport>,
     pub list: Result<ListReadingRows, ListReadingMiss>,
+    pub unknown: Vec<ScanDryRunUnknown>,
 }
 
 impl ListReadingDryRun {
@@ -214,12 +219,13 @@ impl ListReadingDryRun {
 /// Workflow #428 S168-LK: what one `read_list` step's scan read (`PreparedContainedTask::
 /// scan_list`): the frame captured last, the device capture time the list is observed at (the
 /// frame its end check passed on for a list read whole, the last frame for a miss), the list
-/// whole or its miss, and the session's coverage viewports.
+/// whole or its miss, the session's coverage viewports and the positions it could not read.
 pub(super) struct ScannedList {
     pub(super) last: PageObservation,
     pub(super) captured_at: SystemTime,
     pub(super) list: Result<ListReadingRows, ListReadingMiss>,
     pub(super) viewports: Vec<ScanDryRunViewport>,
+    pub(super) unknown: Vec<ScanDryRunUnknown>,
 }
 
 /// `contained_task_resource_reading_invalid` of the operation `operation_id`, refused at `member`
@@ -704,11 +710,13 @@ impl PreparedContainedTask {
             ),
             ListRead::Missed(miss) => (last.captured_at, Err(miss)),
         };
+        let summary = session.summary(None);
         Ok(ScannedList {
             last,
             captured_at,
             list,
-            viewports: session.summary(None).viewports,
+            viewports: summary.viewports,
+            unknown: summary.unknown,
         })
     }
 }
