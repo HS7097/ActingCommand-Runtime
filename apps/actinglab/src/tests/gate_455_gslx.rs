@@ -62,7 +62,10 @@ fn gslx_variables_beside_an_irreversible_capability_need_revision_23_and_nothing
         "provides": provides(Some(true)),
         "variables": variables()
     }));
-    assert_eq!(revision_of(&[irreversible_with_variables.clone()]), 23);
+    assert_eq!(
+        revision_of(std::slice::from_ref(&irreversible_with_variables)),
+        23
+    );
     assert_eq!(
         revision_of(&[control(&json!({
             "provides": provides(Some(true)),
@@ -102,6 +105,6 @@ fn gslx_variables_beside_an_irreversible_capability_need_revision_23_and_nothing
             "shared_ocr": {"lines": {"max": 2, "line_height": 21}}
         }]}),
     );
-    assert_eq!(revision_of(&[lines.clone()]), 21);
+    assert_eq!(revision_of(std::slice::from_ref(&lines)), 21);
     assert_eq!(revision_of(&[irreversible_with_variables, lines]), 23);
 }
