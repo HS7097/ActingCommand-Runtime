@@ -43864,6 +43864,28 @@ fix round 7's report; the rulings are the coordinator's, not the owner's words):
    ahead of it in the order has failed once more at most, about one block each. The contract's
    "The worst cases" and `instance_entry_task_waiting`'s description (after its first sentence:
    the index unchanged, checked current) describe the order with the setters last.
+3. *M4's third climb* (ruling 3). **Not found:** where and why the third climb stops. Established
+   by reading: (i) K3 (c), on the same replay fixture and manual clock without emulator control,
+   runs the same sequence up to the emulator's rung (an exhausted climb, a client's run that lets
+   a run in, the clock moved about two hours, a failure at the entry whose climb runs the
+   return-home and application rungs as configured) and ends; so the third climb stops in its
+   emulator rung or after it. (ii) That rung's first readiness attempt passes on the fake as it
+   does at the first climb: the Start leaves Android up (`android_down` false), the foreground
+   query answers the assigned application, the Start binds the endpoint again, the emulator status
+   read fails (no scripted read) and, the binding being bound, the opens go on, and the opens pass
+   (`observed_open`); so the retry wait (`await_recovery_retry`), which sleeps in real time and
+   reads the Runtime clock, is not entered by the code as read, and fix round 7's account is not
+   shown (nor refuted). (iii) No worker panic shows in the test's output on fix round 6's head (a
+   panicked ladder records no end and keeps its key until its lease lapses on the Runtime clock).
+   Fix round 7's moving clock stays, as `gate_382_h4` drives the same readiness wait on a manual
+   clock (the clock moved at each look while the climb runs), but the cause did not show that it is
+   the right drive here; the test's two waits of the third climb now fail at once with a fatal
+   error the Runtime latched (`assert_runtime_alive`), so a red run names such a stop instead of
+   a wait's bound. No code changed for M4. **Production:** on the system clock every
+   wait of the rung reads the clock its sleeps spend: the readiness wait ends at
+   `readiness_window_ms` (`recovery_environment_not_ready`), a busy or screen hold at its end, the
+   ADB waits at their bounds, and a ladder whose worker panicked frees its key when its lease
+   lapses; the state that holds the test cannot hold a production ladder without end.
 
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`; fix round 2: `since` 0.12.77):

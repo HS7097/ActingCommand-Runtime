@@ -153,7 +153,8 @@
 //!   of their ids, and the one whose own interval is later than its place keeps it;
 //! - Q1 (b), N3 (a), P3, P3 (b) and M3 (c) re-derived: a pair that set the block takes the place
 //!   after the other pairs with a count in a row (P3 (b) tells it from fix round 7's rule; in P3
-//!   the healthy pair runs a minute after the broken pair's first block).
+//!   the healthy pair runs a minute after the broken pair's first block);
+//! - M4 (ruling 3): its third climb's waits fail at once with a fatal error the Runtime latched.
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
@@ -3445,6 +3446,7 @@ const CLIMB_CLOCK_STEP_MS: u64 = 1_000;
 /// outrun.
 fn wait_for_ladders_finished_moving(host: &RuntimeHost, clock: &ManualRuntimeClock, count: usize) {
     wait_until("the ladders' ends, the clock moving", || {
+        assert_runtime_alive(host);
         clock.advance(CLIMB_CLOCK_STEP_MS);
         finished_ladders(host).len() >= count
             && host
@@ -3453,6 +3455,13 @@ fn wait_for_ladders_finished_moving(host: &RuntimeHost, clock: &ManualRuntimeClo
                 .0
                 .is_none()
     });
+}
+
+/// Fix round 8 (M4, whose third climb's stop was not found): the Runtime latched no fatal error;
+/// one latched is the failure, named at the next look instead of at a wait's bound.
+fn assert_runtime_alive(host: &RuntimeHost) {
+    let fatal = host.fatal_error().expect("runtime health");
+    assert!(fatal.is_none(), "the Runtime stopped: {fatal:?}");
 }
 
 /// One rung of a climb's plan: skipped for `reason`, else pending.
@@ -4528,7 +4537,9 @@ fn emulator_actions(state: &FakeState) -> Vec<actingcommand_contract::EmulatorIn
 /// Fix round 7 (CI on fix round 6's head: the first two climbs ended within seconds, and the
 /// third climb's wait ran out): once the third climb's Stop and Start ran, its end is awaited
 /// while the manual clock moves ([`wait_for_ladders_finished_moving`]): the emulator rung's
-/// readiness wait reads the Runtime clock while it sleeps in real time.
+/// readiness wait reads the Runtime clock while it sleeps in real time. Fix round 8 (ruling 3):
+/// where the third climb stopped was not found (register §1.494, "Fix round 8", item 3); both
+/// waits of the third climb now fail at once, with the Runtime's fatal error, if one is latched.
 #[test]
 fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() {
     use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
@@ -4682,6 +4693,7 @@ fn entry_m4_the_emulator_is_restarted_once_in_a_stretch_and_again_in_the_next() 
     // clock's two moves printed, and this climb's wait ran out its 120 seconds): the rung's
     // second Stop and Start, then its end while the clock moves.
     wait_until("the new stretch's emulator restart", || {
+        assert_runtime_alive(&replay.host);
         emulator_actions(&replay.state) == [Stop, Start, Stop, Start]
     });
     wait_for_ladders_finished_moving(&replay.host, replay.manual_clock(), 3);
