@@ -1183,10 +1183,11 @@ an ending instead (`end` and `on_empty`, rule 1 above). The offline entry `dry_r
 frames.
 
 The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
-[resource-readings.md](resource-readings.md), "List readings"): steps 1 and 2 only, with no
-policy, no early stop, no `Return`, no `Confirm` and no tap. Its scan failures end the run as
-here, with the stage `read_list`; a position it could not read is a miss of the list, not a
-failure. It stops on the viewport that reads one position more than a list may hold, the miss
+[resource-readings.md](resource-readings.md), "List readings"), of a page graph or (Workflow #428
+S168-LK, since 0.12.78) of a step plan ([linear-steps.md](linear-steps.md), "List reading
+steps"): steps 1 and 2 only, with no policy, no early stop, no `Return`, no `Confirm` and no tap.
+Its scan failures end the run as here, with the stage `read_list`; a position it could not read is
+a miss of the list, not a failure. It stops on the viewport that reads one position more than a list may hold, the miss
 `list_rows_exceeded`: the 1025th since S168-LB1a (0.12.55; [v012-register.md](v012-register.md)
 §1.309, §1.311), the 257th before it. The scan's own bounds above do not move, so with at most 128
 viewports a list reaches 1024 rows only when each advance brings about 8 new positions
@@ -1404,6 +1405,11 @@ mode `none_allowed` where the step declares `on_empty`, and the upper bound's in
 `Decide` are the run's own, so a scan without an end answers here what it answers in a run (section
 Select over a scan, "A scan without an end"): a decision once its early stop held, else the error
 `selection_scan_early_stop_unreached` with the run's stage and viewport.
+
+Workflow #428 S168-LK (since 0.12.78): `dry_run_list_reading` dry-runs a `read_list` step's scan
+over the same frames, with the run's own session and rows, and answers the list whole or its miss
+with the coverage viewports ([resource-readings.md](resource-readings.md), "Offline"); the select
+dry runs above refuse a step that is no select step, as before.
 
 ## Judge step
 

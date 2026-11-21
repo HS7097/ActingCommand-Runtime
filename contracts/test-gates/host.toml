@@ -4703,6 +4703,15 @@ tests = [
 ]
 incident = ["#486", "ASLEEP-1"]
 
+# Workflow #428 S168-LK (0.12.78; register §1.500; contracts/linear-steps.md, "List reading steps"; contracts/resource-readings.md, "List readings", "Publication" and "Capacity and reserved keys"), the host's half with no change to the host: on the S168-4 gate's host and fake device, its page-graph package (read_members reads the one-screen list of member-00 to member-05, leave taps on to the detail page) and the same package as a step plan (control linear_steps, task entry page list and max_steps 2, every other entry byte for byte). Both runs of the list shown out of key order end Completed on neutral/detail after two steps; the step plan's run publishes one more fact.published of the key with the page-graph record's scope, rows, confidence, lifetime and its policy, source_detector, schema, bundle hash and no trigger, a snapshot of its own run observed later, and it is the key's active record; both runs record the reading's start and finish on neutral/list with no intent, then leave's start, intent and finish on neutral/detail (6); after the step plan read its list once and the instance's own facts were filled until the store refused a key (fact_store_capacity_exceeded, not fatal), a run of the step plan whose list is a new key and a run of the page-graph package of that key each fail contained_task_resource_reading_rejected with the native detail read_members:fact_store_capacity_exceeded, nothing published under the key and nothing evicted (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lk::lk_a_linear_tasks_list_is_published_at_the_run_end_as_a_page_graph_tasks",
+    "actingcommand-runtime-host::lib::tests::gate_428_s168_lk::lk_a_full_store_refuses_a_linear_tasks_list_as_a_page_graph_tasks",
+]
+incident = ["#428 S168-LK"]
+
 # Workflow #455 G-SLx (0.12.78; register §1.501; coordinator work order rd-1121/brief-455-locks.md, rulings 1 and 3; contracts/package-variables.md, "A variable that does not apply"), the host's half, on V2's composer-mode scene (one rule due at every evaluation whose package declares the choice variable pick, default item_b; a manual clock, a fake device): the workbench's judgement keeps no variable of a package that can do something irreversible from applying, and the run reads it as any package's. In each case the dispatch with no value set records pick's default and its run's snapshots hold item_b; after item_a is set through ApplyResourceTargets on lab the next dispatch records it (source set, who set it and when), the run's parameters and snapshots hold item_a, and no goal_value_not_applied is written: the dispatched package marks its own capability irreversible (admitted now, where every kernel before 0.12.78 refused it variables_on_irreversible); a package no rule runs marks irreversible a capability the dispatched package provides unmarked (until 0.12.77 irreversible_by_root); a package of the root cannot be read (until 0.12.77 package_unreadable)
 [[gate]]
 coverage = "Y"

@@ -71,8 +71,10 @@ const READ_LIST_REFUSED_MEMBERS: &[&str] = &[
     "optional",
 ];
 
-/// Workflow #428 S168-4: the effects a `read_list` step never declares beside it.
-const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait"];
+/// Workflow #428 S168-4: the effects a `read_list` step never declares beside it. Workflow #428
+/// S168-LK: a key step's `key` among them, in a task of either execution mode (the gate reads no
+/// mode), since a step plan admits a list reading.
+const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait", "key"];
 
 /// Workflow #450 FL-1b: the members of a `field_lists` entry, every one required.
 const FIELD_LIST_MEMBERS: &[&str] = &[

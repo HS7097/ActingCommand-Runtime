@@ -50,6 +50,10 @@
 //! - **The lines of a shared read's name boxes**, 21 (Workflow #463 SEL-GRID G2, register §1.491):
 //!   a task file's `shared_ocr` that declares `lines`, of a layout of either kind, a row of
 //!   [`ROWS`].
+//! - **A `linear_steps` task's list reading**, 22 (Workflow #428 S168-LK, register §1.500): an
+//!   operation's `read_list` in a `linear_steps` pack, read where the kernel's admission reads it,
+//!   as revisions 13 and 17 read a select step and a key step; a page-graph list reading keeps
+//!   revision 8.
 //! - **Variables beside an irreversible capability**, 23 (Workflow #455 G-SLx, register §1.501):
 //!   a pack's `control.json` that declares `variables` beside a `provides` entry marking its
 //!   capability irreversible, two members of one file, so read on its own
@@ -264,11 +268,11 @@ const fn when(
 }
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
-/// INT-1) 19 and (Workflow #463 SEL-GRID G2) 21 and the register sections they cite, and the B
-/// train's sections, put into a revision: each with its file, its place, what it holds, its
-/// condition and its revision (`contracts/resource-verify.md`, "The `package` revision", lists
-/// them with their sources).
-const ROWS: [Row; 49] = [
+/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21 and (Workflow #428 S168-LK) 22 and the register
+/// sections they cite, and the B train's sections, put into a revision: each with its file, its
+/// place, what it holds, its condition and its revision (`contracts/resource-verify.md`, "The
+/// `package` revision", lists them with their sources).
+const ROWS: [Row; 50] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -484,6 +488,23 @@ const ROWS: [Row; 49] = [
         Place::Under(SHARED_OCR),
         SHARED_LINES_REVISION,
     ),
+    // 22, Workflow #428 S168-LK (§1.500; contracts/linear-steps.md, "List reading steps"): a list
+    // reading of a `linear_steps` task, an operation whose effect is `read_list`, found where the
+    // kernel's admission finds it, as rows 13 and 17 find a select step and a key step: in a pack
+    // whose control's `execution_mode` is `linear_steps`, the member `read_list` of an element of
+    // the task's `operations`, holding the reading's declaration, an object (`TaskOperation.
+    // read_list`, an `Option` that an absent member or `null` leaves empty;
+    // `TaskProgram::validate_linear` takes it as `LinearEffect::ReadList`). Every Runtime before
+    // it refuses such a step at its admission (`contained_task_linear_invalid`, `reason=read_list`);
+    // a page-graph list reading keeps row 8's revision.
+    Row {
+        files: TASK,
+        name: "read_list",
+        place: Place::Under("operations"),
+        holds: Holds::Object,
+        condition: Condition::LinearSteps,
+        revision: 22,
+    },
 ];
 
 /// What the rows read of the document they walk.

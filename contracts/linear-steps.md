@@ -8,8 +8,9 @@ launch, restart or stop the instance's assigned application (rulings R24 and R25
 steps" below). A step whose page does not always appear may be declared optional and is then
 skipped when its page does not appear ([Workflow #339](https://github.com/HS7097/ActingCommand-Workflow/issues/339),
 "Optional steps" below). A step may instead choose one item of a list by what its frame shows
-and tap it once (Workflow #463 K1, "Select steps" below), or press the back key on its page
-(Workflow #463 KP-1, "Key steps" below). Besides its target page, a task may name
+and tap it once (Workflow #463 K1, "Select steps" below), press the back key on its page
+(Workflow #463 KP-1, "Key steps" below), or read a list its page shows, scrolling it to its end,
+and stay on that page (Workflow #428 S168-LK, "List reading steps" below). Besides its target page, a task may name
 pages its path ends on after its last press, its ending pages, each a normal end (Workflow #463 K2,
 "Endings" below). Packages that do not declare the mode keep their page-graph execution unchanged.
 No game-specific values are part of this contract.
@@ -70,8 +71,9 @@ one operation is at fault; an existing check keeps its existing code.
 | no `phases` | `phases` |
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
-| no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
-| each operation's effect is `click`, `application`, (Workflow #463 K1, since 0.12.61) `select` or (Workflow #463 KP-1, since 0.12.69) `key`, exactly one of them; no `on_error` | `operation_effect` |
+| no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted); (Workflow #428 S168-LK, since 0.12.78) no `field_lists`, which group OCR fields a step plan does not read | the field name |
+| (Workflow #428 S168-LK, since 0.12.78) every `read_list` step's members, checked as on the page graph before the rules below ("List reading steps" below): its refusal is `contained_task_resource_reading_invalid`, detail `<operation id>:<member>` | as [resource-readings.md](resource-readings.md), "List readings", says |
+| each operation's effect is `click`, `application`, (Workflow #463 K1, since 0.12.61) `select`, (Workflow #463 KP-1, since 0.12.69) `key` or (Workflow #428 S168-LK, since 0.12.78) `read_list`, exactly one of them; no `on_error` | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
@@ -79,7 +81,7 @@ one operation is at fault; an existing check keeps its existing code.
 | a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37); nor (LOAD-4b, since 0.12.38) any other page its waits await, an optional page its input may reach or its run's skip target ("Loading pages" below) | `loading_page` |
 | no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
-| each operation's destination differs from its `from` | `to_equals_from` |
+| each operation's destination differs from its `from`, but a list reading's, whose `to` is its `from` (Workflow #428 S168-LK) | `to_equals_from` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |
 | each operation's destination equals the next operation's `from` | `chain` |
 | `target_page` names one page, equal to the last operation's destination | `target_page` |
@@ -97,6 +99,7 @@ one operation is at fault; an existing check keeps its existing code.
 | the optional-step rules of "Optional steps" below | `optional_first_step`, `optional_application`, `optional_restart_segment_end`, `optional_settle`, `optional_candidates`, `transition_page` |
 | the select-step rules of "Select steps" below (Workflow #463 K1) | `select_optional`, `select_retry`, `expect_identity`, `any_requires_application`, `select_on_empty_target`, `select_on_empty_terminal` |
 | the key-step rules of "Key steps" below (Workflow #463 KP-1, since 0.12.69) | `key_unknown`, `key_retry`, `any_requires_application` |
+| the list-reading rules of "List reading steps" below (Workflow #428 S168-LK, since 0.12.78) | `read_list_before_optional`, `read_list_last`, `any_requires_application`, `when` |
 
 Every operation still passes the existing operation checks (guard or trusted coordinate, click
 shape, retry fields, `post_delay_ms`); operation ids are unique (`contained_task_program_invalid`).
@@ -115,7 +118,7 @@ prerequisite package runs through the prerequisite gate instead ("Prerequisite p
 
 After `PackageAdmitted` and `RunStarted`, the kernel runs the admitted path; no run state
 machine is built and no page is recognized globally, except on a select step's own frames ("Select
-steps" below).
+steps" below) and a list reading's viewports ("List reading steps" below).
 
 **Observing.** Each capture is recorded as on the page-graph path (the `CapturePage` timing
 boundary, `CaptureCompleted`, the committed input frame context when the frame carries an
@@ -660,6 +663,83 @@ select step, and its primitive carries its `key`. The parser judges nothing of t
 every rule above (the word, an effect beside it, the guard, a retry, the mode) is admission's
 alone, so the two cannot disagree. A step without `key` takes the parser's path it took before,
 byte for byte.
+
+## List reading steps
+
+Workflow #428 S168-LK (since 0.12.78, [v012-register.md](v012-register.md) §1.500; the owner's
+rule of 11-15 that packages are made by recording, which gives step plans, and the coordinator's
+rulings on board #428). An operation's effect may be a list reading, `read_list`: the step reads a
+list its page shows, scrolling it to its end, and writes it as one instance fact of value
+`record_list`, as on the page graph ([resource-readings.md](resource-readings.md), "List
+readings"). It is the one step whose page does not change: its `to` is its `from`.
+
+```json
+{"id": "step_03_read", "from": "step_03", "to": "step_03",
+ "guard": {"page_id": "step_03", "target_id": "step_03/mark", "color_probe": "step_03/mark",
+           "expected_rect": {"x": 0, "y": 0, "width": 40, "height": 20}},
+ "read_list": {"layout_id": "layout/items", "key_feature": "item", "key_column": "id",
+               "columns": [{"column": "count", "feature": "count"}],
+               "fact_key": "inventory.list.items", "valid_for_ms": 86400000,
+               "scan": {"identity_feature": "item", "…": "…", "end": {"check": "step_03/end"}}}}
+```
+
+**Declaration.** The page graph's, unchanged ([resource-readings.md](resource-readings.md), "List
+readings", "Declaration"): a guard, `to` its `from`, no retry, no `expect_after`, no `transition`,
+never optional, the scan's `end` and no `early_stop`, at most 16 readings in a task, which declares
+`scheduling_outcome`. Admission checks the reading's members first, as the page graph does
+(`contained_task_resource_reading_invalid`, `<operation id>:<member>`: an optional reading
+`optional`, an intermediate state `transition`, another effect beside it, a `key` or a `select`
+included, `read_list`, the 17th reading `operations`), then the plan's rules below
+(`contained_task_linear_invalid`, `operation=<id>`), and only then, after the program's own checks,
+its references and its scan's static checks with the recognition pack. The plan's rules:
+
+| Rule | `reason` |
+|---|---|
+| a reading declares no `when` (as no step of a step plan does) | `when` |
+| a reading does not start from `any`: its list is on its page ("Application steps") | `any_requires_application` |
+| a reading is not the operation right before a run of optional steps: that operation's input reaches the run's pages, and a reading has no input of its own ("Optional steps") | `read_list_before_optional` |
+| a reading is not the plan's last step: it ends on its own page and leaves its last viewport to the next step, so no input and no wait would end the run on its target page | `read_list_last` |
+
+`to_equals_from` is not asked of a reading. A task that declares `field_lists` is refused
+(`reason=field_lists`, "Admission"); after an application `stop` a reading is refused as any input
+is (`input_after_application_stop`). A package with a reading is no prerequisite, return-home or
+startup package, as on the page graph (`read_list`; [resource-readings.md](resource-readings.md),
+"Declaration"). Since 0.12.78 the declaration gate refuses a `key` beside `read_list` in a task of
+either mode (`InvalidValue` at `/operations/<i>/read_list`), as it refuses every other effect
+beside it.
+
+**Execution.** When the plan reaches the step, it reads the list from the frame on which its page
+passed (the frame the step before it arrived on, or the entry wait's), which is its first viewport:
+the scan session of the page graph's reading, with no policy ([resource-readings.md](resource-readings.md),
+"Reading"; [selection-graph.md](selection-graph.md), "Select over a scan"), its guard judged on
+every viewport, within its scan's `max_ms` in place of the step timeout, as on the page graph. Its
+moves are its only inputs, each a `task.effect_intent` of the step followed by its input and by no
+`task.effect_completed`. The step has no input of its own, no arrival, no retry and no closing
+decision. It ends as "List readings" says for the page graph, with the same records and the same
+codes:
+
+- **The list read whole**: `ListReadingFrame` on the frame its end check passed on, then the list
+  (`ListReading`); the step's `StepFinished` names its page as recognized on its last viewport, and
+  the next step decides on that viewport: its guard is judged on it, with no frame of its own (with
+  a step gap, ACT-2, a fresh frame of the page first, as for any step). The last viewport is not
+  handed to the reading marks again and confirms no adjustment, as on the page graph.
+- **A list the rules give no reading for** (an unread position, a repeated key, a position past
+  the list's bound): its warning `contained_task_resource_reading_unresolved` on the step's last
+  viewport, and the run goes on to its end.
+- **A failure of the scan itself**: the run ends with the scan's own code at the stage `read_list`,
+  with no retry and no closing decision ("A screen the package never recorded" is not judged).
+
+The host publishes a list at the run's successful end as it publishes a page-graph run's: the same
+key under `inventory.list.`, the same record and the same refusals of the store; a run that fails
+publishes no list. The sampling budget of a plan with a reading counts no arrival for it (its
+scan's captures are compared with its `max_ms` in the preparation, as on the page graph). A
+requested key set never leaves a reading out: a segment of the plan that holds one (on the entry
+page the reading is a segment of its own) is always run.
+
+**Offline.** The kernel's `dry_run_list_reading` runs a reading's scan over saved viewports and
+answers what the step's run records ([resource-readings.md](resource-readings.md), "Offline").
+
+A task without a reading is admitted, run and recorded as before.
 
 ## Loading pages
 
@@ -1442,6 +1522,17 @@ and checked by nothing when a bundle is placed or a package is admitted, so an e
 places such a bundle that declares less, and an earlier Runtime refuses its package at every run.
 This build (0.12.69 and later) takes a key step in every form a package comes in, the source
 layout included ("Key steps", "The source layout").
+A build before Workflow #428 S168-LK (below 0.12.78) refuses a list reading under `linear_steps`
+before `PackageAdmitted` (`contained_task_linear_invalid`, `reason=read_list`), its declaration
+gate taking the step as it takes a page-graph one. A bundle whose packs declare one declares
+`package` [22, 22], which the `package` edge of an earlier installer (its range ending below 22)
+refuses before it places anything ([component-interfaces.md](component-interfaces.md), the
+`package` row 22). That 22 is written by the resource repository's packaging and computed by
+`standard-pack build` for a bundle it builds (its revision table counts an operation's `read_list`
+in a `linear_steps` pack as 22, [resource-verify.md](resource-verify.md), "The `package`
+revision"), and checked by nothing when a bundle is placed or a package is admitted, so an earlier
+installer places such a bundle that declares less, and an earlier Runtime refuses its package at
+every run.
 
 ## Tools
 
@@ -1452,7 +1543,9 @@ graph, or a refusal; the first operation is never optional. When the first opera
 (Workflow #463 KP-1, since 0.12.69, "Key steps"), the decision is its press, `would_press_key`
 (`operation_label`, `key` the word of the vocabulary, `guard` the guard outcome it would press it
 under), never a `would_click`; the simulation declares no capability table, so it never refuses the
-key.
+key. A list reading (Workflow #428 S168-LK, since 0.12.78) is simulated as the page graph's is: its
+scan runs on the frames given, its first move is an input like any, and no list is published. The
+reading's own dry run over saved viewports is `dry_run_list_reading` ("List reading steps").
 A first select step that ends empty (`on_empty`) completes the run with its step counted, so its
 offline simulation reports `offline_simulation_executed_step_invariant`, as a page-graph task's
 empty end does. A package
