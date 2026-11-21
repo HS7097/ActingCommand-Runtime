@@ -16,10 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::{ENVELOPE_BODY_BUDGET, Outcome, Record, RemedySource};
 use actingcommand_contract::{
-    DeclaredCapabilities, GoalType, IrreversiblePackages, NotApplyingCause, PackageVariable,
-    RootGoalDocument, RootPackageVariables, RootVariablesJudged, RuntimeChannel, VariableCause,
-    VariableProblem, VariableSource, judge_root_variables, parse_package_variables,
-    parse_standard_pack_goals,
+    GoalType, NotApplyingCause, PackageVariable, RootGoalDocument, RootPackageVariables,
+    RootVariablesJudged, RuntimeChannel, VariableCause, VariableProblem, VariableSource,
+    judge_root_variables, parse_package_variables, parse_standard_pack_goals,
 };
 use serde_json::{Value, json};
 
@@ -74,14 +73,6 @@ fn variables(declaration: &Value) -> Vec<PackageVariable> {
     parse_package_variables(declaration, &[]).expect("the fixture's variables")
 }
 
-/// What a package provides and what its remedies list: nothing.
-fn nothing() -> DeclaredCapabilities {
-    DeclaredCapabilities {
-        provides: BTreeMap::new(),
-        remedies: BTreeSet::new(),
-    }
-}
-
 /// A task of the game with `package` (`None`: its package could not be read).
 fn task(task_id: &str, package: Option<VariablePackage>) -> VariableTableTask {
     VariableTableTask {
@@ -91,25 +82,19 @@ fn task(task_id: &str, package: Option<VariablePackage>) -> VariableTableTask {
     }
 }
 
-fn package(
-    package_id: &str,
-    variables: Vec<PackageVariable>,
-    capabilities: DeclaredCapabilities,
-) -> VariablePackage {
+/// The package `package_id` declaring `variables` (Workflow #455 G-SLx: no longer with what it
+/// provides and what its remedies list, which the table read for the rule of irreversibility).
+fn package(package_id: &str, variables: Vec<PackageVariable>) -> VariablePackage {
     VariablePackage {
         package_id: package_id.to_owned(),
         variables,
         cap_fact_keys: Vec::new(),
-        capabilities,
     }
 }
 
 /// The table of `t_var` with the four variables alone.
 fn table() -> VariableTable {
-    VariableTable::build(&[task(
-        VAR,
-        Some(package(PACKAGE, variables(&declaration()), nothing())),
-    )])
+    VariableTable::build(&[task(VAR, Some(package(PACKAGE, variables(&declaration()))))])
 }
 
 fn time(at: u64) -> EvaluationTime {
@@ -363,7 +348,7 @@ fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
         .collect::<BTreeMap<_, _>>();
     let table = VariableTable::build(&[task(
         VAR,
-        Some(package(PACKAGE, declared_variables.clone(), nothing())),
+        Some(package(PACKAGE, declared_variables.clone())),
     )]);
     for (name, set, problem) in [
         ("pick", json!("item_c"), VariableProblem::NotAnOption),
@@ -504,66 +489,53 @@ fn sha256_of(value: &Value) -> String {
 
 // Requirement 3 and the work order's test "a variable that does not apply": a variable the root
 // check keeps from applying reads its default whatever is set, with the word: another package of
-// the game declaring `pick` differently (`declaration_conflict`), a package of the game marking
-// irreversible a capability the declaring package provides unmarked (`irreversible_by_root`), a
-// task of the game whose package could not be read (fix round 1: `package_unreadable`, the safe
-// side's own word; `irreversible_by_root` when a declaring package also provides a marked
-// capability), and an instance of a game the table never judged (`root_unchecked`). Without a set
-// value the default is read with no word. This is the table without a composed standard pack;
-// the host's gate test judges a composed root.
+// the game declaring `pick` differently (`declaration_conflict`) and an instance of a game the
+// table never judged (`root_unchecked`). Without a set value the default is read with no word.
+// This is the table without a composed standard pack; the host's gate test judges a composed root.
+// Workflow #455 G-SLx (register §1.501, adapted): the table no longer reads what a package provides
+// (V2 and its fix round 1 gave a package of the game that marks a capability irreversible
+// `irreversible_by_root` and a task whose package could not be read `package_unreadable`), so on
+// the tables of those cases, a task of the game whose package could not be read included, the set
+// value is read as set, with no word.
 #[test]
 fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
     let catalog = catalog(&[(VAR, 100), (OTHER, 50)], None);
     let own = variables(&declaration());
     let mut differing = declaration();
     differing[0]["default"] = json!("item_a");
-    let provides = |marked: bool| DeclaredCapabilities {
-        provides: BTreeMap::from([("cap_x".to_owned(), marked)]),
-        remedies: BTreeSet::new(),
-    };
     let tables = [
         (
             "a conflicting declaration",
             vec![
-                task(VAR, Some(package(PACKAGE, own.clone(), nothing()))),
-                task(
-                    OTHER,
-                    Some(package(OTHER_PACKAGE, variables(&differing), nothing())),
-                ),
+                task(VAR, Some(package(PACKAGE, own.clone()))),
+                task(OTHER, Some(package(OTHER_PACKAGE, variables(&differing)))),
             ],
-            VariableProblem::DeclarationConflict,
+            Some(VariableProblem::DeclarationConflict),
         ),
         (
-            "irreversible by the root",
+            "beside a package that declares nothing",
             vec![
-                task(VAR, Some(package(PACKAGE, own.clone(), provides(false)))),
-                task(
-                    OTHER,
-                    Some(package(OTHER_PACKAGE, Vec::new(), provides(true))),
-                ),
+                task(VAR, Some(package(PACKAGE, own.clone()))),
+                task(OTHER, Some(package(OTHER_PACKAGE, Vec::new()))),
             ],
-            VariableProblem::IrreversibleByRoot,
+            None,
         ),
-        // Fix round 1 (item 3): one word, one cause.
         (
-            "a package of the game that could not be read",
+            "beside a package of the game that could not be read",
             vec![
-                task(VAR, Some(package(PACKAGE, own.clone(), nothing()))),
+                task(VAR, Some(package(PACKAGE, own.clone()))),
                 task(OTHER, None),
             ],
-            VariableProblem::PackageUnreadable,
+            None,
         ),
         (
-            "irreversible by the root, beside a package that could not be read",
+            "beside both",
             vec![
-                task(VAR, Some(package(PACKAGE, own.clone(), provides(false)))),
-                task(
-                    OTHER,
-                    Some(package(OTHER_PACKAGE, Vec::new(), provides(true))),
-                ),
+                task(VAR, Some(package(PACKAGE, own.clone()))),
+                task(OTHER, Some(package(OTHER_PACKAGE, Vec::new()))),
                 task("t_unread", None),
             ],
-            VariableProblem::IrreversibleByRoot,
+            None,
         ),
     ];
     let set = facts(vec![record(&catalog, &[("pick", json!("item_a"))])]);
@@ -573,14 +545,18 @@ fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
             .into_iter()
             .find(|resolved| resolved.variable_name == "pick")
             .expect("pick's value");
+        let (value, source) = match problem {
+            Some(_) => (json!("item_b"), VariableSource::Default),
+            None => (json!("item_a"), VariableSource::Set),
+        };
         assert_eq!(
             pick,
             ResolvedVariable {
                 variable_name: "pick".to_owned(),
-                value: json!("item_b"),
-                source: VariableSource::Default,
+                value,
+                source,
                 set_by: lab_set(),
-                problem: Some(problem),
+                problem,
             },
             "{case}"
         );
@@ -596,7 +572,7 @@ fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
     let elsewhere = VariableTable::build(&[VariableTableTask {
         task_id: VAR.to_owned(),
         games: BTreeSet::from(["game-b".to_owned()]),
-        package: Some(package(PACKAGE, own, nothing())),
+        package: Some(package(PACKAGE, own)),
     }]);
     let pick = values_of(&plan_variable_values(&catalog, &set, &elsewhere))
         .into_iter()
@@ -614,7 +590,7 @@ fn v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set() {
 fn v2_a_package_without_variables_gives_the_reason_chains_of_before() {
     let catalog = catalog(&[(VAR, 100)], None);
     let facts = facts(vec![record(&catalog, &[("pick", json!("item_a"))])]);
-    let table = VariableTable::build(&[task(VAR, Some(package(PACKAGE, Vec::new(), nothing())))]);
+    let table = VariableTable::build(&[task(VAR, Some(package(PACKAGE, Vec::new())))]);
     assert!(table.is_empty());
     let planned = plan_variable_values(&catalog, &facts, &table);
     assert!(planned.is_empty());
@@ -655,7 +631,7 @@ fn v2_fix1_a_value_longer_than_256_bytes_is_applied_and_recorded_whole() {
         "options": options(&names), "min_count": 1, "max_count": 20,
         "default": [names[0]]
     }]));
-    let table = VariableTable::build(&[task(VAR, Some(package(PACKAGE, declared, nothing())))]);
+    let table = VariableTable::build(&[task(VAR, Some(package(PACKAGE, declared)))]);
     let set = json!(names);
     let text = set.to_string();
     assert!(text.len() > 256 && text.len() <= 1024, "{}", text.len());
@@ -745,30 +721,21 @@ fn v2_fix1_a_stored_row_whose_setter_cannot_be_read_is_not_applied_with_its_word
 
 // Fix round 2, items 4, 5 and 9: the contract crate's one judgement of a root's variables
 // (`judge_root_variables`, which the workbench, `standard-pack check` and the table without a
-// composed standard pack call) gives each name its word and the detail of its cause. When one
-// declaring package can do something irreversible by itself (it provides `cap_x`, which another
-// package marks irreversible) beside a package of the root that cannot be read, the word is
-// `irreversible_by_root`, with the capability; an unreadable package alone is
-// `package_unreadable`, naming it. A declaration another package writes otherwise is
-// `declaration_conflict`, naming that package; a name an entry of an accepted `goals.json` takes
-// is `goal_name_conflict`, with the entry's type; the others apply, each verdict listing its
-// packages and its declaration. A `goals.json` that cannot be read keeps every other name from
-// applying (`goals_unreadable`, no detail), and a refused one takes no name.
+// composed standard pack call) gives each name its word and the detail of its cause. A declaration
+// another package writes otherwise is `declaration_conflict`, naming that package; a name an
+// entry of an accepted `goals.json` takes is `goal_name_conflict`, with the entry's type; the
+// others apply, each verdict listing its packages and its declaration. A `goals.json` that cannot
+// be read keeps every other name from applying (`goals_unreadable`, no detail), and a refused one
+// takes no name. Workflow #455 G-SLx (register §1.501, adapted): the judgement takes no rule of
+// irreversibility, so the root of a lone declaring package, which fix round 2 judged
+// `irreversible_by_root` (with the capability another package marks) beside an unreadable
+// package and `package_unreadable` (naming it) beside it alone, lets the name apply.
 #[test]
 fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
     let root_package = |package_id: &str, declared: Value| RootPackageVariables {
         package_id: package_id.to_owned(),
         variables: variables(&declared),
         cap_fact_keys: Vec::new(),
-    };
-    let read = |provides: &[(&str, bool)]| {
-        Some(DeclaredCapabilities {
-            provides: provides
-                .iter()
-                .map(|(capability, marked)| ((*capability).to_owned(), *marked))
-                .collect(),
-            remedies: BTreeSet::new(),
-        })
     };
     let cause = |judged: &RootVariablesJudged, name: &str| {
         judged
@@ -779,39 +746,11 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
             .not_applying
             .clone()
     };
-    const UNREAD: &str = "neutral.unread";
 
     let pick = [root_package(PACKAGE, json!([declaration()[0].clone()]))];
-    let both = IrreversiblePackages::new(BTreeMap::from([
-        (PACKAGE.to_owned(), read(&[("cap_x", false)])),
-        (OTHER_PACKAGE.to_owned(), read(&[("cap_x", true)])),
-        (UNREAD.to_owned(), None),
-    ]));
-    let judged = judge_root_variables(&pick, RootGoalDocument::Absent, &both);
-    assert_eq!(
-        cause(&judged, "pick"),
-        Some(NotApplyingCause {
-            problem: VariableProblem::IrreversibleByRoot,
-            cause: VariableCause::IrreversibleCapabilities {
-                packages: BTreeMap::from([(PACKAGE.to_owned(), vec!["cap_x".to_owned()])]),
-            },
-        }),
-        "irreversible by the root, beside a package that cannot be read"
-    );
-    let unread_only = IrreversiblePackages::new(BTreeMap::from([
-        (PACKAGE.to_owned(), read(&[])),
-        (UNREAD.to_owned(), None),
-    ]));
-    let judged = judge_root_variables(&pick, RootGoalDocument::Absent, &unread_only);
-    assert_eq!(
-        cause(&judged, "pick"),
-        Some(NotApplyingCause {
-            problem: VariableProblem::PackageUnreadable,
-            cause: VariableCause::UnreadablePackages {
-                packages: vec![UNREAD.to_owned()],
-            },
-        })
-    );
+    let judged = judge_root_variables(&pick, RootGoalDocument::Absent);
+    assert!(cause(&judged, "pick").is_none(), "{judged:?}");
+    assert!(judged.not_applying().is_empty());
 
     let mut differing = declaration();
     differing[0]["default"] = json!("item_a");
@@ -819,10 +758,6 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
         root_package(PACKAGE, declaration()),
         root_package(OTHER_PACKAGE, json!([differing[0].clone()])),
     ];
-    let all_read = IrreversiblePackages::new(BTreeMap::from([
-        (PACKAGE.to_owned(), read(&[])),
-        (OTHER_PACKAGE.to_owned(), read(&[])),
-    ]));
     let goals = parse_standard_pack_goals(
         &serde_json::to_vec(&json!({
             "schema_version": "actingcommand.goals.v2",
@@ -833,7 +768,7 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
         "neutral",
     )
     .unwrap_or_else(|issues| panic!("the goal document reads: {issues:?}"));
-    let judged = judge_root_variables(&packages, RootGoalDocument::Accepted(&goals), &all_read);
+    let judged = judge_root_variables(&packages, RootGoalDocument::Accepted(&goals));
     let names = judged
         .verdicts
         .iter()
@@ -873,7 +808,7 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
     );
     assert_eq!(judged.verdicts[2].packages, [PACKAGE.to_owned()]);
 
-    let judged = judge_root_variables(&packages, RootGoalDocument::Unreadable, &all_read);
+    let judged = judge_root_variables(&packages, RootGoalDocument::Unreadable);
     assert_eq!(
         judged.not_applying(),
         BTreeMap::from([
@@ -887,7 +822,7 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
         cause(&judged, "floor").map(|found| found.cause),
         Some(VariableCause::WordOnly)
     );
-    let judged = judge_root_variables(&packages, RootGoalDocument::Refused, &all_read);
+    let judged = judge_root_variables(&packages, RootGoalDocument::Refused);
     assert_eq!(
         judged.not_applying(),
         BTreeMap::from([("pick".to_owned(), VariableProblem::DeclarationConflict)])
@@ -929,7 +864,7 @@ fn v2_fix2_a_reason_past_the_record_bound_is_recorded_with_hashes_and_kept_whole
         .collect::<Vec<_>>();
     let table = VariableTable::build(&[task(
         VAR,
-        Some(package(PACKAGE, variables(&json!(declared)), nothing())),
+        Some(package(PACKAGE, variables(&json!(declared)))),
     )]);
     let plan = crate::variables::plan_with_entries(&catalog, &facts(Vec::new()), &table, |_| {
         names

@@ -50,6 +50,10 @@
 //! - **The lines of a shared read's name boxes**, 21 (Workflow #463 SEL-GRID G2, register §1.491):
 //!   a task file's `shared_ocr` that declares `lines`, of a layout of either kind, a row of
 //!   [`ROWS`].
+//! - **Variables beside an irreversible capability**, 23 (Workflow #455 G-SLx, register §1.501):
+//!   a pack's `control.json` that declares `variables` beside a `provides` entry marking its
+//!   capability irreversible, two members of one file, so read on its own
+//!   ([`variables_beside_irreversible`]).
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -128,6 +132,13 @@ const ANCHORED_SHARED_READ_REVISION: u64 = 20;
 /// Revision 21: the lines of a shared read's name boxes (Workflow #463 SEL-GRID G2), the member
 /// `lines` of a `shared_ocr` (a row of [`ROWS`]).
 const SHARED_LINES_REVISION: u64 = 21;
+/// Revision 23: a pack's variables beside a capability its own `provides` marks irreversible
+/// (Workflow #455 G-SLx), and the members it reads: `control.json`'s `variables` and `provides`,
+/// and a `provides` entry's `irreversible`.
+const IRREVERSIBLE_VARIABLES_REVISION: u64 = 23;
+const VARIABLES: &str = "variables";
+const PROVIDES: &str = "provides";
+const IRREVERSIBLE: &str = "irreversible";
 const CANDIDATE_LAYOUTS: &str = "candidate_layouts";
 const KIND: &str = "kind";
 const REPEATED_ANCHOR: &str = "repeated_anchor";
@@ -691,7 +702,27 @@ fn document_revision(
     if file == File::Task && anchored_shared_read(&document) {
         revision = revision.max(ANCHORED_SHARED_READ_REVISION);
     }
+    if file == File::Control && variables_beside_irreversible(&document) {
+        revision = revision.max(IRREVERSIBLE_VARIABLES_REVISION);
+    }
     revision
+}
+
+/// Revision 23 (Workflow #455 G-SLx, register §1.501; contracts/component-interfaces.md, the
+/// `package` row 23): the control declaration `control` declares `variables` (the top-level member
+/// present, as row 14 reads it) and its `provides` holds an entry whose `irreversible` is `true`,
+/// a package every Runtime before 23 refuses at admission (`contained_task_control_invalid`,
+/// `reason=variables_on_irreversible json_pointer=/variables`: its reader refused any `variables`
+/// member, whatever it held, beside such a `provides`). A pack that declares no variable, or whose
+/// `provides` marks nothing irreversible, needs nothing here.
+fn variables_beside_irreversible(control: &Value) -> bool {
+    control.get(VARIABLES).is_some()
+        && control
+            .get(PROVIDES)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|provided| provided.get(IRREVERSIBLE).and_then(Value::as_bool) == Some(true))
 }
 
 /// Revision 20 (Workflow #463 SEL-2L, register §1.480; contracts/component-interfaces.md, the

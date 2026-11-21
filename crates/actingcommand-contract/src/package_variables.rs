@@ -11,17 +11,17 @@
 //! [`MAX_PACKAGE_VARIABLES`] entries read with the value-type code of the goal declaration
 //! ([`crate::standard_pack_goals`]'s `Check`, whose four package-governing types this slice moved
 //! here, without `governs` and without `from_table`), names unique across the variables and every
-//! parameter of the package's `provides`, and none at all on a package that provides an
-//! irreversible capability (the line between a parameter and a variable is irreversibility). Every
-//! refusal is one [`VariablesViolation`]: its word and the JSON pointer, in `control.json`, of what
-//! breaks the rule.
+//! parameter of the package's `provides`. Every refusal is one [`VariablesViolation`]: its word
+//! and the JSON pointer, in `control.json`, of what breaks the rule. Workflow #455 G-SLx (register
+//! §1.501): a package that provides an irreversible capability declares variables as any other
+//! package does; until 0.12.77 the reader refused every variable of one
+//! (`variables_on_irreversible`), and the root check below kept a variable of a package that
+//! counted as irreversible by the whole root from applying (`variable_irreversible_by_root`).
 //!
 //! The root check, [`check_root_variables`], holds the variables of a game root's packages to each
 //! other and to its `goals.json`: a name several packages declare is one variable only when their
 //! declarations are byte-identical, no entry of `goals.json` uses it for anything but its
-//! placement, the root declares at most [`MAX_ROOT_VARIABLES`] names, no package that counts as
-//! able to do something irreversible by the whole root declares it (fix round 1: the rule of
-//! [`IrreversiblePackages`], the one the goal check holds a placement to), and a variable a package
+//! placement, the root declares at most [`MAX_ROOT_VARIABLES`] names, and a variable a package
 //! reads as a designated effect's cap is an `integer` from 0 to at most [`MAX_VARIABLE_CAP`]. A
 //! name that breaks one of these is reported and does not apply; the root still runs.
 //!
@@ -42,9 +42,9 @@ use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_catalog::{MAX_PACK_CATALOG_TITLE_BYTES, at};
 use crate::standard_pack_goals::{
     Check, DeclaredGoal, GoalBlock, GoalOption, GoalText, GoalTimeUnit, GoalType, GoalUnit,
-    GoalVariable, IrreversiblePackages, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES,
-    MAX_GOAL_LIST_VALUES, MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS,
-    StandardPackGoals, bounded,
+    GoalVariable, MAX_GOAL_CHOICE_OPTIONS, MAX_GOAL_ENTRIES, MAX_GOAL_LIST_VALUES,
+    MAX_GOAL_NAME_BYTES, MAX_GOAL_ORDERED_COUNT, MIN_GOAL_CHOICE_OPTIONS, StandardPackGoals,
+    bounded,
 };
 use crate::{
     FactScalar, FactValue, MAX_DESIGNATED_EFFECT_REPEATS, ProvidedCapability, remedy_token_valid,
@@ -124,14 +124,16 @@ crate::outcome_vocabulary! {
         /// Fix round 1: the application's entry row of the name holds a value but who set it
         /// (its `set_unix_ms` or its `channel`) could not be read.
         EntryUnreadable => "entry_unreadable",
-        /// A package that declares the variable counts as able to do something irreversible by
-        /// the root (`variable_irreversible_by_root`) because it provides, or its remedies list,
-        /// a capability a package of the root marks irreversible.
+        /// Until 0.12.77: a package that declares the variable counted as able to do something
+        /// irreversible by the root (`variable_irreversible_by_root`) because it provided, or its
+        /// remedies listed, a capability a package of the root marks irreversible. Given by no
+        /// build since Workflow #455 G-SLx (register §1.501); kept for the records earlier builds
+        /// wrote.
         IrreversibleByRoot => "irreversible_by_root",
-        /// Fix round 1: a package of the game root could not be read, so the root check counts
-        /// every package of the root as able to do something irreversible (its
-        /// `variable_irreversible_by_root`, the safe side): no package that declares the variable
-        /// provides, or lists, a capability marked irreversible.
+        /// Fix round 1, until 0.12.77: a package of the game root could not be read, so the root
+        /// check counted every package of the root as able to do something irreversible (its
+        /// `variable_irreversible_by_root`, the safe side). Given by no build since Workflow #455
+        /// G-SLx (register §1.501); kept for the records earlier builds wrote.
         PackageUnreadable => "package_unreadable",
         /// Fix round 1: the game root's `goals.json` could not be read, so which names it takes
         /// is not known.
@@ -490,8 +492,6 @@ pub enum VariablesProblem {
     VariablesInvalid,
     /// An entry's name is an earlier variable's or a parameter's of the package's `provides`.
     VariableNameTaken,
-    /// The package provides an irreversible capability, so it declares no variable.
-    VariablesOnIrreversible,
 }
 
 impl VariablesProblem {
@@ -499,7 +499,6 @@ impl VariablesProblem {
         match self {
             Self::VariablesInvalid => "variables_invalid",
             Self::VariableNameTaken => "variable_name_taken",
-            Self::VariablesOnIrreversible => "variables_on_irreversible",
         }
     }
 }
@@ -523,9 +522,10 @@ impl VariablesViolation {
 
 /// The member `variables` (`value`) of a control declaration whose `provides` is `provides`
 /// (already read; empty when it declares none), in declaration order. The first rule broken, in
-/// this order, refuses it:
+/// this order, refuses it (Workflow #455 G-SLx, register §1.501: whether a capability of
+/// `provides` is irreversible refuses nothing since; until 0.12.77 it was the first rule,
+/// `variables_on_irreversible` at `/variables`):
 ///
-/// - `variables_on_irreversible`, at `/variables`: a capability of `provides` is irreversible;
 /// - `variables_invalid`: not a list of 1 to [`MAX_PACKAGE_VARIABLES`] entries (at
 ///   `/variables`); then, entry by entry, the first problem of the goal declaration's value-type
 ///   rules at its pointer: an entry that is no object, a member that is unknown, missing or not of
@@ -539,12 +539,6 @@ pub fn parse_package_variables(
     value: &Value,
     provides: &[ProvidedCapability],
 ) -> Result<Vec<PackageVariable>, VariablesViolation> {
-    if provides.iter().any(ProvidedCapability::irreversible) {
-        return Err(VariablesViolation::new(
-            VariablesProblem::VariablesOnIrreversible,
-            VARIABLES_POINTER,
-        ));
-    }
     let mut taken = provides
         .iter()
         .flat_map(ProvidedCapability::parameters)
@@ -944,25 +938,21 @@ pub struct AppliedVariable {
 }
 
 /// What the root check found: the variables that apply, each once in the order the root first
-/// declares it; the problems, name by name in that order, each declaration in registry order;
-/// and (fix round 1) the variables that do not apply because a package that counts as able to do
-/// something irreversible by the whole root declares them, each once in that order.
+/// declares it; and the problems, name by name in that order, each declaration in registry order.
+/// Workflow #455 G-SLx (register §1.501): until 0.12.77 also the variables that did not apply
+/// because a package that counted as irreversible by the whole root declared them
+/// (`not_applying`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RootVariables {
     pub applied: Vec<AppliedVariable>,
     pub issues: Vec<RootVariableIssue>,
-    pub not_applying: Vec<NotApplyingVariable>,
 }
 
 impl RootVariables {
     /// The provenance listing of `standard-pack check`: each variable that applies by who wrote
-    /// its default, in the order of [`Self::applied`], and (fix round 1) each variable of
-    /// [`Self::not_applying`] with the word that says why it does not apply.
+    /// its default, in the order of [`Self::applied`].
     pub fn provenance(&self) -> VariableOrigins {
-        let mut origins = VariableOrigins {
-            not_applying: self.not_applying.clone(),
-            ..VariableOrigins::default()
-        };
+        let mut origins = VariableOrigins::default();
         for variable in &self.applied {
             match variable.default_origin {
                 DefaultOrigin::Pack => origins.pack.push(variable.name.clone()),
@@ -974,33 +964,14 @@ impl RootVariables {
 }
 
 /// The names of a game root's variables by who wrote their default, each list in the root's
-/// order: no `default_origin` (`pack`), or `"model"` (`model`); and (fix round 1) under
-/// `not_applying`, absent when empty, each variable that a package which counts as able to do
-/// something irreversible by the whole root declares, which does not apply although its
-/// declarations agree.
+/// order: no `default_origin` (`pack`), or `"model"` (`model`). Workflow #455 G-SLx (register
+/// §1.501): until 0.12.77 it also listed under `not_applying`, absent when empty, each variable a
+/// package that counted as irreversible by the whole root declared; no variable is listed so
+/// since, and the member went with the rule.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct VariableOrigins {
     pub pack: Vec<String>,
     pub model: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub not_applying: Vec<NotApplyingVariable>,
-}
-
-/// Fix round 1: a variable of the provenance listing that does not apply, by its name, and the
-/// word of the root check's warning that says why (`variable_irreversible_by_root`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NotApplyingVariable {
-    pub name: String,
-    #[serde(serialize_with = "problem_word")]
-    pub standard_pack_problem: StandardPackProblem,
-}
-
-/// A problem as its word.
-fn problem_word<S: serde::Serializer>(
-    problem: &StandardPackProblem,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(problem.as_str())
 }
 
 /// The root check of the variables `packages` declare (the root's packages in registry order),
@@ -1012,20 +983,18 @@ fn problem_word<S: serde::Serializer>(
 /// - `variable_conflict`: the declarations of the name are not byte-identical (compared as written,
 ///   member order included, in compact JSON), at each declaration; or an entry of `goals.json`
 ///   uses the name, at each declaration's `name`;
-/// - `variable_irreversible_by_root` (fix round 1): a package that declares it counts as able to
-///   do something irreversible by the whole root, as `irreversible` judges it
-///   ([`IrreversiblePackages::counts_irreversible`], the one copy of the rule the goal check holds
-///   a placement to; a package it was not told of counts), at each such package's declaration;
-///   the name is listed in [`RootVariables::not_applying`];
 /// - `variable_cap_range`: a package that declares it reads a designated effect's cap from its
 ///   fact key ([`PackageVariable::fact_key`]) and the variable is no `integer` from 0 to at most
 ///   [`MAX_VARIABLE_CAP`], at that package's declaration's `type` (fix round 1: another type; a
 ///   cap is read from an `integer` only), `min` (fix round 1: below 0) or `max` (above
 ///   [`MAX_VARIABLE_CAP`]), the first of these that holds.
+///
+/// Workflow #455 G-SLx (register §1.501): `variable_irreversible_by_root`, which until 0.12.77 a
+/// variable got that a package which counted as irreversible by the whole root declared, is given
+/// here no more; such a variable applies as any other.
 pub fn check_root_variables(
     packages: &[RootPackageVariables],
     goal_names: &BTreeSet<&str>,
-    irreversible: &IrreversiblePackages,
 ) -> RootVariables {
     let root = RootDeclarations::of(packages);
     let mut checked = RootVariables::default();
@@ -1037,15 +1006,8 @@ pub fn check_root_variables(
             continue;
         };
         let first = variable_at(packages, first_at);
-        let Some(refusal) = refusal_of(
-            packages,
-            position,
-            name,
-            declarations,
-            first,
-            goal_names,
-            irreversible,
-        ) else {
+        let Some(refusal) = refusal_of(packages, position, name, declarations, first, goal_names)
+        else {
             checked.applied.push(AppliedVariable {
                 name: (*name).to_owned(),
                 packages: declarations
@@ -1056,13 +1018,6 @@ pub fn check_root_variables(
             });
             continue;
         };
-        // Fix round 1: the provenance listing marks such a variable as not applying, with why.
-        if refusal.problem == StandardPackProblem::VariableIrreversibleByRoot {
-            checked.not_applying.push(NotApplyingVariable {
-                name: (*name).to_owned(),
-                standard_pack_problem: refusal.problem,
-            });
-        }
         for (package, variable) in refusal.declarations {
             let at_variable = format!("{VARIABLES_POINTER}/{variable}");
             let pointer = match refusal.member {
@@ -1083,21 +1038,14 @@ pub fn check_root_variables(
 /// packages) keeps from applying, with the word a run's record and `goal_value_not_applied` say
 /// it with: `variable_out_of_limits` is `name_out_of_limits`, `variable_conflict` at a
 /// declaration `declaration_conflict` and at a name (a `goals.json` entry's) `goal_name_conflict`,
-/// `variable_irreversible_by_root` `irreversible_by_root` and `variable_cap_range` `cap_range`.
-/// The check reports one problem per name, so a name has one word. It reads the check's answer
-/// only: the rules stay [`check_root_variables`]'s.
-///
-/// Fix round 1 (one word, one cause): `variable_irreversible_by_root` arises in two situations
-/// that `irreversible` (the one the check was given) tells apart. A declaring package that
-/// provides, or whose remedies list, a capability a package of the root marks irreversible
-/// ([`IrreversiblePackages::package`] `Some(true)`) is `irreversible_by_root`; otherwise the check
-/// counted the packages irreversible because a package of the root could not be read
-/// ([`IrreversiblePackages::unreadable`]), or because a declaring package is none it was told of:
-/// `package_unreadable`.
+/// and `variable_cap_range` `cap_range`. The check reports one problem per name, so a name has
+/// one word. It reads the check's answer only: the rules stay [`check_root_variables`]'s.
+/// Workflow #455 G-SLx (register §1.501): the words `irreversible_by_root` and
+/// `package_unreadable`, which until 0.12.77 told the two causes of `variable_irreversible_by_root`
+/// apart, are given here no more.
 pub fn variables_not_applying(
     packages: &[RootPackageVariables],
     checked: &RootVariables,
-    irreversible: &IrreversiblePackages,
 ) -> BTreeMap<String, VariableProblem> {
     let mut not_applying = BTreeMap::new();
     for issue in &checked.issues {
@@ -1132,24 +1080,10 @@ pub fn variables_not_applying(
                 VariableProblem::GoalNameConflict
             }
             (StandardPackProblem::VariableConflict, _) => VariableProblem::DeclarationConflict,
-            (StandardPackProblem::VariableIrreversibleByRoot, _) => {
-                if irreversible.package(&issue.package_id) == Some(true) {
-                    VariableProblem::IrreversibleByRoot
-                } else {
-                    VariableProblem::PackageUnreadable
-                }
-            }
             (StandardPackProblem::VariableCapRange, _) => VariableProblem::CapRange,
             _ => continue,
         };
-        // Fix round 1: one declaring package that can do something irreversible by itself is
-        // the name's cause, whatever an unreadable package adds.
-        let kept = not_applying.entry(variable.name.clone()).or_insert(word);
-        if *kept == VariableProblem::PackageUnreadable
-            && word == VariableProblem::IrreversibleByRoot
-        {
-            *kept = word;
-        }
+        not_applying.entry(variable.name.clone()).or_insert(word);
     }
     not_applying
 }
@@ -1172,8 +1106,8 @@ fn variable_at(
 }
 
 /// The first rule of [`check_root_variables`] the name `name`, the root's `position`th
-/// (from 0), breaks with its `declarations`, the first of them `first`, against `goal_names` and
-/// the root's judgement of irreversibility `irreversible`; `None` when it applies.
+/// (from 0), breaks with its `declarations`, the first of them `first`, against `goal_names`;
+/// `None` when it applies.
 fn refusal_of(
     packages: &[RootPackageVariables],
     position: usize,
@@ -1181,7 +1115,6 @@ fn refusal_of(
     declarations: &[(usize, usize)],
     first: &PackageVariable,
     goal_names: &BTreeSet<&str>,
-    irreversible: &IrreversiblePackages,
 ) -> Option<Refusal> {
     let every = |problem, member| {
         Some(Refusal {
@@ -1202,21 +1135,6 @@ fn refusal_of(
     }
     if goal_names.contains(name) {
         return every(StandardPackProblem::VariableConflict, Some("name"));
-    }
-    // Fix round 1: the whole root's judgement, the one copy the goal check holds a placement to.
-    // Admission keeps variables off a package that marks an irreversible capability itself; a
-    // package that provides one unmarked, or whose remedies list one, is judged here.
-    let on_irreversible = declarations
-        .iter()
-        .copied()
-        .filter(|(package, _)| irreversible.counts_irreversible(&packages[*package].package_id))
-        .collect::<Vec<_>>();
-    if !on_irreversible.is_empty() {
-        return Some(Refusal {
-            problem: StandardPackProblem::VariableIrreversibleByRoot,
-            member: None,
-            declarations: on_irreversible,
-        });
     }
     // A designated effect's cap reads a whole number from 0 to 1000 before the run's first step,
     // from an `integer` variable only (fix round 1: its `min` and any other type too).
@@ -1275,15 +1193,6 @@ pub enum VariableCause {
     /// `goal_name_conflict`: the type of the entry of the accepted `goals.json` that takes the
     /// name (the entry is named like the variable).
     GoalEntry { goal_type: Option<GoalType> },
-    /// `irreversible_by_root`: per declaring package that can do something irreversible by
-    /// itself, the capabilities it provides or its remedies list that a package of the root marks
-    /// irreversible.
-    IrreversibleCapabilities {
-        packages: BTreeMap<String, Vec<String>>,
-    },
-    /// `package_unreadable`: the packages of the root whose declaration could not be read, and a
-    /// declaring package the judgement was not told of.
-    UnreadablePackages { packages: Vec<String> },
     /// `name_out_of_limits`: the name's place in the root's order, from 1.
     NameOutOfLimits { position: usize },
     /// `cap_range`: the declaring packages that read the variable as a designated effect's cap,
@@ -1293,7 +1202,9 @@ pub enum VariableCause {
         member: &'static str,
     },
     /// No detail beyond the word: `goals_unreadable` (the reader that could not read the file
-    /// keeps its failure).
+    /// keeps its failure). Workflow #455 G-SLx (register §1.501): the details of
+    /// `irreversible_by_root` (the capabilities) and of `package_unreadable` (the packages) went
+    /// with those words, which no judgement gives since.
     WordOnly,
 }
 
@@ -1354,13 +1265,15 @@ impl RootVariablesJudged {
 /// scheduler workbench give. The goal document counts as [`RootGoalDocument`] says: an accepted
 /// file's entries take the names they use for anything but a placement, a refused or absent file
 /// takes none, and an unreadable one keeps every name of the root from applying
-/// (`goals_unreadable`) that no other rule already keeps. Then [`check_root_variables`] with
-/// `irreversible` and [`variables_not_applying`] give each name its word, and each word its
-/// detail ([`VariableCause`]).
+/// (`goals_unreadable`) that no other rule already keeps. Then [`check_root_variables`] and
+/// [`variables_not_applying`] give each name its word, and each word its detail
+/// ([`VariableCause`]). Workflow #455 G-SLx (register §1.501): until 0.12.77 it also took the
+/// root's judgement of irreversibility, which kept a variable of a package that counted as
+/// irreversible by the whole root, or of a root one of whose packages could not be read, from
+/// applying; it takes none since.
 pub fn judge_root_variables(
     packages: &[RootPackageVariables],
     goals: RootGoalDocument<'_>,
-    irreversible: &IrreversiblePackages,
 ) -> RootVariablesJudged {
     let goal_names = match goals {
         RootGoalDocument::Accepted(accepted) => accepted.names_besides_placements(),
@@ -1368,8 +1281,8 @@ pub fn judge_root_variables(
             BTreeSet::new()
         }
     };
-    let checked = check_root_variables(packages, &goal_names, irreversible);
-    let words = variables_not_applying(packages, &checked, irreversible);
+    let checked = check_root_variables(packages, &goal_names);
+    let words = variables_not_applying(packages, &checked);
     let root = RootDeclarations::of(packages);
     let mut verdicts = Vec::with_capacity(root.order.len());
     for (position, name) in root.order.iter().enumerate() {
@@ -1394,15 +1307,7 @@ pub fn judge_root_variables(
             declaration: first.clone(),
             not_applying: word.map(|problem| NotApplyingCause {
                 problem,
-                cause: cause_of(
-                    problem,
-                    packages,
-                    position,
-                    declarations,
-                    first,
-                    goals,
-                    irreversible,
-                ),
+                cause: cause_of(problem, packages, position, declarations, first, goals),
             }),
         });
     }
@@ -1418,7 +1323,6 @@ fn cause_of(
     declarations: &[(usize, usize)],
     first: &PackageVariable,
     goals: RootGoalDocument<'_>,
-    irreversible: &IrreversiblePackages,
 ) -> VariableCause {
     let id_of = |(package, _): &(usize, usize)| packages[*package].package_id.clone();
     match problem {
@@ -1445,33 +1349,6 @@ fn cause_of(
                 | RootGoalDocument::Unreadable => None,
             },
         },
-        VariableProblem::IrreversibleByRoot => VariableCause::IrreversibleCapabilities {
-            packages: declarations
-                .iter()
-                .filter_map(|(package, _)| {
-                    let package_id = &packages[*package].package_id;
-                    irreversible
-                        .irreversible_capabilities(package_id)
-                        .filter(|reached| !reached.is_empty())
-                        .map(|reached| (package_id.clone(), reached.iter().cloned().collect()))
-                })
-                .collect(),
-        },
-        VariableProblem::PackageUnreadable => VariableCause::UnreadablePackages {
-            packages: irreversible
-                .unreadable()
-                .iter()
-                .cloned()
-                .chain(
-                    declarations
-                        .iter()
-                        .map(id_of)
-                        .filter(|package_id| irreversible.package(package_id).is_none()),
-                )
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-        },
         VariableProblem::NameOutOfLimits => VariableCause::NameOutOfLimits {
             position: position + 1,
         },
@@ -1487,6 +1364,8 @@ fn cause_of(
             }
         }
         VariableProblem::GoalsUnreadable
+        | VariableProblem::IrreversibleByRoot
+        | VariableProblem::PackageUnreadable
         | VariableProblem::NotAnOption
         | VariableProblem::OutOfRange
         | VariableProblem::OffStep

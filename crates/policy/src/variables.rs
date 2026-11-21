@@ -8,16 +8,16 @@
 //!   standard pack the host's scheduler workbench builds it ([`VariableTable::of_roots`]) from the
 //!   judgement of each game root it read ([`RootVariableJudgement`]): the contract crate's
 //!   [`judge_root_variables`] over every package of the registry, held ones included, against the
-//!   root's `goals.json` as its reader read it, with [`IrreversiblePackages`] of what every
-//!   package provides and what its remedies list; it is built again at each check of the
+//!   root's `goals.json` as its reader read it (Workflow #455 G-SLx, register §1.501: no longer
+//!   with the root's judgement of irreversibility); it is built again at each check of the
 //!   workbench. Fix round 2: a game whose root no check judges now (its root failed its check or
 //!   its composition is refused) reads every variable at its default with `root_unchecked`, and a
 //!   dispatched package the workbench could not read is named ([`VariablePlan::unread`]). Without
 //!   a composed standard pack the host's remedy table builds it once per table
 //!   ([`VariableTable::build`]), as before: the catalog's bound packages, with each game's root
 //!   judged once over the packages the table read for the tasks of that game's instances (a
-//!   package the table could not read counts as unreadable). Each variable's declaration sha256 is
-//!   computed when the table is built.
+//!   package the table could not read declares nothing the judgement reads). Each variable's
+//!   declaration sha256 is computed when the table is built.
 //! - **The resolution** ([`plan_variable_values`]): per (task, instance) pair whose package
 //!   declares variables, per variable: the application's entry row of the variable's name in its
 //!   `session.resource_targets` v3 record, as the evaluation's facts hold it, judged at use by
@@ -39,9 +39,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::{ENVELOPE_BODY_BUDGET, Outcome, Record};
 use actingcommand_contract::{
-    DeclaredCapabilities, IrreversiblePackages, MAX_VARIABLE_VALUE_JSON_BYTES, PackageVariable,
-    RootGoalDocument, RootPackageVariables, RootVariableVerdict, RootVariablesJudged,
-    RuntimeChannel, VariableProblem, VariableSource, judge_root_variables, variable_value_json,
+    MAX_VARIABLE_VALUE_JSON_BYTES, PackageVariable, RootGoalDocument, RootPackageVariables,
+    RootVariableVerdict, RootVariablesJudged, RuntimeChannel, VariableProblem, VariableSource,
+    judge_root_variables, variable_value_json,
 };
 use sha2::{Digest, Sha256};
 
@@ -74,8 +74,6 @@ pub struct VariablePackage {
     pub variables: Vec<PackageVariable>,
     /// The fact keys its designated effects read their caps from.
     pub cap_fact_keys: Vec<String>,
-    /// What it provides and what its remedies list, for the rule of irreversibility.
-    pub capabilities: DeclaredCapabilities,
 }
 
 /// One variable as the table holds it: its declaration and (fix round 1) that declaration's
@@ -235,11 +233,10 @@ impl VariableTable {
     /// (in catalog order): per task whose package declares variables, its package and variables;
     /// per game any task covers, the judgement of the packages read for that game's tasks (each
     /// package once, in catalog order), with no `goals.json` (fix round 2: the contract crate's
-    /// [`judge_root_variables`] with [`RootGoalDocument::Absent`]) and with
-    /// [`IrreversiblePackages`] of every such package, a task whose package could not be read
-    /// counting as an unreadable package of the game: one word per name that does not apply (fix
-    /// round 1: `package_unreadable` where only an unreadable package makes the root count a
-    /// package irreversible).
+    /// [`judge_root_variables`] with [`RootGoalDocument::Absent`]): one word per name that does
+    /// not apply. A task whose package could not be read adds nothing to its game's judgement
+    /// (Workflow #455 G-SLx, register §1.501: until 0.12.77 it counted as an unreadable package of
+    /// the game, which kept every name of the game from applying, `package_unreadable`).
     pub fn build(tasks: &[VariableTableTask]) -> Self {
         let games = tasks
             .iter()
@@ -248,34 +245,23 @@ impl VariableTable {
         let mut judged = BTreeMap::new();
         for game in games {
             let mut root = Vec::<RootPackageVariables>::new();
-            let mut declared = BTreeMap::<String, Option<DeclaredCapabilities>>::new();
+            let mut read = BTreeSet::<&str>::new();
             for task in tasks.iter().filter(|task| task.games.contains(game)) {
-                match &task.package {
-                    Some(package) => {
-                        if declared.contains_key(&package.package_id) {
-                            continue;
-                        }
-                        declared.insert(
-                            package.package_id.clone(),
-                            Some(package.capabilities.clone()),
-                        );
-                        root.push(RootPackageVariables {
-                            package_id: package.package_id.clone(),
-                            variables: package.variables.clone(),
-                            cap_fact_keys: package.cap_fact_keys.clone(),
-                        });
-                    }
-                    // A package the table could not read leaves every capability of the game
-                    // unknown: the safe side of the one rule.
-                    None => {
-                        declared.insert(format!("unread:{}", task.task_id), None);
-                    }
+                let Some(package) = &task.package else {
+                    continue;
+                };
+                if !read.insert(package.package_id.as_str()) {
+                    continue;
                 }
+                root.push(RootPackageVariables {
+                    package_id: package.package_id.clone(),
+                    variables: package.variables.clone(),
+                    cap_fact_keys: package.cap_fact_keys.clone(),
+                });
             }
-            let irreversible = IrreversiblePackages::new(declared);
             judged.insert(
                 game.to_owned(),
-                judge_root_variables(&root, RootGoalDocument::Absent, &irreversible).not_applying(),
+                judge_root_variables(&root, RootGoalDocument::Absent).not_applying(),
             );
         }
         let tasks = tasks
