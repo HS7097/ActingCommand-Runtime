@@ -598,7 +598,8 @@ struct RootDeclarations {
     /// makes).
     goals: RootGoals,
     /// Workflow #463 V2 fix round 1: the root's variables as judged over the whole root (every
-    /// package of the registry, `goals.json`, the rule of irreversibility).
+    /// package of the registry, `goals.json`; until Workflow #455 G-SLx the rule of
+    /// irreversibility too).
     variables: RootVariableJudgement,
 }
 
@@ -626,7 +627,8 @@ struct PackageMarks {
 /// over every package of the registry, held ones included, with the goal document as the reader
 /// read it (an accepted file's entries take the names they use for anything but a placement, a
 /// refused one takes none, one that could not be read keeps every other name of the root from
-/// applying, `goals_unreadable`) and the rule of irreversibility built here. Fix round 2: each
+/// applying, `goals_unreadable`); Workflow #455 G-SLx (register §1.501): no longer with the rule
+/// of irreversibility built here, which serves the composer alone since. Fix round 2: each
 /// package that could not be read is kept with the state of its files ([`files_state`]).
 fn read_declarations(directory: &Path, game: &str, root: &StandardPackRoot) -> RootDeclarations {
     let mut declared = BTreeMap::new();
@@ -684,7 +686,7 @@ fn read_declarations(directory: &Path, game: &str, root: &StandardPackRoot) -> R
     }
     let irreversible = IrreversiblePackages::new(declared);
     let goals = RootGoals::read(directory, game);
-    let judged = judge_root_variables(&variables, goals.document(), &irreversible);
+    let judged = judge_root_variables(&variables, goals.document());
     let judgement = RootVariableJudgement::new(&variables, judged, unreadable);
     RootDeclarations {
         irreversible,

@@ -1190,7 +1190,7 @@ equality only; it never pairs a need with a capability or orders capabilities.
 | `parameters[].name` | a token `^[a-z][a-z0-9_]{0,63}$`, unique across the package's whole `provides` | `reason=provides_parameters_invalid` |
 | `parameters[].options` | 1 to 16 unique tokens | `reason=provides_parameters_invalid` |
 | `parameters[].default` | one of `options` (required) | `reason=provides_parameters_invalid` |
-| `variables` | optional, 1 to 16 entries ([package-variables.md](package-variables.md)); none when the package provides an irreversible capability | `reason=variables_invalid`, `reason=variables_on_irreversible` |
+| `variables` | optional, 1 to 16 entries ([package-variables.md](package-variables.md)); beside an irreversible capability too since Workflow #455 G-SLx (Runtime 0.12.78, `package` 23; until 0.12.77 none when the package provided one, `reason=variables_on_irreversible`) | `reason=variables_invalid`, `reason=variable_name_taken` |
 | `variables[].name` | a token `^[a-z][a-z0-9_]{0,63}$`, unique across the package's `variables` and every `provides[].parameters[].name` | `reason=variable_name_taken` |
 
 Workflow #463 V1: kernel admission's refusal of `variables` also carries the JSON pointer of what

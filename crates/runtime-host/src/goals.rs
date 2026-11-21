@@ -928,14 +928,6 @@ fn goal_cause(cause: &VariableCause) -> Option<GoalVariableCause> {
         VariableCause::GoalEntry { goal_type } => GoalVariableCause::GoalEntry {
             goal_type: goal_type.map(|goal_type| goal_type.as_str().to_owned()),
         },
-        VariableCause::IrreversibleCapabilities { packages } => {
-            GoalVariableCause::IrreversibleCapabilities {
-                packages: packages.clone(),
-            }
-        }
-        VariableCause::UnreadablePackages { packages } => GoalVariableCause::UnreadablePackages {
-            packages: packages.clone(),
-        },
         VariableCause::NameOutOfLimits { position } => GoalVariableCause::NameOutOfLimits {
             position: u64::try_from(*position).unwrap_or(u64::MAX),
         },

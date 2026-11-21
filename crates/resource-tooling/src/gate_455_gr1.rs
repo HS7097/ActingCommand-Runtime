@@ -37,6 +37,16 @@
 // (`rd-1114/brief-1723-fix1.md`): the refusal of the irreversible package's variable names
 // `variables_on_irreversible`, and the root check reports the unmarked provider's variable
 // `variable_irreversible_by_root`.
+// Workflow #455 G-SLx (0.12.78; register §1.501; coordinator work order
+// `rd-1121/brief-455-locks.md`, rulings 1 and 2) lifts that safety line: a package that provides
+// an irreversible capability may declare variables, and a goal entry may govern it. The four
+// tests that pinned the line left the gate map for four `gslx_` tests on the same fixtures: the
+// package that marks the capability declares a variable and the root and the bundle pass; a
+// `tier` over its rule, a placement of a variable of the package that provides it unmarked (which
+// applies) and a `tier` over the head of a chain it follows are accepted by the check and the
+// bundle; and on each such root every other refusal of the check is the one before. A fifth
+// shows that a root none of whose packages marks a capability irreversible answers as before.
+// The first test lost its last fixture, `goal_governs_irreversible`, which nothing gives now.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, variable and text is a
 // placeholder.
 
@@ -45,7 +55,7 @@ use crate::{
     StandardPackRootFiles, check_standard_pack_root, package_bundle,
 };
 use actingcommand_contract::outcome::Outcome;
-use actingcommand_contract::{LabError, LabResult, StandardPackProblem, VariablesProblem};
+use actingcommand_contract::{LabError, LabResult};
 use actingcommand_policy::BENEFIT_FIXED_VALUE_SUBSYSTEM;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -428,16 +438,11 @@ fn goals_with(change: impl Fn(&mut Value)) -> Value {
     value
 }
 
-// Each refusal of the check it can still give (Workflow #463 V1), one fixture each (fix round 1:
-// `goal_out_of_limits` among them; V1: `goal_variable_unknown`): the valid file changed at one
-// entry is refused with exactly one `standard_pack_root_invalid` warning naming `goals.json`, its
-// word and its pointer, and the root is checked, `goals.json` among its root files.
-// `goal_governs_irreversible` needs the root where the package of the irreversible capability
-// runs a rule; it is the last fixture.
-#[test]
-fn gr1_check_reports_each_refusal_at_its_pointer() {
-    let (_temp, game_root) = installed();
-    let cases: [(&str, Value, &str); 12] = [
+/// Each refusal of the check it can still give (Workflow #463 V1), one fixture each (fix round 1:
+/// `goal_out_of_limits` among them; V1: `goal_variable_unknown`): the valid file changed at one
+/// entry, with the word and the pointer of its one problem.
+fn refusal_cases() -> [(&'static str, Value, &'static str); 12] {
+    [
         (
             "goal_name_duplicate",
             goals_with(|value| value["entries"][1]["name"] = json!("stock")),
@@ -501,10 +506,16 @@ fn gr1_check_reports_each_refusal_at_its_pointer() {
             goals_with(|value| value["entries"][0]["title"]["en"] = json!("a".repeat(129))),
             "/entries/0/title/en",
         ),
-    ];
-    for (problem, file, pointer) in cases {
+    ]
+}
+
+/// Each of [`refusal_cases`] written as the game root's `goals.json` is refused with exactly one
+/// `standard_pack_root_invalid` warning naming `goals.json`, its word and its pointer, and the
+/// root is checked, `goals.json` among its root files. The last case's file is left in place.
+fn assert_each_refusal(game_root: &Path) {
+    for (problem, file, pointer) in refusal_cases() {
         write_json(&game_root.join("goals.json"), &file);
-        let checked = check(&game_root);
+        let checked = check(game_root);
         assert_eq!(checked.status, "checked", "{problem}");
         assert_eq!(
             checked.root_files,
@@ -513,26 +524,21 @@ fn gr1_check_reports_each_refusal_at_its_pointer() {
         );
         assert_eq!(
             root_invalid_warnings(&checked.warnings),
-            [goal_warning(&game_root, problem, pointer)],
+            [goal_warning(game_root, problem, pointer)],
             "{problem}"
         );
     }
+}
 
-    let (_running, running_root) = installed_with(packs(), &schedule_running_discard());
-    write_json(
-        &running_root.join("goals.json"),
-        &goals_with(|value| value["entries"][7]["governs"]["rules"] = json!([DISCARD])),
-    );
-    let checked = check(&running_root);
-    assert_eq!(checked.status, "checked");
-    assert_eq!(
-        root_invalid_warnings(&checked.warnings),
-        [goal_warning(
-            &running_root,
-            "goal_governs_irreversible",
-            "/entries/7/governs/rules/0"
-        )]
-    );
+// Each refusal of the check it can still give, one fixture each (`refusal_cases`): exactly one
+// warning at its pointer, the root checked. Workflow #455 G-SLx: the fixture that ended this
+// test, a `tier` over the rule of the package of the irreversible capability
+// (`goal_governs_irreversible`), is one the check accepts now
+// (`gslx_a_tier_over_a_rule_of_an_irreversible_package_is_accepted`).
+#[test]
+fn gr1_check_reports_each_refusal_at_its_pointer() {
+    let (_temp, game_root) = installed();
+    assert_each_refusal(&game_root);
 }
 
 // A root with a valid file answers as the same root without it in every member but `root_files`,
@@ -703,56 +709,70 @@ fn files_below(directory: &Path) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
-// The safety line kept out at the check and the bundle (Workflow #463 V1: an entry governs no
-// package any more; a placement reaches the packages that declare its variable): a package whose
-// control declaration provides an irreversible capability declares no variable, so a root, and a
-// bundle, in which it declares one is refused, naming that package and (fix round 1) the word
-// `variables_on_irreversible`, for `standard-pack check` and for `package bundle --goals` (`--out`
-// not written); the same root and bundle, in which only the packages whose capabilities are not
-// irreversible declare variables, pass with the valid file.
-#[test]
-fn gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle() {
-    let declaring = || {
-        let mut packs = packs();
-        packs[2].variables = Some(json!([
-            {"name": "discarded", "type": "switch", "title": {"en": "Discard"}, "default": false}
-        ]));
-        packs
-    };
-    let (_temp, game_root) = installed();
-    write_json(&game_root.join("goals.json"), &goals());
-    let accepted = check(&game_root);
-    assert!(
-        root_invalid_warnings(&accepted.warnings).is_empty(),
-        "{:?}",
-        accepted.warnings
-    );
-    let (_declaring, declaring_root) = installed_with(declaring(), &schedule());
-    write_json(&declaring_root.join("goals.json"), &goals());
-    let error = check_standard_pack_root(StandardPackCheckRequest {
-        root: declaring_root.clone(),
+/// [`goals`] with a placement of the variable `discarded`, which [`declaring_discard`]'s package
+/// of the irreversible capability declares, after its other entries.
+fn goals_placing_discarded() -> Value {
+    goals_with(|value| {
+        value["entries"]
+            .as_array_mut()
+            .expect("the entries")
+            .push(json!({"name": "discarded", "type": "variable", "block": "switch"}));
     })
-    .expect_err("a package of the irreversible capability that declares a variable");
-    assert_eq!(error.code, "package_invalid", "{}", error.message);
-    // Workflow #463 V1 fix round 1: the refusal names its rule, not only the package.
-    let word = VariablesProblem::VariablesOnIrreversible.as_str();
-    assert!(error.message.contains(DISCARD), "{}", error.message);
-    assert!(error.message.contains(word), "{}", error.message);
+}
 
-    let (temp, request) = bundle_inputs();
-    let (_, accepted) = bundle_with_goals(&temp, &request, &goals());
-    accepted
-        .unwrap_or_else(|error| panic!("reversible packages: {}: {}", error.code, error.message));
-    let (temp, request) = bundle_inputs_with(declaring(), &schedule());
-    let (_, refused) = bundle_with_goals(&temp, &request, &goals());
-    let error = refused.expect_err("the package of the irreversible capability refuses the bundle");
-    assert!(
-        error.message.contains(word),
-        "{}: {}",
-        error.code,
-        error.message
+/// Workflow #455 G-SLx: [`packs`] with [`DISCARD`], whose control marks its capability
+/// irreversible, declaring the switch `discarded`.
+fn declaring_discard() -> [Pack; 4] {
+    let mut packs = packs();
+    packs[2].variables = Some(json!([
+        {"name": "discarded", "type": "switch", "title": {"en": "Discard"}, "default": false}
+    ]));
+    packs
+}
+
+/// `package bundle --goals` of `goals` on the packages `packs` and the schedule `schedule`, which
+/// must lay it beside `bundle.json` byte for byte (Workflow #455 G-SLx, where G-R1 refused such a
+/// bundle `goal_governs_irreversible`).
+fn assert_bundle_lays(packs: [Pack; 4], schedule: &Value, goals: &Value) {
+    let (temp, request) = bundle_inputs_with(packs, schedule);
+    let (source, laid) = bundle_with_goals(&temp, &request, goals);
+    let laid = laid.unwrap_or_else(|error| panic!("the bundle: {}: {}", error.code, error.message));
+    assert_eq!(laid.status, "written");
+    assert_eq!(
+        fs::read(request.out.join("goals.json")).expect("the laid goals.json"),
+        fs::read(&source).expect("the source goals.json")
     );
-    assert!(!request.out.exists(), "--out was written");
+}
+
+/// The `standard_pack_root_invalid` warnings `check` gives of `game_root` with `goals` as its
+/// `goals.json`, and its variable listing.
+fn checked_with(game_root: &Path, goals: &Value) -> (Vec<Value>, Value) {
+    write_json(&game_root.join("goals.json"), goals);
+    let checked = check(game_root);
+    assert_eq!(checked.status, "checked");
+    (
+        root_invalid_warnings(&checked.warnings),
+        serde_json::to_value(&checked.variable_provenance).expect("the listing"),
+    )
+}
+
+// Workflow #455 G-SLx (ruling 1, where G-R1 and V1 kept the line here): a package whose control
+// declaration marks its capability irreversible declares a variable, `discarded`, which the valid
+// file places. `standard-pack check` reads the root and the file without a warning (no
+// `variables_on_irreversible`, no `goal_governs_irreversible`), the variable applies and is
+// listed by its default's origin; every other refusal of the check on that root is the one
+// before; `package bundle --goals` lays the file.
+#[test]
+fn gslx_a_package_that_marks_its_capability_irreversible_declares_a_variable_a_goal_places() {
+    let (_temp, game_root) = installed_with(declaring_discard(), &schedule());
+    let (warnings, listing) = checked_with(&game_root, &goals_placing_discarded());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        listing,
+        json!({"pack": ["keep", "order", "discarded", "route", "enabled"], "model": []})
+    );
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(declaring_discard(), &schedule(), &goals_placing_discarded());
 }
 
 // `package bundle --goals` lays an accepted file beside `bundle.json` byte for byte; the rest of
@@ -833,146 +853,70 @@ fn tier_over(rules: &[&str]) -> Value {
     goals_with(move |value| value["entries"][7]["governs"]["rules"] = rules.clone())
 }
 
-/// `package bundle --goals` of `goals` on the packages `packs` and the schedule `schedule`, which
-/// must refuse it: the refusal is `standard_pack_root_invalid` with `goal_governs_irreversible` at
-/// `pointer`, at the source file, and `--out` is not written.
-fn assert_bundle_refuses_irreversible(
-    packs: [Pack; 4],
-    schedule: &Value,
-    goals: &Value,
-    pointer: &str,
-) {
-    let (temp, request) = bundle_inputs_with(packs, schedule);
-    let (source, refused) = bundle_with_goals(&temp, &request, goals);
-    let error = refused.expect_err("the bundle is refused");
-    let (code, values) = refusal(&error);
-    assert_eq!(code, ROOT_INVALID, "{}", error.message);
-    assert_eq!(
-        values,
-        json!({
-            "game": GAME,
-            "path": source.to_string_lossy(),
-            "standard_pack_problem": "goal_governs_irreversible",
-            "json_pointer": pointer
-        })
-    );
-    assert!(!request.out.exists(), "--out was written");
+/// The variable listing of the root of [`packs`] with the valid file: every variable applies.
+fn every_variable_applies() -> Value {
+    json!({"pack": ["keep", "order", "route", "enabled"], "model": []})
 }
 
-// G-R1 fix round 1, item 1 (the review's first way around the safety line): a `tier` entry is
-// held to the package each rule it governs runs. On a root where the package that provides the
-// irreversible capability runs a rule that writes a fixed value, the tier over that rule beside
-// the rule of `neutral.collect` is `goal_governs_irreversible` at `/entries/7/governs/rules/1` and
-// nothing else, for the check (a warning, the root checked) and for `package bundle --goals` (the
-// bundle refused, `--out` not written); the same tier over the rule of `neutral.collect` alone
-// passes both.
+// Workflow #455 G-SLx (ruling 2, where G-R1 fix round 1, item 1, refused it
+// `goal_governs_irreversible`): on a root where the package that marks the irreversible capability
+// runs a rule that writes a fixed value, a `tier` over that rule beside the rule of
+// `neutral.collect` is accepted by the check (no warning) and by `package bundle --goals` (the
+// file laid), as the tier over the rule of `neutral.collect` alone is; every other refusal of the
+// check on that root is the one before, the `tier` over a rule without a fixed value among them
+// (`goal_tier_without_fixed_value`), and so is the `tier` over that rule and a rule the schedule
+// does not have (`goal_rule_unknown` at the second only).
 #[test]
-fn gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused() {
+fn gslx_a_tier_over_a_rule_of_an_irreversible_package_is_accepted() {
     let (_temp, game_root) = installed_with(packs(), &schedule_running_discard());
-    write_json(&game_root.join("goals.json"), &tier_over(&[COLLECT]));
-    let accepted = check(&game_root);
-    assert!(
-        root_invalid_warnings(&accepted.warnings).is_empty(),
-        "{:?}",
-        accepted.warnings
-    );
-    write_json(
-        &game_root.join("goals.json"),
-        &tier_over(&[COLLECT, DISCARD]),
-    );
-    let refused = check(&game_root);
-    assert_eq!(refused.status, "checked");
+    let accepted: [&[&str]; 3] = [&[COLLECT], &[COLLECT, DISCARD], &[DISCARD]];
+    for rules in accepted {
+        let (warnings, listing) = checked_with(&game_root, &tier_over(rules));
+        assert!(warnings.is_empty(), "{rules:?}: {warnings:?}");
+        assert_eq!(listing, every_variable_applies(), "{rules:?}");
+    }
+    let (warnings, _) = checked_with(&game_root, &tier_over(&[DISCARD, "neutral.none"]));
     assert_eq!(
-        root_invalid_warnings(&refused.warnings),
+        warnings,
         [goal_warning(
             &game_root,
-            "goal_governs_irreversible",
+            "goal_rule_unknown",
             "/entries/7/governs/rules/1"
         )]
     );
-
-    let (temp, request) = bundle_inputs_with(packs(), &schedule_running_discard());
-    let (_, accepted) = bundle_with_goals(&temp, &request, &tier_over(&[COLLECT]));
-    accepted.unwrap_or_else(|error| {
-        panic!(
-            "a rule of a reversible package: {}: {}",
-            error.code, error.message
-        )
-    });
-    assert_bundle_refuses_irreversible(
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(
         packs(),
         &schedule_running_discard(),
         &tier_over(&[COLLECT, DISCARD]),
-        "/entries/7/governs/rules/1",
     );
 }
 
-// G-R1 fix round 1, item 2 (the review's second way around): a capability is irreversible when
-// any package of the root marks it so. The valid file's placement `route` (Workflow #463 V1, in
-// place of the `choice` entry that governed `neutral.keep`) places the variable `neutral.keep`
-// declares; when `neutral.keep` provides, without the mark, the capability `neutral.discard` marks
-// irreversible, that placement is `goal_governs_irreversible` at `/entries/4/name`, for the check
-// (a warning, the root checked) and for `package bundle --goals` (the bundle refused, `--out` not
-// written); with a capability of its own the same file passes the check (and the bundle,
-// `gr1_package_bundle_lays_the_file_and_refuses_a_refused_one`). Workflow #463 V1 fix round 1:
-// the check's root check judges `neutral.keep` by the same rule, so its variable is
-// `variable_irreversible_by_root` at its declaration, before the goal warning and beside it
-// nothing else, and the provenance listing marks it as not applying.
+// Workflow #455 G-SLx (rulings 1 and 2, where G-R1 fix round 1, item 2, and V1 fix round 1 kept
+// the line here): `neutral.keep` provides, without the mark, the capability `neutral.discard`
+// marks irreversible, so it counts as able to do something irreversible by the whole root. Its
+// variable `route` applies (no `variable_irreversible_by_root`, listed by its default's origin
+// and under no `not_applying`), the valid file's placement of it is accepted (no
+// `goal_governs_irreversible`), for the check and for `package bundle --goals`, exactly as on the
+// root where `neutral.keep` provides a capability of its own; every other refusal of the check
+// on that root is the one before.
 #[test]
-fn gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused() {
+fn gslx_an_unmarked_provider_of_an_irreversible_capability_is_governed_and_its_variable_applies() {
     let (_plain, plain_root) = installed();
-    write_json(&plain_root.join("goals.json"), &goals());
-    let accepted = check(&plain_root);
-    assert!(
-        root_invalid_warnings(&accepted.warnings).is_empty(),
-        "{:?}",
-        accepted.warnings
-    );
+    let (warnings, listing) = checked_with(&plain_root, &goals());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(listing, every_variable_applies());
 
     let (_temp, game_root) =
         installed_with(packs_sharing_the_irreversible_capability(), &schedule());
-    write_json(&game_root.join("goals.json"), &goals());
-    let refused = check(&game_root);
-    assert_eq!(refused.status, "checked");
-    // Workflow #463 V1 fix round 1: the root check, before the goal declaration, judges the same
-    // package by the same rule: its variable `route` is `variable_irreversible_by_root` at its
-    // declaration and is listed as not applying.
-    let control = std::path::absolute(&game_root)
-        .expect("absolute game root")
-        .join(KEEP)
-        .join("control.json");
-    let by_root = StandardPackProblem::VariableIrreversibleByRoot.as_str();
-    assert_eq!(
-        root_invalid_warnings(&refused.warnings),
-        [
-            json!({
-                "code": ROOT_INVALID,
-                "values": {
-                    "game": GAME,
-                    "path": control.to_string_lossy(),
-                    "standard_pack_problem": by_root,
-                    "json_pointer": "/variables/0"
-                }
-            }),
-            goal_warning(&game_root, "goal_governs_irreversible", "/entries/4/name"),
-        ]
-    );
-    assert_eq!(
-        serde_json::to_value(&refused.variable_provenance).expect("the listing"),
-        json!({
-            "pack": ["keep", "order", "enabled"],
-            "model": [],
-            "not_applying": [{
-                "name": "route",
-                "standard_pack_problem": by_root
-            }]
-        })
-    );
-    assert_bundle_refuses_irreversible(
+    let (warnings, listing) = checked_with(&game_root, &goals());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(listing, every_variable_applies());
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(
         packs_sharing_the_irreversible_capability(),
         &schedule(),
         &goals(),
-        "/entries/4/name",
     );
 }
 
@@ -1010,58 +954,56 @@ fn schedule_with_chain(second: &str) -> Value {
     value
 }
 
-// G-R1 fix round 2 (the differential review's way around the safety line): a rule that follows a
-// rule a `tier` entry governs runs when that rule completes, so scaling the governed rule's value
-// runs it more too. The valid file's `tier` entry governs the rule of `neutral.collect`, the head
-// of a two-step chain. When the second follower runs `neutral.discard`, the package that provides
-// the irreversible capability, the composition lists both followers with the head, and the tier
-// is `goal_governs_irreversible` at the head's pointer `/entries/7/governs/rules/0` and nothing
-// else, for the check (a warning, the root checked) and for `package bundle --goals` (the bundle
-// refused, `--out` not written); the same chain whose second follower runs `neutral.spend`, every
-// follower reversible, passes both.
+// Workflow #455 G-SLx (ruling 2, where G-R1 fix round 2 refused it `goal_governs_irreversible`):
+// the valid file's `tier` entry governs the rule of `neutral.collect`, the head of a two-step
+// chain. When the second follower runs `neutral.discard`, the package that marks the irreversible
+// capability, the composition still lists both followers with the head, and the tier is accepted
+// by the check (no warning) and by `package bundle --goals` (the file laid), as on the same chain
+// whose second follower runs `neutral.spend`; every other refusal of the check on that root is
+// the one before.
 #[test]
-fn gr1_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_refused() {
+fn gslx_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_accepted() {
     let (_reversible, reversible_root) = installed_with(packs(), &schedule_with_chain(SPEND));
-    write_json(&reversible_root.join("goals.json"), &goals());
-    let accepted = check(&reversible_root);
-    assert!(
-        root_invalid_warnings(&accepted.warnings).is_empty(),
-        "{:?}",
-        accepted.warnings
-    );
+    let (warnings, _) = checked_with(&reversible_root, &goals());
+    assert!(warnings.is_empty(), "{warnings:?}");
 
     let (_temp, game_root) = installed_with(packs(), &schedule_with_chain(DISCARD));
     write_json(&game_root.join("goals.json"), &goals());
-    let refused = check(&game_root);
-    assert_eq!(refused.status, "checked");
+    let accepted = check(&game_root);
+    assert_eq!(accepted.status, "checked");
     assert_eq!(
-        serde_json::to_value(&refused.benefit_followers).expect("the followers"),
+        serde_json::to_value(&accepted.benefit_followers).expect("the followers"),
         json!([
             {"task_id": KEEP, "rides_with": COLLECT},
             {"task_id": DISCARD, "rides_with": COLLECT}
         ])
     );
-    assert_eq!(
-        root_invalid_warnings(&refused.warnings),
-        [goal_warning(
-            &game_root,
-            "goal_governs_irreversible",
-            "/entries/7/governs/rules/0"
-        )]
+    assert!(
+        root_invalid_warnings(&accepted.warnings).is_empty(),
+        "{:?}",
+        accepted.warnings
     );
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(packs(), &schedule_with_chain(DISCARD), &goals());
+}
 
-    let (temp, request) = bundle_inputs_with(packs(), &schedule_with_chain(SPEND));
-    let (_, accepted) = bundle_with_goals(&temp, &request, &goals());
-    accepted.unwrap_or_else(|error| {
-        panic!(
-            "a chain of reversible followers: {}: {}",
-            error.code, error.message
-        )
-    });
-    assert_bundle_refuses_irreversible(
-        packs(),
-        &schedule_with_chain(DISCARD),
-        &goals(),
-        "/entries/7/governs/rules/0",
-    );
+// Workflow #455 G-SLx (the brief's test 4): a root none of whose packages marks a capability
+// irreversible (`neutral.discard` provides its capability unmarked), checked with the valid file,
+// gives no warning and lists every variable by its default's origin, gives each refusal of the
+// check exactly as before, and `package bundle --goals` lays the file, as on main. The tests of
+// G-R1 and V1 that this slice leaves unchanged pin the rest of those answers.
+#[test]
+fn gslx_a_root_without_an_irreversible_capability_answers_as_before() {
+    let reversible = || {
+        let mut packs = packs();
+        packs[2].provides = Some(json!([{"capability": "cap_discard", "parameters": [
+            {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}]}]));
+        packs
+    };
+    let (_temp, game_root) = installed_with(reversible(), &schedule());
+    let (warnings, listing) = checked_with(&game_root, &goals());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(listing, every_variable_applies());
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(reversible(), &schedule(), &goals());
 }

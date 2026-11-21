@@ -173,7 +173,12 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   one keeps its revision, so [3, 20]. Workflow #463 SEL-GRID G2 (0.12.76, register §1.491)
 ///   raises it to 21: a layout's shared read that declares `lines`, which every Runtime before it
 ///   refuses at its declaration gate (`UnknownField` at `/candidate_layouts/<i>/shared_ocr/lines`);
-///   a pack without it keeps its revision, so [3, 21].
+///   a pack without it keeps its revision, so [3, 21]. Workflow #455 G-SLx (0.12.78, register
+///   §1.501) raises it to 23 (22 is the revision of pull request #1860 of the same release): a
+///   pack's variables beside a capability its own `provides` marks irreversible, which every
+///   Runtime before it refuses at admission (`contained_task_control_invalid`,
+///   `reason=variables_on_irreversible`); a pack without such a pair keeps its revision, so
+///   [3, 23].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -224,7 +229,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 9]),
-    ("package", [3, 21]),
+    ("package", [3, 23]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];

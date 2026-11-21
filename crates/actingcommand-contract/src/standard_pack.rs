@@ -79,7 +79,9 @@ crate::outcome_vocabulary! {
     /// declared variables, `variable_conflict`, `variable_out_of_limits` and `variable_cap_range`;
     /// its fix round 1, the root check's fourth, `variable_irreversible_by_root`, and a bundle zip
     /// whose packs declare variables `variable_undeclared`; its fix round 3, the file's sixteenth,
-    /// `goal_version_retired`, of a version 1 file, the file being version 2 since.
+    /// `goal_version_retired`, of a version 1 file, the file being version 2 since. Workflow #455
+    /// G-SLx (since 0.12.78): `goal_governs_irreversible` and `variable_irreversible_by_root` are
+    /// given no more and stay registered.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -261,10 +263,12 @@ crate::outcome_vocabulary! {
         /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
         /// package a governed rule runs, or one that declares a placed variable, is not.
         GoalPackageUnknown => "goal_package_unknown",
-        /// G-R1: a governed package, or (fix round 1) the package a governed rule runs, provides a
-        /// capability that a package of the game root marks `irreversible: true` in its control
-        /// declaration's `provides[]`; no goal entry governs such a package or rule. Workflow #463
-        /// V1: nor places a variable such a package declares.
+        /// G-R1, until 0.12.77: a governed package, or (fix round 1) the package a governed rule
+        /// runs, provided a capability that a package of the game root marks `irreversible: true`
+        /// in its control declaration's `provides[]`; Workflow #463 V1: or a placed variable was
+        /// such a package's. Workflow #455 G-SLx (since 0.12.78, register §1.501): a goal entry
+        /// governs such a package as any other, and nothing gives this word; it stays registered
+        /// for what earlier releases printed.
         GoalGovernsIrreversible => "goal_governs_irreversible",
         /// G-R1: a `tier` entry's rule is not a rule of `schedule.json`.
         GoalRuleUnknown => "goal_rule_unknown",
@@ -310,10 +314,11 @@ crate::outcome_vocabulary! {
         /// below 0 (at its `min`), or a variable of another type is read as a cap (at its `type`:
         /// a cap is read from an `integer` variable only); it does not apply.
         VariableCapRange => "variable_cap_range",
-        /// Workflow #463 V1 fix round 1: a variable a package declares that counts as able to do
-        /// something irreversible by the whole game root (it provides, unmarked, a capability
-        /// another package marks irreversible, or its remedies list one; the rule of
-        /// [`crate::IrreversiblePackages`]), at the declaration; no variable of that name applies.
+        /// Workflow #463 V1 fix round 1, until 0.12.77: a variable a package declared that
+        /// counted as able to do something irreversible by the whole game root, at the
+        /// declaration; no variable of that name applied. Workflow #455 G-SLx (since 0.12.78,
+        /// register §1.501): such a variable applies as any other, and nothing gives this word;
+        /// it stays registered for what earlier releases printed.
         VariableIrreversibleByRoot => "variable_irreversible_by_root",
         /// Workflow #463 V1 fix round 1: a bundle zip whose packs declare `variables` declares a
         /// `package` interface maximum below 14. Refused by the installer's `place` at
