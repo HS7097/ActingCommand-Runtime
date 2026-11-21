@@ -1622,7 +1622,10 @@ the configured starts; the watch ends with the host.
   check does not stop that emulator again until a scheduled run has been admitted on the instance
   since the wake, and says so once (`instance_idle_stop_withheld`;
   [runtime-config.md](runtime-config.md), "What wakes an idle instance"); a claim that read the
-  emulator running started nothing and binds nothing.
+  emulator running started nothing and binds nothing. Fix round 1: the daemon-start preparation
+  prepares no instance whose emulator the restored idle stop holds stopped (it withdraws its
+  availability as for every device self-checked instance and opens nothing), so the instance is
+  asleep after a start as before it, and its wake's configured start prepares it.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes

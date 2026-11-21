@@ -124,7 +124,9 @@
 //! #486 ASLEEP-1 (0.12.77; register §1.497): an instance whose emulator its idle action stops or
 //! holds stopped ([`IdlePlanner::emulators_held_stopped`]) is asleep when nothing but that stop
 //! withdrew its availability (`HostShared::asleep_for_policy`); the evaluation judges it as if it
-//! were available, and the plan this module reads follows with no case of its own. Ruling 6, the
+//! were available, and the plan this module reads follows (fix round 1: on an instance whose idle
+//! action can stop its emulator, a decision a gate without a time holds names no wake in it,
+//! `schedule_explanation::IdleDraft`). Ruling 6, the
 //! bound on what that foresaw not: a wake whose work started the instance's emulator stays
 //! unanswered ([`IdlePlanner::check_with_due_task`]) until a scheduled run is admitted on the
 //! instance after it ([`IdleView::latest_admission`]), another idle configuration of the
@@ -526,7 +528,7 @@ struct InstanceIdle {
     /// woken, or with no usable record), until the wake is queued.
     owed_at_start: bool,
     /// #486 ASLEEP-1 (ruling 6): the wake that started the instance's emulator, while no scheduled
-    /// run dispatched on the instance since answered it.
+    /// run admitted on the instance since answered it.
     unanswered: Option<UnansweredWake>,
 }
 
@@ -545,7 +547,7 @@ impl InstanceIdle {
 
 /// #486 ASLEEP-1 (register §1.497, ruling 6; `contracts/runtime-config.md`, "What wakes an idle
 /// instance"): what the one warning of a wake that started the instance's emulator says when the
-/// idle check would have stopped that emulator again before a scheduled run was dispatched on the
+/// idle check would have stopped that emulator again before a scheduled run was admitted on the
 /// instance: why the wake came, the task it named (with `task_due`) and when it was queued.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WithheldStop {
@@ -567,7 +569,7 @@ enum StopWarning {
 }
 
 /// #486 ASLEEP-1 (register §1.497, ruling 6): a wake after `stop_emulator` (its configured emulator
-/// start in effect), which no scheduled run dispatched on the instance since has answered. Once its
+/// start in effect), which no scheduled run admitted on the instance since has answered. Once its
 /// configured start has started the instance's emulator ([`IdlePlanner::wake_started_emulator`];
 /// a start that found the emulator running started nothing), the idle check does not stop that
 /// emulator again while it stands: under `auto` the tier stops at `close_app`, under a plain

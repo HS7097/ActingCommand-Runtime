@@ -330,7 +330,7 @@ fn wake_outcome(
 /// #486 ASLEEP-1 (register §1.497, ruling 6): `instance_idle_stop_withheld` for `alias`, the
 /// warning of a wake (`withheld`: why it came, the task it named, when it was queued) after which
 /// the idle check did not stop the instance's emulator again, no scheduled run having been
-/// dispatched on the instance since.
+/// admitted on the instance since.
 fn withheld_stop_outcome(alias: &str, withheld: &WithheldStop) -> Outcome {
     let outcome = Outcome::new(IdleCode::StopWithheld)
         .operation(IdleLocation::Check)
@@ -502,7 +502,7 @@ impl HostShared {
             );
             // #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of a wake that started the
             // instance's emulator, the first time the check did not stop that emulator again
-            // because no scheduled run has been dispatched on the instance since. A record that
+            // because no scheduled run has been admitted on the instance since. A record that
             // fails is this instance's failure (#419).
             if let Some(withheld) = planner.take_withheld_stop(&alias)
                 && let Err(error) = self.record_idle(
@@ -706,6 +706,41 @@ impl HostShared {
     /// not come), by alias; read with the closed instances, before any other lock of the cycle.
     pub(super) fn idle_emulators_held_stopped(&self) -> RuntimeHostResult<BTreeSet<String>> {
         Ok(lock(&self.idle, IdleLocation::Check)?.emulators_held_stopped())
+    }
+
+    /// #486 ASLEEP-1 fix round 1 (register §1.497; `contracts/runtime-config.md`, "What wakes an
+    /// idle instance"): the instances whose idle action in effect can stop their emulator, by
+    /// alias: of the instances the idle check plans for (a registered physical instance with a
+    /// device system it can drive), each whose configuration names `stop_emulator`, or `auto`,
+    /// whose highest tier that is, with its startup package and its configured emulator start in
+    /// effect (the check's `IdleView::emulator_wakeable`). The idle plan of each takes no wake from
+    /// a decision a gate without a time holds (`schedule_explanation::IdleDraft::add`). Read as a
+    /// cycle starts, before the policy's lock; each lock is taken alone.
+    pub(super) fn idle_emulator_stops_for_policy(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        let instances = lock(&self.registered_instances, IdleLocation::Check)?
+            .values()
+            .filter(|instance| {
+                instance.provenance() == ExecutionBackendProvenance::PhysicalDevice
+                    && instance.device_system_without_input_backend().is_none()
+            })
+            .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+            .collect::<Vec<_>>();
+        let startup_packages = self.startup_packages()?;
+        let mut stops = BTreeSet::new();
+        for (instance_id, alias) in instances {
+            let Some(config) = self.idle_settings(instance_id)? else {
+                continue;
+            };
+            if matches!(
+                config.action,
+                IdleAction::StopEmulator | IdleAction::Auto(_)
+            ) && startup_packages.contains_key(&instance_id)
+                && self.start_emulator_in_effect(instance_id)?
+            {
+                stops.insert(alias);
+            }
+        }
+        Ok(stops)
     }
 
     /// #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep instance"):
@@ -1091,6 +1126,8 @@ impl HostShared {
             emulator_wakeable: startup_package && configured_start,
             start_held,
             run_uncounted,
+            // #486 ASLEEP-1 (ruling 6): the check sets the latest admission it read with the plan.
+            latest_admission: None,
         })
     }
 

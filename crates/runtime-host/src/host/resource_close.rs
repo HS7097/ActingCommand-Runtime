@@ -1655,7 +1655,9 @@ impl HostShared {
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
     /// the first and is a failed self-check (`lease_cooldown`). One unreachable device leaves only
     /// its instance unavailable (Workflow #434 LAB-6S4a: the held start's verdict over every
-    /// prepared instance, INST-1, went with the held start).
+    /// prepared instance, INST-1, went with the held start). #486 ASLEEP-1 fix round 1: an
+    /// instance whose emulator its restored idle action holds stopped is withdrawn and not
+    /// prepared, so it is asleep after the start as before it.
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
         let instances = lock(
             &self.registered_instances,
@@ -1681,6 +1683,15 @@ impl HostShared {
             // `device_system:<system>` (once, unless that withdrawal is in effect), the plain
             // statement of what it is, and nothing is opened, recorded as a failure or counted.
             if inert {
+                continue;
+            }
+            // #486 ASLEEP-1 fix round 1 (register §1.497): an instance whose emulator its idle
+            // action holds stopped (`restore_idle_state` restored it so before this) is not
+            // prepared. Its emulator is stopped, so the preparation could only fail, take the
+            // instance into the unavailable instances the probes take up and leave it not asleep;
+            // its availability stays withheld above (`backend_selfcheck:unchecked`), as the stop
+            // left it, so it is asleep after the start as before it. Its wake's start prepares it.
+            if self.idle_holds_emulator_stopped(&instance_alias)? {
                 continue;
             }
             if lock(

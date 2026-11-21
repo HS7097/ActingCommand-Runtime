@@ -1903,6 +1903,9 @@ impl HostShared {
         // emulator it stops or holds stopped.
         let idle_closed = self.idle_closed_for_policy()?;
         let held_stopped = self.idle_emulators_held_stopped()?;
+        // #486 ASLEEP-1 fix round 1: the instances whose idle action in effect can stop their
+        // emulator, whose idle plans take no wake from a decision a gate without a time holds.
+        let idle_stops_emulator = self.idle_emulator_stops_for_policy()?;
         // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
         // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
         // catalog. Nothing in configured mode. ISO-PE: it reads the monotonic clock as the cycle
@@ -2173,6 +2176,7 @@ impl HostShared {
                     standard_pack_variables: standard_pack_variables.as_deref(),
                     availability_withdrawals: &availability_withdrawals,
                     asleep: &asleep,
+                    idle_stops_emulator: &idle_stops_emulator,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

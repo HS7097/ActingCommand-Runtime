@@ -3010,11 +3010,19 @@ then held back; the idle check stopped it again, with no end.
   dispatch intent, reason chain or dispatch decision record, no shared run slot taken, no chain step
   settled as dispatched, no `capped_spend` and no pass of its capped block for its round (its
   episode does not advance past it), no no-progress basis captured, no budget counted.
-- **The idle plan** follows with no case of its own: the decision above is due and is the task the
-  wake names (`idle_wake_cause` `task_due`); every other decision counts as on an available
-  instance (a spent budget: not due, its wake the release; a benefit hold: not due, only a wake of
-  its own, so none for a trigger that names no later time). The wake is the emulator's start, then
-  the startup package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+- **The idle plan** follows: the decision above is due and is the task the wake names
+  (`idle_wake_cause` `task_due`); every other decision counts as on an available instance (a spent
+  budget: not due, its wake the release). Fix round 1 (the coordinator's ruling 2 of the round): on
+  an instance whose idle action in effect can stop its emulator (`stop_emulator`, or `auto` with its
+  emulator start), a decision a gate without a time holds (the benefit gate, the no-progress guard,
+  a pool's lines) is not due and names no wake, whatever next time its trigger names; on any other
+  instance it names its own wake as before. The wake is the emulator's start, then the startup
+  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+- **After a Runtime start** (fix round 1, ruling 5) the instance is asleep as before it: the start
+  restores it stopped with its wake, withdraws its availability (`backend_selfcheck:unchecked`) and
+  does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
+  the unavailable instances above), so its withdrawal is the gate's `self_check` and the probes do
+  not hold it.
 - **Not asleep.** An instance whose application `close_app` closed (it stays available, and #484's
   look ahead and its fix round 2 hold for it as before); an instance unavailable for any other cause
   (its candidates are blocked at placement as before); an instance whose emulator a person stopped.

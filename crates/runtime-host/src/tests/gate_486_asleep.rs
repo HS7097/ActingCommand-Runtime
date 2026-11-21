@@ -3,8 +3,8 @@
 //! #486 ASLEEP-1 (0.12.77; register §1.497; `contracts/runtime-config.md`, "What wakes an idle
 //! instance"; `contracts/scheduling/README.md`, "An asleep instance"), the host half. An instance
 //! whose emulator its idle action stopped is asleep, not unavailable: the evaluation judges it as
-//! if it were available and selects nothing on it, and the idle plan follows with no case of its
-//! own; a wake whose work started the emulator must be answered by a dispatched run before the
+//! if it were available and selects nothing on it, and the idle plan follows; a wake whose work
+//! started the emulator must be answered by a scheduled run admitted on the instance before the
 //! emulator is stopped again (ruling 6).
 //!
 //! The fixture instance is `gate_372k2`'s policy instance on a host of its own, emulator-controlled
@@ -29,7 +29,7 @@
 //!   task is dispatched, and the instance is stopped again after its runs.
 //! - 8: a replay of one idle stretch with a spent-budget task and a benefit-unknown task: one stop,
 //!   no start before the release less the lead, one start at it.
-//! - 9: ruling 6 in the planner: after a wake that started the emulator, with no run dispatched,
+//! - 9: ruling 6 in the planner: after a wake that started the emulator, with no run admitted,
 //!   the emulator is not stopped again (`auto` takes `close_app` at most, its lighter tiers as
 //!   they are) and one warning is due; a run admitted after the wake, a Runtime start, a catalog's
 //!   activation and another idle configuration each let the stop be taken again.
@@ -37,16 +37,52 @@
 //!   its budget, and the restored planner keeps its wake and starts nothing.
 //! - 11: an asleep instance under a person's pause is not woken (`WakeHeld`), its task due behind
 //!   the pause; once the pause no longer holds the start the wake comes.
+//!
+//! Fix round 1 (the coordinator's ruling 7 of the round; review-1859 point 10): two real replays on
+//! the same instance with the idle action `stop_emulator`, as the idle host gates configure theirs
+//! (`gate_idle1_host`, `gate_idle1p`: its configured emulator start, a startup package, its stuck
+//! recovery off, the scripted emulator), with test 5's budget catalogue. No hook makes it asleep:
+//! every idle check is the host's own, on the plan its own evaluated cycle leaves
+//! (`RuntimeHost::evaluate_policy_cycle`), with its own planner, and the emulator is stopped and
+//! started through the claims the product takes.
+//! - r1: the host's own check stops the emulator, its wake at the release less the lead; asleep,
+//!   the task is deferred by its budget; at the release less the lead the check queues the wake,
+//!   whose claim starts the emulator (`drive_autostart`), and its startup package runs; with no run
+//!   admitted the checks of the next night do not stop it, and the ledger holds one
+//!   `instance_idle_stop_withheld`; after two runs are admitted the check stops it again.
+//! - r2: the stop, then a Runtime start in the middle of the sleep (a seeding and a loading start,
+//!   the emulator stopped as the action left it, an open on its pending endpoint refused): the
+//!   instance is restored stopped with its wake, is prepared by nothing and so is in no unavailable
+//!   instances' set, and is asleep (the task deferred by its budget, not `instance_unavailable`) with
+//!   no wake for nothing; its wake then starts the emulator, the night's check withholds the stop
+//!   once, and a catalogue's activation answers the wake: the next check stops the emulator. The
+//!   activated catalogue adds a judged task with no effect on an interval clock, whose benefit is
+//!   unknown and whose trigger names a time a millisecond away: on this instance (its idle action
+//!   can stop its emulator) that decision names no wake, so the stop is taken with its wake at the
+//!   budget's release less the lead (fix round 1, ruling 2).
 
+use super::emulator_controller::stopped_state;
+use super::gate_369_s6c::{connectivity, head, send};
 use super::gate_372k2::{SlotTask, at, slot_sources};
+use super::gate_idle1p::{emulator_starts, kept_rows, stops};
+use super::instance_workers::{all_events, phases};
 use super::*;
-use crate::codes::{HostCode, IdleWakeCause};
+use crate::codes::{HostCode, IdleCode, IdleLocation, IdleWakeCause};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleStep, IdleView, KeptIdle, WakeWork, WithheldStop,
 };
-use actingcommand_contract::{InstanceStuckRecovery, SchedulingResumeSelfCheck};
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{
+    ConfigParameter, ConfigParameterSource, FactScalar, InstanceStuckRecovery,
+    MAX_RUNTIME_SUBSCRIPTION_WAIT_MS, RuntimeConfigManifest, RuntimeLifecyclePhase,
+    RuntimeSubscriptionRequest, SchedulingResumeSelfCheck, SubscriptionCursor,
+};
+use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_policy::{EligibilityState, PolicyCode, SchedulingDecisionState, TaskDecision};
-use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
+use actingcommand_runtime_config::{
+    AutoGaps, DefaultsFile, IdleAction, IdleConfig, annotate_settable, mechanism_rows,
+    render_parameters,
+};
 use serde_json::{Value, json};
 
 const ALIAS: &str = POLICY_INSTANCE_ALIAS;
@@ -115,11 +151,25 @@ fn judged_task() -> SlotTask {
     }
 }
 
+/// Fix round 1 (r2): the judged task on an interval clock of 1 ms, so its trigger is true at every
+/// evaluation and names its next time a millisecond away.
+fn judged_interval_task() -> SlotTask {
+    SlotTask {
+        trigger: budget_task().trigger,
+        ..judged_task()
+    }
+}
+
 /// `gate_372k2`'s catalog of `tasks` (activity window 06:00-23:30 UTC, activity interval 1 ms),
 /// declared `actingcommand.scheduling.v2` (every timeline event valid from 0, as `gate_ss2h`'s V2
 /// example), [`JUDGED`] marked `benefit_judged` with no effect.
 fn sources(tasks: &[SlotTask]) -> CatalogSources {
-    let mut sources = slot_sources(1, tasks, None);
+    sources_of(1, tasks)
+}
+
+/// [`sources`] as the catalog's version `version` (fix round 1: a later version activates).
+fn sources_of(version: u64, tasks: &[SlotTask]) -> CatalogSources {
+    let mut sources = slot_sources(version, tasks, None);
     for source in [
         &mut sources.tasks,
         &mut sources.pools,
@@ -801,7 +851,7 @@ fn asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once() {
     let far = at(1, 12, 0);
     // A wake for a due task whose configured start started the emulator (`started`; the host's
     // autostart claim says so when it drove the Start), then its claims, then the instance free
-    // with nothing due before `far`: no run was dispatched since the wake.
+    // with nothing due before `far`: no run was admitted since the wake.
     let woken_and = |config: &IdleConfig, started: bool| {
         let mut planner = stopped_planner(None);
         assert_eq!(
@@ -910,7 +960,7 @@ fn asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once() {
                 ..
             })
         ),
-        "a dispatched run answers the wake"
+        "an admitted run answers the wake"
     );
 
     // `auto`: the tier is capped below the emulator's stop, the lighter tiers as they are.
@@ -1081,4 +1131,624 @@ fn asleep_h11_an_asleep_instance_under_a_persons_pause_is_not_woken() {
         "woken once the pause no longer holds the start"
     );
     sleepy.close();
+}
+
+// ---- Fix round 1: the real replays (ruling 7)
+
+/// Every bounded wait of the replays (test plan v2.2 §2.1 guard 3: a gate file waits only with the
+/// constant of this name); it only bounds a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(60);
+
+/// One idle record of the replay instance: its code, its `operation` and its `idle_wake_cause`.
+type IdleRecord = (String, String, Option<String>);
+
+/// The stop's record (`instance_idle_action`, `run_idle_action`).
+fn stop_record() -> IdleRecord {
+    (
+        IdleCode::Taken.as_str().to_owned(),
+        IdleLocation::Action.as_str().to_owned(),
+        None,
+    )
+}
+
+/// The record of a wake at its planned time (`instance_idle_action`, `queue_idle_wake`,
+/// `planned_time_reached`).
+fn wake_record() -> IdleRecord {
+    (
+        IdleCode::Taken.as_str().to_owned(),
+        IdleLocation::Wake.as_str().to_owned(),
+        Some(IdleWakeCause::PlannedTimeReached.as_str().to_owned()),
+    )
+}
+
+/// The one warning of that wake (`instance_idle_stop_withheld`, `check_idle_instances`, its cause).
+fn withheld_record() -> IdleRecord {
+    (
+        IdleCode::StopWithheld.as_str().to_owned(),
+        IdleLocation::Check.as_str().to_owned(),
+        Some(IdleWakeCause::PlannedTimeReached.as_str().to_owned()),
+    )
+}
+
+/// The replay instance's row of `host.idle_state`: stopped by `stop_emulator`, its wake at `wake`.
+fn stopped_row(wake: u64) -> BTreeMap<String, FactScalar> {
+    BTreeMap::from([
+        (
+            "instance_alias".to_owned(),
+            FactScalar::String(ALIAS.to_owned()),
+        ),
+        (
+            "action".to_owned(),
+            FactScalar::String(IdleAction::StopEmulator.as_str().to_owned()),
+        ),
+        ("wake_at_unix_ms".to_owned(), FactScalar::TimestampMs(wake)),
+    ])
+}
+
+/// The replay instance's configuration, built as `gate_484_idle_w2`'s `close_app` fixture builds
+/// its own: the `idle` section's keys as the assembly renders them from the shipped defaults file,
+/// the instance's own `idle.action` `stop_emulator` and `start_emulator` (the configuration's check
+/// asks for it beside `stop_emulator`), and its no-progress guard off.
+fn stop_emulator_manifest(instance: InstanceId) -> RuntimeConfigManifest {
+    let (_, defaults) = DefaultsFile::shipped().expect("the defaults file parses");
+    let section = actingcommand_runtime_config::idle::SECTION;
+    let id = crate::failure_identity::identifier_text(&instance);
+    let own = |member: &str, value: FactScalar| ConfigParameter {
+        key: actingcommand_runtime_config::instance_key(&id, member),
+        value,
+        source: ConfigParameterSource::Explicit,
+        settable: false,
+    };
+    let mut parameters =
+        render_parameters(&mechanism_rows(), &[], &defaults, &json!({}), &|_| None)
+            .expect("every key resolves")
+            .into_iter()
+            .filter(|row| row.key.split('.').next() == Some(section))
+            .collect::<Vec<_>>();
+    parameters.push(own(
+        actingcommand_runtime_config::idle::ACTION,
+        FactScalar::String(IdleAction::StopEmulator.as_str().to_owned()),
+    ));
+    parameters.push(own(
+        actingcommand_runtime_config::START_EMULATOR,
+        FactScalar::Boolean(true),
+    ));
+    parameters.extend(no_progress_off_manifest(&instance).parameters);
+    annotate_settable(&mut parameters).expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// A start of the replay instance's host on `root`, on `clock`: the fixture instance of tests 5 to
+/// 11 (emulator-controlled and device self-checked, `device_state`) with the idle action
+/// `stop_emulator`, its configured emulator start in effect and in the start turn
+/// (`with_emulator_autostart`), a startup package, its stuck recovery off and internet access at
+/// once, as the idle host gates configure their instance.
+fn open_replay_host(
+    root: &TempDir,
+    registered: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+) -> RuntimeHost {
+    // `gate_ord1c`'s fix round 3, as `open_host` above.
+    let moved = Arc::clone(clock);
+    *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || moved.advance(1)));
+    let package = root.path().join("asleep-startup-package.zip");
+    fs::write(&package, neutral_contained_task_package(true)).expect("write the startup package");
+    let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(60_000))
+        .expect("the startup package request");
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    RuntimeHost::start(
+        config(root)
+            .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(stop_emulator_manifest(registered))
+            .with_stuck_recovery(BTreeMap::from([(
+                ALIAS.to_owned(),
+                InstanceStuckRecovery {
+                    enabled: false,
+                    cooldown_secs: 600,
+                },
+            )]))
+            .with_emulator_autostart(vec![ALIAS.to_owned()])
+            .with_network_connectivity_for_test(read)
+            .with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)])),
+        Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(state))),
+    )
+    .expect("start the replay's host")
+}
+
+/// The replay instance on a host of its own with test 5's budget catalogue. Every idle check is
+/// the host's own, on the plan its own evaluated cycle leaves, with its own planner.
+struct Replay {
+    host: RuntimeHost,
+    clock: Arc<ManualRuntimeClock>,
+    state: Arc<FakeState>,
+    registered: InstanceId,
+    approved: BTreeSet<String>,
+    root: TempDir,
+}
+
+impl Replay {
+    fn start(unix_ms: u64) -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let registered = instance_id();
+        let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+        let state = device_state();
+        let host = open_replay_host(&root, registered, &clock, &state);
+        host.activate_policy_catalog(&sources(&[budget_task()]))
+            .expect("activate the budget catalogue");
+        Self {
+            host,
+            clock,
+            state,
+            registered,
+            approved: BTreeSet::new(),
+            root,
+        }
+    }
+
+    /// A clean stop and a new start on the same state root at `unix_ms`, its device's emulator
+    /// stopped as the idle action left it: no port reported, and an open on its pending endpoint
+    /// refused, as the device registry refuses one (`refuse_pending_opens`).
+    fn restart(self, unix_ms: u64) -> Self {
+        let Self {
+            host,
+            registered,
+            approved,
+            root,
+            ..
+        } = self;
+        host.close().expect("close the replay's host");
+        let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+        let state = device_state();
+        state.emulator.rebind(None);
+        state.refuse_pending_opens.store(true, Ordering::Release);
+        let host = open_replay_host(&root, registered, &clock, &state);
+        Self {
+            host,
+            clock,
+            state,
+            registered,
+            approved,
+            root,
+        }
+    }
+
+    fn close(self) {
+        assert!(
+            self.host
+                .fatal_error()
+                .expect("the Runtime's health")
+                .is_none()
+        );
+        self.host.close().expect("close the replay's host");
+    }
+
+    /// Moves the Runtime clock and samples the host's capacity at the new time.
+    fn set_time(&self, unix_ms: u64) {
+        self.clock.set_unix_ms(unix_ms);
+        let sample_capacity = self
+            .host
+            .capacity_sampler_for_test()
+            .expect("capacity owner");
+        sample_capacity().expect("capacity sample");
+    }
+
+    /// One evaluation at `unix_ms` on the test inputs, with no idle check.
+    fn evaluate(&self, unix_ms: u64) -> PolicyCycle {
+        self.set_time(unix_ms);
+        let mut facts = policy_facts();
+        facts.outcomes.clear();
+        self.host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms,
+                    monotonic_ms: unix_ms,
+                },
+                7,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("evaluate at {unix_ms}: {error}"))
+    }
+
+    /// One cycle at `unix_ms` as actingd's driver asks for it: the evaluation, then the host's own
+    /// idle check on the plan it leaves (`gate_484_idle_w2`'s `OwnHost::cycle`).
+    fn cycle(&self, unix_ms: u64) -> PolicyCycle {
+        self.set_time(unix_ms);
+        let cycle = self
+            .host
+            .evaluate_policy_cycle(PolicyTrigger::Recovery)
+            .unwrap_or_else(|error| panic!("the cycle at {unix_ms}: {error}"));
+        assert!(
+            cycle.evaluation.is_some(),
+            "the cycle at {unix_ms} is evaluated: {:?}",
+            cycle.directive
+        );
+        cycle
+    }
+
+    /// Evaluates at `unix_ms`, admits the dispatch the cycle selected for [`TASK`], completes it
+    /// and ends its lease, as a run of the task does ([`Sleepy::dispatch`]).
+    fn dispatch(&mut self, unix_ms: u64) {
+        let cycle = self.evaluate(unix_ms);
+        let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == TASK)
+            .unwrap_or_else(|| panic!("the task is selected at {unix_ms}: {evaluation:#?}"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("the dispatch's reason chain")
+            .clone();
+        if self.approved.insert(intent.catalog_hash.clone()) {
+            record_policy_approval(&self.host, &intent);
+        }
+        let PolicyDispatchAdmission::Granted { context } = self
+            .host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&self.host, &intent))
+            .unwrap_or_else(|error| panic!("admit the task at {unix_ms}: {error}"))
+        else {
+            panic!("the task is granted at {unix_ms}");
+        };
+        self.host
+            .complete_policy_dispatch(&intent.decision_id)
+            .expect("complete the dispatch");
+        self.host
+            .release_policy_dispatch_lease_for_test(&context)
+            .expect("end the dispatch's lease");
+    }
+
+    /// The instance's idle records after `after`, in order: `instance_idle_action` and
+    /// `instance_idle_stop_withheld`.
+    fn records(&self, after: u64) -> Vec<IdleRecord> {
+        let events = all_events(&self.host);
+        phases(&events)
+            .into_iter()
+            .filter(|(event, _)| {
+                event.sequence() > after && event.links().instance_id() == Some(&self.registered)
+            })
+            .filter_map(|(_, phase)| {
+                let RuntimeLifecyclePhase::DeviceStateObserved { outcome } = phase else {
+                    return None;
+                };
+                let code = outcome.code().as_str();
+                (code == IdleCode::Taken.as_str() || code == IdleCode::StopWithheld.as_str()).then(
+                    || {
+                        let text = |key: &str| {
+                            outcome
+                                .value(key)
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        };
+                        (
+                            code.to_owned(),
+                            text("operation").unwrap_or_default(),
+                            text("idle_wake_cause"),
+                        )
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Whether nothing holds or waits for the instance's key: no idle action's claim was queued.
+    fn claims_free(&self) -> bool {
+        self.host
+            .instance_claims_for_test(ALIAS)
+            .expect("the instance's claims")
+            == (None, Vec::new())
+    }
+
+    /// Waits until the configured start the wake queued has ended (one of its report lines) and
+    /// returns the code of that line.
+    fn await_start_end(&self) -> String {
+        let ends = [
+            HostCode::EmulatorAutostartStarted,
+            HostCode::EmulatorAutostartPreparationFailed,
+            HostCode::EmulatorAutostartFailed,
+            HostCode::EmulatorAutostartSkipped,
+        ];
+        let end = |line: &Outcome| ends.iter().any(|code| line.is(*code));
+        let lines = self
+            .host
+            .emulator_autostart_reports()
+            .await_lines_for_test(|lines| lines.iter().any(end), GATE_WAIT)
+            .expect("the wake's configured start ended");
+        lines
+            .iter()
+            .find(|&line| end(line))
+            .map(|line| line.code().as_str().to_owned())
+            .expect("the line that ended it")
+    }
+
+    /// Waits until nothing holds or waits for the instance's key: the wake's claims have ended, its
+    /// startup package's run among them. Each wait is a ledger subscription that answers as soon as
+    /// the instance's next key release after `after` is written (`gate_idle1p`'s `await_release`),
+    /// so `GATE_WAIT` only bounds a broken run; the admission guard the last release held is then
+    /// taken and let go.
+    fn await_free(&self, mut after: u64) {
+        let empty_answers = GATE_WAIT
+            .as_millis()
+            .div_ceil(u128::from(MAX_RUNTIME_SUBSCRIPTION_WAIT_MS));
+        let mut empty = 0;
+        while !self.claims_free() {
+            let query = EventQuery {
+                event_type: Some(EventType::LeaseReleased),
+                instance_id: Some(self.registered),
+                from_sequence: Some(after + 1),
+                ..EventQuery::default()
+            };
+            let subscription = RuntimeSubscriptionRequest::new(
+                query.clone(),
+                ProjectionProfile::Forensic,
+                SubscriptionCursor::default(),
+                MAX_RUNTIME_SUBSCRIPTION_WAIT_MS,
+                1,
+            )
+            .expect("subscription request");
+            let receipt = send(
+                &self.host,
+                RuntimeOperation::SubscribeEvents {
+                    request: subscription,
+                },
+                4_862,
+            );
+            let Some(RuntimeResult::EventBatch { batch }) = receipt.result() else {
+                panic!("an event batch: {receipt:?}");
+            };
+            if batch.timed_out() {
+                empty += 1;
+                assert!(empty < empty_answers, "the instance's key is released");
+                continue;
+            }
+            empty = 0;
+            after = self
+                .host
+                .query_persisted_events_for_test(query)
+                .expect("the instance's key releases")
+                .first()
+                .map(PersistedEvent::sequence)
+                .expect("the instance's next key release");
+        }
+        let admission = self
+            .host
+            .instance_admission_for_test(ALIAS)
+            .expect("the instance's admission guard");
+        drop(admission.lock().expect("the instance's admission guard"));
+    }
+}
+
+#[test]
+fn asleep_r1_the_hosts_own_check_stops_wakes_and_keeps_the_emulator_until_a_run_is_admitted() {
+    let mut replay = Replay::start(at(1, 6, 0));
+    let before = head(&replay.host);
+    // The day's two runs spend the task's budget.
+    replay.dispatch(at(1, 6, 10));
+    replay.dispatch(at(1, 6, 20));
+
+    // (i) 06:30, free: the budget defers the task to its release, and the host's own check stops
+    // the emulator, its wake at the release less the lead.
+    let release = deferred_by(
+        &replay.cycle(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(
+        stops(&replay.state),
+        1,
+        "the host's own check stopped the emulator"
+    );
+    let wake = release - LEAD_MS;
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row(wake)]),
+        "kept stopped, its wake at the release less the lead"
+    );
+
+    // Asleep: the evaluation judges the instance as an available one (the budget defers the task,
+    // not `instance_unavailable`), and the check starts nothing.
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(at(1, 12, 0)),
+            TASK,
+            HostCode::PolicyBudgetExhausted.as_str()
+        ),
+        Some(release),
+        "asleep, the budget defers the task to its release"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "no wake before its time"
+    );
+
+    // (ii) The release less the lead: the check queues the wake. (iii) Its claim reads the
+    // emulator stopped and starts it (`drive_autostart`); its startup package runs.
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    replay.cycle(wake);
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), wake_record()],
+        "the wake at its planned time"
+    );
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    assert_eq!(emulator_starts(&replay.state), 1, "one Start");
+    replay.await_free(woken_at);
+
+    // (iv) No run admitted: the next night's checks (the task's window closed, its next work at
+    // the window's opening, hours away) do not stop the emulator the wake started, and the ledger
+    // holds one warning for that wake.
+    for moment in [at(3, 1, 0), at(3, 1, 10)] {
+        replay.cycle(moment);
+        assert!(
+            replay.claims_free(),
+            "the check at {moment} took no idle action"
+        );
+    }
+    assert_eq!(stops(&replay.state), 1, "not stopped again");
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), wake_record(), withheld_record()],
+        "one instance_idle_stop_withheld"
+    );
+
+    // (v) The day's two runs admitted: the check stops the emulator again, with no second warning.
+    replay.dispatch(at(3, 6, 10));
+    replay.dispatch(at(3, 6, 20));
+    replay.cycle(at(3, 6, 30));
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(2, GATE_WAIT),
+        Some(2),
+        "the second stop ended"
+    );
+    assert_eq!(
+        stops(&replay.state),
+        2,
+        "a run admitted after the wake answers it"
+    );
+    assert_eq!(
+        replay.records(before),
+        [
+            stop_record(),
+            wake_record(),
+            withheld_record(),
+            stop_record()
+        ],
+        "the stop again"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wake() {
+    let mut replay = Replay::start(at(1, 6, 0));
+    replay.dispatch(at(1, 6, 10));
+    replay.dispatch(at(1, 6, 20));
+    let release = deferred_by(
+        &replay.cycle(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    let wake = release - LEAD_MS;
+    let kept = Some(vec![stopped_row(wake)]);
+    assert_eq!(kept_rows(&replay.host), kept, "kept stopped with its wake");
+
+    // Ruling 5, a Runtime start in the middle of the sleep: the root's second start seeds (it
+    // replays the history), its third loads the decision memory from its value records, as every
+    // restart of an installation does. The emulator stays stopped as the idle action left it.
+    let replay = replay.restart(at(1, 7, 0));
+    let replay = replay.restart(at(1, 7, 1));
+    let started = head(&replay.host);
+    assert_eq!(
+        kept_rows(&replay.host),
+        kept,
+        "the start restored the instance stopped with its wake"
+    );
+    assert_eq!(
+        replay
+            .host
+            .unavailable_for_test(ALIAS)
+            .expect("the unavailable instances"),
+        None,
+        "the start prepared nothing on the stopped emulator, so no failed preparation took it in"
+    );
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(at(1, 8, 0)),
+            TASK,
+            HostCode::PolicyBudgetExhausted.as_str()
+        ),
+        Some(release),
+        "asleep after the start: the budget defers the task, not instance_unavailable"
+    );
+    assert!(
+        replay.records(started).is_empty(),
+        "no wake for nothing after the start"
+    );
+    assert_eq!(emulator_starts(&replay.state), 0, "nothing starts it");
+
+    // Its wake starts the emulator; the night's check withholds the stop, once.
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    replay.cycle(wake);
+    assert_eq!(replay.records(started), [wake_record()], "the wake");
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    assert_eq!(emulator_starts(&replay.state), 1, "one Start");
+    replay.await_free(woken_at);
+    replay.cycle(at(3, 1, 0));
+    assert!(replay.claims_free(), "the check took no idle action");
+    assert_eq!(stops(&replay.state), 0, "not stopped");
+    assert_eq!(
+        replay.records(started),
+        [wake_record(), withheld_record()],
+        "one instance_idle_stop_withheld"
+    );
+
+    // A catalogue's activation answers the wake: the next check stops the emulator. The activated
+    // catalogue adds a judged task on an interval clock whose benefit is unknown: on this instance
+    // (its idle action can stop its emulator) its decision names no wake in the idle plan (fix
+    // round 1, ruling 2), so the stop is taken and its wake is the budget's release less the lead.
+    replay
+        .host
+        .activate_policy_catalog(&sources_of(2, &[budget_task(), judged_interval_task()]))
+        .expect("activate the second catalogue");
+    let cycle = replay.cycle(at(3, 1, 10));
+    let judged = decision(&cycle, JUDGED);
+    assert!(
+        judged.reasons.last().is_some_and(|reason| {
+            reason.outcome.is(PolicyCode::BenefitUnknown)
+                || reason.outcome.is(PolicyCode::PolicyBenefitNonpositive)
+        }),
+        "the benefit gate holds the judged task: {judged:#?}"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop after the activation ended"
+    );
+    assert_eq!(stops(&replay.state), 1, "the activation answered the wake");
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row(at(3, 6, 0) - LEAD_MS)]),
+        "its wake at the window's opening less the lead, none from the judged task"
+    );
+    assert_eq!(
+        replay.records(started),
+        [wake_record(), withheld_record(), stop_record()],
+        "one warning, then the stop"
+    );
+    replay.close();
 }

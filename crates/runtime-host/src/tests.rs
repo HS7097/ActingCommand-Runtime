@@ -247,7 +247,8 @@ mod gate_idle3_host;
 mod gate_484_idle_w2;
 // #486 ASLEEP-1 (0.12.77; register §1.497): an instance whose emulator the idle action stopped is
 // asleep, not unavailable; it is woken only for a task that would be dispatched, and a wake that
-// started the emulator must be answered by a dispatched run before the emulator is stopped again.
+// started the emulator must be answered by a scheduled run admitted on the instance before the
+// emulator is stopped again.
 mod gate_486_asleep;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.

@@ -356,6 +356,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// by alias (`HostShared::asleep_for_policy`): the evaluation judges each as if it were
     /// available and selects nothing on it (`InstanceHolds::mark_asleep`).
     pub(crate) asleep: &'a BTreeSet<String>,
+    /// #486 ASLEEP-1 fix round 1 (register §1.497): the instances whose idle action in effect can
+    /// stop their emulator, by alias (`HostShared::idle_emulator_stops_for_policy`): their idle
+    /// plan takes no wake from a decision a gate without a time holds. Only the plan reads it.
+    pub(crate) idle_stops_emulator: &'a BTreeSet<String>,
 }
 
 /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
@@ -3907,6 +3911,7 @@ impl PolicyHost {
             standard_pack_variables,
             availability_withdrawals,
             asleep,
+            idle_stops_emulator,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4609,7 +4614,7 @@ impl PolicyHost {
                     .insert(decision.task_id.clone(), None);
             }
         }
-        self.explanation.record_gated(
+        self.explanation.record_stopping(
             &evaluation,
             active.compiled.catalog_hash(),
             time.unix_ms,
@@ -4644,6 +4649,9 @@ impl PolicyHost {
                     store_tasks: &store_tasks,
                 },
             },
+            // #486 ASLEEP-1 fix round 1: the instances whose idle plan takes no wake from a
+            // decision a gate without a time holds.
+            idle_stops_emulator,
         );
         // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
         // dispatches, replaced with the explanation it belongs to.

@@ -391,7 +391,10 @@ the look ahead above reads positions 3 to 8 behind a hold as for any instance). 
 candidate the round would then select is not selected: it waits with `instance_asleep_wake_due`
 and the evaluation's time as its wake, and takes the instance (and its device) for the round, so
 a candidate behind it waits as behind a selected one; no intent is made for it, so nothing of
-admission runs. An instance unavailable for any other cause is blocked at placement as before.
+admission runs. The clock-slot trace writes no record for it either (fix round 1, ruling 8): its
+deferral is the allocation's, after the closure let it through, so no closure deferral is captured
+for it, it is no placement block, and it has no intent to be owed. An instance unavailable for any
+other cause is blocked at placement as before.
 
 **Admission** (SR-4a2) judges positions 4 and 7 again, at its own time, under the admission
 lock, after the intent's own checks (catalog, shape, ledger position, reason chain, approvals,

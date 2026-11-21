@@ -3355,7 +3355,7 @@ actingcommand_contract::outcome_codes! {
         Unsupported => "instance_idle_action_unsupported": warning / none,
         /// Warning (#486 ASLEEP-1, since 0.12.77; register §1.497, ruling 6). An idle wake started
         /// the instance's emulator (after `stop_emulator`), and no scheduled run has been
-        /// dispatched on the instance since: the idle check that would have stopped the emulator
+        /// admitted on the instance since: the idle check that would have stopped the emulator
         /// again does not (under `auto` it takes `close_app` at most). Once per such wake, the
         /// first time (`operation` `check_idle_instances`). Keys `alias`, `idle_action`
         /// (`stop_emulator`, the stop not taken), `idle_wake_cause` (why the wake came), `task_id`
