@@ -4,27 +4,28 @@
 // "Irreversibility"; contracts/standard-pack-schedule.md, "The irreversible mark"): the resource
 // tools' goal check (`goal_issues`) and the composer's input they read (`root_irreversibility`),
 // over real packages on disk read by the Runtime's metadata reader.
-// - C.4: the goal check's half of the policy gate's t7 goes through `goal_issues`: a `tier` entry
-//   over four chain heads whose followers are linked three ways the evaluator reads as a chain
-//   link (a plain link, a link that also accepts a failed end, a link behind a complete rule),
-//   each follower running an irreversible package, is refused at those three heads and passes the
-//   fourth, whose one follower runs a package nobody marks.
+// - C.4: the goal check's half of the policy gate's t7 goes through `goal_issues`, over four chain
+//   heads: three whose followers are linked three ways the evaluator reads as a chain link (a
+//   plain link, a link that also accepts a failed end, a link behind a complete rule), each
+//   follower running an irreversible package, and a fourth whose one follower runs a package
+//   nobody marks. A `tier` entry over the four heads, and one over the four followers themselves,
+//   are accepted, nothing refused.
 // - Part B (the coordinator's ruling of 11-14): a package whose remedy lists a capability another
-//   package of the root provides marked irreversible counts as irreversible, for the goal check
-//   (a `tier` over its rule, over the head of a chain it follows, and an entry that governs it are
-//   refused) and for the composer's input the tools read; a package whose remedy lists only a
-//   capability nobody marks does not.
+//   package of the root provides marked irreversible counts as irreversible for the composer's
+//   input the tools read (`root_irreversibility`, which the standard-pack trial's mark reads too);
+//   a package whose remedy lists only a capability nobody marks does not. The goal check accepts a
+//   `tier` over such a package's rule and over the head of a chain it follows, and the placement
+//   of the variable it declares, nothing refused, and the check's root check lets that variable
+//   apply, no warning.
 // Workflow #463 V1 (register §1.378; contracts/package-variables.md) replaced the entry types that
 // governed packages by the placement `variable`: Part B's `switch` over two packages became the
-// placement of the variable both declare, refused at the placement's `name`, and `goal_issues`
-// takes no tables any more.
+// placement of the variable both declare, and `goal_issues` takes no tables any more.
 // Workflow #455 G-SLx (0.12.78; register §1.501; coordinator work order
-// `rd-1121/brief-455-locks.md`, rulings 1 and 2): the goal check no longer judges irreversibility,
-// so C.4's `tier` over the four heads is accepted (the test left the gate map for
-// `gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted`), and Part B's `tier` and
-// placement are accepted and the variable the two packages declare applies in the check's root
-// check, while the composer's input the tools read (the standard-pack trial's mark reads it too)
-// counts the same packages irreversible as before (Part B adapted, its name kept).
+// `rd-1121/brief-455-locks.md`, rulings 1 and 2): the goal check no longer judges irreversibility.
+// Until 0.12.77 C.4's `tier` was refused at the three heads of irreversible followers (that test
+// left the gate map for `gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted`),
+// and Part B's `tier` at the irreversible package and the chain's head and its placement at the
+// placement's `name` (Part B adapted, its name kept).
 // A made-up game `neutral`, server `test`, 16x9; every package, rule, capability and variable is
 // a placeholder.
 

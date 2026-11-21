@@ -10,42 +10,34 @@
 //   `root_files`, which lists `goals.json`;
 // - a refused file's problems come in file order, and the answer is otherwise the answer without
 //   the file;
-// - the safety line at the check and the bundle: a package whose control declaration has an
-//   irreversible capability can be reached by no entry;
 // - `package bundle --goals` lays an accepted file beside `bundle.json` byte for byte, the rest of
 //   its output as without the flag, and refuses a refused file as a refused root file, with
-//   `--out` not written;
-// - fix round 1 (the independent review's two ways around the safety line): a `tier` entry over a
-//   rule whose package provides the irreversible capability, and an entry that reaches a package
-//   providing unmarked a capability another package marks irreversible, are each
-//   `goal_governs_irreversible` at their pointer and nothing else, for the check and the bundle;
-// - fix round 2 (`rd-1114/brief-1694-fix2.md`, the differential review's way around the safety
-//   line): a `tier` entry over the head of a chain whose second follower runs the package that
-//   provides the irreversible capability is `goal_governs_irreversible` at the head's pointer and
-//   nothing else, for the check and the bundle, while the same chain with reversible followers
-//   passes both.
+//   `--out` not written.
 // Workflow #463 V1 (register §1.378; contracts/package-variables.md; coordinator work order
 // `rd-1114/brief-463-v1-package-variables.md`) replaced the four entry types that governed packages
 // by the placement `variable`, so these tests were adapted, each to what it pins: the packages
 // declare the variables the valid file places where it held the four types; the refusals the
 // check can still give are reported one fixture each (`goal_package_unknown` cannot be: the
 // composition refuses a rule of an unknown package first, and no entry takes a table any more),
-// `goal_variable_unknown` among them; the safety line of the irreversible package is kept by
-// admission (such a package declaring a variable fails the check and the bundle), and a
-// placement whose variable a package providing the irreversible capability unmarked declares is
-// `goal_governs_irreversible` at the placement's `name`. V1 fix round 1
-// (`rd-1114/brief-1723-fix1.md`): the refusal of the irreversible package's variable names
-// `variables_on_irreversible`, and the root check reports the unmarked provider's variable
-// `variable_irreversible_by_root`.
+// `goal_variable_unknown` among them.
 // Workflow #455 G-SLx (0.12.78; register §1.501; coordinator work order
-// `rd-1121/brief-455-locks.md`, rulings 1 and 2) lifts that safety line: a package that provides
-// an irreversible capability may declare variables, and a goal entry may govern it. The four
-// tests that pinned the line left the gate map for four `gslx_` tests on the same fixtures: the
-// package that marks the capability declares a variable and the root and the bundle pass; a
-// `tier` over its rule, a placement of a variable of the package that provides it unmarked (which
-// applies) and a `tier` over the head of a chain it follows are accepted by the check and the
-// bundle; and on each such root every other refusal of the check is the one before. A fifth
-// shows that a root none of whose packages marks a capability irreversible answers as before.
+// `rd-1121/brief-455-locks.md`, rulings 1 and 2) lifts the safety line G-R1, its fix rounds 1 and
+// 2 and V1 with its fix round 1 pinned here (an entry reaching a package that can do something
+// irreversible was `goal_governs_irreversible`, such a package's variable failed the check and
+// the bundle `variables_on_irreversible`, and the unmarked provider's variable was
+// `variable_irreversible_by_root`); the four tests of that line left the gate map. What these
+// tests assert of it now, on the same fixtures, for `standard-pack check` and
+// `package bundle --goals` alike:
+// - the package whose control declaration marks its capability irreversible declares a variable
+//   the valid file places: no warning, the variable listed by its default's origin, the file laid;
+// - a `tier` over that package's rule, alone or beside another's, is accepted, and beside a rule
+//   the schedule does not have is `goal_rule_unknown` at that rule alone;
+// - the variable of a package that provides the capability unmarked applies and its placement is
+//   accepted, as on the root where that package provides a capability of its own;
+// - a `tier` over the head of a chain whose second follower runs the marked package is accepted,
+//   the composition listing both followers with the head as on the chain of reversible followers;
+// - on each such root every other refusal of the check is the one before, and a root none of
+//   whose packages marks a capability irreversible answers as before.
 // The first test lost its last fixture, `goal_governs_irreversible`, which nothing gives now.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, variable and text is a
 // placeholder.
