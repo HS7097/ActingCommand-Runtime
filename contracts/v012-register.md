@@ -44182,9 +44182,12 @@ Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or
 schedule explanation's check is its shape rules alone): its status read of an entry-blocked
 instance is byte for byte as before, since the status gains nothing from this slice; its schedule
 explanation read (`ac_overview`'s not-running rows) decodes the new `why`; its deploy, place and
-post-check read the status only and meet nothing new; the ledger's new records (`runtime.failed`
-with the new codes, `policy.not_run_changed` naming `instance_entry_blocked`) are codes it reads as
-text, their values (`entry_recovery_end`, `trigger_rule` among them) a map it takes as it is. **A rollback to
+post-check read the status only and meet nothing new; the ledger's new records are `runtime.failed`
+with the new codes, which it reads as text, their values (`entry_recovery_end`, `trigger_rule` among
+them) a map it takes as it is. No record of the ledger marks a block's beginning or end (no code
+writes `policy.not_run_changed`: 114-A added its reader alone, §1.236); what shows a block is the
+schedule explanation's `why` and the three warnings (`instance_entry_blocked_recovery_failed`,
+`instance_entry_blocked_awaiting_person`, `instance_entry_task_set_aside_reported`). **A rollback to
 v0.12.75** passes the installer's edges as AVAIL-1's does; the blocks were memory and are gone, so
 the instance is scheduled again and the 11-20 storm can return; a record settled at the entry
 replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives no identity), so it
