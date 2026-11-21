@@ -155,6 +155,12 @@
 //!   after the other pairs with a count in a row (P3 (b) tells it from fix round 7's rule; in P3
 //!   the healthy pair runs a minute after the broken pair's first block);
 //! - M4 (ruling 3): its third climb's waits fail at once with a fatal error the Runtime latched.
+//!
+//! Fix round 9 (the coordinator's work order of 11-21 after CI on fix round 8's head):
+//!
+//! - P3: in the round a minute after the first block's end `OTHER`, ranked behind `BROKEN`, is
+//!   passed over as one behind the instance's winner before its eligibility, where its wait would
+//!   be read, is asked; the test asserts that (its wait is asserted on its pair).
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
@@ -1561,11 +1567,14 @@ fn entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_
 /// second (two), less than its own wait, which still runs and stands; fix round 8 (ruling 1):
 /// `TASK`, whose failure set the block, the third (three first intervals; fix round 7 had its own
 /// minute, so it came due with `BROKEN` and, first in the evaluation's order, failed again). In
-/// the round a minute after that end `BROKEN` alone is due: it is dispatched while `TASK` (`count`
-/// 1) and `OTHER` (`count` 10) wait, and its success ends every wait. `TASK`'s next failure counts
-/// against it: under a threshold of 1 it is set aside there; under 2 the healthy `BROKEN` (its
-/// count in a row none) runs at that block's end and `TASK`'s next failure, the second against
-/// it, sets it aside. One person told each time.
+/// the round a minute after that end `BROKEN` alone is due and is dispatched; `TASK`, ranked ahead
+/// of it, waits (`count` 1). Fix round 9: `OTHER` waits too (its pair), but the round does
+/// not read that wait: ranked behind `BROKEN`, which takes the instance, it is passed over as one
+/// behind the instance's winner (`instance_already_selected`) before its eligibility, where
+/// position 4b reads a pair's wait, is asked. `BROKEN`'s success ends every wait. `TASK`'s next
+/// failure counts against it: under a threshold of 1 it is set aside there; under 2 the healthy
+/// `BROKEN` (its count in a row none) runs at that block's end and `TASK`'s next failure, the
+/// second against it, sets it aside. One person told each time.
 #[test]
 fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_first_interval() {
     for threshold in [1_u16, 2] {
@@ -1618,11 +1627,28 @@ fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_f
         advance_manual_clock_to(&clock, at);
         let round = evaluate(&host, at, 102);
         assert!(dispatched(&round, BROKEN), "{round:#?}");
-        for (task_id, count) in [(TASK, 1), (OTHER, 10)] {
-            let waiting = reason_of(&round, task_id, HostCode::InstanceEntryTaskWaiting)
-                .unwrap_or_else(|| panic!("{task_id} waits: {round:#?}"));
-            assert_eq!(waiting.value("count"), Some(&json!(count)), "{task_id}");
-        }
+        let waiting = reason_of(&round, TASK, HostCode::InstanceEntryTaskWaiting)
+            .unwrap_or_else(|| panic!("the setter waits: {round:#?}"));
+        assert_eq!(waiting.value("count"), Some(&json!(1)));
+        // Fix round 9 (CI on fix round 8's head): `OTHER`'s wait (its pair, above) is not read in
+        // this round: ranked behind `BROKEN`, which takes the instance, it is settled as one behind
+        // the instance's winner before its eligibility, where position 4b reads a pair's wait, is
+        // asked.
+        let behind = round
+            .decisions
+            .iter()
+            .find(|decision| {
+                decision.task_id == OTHER
+                    && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
+            })
+            .and_then(|decision| decision.reasons.last())
+            .unwrap_or_else(|| panic!("the decision of OTHER: {round:#?}"));
+        assert!(
+            behind
+                .outcome
+                .is(actingcommand_policy::PolicyCode::InstanceAlreadySelected),
+            "behind the instance's winner: {round:#?}"
+        );
         let healthy = admit_at(&host, &clock, at, 103);
         assert_eq!(healthy.task_id, BROKEN, "the first healthy pair");
         let let_in = succeed(&host, &clock, &healthy);
