@@ -4150,6 +4150,22 @@ impl PolicyHost {
             {
                 return Ok(Some(None));
             }
+            // Position 4b's pair (Workflow #490 ENTRY-A fix round 4; #486 ASLEEP-1 fix round 2,
+            // `scheduling-blackout.md`, "The idle plan behind a hold"): on an instance not blocked,
+            // or for a store update task that passes the block, a task that waits after its
+            // failures at the entry, or is set aside for its window, is let through at that end.
+            // The block itself is not read: a blocked instance's candidate counts due.
+            if (entry_blocked.get(&intent.instance_id).is_none()
+                || store_tasks.contains(&intent.task_id))
+                && let Some(waiting) = entry_blocked.pair_deferral(
+                    &intent.instance_id,
+                    &intent.task_id,
+                    time.unix_ms,
+                    false,
+                )
+            {
+                return Ok(Some(deferred_wake(&waiting)));
+            }
             // Positions 5 and 6.
             if let Some(deferral) = pack_schedule
                 .deferral(intent, false)

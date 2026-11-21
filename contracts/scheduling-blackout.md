@@ -329,7 +329,8 @@ keeps 4a's hold. The evaluation reads the blocks under
 the policy outcome gate a settlement blocks under, so no evaluation sees the run's settlement
 without its block; admission does not judge it again. The idle plan counts such a decision due
 (eligible, no wake): an idle action never closes a blocked instance, whose recovery is coming,
-and its look ahead does not read this position. The not-running row of the schedule explanation
+and its look ahead does not read the block (it reads the pairs' waits below: #486 ASLEEP-1 fix
+round 2, "The idle plan behind a hold"). The not-running row of the schedule explanation
 names it, since the first evaluation that deferred the instance so. Then (fix round 4, rulings 2
 and 3; [policy-suspension.md](policy-suspension.md), "A pair that keeps failing at its entry"), on
 an instance not blocked or for a store update task that passes the block, a candidate whose pair
@@ -399,7 +400,13 @@ the Runtime ends the evaluation, any other goes to the daemon's log as a skipped
 ([runtime-config.md](runtime-config.md)). This look ahead serves the idle plan alone: the order above, the
 reason and wake each deferral answers, the not-run explanation, the clock-slot records of Workflow
 #372 K2 and the budgets' accounting are what they were. A position added to the order is added to
-the look ahead (`PolicyHost::evaluate`, `look_ahead`). A candidate that the evaluation blocks
+the look ahead (`PolicyHost::evaluate`, `look_ahead`). Of position 4b (Workflow #490 ENTRY-A) the
+look ahead reads, after 4a, a pair's wait and its being set aside, on an instance not blocked or
+for a store update task that passes the block, with its end as the release (#486 ASLEEP-1 fix
+round 2: otherwise a plan made while the idle action's own claim held the key counted the waiting
+task due, and the instance, its emulator just stopped, was woken at once for a task that could
+not be dispatched until the wait's end); not the block itself, whose candidate counts due. A
+candidate that the evaluation blocks
 before this order because its instance is unavailable (`instance_unavailable`: a start withholds
 the availability until its self-check, and a pause a start restored keeps it withheld until the
 resume's reconnect) reaches no position, so on an instance the idle action closed, while positions

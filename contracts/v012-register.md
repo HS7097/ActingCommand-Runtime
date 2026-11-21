@@ -44544,6 +44544,33 @@ coordinator's rulings 1 to 9 of the round).
   `codes.rs`, `idle_action.rs`, `host/emulator_autostart.rs` and the two code fragments; the
   contracts above.
 
+**Fix round 2** (coordinator work order `rd-1121/brief-486-asleep-fix2.md`, after CI's `lint` on
+fix round 1's head; stacked on pull request #1853, §1.494, merged at its head `d32cb7d1`).
+- *Lint.* `IdlePlanner::check` has had no caller outside the tests since the host checks with
+  `check_with_due_task`; it is built for tests only, as `record_gated` is. Clippy's run on fix round
+  1 named nothing else the slice touched.
+- *The merge.* Both sides kept: `PolicyEvaluationContext` carries `asleep`, `idle_stops_emulator`
+  and `entry_blocked`; a catalogue's activation clears #490's entry pairs and then this slice's
+  unanswered wakes, each its own state in the one activation path; a Runtime start begins both
+  empty; the scheduler workbench's package change clears the pairs alone, as it answers no wake.
+- *A pair's wait behind a hold* (`policy_host.rs`, `look_ahead`; `scheduling-blackout.md`, "The
+  idle plan behind a hold"). #490's position 4b added a pair's wait and its being set aside to the
+  order but not to #484's look ahead, so a plan made while a hold of positions 1 or 2 (the idle
+  action's own claim as it stops the emulator among them) deferred a waiting task counted it due,
+  and the instance, asleep after the stop, was woken at once for a task that cannot be dispatched
+  before the wait's end. The look ahead now reads them after 4a, on an instance not blocked or for
+  a store update task, their end the release; the block itself is still not read.
+- *Read against #490, nothing else to change.* An asleep instance selects nothing, so no block is
+  set on it. A blocked instance's candidates count due, so the idle check stops its emulator only
+  when none of them reaches 4b; #490 does not end a block at an idle stop (a recovery or a run that
+  succeeds, a resume, a blackout, a fence, a restart), and its held recovery waits while the idle
+  stop owns the instance; the first evaluation in which a candidate reaches the block wakes it, and
+  its startup package's success or the recovery ends the block. A waiting or set-aside pair is
+  deferred at 4b in the closure before the selection that names `instance_asleep_wake_due`, so it
+  is never the task an instance is woken for, and its end is its wake in the plan. A run admitted
+  and failed at its entry answers a wake; the instance may sleep again once the block ended, and is
+  woken for that pair no sooner than its wait's end.
+
 **At deploy.** No new key: nothing to configure. A v0.12.76 reader of the schedule explanation
 (`actingctl`, the MCP server, the console) meets one code it does not know,
 `instance_asleep_wake_due`, as a candidate row's `why` and in its `reasons`, on an instance whose
