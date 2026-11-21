@@ -45,11 +45,12 @@
 //!   there and its count in a row at once (`EntryBlocks::let_pairs_go`); a store update task's run
 //!   is no such run whatever its end (ruling 4), and a changed package frees every pair as an
 //!   activation does (ruling 5, the scheduler workbench's check). Fix round 7 (ruling 1, which
-//!   replaces fix round 6's rule): at a block's end the pairs whose failures set it wait their own
-//!   interval from that end, and the other pairs take turns in the order of their latest failure
-//!   at the entry, the one that failed longest ago first: the first waits one first interval, the
-//!   second two, and so on, a wait still running never shortened, a pair set aside taking no
-//!   place (`EntryBlocks::end`).
+//!   replaces fix round 6's rule): at a block's end the pairs take turns in the order of their
+//!   latest failure at the entry, the one that failed longest ago first: the first waits one
+//!   first interval, the second two, and so on, a wait still running never shortened, a pair set
+//!   aside taking no place; fix round 8 (ruling 1): the pairs whose failures set the block take
+//!   the places after the others, each waiting the later of its own interval and its place's time
+//!   (`EntryBlocks::end`).
 //! - **Where a climb starts and when** (fix round 3, rulings 3 and 5). A stretch of the instance
 //!   runs from its first block since a run was last let in (a scheduled run's main package started
 //!   after its entry check, a scheduled run, a client's or the Lab's run succeeded) until the next
@@ -373,24 +374,28 @@ impl EntryBlocks {
     /// out for its interval after the instance can be dispatched to again. Fix round 5 (ruling 3
     /// (ii)): a pair whose wait a scheduled run let in ended (none in a row) has none to renew.
     ///
-    /// Fix round 7 (ruling 1; it replaces fix round 6's rule): a turn order. The pairs whose
-    /// failures set or renewed the block (`EntryBlock::setters`) wait their own interval from now.
-    /// Every other pair of the instance with a count in a row above none, but one set aside (it
-    /// takes no place and is left as it is), takes a place in the order of its latest failure at
-    /// the entry (`EntryPair::observed_at_unix_ms`, which every failure sets), the one that failed
-    /// longest ago first, equal times by the task's id (the map's order, kept by a stable sort), so
-    /// the order is the same on every run: the first waits one `first_interval_ms` from now, the
-    /// second two, the third three, and so on. A wait still running is never shortened (the later
-    /// time stands), and the window's end bounds every wait where it is read (`pair_deferral`). So
-    /// after every block the other pairs come due one at a time, least recently failed first: a
-    /// pair the outage left with a long interval waits its turn, not that interval, and a healthy
-    /// pair runs once each broken pair ahead of it in the order has failed once more, about one
-    /// block each (a setter whose own interval is not longer than the healthy pair's place may
-    /// come due with or before it, and the evaluation's order decides between pairs due together).
-    /// A task that never failed has no pair: it keeps the first interval's gap after every block.
+    /// Fix round 7 (ruling 1; it replaces fix round 6's rule) and fix round 8 (ruling 1): a turn
+    /// order. Every pair of the instance with a count in a row above none, but one set aside (it
+    /// takes no place), takes a place: first the pairs whose failures did not set the block, in
+    /// the order of their latest failure at the entry (`EntryPair::observed_at_unix_ms`, which
+    /// every failure sets), the one that failed longest ago first, equal times by the task's id
+    /// (the map's order, kept by a stable sort), so the order is the same on every run; then the
+    /// pairs whose failures set or renewed the block (`EntryBlock::setters`), in the same order
+    /// among themselves. The pair at place n waits n `first_interval_ms` from now, and a pair that
+    /// set the block waits its own interval from now when that is later. A wait still running is
+    /// never shortened (the later time stands), and the window's end bounds every wait where it is
+    /// read (`pair_deferral`). A pair set aside is left as it is, but one whose failure set the
+    /// block waits its own interval from now, as before. So after every block the pairs come due
+    /// one at a time, least recently failed first and those that set the block last: a pair the
+    /// outage left with a long interval waits its turn, not that interval, and a healthy pair is
+    /// let in after each broken pair ahead of it in the order has failed once more at most, about
+    /// one block each; with no other pair, a pair that set the block waits its own interval. A
+    /// task that never failed has no pair: it keeps the first interval's gap after every block.
     /// Any rule that decides a pair's wait from intervals alone (fix rounds 5 and 6) let the
     /// evaluation's order pick among the pairs that came due together, so broken pairs could take
-    /// turns ahead of a healthy pair for hours.
+    /// turns ahead of a healthy pair for hours; fix round 7 left the setters at their own
+    /// interval, so a setter with a short one came due with the first turn and could run first
+    /// again.
     fn end(
         &mut self,
         instance_id: InstanceId,
@@ -401,26 +406,34 @@ impl EntryBlocks {
         let block = self.blocked.remove(&instance_id)?;
         self.ended_let_in
             .insert(instance_id, count(&self.let_in, instance_id));
-        let mut others = Vec::new();
+        let (mut others, mut setters) = (Vec::new(), Vec::new());
         for ((_, task_id), pair) in self
             .pairs
             .iter_mut()
             .filter(|((pair_instance, _), pair)| *pair_instance == instance_id && pair.in_a_row > 0)
         {
-            if block.setters.contains(task_id) {
-                pair.until_unix_ms = pair
-                    .until_unix_ms
-                    .max(now_unix_ms.saturating_add(pair.interval_ms));
-            } else if !pair.set_aside {
-                others.push(pair);
+            match (block.setters.contains(task_id), pair.set_aside) {
+                (true, true) => {
+                    pair.until_unix_ms = pair
+                        .until_unix_ms
+                        .max(now_unix_ms.saturating_add(pair.interval_ms));
+                }
+                (true, false) => setters.push(pair),
+                (false, false) => others.push(pair),
+                (false, true) => {}
             }
         }
         // Stable: pairs that failed at the same time keep the map's order, by the task's id.
         others.sort_by_key(|pair| pair.observed_at_unix_ms);
-        for (place, pair) in (1_u64..).zip(others) {
-            pair.until_unix_ms = pair
-                .until_unix_ms
-                .max(now_unix_ms.saturating_add(first_interval_ms.saturating_mul(place)));
+        setters.sort_by_key(|pair| pair.observed_at_unix_ms);
+        let order = others
+            .into_iter()
+            .map(|pair| (pair, false))
+            .chain(setters.into_iter().map(|pair| (pair, true)));
+        for (place, (pair, set_the_block)) in (1_u64..).zip(order) {
+            let own_ms = if set_the_block { pair.interval_ms } else { 0 };
+            let wait_ms = first_interval_ms.saturating_mul(place).max(own_ms);
+            pair.until_unix_ms = pair.until_unix_ms.max(now_unix_ms.saturating_add(wait_ms));
         }
         block.held
     }
@@ -1745,6 +1758,25 @@ impl HostShared {
             },
         );
         Ok(())
+    }
+
+    /// Fix round 8, test only: the failure at the entry of `task_id`'s pair on `instance_id` renewed
+    /// the instance's block, as a scheduled run's failure at the entry settled while the block
+    /// stands does (`block_instance_entry`): the block counts the task among the tasks whose
+    /// failures set or renewed it (`EntryBlock::setters`). `false` when the instance is not
+    /// blocked.
+    #[cfg(test)]
+    pub(super) fn seed_entry_setter_for_test(
+        &self,
+        instance_id: InstanceId,
+        task_id: &str,
+    ) -> RuntimeHostResult<bool> {
+        let mut blocks = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
+        let Some(block) = blocks.blocked.get_mut(&instance_id) else {
+            return Ok(false);
+        };
+        block.setters.insert(task_id.to_owned());
+        Ok(true)
     }
 
     /// Test only: the entry block of `instance_id`, if it has one.

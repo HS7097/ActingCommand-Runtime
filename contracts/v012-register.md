@@ -43784,12 +43784,14 @@ coordinator's, not the owner's words):
    ago first, equal times by the task's id (the map's order, kept by a stable sort); the first
    waits one first interval (`scheduling.unavailable_probe`'s, as fix round 6 reads it) from the
    end, the second two, the third three; a running wait is never shortened, and the window's end
-   bounds every wait where it is read. *Its bound, in plain words:* after an outage a healthy pair
-   runs once each broken pair ahead of it in the order has failed once more, about one block
-   each, and the pair that set the latest block may run first again while its own interval is not
-   longer than the healthy pair's turn and it stands before it in the evaluation's order (a
-   broken pair with no count first in the order fails twice before the healthy pair's turn); in a
-   stretch that let nothing in a block lasts about half an hour from its sixth on. Walk (shipped
+   bounds every wait where it is read. *Its bound, in plain words* (fix round 8, ruling 2, once the
+   pairs that set the block take the places after the others, item 1 of "Fix round 8"): after an
+   outage a healthy pair is let in after each broken pair ahead of it in the order has failed once
+   more at most, about one block each; in a stretch that let nothing in a block lasts about half
+   an hour from its sixth on. (As built in this round, with the setters at their own interval, the
+   pair that set the latest block could run first again while its own interval was not longer than
+   the healthy pair's turn, so a broken pair with no count first in the order failed twice before
+   the healthy pair's turn: cases (d) and (e) below.) Walk (shipped
    values, the review's model: climbs of about two minutes, the cool-down window from a climb's
    start, the first healthy run): (a) one broken pair and healthy pairs at the maximum, 33 (fix
    round 6: 62); (b) two broken pairs ahead of one healthy, 33 or 65 by the order of their latest
@@ -43834,6 +43836,34 @@ coordinator's, not the owner's words):
    `instance_workers`'s emulator fixture, `gate_480_pg2b`). M4 now waits for the rung's second Stop
    and Start, then for the climb's end while the manual clock moves a second at each look
    (`wait_for_ladders_finished_moving`); the test's sequence changed, not the code.
+
+**Fix round 8** (the coordinator's work order of 11-21, `rd-1121/brief-490-entry-a-fix8.md`, after
+fix round 7's report; the rulings are the coordinator's, not the owner's words):
+
+1. *The pairs that set the block come last in the turn order* (`EntryBlocks::end`). At a block's
+   end the pairs of the instance whose count in a row is above none, but a pair set aside (no
+   place; one whose failure set the block still waits its own interval, as before), take places:
+   first the pairs whose failures did not set the block, as in fix round 7 (latest failure at the
+   entry oldest first, equal times by the task's id), then the pairs whose failures set or renewed
+   it (`EntryBlock::setters`), in the same order among themselves. The pair at place n waits n
+   first intervals from the end, and a pair that set the block waits its own interval when that
+   is later; a wait still running is never shortened; the window's end bounds every wait where it
+   is read. With no other pair, a pair that set the block waits its own interval, as before. Fix
+   round 7 left the setters at their own interval: with a short one (a pair's first failures, one
+   first interval) a setter came due with the first turn, and the evaluation's order could put it
+   first again. Walk (shipped values; fix round 7's model, the latest failures of the outage's
+   pairs taken in every order, and the seventh review's minute model, those failures tied and
+   ordered by name): (a) 33 (fix round 7: 33); (b) 33 or 65 by the order of the latest failures,
+   65 in the review's model (33 or 65); (c) 12 (12); (d) 33, 34 when the healthy pair with the
+   longer wait failed longest ago (its own thirty-four minutes outlast its first turn; the review's
+   model 33) (65); (e) 65 (97); the review's first counterexample 33 or 65, 65 in its model (65);
+   its second 65 to 97, 97 in its model (65 to 97). The review expected 33, 65, 12, 33, 65 for
+   (a) to (e): the same, but for the order of the latest failures in (b) and (d).
+2. *The bound* (the contract's "A pair that keeps failing at its entry", item 1 of fix round 7
+   above, the comment of `end`): after an outage a healthy pair is let in after each broken pair
+   ahead of it in the order has failed once more at most, about one block each. The contract's
+   "The worst cases" and `instance_entry_task_waiting`'s description (after its first sentence:
+   the index unchanged, checked current) describe the order with the setters last.
 
 **Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
 class `none`; fix round 2: `since` 0.12.77):
@@ -43886,6 +43916,7 @@ map). `ledger` stays [3, 9]: no record gains a member or a word; the mark `i` is
 | Fix round 5 | `policy_control.rs` (`entry_condition` for a sensitive task, `input_at_entry`, `preview_paced_settlement`'s `sensitive`); `host/entry_blocks.rs` (`pair_interval_ms`, `EntryBlocks::let_pairs_go`, `end` skipping a pair with none in a row, `settle_entry` for a store update task and a run let in, `recovery_ended` setting `restarts`, the test seam `note_entry_let_in_for_test`); `host/policy_outcome.rs` (`EntryRule::store_task` whatever the end); `host/failure_settlement.rs` (`scheduled_run_entry_checked`); `host/recovery_ladder.rs` (the excluded code's staged recovery only for a run that checked its entry); `host/standard_pack_schedule.rs` (`check_standard_pack_rules` frees the pairs when a package's declaration files changed); `codes.rs` (two texts); `.github/workflows/ci.yml` (host-lab's limits; fix round 6: main's again) |
 | Fix round 6 | `host/entry_blocks.rs` (`EntryBlock::setters`, `EntryBlocks::end` with the configuration's first interval, its callers, the test seam `seed_entry_pair_for_test`); `host/standard_pack_schedule.rs` (`PairMarks`, `RECOGNITION_FILES`, `WorkbenchState::pair_marks`, the comparison before the check's early return, a first read's package marks); `host.rs` (`seed_entry_pair_for_test`); the outcome catalogue's texts (three codes) |
 | Fix round 7 | `host/entry_blocks.rs` (`EntryBlocks::end`'s turn order; the test seam `seed_entry_pair_for_test` with the latest failure's time and a real window end); `host.rs` (`seed_entry_pair_for_test`); `instance_entry_task_waiting`'s description |
+| Fix round 8 | `host/entry_blocks.rs` (`EntryBlocks::end`: the setters' places after the others; the test seam `seed_entry_setter_for_test`); `host.rs` (`seed_entry_setter_for_test`); `instance_entry_task_waiting`'s description |
 | Texts | [policy-suspension.md](policy-suspension.md) ("A failure at the entry", R22, "Which failures accumulate"); [scheduling-blackout.md](scheduling-blackout.md) (position 4b); [scheduling/README.md](scheduling/README.md); [standard-pack-schedule.md](standard-pack-schedule.md); [runtime-interface.md](runtime-interface.md); fix round 2: [emulator-control.md](emulator-control.md) ("Triggers") and [runtime-config.md](runtime-config.md) (`recovery_ladder.exclude_codes`) on what an excluded code does |
 
 **Tests** (`crates/runtime-host/src/tests/gate_490_entry_a.rs`, host gate map row "#490 ENTRY-A"; no
@@ -44048,6 +44079,25 @@ others' counts in a row none).
 | `entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_first` (1) | Through the test seams, one task: five pairs seeded beside `TASK`'s, their ids sorting against the order of their latest failures and their counts in neither order, one with a wait running an hour, one set aside with the oldest failure; `TASK`'s failure sets the block; at its end `TASK` waits its own minute, the three others one, two and three first intervals in the order of their latest failures, the fourth keeps its running wait, the set-aside pair takes no place and is left as it was |
 | `entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_failed_once_more` (1, the seventh review's case) | Three tasks, first interval one minute, longest thirty: `TASK` fails four times in a row (the outage), `OTHER` seeded at six with a later latest failure, `BROKEN` with none; `BROKEN` fails, its block ends thirty-one minutes later (`BROKEN` its minute, `TASK` one first interval, `OTHER` two); `TASK` fails again (five in a row, sixteen minutes); at that block's end `OTHER` one first interval, `BROKEN` two: a minute later `OTHER` is dispatched while both broken pairs wait (counts 5 and 1), and its success ends every wait |
 
+Fix round 8's tests (host gate map, the eighth row "#490 ENTRY-A"; 40 tests, none added or
+removed). Changed, each expectation derived from `EntryBlocks::end` as built (a pair that set the
+block takes the place after the other pairs with a count in a row, at its own interval when that
+is later): Q1 (a) (the test seam `seed_entry_setter_for_test` counts a sixth seeded pair, `Q_F`,
+six in a row, its latest failure fifteen minutes before the admission, among the block's setters:
+at the block's end `Q_F` takes the fifth place and keeps its own thirty minutes, later than five
+first intervals, and `TASK` the sixth, six first intervals, later than its own minute; ordered by
+id, `TASK` would be the fifth); Q1 (b) (`BROKEN` three first intervals at its block's end, not its
+own minute, so `TASK` alone is due a minute after it); N3 (a) (`OTHER` three at the outage's last
+block's end; `TASK` three at its second block's end, not its own two, and its
+`next_eligible_unix_ms` with it); P3 (`TASK` three first intervals at its first block's end, so a
+minute after it `BROKEN` alone is due and runs while `TASK` (count 1) and `OTHER` (count 10) wait:
+the broken pair's second failure ahead of it is gone); P3 (b) (`OTHER` three at its block's end,
+`TASK` three at its second and `BROKEN` three at its second, where fix round 7 gave their own one
+or two minutes: the test tells the two rules apart); M3 (c) (`BROKEN`, which set the block, two
+first intervals, not its own one). Unchanged after a walk of each: M1, M2, M3 (a), M3 (b), M7,
+N3 (b), N4, M5, P4 and the replays (at each block's end the pair that set it is the only one with
+a count in a row, so it waits its own interval).
+
 **What is not changed.** A failure in a step of the main package is settled, rerun, counted and
 paused as before (A2 only clears the pair's mark when such a run started its main package);
 budgets are taken at admission and an immediate rerun of a step failure costs one; the failure
@@ -44095,7 +44145,10 @@ rules come due one at a time, a minute apart, the one whose latest failure at th
 first (the rule whose failure set the block still waits its own interval), so a healthy rule an
 outage left waiting runs once each broken rule ahead of it has failed once more; until a
 composition has succeeded since the start, a placement is seen only by `bundle.json` and the
-recognition files. **Before a rollback to 0.12.76** (fix round 6, item 5): look whether any
+recognition files. **Fix round 8 at deploy:** the rule whose failure set the block no longer waits
+only its own interval: it comes due after the instance's other waiting rules, a minute after the
+last of them at the earliest, so a healthy rule an outage left waiting is let in after each broken
+rule ahead of it has failed once more at most. **Before a rollback to 0.12.76** (fix round 6, item 5): look whether any
 catalogue generation activated since this version was deployed holds a task whose `sensitive` is
 true; if none, nothing more to check; if one does, look whether a `policy.execution_recorded` of
 such a task whose `failure` carries `condition` and whose `failure.failure_identity` ends in `~fi`

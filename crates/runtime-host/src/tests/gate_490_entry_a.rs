@@ -145,6 +145,15 @@
 //!   check activated no catalogue (ruling 4); the seeded pair's window ends at a real time;
 //! - M4 waits for its third climb's end with the manual clock moving (the emulator rung's
 //!   readiness wait reads the Runtime clock while it sleeps in real time).
+//!
+//! Fix round 8 (the coordinator's work order of 11-21 after fix round 7):
+//!
+//! - Q1 (a) (ruling 1): two pairs set the block (the test seam counts a second one among its
+//!   setters); they take the places after the others in the order of their latest failures, not
+//!   of their ids, and the one whose own interval is later than its place keeps it;
+//! - Q1 (b), N3 (a), P3, P3 (b) and M3 (c) re-derived: a pair that set the block takes the place
+//!   after the other pairs with a count in a row (P3 (b) tells it from fix round 7's rule; in P3
+//!   the healthy pair runs a minute after the broken pair's first block).
 
 use super::gate_373_nav3a::{
     AWAY, DONE, LEAD, MAIN, MENU, OPEN, Pack, RETURN_HOME, SHOP, StandardRoot, route, screens,
@@ -998,9 +1007,11 @@ fn entry_m3_b_a_failure_with_nothing_let_in_since_the_previous_one_does_not_coun
 /// `escalation_threshold` 1): `TASK` and `BROKEN` fail at their entry each time; `OTHER` succeeds;
 /// each block lasts `BLOCK_MS`. `TASK` fails; after its block's end, while it waits, `BROKEN` is
 /// dispatched and fails. `TASK`'s wait passed during `BROKEN`'s block, but that block's end starts
-/// both pairs' waits again: `OTHER` runs and is let in. `TASK`'s next failure, then `BROKEN`'s,
-/// each came after a run let in: each pair is set aside for the window in turn, a person told once
-/// of each, and `OTHER` is dispatched and runs again.
+/// both pairs' waits again (fix round 8, ruling 1: `TASK` the first turn, one first interval,
+/// `BROKEN`, which set the block, the second, two; fix round 7 gave it its own minute): `OTHER`
+/// runs and is let in. `TASK`'s next failure, then `BROKEN`'s, each came after a run let in: each
+/// pair is set aside for the window in turn, a person told once of each, and `OTHER` is dispatched
+/// and runs again.
 #[test]
 fn entry_m3_c_two_broken_pairs_and_a_healthy_task_the_healthy_task_runs_and_both_are_set_aside_in_turn()
  {
@@ -1025,11 +1036,11 @@ fn entry_m3_c_two_broken_pairs_and_a_healthy_task_the_healthy_task_runs_and_both
         "the task's wait passes during the broken one's block"
     );
     recover_at(&host, &clock, block_end);
-    for task_id in [TASK, BROKEN] {
+    for (task_id, place) in [(TASK, 1_u64), (BROKEN, 2)] {
         assert_eq!(
             pair(&host, task_id).map(|(_, _, until, _)| until),
-            Some(block_end + FIRST_INTERVAL_MS),
-            "{task_id} waits from the latest block's end"
+            Some(block_end + place * FIRST_INTERVAL_MS),
+            "{task_id} waits from the latest block's end, in its turn"
         );
     }
     let other = admit_at(&host, &clock, block_end + 1_000, 102);
@@ -1198,12 +1209,13 @@ fn entry_n1_a_sensitive_tasks_failure_at_the_entry_settles_as_a_condition_and_ne
 /// 2, `scheduling.unavailable_probe`'s first and longest interval one minute, so a pair is at the
 /// maximum from its first failure): an outage. `TASK`, first in the order, fails at its entry, then
 /// `BROKEN` and `OTHER` (both healthy here) fail too while it waits, each block `BLOCK_MS` long.
-/// Fix round 7 (ruling 1): at the last block's end `OTHER`, whose failure set it, waits its own
-/// minute, and the others take turns by their latest failure: `TASK` (the oldest) one first
-/// interval, `BROKEN` two. The outage ends: `TASK`, whose entry stays broken, is dispatched first
-/// (due with `OTHER`) and fails again, its second in a row, and past the maximum it waits one first
-/// interval more (ruling 3 (i)); at that block's end `BROKEN` (its latest failure now the oldest)
-/// waits one first interval and `OTHER` two, so in the round a minute after it `TASK` waits
+/// Fix round 7 (ruling 1): at the last block's end the others take turns by their latest failure:
+/// `TASK` (the oldest) one first interval, `BROKEN` two; fix round 8 (ruling 1): `OTHER`, whose
+/// failure set the block, the third (fix round 7: its own minute). The outage ends: `TASK`, whose
+/// entry stays broken, is dispatched first (the only one due) and fails again, its second in a
+/// row, its own wait past the maximum two minutes (ruling 3 (i)); at that block's end `BROKEN`
+/// (its latest failure now the oldest) waits one first interval, `OTHER` two and `TASK`, which set
+/// the block, three (fix round 7: its own two), so in the round a minute after it `TASK` waits
 /// (`count` 2) and the healthy `BROKEN` is dispatched and succeeds. That run
 /// let in ends every pair's wait at once (ruling 3 (ii)): no reason holds `TASK` or `OTHER`, `TASK`
 /// (first in the order) is dispatched once `BROKEN`'s lease has lapsed and its failure counts
@@ -1234,9 +1246,9 @@ fn entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_
         block_end = settled.observed_at_unix_ms + BLOCK_MS;
         recover_at(&host, &clock, block_end);
     }
-    // Fix round 7 (ruling 1): `OTHER` set the block (its own minute); `TASK` failed longest ago
-    // (one first interval), `BROKEN` after it (two).
-    for (task_id, minutes) in [(TASK, 1_u64), (BROKEN, 2), (OTHER, 1)] {
+    // Fix round 7 (ruling 1): `TASK` failed longest ago (one first interval), `BROKEN` after it
+    // (two); fix round 8 (ruling 1): `OTHER` set the block, the place after them (three).
+    for (task_id, minutes) in [(TASK, 1_u64), (BROKEN, 2), (OTHER, 3)] {
         assert_eq!(
             pair(&host, task_id),
             Some((1, 0, block_end + minutes * FIRST_INTERVAL_MS, false)),
@@ -1245,14 +1257,14 @@ fn entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_
     }
 
     let again = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, 103);
-    assert_eq!(again.task_id, TASK, "first in the order");
+    assert_eq!(again.task_id, TASK, "the first turn, the only one due");
     let settled = settle_at_entry_after(&host, &clock, &again, ENTRY_RUN_MS);
     block_end = settled.observed_at_unix_ms + BLOCK_MS;
     recover_at(&host, &clock, block_end);
     assert_eq!(
         pair(&host, TASK),
-        Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false)),
-        "past the maximum, one first interval more"
+        Some((2, 0, block_end + 3 * FIRST_INTERVAL_MS, false)),
+        "it set the block: the third turn, later than its own two minutes past the maximum"
     );
     assert_eq!(
         pair(&host, BROKEN),
@@ -1273,7 +1285,7 @@ fn entry_n3_a_after_an_outage_the_pairs_at_the_maximum_come_due_apart_and_a_run_
     assert_eq!(waiting.value("count"), Some(&json!(2)));
     assert_eq!(
         waiting.value("next_eligible_unix_ms"),
-        Some(&json!(block_end + 2 * FIRST_INTERVAL_MS))
+        Some(&json!(block_end + 3 * FIRST_INTERVAL_MS))
     );
     let healthy = admit_at(&host, &clock, at, 105);
     assert_eq!(
@@ -1543,16 +1555,16 @@ fn entry_n4_a_store_update_task_whose_main_package_started_and_failed_is_no_run_
 /// `TASK`, first in the order and whose entry is broken, with none (the test seeds the two pairs;
 /// fix round 7: their latest failures at the same time, a minute before the outage's end, so
 /// the turn order takes them by the task's id, `BROKEN` first). `TASK` fails at once; its block,
-/// whose climb the stretch's pace holds, ends thirty-one minutes after the outage: `TASK`, whose
-/// failure set it, waits its own minute; `BROKEN`, whose own wait has passed, its turn, the first
-/// (one first interval), not thirty minutes; `OTHER` the second (two), less than its own wait,
-/// which still runs and stands. `TASK` and `BROKEN` come due together and `TASK`, first in the
-/// order, fails again; after that block's end `TASK` waits its two minutes, `BROKEN` one first
-/// interval and `OTHER` two (fix round 7; fix round 6 had one for both): in the round a minute
-/// after it `TASK` waits (`count` 2) and `BROKEN` runs, and its success ends every wait. `TASK`'s
-/// next failure counts against it: under a threshold of 1 it is set aside there; under 2 the
-/// healthy `BROKEN` (its count in a row none) runs at that block's end and `TASK`'s next failure,
-/// the second against it, sets it aside. One person told each time.
+/// whose climb the stretch's pace holds, ends thirty-one minutes after the outage: `BROKEN`, whose
+/// own wait has passed, takes the first turn (one first interval), not thirty minutes; `OTHER` the
+/// second (two), less than its own wait, which still runs and stands; fix round 8 (ruling 1):
+/// `TASK`, whose failure set the block, the third (three first intervals; fix round 7 had its own
+/// minute, so it came due with `BROKEN` and, first in the evaluation's order, failed again). In
+/// the round a minute after that end `BROKEN` alone is due: it is dispatched while `TASK` (`count`
+/// 1) and `OTHER` (`count` 10) wait, and its success ends every wait. `TASK`'s next failure counts
+/// against it: under a threshold of 1 it is set aside there; under 2 the healthy `BROKEN` (its
+/// count in a row none) runs at that block's end and `TASK`'s next failure, the second against
+/// it, sets it aside. One person told each time.
 #[test]
 fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_first_interval() {
     for threshold in [1_u16, 2] {
@@ -1585,11 +1597,6 @@ fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_f
         let block_end = outage_end + 31 * MINUTE_MS;
         recover_at(&host, &clock, block_end);
         assert_eq!(
-            pair(&host, TASK),
-            Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
-            "its failure set the block: its own interval"
-        );
-        assert_eq!(
             pair(&host, BROKEN),
             Some((6, 0, block_end + FIRST_INTERVAL_MS, false)),
             "the first turn (the same latest failure, the lower id), not its thirty minutes"
@@ -1599,34 +1606,22 @@ fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_f
             Some((10, 0, outage_end + 34 * MINUTE_MS, false)),
             "its own wait still runs past its turn: never shortened"
         );
-
-        let again = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, 101);
-        assert_eq!(
-            again.task_id, TASK,
-            "due with BROKEN, and first in the order"
-        );
-        let settled = settle_at_entry_after(&host, &clock, &again, ENTRY_RUN_MS);
-        let block_end = settled.observed_at_unix_ms + BLOCK_MS;
-        recover_at(&host, &clock, block_end);
+        // Fix round 8 (ruling 1): the pair that set the block takes the place after the others.
         assert_eq!(
             pair(&host, TASK),
-            Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false))
+            Some((1, 0, block_end + 3 * FIRST_INTERVAL_MS, false)),
+            "its failure set the block: the third turn, later than its own minute"
         );
-        // Fix round 7 (ruling 1): the two healthy pairs take turns, one and two first intervals.
-        for (task_id, place) in [(BROKEN, 1_u64), (OTHER, 2)] {
-            assert_eq!(
-                pair(&host, task_id).map(|(_, _, until, _)| until),
-                Some(block_end + place * FIRST_INTERVAL_MS),
-                "{task_id}: its turn after the broken pair's block"
-            );
-        }
+
         let at = block_end + FIRST_INTERVAL_MS;
         advance_manual_clock_to(&clock, at);
         let round = evaluate(&host, at, 102);
         assert!(dispatched(&round, BROKEN), "{round:#?}");
-        let waiting = reason_of(&round, TASK, HostCode::InstanceEntryTaskWaiting)
-            .unwrap_or_else(|| panic!("the broken pair waits: {round:#?}"));
-        assert_eq!(waiting.value("count"), Some(&json!(2)));
+        for (task_id, count) in [(TASK, 1), (OTHER, 10)] {
+            let waiting = reason_of(&round, task_id, HostCode::InstanceEntryTaskWaiting)
+                .unwrap_or_else(|| panic!("{task_id} waits: {round:#?}"));
+            assert_eq!(waiting.value("count"), Some(&json!(count)), "{task_id}");
+        }
         let healthy = admit_at(&host, &clock, at, 103);
         assert_eq!(healthy.task_id, BROKEN, "the first healthy pair");
         let let_in = succeed(&host, &clock, &healthy);
@@ -1688,15 +1683,16 @@ fn entry_p3_after_an_outage_a_broken_pair_due_first_holds_the_healthy_ones_one_f
 /// first interval one minute and its longest two): an outage, each block `BLOCK_MS`: `TASK`,
 /// `BROKEN` and `OTHER` fail at their entry in turn, each its first in a row. Fix round 7 (ruling
 /// 1, the turn order; it tells this round's rule from fix round 6's): at `OTHER`'s block's end
-/// `OTHER` (the setter) waits its own minute, `TASK` (its latest failure the oldest) one first
-/// interval and `BROKEN` two (fix round 6: one, its interval not longer than the setter's).
-/// `TASK`, due with `OTHER` and first in the order, fails again (two minutes); at that block's end
-/// `BROKEN` waits one first interval and `OTHER` two (fix round 6: one each), so `BROKEN` alone is
-/// due a minute later and fails again. At `BROKEN`'s second block's end `BROKEN` waits its own two
-/// minutes, `OTHER` (the oldest failure now) one first interval and `TASK` two: a minute later
-/// `OTHER` is dispatched while both broken pairs wait (`count` 2), each having failed once more
-/// since `OTHER`'s failure. `OTHER` succeeds, which ends every wait, and `TASK`'s next failure,
-/// one against it, sets it aside; one person told.
+/// `TASK` (its latest failure the oldest) waits one first interval and `BROKEN` two (fix round 6:
+/// one, its interval not longer than the setter's); fix round 8 (ruling 1; it tells this round's
+/// rule from fix round 7's) `OTHER`, the setter, three (fix round 7: its own minute). `TASK`, the
+/// only one due a minute later, fails again (two minutes); at that block's end `BROKEN` waits one
+/// first interval, `OTHER` two (fix round 6: one each) and `TASK`, the setter, three, so `BROKEN`
+/// alone is due a minute later and fails again. At `BROKEN`'s second block's end `OTHER` (the
+/// oldest failure now) waits one first interval, `TASK` two and `BROKEN`, the setter, three (fix
+/// round 7: its own two): a minute later `OTHER` is dispatched while both broken pairs wait
+/// (`count` 2), each having failed once more since `OTHER`'s failure. `OTHER` succeeds, which ends
+/// every wait, and `TASK`'s next failure, one against it, sets it aside; one person told.
 #[test]
 fn entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of_it() {
     let root = TempDir::new().expect("tempdir");
@@ -1720,8 +1716,9 @@ fn entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of
         block_end = settled.observed_at_unix_ms + BLOCK_MS;
         recover_at(&host, &clock, block_end);
     }
-    // Fix round 7 (ruling 1): `OTHER` set the block; `TASK` failed longest ago, then `BROKEN`.
-    for (task_id, minutes) in [(TASK, 1_u64), (BROKEN, 2), (OTHER, 1)] {
+    // Fix round 7 (ruling 1): `TASK` failed longest ago, then `BROKEN`; fix round 8 (ruling 1):
+    // `OTHER` set the block, the place after them.
+    for (task_id, minutes) in [(TASK, 1_u64), (BROKEN, 2), (OTHER, 3)] {
         assert_eq!(
             pair(&host, task_id),
             Some((1, 0, block_end + minutes * FIRST_INTERVAL_MS, false)),
@@ -1730,33 +1727,33 @@ fn entry_p3_b_two_broken_pairs_ahead_of_a_healthy_one_do_not_take_turns_ahead_of
     }
     for (task_id, seed) in [(TASK, 103), (BROKEN, 104)] {
         let intent = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, seed);
-        assert_eq!(intent.task_id, task_id, "first in the order of those due");
+        assert_eq!(intent.task_id, task_id, "the first turn, the only one due");
         let settled = settle_at_entry_after(&host, &clock, &intent, ENTRY_RUN_MS);
         block_end = settled.observed_at_unix_ms + BLOCK_MS;
         recover_at(&host, &clock, block_end);
         if task_id == TASK {
-            // `TASK` set the block; `BROKEN` failed longest ago (one), `OTHER` after it (two).
-            for (other, minutes) in [(BROKEN, 1_u64), (OTHER, 2)] {
+            // `BROKEN` failed longest ago (one), `OTHER` after it (two); `TASK` set the block
+            // (three, later than its own two).
+            for (in_turn, in_a_row, minutes) in
+                [(BROKEN, 1_u32, 1_u64), (OTHER, 1, 2), (TASK, 2, 3)]
+            {
                 assert_eq!(
-                    pair(&host, other),
-                    Some((1, 0, block_end + minutes * FIRST_INTERVAL_MS, false)),
-                    "{other}: its turn after the block `TASK` set"
+                    pair(&host, in_turn),
+                    Some((in_a_row, 0, block_end + minutes * FIRST_INTERVAL_MS, false)),
+                    "{in_turn}: its turn after the block `TASK` set"
                 );
             }
         }
     }
-    for task_id in [TASK, BROKEN] {
+    // `OTHER` failed longest ago (one), `TASK` after it (two); `BROKEN` set the block (three,
+    // later than its own two).
+    for (task_id, in_a_row, minutes) in [(OTHER, 1_u32, 1_u64), (TASK, 2, 2), (BROKEN, 2, 3)] {
         assert_eq!(
             pair(&host, task_id),
-            Some((2, 0, block_end + 2 * FIRST_INTERVAL_MS, false)),
-            "{task_id}: two minutes (BROKEN its own, the setter's; TASK the second turn)"
+            Some((in_a_row, 0, block_end + minutes * FIRST_INTERVAL_MS, false)),
+            "{task_id}: its turn after the block `BROKEN` set"
         );
     }
-    assert_eq!(
-        pair(&host, OTHER),
-        Some((1, 0, block_end + FIRST_INTERVAL_MS, false)),
-        "the first turn: its latest failure the oldest"
-    );
     let at = block_end + FIRST_INTERVAL_MS;
     advance_manual_clock_to(&clock, at);
     let round = evaluate(&host, at, 105);
@@ -1980,17 +1977,25 @@ const Q_B: &str = "fixture.q-b";
 const Q_C: &str = "fixture.q-c";
 const Q_D: &str = "fixture.q-d";
 const Q_E: &str = "fixture.q-e";
+/// Fix round 8 (Q1 (a)): a second pair that set the block, whose id sorts after `TASK`'s and whose
+/// latest failure came before it.
+const Q_F: &str = "fixture.q-f";
 
 /// Q1 (a) (fix round 7, ruling 1, the turn order at a block's end, through the test seams; the
 /// settlement hook, one task, the test host's configuration: first interval one minute, factor
-/// 2): five pairs of the policy instance are seeded as earlier failures at the entry left them,
-/// their waits passed but one: `Q_C` three in a row, its latest failure thirty minutes before
-/// `TASK`'s admission; `Q_B` six, twenty; `Q_A` one, ten; `Q_D` two, five, its wait running an
-/// hour after the admission; `Q_E` set aside, forty (the oldest). `TASK` fails at its entry and
-/// sets the block; at the block's end `TASK` waits its own interval (one minute), and the others
-/// take turns in the order of their latest failures, not of their ids or counts: `Q_C` one first
-/// interval, `Q_B` two, `Q_A` three; `Q_D`, the fourth, keeps its longer wait; `Q_E` takes no
-/// place (else every other turn would be one later) and is left as it was.
+/// 2, longest thirty minutes): six pairs of the policy instance are seeded as earlier failures at
+/// the entry left them, their waits passed but one: `Q_C` three in a row, its latest failure
+/// thirty minutes before `TASK`'s admission; `Q_B` six, twenty; `Q_A` one, ten; `Q_D` two, five,
+/// its wait running an hour after the admission; `Q_E` set aside, forty (the oldest); `Q_F` six
+/// (its own interval thirty minutes), fifteen. `TASK` fails at its entry and sets the block, and
+/// the test seam counts `Q_F` among the block's setters too (as a failure of it settled while the
+/// block stands would). At the block's end the pairs that did not set it take turns in the order
+/// of their latest failures, not of their ids or counts: `Q_C` one first interval, `Q_B` two,
+/// `Q_A` three; `Q_D`, the fourth, keeps its longer wait; `Q_E` takes no place (else every other
+/// turn would be one later) and is left as it was. Fix round 8 (ruling 1): the two setters take
+/// the places after them in the order of their latest failures, not of their ids: `Q_F` the
+/// fifth, whose own thirty minutes are later and stand, `TASK` the sixth, six first intervals,
+/// later than its own minute (the fifth, were the setters ordered by id).
 #[test]
 fn entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_first() {
     let root = TempDir::new().expect("tempdir");
@@ -2004,6 +2009,7 @@ fn entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_f
         (Q_C, 3, 30, POLICY_NOW_UNIX_MS, false),
         (Q_D, 2, 5, running_until, false),
         (Q_E, 1, 40, 0, true),
+        (Q_F, 6, 15, POLICY_NOW_UNIX_MS, false),
     ] {
         host.seed_entry_pair_for_test(
             POLICY_INSTANCE_ALIAS,
@@ -2021,14 +2027,25 @@ fn entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_f
     assert_eq!(first.task_id, TASK);
     let settled = settle_at_entry_after(&host, &clock, &first, ENTRY_RUN_MS);
     assert_eq!(blocked_by(&host).decision_id, first.decision_id);
+    assert!(
+        host.seed_entry_setter_for_test(POLICY_INSTANCE_ALIAS, Q_F)
+            .expect("seed the second setter"),
+        "the instance is blocked"
+    );
     let block_end = settled.observed_at_unix_ms + BLOCK_MS;
-    assert!(block_end + 4 * FIRST_INTERVAL_MS < running_until);
+    assert!(block_end + 6 * FIRST_INTERVAL_MS < running_until);
     recover_at(&host, &clock, block_end);
     for (task_id, expected, why) in [
         (
             TASK,
-            (1, 0, block_end + FIRST_INTERVAL_MS, false),
-            "its failure set the block: its own interval",
+            (1, 0, block_end + 6 * FIRST_INTERVAL_MS, false),
+            "it set the block: the sixth turn, later than its own minute",
+        ),
+        (
+            Q_F,
+            (6, 0, block_end + 30 * MINUTE_MS, false),
+            "it set the block too, its latest failure older than TASK's: the fifth turn, its own \
+             thirty minutes later",
         ),
         (
             Q_C,
@@ -2065,14 +2082,16 @@ fn entry_q1_a_at_a_blocks_end_the_other_pairs_take_turns_least_recently_failed_f
 /// of `BLOCK_MS`), `BROKEN` (second in the order, its entry broken too) with none, and `OTHER`
 /// (healthy) with six, its latest failure after `TASK`'s (seeded), waiting from the outage's end
 /// eight and thirty minutes. `BROKEN`, the only task due, fails; its block, whose climb the
-/// stretch's pace holds, ends thirty-one minutes later: `BROKEN` waits its own minute, `TASK` (the
-/// oldest failure) one first interval and `OTHER` two. `TASK`, due with `BROKEN` and first in the
-/// order, fails again (its fifth in a row, sixteen minutes); at that block's end `OTHER` (the
-/// oldest failure now) waits one first interval and `BROKEN` two, so a minute later `OTHER` is
-/// dispatched while both broken pairs wait, each having failed once more since the outage's end,
-/// and its success lets it in and ends every wait. Fix round 6's rule let `BROKEN` (its interval
-/// not longer than the setter's) come due with `OTHER` there and run first, and the two broken
-/// pairs took turns ahead of it for hours (the review: 478 minutes under the shipped values).
+/// stretch's pace holds, ends thirty-one minutes later: `TASK` (the oldest failure) waits one first
+/// interval, `OTHER` two and `BROKEN`, which set the block, three (fix round 8, ruling 1: the
+/// place after the others; fix round 7 had its own minute). `TASK`, the only one due a minute
+/// later, fails again (its fifth in a row, sixteen minutes, later than its third place); at that
+/// block's end `OTHER` (the oldest failure now) waits one first interval and `BROKEN` two, so a
+/// minute later `OTHER` is dispatched while both broken pairs wait, each having failed once more
+/// since the outage's end, and its success lets it in and ends every wait. Fix round 6's rule let
+/// `BROKEN` (its interval not longer than the setter's) come due with `OTHER` there and run first,
+/// and the two broken pairs took turns ahead of it for hours (the review: 478 minutes under the
+/// shipped values).
 #[test]
 fn entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_failed_once_more() {
     let root = TempDir::new().expect("tempdir");
@@ -2121,17 +2140,14 @@ fn entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_fa
     recover_at(&host, &clock, block_end);
     for (task_id, expected) in [
         (TASK, (4, 0, block_end + FIRST_INTERVAL_MS, false)),
-        (BROKEN, (1, 0, block_end + FIRST_INTERVAL_MS, false)),
         (OTHER, (6, 0, block_end + 2 * FIRST_INTERVAL_MS, false)),
+        (BROKEN, (1, 0, block_end + 3 * FIRST_INTERVAL_MS, false)),
     ] {
         assert_eq!(pair(&host, task_id), Some(expected), "{task_id}");
     }
 
     let again = admit_at(&host, &clock, block_end + FIRST_INTERVAL_MS, 105);
-    assert_eq!(
-        again.task_id, TASK,
-        "due with BROKEN, and first in the order"
-    );
+    assert_eq!(again.task_id, TASK, "the first turn, the only one due");
     let settled = settle_at_entry_after(&host, &clock, &again, ENTRY_RUN_MS);
     let block_end = settled.observed_at_unix_ms + 31 * MINUTE_MS;
     recover_at(&host, &clock, block_end);

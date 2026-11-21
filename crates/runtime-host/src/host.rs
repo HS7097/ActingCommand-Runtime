@@ -5423,6 +5423,24 @@ impl RuntimeHost {
         shared.seed_entry_pair_for_test(instance_id, task_id, seeded)
     }
 
+    /// Workflow #490 ENTRY-A fix round 8 (ruling 1): `instance_alias`'s entry block counts
+    /// `task_id` among the tasks whose failures set or renewed it, as a failure at the entry of
+    /// that task settled while the block stands does; `false` when the instance is not blocked.
+    #[cfg(test)]
+    pub(crate) fn seed_entry_setter_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+    ) -> RuntimeHostResult<bool> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::EntryPairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.seed_entry_setter_for_test(instance_id, task_id)
+    }
+
     /// Workflow #490 ENTRY-A: `instance_alias`'s entry block, if it has one: the gate the
     /// evaluation reads, whether a person was told, and when its held recovery is due.
     #[cfg(test)]
