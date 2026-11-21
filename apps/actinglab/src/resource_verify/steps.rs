@@ -43,8 +43,10 @@ const ROOT_DECLARATIONS: [&str; 6] = [
     "navigation.json",
 ];
 /// The root files the command reads besides `packs/` and `regression/`, whose bytes must be
-/// their blobs.
-const ROOT_INPUTS: [&str; 7] = [
+/// their blobs. Workflow #455 GOALS-PACK-1: and `goals.json`, which the bundle of both rows carries
+/// (Workflow #464 P2 read it for `standard-pack build` only), so that the file a zip carries is
+/// the committed blob and never an ignored file.
+const ROOT_INPUTS: [&str; 8] = [
     "applications.json",
     "maintenance.json",
     "pages.json",
@@ -52,16 +54,17 @@ const ROOT_INPUTS: [&str; 7] = [
     "navigation.json",
     "declaration-exclusions.json",
     "manifest.yaml",
+    STANDARD_PACK_GOALS_FILE,
 ];
 /// Workflow #464 P2: the root files `standard-pack build` reads besides [`ROOT_INPUTS`], and the
 /// root directories it reads: every other input its bundle carries, so that each is the committed
 /// blob and none is an ignored file (fix round 1: `ui.json` too; Workflow #477 PC-1:
-/// `pack-catalog.json`, which replaced it).
-const BUILD_ROOT_INPUTS: [&str; 5] = [
+/// `pack-catalog.json`, which replaced it; Workflow #455 GOALS-PACK-1: `goals.json` moved to
+/// [`ROOT_INPUTS`]).
+const BUILD_ROOT_INPUTS: [&str; 4] = [
     STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_GOALS_FILE,
     STANDARD_PACK_CATALOG_FILE,
 ];
 const BUILD_ROOT_DIRECTORIES: [&str; 3] = [
@@ -421,7 +424,8 @@ fn dirty(count: usize, first: &str, problem: DirtyProblem) -> Outcome {
 
 /// A file the command reads: under `packs/` or `regression/`, or a root input. Workflow #464 P2:
 /// for `standard-pack build` also every other input its bundle carries ([`BUILD_ROOT_INPUTS`],
-/// and the files under [`BUILD_ROOT_DIRECTORIES`]); `resource verify` reads what it read before.
+/// and the files under [`BUILD_ROOT_DIRECTORIES`]); `resource verify` reads what it read before
+/// and (Workflow #455 GOALS-PACK-1) `goals.json`, a root input of both rows.
 fn read_path(path: &str, steps_for: StepsFor) -> bool {
     path == "packs"
         || path == "regression"

@@ -295,6 +295,10 @@ mod gate_463_ad1;
 // can do (register §1.467).
 #[path = "gate_398_db2.rs"]
 mod gate_398_db2;
+// Workflow #455 GOALS-PACK-1: `resource verify` checks a repository's `goals.json` with the one goal
+// check, carries an accepted one in its zip and declares the revision it needs.
+#[path = "gate_455_goals_pack.rs"]
+mod gate_455_goals_pack;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
