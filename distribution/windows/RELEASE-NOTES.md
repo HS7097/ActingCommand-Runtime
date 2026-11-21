@@ -9,6 +9,199 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.77
+
+本版是 v0.12.76 之后的 5 次合并、5 张 PR，没有列车，一张一张单独合入：#71 FLK-17 #1857、#455 GOALS-PACK-1 #1856、#455 G-R2x #1858、#490 ENTRY-A #1853，最后 #486 ASLEEP-1 #1859。
+后四张叠成一条线：GOALS-PACK-1 并了 FLK-17 的分支，G-R2x 并了 GOALS-PACK-1 的头，ENTRY-A 第六轮并了 G-R2x 的头，ASLEEP-1 并了 ENTRY-A 的头；冲突只在登记册、码索引的计数、`policy_host.rs` 的上下文结构体和 `policy_dispatch.rs` 的一处构造，两边都整段留下，`ci.yml` 取 FLK-17 的原文；本版的登记是 §1.494、§1.497、§1.498、§1.499，册里 §1.494 和 §1.496 到 §1.499 各一次、按号排（FLK-17 不占登记节）。
+**§1.495 留着，不在本版**：是看板 #490 剩下的几件（第一次恢复不受共用的冷却窗管、等一张一直在动的不认识的画面要有上限、天天在进门处失败的规则交给人）。下一版的一片（PR #1860，`package` 22）没合，不在本版。
+内容是生产上的一处缺陷、主人一句一直没法照做的话，和目标的两片：**进门就失败的调度运行不再算它规则的失败**，算这台实例的状况：次数退还，实例被挡住、照它自己的恢复阶梯恢复，一直进不了门的任务一次比一次等得久，别的任务进得去而它还败，就搁到这个活动窗结束、告诉人一次（看板 #490）；
+**闲置动作停了模拟器的实例算睡着，不算不可用**：调度照可用把它的候选判一遍，只为真派得出去的任务叫醒它（看板 #486）；**目标抬高产出它那个池子的每一条任务**，会做不可逆操作的包的任务也一样（G-R2s 撤回）；**`resource verify` 检查资源仓的 `goals.json`**，校验用的 zip 带上它、声明 `package` [14, 14]（两片都是看板 #455）；host-lab 作业的时限抬高（看板 #71）。
+**生产上跑的是 v0.12.76（2026-11-21 05:16 JST 起，经 Lab 救急模块部署；看板 #421，评论 7049683097）**。从 v0.12.76 装本版：
+**Lab 救急模块的 `deploy` 和 `actingctl install` 两面都不用标志，`ledger_verify` 为 false，计划通知的 `rollback_window_bounded` 为 false，`defaults_diff` 没有一行，没有新文件**。
+**接口区间一个没动**，`ledger` 仍是 [3, 9]；配置键没加（默认值文件一字没改）；结果码加了 9 个、位置 2 个、键 2 个、词表 1 张（3 个词），1 个码标成 `retired`。
+**退回 v0.12.76 开着，多一个条件：部署以来启用过的目录代里要是有敏感任务，它在进门处结算成状况的执行记录会让 v0.12.76 在启动时停下**（生产的排程今天没有敏感规则；见「部署和退路」「升级与退回」）。
+**使用中的安装最先碰到的是进门失败不再算规则的失败：一条调度运行在主包开跑之前失败（失败码属 `pack_logic_mismatch` 类），次数退还，不进连败、不暂停规则，这台实例被挡住，恢复好以前不再往上派任务**（见下）。
+
+- **为什么有这一版**：看板 #490，11-20 生产上的一处缺陷（§1.494）：一个包把游戏留在没有包认得的画面上，之后到期的任务都在进门那一步失败（主包一步没走）；这种失败不累计，立即重跑在几秒里又派出它，直到当天的次数用完；`escalation_threshold` 为 1 的规则被一次这样的失败暂停；次数用完以后什么都不再失败，也就没有东西触发恢复，一台实例停了两个小时。那天生产上还有七条规则天天在进门那一步失败（验收记录 `a1853`）。
+  看板 #486（§1.497）：主人 11-02 说没有任务时直接关掉模拟器，一直做不到：闲置动作停了模拟器，这台就算不可用，评估在放置那一步把它的候选全挡住、后面的门一道不读，派不出去的任务也被闲置计划算成到期，刚停的模拟器又被叫醒；所以生产一直用关应用。
+  看板 #455 的两片：11-21 主人的审计查出 G-R2s 和她自己的话相反，这一版撤回（§1.499）；`resource verify` 补上 `goals.json`，是按材料定目标的那张工作单（看板 #493）等着的（§1.498）。
+  另外 #1857：#1853 的一次 CI 里 host-lab 的测试一步在 35 分钟被掐掉，这张把作业上限 45 → 60、测试一步 35 → 50 分钟，没改程序。
+
+- **在用的安装在部署时和以后碰到的**（逐条核过代码和契约）：
+  - **首先，进门失败算实例的状况，不算规则的失败**（ENTRY-A，§1.494；`contracts/policy-suspension.md`「A failure at the entry」，`contracts/scheduling-blackout.md` 第 4b 位）。
+    **哪些算**：调度运行（客户端和 Lab 的运行不算，照旧）的主包准入了、前置链解析了，查过入口（前置链的门、页图的入口检查，或主页入口预检的 `EntryRecoveryDecision`），主包一直没开跑（没有 `EntryTargetDisposition` `Started`），失败在它的范围里不累计（`crates/runtime-host/src/failure_identity.rs` 640 `failed_at_entry`，`host/failure_settlement.rs` 759–826），
+    失败码的类是 `pack_logic_mismatch`，而且这台的恢复阶梯有一条任务阶段的触发项收这个类（`host/recovery_ladder.rs` 4930 `entry_class`，1807 `entry_trigger_item`、1832 `entry_failure_recovered`：按类判，不点名码，不读排除表，出厂就是 `pack_logic` 那一项）。
+    出厂排除表里的 `contained_task_prerequisite_*` 和 `contained_task_return_home_entry_unmatched`（11-19 那场和天天失败的那几条）也是这个类：它们照旧不在租约结束时自己起阶梯，阶梯先备好、留给结算，结算挡住实例时交给挡，租约清扫的下一拍放行（1866 `ladder_at_lease_end`）。别的类在进门处失败（取帧后端、设备连接、围栏、配置）照 v0.12.76 原样结算，不挡任何东西。
+    **怎么结算**：一律当成实例的状况：记录带 `condition` {`refunded` true，`count` 1，活动窗的尽头}，失败身份的 `F` 是 `fi` 加十二位十六进制；不进连败、不走 `on_failure`、不立即重跑、不欠补跑，`escalation_threshold` 是几都不暂停，准入时拿走的四样次数退还，运行时长不计（`crates/runtime-host/src/policy_control.rs` 1725–1745 `entry_condition`，85 `entry_blocked`）。
+    **敏感任务也一样**：主包一步没走，没做过敏感的事，记录的 `sensitive` 写 false（1455–1460）；这是回 v0.12.76 那个条件的来源（「部署和退路」）。
+    **挡住实例**：结算在策略结果门下挡住这台（`host/entry_blocks.rs` 709 `settle_entry`、841 `block_instance_entry`），评估在同一道门下读：第 4b 位把这台的每个候选都推后，原因 `instance_entry_blocked`，没有自己的唤醒时刻，欠的补跑、立即重跑、补救请求、事实刷新都在内，只有商店更新任务放过去（`crates/runtime-host/src/entry_block.rs` 187–226，`policy_host.rs` 4310–4325）。
+    **什么结束挡**：这台的恢复阶梯以 `recovered` 或 `environment_ready` 结束（`entry_blocks.rs` 1026），这台上任何一次运行成功（调度的、商店更新的、客户端或 Lab 的、启动包、某一级的运行；990 `note_entry_success`，`host/contained_task.rs` 12348），
+    有人恢复这台的暂停或全局暂停（`host/requests.rs` 576，`entry_blocks.rs` 1082），停电时段盖住它或围栏接手（1377–1384），Runtime 重启（全在内存里）。挡结束时还留着的恢复丢掉，照 AVAIL-1 的做法再记一条那次触发的 `recovery_ladder_suppressed` `cooldown`（1012）。
+    **恢复从哪一级起、后面的怎么排**：上一次挡结束以后这台还没有运行进去过（调度运行过了入口检查开跑主包，或者调度、客户端、Lab 的运行成功）就又被挡，这次从第一个会重启应用的那一级起（`recovery_ladder.rs` 430 `start_at_application_restart`），否则照配置；被冷却压下的恢复跟着挡留着，到点由租约清扫放行（`entry_blocks.rs` 1352 `take_up_entry_recoveries`）。
+    一「段」是中间没有运行进去的连着几次挡：一段里第一次爬梯照常，之后每一次都要等 `scheduling.unavailable_probe` 按这一段已有的爬梯次数给的间隔（出厂 1、2、4、8、16 分钟，最长 30 分钟），从上一次爬梯结束算起，也不早于这台的冷却窗结束（出厂 600 秒），
+    不管上一次是恢复了、走完没成还是被暂停、容量、排空、关机打断（297 `paced_until`，1458–1468）；有人暂停时一级都不爬，放开就解挡。照出厂值，一段什么都修不好的夜里，爬梯约在 0、10、20、30、40、58 分钟，第二个小时一次（约 1:30），之后每小时两次。
+    **模拟器一段里最多重启一次**：这一段里有一架阶梯跑过重启模拟器那一级，之后的爬梯跳过它，记 `recovery_rung_finished` `skipped`、结果码 `recovery_rung_skipped_emulator_restarted_in_stretch`，爬到重启应用为止（`recovery_ladder.rs` 2874–2890，`entry_blocks.rs` 1048）；有运行进去以后的新一段可以再重启一次。
+    **告诉人**：都是实例下一条 warning 的 `runtime.failed`，同时交给守护进程的日志（`entry_blocks.rs` 1620–1651）。挡自己的一次恢复没恢复成：`instance_entry_blocked_recovery_failed`，每次挡一条，`entry_recovery_end` 说怎么结束的，`exhausted`（挡按上面的节奏自己再试，`next_occurrence_unix_ms` 是下一次最早的时刻）、
+    `update_dialog`（爬梯碰上游戏的更新弹窗：这一段不再爬，交给商店更新任务）或 `worker_panicked`（这次挡里不再爬），`trigger_rule` 是放行它的触发项（1114、1593）；一段从它的第一次挡算起满 `scheduling.unavailable_probe.attention_after_ms`（出厂一小时）：`instance_entry_blocked_awaiting_person`（`elapsed_ms`、`limit_ms`），每段一条，暂停、围栏、闲置停机占着这台时不记、时钟照走（1391–1418）；
+    一条任务在这台上被搁到窗尾：`instance_entry_task_set_aside_reported`，每对每个窗一条，启用目录、换包、重启清掉计数以后再被搁置时再记一条（下面）。队列拒收挡的恢复的认领，从 1 秒起、翻倍到最多 1 分钟一次地再试，同一次挡里同一种拒绝只记一条（629 `claim_retry_wait_ms`，1263）；容量不够、别的阶梯占着这台时什么都不记，下一拍再试。
+    **一对（任务、实例）连着进门失败，一次比一次等得久**：同一个活动窗里、同样的包，第 n 次连着失败以后，这条任务在这台上要等 `scheduling.unavailable_probe` 的第 n 个间隔才再派（1、2、4、8、16、30 分钟，过了 30 分钟每多败一次多等一个首间隔；611 `pair_interval_ms`），
+    从这次失败设下的那次挡结束时算起（挡还没结束时从结算算起），不过活动窗的尽头；排程解释写 `instance_entry_task_waiting`（`count`、`next_eligible_unix_ms`），到点唤醒（`entry_block.rs` 89 `pair_deferral`）。这台别的任务不受它影响。
+    **挡结束时的轮次**：这台每一对连着失败、没被搁置的排队到期：先是失败没设这次挡的那些对，按最近一次进门失败从早到晚排（同时的按任务号），再是设下或续上这次挡的那些对，同样排；第 n 位从挡结束起等 n 个首间隔，设挡的对等这个和它自己的间隔里晚的那个；
+    还在走的等待不缩短，被搁置的不占位（`entry_blocks.rs` 399–439 `end`）。所以停服以后，健康的那一对最多等排在它前面的坏对各再败一次，每一次约一次挡的工夫。
+    **一次调度运行进了门**（成功，或者过了入口检查开跑主包）：这台每一对的连败当即清零、等待结束（458 `let_pairs_go`），这一段结束，下一次挡照配置爬；商店更新任务的运行不算进门，它成功时这台的每一对从头算，挡和段也结束（754–767）。
+    **搁到窗尾**：同一个窗里，「这台在它上一次进门失败以后放进过别的调度运行」而它又进门失败的次数到了它规则的 `on_failure.escalation_threshold`（目录要求每条任务都有，1 到 1000；`standard-pack adopt` 没给时写 2），它就在这台上搁到这个活动窗结束：
+    排程解释写 `instance_entry_task_set_aside`（`count`、`limit_count`、`window_end_unix_ms`），窗尾唤醒，告诉人一次；不知道窗的不搁（480–526 `pair_failed`）。规则不暂停、连败不动，下一个窗从头算。
+    **什么把各对放出来**：启用一份目录（启用、回滚、`standard-pack adopt` 的；`host/policy_catalog.rs` 369 `clear_entry_pairs`），工作台检查看到某个在用的游戏的包变了（`bundle.json`、三个识别文件、每个已登记包的 `control.json` 和 `resources/operations/resources.json` 的长度和修改时间，一次变化只清一次；`host/standard_pack_schedule.rs` 1194–1223），
+    Runtime 启动（全在内存里）；这一对的调度运行别的结局、换窗、换包也让它从头算。挡和段不受目录启用影响。
+    **排程解释**：不加成员。不在运行那一行的 `why` 是 `instance_entry_blocked`（`instance_id` 是别名，`task_id`、`decision_id` 是挡住它的那次运行的，`failure_code`、`observed_at_unix_ms`），这台每个候选行也是，商店更新任务的除外；同时不可用的实例只答 `instance_unavailable`，可用了还挡着才答 `instance_entry_blocked`；
+    候选行可能带 `instance_entry_task_waiting` 或 `instance_entry_task_set_aside`（`contracts/runtime-interface.md`）。挡的开始和结束在账本里没有单独的记录：看得到的是排程解释的 `why`、带新码的 `runtime.failed` 和上面那三条警告。
+  - **闲置动作停了模拟器的实例**（ASLEEP-1，§1.497；`contracts/scheduling/README.md`「An asleep instance」，`contracts/runtime-config.md`「What wakes an idle instance」）。
+    **闲置动作是 `close_app` 或 `none` 的安装只变一处**：#484 给闲置计划用的只读预读，原来不读第 4b 位；现在一条候选被第 1、2 位（暂停、钥匙被占或在等、冷却，闲置动作自己收尾时的认领也在内）挡着时，它这一对进门失败以后的等待或搁置当成一道有时刻的门读出来，唤醒取那一刻，不再算到期
+    （`crates/runtime-host/src/policy_host.rs` 4153–4168；挡本身照旧不读：被挡的实例的候选照旧算到期）。没有这一处，关应用那一刻自己的认领占着钥匙，这样一条还在等的任务会让刚关的应用马上被叫起来。只动闲置计划，不动派发。
+    别的逐字节照旧：没有睡着的实例时评估的新分支走不到，`IdleDraft` 只在能停模拟器的实例上变（`schedule_explanation.rs` 302–310），启动时准备的实例和以前一样。
+    **闲置动作是 `stop_emulator` 或 `auto` 的**：**睡着**是闲置动作停着或按着这台的模拟器（停的请求发了没结束、它的认领在停的时候占着钥匙、停完了唤醒还没到），而撤掉可用性的只有这次停机：投影里撤销的来源是 `self_check`（配置的种子是可用，没有设备链接、设备状态、设备系统的撤销），
+    没有围栏，也不在 AVAIL-1 要探的名单里（`host/idle.rs` 707、754 `asleep_for_policy`）。可用性事实不改，睡着的实例照旧不派任务。
+    **当可用判、一个都不选**：评估在自己的投影里把睡着的实例当可用（`crates/policy/src/evaluator.rs` 429 `judge_asleep_as_available`），放置、推后的次序、收益门、池子水位和封顶次序、无进展守卫、排序都照可用实例读；
+    本来会被选中的那条不选，推后，原因 `instance_asleep_wake_due`（`instance_id` 是别名），唤醒是这次评估的时刻；它占住这台、这台的设备和它的封顶块，后面的候选像排在一条选中的后面一样等（2754–2790）；不发派发意图，没有理由链和决策记录，不占预算和共享名额，不交接链步，不推进封顶回合，不取无进展的底数。
+    **什么叫醒、什么不叫醒**：闲置计划把那条算到期并点名它，唤醒照旧是起模拟器、再跑启动包。能停模拟器的实例上（闲置动作是 `stop_emulator` 或 `auto`，启动包和配置的模拟器启动都在；`host/idle.rs` 719），被收益未知、收益非正、无进展、池子水位这类没有时刻的门挡住的决定不再给唤醒时刻，不管触发器说下一刻是几点（`schedule_explanation.rs` 253–259、307）；
+    有时刻的门（预算到哪一刻放开）照旧取那一刻减提前量，触发器没到的取触发器的时刻。进门失败后在等或被搁置的那一对在第 4b 位就推后，不会是叫醒它的那条，它的到期就是计划里的唤醒。有人暂停时唤醒按住（`WakeHeld`），放开以后才来。
+    **兜底和它的警告**：一次唤醒真把模拟器起起来了（`host/emulator_autostart.rs` 1308–1314；去起时发现模拟器开着的不算），在这台上有调度运行被准入以前，闲置检查不再停它：`stop_emulator` 下什么都不做，`auto` 下最多关应用；
+    头一次这样不停时记一条 warning 的 `instance_idle_stop_withheld`（`alias`、`idle_action` `stop_emulator`、`idle_wake_cause`、`task_id`、`at_unix_ms`），是实例下的 `device_state_observed` 记录和同一行报告（`crates/runtime-host/src/idle_action.rs` 1098–1131、1151 `withhold_stop`，`host/idle.rs` 334、507–513）。
+    之后这台有调度运行被准入（事实刷新的读数也算，准入以后被拒或失败的也算）、这台的闲置配置变了、启用一份目录、Runtime 启动，都结束它（`idle_action.rs` 595 `answered`，`host/policy_catalog.rs` 393）。
+    **Runtime 启动**：闲置动作按着模拟器停着的实例，启动不再去准备它（停着的模拟器准备必败，会进 AVAIL-1 的名单、不再算睡着），可用性照停机时那样撤着，重启前后都是睡着、带着原来的唤醒；唤醒时配置的启动去准备它（`host/resource_close.rs` 1688–1696）。
+    **生产今天每台都是关应用**；总览上线以后在一台实例上改成停模拟器，实机看一停一醒再推到别的几台（验收记录 `a1859`）。
+  - **目标**（G-R2x，§1.499；`contracts/resource-targets.md`「A task that can do something irreversible」「A game whose root cannot be composed」）。
+    **持有目标记录的实例**：带过不可逆标记（`irreversible_reach`）的任务的候选，现在和别的候选一样读这台的目标记录，产出目标没满的池子时被目标抬高，可能排到这台别的候选前面（`crates/policy/src/evaluator.rs` 4585–4607：评估器只剩「根组不起来」这一种把记录拿掉的情形）；
+    第 1 版记录点名这样的任务的，`adjust` 和 `override` 照样对它生效。没带过标记的候选，它自己分数阶段的数和净收益一个不变；变的是竞争和列出竞争者的记录：胜出者的领先量（`rank_breakdown` 的 `lead`）、决策记录里落选的行（`total`、`behind_by`）、封顶回合按单位价值的次序、储备闸、重任务位。前向投影一样。
+    原因码 **`resource_target_package_irreversible` 退役**，不再出现。真会改调度的只有两种：带过标记的任务产出的池子在这台上有没满的目标（这台别的候选的 `resource_targets` 原因显示那个目标 `applied`、`gap` 大于 0），或者这台的第 1 版记录点了它的名。
+    **不持有目标记录的实例**：什么都不变。11-21 总览读了生产六台里的四台，都没有目标记录（另两台没读），所以这几台上线后的权重不变（验收记录 `a1858`）。
+    **编排器不再写标记**（`crates/policy/src/compose.rs`），成员留着可读、不起作用（`crates/policy/src/schema.rs` 435–446）：v0.12.60 到 v0.12.76 编出的目录代带着它，启动时重编每一代、核哈希（`policy_host.rs` 8537 `read_generation`，对不上是致命的 `catalog_generation_content_mismatch`），所以照读照算哈希；`schedule.json` 的规则写这个成员照旧拒，V1 文档照旧拒。
+    **新的一代目录**：在用的那一代里有任务带这个成员的，那个根这一版编出来的哈希不同，部署后启动的第一次工作台检查（在那一轮评估之前）启用新的一代（`catalog.activated`，版本是账本头加 1）；在用的一代没有任务带它的，哈希一样，什么都不启用。部署之前看状态根里在用那一代的 `tasks` 文档有没有 `"irreversible_reach": true`，就知道会不会换代。
+    **启用一代目录重置的**（都只在内存里，启动时本来就空）：无进展守卫、随机延迟表、按哈希重建的补救表，本版又多两样：进门失败各对的计数和等待（上面）、闲置计划记着的没回应的唤醒（上面）；封顶片段、每日预算、冷却、运行状态按任务号，不变；派发的决策标识按新哈希算。
+    **照旧拒的**：目标检查对管着这类包的条目（`goal_governs_irreversible`），内核准入对这类包上的 `variables`（`variables_on_irreversible`），`standard-pack check` 的 `variable_irreversible_by_root` 和工作台判这样的变量不适用，都原样（共用 `IrreversiblePackages`，读不了的包照旧把整个根算成不可逆），要不要放开由主人定。
+    读不了的包照旧由 `standard_pack_package_unreadable` 告诉人，它不再给任务打标记。
+  - **`resource verify`**（GOALS-PACK-1，§1.498；`contracts/resource-verify.md`，`contracts/standard-pack-goals.md`「Before any pack carries the file」）：打包那一步在 `package bundle` 写完包以后，用资源工具的 `check_bundle_goals`（`crates/resource-tooling/src/bundle_goals.rs`，`standard-pack check` 和 `package bundle --goals` 用的同一套 `goal_issues`）检查仓里的 `goals.json`。
+    被拒的文件让这一步失败，每个问题一条 `standard_pack_root_invalid`（`game`、`path`、`standard_pack_problem`、`json_pointer`、`step`），同一轮里索引和拷贝的检查照跑，然后在出 zip 之前停（work 目录里留下不带这个文件的 `bundle/`，没有 `out/`、没有 zip）；版本 1 的文件只有一条 `goal_version_retired`。
+    通过的文件原样放进校验用的 zip（和 `bundle.json` 同级），报告的打包计数多 `goals`（各类条目数），`interfaces.json` 声明 3、10（带 `notices/`）、14（带 `goals.json`）里最高的那个，带文件的就是 `package` [14, 14]（`apps/actinglab/src/resource_verify/bundle.rs` 197 `package_revision`、522 `lay_goals`）；
+    `goals.json` 也成了 checkout 前置条件绑定的根文件（`resource_verify/steps.rs` 49 `ROOT_INPUTS`），带进 zip 的一定是提交里的那份。没有这个文件的仓结果和以前一样，**只有一处例外**：工作树里有一个被 git 忽略的 `goals.json` 时，checkout 那一步现在失败（`resource_verify_checkout_dirty`，`dirty_problem` `ignored_in_read_path`），v0.12.76 及以前是通过。
+    **哪个版本出这种 zip、谁收**：0.12.77 及以后的 `resource verify`（更早的不看这个文件、也不带它）；`standard-pack build` 从 0.12.61 起就带上通过的文件并按内容声明修订。带文件、声明 [14, 14] 的 zip，0.12.61 及以后的安装工具放得下（v0.12.61 标签起 `package` [3, 15]），v0.12.60（[3, 12]）及更早的在计划的 `package` 边以 `interface_edge` 拒。
+    **发版还欠的**：资源仓发版用的是各仓自己脚本里的 `package bundle`，不是 `resource verify` 也不是 `standard-pack build`（资源侧 11-21 的回答，Runtime 这边没读那些仓）；**发版的 zip 要带上这个文件，得资源侧把发版脚本换成 `standard-pack build`，或者给 `package bundle` 传 `--goals`、自己在 `interfaces.json` 里写 14 以上**（`package bundle` 不写这个文件）；资源仓的 CI 要把钉住的 Tools 升到 0.12.77，校验才查它。
+  - **账本和读者**：ENTRY-A 写的都是已有种类的记录：`policy.execution_recorded`（进门处结算成状况：`failure.condition` 和带 `~fi` 的失败身份，都是已有的成员）、实例下的 `runtime.failed`（三条警告），`runtime.lifecycle_observed` 的已有阶段 `recovery_ladder_suppressed`（丢掉留着的恢复）和 `recovery_rung_finished`（跳过的模拟器那一级，`rung_result` 是已有的 `skipped`）；
+    队列拒收的认领再试走已有的认领记录。ASLEEP-1 写的是 `runtime.lifecycle_observed` 的 `device_state_observed`（`instance_idle_stop_withheld`）；`instance_asleep_wake_due` 只在排程解释里，那条不选、不写派发，也就没有决策记录。G-R2x 不再写退役的那个码；GOALS-PACK-1 不碰 Runtime。
+    新码和新位置都是记录和回答里的文本，v0.12.76 的读者照拼写收（`crates/actingcommand-contract/src/outcome.rs` 740–744 `CodeStr`，1719–1735 结果的值按 map 读，收到的结果不按目录核；本版这个文件没改）；
+    **没有一张 v0.12.76 的读者拒收的闭词表加了值**：新的词表 `entry_recovery_end` 只在结果的值里；跳过的那一级故意不加跳过原因的词（`RecoveryRungSkipReason` 是持久化记录的闭词表，加词就得动 `ledger`）；契约库的 `event/`、`runtime.rs` 和 `crates/ledger` 一个文件没改，状态和排程解释不加成员。
+  - **盘上的东西**：本版照读 v0.12.76 留下的一切（账本修订 3 到 9、配置、录制、包、绑定、持久化的暂停、事实库、`host.idle_state`、v0.12.60 到 v0.12.76 编的目录代），第一次启动不迁移、不要新状态根。挡、各对、段、睡着的名单、没回应的唤醒都在内存里，重启就没了。
+    本版写的东西里 v0.12.76 读不了的，只有敏感任务在进门处结算成状况的执行记录（见「部署和退路」）。
+
+- **改了什么**（进门失败、睡着、目标、`resource verify`、CI）：
+  - **进门失败**（ENTRY-A，§1.494）：宿主新模块 `host/entry_blocks.rs`（挡、各对、段、留着的恢复、三条警告）和 `entry_block.rs`（第 4b 位）；`failure_identity.rs`（`failed_at_entry`、`fi`、`packages`）、`host/failure_settlement.rs`（判定、活动窗）、`policy_control.rs`（`entry_condition`、敏感任务）、`host/policy_outcome.rs`（交给挡）、`policy_host.rs`（第 4b 位、窗尾、门槛、商店任务）、
+    `host/recovery_ladder.rs`（挡的阶梯、从重启应用起、跳过模拟器那一级、结束的种类）、`host/contained_task.rs`（成功结束挡、入口事实）、`host/host_claims.rs`（崩溃）、`host/unavailable_probe.rs`（交给挡）、`host/requests.rs`（恢复解挡）、`host/resource_fence.rs`、`host/policy_catalog.rs`（启用清对）、`host/standard_pack_schedule.rs`（换包清对）、`host/policy_dispatch.rs`、`host.rs`（租约清扫的一步、测试缝）、`codes.rs`、`lib.rs`；
+    `crates/runtime-config/src/recovery_ladder.rs`（`LadderConfig::classify_unexcluded`）；契约库 `outcome/keys.rs` 两个键。
+  - **睡着**（ASLEEP-1，§1.497）：策略 `evaluator.rs`（`InstanceHolds` 的睡着、当可用判、不选）、`codes.rs`、`lib.rs`；宿主 `host/idle.rs`（谁睡着、能停模拟器的名单、警告）、`idle_action.rs`（没回应的唤醒、不停）、`schedule_explanation.rs`（`IdleDraft::add`、`record_stopping`）、`policy_host.rs`（上下文、预读读第 4b 位、最近一次准入）、
+    `host/policy_dispatch.rs`、`host/emulator_autostart.rs`（起了模拟器）、`host/policy_catalog.rs`（启用忘掉唤醒）、`host/resource_close.rs`（启动不准备）、`codes.rs`。
+  - **目标**（G-R2x，§1.499）：策略 `evaluator.rs`（删掉标记那一支）、`compose.rs`（不写标记、不再走传播它的那一遍）、`schema.rs`（成员留着、不起作用）、`validation.rs`、`codes.rs`、`lib.rs`；宿主 `host/standard_pack_schedule.rs`（`held_otherwise` 不再比标记）；契约库 `standard_pack_goals.rs` 和 `crates/lab-ops/src/packs.rs` 只改注释。
+  - **`resource verify`**（GOALS-PACK-1，§1.498）：资源工具新文件 `bundle_goals.rs`；Lab 的 `resource_verify.rs`（计数）、`resource_verify/bundle.rs`（检查、放进、声明）、`resource_verify/steps.rs`（读的根文件）。
+  - **CI**（FLK-17，不占登记节）：只改 `.github/workflows/ci.yml` 的 host-lab 两个时限和说明。
+  - **这些都不替人拿主意**：进门失败只是不再算到规则头上，最坏是晚跑到窗尾，不暂停什么；睡着只改叫醒的时机，不改派什么；G-R2s 照主人的话撤回，另两道拒绝等主人定；`resource verify` 只检查、照原样带上文件。
+
+- **部署和退路**：照 v0.12.76 那次的做法，用在线 v0.12.76 留下的那份 `actinglab` 跑 `release stage`、`deploy <提交> --plan` 预看、`deploy <提交> --detach` 实做，再用 `op status` 看结果。
+  救急模块（`crates/lab-rescue`）本版一个文件没改，所以留存的 v0.12.76 副本做的和本版的一样。没有账本那一步：两边账本都是 [3, 9]。部署时要知道的，从各登记节的「At deploy」收在一起：
+  - **这一版由 v0.12.76 的留存副本对着在线的 v0.12.76 部署**：那份副本讲 `runtime-client` 14，读新 Runtime 的状态、配置事实、计划和目录、启动报告，本版回给它们的没有一个新成员；计划的 `defaults_diff` 没有行，启动后检查的 `new_keys` 没有要核的新键。部署前照旧不留开着的录制、不跑试跑。
+  - **没有要配的、没有要搬的**：不加配置键，默认值文件不变；各对的计数和等待、睡着的名单都从空开始，从这一次启动起不再有进门失败算到规则头上。**部署之前因为进门失败被暂停的规则（门槛为 1 的那种）照旧暂停，直到它的包内容变了**，部署什么都不放开；人手按住的包、挂起的规则也一样，要人自己放。
+  - 出厂排除表里的前置、回主页进门失败从这一版起挡住实例、由挡自己起恢复，不再被重跑到次数用完；挡自己的恢复没成、一段满一小时、一对被搁到窗尾，各有一条警告记录（§1.494）。
+  - **部署后启动的第一次工作台检查，在用的一代目录里有任务带 `irreversible_reach` 的，启用新的一代**（§1.499）；没有的，什么都不启用。
+  - 每一份钉着的离线 Lab 照旧等本版上线以后再升到本版（钉着的 Lab 和生产的 Runtime 是同一个构建，编排和读列表才一样：本版的 Lab 编出来的目录不带标记）；资源仓的 CI 要 `resource verify` 查 `goals.json`，钉的 Tools 要到 0.12.77（§1.498）。
+  - **退回 v0.12.76**：计划的边都过（见「升级与退回」），回退门只放行这次部署替换掉的 v0.12.76（`install/update.rs` 410–420）。
+    **本版新加的一个条件**：v0.12.76 的 Runtime 判一条任务敏感不敏感，看的是派发那一代目录里的任务，不看记录；敏感任务的记录带着状况，它就以致命的 `policy_execution_record_mismatch` 停下（v0.12.76 标签上 `crates/runtime-host/src/policy_control.rs` 1427–1444 `preview_paced_settlement`，实时结算和启动重放都经 1731–1799 `commit_paced_execution`）；
+    带启动锚点的启动只重放决策记忆最后一条值记录之后的执行记录（同一标签 `policy_host.rs` 6912、7084–7107），本版每次结算后紧接着写这一对的值记录，所以撞上的只有「执行记录写了、值记录没写就停了」那一条窄缝；整本重放的启动碰到账本里任何一条这样的记录都停。
+    **退回之前核两步**：一，本版部署以来启用过的目录代里有没有 `sensitive` 为 true 的任务，没有就到此为止（生产的排程今天没有敏感规则，总览 11-21 数的）；二，有的话，看账本最后一条 `policy.control_state_recorded` 或 `policy.activity_state_recorded` 之后，有没有这种任务的 `policy.execution_recorded`，`failure` 带 `condition`、`failure.failure_identity` 以 `~fi` 加十二位十六进制结尾：有就先别退。
+    回去以后：挡、各对、睡着的名单、没回应的唤醒都没了，11-20 那种进门风暴又会出现；v0.12.76 不认 `fi`，它重放的进门状况当成普通的状况，欠这一对一次补跑到窗尾（同一标签 `policy_control.rs` 1860–1884），对已有记录的派发重复结算时以致命的 `policy_execution_identity_conflict` 拒（`policy_host.rs` 6329–6335）；
+    设了 `stop_emulator` 或 `auto` 的实例又会碰上看板 #486（退回之前改回 `close_app`）；v0.12.76 的第一次工作台检查重新打上不可逆标记、再启用一代目录。
+  - **再往回到 v0.12.75**：v0.12.76 说明里的条件照旧：整机事实超过 256 条以后回不去（部署时 212 条），这期间放过修订 21 的包先换掉，根配置里写了 `scheduling.unavailable_probe` 的先拿掉。**回 v0.12.72 及更早，计划以 `interface_edge` 拒**（`installer_meets_next`，`plan.rs` 325–341；v0.12.72 标签声明 `runtime-client` [3, 11]）。
+  - 跑着的 MCP 服务器在重新启动之前答旧的工具表；本版没有新工具、没有新参数。
+  - 部署以后要看的（不改任何东西）：`op status` 的 `rollback_window`（见「升级与退回」）；部署前后事实库的合计（部署不写它）；有没有新的 `catalog.activated`；排程解释（`actingctl schedule`、`ac_schedule`）里有没有实例答 `instance_entry_blocked`、候选带 `instance_entry_task_waiting` 或 `instance_entry_task_set_aside`；
+    账本里有没有 `instance_entry_blocked_recovery_failed`、`instance_entry_blocked_awaiting_person`、`instance_entry_task_set_aside_reported`、`recovery_rung_skipped_emulator_restarted_in_stretch`；闲置照旧是关应用时，`instance_idle_action` 的唤醒记录和 v0.12.76 一样，`instance_asleep_wake_due` 和 `instance_idle_stop_withheld` 只在设了停模拟器以后才会出现。
+
+- **已知的限度**（各片最后一次审查和验收记录列的，逐条核过）：
+  - **进门失败**（ENTRY-A）：**一台上只有一个坏对时它永远不会被搁置**：出厂值下一个活动窗里约败 35 次，每次是一次退还的短运行、一次挡和一次从重启应用起的爬梯，一段满一小时告诉人一次。**停服以后，健康的那一对要等排在它前面的坏对各再败一次**，每一次约一次挡的工夫；一段里从第六次挡起每次挡约半小时（实现者按规则用脚本走出来的几种情形在 33 到 97 分钟之间，没有在实机上量）。
+    **每启用一次目录、每换一次包，所有对都被放出来**，坏的对会再败门槛加一次。**换包看不到的**：手改包里别的文件而 `control.json` 和 `resources.json` 不动、`tables/`、`loading/`、`notices/` 和根上别的文件的变化，配置模式（没有工作台，只有启用目录才放）；启动以来还没有组合成功过时，只比 `bundle.json` 和三个识别文件。
+    **对账结算的进门失败照旧算到规则头上**（进程死在终态写了、结算没写之间，或者被放弃的通道联机结算）：门槛为 1 的规则会因此暂停到包变；补它要动账本的恢复规则（按终态结算的失败身份必须为空），这一片没做。
+    **门测试 M4（模拟器一段里只重启一次）连着四个头超时、最后两个头通过，原因两位实现者都没找到**；现在一边推时钟一边等，Runtime 锁死成致命错时等待当场失败并报出原因。生产用真时钟，那一级的每个等待都有上限（就绪等待到 `readiness_window_ms` 为止）。§1.495 那几件不在本版（上面）。
+  - **睡着**（ASLEEP-1）：**闲置停模拟器还没在真模拟器上跑过**：两条回放是真的闲置检查停假模拟器、真的唤醒把它起起来；总览上线以后在一台实例上打开。**触发时刻还没到、到时预算仍然用完的任务，会在触发时刻把实例白叫醒一次**，之后兜底让模拟器一直开到有调度运行被准入（以后的一片让计划按触发时刻读后面的门）；
+    兜底的「被准入」含事实刷新的读数，也含准入后被拒或失败的运行；只有客户端或 Lab 的运行的实例，叫醒以后不会再被停（没有调度运行来回应它）。
+  - **目标**（G-R2x）：目标检查和变量对会做不可逆操作的包的两道拒绝留着，等主人定；「根组不起来的游戏当作没有目标」不在撤回之列，原样留着。生产上 11-21 读的四台都没有目标记录，所以这一片还没有在生产上改过任何一个权重。
+  - **`resource verify`**（GOALS-PACK-1）：**不按包的内容声明修订**：包里声明了 `variables` 或 `lines`、又没有 `goals.json` 的仓，仍只声明 3（带 `notices/` 是 10）：带 `variables` 的，今天的安装工具在计划里以 `variable_undeclared` 拒，更早的收下、它的 Runtime 跑不了；带 `lines` 的，没有安装工具查，区间低于 21 的收下、它的 Runtime 每次运行都拒。只有 `standard-pack build` 按内容声明。
+    「这样的 zip 安装工具放得下」只是调了安装工具计划里那两道判定来证，没有跑真的放置计划；文件被拒的那次 work 目录里留下不带它的 `bundle/`；发版的 zip 带上它还欠资源侧换脚本（上面）。
+  - **host-lab 作业**：这一次只是腾地方。#1859 最后一个头（带着 #1853）的 host-lab 用了 36 分 48 秒，新的上限是作业 60、测试一步 50 分钟；每一片都往这个作业里加测试，把它拆成几份的是看板 #499，还没排。
+  - 看板 #495、#496、#497 照旧，本版不碰：仍有不可用的实例没人探、没人告诉的情形；一台实例的连接准备里程序崩了仍停整个 Runtime；排序类的包变量许可的个数和值的字节上限对不上。
+  - 写这份说明的时候，本版没有一片在设备上跑过：进门失败的各条和睡着的停与醒都只在假设备上的回放里跑过，生产上要等第一次进门失败、第一次打开停模拟器才看得到。
+
+- **`acib`**：本版没碰 `apps/acib`。**`acib` 照旧不在发版的两个压缩包里**：`.github/workflows/windows-remote-build.yml` 本版没改（387–398 发版构建排除它，1007–1030 单独编、单独上传，发版那次不编），两个压缩包的文件表里没有它；锁文件、依赖和 `NOTICE.md` 本版没改。
+
+配置：按代码、`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 核过：
+
+- 接口：逐行和 v0.12.76 一样：`actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [12, 14]、`package` [3, 21]、`runtime-outcomes` [1, 1]（`component-interfaces.json` 4–10；这个文件、`contracts/component-interfaces.md` 和 `tools/actinglab-architecture/tests/component_interfaces.rs` 的钉本版都没改）。
+  没找到该升没升的：账本不加表、索引、记录种类、成员或修订（`crates/ledger` 一个文件没改）；进门的 `fi` 是 `failure_identity` 这个文本成员里的标记，每个修订都解得开；新码都在已有的记录和回答里，`runtime-outcomes` 留 1；状态和排程解释不加成员，`runtime-client` 留 [12, 14]；
+  `irreversible_reach` 成员原样留着（读、算哈希），`package` 不动；不加配置成员，`actingd-config` 不动；`resource verify` 报告的 `goals` 是可选成员，报告的 schema 仍是 `actinglab.resource-verify.v1`。
+- **Runtime 改了的文件**：宿主 `crates/runtime-host/src/` 的 `codes.rs`、`entry_block.rs`（新）、`failure_identity.rs`、`host.rs`、`idle_action.rs`、`lib.rs`、`policy_control.rs`、`policy_host.rs`、`schedule_explanation.rs`，`host/` 下的 `contained_task.rs`、`emulator_autostart.rs`、`entry_blocks.rs`（新）、`failure_settlement.rs`、`host_claims.rs`、`idle.rs`、`policy_catalog.rs`、`policy_dispatch.rs`、`policy_outcome.rs`、`recovery_ladder.rs`、`requests.rs`、`resource_close.rs`、`resource_fence.rs`、`standard_pack_schedule.rs`、`unavailable_probe.rs`，
+  测试 `tests/gate_490_entry_a.rs`、`tests/gate_486_asleep.rs`（新），`gate_455_gr2s.rs`、`gate_rl1b.rs`、`gate_387_d1c.rs` 改了，`gate_373_nav3a.rs`、`gate_373_nav6.rs` 只把夹具改成对新门可见，`tests.rs` 加测试声明；策略 `crates/policy/src/` 的 `codes.rs`、`compose.rs`、`evaluator.rs`、`lib.rs`、`schema.rs`、`validation.rs` 和测试 `gate_455_gr2s.rs`、`gate_486_asleep.rs`（新）；
+  `crates/runtime-config/src/recovery_ladder.rs`；契约库 `outcome/keys.rs`、`standard_pack_goals.rs`（只改注释）。`apps/actingd`、账本 `crates/ledger`、客户端库 `crates/runtime-client`、内核 `crates/execution-kernel`、`crates/scheduler`、`crates/device`、`crates/display-adapter`、`crates/pack-containment`、`crates/recognition-pack`、`crates/watchdog`、`crates/host-metrics`、`crates/lab-rescue` 一个文件没改。
+- 配置键：没有加的、没有去掉的（`crates/runtime-config` 只多一个函数 `LadderConfig::classify_unexcluded`）；`actingd.defaults.json` 一字没改，sha256 仍是 `c05c7478d893faa6dcfefd60b4cf2b1e748fdff2f89a9468f624ff24ce2b56fd`；两个配置模板和 `apps/actingd/src/config/manifest.rs` 没改（`distribution/` 下只改了本文件）。
+- 结果码：加了 9 个码、2 个位置、2 个键、1 张词表（3 个词），1 个码标成 `retired`，没有改类别的，已有的词表没加词。按片：ENTRY-A 加 `instance_entry_blocked`（info）、`instance_entry_task_waiting`（info）、`instance_entry_task_set_aside`（info）、`recovery_rung_skipped_emulator_restarted_in_stretch`（info）、`instance_entry_blocked_awaiting_person`（warning）、`instance_entry_blocked_recovery_failed`（warning）、`instance_entry_task_set_aside_reported`（warning），都是 runtime-host 的、类 `none`、退出码 0，
+  位置 `instance_entry_block`、`take_up_entry_recoveries`，键 `entry_recovery_end`（词表同名：`exhausted`、`update_dialog`、`worker_panicked`）和 `trigger_rule`；ASLEEP-1 加 `instance_asleep_wake_due`（policy，info，排程决定的原因）和 `instance_idle_stop_withheld`（runtime-host，warning），类都是 `none`，退出码 0；
+  G-R2x 把 `resource_target_package_irreversible` 标成 `retired`（`retired_in` 0.12.77，注册表里那一项去掉），改了 `resource_target_root_uncomposed` 和 `standard_pack_package_unreadable` 的说明；GOALS-PACK-1 没加码，只在 `standard_pack_root_invalid` 的说明里写了 `goals.json`；FLK-17 没碰码。
+  合计 4067 个码（在用 3977，`retired` 90），1779 个位置，31 个片段文件（42 个属主，11 个没有片段文件）；键 706，词表 293，词 2238；在用码按类别 error 3421、warning 189、info 225、success 125、fatal 17；审阅定稿的在用码 154 个。
+  本版的发布文件 `contracts/outcome-codes/released/0.12.77.json`：1 个码（`resource_target_package_irreversible`，`retired`）、0 个位置（新码都还没定稿）；索引由脚本生成，仍是 32 个文件，核过是最新的。
+- Lab 的操作表仍是 194 行，一行没改，没加参数（`resource verify` 那一行的回答就是命令的报告，多的 `goals` 是报告的可选成员）；帮助最长 159 字节。命令清单仍是 46 个顶层分派臂、109 条命令（`ratchet/` 没改）。
+  Lab 的 MCP 服务器的工具数和参数不变；第一代 MCP 服务器仍是 46 个工具，`apps/actingctl` 一个文件没改。README 两种语言只把工具表标题改成 v0.12.77。两个压缩包的文件表不变：没有新文件、没有去掉的文件，`acib.exe` 不在里面。
+- 不稳定表仍是 FLK-08、FLK-10、FLK-14、FLK-15、FLK-16（`ci/flaky-tests.toml`，本版没动）；`ci/retired-gates.toml` 多 12 条（G-R2s 退出门表的 12 条测试，199 → 211 条）。
+  看板 #71 本版只多了一条：#1857 的验收记录（11-21 08:47 JST），本版别的片一件都没在那里登记；**#1857 的标题和 `ci.yml` 注释用的编号 FLK-17，看板 #71 在 11-16 已经登记给了另一件**（host 门表里 `gate_411_a65` 的一条测试，子进程提前退出），同一个号现在指两件事，两件都没有镜像进这张表；FLK-18 照旧。
+  各片 CI 红过的都是自己的毛病（ENTRY-A 前几个头的两道守卫、几条测试的期望、一次测试一步撞了旧的 35 分钟、一次静态检查，还有上面的 M4；ASLEEP-1 第一头编不过、第二头一处 lint；G-R2x 一处 lint），改了再推，没有重跑出来的绿；验收时读的头都是一次全过。
+
+升级与退回（救急模块部署、退回、撤销那几条路：`crates/lab-rescue` 本版一个文件没改，v0.12.75 说明里引的行号对本版也对）：
+
+- **v0.12.76 的安装工具装本版：两面都能装，不用任何标志。** 计划的边：`ledger` 两边 [3, 9]，`previous_max_in_next` 过，`one_way` 不触发（`install/plan.rs` 298–311）；`runtime-outcomes` 的 `next_max_in_installer` 过（312–324）；`install-control` 三方 [0, 0]；
+  `runtime-client` 的 `installer_meets_previous` 是安装工具 I [12, 14] 对在线 Rp [12, 14]，`installer_meets_next` 是 I [12, 14] 对本版 R* [12, 14]，都过（325–341）；`package` 的 `bundle_max_in_next` 每个已装的游戏一条，照旧是 `pack_declaration_unknown` 警告、不挡，R* 写 [3, 21]（342–365）。
+  `actingd-config` 没有比区间的边：`installer_knows_keys`（370 起）过，`next_check_config` 照新版 `check-config` 的结果类别判，过（912–924）。`defaults_diff` 没有一行（584–608）；文件计划里没有 `new`；`ledger_verify` 为 false（925）；计划通知的 `rollback_window_bounded` 为 false（只有接受了单向的那一步才是 true，212）。
+- **本版第一次启动多写的**：格式上没有；不迁移、不要新状态根；配置的事实和 `config.selection` 的默认值哈希不变。在用的一代目录带标记时，第一次工作台检查多一条 `catalog.activated`；之后有进门失败、打开了停模拟器时，多上面那些记录。v0.12.76 的配置文件照收；`standard-pack check` 不出新的码。
+- **退回 v0.12.76：开着，有条件。** 回退门（`install/update.rs` 393–515）只放行这次部署替换掉的 v0.12.76（第 2 部分，410–420）。第 1 部分的边：`ledger` 两边 [3, 9]；`runtime-client` 是做退回的那份工具对 Rp [12, 14] 和 R* [12, 14]，本版和 v0.12.76 留存的 I 都是 [12, 14]，过；`package` 每个游戏照旧是警告；`actingd-config` 没有区间的边。
+  第 2 部分用 v0.12.76 自己的 `actingledger events` 读部署以来的每一页：本版不写新的记录种类或成员，新码照拼写读，过。第 4 部分（500–513）是 v0.12.76 的 `check-config` 读在线的配置：本版不加配置成员，过。
+  **门不看的是那一条**：敏感任务在进门处结算成状况的执行记录（v0.12.76 启动时停下），见「部署和退路」，退回之前核两步。`rollback_window_bounded` 只看接受了的单向账本一步（`plan.rs` 212），`op status` 的 `rollback_window` 只比账本的边（`install/status.rs` 286–299）。
+  部署以后 `op status` 的 `rollback_window` 里，留存的 v0.12.76、v0.12.75、v0.12.74、v0.12.73、v0.12.72、v0.12.71 `ledger_edge_passes` 为 true，更早的为 false；**v0.12.72、v0.12.71 两行虽是 true，回它们的计划被拒**（`runtime-client`）；这一栏不说有没有敏感任务的进门记录，也不说事实库有多少条、放没放过修订 21 的包。
+  - 回去以后用不了的：进门失败算状况、挡、各对的等待和搁置、段的节奏和模拟器一段一次（11-20 那种风暴又会出现）；睡着和兜底（停模拟器的实例又碰上看板 #486）；目标照样抬高带过标记的任务（v0.12.76 重新打标记、换一代目录）；`resource verify` 查 `goals.json`（安装里的 Lab 也回到 v0.12.76）。
+  - **账本、配置、录制、包、绑定、持久化的暂停、事实库、本版编的目录代，v0.12.76 照读**；要先核的是敏感任务的进门状况记录，要先改回的是设了停模拟器的实例。
+
+配对：
+
+- **控制台 UI**：界面的 v0.12.30（11-21 的预发布）钉 Runtime `f6e2cd26`，即 v0.12.76。**本版没有它读不了的东西**：状态不加成员，它钉的契约库照解；排程解释的新原因码照拼写读、值按 map 读；账本的新内容都在已有的记录种类里，新码照拼写读，没有一张闭词表加了值；账本库本版没改。它不用为本版改钉。
+  它不知道的：四个新的排程原因（`instance_entry_blocked`、`instance_entry_task_waiting`、`instance_entry_task_set_aside`、`instance_asleep_wake_due`）、四条新的警告和跳过模拟器那一级的码、`entry_recovery_end` 这张词表（当普通的值读，显不显示是界面的事）；退役的 `resource_target_package_irreversible` 不再出现。
+- **部署工具包**（这次走 Lab 的行）：两个构建清单的 `speaks` 和 v0.12.76 一样：`actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [12, 14]、`package` [3, 21]、`runtime-outcomes` [1, 1]；默认值文件的 sha256 是 `c05c7478d893faa6dcfefd60b4cf2b1e748fdff2f89a9468f624ff24ce2b56fd`；
+  `git diff --stat v0.12.76 <提交> -- apps/actingd/src/config/manifest.rs distribution/windows/actingd.defaults.json` 什么都不打印；`ledger` 两条边写 Rp [3, 9]、R* [3, 9]，都过；`runtime-client` 的边写 I [12, 14]、Rp [12, 14]、R* [12, 14]，都过；警告照旧是每个游戏一条 `package` 的 `bundle_max_in_next`，R* 写 [3, 21]；`actingd-config` 的两行过。
+  **和 v0.12.76 那次不同的**：没有区间动；`defaults_diff` 和启动后检查的 `new_keys` 又是空的；没有要搬的东西（事实库照旧整个带过来，部署前后各读一次合计就行）；启动后的第一次工作台检查可能启用一代新目录（部署前看在用那一代有没有 `irreversible_reach`，部署后数 `catalog.activated`）；
+  **退回之前多一个条件**：核本版部署以来的目录代里有没有敏感任务（没有就不用再查账本），v0.12.76 的三个条件照旧留给再往回的那一步；部署以后不改任何东西就能读的：排程解释里的进门原因和账本里那四个新码（上面「部署以后要看的」），闲置照旧关应用时唤醒记录和上次一样。
+  照旧的：`notice.rollback_window_bounded` 为 false、`ledger_verify` 为 false、没有账本那一步、日志的 `one_way` 为 false；没有新文件、没有去掉的文件；运行中的 `actingctl.exe`（MCP 服务）、`actinglab-mcp.exe` 和做计划的 `actinglab` 改名放到一边，别的跑着的程序文件挡住；救急模块的产品代码没变，按住和计划和上次一样；部署前核没有开着的录制和试跑。
+- **放置**：Lab 的 `place` 本版没改：带 `goals.json` 的 zip 要声明 `package` 14 以上（`place.rs` 929–938，不够是 `goal_undeclared`），声明的区间要落在安装工具自己的 [3, 21] 里（1536–1551）。
+- **资源频道钉着的工具**（升到本版以后）：`resource verify` 查仓里的 `goals.json`、通过的带进校验用的 zip 并声明 [14, 14]；工作树里被 git 忽略的 `goals.json` 让 checkout 那一步失败；`standard-pack compose` 和 `check` 编出来的目录不再带不可逆标记；做包的命令、参数一个没变。`acib` 照旧不随发版。
+- **两个 MCP 服务器**：Lab 的工具数和参数不变；第一代的工具表一个没变。旧映像上的进程照旧能用，答旧的工具表。
+
+运行上的变化：
+
+- 从 v0.12.76 部署，经 Lab 的 `release stage`、`deploy`、`op status`：两面都不用标志，没有 `ledger_verify`，`defaults_diff` 没有行，没有新文件；接口区间一个没动；退回 v0.12.76 开着，先核有没有敏感任务的进门状况记录。
+- 调度运行在主包开跑之前失败（`pack_logic_mismatch` 类）不再算规则的失败：次数退还，不进连败、不暂停；实例被挡住，恢复成功、运行成功、恢复暂停、停电时段、围栏或重启解挡；挡自己的恢复按节奏重爬，模拟器一段里最多重启一次。
+- 一直进不了门的任务在那台上一次比一次等得久（1 分钟起翻倍，最长 30 分钟再一分钟一分钟加），别的任务进得去而它还败到门槛，就搁到活动窗结束、告诉人一次；启用目录、换包、重启把它放出来。
+- 闲置动作可以设成停模拟器了：停了模拟器的实例算睡着，只为真派得出去的任务叫醒；唤醒起了模拟器而一直没有调度运行被准入时不再停，记 `instance_idle_stop_withheld`。生产今天都是关应用。
+- 目标抬高产出它那个池子的每一条任务，会做不可逆操作的包的也一样；`resource_target_package_irreversible` 退役；在用的目录带过标记的，部署后换一代。
+- `resource verify` 查资源仓的 `goals.json`，带进校验用的 zip、声明 [14, 14]；发版的 zip 要带上它，还欠资源侧换发版脚本。
+
+本版合并的 PR：
+
+- #1859 #486 ASLEEP-1（登记 §1.497）：policy 门表 `#486 ASLEEP-1` 4 条，host 门表 9 条（其中两条是真停真起的回放）；旧测试一条没动。
+- #1853 #490 ENTRY-A（§1.494）：host 门表 `#490 ENTRY-A` 40 条（八行）；`gate_387_d1c` 的「排除的码」那一格多等一拍清扫，`gate_373_nav3a`、`gate_373_nav6` 只把夹具改成可见。
+- #1858 #455 G-R2x（§1.499）：policy 门表 `#455 G-R2x` 5 条，host 门表 3 条；G-R2s 的 12 条（policy 9、host 3）退出门表，旧名记进 `ci/retired-gates.toml`；`gate_rl1b` 的 r4 换了场景、名字不变。
+- #1856 #455 GOALS-PACK-1（§1.498）：exec 门表 `#455 GOALS-PACK-1` 5 条（actinglab）；`gate_464_p2` 的一条改了期望（带上文件、声明 [14, 14]），名字不变。
+- #1857 #71 FLK-17（不占登记节）：只改 `.github/workflows/ci.yml`（host-lab 作业 45 → 60 分钟、测试一步 35 → 50），没有测试。
+- 合计 66 条新测试；v0.12.76 门表里的 12 条退出门表（见 G-R2x），此外没有测试退出门表。
+
 ## v0.12.76
 
 本版是 v0.12.75 之后的 6 次合并、6 张 PR，没有列车，一张一张单独合入：#463 SEL-GRID G1 #1848、#479 ACIB-3d #1849、#463 PRIV-SCAN #1851、#463 SEL-GRID G2 #1850、#489 AVAIL-1 #1852，最后 #498 FACT-CAP #1854。
@@ -126,6 +319,12 @@ and artifact names bind the complete source SHA.
   - **看板 #490 不在本版修**（§1.494、§1.495 是它的两片，PR #1853 没合）：**进门就失败的任务照旧被立刻再派，直到当天的预算用完**，跑不了的包这期间靠人按住。
   - 看板 #486 照旧：已关、不可用、又没被按着的实例仍会为派不了的任务被唤醒（闲置动作是停模拟器时才碰到，生产用的是关应用；再探要等它的唤醒结束了闲置的按住才碰得到它）。看板 #497 照旧：排序类的包变量，声明许可的个数最多 32，而一个值最多 1024 字节，合法的值可能存不下（读代码查出来的，生产上没碰到；界面的排序控件在本地按字节挡住）。
   - 写这份说明的时候，本版在设备上跑过的只有 `acib stop`（用第一个头的构建，见上）；Runtime 和 Lab 的五片都还没在设备上跑过。
+    部署以后补记（看板 #421，评论 7049683097）：部署走完了工具包的二十五步和四个带字母的步骤（原来的第 9 步和第 26 到 30 步是热放置的重钉，已经退役），调度开着：部署前没有全局暂停、没有实例暂停，部署自己的按住按住了六台，当时都没有活在跑，当场就静，交还时恢复的也是这六台。
+    Runtime 2026-11-21 05:16:26 JST 就绪，启动后 13.4 秒（`ready_ms` 13382；`start_stages` 共 12249 毫秒，其中打开账本 3324、恢复 6233、给上一轮收尾 72；`contained_settlement` 上一轮 34 个运行都已结束、整读 0 个），从关闭到启动 7978 毫秒，启动后检查的 12 项都过，新键那一项核到四个键都取默认值。
+    启动以后读到的：事实库整个带了过来，六台各自的条数和部署前一样，合计 212 条；计划的边和上面写的一样（`ledger` 两条过，`runtime-client` 留存的 v0.12.75 [12, 13] 和本版 [12, 14] 交得上，`actingd-config` 两条过，`package` 每个游戏一条警告，`defaults_diff` 四行），控制台声明的区间和本版也交得上；
+    `rollback_window` 里留存的 54 个旧构建有五个过账本的边，v0.12.75 在内，退回 v0.12.75 的三个条件当时都满足（根配置里没写再探的四个键、没放过修订 21 的包、整机 212 条）；换版前后六台上没有一条闲置唤醒记录；部署记录写的是换版以后没有实例被判成不可用、没有探测记录、也没有提醒（这一片要等哪台真不可用了才看得到它起作用）。
+    之后几个小时看到的、v0.12.77 答复或点名的：11-21 主人的审计对着她自己的话（10-28 第 79 条、11-18 第 234 条裁定）查出 G-R2s（v0.12.60 起「目标不抬高会做不可逆操作的包的任务」）和它们相反（v0.12.77 撤回）；进门就失败的任务照旧被立刻再派（看板 #490，v0.12.77 修）；
+    闲置动作没法设成停模拟器：停了模拟器的实例算不可用，派不出去的任务也会把它叫醒（看板 #486，v0.12.77 修）。
 
 - **`acib`**：ACIB-3d 见上面的「`acib stop`」。**`acib` 照旧不在发版的两个压缩包里**：`.github/workflows/windows-remote-build.yml` 本版没改（387–398 发版构建排除它，1007–1030 单独编、单独上传，发版那次不编），两个压缩包的文件表里没有它；锁文件、依赖和 `NOTICE.md` 本版没改。
 
