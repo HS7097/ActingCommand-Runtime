@@ -45205,12 +45205,20 @@ declares [3, 23]; `standard-pack build` counts 23 for a pack whose `control.json
 members and for no other (variables beside a reversible capability stay 14); `place` asks nothing
 of 23, as of rows 13 and 15 to 22. **What v0.12.77 answers such a package:** its installer (range
 [3, 21]) refuses a bundle that declares [23, 23] at its `package` edge (`interface_edge`), in the
-plan, before the hold and any write; a bundle that declares 14 to 21 is placed (`place` asks 14 of
-variables), and then its admission refuses the package at every run before `PackageAdmitted`
-(`contained_task_control_invalid`, `reason=variables_on_irreversible json_pointer=/variables`), its
-workbench counts it a package that cannot be read (`standard_pack_package_unreadable` with that
-refusal as cause, which keeps every variable of its root from applying there, `package_unreadable`),
-and its `standard-pack check` fails the root `package_invalid` naming the package and the word.
+plan, before the hold and any write. A bundle that declares 14 to 21 passes the plan (`place` asks
+14 of variables) and its items are laid, but its `place` then runs the checks after the placement
+(`post_check`, read in `check_step` of `crates/lab-rescue/src/install/place.rs` on main
+`3285143f`, the release commit of 0.12.77), among them that build's own `standard-pack check` of
+the game root (`tools\actinglab.exe --json standard-pack check --root <game root>`), which fails
+the root `package_invalid` naming the package and the word `variables_on_irreversible`: its row
+`standard_pack_check` is `fail`, and the placement ends `post_check_failed` with the items placed
+and the instances its `pause` held staying paused, the hold kept (`next` names `release-hold`;
+`undo` puts the items back); a placement made while no Runtime runs ends the same way with no hold
+and `next` naming `undo`. Should a person release the hold over the placed root, its admission
+refuses the package at every run before `PackageAdmitted` (`contained_task_control_invalid`,
+`reason=variables_on_irreversible json_pointer=/variables`), and its workbench counts it a package
+that cannot be read (`standard_pack_package_unreadable` with that refusal as cause, which keeps
+every variable of its root from applying there, `package_unreadable`).
 **`goals.json`** needs no mark: the document's versioning asks a new version for a new shape, and
 the shape and the reader do not change, only the Tools' references check accepts more; so the file
 stays version 2 at `package` 14. What 0.12.77 answers a version 2 file whose entries govern such a
@@ -45301,7 +45309,11 @@ package's variable now applies where 0.12.77 read the default with `package_unre
 sees beforehand whether that is so in check-config's notes (`standard_pack_package_unreadable`)
 and in the ledger (`goal_value_not_applied` with `variable_problem` `package_unreadable`). **A
 rollback to v0.12.77** meets: a bundle made for the new rules (`package` [23, 23]) refused by its
-installer at the `package` edge; a root already holding such a package (placed by this build)
+installer at the `package` edge; one with such a package that declares less (14 to 21) laid by its
+`place`, whose checks after the placement then fail it (its own `standard-pack check` fails the root
+`package_invalid` with `variables_on_irreversible`), the placement ending `post_check_failed` with
+the items placed and the instances it paused staying paused (no hold when no Runtime runs; `next`
+names `undo`); a root already holding such a package (placed by this build)
 run with that package refused at every run and counted unreadable, its root's variables then
 `package_unreadable`, its `standard-pack check` failing `package_invalid` (its rollback gate warns
 `pack_declaration_unknown` per game root and does not refuse, the register keeping no root's
