@@ -805,6 +805,24 @@ pub(super) struct ContainedRunControl {
     /// package began, its `PackageAdmitted` recorded (a layer's run records none of its own): a
     /// scheduled run counts in its pair's break-in only then.
     package_began: std::sync::OnceLock<()>,
+    /// Workflow #490 ENTRY-A fix round 3 (ruling 6): set once the run recorded an
+    /// `EntryRecoveryDecision` (it checked its entry), and once it recorded an
+    /// `EntryTargetDisposition` `Started` (its main package started): what its failed lease end
+    /// reads in memory instead of the ledger ([`RunEntry`]).
+    entry_checked: std::sync::OnceLock<()>,
+    entry_started: std::sync::OnceLock<()>,
+}
+
+/// Workflow #490 ENTRY-A fix round 3 (ruling 6; `contracts/policy-suspension.md`, "Where a block's
+/// recovery starts and when"): what a run's own entry facts said, noted in memory on its control
+/// as they were recorded (`RuntimeContainedTask::record_entry_fact`), which its failed lease end
+/// reads with no ledger read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct RunEntry {
+    /// It recorded an `EntryRecoveryDecision`: it checked its entry.
+    pub(super) checked: bool,
+    /// It recorded an `EntryTargetDisposition` `Started`: its main package started.
+    pub(super) started: bool,
 }
 
 /// Workflow #463 U1, fix round 3 (item 4): what a scheduled run noted, before it executed, of the
@@ -1041,6 +1059,8 @@ impl ContainedRunControl {
             runtime_budget_end: std::sync::OnceLock::new(),
             past_break_in: std::sync::OnceLock::new(),
             package_began: std::sync::OnceLock::new(),
+            entry_checked: std::sync::OnceLock::new(),
+            entry_started: std::sync::OnceLock::new(),
         }
     }
 
@@ -1232,6 +1252,25 @@ impl ContainedRunControl {
         self.package_began.get().is_some()
     }
 
+    /// Workflow #490 ENTRY-A fix round 3 (ruling 6): notes, once recorded, that the run checked its
+    /// entry (`checked`) or that its main package started (`started`).
+    fn note_entry_fact(&self, checked: bool, started: bool) {
+        if checked {
+            let _ = self.entry_checked.set(());
+        }
+        if started {
+            let _ = self.entry_started.set(());
+        }
+    }
+
+    /// Workflow #490 ENTRY-A fix round 3 (ruling 6): what [`Self::note_entry_fact`] noted.
+    fn run_entry(&self) -> RunEntry {
+        RunEntry {
+            checked: self.entry_checked.get().is_some(),
+            started: self.entry_started.get().is_some(),
+        }
+    }
+
     /// Workflow #463 U1b: the code an unrecorded verdict of a linear step's closing decision ends
     /// the run with: `page_confirmation_failed` for a scheduled run noted past its break-in, the
     /// dedicated code for every other run (a run in its break-in, a direct run, a Lab run).
@@ -1301,7 +1340,12 @@ impl ContainedRunControl {
             return Ok(None);
         };
         Ok(self.take_failed_terminal()?.map(|terminal| {
-            super::recovery_ladder::LadderTrigger::new(terminal, source, self.package().cloned())
+            super::recovery_ladder::LadderTrigger::new(
+                terminal,
+                source,
+                self.package().cloned(),
+                self.run_entry(),
+            )
         }))
     }
 
@@ -3907,11 +3951,23 @@ impl RuntimeContainedTask<'_> {
         } else {
             EventSeverity::Info
         };
+        // Workflow #490 ENTRY-A fix round 3 (ruling 6): what the run's failed lease end reads of its
+        // entry, noted in memory once recorded.
+        let checked = matches!(&fact, TaskSemanticFact::EntryRecoveryDecision { .. });
+        let started = matches!(
+            &fact,
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::Started,
+                ..
+            }
+        );
         self.append_task(
             severity,
             self.links(),
             TaskPayloadDraft::semantic(fact, AuditInput::new()),
-        )
+        )?;
+        self.control.note_entry_fact(checked, started);
+        Ok(())
     }
 
     /// ACT-2 (Workflow #407, register §1.250): the seed of the run's next drawn gap, from the seed
@@ -8615,8 +8671,13 @@ impl HostShared {
         context: &PolicyRunContext,
         task_request: &ContainedTaskRequest,
     ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
-        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item).
-        self.register_scheduled_resolution(context.decision_id())?;
+        // Workflow #336 L6: the settlement reads what this path resolves (§5.2.1 last item);
+        // Workflow #490 ENTRY-A: and what is known now of the instance's entry blocks.
+        self.register_scheduled_resolution(
+            context.decision_id(),
+            context.run_id(),
+            context.lease_token().instance_id(),
+        )?;
         lock(self.policy()?, HostLocation::ValidatePolicyRunContext)?
             .validate_run_context(context)
             .map_err(|error| {
@@ -12272,6 +12333,20 @@ impl HostShared {
             if let Some(mut failure) = reading_failure {
                 failure.terminal = Some(terminal(&terminal_event));
                 return Err(failure);
+            }
+            // Workflow #490 ENTRY-A (`entry_blocks.rs`): a run on the instance that succeeded (a
+            // scheduled run, a client's or the Lab's, a startup package, a rung's) ends the
+            // instance's entry block, before its lease ends and wakes the evaluation; fix round 3
+            // (rulings 3 and 5): one that is not the Runtime's own run lets a run in there.
+            if draft.outcome == TaskOutcome::Success {
+                let host_run = lock(
+                    &self.contained_runs,
+                    HostLocation::AppendContainedTaskTerminal,
+                )?
+                .get(&request.request_id())
+                .is_some_and(|control| control.is_host_package());
+                self.note_entry_success(token.instance_id(), !host_run)
+                    .map_err(RequestFailure::poison_without_terminal)?;
             }
             Ok(terminal_event)
         })();

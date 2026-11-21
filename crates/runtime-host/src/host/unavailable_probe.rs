@@ -59,7 +59,8 @@
 //! - **A cool-down's end** (item 1): a ladder that its cool-down suppressed while the instance was
 //!   in the set is held with the instance, with the `until_unix_ms` its suppression named. From
 //!   that time (no later than the sweep's next tick) a probe is due whatever the interval: a probe
-//!   that passes drops the held recovery with the unavailability; one that fails reads the
+//!   that passes drops the held recovery with the unavailability (Workflow #490 ENTRY-A: an
+//!   entry-blocked instance's block takes it over instead); one that fails reads the
 //!   instance's cool-down window in force again (fix round 1: a later climb, or a `triggered`
 //!   admission, may have opened one since) and, once no window holds it, admits the recovery as
 //!   it would have been admitted without the cool-down (every other admission rule as before) and
@@ -224,9 +225,10 @@ pub(super) struct PendingUnavailableProbe {
     pub(super) links: EventLinksDraft,
 }
 
-/// What holds an instance's probes at a tick.
+/// What holds an instance's probes at a tick (Workflow #490 ENTRY-A: and the take-up of an
+/// entry-blocked instance's held recovery, `entry_blocks.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProbeHold {
+pub(super) enum ProbeHold {
     /// Nothing: the instance may be probed when its key is free.
     Free,
     /// A blackout covers the instance: it is probed after the blackout.
@@ -276,7 +278,9 @@ impl HostShared {
                     None
                 };
                 drop(instances);
-                return self.drop_held_recovery(dropped);
+                // Workflow #490 ENTRY-A: handed to the instance's entry block when it is
+                // entry-blocked, else dropped with its record (`leave_held_recovery`).
+                return self.leave_held_recovery(instance_id, dropped);
             }
             (Some(since_unix_ms), failed) => {
                 let instance = match instances.entry(instance_id) {
@@ -302,26 +306,38 @@ impl HostShared {
 
     /// Workflow #489 AVAIL-1 (item 1): a ladder of `instance_id` its cool-down suppressed until
     /// `until_unix_ms`. While the instance is unavailable by its self-check, the recovery is held
-    /// with it and taken up when the cool-down ends; otherwise nothing changes. Fix round 2 (item
-    /// 4): one is held per instance; a later one replaces the earlier, whose drop is recorded.
+    /// with it and taken up when the cool-down ends. Fix round 2 (item 4): one is held per
+    /// instance; a later one replaces the earlier, whose drop is recorded. Workflow #490 ENTRY-A:
+    /// otherwise it is held with the instance's entry block, or kept for the settlement of the
+    /// scheduled run its trigger names (`hold_entry_recovery`); for any other instance nothing
+    /// changes.
     pub(super) fn hold_cooled_down_recovery(
         &self,
         instance_id: InstanceId,
         ladder: PendingRecoveryLadder,
         until_unix_ms: u64,
     ) -> RuntimeHostResult<()> {
-        let replaced = lock(
-            &self.unavailable_instances,
-            HostLocation::QueueUnavailableProbes,
-        )?
-        .get_mut(&instance_id)
-        .and_then(|instance| {
-            instance.held.replace(HeldRecovery {
-                ladder,
-                until_unix_ms,
-            })
-        });
-        self.drop_held_recovery(replaced)
+        let (replaced, not_held) = {
+            let mut instances = lock(
+                &self.unavailable_instances,
+                HostLocation::QueueUnavailableProbes,
+            )?;
+            match instances.get_mut(&instance_id) {
+                Some(instance) => (
+                    instance.held.replace(HeldRecovery {
+                        ladder,
+                        until_unix_ms,
+                    }),
+                    None,
+                ),
+                None => (None, Some(ladder)),
+            }
+        };
+        self.drop_held_recovery(replaced)?;
+        match not_held {
+            Some(ladder) => self.hold_entry_recovery(instance_id, ladder, until_unix_ms),
+            None => Ok(()),
+        }
     }
 
     /// Fix round 2 (item 4): `held`, a recovery the cool-down held back with an unavailable
@@ -332,6 +348,28 @@ impl HostShared {
             Some(held) => self.record_dropped_held_recovery(&held.ladder, held.until_unix_ms),
             None => Ok(()),
         }
+    }
+
+    /// Workflow #490 ENTRY-A: `held`, a recovery held with `instance_id`, which leaves the set
+    /// (the gate's decision with no probe in flight, a probe's start that does not run, a probe's
+    /// settlement): an entry-blocked instance's block takes it over, to take it up at its
+    /// cool-down's end (`hand_over_held_recovery`), and nothing records it as dropped; for any
+    /// other instance it is dropped with its record, as AVAIL-1 drops it (`drop_held_recovery`).
+    /// Called with no set's lock held.
+    fn leave_held_recovery(
+        &self,
+        instance_id: InstanceId,
+        held: Option<HeldRecovery>,
+    ) -> RuntimeHostResult<()> {
+        let Some(held) = held else {
+            return Ok(());
+        };
+        let until_unix_ms = held.until_unix_ms;
+        let not_taken = self.hand_over_held_recovery(instance_id, held.ladder, until_unix_ms)?;
+        self.drop_held_recovery(not_taken.map(|ladder| HeldRecovery {
+            ladder,
+            until_unix_ms,
+        }))
     }
 
     /// Test builds: `instance_id` as the set holds it, with the configuration in effect.
@@ -408,7 +446,11 @@ impl HostShared {
     }
 
     /// What holds the probes of `instance_id` (alias `alias`) now.
-    fn probe_hold(&self, instance_id: InstanceId, alias: &str) -> RuntimeHostResult<ProbeHold> {
+    pub(super) fn probe_hold(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+    ) -> RuntimeHostResult<ProbeHold> {
         let paused =
             lock(&self.scheduling_pause, HostLocation::QueueUnavailableProbes)?.pauses(alias);
         if paused
@@ -771,7 +813,9 @@ impl HostShared {
                 }
             }
         };
-        self.drop_held_recovery(dropped)?;
+        // Workflow #490 ENTRY-A: an instance that left the set hands its held recovery to its
+        // entry block when it is entry-blocked (`leave_held_recovery`).
+        self.leave_held_recovery(instance_id, dropped)?;
         let Some(start) = start else {
             return self.release_host_key(&key);
         };
@@ -918,7 +962,8 @@ impl HostShared {
             }
         }
         // Fix round 2 (item 4): a recovery held with an instance that left the set is dropped
-        // after the probe's record, with its own.
-        self.drop_held_recovery(dropped)
+        // after the probe's record, with its own; Workflow #490 ENTRY-A: an entry-blocked
+        // instance's block takes it over instead (`leave_held_recovery`).
+        self.leave_held_recovery(instance_id, dropped)
     }
 }

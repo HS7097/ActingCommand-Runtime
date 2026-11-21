@@ -145,7 +145,7 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
 | `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
 | `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend`, `task_capture_backend` |
-| `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched`, `device_link_lost` |
+| `recovery_ladder.exclude_codes` | list of codes or `prefix*`: a failure whose code it names starts no ladder by itself; since 0.12.77 (Workflow #490 ENTRY-A) such a code of class `pack_logic_mismatch` that a scheduled run meets at its entry blocks the instance, whose own recovery climbs under the item that takes the class, the list not read ([emulator-control.md](emulator-control.md), "Triggers"; [policy-suspension.md](policy-suspension.md), "A failure at the entry") | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched`, `device_link_lost` |
 | `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
 | `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |
 | `recovery_ladder.rules.already_running` | `suppress` \| `queue` | `suppress` |

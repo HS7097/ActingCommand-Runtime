@@ -25,6 +25,8 @@ mod control_gates;
 // Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas, read from their directory.
 mod display_safe_area;
 mod emulator_control;
+// Workflow #490 ENTRY-A: the scheduling gate of an instance a run's entry failure blocked.
+mod entry_block;
 mod error;
 mod events;
 mod fact_refresh;

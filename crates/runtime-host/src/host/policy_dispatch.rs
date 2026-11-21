@@ -1946,11 +1946,16 @@ impl HostShared {
             availability_withdrawals,
             dispatches_read,
             queue_wait_starts,
+            entry_blocked,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
                 HostLocation::SnapshotPolicyOutcomeState,
             )?;
+            // Workflow #490 ENTRY-A: the entry-blocked instances, read under the gate a settlement
+            // blocks its instance under, so no evaluation sees a run's settlement without its
+            // block.
+            let entry_blocked = self.entry_block_gates()?;
             let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
             // this cycle's inputs are projected (Workflow #308 slice 5b). Workflow #437 ORD-1c:
@@ -2010,6 +2015,7 @@ impl HostShared {
                 availability_withdrawals,
                 dispatches_read,
                 queue_wait_starts,
+                entry_blocked,
             )
         };
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
@@ -2165,6 +2171,7 @@ impl HostShared {
                     dispatches_read,
                     standard_pack_variables: standard_pack_variables.as_deref(),
                     availability_withdrawals: &availability_withdrawals,
+                    entry_blocked: &entry_blocked,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

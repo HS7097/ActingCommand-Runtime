@@ -287,6 +287,65 @@ actingcommand_contract::outcome_codes! {
         /// next probe's time).
         InstanceUnavailableAwaitingPerson => "instance_unavailable_awaiting_person": warning / none,
         // Workflow #489 AVAIL-1 end
+        // Workflow #490 ENTRY-A begin: a run that failed at its entry blocks its instance.
+        /// Info (Workflow #490 ENTRY-A). The candidate's instance is entry-blocked: a scheduled run
+        /// there failed at its entry (its main package executed no step, its failure's class
+        /// `pack_logic_mismatch`), and since then no recovery and no run of the instance
+        /// succeeded, no resume lifted a pause of it, and no blackout covered it and no fence took
+        /// it. Every candidate of the instance but a store update package's task is deferred with
+        /// no wake of its own, the fact refresh naming it as its gate (keys `instance_id`,
+        /// `task_id` and `decision_id` of the run that blocked it, `failure_code` its failure,
+        /// `observed_at_unix_ms` when it was blocked).
+        InstanceEntryBlocked => "instance_entry_blocked": info / none,
+        /// Warning (Workflow #490 ENTRY-A). An entry-blocked instance waits for a person, once per
+        /// stretch of blocks with nothing let in between them: the stretch lasted
+        /// `scheduling.unavailable_probe.attention_after_ms` (`elapsed_ms`, `limit_ms`), whatever
+        /// holds it, while no pause, fence or idle stop owns the instance (keys `instance_id`,
+        /// `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` as above).
+        InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
+        /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
+        /// without recovering (`entry_recovery_end`: its ladder exhausted, the game's update
+        /// dialog ended a rung's run, its worker panicked; `trigger_rule` the trigger item it was
+        /// admitted under): the instance stays blocked, once per block; after an exhausted climb
+        /// the block climbs again by itself (`next_occurrence_unix_ms` its earliest time), after
+        /// the update dialog no climb again in the stretch, after a panicked worker none in the
+        /// block (keys as above).
+        InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
+        /// entry on its instance `count` times in a row in its activity window, the latest
+        /// (`decision_id`, `failure_code`, settled at `observed_at_unix_ms`) less than
+        /// `scheduling.unavailable_probe`'s interval for `count` before now, counted from the end
+        /// of the block it set and of any later block of the instance (from its settlement until a
+        /// block ends): it is not dispatched there
+        /// before `next_eligible_unix_ms` (never after the window's end), when it wakes; the fact
+        /// refresh names it as its gate (keys `instance_id`, `task_id` as well). Fix round 5: past
+        /// `max_interval_ms` one more `first_interval_ms` per further failure in a row, and a
+        /// scheduled run let in on the instance ends the wait at once.
+        InstanceEntryTaskWaiting => "instance_entry_task_waiting": info / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 3). The candidate's task is set aside on
+        /// its instance until its activity window ends (`window_end_unix_ms`), when it wakes: in
+        /// that window `count` of its failures at the entry came although the instance had let
+        /// another scheduled run in since its previous one, reaching its rule's
+        /// `escalation_threshold` (`limit_count`); its latest `decision_id`, `failure_code`,
+        /// `observed_at_unix_ms` (keys `instance_id`, `task_id` as well). The fact refresh names it
+        /// as its gate.
+        InstanceEntryTaskSetAside => "instance_entry_task_set_aside": info / none,
+        /// Warning (Workflow #490 ENTRY-A fix round 4, ruling 3). A person is told, once per task,
+        /// instance and window (and again when it is set aside again after a catalogue's
+        /// activation, a changed package or a Runtime start cleared the counts; fix round 5,
+        /// ruling 6), that a task is set aside on its instance until its activity window ends
+        /// (`window_end_unix_ms`): `count` of its failures at the entry in that window came
+        /// although the instance had let another scheduled run in since its previous one, which
+        /// reached its rule's `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`,
+        /// `decision_id`, `failure_code`, `observed_at_unix_ms` of the failure that reached it.
+        InstanceEntryTaskSetAsideReported => "instance_entry_task_set_aside_reported": warning / none,
+        /// Info (Workflow #490 ENTRY-A fix round 4, ruling 4). An entry-blocked instance's ladder
+        /// did not run its emulator restart rung: a ladder of the instance's stretch of entry
+        /// blocks (blocks with no run let in between them) has run that rung already, and the
+        /// emulator is restarted at most once in a stretch (the rung's `recovery_rung_finished`
+        /// outcome, `skipped`; the climb's plan lists the rung pending, as a plan drill's does).
+        RecoveryRungSkippedEmulatorRestartedInStretch => "recovery_rung_skipped_emulator_restarted_in_stretch": info / none,
+        // Workflow #490 ENTRY-A end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
         /// rung's `recovery_rung_finished` outcome; M387 §4.1).
@@ -2238,6 +2297,11 @@ actingcommand_contract::outcome_locations! {
         // Workflow #489 AVAIL-1: the lease sweep queues the due probes of instances their device
         // self-check made unavailable, and tells a person of one unavailable too long.
         QueueUnavailableProbes => "queue_unavailable_probes",
+        // Workflow #490 ENTRY-A: an instance's entry block, set by a run that failed at its entry,
+        // ended by a recovery, a run or a resume, and the attention of a person once its recovery
+        // ended without success; the lease sweep takes up a recovery its cool-down held back.
+        InstanceEntryBlock => "instance_entry_block",
+        TakeUpEntryRecoveries => "take_up_entry_recoveries",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -2964,6 +3028,20 @@ pub(crate) mod test_spellings {
             HoldEmulatorStoppedForTest => "hold_emulator_stopped_for_test",
             // Fix round 1: a test reads an instance as the unavailable instances hold it.
             UnavailableForTest => "unavailable_for_test",
+            // Workflow #490 ENTRY-A: a test settles the next run as one that failed at its entry,
+            // reads an instance's entry block and runs one tick of the blocks' held recoveries.
+            SettleAtEntryForTest => "settle_at_entry_for_test",
+            EntryBlockForTest => "entry_block_for_test",
+            EntryBlockTickForTest => "entry_block_tick_for_test",
+            // Workflow #490 ENTRY-A: a test settles the next run as one whose main package started
+            // after its entry check, ends a recovery of an instance and (fix round 4) reads a
+            // pair's failures at the entry and its wait.
+            SettlePastEntryForTest => "settle_past_entry_for_test",
+            RecoverInstanceForTest => "recover_instance_for_test",
+            EntryPairForTest => "entry_pair_for_test",
+            // Workflow #490 ENTRY-A fix round 3: a test lets a scheduled run in on an instance, as
+            // its settlement tells the entry blocks.
+            LetRunInForTest => "let_run_in_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.
@@ -3736,6 +3814,22 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- #484 IDLE-W2: end ----
+
+// ---- Workflow #490 ENTRY-A fix round 1 (register §1.494): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// How an entry-blocked instance's own recovery ended without recovering (vocabulary
+    /// `entry_recovery_end`, since 0.12.77): the value of `instance_entry_blocked_recovery_failed`.
+    pub enum EntryRecoveryEnd: "entry_recovery_end" {
+        /// The recovery ladder climbed its rungs and ended `exhausted`.
+        Exhausted => "exhausted",
+        /// Fix round 3 (ruling 4): the game's update dialog ended a rung's run, which ends the
+        /// ladder `exhausted` at Warning; no climb again in the instance's stretch of blocks.
+        UpdateDialog => "update_dialog",
+        /// The worker that climbed the ladder panicked; the ladder ended there.
+        WorkerPanicked => "worker_panicked",
+    }
+}
+// ---- Workflow #490 ENTRY-A fix round 1: end ----
 
 // ---- #498 FACT-CAP (register §1.496; contracts/instance-fact-store.md): begin ----
 actingcommand_contract::outcome_codes! {
