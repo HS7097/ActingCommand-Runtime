@@ -351,12 +351,8 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #437 MAPP-1: end ----
         // ---- Workflow #455 G-R2s (`contracts/resource-targets.md`, "A task that can do
         // something irreversible"): begin ----
-        /// Info. The candidate's task carries the composer's mark `irreversible_reach` (its
-        /// package, or a rule that follows it by a chain link, can do something irreversible, or
-        /// a package of its game root could not be read) and its instance holds a resource target
-        /// record: the record's targets are left out for this candidate, which is weighed exactly
-        /// as on an instance without a record (no keys).
-        ResourceTargetPackageIrreversible => "resource_target_package_irreversible": info / none,
+        // (`resource_target_package_irreversible` is retired in 0.12.77, Workflow #455 G-R2x,
+        // register §1.499: a task's irreversible mark no longer leaves a record out.)
         /// Info. Round 2: the Runtime's scheduler workbench cannot compose the root of the
         /// candidate's game (its metadata cannot be read, it is damaged, or the composition is
         /// refused as a whole) and the instance holds a resource target record: the record's

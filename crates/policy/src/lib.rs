@@ -169,8 +169,9 @@ mod tests {
     // Workflow #455 G-R2a (0.12.60; register §1.361): the goal document's value store, a v3
     // record whose targets weigh as a v2 record's.
     mod gate_455_gr2a;
-    // Workflow #455 G-R2s (0.12.60; register §1.369): a goal never raises the weight of a task
-    // whose package can do something irreversible.
+    // Workflow #455 G-R2s (0.12.60; register §1.369), withdrawn by G-R2x (0.12.77; register
+    // §1.499): a goal raises the weight of every task that produces its pool, a package that can
+    // do something irreversible included.
     mod gate_455_gr2s;
     // Workflow #463 V2 (0.12.61; register §1.382): the values a selected dispatch hands its run
     // for its package's variables.
@@ -183,8 +184,8 @@ mod tests {
     mod gate_486_asleep;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
-    /// registry lists reads and provides nothing, so nothing is marked: the gate tests' roots hold
-    /// no package files.
+    /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
+    /// roots hold no package files.
     fn readable_root(
         root: &actingcommand_contract::StandardPackRoot,
     ) -> actingcommand_contract::IrreversiblePackages {
