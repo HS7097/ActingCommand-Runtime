@@ -3,7 +3,9 @@ name: CI
 # Test plan v2.2 §1 (Batch 0a): one lint job, seven module test jobs and the ubuntu summary job
 # `gate`, whose check name stays `rust`. Each module job compiles its selection once
 # (`--no-run`; apps once per call of its Test step), then runs it with the same selection and
-# features.
+# features. `host-lab` is one job id with a matrix of three shards (board #499): each shard builds
+# and runs the job's whole selection, and libtest filters give it its share of the tests (see the
+# job).
 #
 # One-line forms (`gate_ci_jobs_cover_every_member` in
 # tools/actinglab-architecture/tests/gate_map.rs reads them without a YAML parser):
@@ -28,7 +30,8 @@ name: CI
 #   (`--message-format=json-render-diagnostics`, diagnostics stay rendered on stderr) to
 #   `$RUNNER_TEMP/test-build/`; that is the job's exe → (package, target) table.
 # - `Attribute test results` runs `ci/gate_check.py attribute` on every tee'd log of the Test step
-#   and writes `<log stem>.results.json` beside it in the uploaded `test-results-<job>`:
+#   and writes `<log stem>.results.json` beside it in the uploaded `test-results-<job>` (a
+#   host-lab shard: `host-lab-<shard>.log` in `test-results-host-lab-<shard>`):
 #   {"format": "actingcommand-gate-results/1", "job", "log", "configuration" (the run's
 #   `--features` value, "" for the default features, as in ci/flaky-tests.toml), "binaries": [
 #   {"package", "target" (`lib`, `bin:<name>` or the integration test), "exe", "running",
@@ -47,10 +50,12 @@ name: CI
 #   "seen"}]}, the tests that had started and not finished as far as the log tells (libtest's
 #   60-second notice multi-threaded, its `test <path> ... ` single-threaded), and `check` is red
 #   on it, naming them. `gate` runs the logic tests of ci/gate_check.py (ci/test_gate_check.py).
-# - `gate` downloads every `test-results-*` and runs `ci/gate_check.py check`: each name of
-#   contracts/test-gates/*.toml runs exactly once per configuration of its job and passes; a name
-#   of ci/flaky-tests.toml is reported as skipped; on pull requests a name or key that leaves the
-#   map since the merge base must be listed in ci/retired-gates.toml, and no key may be new.
+# - `gate` downloads every `test-results-*`, merges host-lab's three shards into the one folder
+#   `test-results-host-lab` (each shard's results document names job `host-lab`), and runs
+#   `ci/gate_check.py check`: each name of contracts/test-gates/*.toml runs exactly once per
+#   configuration of its job and passes; a name of ci/flaky-tests.toml is reported as skipped; on
+#   pull requests a name or key that leaves the map since the merge base must be listed in
+#   ci/retired-gates.toml, and no key may be new.
 #
 # Time limits (#71 FLK-13: in run 43070595705 host-lab reached its 35-minute job limit inside its
 # Test step; the job was cancelled, so its log was never attributed or uploaded):
@@ -60,12 +65,15 @@ name: CI
 #   it. The runner kills a step that runs out of its own limit and fails it; the job is not
 #   cancelled. So `!cancelled()` holds and `steps.test.outcome` is `failure`, the two steps after
 #   it run, and the uploaded log is the log up to the kill.
-# - #71 FLK-17: in run 44827500729 (pull request #1853) host-lab's Test step was killed at its
+# - #71 FLK-19: in run 44827500729 (pull request #1853) host-lab's Test step was killed at its
 #   35-minute limit when the runtime-host library's test binary had finished 1801 of its 1816
 #   tests, and on main the passing runs of the whole job took 35m56s to 40m49s against its
-#   45-minute limit. So host-lab's job and Test limits each rose by 15 minutes; splitting the job
-#   is a later slice.
-# - light: job 15, Test 8. host-lab: job 60, Test 50. exec-core, exec-tooling, ledger,
+#   45-minute limit, so its limits rose to job 60, Test 50. Board #499 then split it into three
+#   shards: in run 44985854498 (job 137096123353) the unsplit job's build took 4m03s and its Test
+#   step 26m41s, 22m12s of that the runtime-host library's 1837 tests. Each shard's job 30, Test
+#   22 leave room for an uneven split; they are tightened once three runs of pull requests on
+#   main show each shard's real times.
+# - light: job 15, Test 8. host-lab: each shard job 30, Test 22. exec-core, exec-tooling, ledger,
 #   runtime-client, apps: job 35, Test 15. lint, flaky and gate have no such Test step and keep
 #   only their job limit.
 
@@ -361,15 +369,31 @@ jobs:
   host-lab:
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
-    # #71 FLK-13: its Test step takes 20 to 23.5 minutes (one run reached 29.6 and the old
-    # 35-minute job limit). FLK-17: 60 leaves the step's 50 and 10 for setup, build, attribution,
-    # upload.
-    timeout-minutes: 60
+    # #71 FLK-13, FLK-19 and board #499: each shard's job 30 leaves its Test step's 22 and 8 for
+    # setup, build, attribution and upload (the head of this file).
+    timeout-minutes: 30
+    # Board #499: three shards of the same selection, flags, skips, features and threads; each
+    # builds the whole selection as the unsplit job did and passes its own libtest filters. Shard 1
+    # runs the tests whose libtest path contains a filter of HOST_LAB_F1; shard 2 those that
+    # contain one of HOST_LAB_F2 and none of HOST_LAB_F1; shard 3 those that contain none of
+    # either. The three conditions exclude each other and together hold for every name, so any
+    # test of any package, target or name runs in exactly one shard: in shard 3 unless a filter
+    # names it. The filters are module-path prefixes that split the runtime-host library's tests
+    # about evenly by count (621, 622 and 592 in run 44985854498); actinglab tests under the same
+    # prefixes run in shards 1 and 2. Without fail-fast a failing shard leaves the others running,
+    # each to its own log. `gate` needs `host-lab`, that is every shard.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-agent-forward -p actingcommand-actinglab -p actingcommand-lab-ops -p actingcommand-watchdog -p actingcommand-lab-rescue
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
       CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
       CI_SKIP: tests::facts::fact_snapshot_catches_up_with_critical_ledger_events protocol_goldens_match_current_cli tests::contained_tasks::runtime_executes_neutral_contained_task_without_lab_ownership tests::gate_373_nav6::n6_13_without_interrupts_a_run_records_what_it_records_without_a_root
+      HOST_LAB_SHARD: ${{ matrix.shard }}
+      HOST_LAB_F1: tests::gate_0 tests::gate_3 tests::gate_40 tests::gate_41 tests::gate_42
+      HOST_LAB_F2: tests::gate_4 tests::gate_a tests::gate_h tests::gate_i tests::gate_m
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -388,19 +412,36 @@ jobs:
           }
       - name: Test
         id: test
-        timeout-minutes: 50
+        timeout-minutes: 22
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $selection = "$env:CI_PACKAGES $env:CI_FEATURES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
           $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $first = @("$env:HOST_LAB_F1".Split(' ', [StringSplitOptions]::RemoveEmptyEntries))
+          $second = @("$env:HOST_LAB_F2".Split(' ', [StringSplitOptions]::RemoveEmptyEntries))
+          if ($first.Count -eq 0 -or $second.Count -eq 0) {
+            throw "HOST_LAB_F1 and HOST_LAB_F2 each name at least one filter"
+          }
+          $skipFirst = @($first | ForEach-Object { '--skip'; $_ })
+          $skipSecond = @($second | ForEach-Object { '--skip'; $_ })
+          # The shard's libtest arguments (the job's comment: each test in exactly one shard).
+          if ($env:HOST_LAB_SHARD -eq '1') {
+            $filters = $first
+          } elseif ($env:HOST_LAB_SHARD -eq '2') {
+            $filters = $second + $skipFirst
+          } elseif ($env:HOST_LAB_SHARD -eq '3') {
+            $filters = $skipFirst + $skipSecond
+          } else {
+            throw "host-lab shard '$env:HOST_LAB_SHARD' is not 1, 2 or 3"
+          }
           $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
-          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+          cargo test --locked --no-fail-fast @selection -- @filters @skip 2>&1 |
             ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
-            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB-$env:HOST_LAB_SHARD.log")
           if ($LASTEXITCODE -ne 0) {
-            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+            throw "$env:GITHUB_JOB shard $env:HOST_LAB_SHARD tests failed with exit code $LASTEXITCODE"
           }
       - name: Attribute test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -413,15 +454,16 @@ jobs:
           }
           $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
           $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
-          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB-$env:HOST_LAB_SHARD.log") "--configuration=$configuration"
           if ($LASTEXITCODE -ne 0) {
-            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
+            throw "attributing the $env:GITHUB_JOB shard $env:HOST_LAB_SHARD test log failed with exit code $LASTEXITCODE"
           }
       - name: Upload test results
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: test-results-${{ github.job }}
+          # One name per shard; `gate` merges the three into `test-results-host-lab`.
+          name: test-results-${{ github.job }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/test-results/
           if-no-files-found: error
 
@@ -748,6 +790,16 @@ jobs:
         with:
           pattern: test-results-*
           path: ${{ runner.temp }}/test-results
+      # Board #499: host-lab's shards upload `test-results-host-lab-<shard>`; their logs and
+      # results documents (job `host-lab`, file names apart) go into the one folder of job
+      # host-lab that `check` reads. The per-shard folders above are no module job's and unread.
+      - name: Merge host-lab's shards
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: test-results-host-lab-*
+          path: ${{ runner.temp }}/test-results/test-results-host-lab
+          merge-multiple: true
       - name: Gate map against the test results
         if: ${{ !cancelled() }}
         env:
