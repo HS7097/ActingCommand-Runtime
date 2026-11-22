@@ -45100,6 +45100,228 @@ answers the same. So the rollback stays open while no root is placed from such a
 `package` row 22). In the release notes' language:
 线性包（录制出来的包）的一步现在可以读一张会滚动的列表（`read_list`），声明和页图里的一样：从这一步页面出现的那一帧开始滚，滚到底整张读到就照旧在运行成功结束时写进 `inventory.list.` 下面那个事实，下一步就在最后一屏上接着判断；漏读一行只记警告、运行照常走完；滚动本身失败就以它自己的码、阶段 `read_list` 结束运行，不重试、不发布。读取步不能放最后一步，不能紧挨在可选步前面，不能从任意屏幕开始；`key` 不能和 `read_list` 写在同一步。内核加了一个离线入口，可在存下来的各屏上把读取跑一遍、答出和实际运行一样的结果（给后面 Lab 自检用）。包的修订升到 22：带读取步的线性包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`reason=read_list`）。
 
+### 1.501 Slice #455 G-SLx (0.12.78): the last two locks on packages that can do something irreversible are lifted: such a package may declare variables, and goal entries may govern it (Workflow #455; the owner's words of 10-28, 11-18 and 11-21, quoted below; the rulings are the coordinator's on those words, not the owner's; coordinator work order `rd-1121/brief-455-locks.md`, on main `d128e370`)
+
+[standard-pack-goals.md](standard-pack-goals.md) ("What is not this file's", rewritten; "The
+checks"; "Who reads it"; "Interface"; "Before any pack carries the file") and
+[package-variables.md](package-variables.md) ("A package that can do something irreversible", in
+place of "Irreversibility is the line between a parameter and a variable"; "The refusals"; "Shared
+names and the root check"; "A variable that does not apply"; "Interface", `package` 23) are the
+contract; [component-interfaces.md](component-interfaces.md) (the `package` row 23),
+[resource-verify.md](resource-verify.md) (its row 23), [standard-pack-schedule.md](standard-pack-schedule.md)
+("The irreversible mark"), [resource-targets.md](resource-targets.md),
+[resource-declarations.md](resource-declarations.md) and [package-reference.md](package-reference.md)
+follow it.
+
+**What is lifted, and on whose words.** `standard-pack-goals.md` kept "premium currency, real
+money, retiring and scrapping" out of goals at three places and said the owner decides later. Her
+words:
+- 10-28: 「这个可以自主突破，并且这个自主突破需要是共通的，因为我在启用RT的调度后，这个账号就相当于直接交给RT了。」
+- 11-18 (premium currency and tickets spent by the scheduler): 「234，批准，好兄弟，可以跑，换句话说，只有跑了才知道符不符合我们的预期，否则全都是纸上谈兵。」
+- 11-21, to the coordinator's question whether goals and a package's variables may govern packages that can do something irreversible (retiring, scrapping, buying, drawing, training that spends materials), where the coordinator wrote that he leaned to lifting both locks, real money excepted: 「7，这个早该拆掉了，好兄弟」
+
+The scheduler's line (G-R2s, the evaluator) went with G-R2x (§1.499). The coordinator's rulings:
+(1) kernel admission no longer refuses `variables` on a package whose own `provides` marks a
+capability irreversible (`variables_on_irreversible`), `standard-pack check` no longer reports
+`variable_irreversible_by_root`, and the workbench's judgement (and every offline reader that
+judges a root as it does) no longer says such a variable does not apply; (2) the goal check no
+longer refuses an entry because it governs, reaches or follows such a package
+(`goal_governs_irreversible` produced nowhere); (3) the declaration stays, and what nothing reads
+afterwards is removed; (4) the contract says what is true: real money alone is kept out, and by
+the packages themselves (no package holds a press that leads to a platform payment, a rule of pack
+making), and the resource-side review goes; (5) the retired words leave the catalogue as its rules
+ask; (6) a revision where the registry's rule asks for one; (7) nothing names a game, package or
+alias.
+
+**Built.**
+- *The contract crate.* `parse_package_variables` reads `variables` beside any `provides`; its
+  refusal `VariablesProblem::VariablesOnIrreversible` is removed (a name of a parameter of an
+  irreversible capability is still `variable_name_taken`). `check_root_variables`,
+  `variables_not_applying` and `judge_root_variables` take no `IrreversiblePackages`: their rules
+  are `variable_out_of_limits`, `variable_conflict` and `variable_cap_range`. `GoalReferences::new`
+  takes the root's package ids (`BTreeSet<String>`), which a rule's package and a placement's
+  packages are held to (`goal_package_unknown`); a `tier` is held to its rules and their fixed
+  value only, and `GoalRule` lost `followers`.
+- *The kernel and the source parser* call that reader: nothing of theirs changed but their texts.
+- *The policy crate.* `VariableTable::build` judges a game's packages without the rule (a task
+  whose package could not be read adds nothing to its game's judgement); `VariablePackage` lost
+  `capabilities`; `standard_pack_rule_followers`, read by the goal check alone, is removed.
+- *The Runtime host.* The workbench's `read_declarations` judges the root's variables without the
+  rule and still builds `IrreversiblePackages` for the composer; the remedy table builds
+  `VariablePackage` without capabilities; the goal page maps the two causes that are gone no more.
+- *The resource tooling.* `goal_issues` makes its references of the registry's package ids (every
+  package still read by the Runtime's metadata reader, for its variables; one it refuses is still
+  the check's error), with no followers; `variable_report` judges without the rule.
+- *`standard-pack build`'s revision table* (`apps/actinglab/src/resource_verify/revision.rs`, a
+  constant, a function and one line of `document_revision`): row 23 (below).
+- *The declaration* `distribution/windows/component-interfaces.json`: `package` [3, 23].
+
+**Removed whole, and what had to stay** (ruling 3). Removed: `IrreversiblePackages::followers_irreversible`
+(the walk over followers), `GoalReferences`' judgement of irreversibility, `GoalRule::followers`,
+`standard_pack_rule_followers`, `VariablesProblem::VariablesOnIrreversible`, the judgement's
+`irreversible` parameter, `RootVariables::not_applying`, `VariableOrigins::not_applying` (absent
+whenever empty, so no answer changes for a root that never had it) with `NotApplyingVariable`,
+`VariableCause::IrreversibleCapabilities` and `::UnreadablePackages`, `VariablePackage::capabilities`
+and the resource tooling's reading of capabilities for the goal check and the root check.
+`IrreversiblePackages` stays (`new`, `package`, `irreversible_capabilities`, `unreadable`,
+`counts_irreversible`), with `DeclaredCapabilities` and `RemedyDeclarations::declared_capabilities`,
+because two readers that need the reading of every package's declaration still read it: the
+composer's required input `StandardPackGameFiles.irreversible`, read for which packages could not
+be read, its warning `standard_pack_package_unreadable` (built by the workbench, check-config and
+`actingd suspended`, lab-ops' `game_irreversibility` and the resource tooling's
+`root_irreversibility` for `standard-pack check`, `compose` and `package bundle --schedule`); and
+the standard-pack trial's irreversible mark (`judge_irreversible`: `counts_irreversible`,
+`irreversible_capabilities`, `unreadable`; `trial_irreversible_unacknowledged`), which asks a
+person's acknowledgement before a trial run of such a package and is none of the two locks. The
+irreversible mark in a package's declaration, the `irreversible` member of the Lab's `packs` rows,
+the record of who started an irreversible Lab operation, the remedy layer and the evaluator are
+unchanged. The goal page's wire type `GoalVariableCause` keeps its members
+`irreversible_capabilities` and `unreadable_packages` (`runtime-client` does not move); no Runtime
+answers them since.
+
+**The retired words** (ruling 5). None of the three the work order names is a code:
+`goal_governs_irreversible` and `variable_irreversible_by_root` are words of the vocabulary
+`standard_pack_problem` (code `standard_pack_root_invalid`), and `variables_on_irreversible` was a
+`reason` word of `contained_task_control_invalid`'s detail and of the source parser's message,
+registered in no catalogue. The slice also leaves two words of `variable_problem` unproduced,
+`irreversible_by_root` and `package_unreadable`. The catalogue's rules for an entry a release
+produced: a code is never deleted, it is retired (the writing rules; G1 and G9 of the outcome
+guard keep a released retired entry retired), while a vocabulary's tokens carry no status and must
+equal their enum (G7). So a released word stays registered with its description saying it is no
+longer given, as `goal_table_unknown` (V1) and `live_pool_key` (POOL-1) stayed: the four words were
+released (`goal_governs_irreversible` in 0.12.60, the three others in 0.12.61), and the two of
+`variable_problem` are written into ledger records
+(`policy_dispatch_parameters`' `variable_values`, `goal_value_not_applied`), so each stays in its
+enum and its vocabulary with its description changed. `variables_on_irreversible` is written no
+more. No code is added or retired; the descriptions of `standard_pack_package_unreadable`
+(contract), `goal_value_not_applied` and `run_variable_not_applying` (runtime host) changed, no
+signature. `ci/outcome_codes_index.py --check` says the index is current.
+
+**Revisions** (ruling 6). A package that declares variables beside a capability its own
+`provides` marks irreversible was refused by every kernel so far at admission (and by its metadata
+reader), so, by the registry's rule for a package that needs a newer kernel (row 13's reasoning, as
+row 14 for variables and row 21 for `lines`), it takes `package` 23 (22 is §1.500's): the Runtime
+declares [3, 23]; `standard-pack build` counts 23 for a pack whose `control.json` holds both
+members and for no other (variables beside a reversible capability stay 14); `place` asks nothing
+of 23, as of rows 13 and 15 to 22. **What v0.12.77 answers such a package:** its installer (range
+[3, 21]) refuses a bundle that declares [23, 23] at its `package` edge (`interface_edge`), in the
+plan, before the hold and any write. A bundle that declares 14 to 21 passes the plan (`place` asks
+14 of variables) and its items are laid, but its `place` then runs the checks after the placement
+(`post_check`, read in `check_step` of `crates/lab-rescue/src/install/place.rs` on main
+`3285143f`, the release commit of 0.12.77), among them that build's own `standard-pack check` of
+the game root (`tools\actinglab.exe --json standard-pack check --root <game root>`), which fails
+the root `package_invalid` naming the package and the word `variables_on_irreversible`: its row
+`standard_pack_check` is `fail`, and the placement ends `post_check_failed` with the items placed
+and the instances its `pause` held staying paused, the hold kept (`next` names `release-hold`;
+`undo` puts the items back); a placement made while no Runtime runs ends the same way with no hold
+and `next` naming `undo`. Should a person release the hold over the placed root, its admission
+refuses the package at every run before `PackageAdmitted` (`contained_task_control_invalid`,
+`reason=variables_on_irreversible json_pointer=/variables`), and its workbench counts it a package
+that cannot be read (`standard_pack_package_unreadable` with that refusal as cause, which keeps
+every variable of its root from applying there, `package_unreadable`).
+**`goals.json`** needs no mark: the document's versioning asks a new version for a new shape, and
+the shape and the reader do not change, only the Tools' references check accepts more; so the file
+stays version 2 at `package` 14. What 0.12.77 answers a version 2 file whose entries govern such a
+package: its `standard-pack check` warns `goal_governs_irreversible` at each such entry and checks
+the root as without the file (the post check of its `place` passes); its `package bundle --goals`
+refuses the bundle with that word, `--out` not written, and its `resource verify` and
+`standard-pack build` fail their `bundle` step, no zip; its workbench reads the file with the reader
+alone and accepts it, the goal page listing its entries, while a variable of such a package does
+not apply there (`irreversible_by_root`, or `package_unreadable` as above). No stop condition of
+the work order held: the run's preparation hands such a package's variables to its run with the
+exclusion removed alone (the dispatch's `variable_values`, the overlay, a direct run's given values
+take the same paths as any package's); neither the goal document nor the target record needs a new
+version; and the one rule of the three places that guards something other than irreversibility,
+"no entry kind writes anything else" (a remedy choice, a capability's parameter, a configuration
+key, a pack switch), is kept as its own item, as are `goal_package_unknown` and `goal_rule_unknown`
+in the arms the lifted refusal shared.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GSLX-1 | `variables` beside a `provides` entry with `irreversible: true` | package content, `package` 23 | G-SLx | the packs' authors; `standard-pack build` counts 23 | every Runtime before refuses it at admission |
+| GSLX-2 | `goal_governs_irreversible`, `variable_irreversible_by_root` | words of `standard_pack_problem`, no longer given | G-SLx | none since 0.12.78 | kept registered |
+| GSLX-3 | `irreversible_by_root`, `package_unreadable` | words of `variable_problem`, no longer given | G-SLx | none since 0.12.78 | kept for the records earlier builds wrote |
+| GSLX-4 | `variable_provenance.not_applying` | member of `standard-pack check`'s answer, removed | G-SLx | none since 0.12.78 | absent when empty, so a root without it answers byte for byte as before |
+| GSLX-5 | `GoalVariableCause` `irreversible_capabilities`, `unreadable_packages` | members of the goal page's answer, kept, no longer answered | G-SLx | none since 0.12.78 | `runtime-client` unchanged |
+
+**Interface.** `package` [3, 22] to [3, 23] (row 23). `ledger`, `runtime-client`, `actingd-config`
+and `runtime-outcomes` do not move: such a package's variables are judged, recorded and overlaid in
+the shapes of any package's.
+
+**Tests** (gate rows "#455 G-SLx" of the contract, exec and host maps; the tests that pinned the
+lifted rules left the maps with their `[[retired]]` entries in `ci/retired-gates.toml`, as §1.499's
+did).
+
+| Test | What it shows |
+|---|---|
+| kernel `gate_463_v1::gslx_a_package_with_an_irreversible_capability_declares_variables_and_its_runs_read_them` (work order 1) | Admitted for real with its four variables beside a `provides` that marks its capability irreversible, declaring them as beside a reversible one; without a dispatch the defaults, from a dispatch's values `pick` item_a and `floor` 100 those values with the dispatch's parameter, given values alike, equal to the reversible package's |
+| host `gate_463_v2::gslx_host_a_variable_of_an_irreversible_package_reaches_its_run` (1, 2) | In composer mode the set value reaches the dispatch's record (source `set`), the run's parameters and its snapshots, no `goal_value_not_applied`: the dispatched package marking its own capability, a package no rule runs marking the one it provides unmarked, a package of the root that cannot be read |
+| contract `package_variables::tests::gslx_root_check_applies_a_variable_of_a_package_irreversible_by_the_root` (2) | V1 fix round 1's root (marked, unmarked provider, remedy, reversible): every variable applies, no `not_applying`, the judgement keeps none from applying |
+| resource tooling `gate_455_gr1::gslx_a_package_that_marks_its_capability_irreversible_declares_a_variable_a_goal_places` (1, 2, 3) | The marked package declares a variable a goal places: `standard-pack check` without a warning, the variable listed, every other refusal of the check as before, `package bundle --goals` lays the file |
+| resource tooling `gate_455_gr1::gslx_an_unmarked_provider_of_an_irreversible_capability_is_governed_and_its_variable_applies` (2, 3) | The unmarked provider's variable applies and its placement is accepted, as on the root where it provides its own capability; other refusals unchanged; the bundle laid |
+| resource tooling `gate_455_gr1::gslx_a_tier_over_a_rule_of_an_irreversible_package_is_accepted` (3) | A `tier` over the marked package's rule, alone and beside another's, accepted by the check and the bundle; with a rule the schedule lacks `goal_rule_unknown` at it alone; other refusals unchanged |
+| resource tooling `gate_455_gr1::gslx_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_accepted` (3) | The `tier` over a chain head whose follower runs the marked package accepted, the composition's followers as before; other refusals unchanged; the bundle laid |
+| resource tooling `gate_455_gr2s::gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted` (3) | The goal check accepts G-R2s's `tier` over four chain heads and one over their irreversible followers |
+| contract `standard_pack_goals::tests::gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root` (3) | References of package ids alone: the `tier` and the placements are `goal_package_unknown` at the untold package only |
+| resource tooling `gate_455_gr1::gslx_a_root_without_an_irreversible_capability_answers_as_before` (4) | A root none of whose packages marks a capability: no warning with the valid file, each refusal of the check as before, the bundle laid |
+| actinglab `gate_455_gslx::gslx_variables_beside_an_irreversible_capability_need_revision_23_and_nothing_else_does` (5) | 23 for the pair in one `control.json` whatever `variables` holds; 14 beside a capability marked `false` or unmarked, 4 for the capability alone, 14 for the members in two packs, 23 beside a task that needs 21 |
+
+Adapted, their names kept (work order 6): `gate_455_gr1::gr1_check_reports_each_refusal_at_its_pointer`
+(its last fixture, a `tier` over the marked package's rule, is accepted now; its twelve refusals
+are a shared table the `gslx_` tests run too); `gate_455_gr2s::gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible`
+(the composer's input as before, the goal half accepted, the variable applying);
+`gate_463_v1::v1_variables_violations_are_refused_with_their_reason_and_pointer` and the source
+parser's `v1_source_parser_takes_variables_and_refuses_each_at_its_pointer` (no
+`variables_on_irreversible`; a parameter's name of an irreversible capability `variable_name_taken`);
+the contract crate's `v1_each_refusal_is_at_its_pointer`, `v1_provenance_lists_each_variable_by_its_default_s_origin`,
+`v1_a_placement_is_held_to_the_variables_the_root_declares` and the goal reader's first two tests
+(the new constructor, the listing without `not_applying`); policy `gate_463_v2::v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set`
+and `v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause` (the irreversible and
+unreadable cases read as set, no word); host `gate_463_v2::v2_fix1_the_whole_root_keeps_a_variable_from_applying`
+(its two lifted cases moved to the `gslx_` host test). For the range [3, 23]:
+`gate_463_kp1`, `gate_463_sel2l`, the rescue module's `gate_463_v1`, the Lab's `gate_463_sel2l_rows`
+and actinglab-architecture's `component_interfaces`. Left the maps: the contract crate's
+`goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root` and
+`v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root`, the resource tooling's four
+`gr1_` tests of the safety line and `gr2s_t7`.
+
+**What is not changed.** For a package that declares no irreversible capability, in a root none
+of whose packages does and all of whose packages can be read: every refusal of the goal check,
+every judgement of the variables and every refusal of admission are byte for byte main's (the
+code paths that remain are the old ones minus the arms that judged irreversibility; test 4 and the
+unchanged tests of G-R1, V1 and V2 pin them). The one change on such a root: **a package that
+cannot be read** no longer keeps the other packages' variables from applying (until 0.12.77
+`package_unreadable`, the safe side of the lifted rule, since it might have marked a capability);
+it still gets its warning, and a dispatch of that package itself still hands no value
+(`goal_value_package_unreadable`). The evaluator, the remedy layer, the composer's composition,
+the irreversible mark, the `packs` rows and the trial's mark are unchanged.
+
+**At deploy.** Nothing changes for the packages in production, because none declares a variable
+beside an irreversible capability and no installed root carries a `goals.json`. A person verifies
+both on the installation, without a resource repository: (1) `actinglab standard-pack check --root
+<standard_packs.root>\<game>` of the live build (0.12.77), per installed game, checks the root
+(exit 0): it would fail `package_invalid` with `variables_on_irreversible` for such a package, and
+`actingd check-config` would note such a package `standard_pack_package_unreadable` with that
+refusal as its cause; (2) the same answer's `root_files` lists no `goals.json` (nor does the game
+root's directory hold one), and `actinglab goals <instance>` shows no declaration. One thing can
+change: on a game whose root holds a package the workbench cannot read, a value set for another
+package's variable now applies where 0.12.77 read the default with `package_unreadable`; a person
+sees beforehand whether that is so in check-config's notes (`standard_pack_package_unreadable`)
+and in the ledger (`goal_value_not_applied` with `variable_problem` `package_unreadable`). **A
+rollback to v0.12.77** meets: a bundle made for the new rules (`package` [23, 23]) refused by its
+installer at the `package` edge; one with such a package that declares less (14 to 21) laid by its
+`place`, whose checks after the placement then fail it (its own `standard-pack check` fails the root
+`package_invalid` with `variables_on_irreversible`), the placement ending `post_check_failed` with
+the items placed and the instances it paused staying paused (no hold when no Runtime runs; `next`
+names `undo`); a root already holding such a package (placed by this build)
+run with that package refused at every run and counted unreadable, its root's variables then
+`package_unreadable`, its `standard-pack check` failing `package_invalid` (its rollback gate warns
+`pack_declaration_unknown` per game root and does not refuse, the register keeping no root's
+range); a `goals.json` whose entries govern such a package: its `standard-pack check` warns
+`goal_governs_irreversible` (the post check passes), its workbench applies the file's entries with
+such a package's variables not applying, and its bundle tools refuse the file. The records this
+build writes have no new code, word, member or shape, so v0.12.77 reads them.
+
 ### 1.504 Slice #455 P1 (0.12.78): a pool may declare that its inventory is read from rows of a list (`observation.kind` `list_rows`): the declaration, the compile's checks and the composer's `requires`; no Runtime gives it a reading yet (board #455; the rulings 1 to 9 are the coordinator's of 11-21, no words of the owner's behind them; coordinator work order `rd-1121/brief-455-p1.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition; on main `3285143f`, the 0.12.77 release)
 
 This section takes 1.504: §1.500 to §1.503 belong to other slices of this version.

@@ -573,8 +573,10 @@ pub(super) fn parse_control_provides(
 /// Workflow #463 V1 (contracts/package-variables.md): the `variables` member of a control
 /// declaration whose `provides` is `provides`, read by the contract crate's one reader
 /// ([`parse_package_variables`]); a refusal is `contained_task_control_invalid` with the rule as
-/// its `reason` (`variables_invalid`, `variable_name_taken`, `variables_on_irreversible`) and the
-/// pointer of what breaks it in `control.json` as its `json_pointer`.
+/// its `reason` (`variables_invalid`, `variable_name_taken`; Workflow #455 G-SLx, register
+/// §1.501: no longer `variables_on_irreversible`, a package with an irreversible capability
+/// declaring variables as any other) and the pointer of what breaks it in `control.json` as its
+/// `json_pointer`.
 pub(super) fn parse_control_variables(
     value: &serde_json::Value,
     provides: &[ProvidedCapability],

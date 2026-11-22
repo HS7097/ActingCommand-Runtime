@@ -564,14 +564,15 @@ something irreversible"):
   refused (`schedule_invalid` at `/rules/<i>/irreversible_reach`), so the member is passed through
   to no task. A V2 catalog may carry the member, as a generation of 0.12.60 to 0.12.76 does; it is
   read and hashed as before and has no effect ([scheduling/v2/README.md](scheduling/v2/README.md)).
-- **What stays of the irreversible declaration** until the owner decides whether goals and
-  variables may govern such packages: a capability's `irreversible` mark in a package's
-  declaration; the goal check's refusal of an entry that governs such a package
-  (`goal_governs_irreversible`, [standard-pack-goals.md](standard-pack-goals.md)); kernel
-  admission's `variables_on_irreversible`; `standard-pack check`'s `variable_irreversible_by_root`
-  and the judgement that such a variable does not apply
-  ([package-variables.md](package-variables.md)); the remedy layer's own rules. They share the rule
-  below, which this section kept as G-R2s wrote it.
+- **What stays of the irreversible declaration**: a capability's `irreversible` mark in a
+  package's declaration and the remedy layer's own rules. Until 0.12.77 the goal check's refusal
+  of an entry that governs such a package (`goal_governs_irreversible`), kernel admission's
+  `variables_on_irreversible`, `standard-pack check`'s `variable_irreversible_by_root` and the
+  judgement that such a variable does not apply stayed too; Workflow #455 G-SLx (0.12.78, register
+  §1.501, the owner's decision) lifted all four ([standard-pack-goals.md](standard-pack-goals.md),
+  "What is not this file's"; [package-variables.md](package-variables.md)). Their rule below stays
+  for the composer's warning and the standard-pack trial's mark
+  ([standard-pack-trial.md](standard-pack-trial.md)).
 - **The composer's input stays required.** It reads only which packages of the root could not be
   read, for its warning `standard_pack_package_unreadable` (below), which is what tells a person
   that a package's declaration could not be read now that no task is marked for it.
@@ -589,31 +590,22 @@ What G-R2s wrote of the rule, its readers and the workbench's re-read, as it sta
   the irreversible remedy run more often. The remedies are judged from the declarations alone:
   every capability a remedy lists, its default or not, whatever an instance chooses
   ([remedies.md](remedies.md)). The Runtime's reader gives both (`read_remedy_declarations`, its
-  `declared_capabilities`). The goal check (`GoalReferences::new`) holds the same type; there is
-  no second implementation.
-- **The rules that follow a rule** (G-R2s fix rounds 1 and 3; the lists the composer's mark
-  walked until G-R2x, the goal check's alone since). **A rule follows another** when its trigger
-  has a chain link to it as the evaluator reads one (`required_predecessors`,
-  [scheduling/README.md](scheduling/README.md), "Ties and chain heads"): a `dependency_completed`
-  reached from the trigger's root only through `all` whose `terminal_states` holds `succeeded`,
-  whatever else it accepts and whether it writes `since_own_run`, a link to the rule itself
-  excepted, both rules not held. A follower with its own `produces` or its own value, one linked by
-  a link that also accepts another end, and one behind a complete rule all count; they are not
-  only the followers the coverage lists (`benefit_followers`, "Coverage" above): which follower
-  rides with which head the evaluator decides by each run's state, which no composition knows, so
-  every chain link of that kind counts, walked through further followers (each once, so a cycle
-  ends the walk). Not followed: a `dependency_completed` under `any` or `not` or one that does not
-  accept `succeeded`, a trigger on a fact or a capacity, and a declared `prerequisite_package_id`.
-  One copy of the lists and the walk: the policy crate's `standard_pack_rule_followers` gives each
-  rule the rules that follow it, and the contract crate's `IrreversiblePackages::followers_irreversible`
-  walks them; the goal check holds a `tier` entry's rule to them (`GoalRule::followers`,
-  [standard-pack-goals.md](standard-pack-goals.md)). A package that is no package the reader read
-  counts as irreversible there.
+  `declared_capabilities`). Until Workflow #455 G-SLx (0.12.77) the goal check
+  (`GoalReferences::new`) held the same type; since, its readers are the composer (which packages
+  could not be read) and the standard-pack trial's mark; there is no second implementation.
+- **The rules that follow a rule** (G-R2s fix rounds 1 and 3) were the lists the composer's mark
+  walked until G-R2x and the goal check's until G-SLx: every rule whose trigger has a chain link
+  to a rule as the evaluator reads one, walked through further followers. Since G-SLx nothing
+  reads them: the policy crate's `standard_pack_rule_followers`, the contract crate's
+  `IrreversiblePackages::followers_irreversible` and the goal check's `GoalRule::followers` are
+  removed. The coverage's riding followers (`benefit_followers`, "Coverage" above) are another
+  list and stay.
 - **A package that could not be read.** Its capabilities are unknown, so the rule counts every
-  package of its root as irreversible (`counts_irreversible`, the safe side the goal check and the
-  variables' judgement read). The composition warns `standard_pack_package_unreadable` once per such
-  package (keys `game`, `package_id`), after its other warnings; until 0.12.76 every composed task of
-  that game was marked too, and since 0.12.77 none is.
+  package of its root as irreversible (`counts_irreversible`, the safe side; since G-SLx the
+  standard-pack trial's mark alone reads it, the goal check and the variables' judgement no
+  more). The composition warns `standard_pack_package_unreadable` once per such package (keys
+  `game`, `package_id`), after its other warnings; until 0.12.76 every composed task of that game
+  was marked too, and since 0.12.77 none is.
 - **Who reads the packages.** The Runtime's workbench, check-config and `actingd suspended`
   (`compose_configured_standard_packs`, check-config's preview) and the resource tools
   (`standard-pack check`, `standard-pack compose`, `package bundle --schedule`) read each
@@ -640,8 +632,9 @@ What G-R2s wrote of the rule, its readers and the workbench's re-read, as it sta
   meaning: the package's own declaration.
 - **Three scopes of one word.** `irreversible` means today: the package's own declaration (the
   `actingctl packs` row member), the whole root's (a capability any package of the root marks:
-  the goal check and the variables' judgement; G-R2s's mark used it too), and the providers bound
-  on an instance (the remedy layer's request flag, [remedies.md](remedies.md) §2.3).
+  the standard-pack trial's mark; G-R2s's mark used it until G-R2x, and the goal check and the
+  variables' judgement until Workflow #455 G-SLx, 0.12.78), and the providers bound on an instance
+  (the remedy layer's request flag, [remedies.md](remedies.md) §2.3).
 - **The workbench reads the declarations again** when a package's declaration files change (the
   coordinator's ruling 1 of 11-14). The marks it compares at each check ("The scheduler workbench"
   below) are, per game in use, those of `schedule.json` and `bundle.json`, since Workflow #463 V2

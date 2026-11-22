@@ -5,12 +5,17 @@
 // admission reads them with the contract crate's one reader: a rule broken is refused as
 // `contained_task_control_invalid` with the rule as its `reason` and the pointer in
 // `control.json` as its `json_pointer`; a name a parameter of `provides` has is
-// `variable_name_taken`, and a package that provides an irreversible capability declares none
-// (`variables_on_irreversible`). A package that declares variables is admitted, and answers its
+// `variable_name_taken`. A package that declares variables is admitted, and answers its
 // descriptor, its parameter defaults and the parameters of a run without a dispatch as the same
 // package without them: nothing resolves or overlays a variable in this slice. Every package is
 // built in memory; the metadata reader by path is read by `standard-pack check`
 // (`resource-tooling`, `gate_463_v1`).
+//
+// Workflow #455 G-SLx (0.12.78; register §1.501): a package that provides a capability it marks
+// irreversible declares variables as any other package, where V1 refused them
+// (`variables_on_irreversible`): the first test takes them beside such a `provides`, and the
+// third admits such a package for real and shows that its runs read its variables as the same
+// package's beside a reversible `provides` do.
 //
 // A synthetic `neutral` game, server `test`, 16x9, as `gate_411_b15p` builds it: page `home` is
 // told by a blue first pixel and page `page_b` by a red one; the package's one operation goes from
@@ -144,8 +149,8 @@ fn with(change: impl Fn(&mut Value)) -> Value {
 }
 
 // Each rule of `variables` refuses the control declaration with `contained_task_control_invalid`,
-// its reason and its pointer; the variables of each kind, beside a reversible `provides` or
-// without one, pass.
+// its reason and its pointer; the variables of each kind, beside a reversible `provides`, without
+// one and (G-SLx) beside a `provides` that marks its capability irreversible, pass.
 #[test]
 fn v1_variables_violations_are_refused_with_their_reason_and_pointer() {
     let cases = [
@@ -199,11 +204,11 @@ fn v1_variables_violations_are_refused_with_their_reason_and_pointer() {
             "/variables/1/name",
         ),
         (
-            "a package that provides an irreversible capability",
+            "a name a parameter of an irreversible capability has",
             Some(provides(true)),
-            variables(),
-            "variables_on_irreversible",
-            "/variables",
+            with(|value| value[1]["name"] = json!("param_p")),
+            "variable_name_taken",
+            "/variables/1/name",
         ),
     ];
     for (case, provided, declared, reason, pointer) in cases {
@@ -222,6 +227,7 @@ fn v1_variables_violations_are_refused_with_their_reason_and_pointer() {
     for (case, provided) in [
         ("without provides", None),
         ("beside a reversible provides", Some(provides(false))),
+        ("beside an irreversible provides", Some(provides(true))),
     ] {
         validate_control_declaration(control(provided, Some(variables())))
             .unwrap_or_else(|error| panic!("{case}: {error}"));
@@ -260,5 +266,75 @@ fn v1_a_package_with_variables_is_admitted_and_answers_as_without_them() {
     assert_eq!(
         declaring.default_run_parameters(),
         plain.default_run_parameters()
+    );
+}
+
+// Workflow #455 G-SLx (0.12.78; register §1.501; the brief's test 1): a package whose own
+// `provides` marks its capability irreversible and that declares the four variables is admitted
+// for real (the source parser's gate and kernel admission; every kernel before 0.12.78 refused it
+// `variables_on_irreversible`), declares them as the same package beside a reversible `provides`,
+// and its runs read them as that package's do: without a dispatch at their defaults, from a
+// dispatch that carries `pick` item_a and `floor` 100 those values (the others at their defaults),
+// with the dispatch's parameter beside them, and given the same values (a direct run, the Lab's
+// scan replay) the same.
+#[test]
+fn gslx_a_package_with_an_irreversible_capability_declares_variables_and_its_runs_read_them() {
+    use actingcommand_contract::FactValue;
+    let prepare = |irreversible: bool| {
+        PreparedContainedTask::load_content_entries(
+            LABEL,
+            entries(&control(Some(provides(irreversible)), Some(variables()))),
+            None,
+            admission_deadline(),
+        )
+        .unwrap_or_else(|error| {
+            panic!("irreversible {irreversible}: admission refused the package: {error}")
+        })
+    };
+    let marked = prepare(true);
+    let reversible = prepare(false);
+    assert_eq!(marked.declared_variables().len(), 4);
+    assert_eq!(marked.declared_variables(), reversible.declared_variables());
+    assert_eq!(
+        marked.declared_parameter_defaults(),
+        [("param_p".to_owned(), "opt_2".to_owned())]
+    );
+    assert_eq!(marked.default_run_values(), reversible.default_run_values());
+    assert_eq!(
+        marked.default_variable_values(),
+        reversible.default_variable_values()
+    );
+
+    let given = [
+        ("pick".to_owned(), json!("item_a")),
+        ("floor".to_owned(), json!(100)),
+    ];
+    let read = marked.dispatched_variable_values(&given);
+    assert_eq!(read, reversible.dispatched_variable_values(&given));
+    let value_of = |name: &str| {
+        read.iter()
+            .find(|(declared, _)| declared == name)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(
+        value_of("pick"),
+        Some(FactValue::String("item_a".to_owned()))
+    );
+    assert_eq!(value_of("floor"), Some(FactValue::Integer(100)));
+    assert_eq!(value_of("extra"), Some(FactValue::Boolean(false)));
+    let parameter = vec![("param_p".to_owned(), "opt_1".to_owned())];
+    assert_eq!(
+        marked
+            .dispatched_run_parameters(parameter.clone(), 1_000)
+            .with_variables(read.clone()),
+        reversible
+            .dispatched_run_parameters(parameter, 1_000)
+            .with_variables(reversible.dispatched_variable_values(&given))
+    );
+    assert_eq!(
+        marked
+            .given_variable_values(&given)
+            .expect("the given values"),
+        read
     );
 }

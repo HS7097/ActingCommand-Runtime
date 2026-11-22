@@ -20,9 +20,11 @@ the place on the goal page, the default's origin, and the interface revision; an
   (`parse_package_variables`, `crates/actingcommand-contract/src/package_variables.rs`) that
   kernel admission and the source parser both call, each refusal at its JSON pointer;
 - the root check of `actinglab standard-pack check` over the variables of a game root's packages,
-  and its provenance listing; since fix round 1 it judges irreversibility over the whole root
-  with the goal check's rule (`variable_irreversible_by_root`) and the listing marks such a
-  variable as not applying;
+  and its provenance listing; from fix round 1 to 0.12.77 it judged irreversibility over the whole
+  root with the goal check's rule (`variable_irreversible_by_root`) and the listing marked such a
+  variable as not applying, which Workflow #455 G-SLx (Runtime 0.12.78, register
+  [v012-register.md](v012-register.md) §1.501) lifted with admission's refusal of variables on a
+  package that marks an irreversible capability ("A package that can do something irreversible");
 - the `goals.json` entry type `variable`, which places a variable on the page, in version 2 of
   the file (fix round 3: a version 1 file is `goal_version_retired`;
   [standard-pack-goals.md](standard-pack-goals.md));
@@ -65,7 +67,7 @@ variable warning does not stop a placement, its row `standard_pack_check` is `pa
 `{exit: 0}`, and the answer, warnings included, is not kept (it is kept only when the check
 fails). `resource verify`'s `bundle` step runs it on its installed root and relays the warnings.
 `package bundle` does not run it. Since V2 the Runtime runs the same check (the contract crate's
-`check_root_variables` and `IrreversiblePackages`, no second copy), and a variable that does not
+`check_root_variables`, no second copy; until 0.12.77 with `IrreversiblePackages`), and a variable that does not
 apply is handed no value from outside: the run reads its default, whatever the application holds
 ("A variable that does not apply"). Since its fix round 1 (the coordinator's ruling), with a
 composed standard pack the check is the root check over the whole root, as `standard-pack check`
@@ -137,27 +139,33 @@ Every other member is refused. A **set** (several things on or off) is an `order
 order the package ignores (`min_count` 0); one pick among many is an `ordered` variable with
 `min_count` and `max_count` 1.
 
-**Irreversibility is the line between a parameter and a variable.** A package that provides an
-irreversible capability (a `provides[]` entry with `irreversible: true`) declares no variable: the
-values that widen what an irreversible act may consume are its capability's parameters, set with
-the permission they scope ([remedies.md](remedies.md) §2.2, §2.3). Admission judges the package's
-own marks only. A package that provides, without the mark, a capability another package of the
-root marks irreversible, or whose remedies list one, can only be judged with the root, by the one
-rule the goal check uses (the contract crate's `IrreversiblePackages`): its variables do not
-apply, `standard-pack check` reports each of them `variable_irreversible_by_root` (fix round 1,
-"Shared names and the root check"), a `goals.json` entry that places one is
-`goal_governs_irreversible` ([standard-pack-goals.md](standard-pack-goals.md), "The checks"), and
-the slice that resolves values (V2) runs such a package on its defaults.
+**A package that can do something irreversible** (Workflow #455 G-SLx, Runtime 0.12.78, register
+§1.501, on the owner's decision recorded there) declares variables as any other package: a
+package whose own `provides` marks a capability `irreversible: true`, one that provides such a
+capability unmarked while another package of the root marks it, and one whose remedies list one.
+Its variables are read, shared, judged, placed and handed to its runs exactly as any package's
+(this document's every rule); a name of a parameter of its capability is still
+`variable_name_taken`, so a variable and a parameter never share a name. What stays: the
+capability's parameters are still what scopes the remedy layer's permission
+([remedies.md](remedies.md) §2.2, §2.3), and the mark is still what the remedy layer, the Lab's
+`packs` and the standard-pack trial read. Until 0.12.77 irreversibility was the line between a
+parameter and a variable: admission refused `variables` on a package whose own `provides` marked
+such a capability (`variables_on_irreversible`, at `/variables`, whatever the member held), and a
+package that counted as irreversible only by the whole root (by the contract crate's
+`IrreversiblePackages`) had its variables reported `variable_irreversible_by_root`, kept from
+applying and run on their defaults, and their placements refused `goal_governs_irreversible`. A
+package that declares variables beside a capability its own `provides` marks irreversible needs
+`package` revision 23 ("Interface").
 
 ## The refusals
 
-The first rule broken refuses the member, in this order: the irreversible package; the list; then
-entry by entry, the first problem of the value-type rules; then the entry's name, once the entry
-reads.
+The first rule broken refuses the member, in this order: the list; then entry by entry, the first
+problem of the value-type rules; then the entry's name, once the entry reads (Workflow #455
+G-SLx: until 0.12.77 the first rule was the irreversible package, `variables_on_irreversible` at
+`/variables`).
 
 | Reason | When | JSON pointer |
 |---|---|---|
-| `variables_on_irreversible` | a capability of the package's `provides` is irreversible | `/variables` |
 | `variables_invalid` | not a list of 1 to 16 entries; an entry that is no object; a member unknown, missing or not of its type; a name, an option value or a unit word outside its form; a text, a list or a name of a size outside its limit; a type that is none of the four; a block that is not the type's; a range, a step or a count that cannot hold a value; an option written twice; a default that is no value of the declaration; a `default_origin` other than `"model"` | the member that breaks the rule (`/variables` for the list) |
 | `variable_name_taken` | the name of an earlier variable or of any parameter of `provides` | `/variables/<i>/name` |
 
@@ -170,9 +178,10 @@ reads.
   containment keeps that text when it relays the gate's refusal (`declaration_error`,
   `crates/pack-containment/src/lib.rs`), so the refusal of an admission by path, as
   `standard-pack check` and `package bundle` admit a pack, names the reason too.
-- The three reasons are words of the `reason` of `contained_task_control_invalid`, registered in
+- The two reasons are words of the `reason` of `contained_task_control_invalid`, registered in
   this table and in [resource-declarations.md](resource-declarations.md), the `control.json`
-  members, as `provides`' are.
+  members, as `provides`' are (a third, `variables_on_irreversible`, no build writes since
+  Workflow #455 G-SLx).
 
 A `control.json` without `variables` reads, serializes and runs byte for byte as before: no
 member is added to anything a run or a record carries.
@@ -195,7 +204,6 @@ then declaration order), the first of these holds:
 | `variable_out_of_limits` | the name is the root's 97th or later (96 names: the entry rows an application's goal record keeps, as `goals.json` holds at most 96 entries) | `/variables/<i>/name` of each declaration |
 | `variable_conflict` | the declarations of the name are not byte-identical | `/variables/<i>` of each declaration |
 | `variable_conflict` | an entry of an accepted `goals.json` uses the name for anything but its placement | `/variables/<i>/name` of each declaration |
-| `variable_irreversible_by_root` (fix round 1) | a package that declares it counts as able to do something irreversible by the whole root: it provides, unmarked, a capability another package of the root marks irreversible, or a remedy of its mappings lists one (the contract crate's `IrreversiblePackages`, the one copy of the rule the goal check holds a placement to; admission refuses `variables` on a package whose own `provides` marks the capability) | `/variables/<i>` of each such package's declaration |
 | `variable_cap_range` | a package that declares it reads a designated effect's cap from `session.dispatch.parameter.<name>` (`max_repeats: {fact_key}`, which takes a whole number from 0 to 1000), and the variable is of another type than `integer` (fix round 1: a cap is read from an `integer` variable only), or an `integer` whose `min` is below 0 (fix round 1) or whose `max` is above 1000, the first of these | `/variables/<i>/type`, `/variables/<i>/min` or `/variables/<i>/max` of each such package's declaration |
 
 Each problem is one `standard_pack_root_invalid` warning with `game`, `path` (the package's
@@ -204,25 +212,27 @@ before those of `goals.json`. **The root still runs**, and no variable of that n
 refused `goals.json` applies no entry). The check warns only, wherever it runs: the installer's
 `place` runs it after every placement and reads its exit code only, so a warning passes its post
 check; `package bundle` does not run it. Since V2 the Runtime enforces it: it runs the same check
-and hands a variable that does not apply no value from outside, for a conflicting name and for a
-package irreversible by the root alike ("The run"); since V2's fix round 1, with a composed
-standard pack, over the whole root as this check runs it, `goals.json` included. A `goals.json`
-the reader refuses applies no entry, so it takes no name. The root check's four words, like V1's three others
-(`goal_variable_unknown` of the placement, fix round 1's `variable_undeclared` of the installer
-and fix round 3's `goal_version_retired` of a version 1 `goals.json`), are words of the existing
-vocabulary `standard_pack_problem` under the existing code `standard_pack_root_invalid`.
+and hands a variable that does not apply no value from outside ("The run"); since V2's fix round
+1, with a composed standard pack, over the whole root as this check runs it, `goals.json`
+included. A `goals.json` the reader refuses applies no entry, so it takes no name. The root
+check's words, like V1's three others (`goal_variable_unknown` of the placement, fix round 1's
+`variable_undeclared` of the installer and fix round 3's `goal_version_retired` of a version 1
+`goals.json`), are words of the existing vocabulary `standard_pack_problem` under the existing
+code `standard_pack_root_invalid`. Its fourth, fix round 1's `variable_irreversible_by_root` (a
+package that declares the name counted as irreversible by the whole root), no build gives since
+Workflow #455 G-SLx (0.12.78): the word stays registered for what earlier releases printed.
 
 **The provenance listing.** The answer of `standard-pack check` gains, after `models`,
 `variable_provenance` `{pack: [names], model: [names]}` when a package of the root declares
 variables: each variable that applies, once, in the root's order, by who wrote its default
 (`pack` without `default_origin`, `model` with it), as the schedule's provenance lists its fixed
-values ([standard-pack-schedule.md](standard-pack-schedule.md), "Provenance"). Since fix round 1
-the listing marks as not applying each variable that a package counting as irreversible by the
-whole root declares, which would otherwise read as in effect: `not_applying`
-`[{name, standard_pack_problem: "variable_irreversible_by_root"}]`, once each in the root's order,
-absent when there is none. A name another problem keeps from applying is in neither list (its
-warning says why). A root whose packages declare none answers without the member, byte for byte
-as before. `package bundle` runs no root check of variables.
+values ([standard-pack-schedule.md](standard-pack-schedule.md), "Provenance"). A name a problem
+keeps from applying is in neither list (its warning says why). A root whose packages declare none
+answers without the member, byte for byte as before. `package bundle` runs no root check of
+variables. (From fix round 1 to 0.12.77 the listing also had `not_applying`
+`[{name, standard_pack_problem: "variable_irreversible_by_root"}]`, absent when empty; since
+Workflow #455 G-SLx no variable is listed so and the member is gone, so no answer changes for a
+root that never had it.)
 
 ## The default's origin
 
@@ -239,8 +249,9 @@ the variable of that name that some package of the root declares
 ([standard-pack-goals.md](standard-pack-goals.md), "The five types of version 2"). It writes no
 text and no value: the variable carries its own. Its `block`, when written, is the placed
 variable's base block (`goal_block_mismatch` otherwise). A name no package of the root declares is
-`goal_variable_unknown`; a placement is held to every package that declares the variable as a
-governed package was (`goal_governs_irreversible`, `goal_package_unknown`). The type replaces the
+`goal_variable_unknown`; a placement is held to every package that declares the variable being a
+package of the root (`goal_package_unknown`; until Workflow #455 G-SLx, 0.12.77, also
+`goal_governs_irreversible` when one could do something irreversible). The type replaces the
 four types that governed packages. Release 0.12.60 shipped version 1 with those four, and a
 released format does not change its shape in place, so the file of the five types is version 2
 (`actingcommand.goals.v2`, fix round 3, the coordinator's ruling 2 on the design's questions): a
@@ -293,9 +304,9 @@ carries it in a `json` key of the same bound, so every value a run is to read of
 (`value_too_long` is gone).
 
 **A variable that does not apply** is handed no value from outside: the run reads its default,
-whatever the application holds. The Runtime runs the root check (`check_root_variables`, with
-`IrreversiblePackages`; the rules stay the contract crate's, `variables_not_applying` gives each
-name its word) where it can judge the root. Fix round 2: the rules of "does not apply" have one
+whatever the application holds. The Runtime runs the root check (`check_root_variables`; until
+Workflow #455 G-SLx, 0.12.77, with `IrreversiblePackages`; the rules stay the contract crate's,
+`variables_not_applying` gives each name its word) where it can judge the root. Fix round 2: the rules of "does not apply" have one
 copy, the contract crate's `judge_root_variables`, which the workbench, the table without a
 composed standard pack and `standard-pack check` all call. It takes the goal document as its
 reader read it (`RootGoalDocument`): absent, accepted with its entries (each takes the name it
@@ -312,9 +323,9 @@ its provenance listing come from the same judgement as the Runtime's.
   root check's, over the whole root). The scheduler workbench runs it where it already reads the
   whole root, at each read of a game root (`read_declarations` of
   `crates/runtime-host/src/host/standard_pack_schedule.rs`): over every package of the registry, a
-  package no rule runs included, read with the Runtime's metadata reader, with the rule of
-  irreversibility built from what every package provides and what its remedies list, against the
-  names the root's `goals.json` takes for anything but a placement, read with the contract crate's
+  package no rule runs included, read with the Runtime's metadata reader (until Workflow #455
+  G-SLx, 0.12.77, with the rule of irreversibility built from what every package provides and what
+  its remedies list), against the names the root's `goals.json` takes for anything but a placement, read with the contract crate's
   reader (`parse_standard_pack_goals`): an accepted file's names, none for a refused or absent file,
   and, for a file that cannot be read, every name of the root does not apply (`goals_unreadable`).
   Fix round 2: a refused file and one that cannot be read are each `standard_pack_goals_not_applied`
@@ -353,8 +364,9 @@ its provenance listing come from the same judgement as the Runtime's.
 - **Without a composed standard pack** (a configured catalog), as V2 built it: once per remedy
   table, over the packages the table reads, grouped by the game of the instances each catalog task
   covers: each package once in catalog order, no `goals.json` (so `goal_name_conflict` and
-  `goals_unreadable` do not arise there), and a task whose package could not be read counts as an
-  unreadable package of its game, the safe side of the rule. The table is built at the first
+  `goals_unreadable` do not arise there); a task whose package could not be read adds nothing to
+  its game's judgement (until Workflow #455 G-SLx, 0.12.77, it counted as an unreadable package of
+  its game, the safe side of the rule of irreversibility). The table is built at the first
   evaluation under a catalog, again when the procedure manifest in place changes, and at the remedy
   table's interval while a round is open, a stop recorded or an instance waits for its client
   update; it is memory only and dropped with the table. A package no catalog task binds is not
@@ -366,12 +378,17 @@ Each name the check reports takes the word of its problem (one word, one cause):
 |---|---|
 | `variable_conflict` at a declaration | `declaration_conflict` |
 | `variable_conflict` at the name (a `goals.json` entry) | `goal_name_conflict` |
-| `variable_irreversible_by_root`, a declaring package providing or listing a capability a package of the root marks irreversible | `irreversible_by_root` |
-| `variable_irreversible_by_root` only because a package of the root could not be read (the rule's safe side counts every package) | `package_unreadable` (fix round 1) |
 | `variable_out_of_limits` | `name_out_of_limits` |
 | `variable_cap_range` | `cap_range` |
 | (fix round 1) the root's `goals.json` could not be read | `goals_unreadable` |
 | no check judges the instance's game now: with a composed standard pack (fix round 2), the workbench notes the game uncomposed (its root failed a check, or a composition was refused while the generation in force did not hold the game with its present files), until a check whose composition of every game succeeds; without one, the table was built before an instance of it was known | `root_unchecked` |
+
+Two words of the vocabulary no build gives since Workflow #455 G-SLx (0.12.78): `irreversible_by_root`
+(until 0.12.77 the word of `variable_irreversible_by_root` when a declaring package provided or
+listed a capability a package of the root marks irreversible) and `package_unreadable` (fix round
+1, its word when only a package of the root that could not be read made the rule count every
+package). They stay in the vocabulary for the records earlier builds wrote; a package of the root
+that cannot be read keeps no other package's variable from applying since.
 
 **A dispatched package whose variables cannot be read** (fix round 2). With a composed standard
 pack, a dispatch whose package the workbench could not read (a declaration file's metadata, the
@@ -552,9 +569,10 @@ here). From memory, never from a file:
 - `RootVariableJudgement::verdicts`: per name of the root, in the order the root first declares
   it, a `RootVariableVerdict`: the packages that declare it, its first declaration, and when it
   does not apply a `NotApplyingCause`, the word and its detail (`VariableCause`: the packages whose
-  declaration conflicts, the type of the `goals.json` entry that takes the name, the packages that
-  cannot be read, per declaring package the capabilities that make it irreversible, the name's
-  place, or the packages that read it as a cap and the member at fault);
+  declaration conflicts, the type of the `goals.json` entry that takes the name, the name's place,
+  or the packages that read it as a cap and the member at fault; until Workflow #455 G-SLx,
+  0.12.77, also the packages that cannot be read and, per declaring package, the capabilities that
+  made it irreversible);
   `RootVariableJudgement::unreadable_packages`: the packages of the root that could not be read.
 - `VariableTable::root_word(game, name)`, the word that keeps a name from applying on an instance
   of the game now (`root_unchecked` while no check judges its root), and the policy crate's
@@ -586,8 +604,9 @@ record ([resource-targets.md](resource-targets.md), "One value by name").
   (`effective_json`, `source`, the `variable_problem` word): a value not applied, or a variable
   that does not apply, is `not_applied` with its word and, when the word is the root's judgement's,
   its detail (`variable_cause`: the packages that declare it otherwise, the `goals.json` entry's
-  type, the irreversible capabilities, the unreadable packages, the name's place, or the cap's
-  readers and member); a value applied in part is `in_effect` with `keys_left_out` and the keys
+  type, the name's place, or the cap's readers and member; its members
+  `irreversible_capabilities` and `unreadable_packages` stay in the shape, which Workflow #455
+  G-SLx does not change, and no Runtime of 0.12.78 or later answers them); a value applied in part is `in_effect` with `keys_left_out` and the keys
   left out. Beside the bound packages that declare a variable (`packages`), the root's other
   packages that declare it are named `unbound_packages`. A placement whose variable no bound
   package declares is `not_offered`. The view judges no stored value itself. A stored value no
@@ -669,6 +688,24 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   the `ledger` row 9): the admission record's optional `content_hash` and `variables` ("The run's
   admission record"). One way; a build that declares [3, 8] cannot read a ledger that holds one.
   `runtime-client`, `package`, `actingd-config` and `runtime-outcomes` do not move.
+- **`package` 23** (Workflow #455 G-SLx, Runtime 0.12.78, register §1.501,
+  [component-interfaces.md](component-interfaces.md), the `package` row 23; 22 is another slice's
+  of the same release): a pack whose `control.json` declares `variables` beside a `provides` entry
+  that marks its capability `irreversible: true`. Every Runtime before it refuses such a package
+  at admission (`contained_task_control_invalid`, `reason=variables_on_irreversible
+  json_pointer=/variables`, before `PackageAdmitted`, at every run), and its metadata reader
+  refuses it too, so its workbench counts it a package that cannot be read; that is why it takes
+  a revision, by the `package` row 13's reasoning ("What a range means": a bundle's maximum is the
+  revision its packs need). A pack without such a pair keeps its revision (variables beside a
+  reversible capability stay 14), so the Runtime declares [3, 23]; a bundle whose packs hold the
+  pair declares `package` [23, 23], which `standard-pack build` counts for such a pack and for no
+  other ([resource-verify.md](resource-verify.md), "The `package` revision"). The installer of
+  0.12.77 (its range [3, 21]) refuses such a bundle through its `package` edge
+  (`interface_edge`), in the plan, before the hold and any write; this build's `place` asks
+  nothing of 23, as of revisions 13 and 15 to 21, so a bundle that declares less is placed as it
+  declares, and an earlier Runtime then refuses that package at every run. A rollback below 23
+  stays open while no root holds such a pack. `ledger`, `runtime-client`, `actingd-config` and
+  `runtime-outcomes` do not move.
 
 ## What arrives later
 

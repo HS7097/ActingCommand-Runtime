@@ -97,12 +97,17 @@ target record as on an instance without one, with the reason
   the reserve gate ("Task Reserves" there) and the heavy-scene slots ("Shared Run Limits" there),
   because a candidate that carried the mark can now be raised by a goal. That is the purpose of the
   withdrawal. On an instance without a target record nothing changes.
-- **What stays** until the owner decides whether goals and variables may govern such packages: the
-  goal check's refusal of an entry that governs one (`goal_governs_irreversible`,
-  [standard-pack-goals.md](standard-pack-goals.md)), kernel admission's refusal of `variables` on
-  one (`variables_on_irreversible`), `standard-pack check`'s `variable_irreversible_by_root` and the
-  judgement that such a variable does not apply ([package-variables.md](package-variables.md)), with
-  the rule they share (`IrreversiblePackages`).
+- **Goals and variables govern such packages too** since Workflow #455 G-SLx (0.12.78, register
+  §1.501, the owner's decision): the goal check's refusal of an entry that governs one
+  (`goal_governs_irreversible`, [standard-pack-goals.md](standard-pack-goals.md), "What is not this
+  file's"), kernel admission's refusal of `variables` on one (`variables_on_irreversible`),
+  `standard-pack check`'s `variable_irreversible_by_root` and the judgement that such a variable
+  does not apply ([package-variables.md](package-variables.md)), which stayed here until 0.12.77,
+  are lifted. A value set on an application for a variable of such a package is that package's
+  run's like any other. Real money stays out by the packages themselves: no package holds a press
+  that leads to a platform payment. The capability's `irreversible` mark stays in its declaration
+  (the remedy layer reads it), and the contract crate's `IrreversiblePackages` stays for the
+  composer's warning of a package that cannot be read and the standard-pack trial's mark.
 
 ## A game whose root cannot be composed
 

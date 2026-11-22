@@ -5,14 +5,16 @@
 //! one entry of each of the types reads with every member its type has; and the reader is
 //! strict: an unknown member, an unknown type and a type of a later version are refused, each at
 //! its pointer, and (fix round 1) a bound of the shape broken is `goal_out_of_limits`. Fix round
-//! 1: the references are made only from what every package of the root provides, and judge the
-//! package a governed rule runs by the capabilities the whole root marks irreversible.
+//! 1: the references are made only from every package of the root, and hold the package a
+//! governed rule runs to them (Workflow #455 G-SLx: no longer judged by the capabilities the
+//! whole root marks irreversible).
 //!
 //! Workflow #463 V1 (register §1.378; contracts/package-variables.md) replaced the four types that
 //! governed packages by the placement `variable`, so these tests were adapted: the neutral example
 //! places a variable where it held a `choice` entry, each of the five types reads, the four
 //! replaced types are `goal_type_unknown`, and a placement is held, as a governed package was, to
-//! the packages that declare its variable. V1 fix round 3 made the document of the five types
+//! the packages that declare its variable being packages of the root. V1 fix round 3 made the
+//! document of the five types
 //! version 2: the fixtures write `actingcommand.goals.v2`, "another version" is a later one, and a
 //! version 1 document is `goal_version_retired` and read no further. A made-up game `neutral`;
 //! every id, name and text is a placeholder.
@@ -41,23 +43,10 @@ fn read(value: &Value) -> Result<StandardPackGoals, Vec<StandardPackRootIssue>> 
     parse_standard_pack_goals(&bytes(value), GAME)
 }
 
-/// Each package of `provides` with what its control declaration provides and no remedy (Workflow
-/// #455 G-R2s fix round 3: the references take each package's declarations whole).
-fn provided(
-    provides: BTreeMap<String, BTreeMap<String, bool>>,
-) -> BTreeMap<String, DeclaredCapabilities> {
-    provides
-        .into_iter()
-        .map(|(package_id, provides)| {
-            (
-                package_id,
-                DeclaredCapabilities {
-                    provides,
-                    remedies: BTreeSet::new(),
-                },
-            )
-        })
-        .collect()
+/// The packages of a root, by id (Workflow #455 G-SLx: the references take the packages alone,
+/// where they took what each package's declarations say until 0.12.77).
+fn packages(ids: &[&str]) -> BTreeSet<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
 }
 
 fn issue(problem: StandardPackProblem, pointer: &str) -> StandardPackRootIssue {
@@ -148,10 +137,7 @@ fn goals_neutral_example_reads_to_typed_entries() {
     );
     // A root that offers the valued pool and a package that declares the variable holds every
     // reference.
-    let mut references = GoalReferences::new(provided(BTreeMap::from([(
-        "neutral.collect".to_owned(),
-        BTreeMap::new(),
-    )])));
+    let mut references = GoalReferences::new(packages(&["neutral.collect"]));
     references
         .pools
         .insert("pool.neutral.points".to_owned(), true);
@@ -275,10 +261,7 @@ fn goals_each_type_reads_its_members() {
         BTreeSet::from(["group_a", "about", "points", "weight"])
     );
     // A root that offers every reference holds them all.
-    let mut references = GoalReferences::new(provided(BTreeMap::from([
-        ("neutral.collect".to_owned(), BTreeMap::new()),
-        ("neutral.spend".to_owned(), BTreeMap::new()),
-    ])));
+    let mut references = GoalReferences::new(packages(&["neutral.collect", "neutral.spend"]));
     references
         .pools
         .insert("pool.neutral.points".to_owned(), true);
@@ -287,7 +270,6 @@ fn goals_each_type_reads_its_members() {
         GoalRule {
             package_id: "neutral.spend".to_owned(),
             fixed_value: true,
-            followers: Vec::new(),
         },
     );
     references.variables.insert(
@@ -488,18 +470,19 @@ fn v1_a_version_1_document_is_refused_goal_version_retired() {
     );
 }
 
-/// G-R1 fix round 1 (items 1 to 3), with made-up packages: `neutral.discard` marks the capability
-/// `cap_discard` irreversible, `neutral.reuse` provides it without the mark (and one of its own),
-/// `neutral.collect` provides nothing, and `neutral.unlisted` is a package the references were not
-/// told of; each runs a rule that writes a fixed value and declares a variable. A `tier` entry that
-/// governs their four rules and (Workflow #463 V1, in place of the `switch` entry that governed the
-/// four packages) the four placements of their variables are each `goal_governs_irreversible` for
-/// the package that marks the capability and for the one that provides it unmarked,
-/// `goal_package_unknown` for the package the references say nothing of, each at its pointer (a
-/// placement's at its `name`), and pass `neutral.collect`. References made from no package pass no
-/// rule, and know no variable.
+/// G-R1 fix round 1 (items 1 to 3), with made-up packages: `neutral.collect`, `neutral.discard`
+/// and `neutral.reuse` are packages of the root, and `neutral.unlisted` is a package the
+/// references were not told of; each runs a rule that writes a fixed value and declares a
+/// variable. Workflow #455 G-SLx (register §1.501): the references are made from the root's
+/// packages alone, and whether a package can do something irreversible is no reference any more
+/// (until 0.12.77 `neutral.discard` marked a capability irreversible and `neutral.reuse` provided
+/// it unmarked, and both were `goal_governs_irreversible`). A `tier` entry that governs their four
+/// rules and the four placements of their variables are `goal_package_unknown` for the package
+/// the references say nothing of, each at its pointer (a placement's at its `name`), and nothing
+/// else: the three packages of the root pass. References made from no package pass no rule, and
+/// know no variable.
 #[test]
-fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
+fn gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root() {
     use StandardPackProblem as Problem;
     const PACKAGES: [&str; 4] = [
         "neutral.collect",
@@ -525,27 +508,13 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
         "entries": entries
     }))
     .unwrap_or_else(|issues| panic!("the declaration reads: {issues:?}"));
-    let mut references = GoalReferences::new(provided(BTreeMap::from([
-        ("neutral.collect".to_owned(), BTreeMap::new()),
-        (
-            "neutral.discard".to_owned(),
-            BTreeMap::from([("cap_discard".to_owned(), true)]),
-        ),
-        (
-            "neutral.reuse".to_owned(),
-            BTreeMap::from([
-                ("cap_discard".to_owned(), false),
-                ("cap_reuse".to_owned(), false),
-            ]),
-        ),
-    ])));
+    let mut references = GoalReferences::new(packages(&PACKAGES[..3]));
     for package_id in PACKAGES {
         references.rules.insert(
             rule_of(package_id),
             GoalRule {
                 package_id: package_id.to_owned(),
                 fixed_value: true,
-                followers: Vec::new(),
             },
         );
         references.variables.insert(
@@ -556,23 +525,13 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
     assert_eq!(
         check_standard_pack_goal_references(&goals, &references),
         [
-            issue(
-                Problem::GoalGovernsIrreversible,
-                "/entries/0/governs/rules/1"
-            ),
-            issue(
-                Problem::GoalGovernsIrreversible,
-                "/entries/0/governs/rules/2"
-            ),
             issue(Problem::GoalPackageUnknown, "/entries/0/governs/rules/3"),
-            issue(Problem::GoalGovernsIrreversible, "/entries/2/name"),
-            issue(Problem::GoalGovernsIrreversible, "/entries/3/name"),
             issue(Problem::GoalPackageUnknown, "/entries/4/name"),
         ]
     );
 
-    // The only way to make references takes what the packages provide: made from none, they know
-    // no rule and no variable, and nothing is passed.
+    // The only way to make references takes the root's packages: made from none, they know no
+    // rule and no variable, and nothing is passed.
     let unknown = (0..PACKAGES.len())
         .map(|j| {
             issue(
@@ -586,7 +545,7 @@ fn goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root() {
         )
         .collect::<Vec<_>>();
     assert_eq!(
-        check_standard_pack_goal_references(&goals, &GoalReferences::new(BTreeMap::new())),
+        check_standard_pack_goal_references(&goals, &GoalReferences::new(BTreeSet::new())),
         unknown
     );
 }

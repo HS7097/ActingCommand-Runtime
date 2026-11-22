@@ -4,24 +4,32 @@
 // "Irreversibility"; contracts/standard-pack-schedule.md, "The irreversible mark"): the resource
 // tools' goal check (`goal_issues`) and the composer's input they read (`root_irreversibility`),
 // over real packages on disk read by the Runtime's metadata reader.
-// - C.4: the goal check's half of the policy gate's t7 goes through `goal_issues`: a `tier` entry
-//   over four chain heads whose followers are linked three ways the evaluator reads as a chain
-//   link (a plain link, a link that also accepts a failed end, a link behind a complete rule),
-//   each follower running an irreversible package, is refused at those three heads and passes the
-//   fourth, whose one follower runs a package nobody marks.
+// - C.4: the goal check's half of the policy gate's t7 goes through `goal_issues`, over four chain
+//   heads: three whose followers are linked three ways the evaluator reads as a chain link (a
+//   plain link, a link that also accepts a failed end, a link behind a complete rule), each
+//   follower running an irreversible package, and a fourth whose one follower runs a package
+//   nobody marks. A `tier` entry over the four heads, and one over the four followers themselves,
+//   are accepted, nothing refused.
 // - Part B (the coordinator's ruling of 11-14): a package whose remedy lists a capability another
-//   package of the root provides marked irreversible counts as irreversible, for the goal check
-//   (a `tier` over its rule, over the head of a chain it follows, and an entry that governs it are
-//   refused) and for the composer's input the tools read; a package whose remedy lists only a
-//   capability nobody marks does not.
+//   package of the root provides marked irreversible counts as irreversible for the composer's
+//   input the tools read (`root_irreversibility`, which the standard-pack trial's mark reads too);
+//   a package whose remedy lists only a capability nobody marks does not. The goal check accepts a
+//   `tier` over such a package's rule and over the head of a chain it follows, and the placement
+//   of the variable it declares, nothing refused, and the check's root check lets that variable
+//   apply, no warning.
 // Workflow #463 V1 (register §1.378; contracts/package-variables.md) replaced the entry types that
 // governed packages by the placement `variable`: Part B's `switch` over two packages became the
-// placement of the variable both declare, refused at the placement's `name`, and `goal_issues`
-// takes no tables any more.
+// placement of the variable both declare, and `goal_issues` takes no tables any more.
+// Workflow #455 G-SLx (0.12.78; register §1.501; coordinator work order
+// `rd-1121/brief-455-locks.md`, rulings 1 and 2): the goal check no longer judges irreversibility.
+// Until 0.12.77 C.4's `tier` was refused at the three heads of irreversible followers (that test
+// left the gate map for `gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted`),
+// and Part B's `tier` at the irreversible package and the chain's head and its placement at the
+// placement's `name` (Part B adapted, its name kept).
 // A made-up game `neutral`, server `test`, 16x9; every package, rule, capability and variable is
 // a placeholder.
 
-use crate::standard_pack_goals::{goal_issues, root_irreversibility};
+use crate::standard_pack_goals::{goal_issues, root_irreversibility, variable_report};
 use actingcommand_contract::{
     StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
     read_standard_pack_root,
@@ -275,14 +283,15 @@ fn refusals(issues: &[StandardPackRootIssue]) -> Vec<(StandardPackProblem, Strin
         .collect()
 }
 
-// C.4: t7's goal half through `goal_issues`. Four heads on an hourly clock, each writing a fixed
-// value and running a package that provides nothing: H1's follower B1 by a plain link, H2's
-// follower B2 by a link that also accepts a `failed` end, H3's follower C3 (a complete rule) and
-// C3's follower B3; B1, B2 and B3 run a package that marks `cap_y` irreversible. H4's one follower
-// F4 runs a package that provides `cap_p`, which nobody marks. A `tier` over the four heads is
-// `goal_governs_irreversible` at H1, H2 and H3 and nothing else.
+// C.4's fixture through `goal_issues`. Four heads on an hourly clock, each writing a fixed value
+// and running a package that provides nothing: H1's follower B1 by a plain link, H2's follower B2
+// by a link that also accepts a `failed` end, H3's follower C3 (a complete rule) and C3's
+// follower B3; B1, B2 and B3 run a package that marks `cap_y` irreversible. H4's one follower F4
+// runs a package that provides `cap_p`, which nobody marks. Workflow #455 G-SLx (ruling 2, where
+// G-R2s refused it `goal_governs_irreversible` at H1, H2 and H3): a `tier` over the four heads,
+// and one over the three followers B1, B2 and B3 themselves, are accepted, nothing refused.
 #[test]
-fn gr2s_t7_the_goal_check_reads_the_same_chain_links() {
+fn gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted() {
     let packs: Vec<Pack> = vec![
         ("neutral.h1", None, None),
         ("neutral.b1", Some(irreversible("cap_y")), None),
@@ -306,34 +315,25 @@ fn gr2s_t7_the_goal_check_reads_the_same_chain_links() {
         rule("neutral.f4", link("neutral.h4", &["succeeded"])),
     ];
     let (_temp, game_root, root, schedule) = installed(packs, rules);
-    let goals = goals(json!([tier(&[
-        "neutral.h1",
-        "neutral.h2",
-        "neutral.h3",
-        "neutral.h4"
-    ])]));
-    assert_eq!(
-        refusals(&issues(&game_root, &root, &schedule, &goals)),
-        (0..3)
-            .map(|index| {
-                (
-                    StandardPackProblem::GoalGovernsIrreversible,
-                    format!("/entries/0/governs/rules/{index}"),
-                )
-            })
-            .collect::<Vec<_>>()
-    );
+    for heads in [
+        ["neutral.h1", "neutral.h2", "neutral.h3", "neutral.h4"],
+        ["neutral.b1", "neutral.b2", "neutral.b3", "neutral.f4"],
+    ] {
+        let goals = goals(json!([tier(&heads)]));
+        let refused = refusals(&issues(&game_root, &root, &schedule, &goals));
+        assert!(refused.is_empty(), "{heads:?}: {refused:?}");
+    }
 }
 
 // Part B: BLOCKED's package provides nothing and its mapping's remedy lists `cap_r` and `cap_q`;
 // PROVIDER's package provides `cap_r` marked irreversible; F5, the follower of H5 by a plain link,
 // runs a package whose remedy lists `cap_r`; KEEPS's package's remedy lists `cap_q` alone, which
 // SPARE's package provides unmarked. The composer's input the tools read counts BLOCKED, PROVIDER
-// and F5 irreversible and KEEPS, SPARE and H5 not, every package read. The goal check reads the
-// same rule: a `tier` over BLOCKED, KEEPS and H5 is `goal_governs_irreversible` at BLOCKED and H5,
-// and (Workflow #463 V1, in place of a `switch` that governed the packages BLOCKED and KEEPS) the
-// placement of the variable `enabled` BLOCKED and KEEPS declare is refused at its `name`, nothing
-// else.
+// and F5 irreversible and KEEPS, SPARE and H5 not, every package read. Workflow #455 G-SLx
+// (rulings 1 and 2, adapted; until 0.12.77 the goal check read the same rule and refused the
+// `tier` at BLOCKED and H5 and the placement at its `name`): a `tier` over BLOCKED, KEEPS and H5
+// and the placement of the variable `enabled` BLOCKED and KEEPS declare are accepted, nothing
+// refused, and the check's root check lets `enabled` apply with both packages, no warning.
 #[test]
 fn gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible() {
     let packs: Vec<Pack> = vec![
@@ -379,21 +379,17 @@ fn gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irre
         tier(&["neutral.blocked", "neutral.keeps", "neutral.h5"]),
         {"name": "enabled", "type": "variable"}
     ]));
+    let refused = refusals(&issues(&game_root, &root, &schedule, &goals));
+    assert!(refused.is_empty(), "{refused:?}");
+
+    let (warnings, listing) =
+        variable_report(GAME, &root, Some(goals.as_slice()), &|directory: &str| {
+            game_root.join(directory)
+        })
+        .unwrap_or_else(|error| panic!("the root check runs: {}: {}", error.code, error.message));
+    assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(
-        refusals(&issues(&game_root, &root, &schedule, &goals)),
-        [
-            (
-                StandardPackProblem::GoalGovernsIrreversible,
-                "/entries/0/governs/rules/0".to_owned()
-            ),
-            (
-                StandardPackProblem::GoalGovernsIrreversible,
-                "/entries/0/governs/rules/2".to_owned()
-            ),
-            (
-                StandardPackProblem::GoalGovernsIrreversible,
-                "/entries/1/name".to_owned()
-            ),
-        ]
+        serde_json::to_value(&listing).expect("the listing"),
+        json!({"pack": ["enabled"], "model": []})
     );
 }
