@@ -3015,9 +3015,10 @@ impl Replay {
             .collect()
     }
 
-    /// #486 ASLEEP-3: the operator's closing of [`CLOSED_PACK`] on the instance from `from_unix_ms`,
-    /// a row with no end (`EditPackSchedule`), as the resource side closes a package.
-    fn close_pack(&self, from_unix_ms: u64) {
+    /// #486 ASLEEP-3: the operator's schedule of [`CLOSED_PACK`] on the instance from
+    /// `from_unix_ms`, one row with no end (`EditPackSchedule`, which replaces the package's rows),
+    /// closed or (`schedulable`) open, as the resource side closes or reopens a package.
+    fn schedule_pack(&self, from_unix_ms: u64, schedulable: bool) {
         let mut client = TestClient::connect(&self.host);
         let request = client.request(RuntimeOperation::EditPackSchedule {
             scope: FactScope::Instance {
@@ -3027,7 +3028,7 @@ impl Replay {
             rows: vec![PackScheduleEditRow {
                 from_unix_ms,
                 until_unix_ms: None,
-                schedulable: false,
+                schedulable,
             }],
             expected_version: None,
         });
@@ -3088,7 +3089,7 @@ fn asleep3_r8_a_start_restores_the_instance_closed_and_its_closed_pack_schedule_
 
     // Its task's package is closed by its pack's schedule, with no end.
     replay.set_time(at(1, 6, 15));
-    replay.close_pack(started_at);
+    replay.schedule_pack(started_at, false);
 
     // The start's first evaluation: asleep, the instance is judged as available, and its pack's
     // schedule holds the task back with no time (deferred, eligibility true, no wake: what the
@@ -3218,13 +3219,104 @@ fn asleep3_r9_a_wake_no_run_answers_withholds_the_stop_for_its_hold_and_then_sto
     replay.close();
 }
 
-/// #486 ASLEEP-3, the planner: from `planner` (the instance stopped), one wake at `woken_at` for a
-/// due task whose configured start starts the emulator, its claims a minute, then the instance free
-/// with nothing due before `far`, every view showing the latest admission `admitted`. The hold the
-/// first withholding check gives (none: the stop was taken at once), checked to hold up to its end
-/// and to pass after it, and the time the stop was taken.
+#[test]
+fn asleep3_r10_an_awake_instance_whose_pack_schedule_is_closed_sleeps_and_wakes_when_it_reopens() {
+    // Fix round 1 (ruling 3): the replay instance awake on its first start, its emulator running,
+    // the budget task's procedure bound to the package its pack's schedule closes.
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let package = closed_pack_package(&root);
+    let clock = Arc::new(ManualRuntimeClock::new(at(1, 6, 0), 0));
+    let state = device_state();
+    let host = open_incident_host(&root, registered, &clock, &state, &package, true);
+    host.activate_policy_catalog(&sources(&[budget_task()]))
+        .expect("activate the budget catalogue");
+    let replay = Replay {
+        host,
+        clock,
+        state,
+        registered,
+        approved: BTreeSet::new(),
+        root,
+    };
+    let before = head(&replay.host);
+
+    // Its only task's package is closed with no end. Awake and under no hold, the evaluation
+    // defers the task `pack_schedule_closed` with no wake, eligibility true; the plan no longer
+    // counts it due, so the host's own check carries out the idle action.
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+    assert_eq!(
+        deferred_by(&replay.cycle(at(1, 6, 10)), TASK, PACK_SCHEDULE_CLOSED),
+        None,
+        "a row with no end names no wake"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms.is_none(),
+        "not due on the awake instance: {read:?}"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(stops(&replay.state), 1, "the awake instance became idle");
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "one stop, with no wake planned"
+    );
+
+    // The pack's schedule reopened: asleep, the instance is judged as available, the round's pick
+    // is the task it is woken for, and the host's own check wakes it once for that task; its
+    // configured start starts the emulator and its startup package runs; then the task is
+    // dispatched.
+    replay.set_time(at(1, 6, 20));
+    replay.schedule_pack(at(1, 6, 20), true);
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    let due_at = at(1, 6, 30);
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(due_at),
+            TASK,
+            PolicyCode::InstanceAsleepWakeDue.as_str()
+        ),
+        Some(due_at),
+        "the task it is woken for, its wake the evaluation's time"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "one wake, for the task"
+    );
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    replay.await_free(woken_at);
+    let cycle = replay.evaluate(at(1, 6, 40));
+    let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+    assert!(
+        evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == TASK),
+        "the task is dispatched once the instance is awake: {evaluation:#?}"
+    );
+    replay.close();
+}
+
+/// #486 ASLEEP-3, the planner under `config` (`stop_emulator`): from `planner` (the instance
+/// stopped), one wake at `woken_at` for a due task whose configured start starts the emulator, its
+/// claims a minute, then the instance free with nothing due before `far`, every view showing the
+/// latest admission `admitted`. The hold the first withholding check gives (none: the stop was taken
+/// at once), checked to hold up to its end and to pass after it, and the time the stop was taken.
 fn unanswered_round(
     planner: &mut IdlePlanner,
+    config: &IdleConfig,
     woken_at: u64,
     far: u64,
     admitted: Option<u64>,
@@ -3236,7 +3328,7 @@ fn unanswered_round(
     assert_eq!(
         planner.check_with_due_task(
             ALIAS,
-            &STOP,
+            config,
             view(stopped()),
             Some(plan_at(woken_at, true, None)),
             woken_at,
@@ -3250,7 +3342,7 @@ fn unanswered_round(
     assert_eq!(
         planner.check(
             ALIAS,
-            &STOP,
+            config,
             view(leased()),
             Some(plan_at(held, true, None)),
             held
@@ -3260,7 +3352,7 @@ fn unanswered_round(
     let free_at = held + MINUTE_MS;
     let first = planner.check(
         ALIAS,
-        &STOP,
+        config,
         view(free()),
         Some(plan_at(free_at, false, Some(far))),
         free_at,
@@ -3278,7 +3370,7 @@ fn unanswered_round(
     assert_eq!(
         planner.check(
             ALIAS,
-            &STOP,
+            config,
             view(free()),
             Some(plan_at(end, false, Some(far))),
             end
@@ -3292,7 +3384,7 @@ fn unanswered_round(
         matches!(
             planner.check(
                 ALIAS,
-                &STOP,
+                config,
                 view(free()),
                 Some(plan_at(after, false, Some(far))),
                 after
@@ -3308,32 +3400,74 @@ fn unanswered_round(
     (Some(end - free_at), after)
 }
 
-#[test]
-fn asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak() {
+/// `stop_emulator` with the production gap and its emulator's wake lead `lead_ms`.
+const fn stop_with_lead(lead_ms: u64) -> IdleConfig {
+    IdleConfig {
+        stop_emulator_wake_lead_ms: lead_ms,
+        ..STOP
+    }
+}
+
+/// The holds of `rounds` consecutive unanswered wakes under `config`, from the instance stopped,
+/// no run ever admitted.
+fn unanswered_holds(config: &IdleConfig, rounds: usize) -> Vec<Option<u64>> {
     let far = at(3, 0, 0);
     let mut planner = stopped_planner(None);
     let mut woken_at = at(1, 6, 0);
     let mut holds = Vec::new();
-    for _ in 0..6 {
-        let (hold, stopped_at) = unanswered_round(&mut planner, woken_at, far, None);
+    for _ in 0..rounds {
+        let (hold, stopped_at) = unanswered_round(&mut planner, config, woken_at, far, None);
         holds.push(hold);
         woken_at = stopped_at + MINUTE_MS;
     }
-    // Twice the lead (10 minutes), doubled for each consecutive unanswered wake before it, at most
-    // 24 leads (two hours).
-    assert_eq!(
-        holds,
-        [2, 4, 8, 16, 24, 24].map(|leads| Some(leads * LEAD_MS)),
-        "10, 20, 40, 80, 120 and 120 minutes"
-    );
-    // A scheduled run admitted since the last wake answers it and ends the streak: the next wake's
-    // hold is the first again.
-    let (hold, _) = unanswered_round(&mut planner, woken_at, far, Some(7));
-    assert_eq!(hold, Some(2 * LEAD_MS), "an admitted run ended the streak");
+    holds
 }
 
 #[test]
-fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours() {
+fn asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak() {
+    let minutes = |list: &[u64]| {
+        list.iter()
+            .map(|each| Some(each * MINUTE_MS))
+            .collect::<Vec<_>>()
+    };
+    // Fix round 1 (ruling 2): the larger of twice the lead and 10 minutes, doubled for each
+    // consecutive unanswered wake before it, at most two hours, whatever the lead.
+    assert_eq!(
+        unanswered_holds(&STOP, 6),
+        minutes(&[10, 20, 40, 80, 120, 120]),
+        "the factory lead of 5 minutes: 10, 20, 40, 80, 120 and 120 minutes"
+    );
+    assert_eq!(
+        unanswered_holds(&stop_with_lead(0), 6),
+        minutes(&[10, 20, 40, 80, 120, 120]),
+        "a lead of 0: the floor of 10 minutes all the same"
+    );
+    assert_eq!(
+        unanswered_holds(&stop_with_lead(30 * MINUTE_MS), 3),
+        minutes(&[60, 120, 120]),
+        "a lead of 30 minutes: twice it first, then the cap of two hours"
+    );
+    // A scheduled run admitted since the last wake answers it and ends the streak: the next wake's
+    // hold is the first again.
+    let far = at(3, 0, 0);
+    let mut planner = stopped_planner(None);
+    let mut woken_at = at(1, 6, 0);
+    for _ in 0..3 {
+        let (_, stopped_at) = unanswered_round(&mut planner, &STOP, woken_at, far, None);
+        woken_at = stopped_at + MINUTE_MS;
+    }
+    let (hold, _) = unanswered_round(&mut planner, &STOP, woken_at, far, Some(7));
+    assert_eq!(
+        hold,
+        Some(10 * MINUTE_MS),
+        "an admitted run ended the streak"
+    );
+}
+
+/// #486 ASLEEP-3, the loop bound under `config`: a check every minute for two hours; awake, the
+/// plan shows no work, so the check would stop the emulator; stopped, the wake predicate always
+/// says due; no run is ever admitted. The stops, the wakes and the warnings.
+fn two_hour_loop(config: &IdleConfig) -> (u32, u32, u32) {
     /// Where the instance stands between two checks of the loop.
     #[derive(Clone, Copy)]
     enum Standing {
@@ -3347,13 +3481,11 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
     let mut standing = Standing::Awake;
     let (mut stops_taken, mut wakes, mut warnings) = (0_u32, 0_u32, 0_u32);
     let mut now = start;
-    // A check every minute for two hours. Awake, the plan shows no work, so the check would stop
-    // the emulator; stopped, the wake predicate always says due; no run is ever admitted.
     while now <= end {
         match standing {
             Standing::Awake => {
                 if let Some(step) =
-                    planner.check(ALIAS, &STOP, free(), Some(plan_at(now, false, None)), now)
+                    planner.check(ALIAS, config, free(), Some(plan_at(now, false, None)), now)
                 {
                     assert!(
                         matches!(
@@ -3377,7 +3509,7 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
                 assert_eq!(
                     planner.check_with_due_task(
                         ALIAS,
-                        &STOP,
+                        config,
                         stopped(),
                         Some(plan_at(now, true, None)),
                         now,
@@ -3392,7 +3524,7 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
             }
             Standing::Woken => {
                 assert_eq!(
-                    planner.check(ALIAS, &STOP, leased(), Some(plan_at(now, true, None)), now),
+                    planner.check(ALIAS, config, leased(), Some(plan_at(now, true, None)), now),
                     None
                 );
                 standing = Standing::Awake;
@@ -3400,12 +3532,23 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
         }
         now += MINUTE_MS;
     }
+    (stops_taken, wakes, warnings)
+}
+
+#[test]
+fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours() {
     // The first stop, then one after each hold: 10 minutes from the first withholding check, then
     // 20 and 40; the fourth hold, 80 minutes, outlasts the two hours (11-21's loop went round
-    // eleven times in sixteen minutes).
-    assert_eq!(
-        (stops_taken, wakes, warnings),
-        (4, 4, 4),
-        "four stops, four wakes and one warning each"
-    );
+    // eleven times in sixteen minutes). Fix round 1 (ruling 2): the same with a wake lead of 0, the
+    // bound depending on no setting.
+    for (case, config) in [
+        ("the factory lead", STOP),
+        ("a lead of 0", stop_with_lead(0)),
+    ] {
+        assert_eq!(
+            two_hour_loop(&config),
+            (4, 4, 4),
+            "{case}: four stops, four wakes and one warning each"
+        );
+    }
 }

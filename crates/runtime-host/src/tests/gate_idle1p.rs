@@ -51,8 +51,10 @@
 //! in fact runs gets the ordinary check's action instead): adapted, L-3 and M-2 (no wake before
 //! the plan; with it X's running emulator is stopped with its wake from the plan), O-2 and M-1
 //! through the host (their start's check takes a plan: a task due, or the plan's own time come) and
-//! O-2 in the planner (its restart's check takes a plan whose time has come). N-1 is unchanged: a
-//! plan with no task wake while a reading waits still wakes the instance once (review N-1's case).
+//! O-2 in the planner (its restart's check takes a plan whose time has come). Fix round 1 (ruling
+//! 1: a reading alone wakes no instance, at a start either): N-1 both, whose start's plan with no
+//! task wake while the reading waits now wakes nothing; the wake comes with a plan that has a task
+//! due, and what follows it is as before.
 //!
 //! L-1 to L-3 go through the host with the scripted emulator of `gate_idle1_host` (X's idle action
 //! `stop_emulator`, its configured emulator start and a startup package) on a manual clock; each
@@ -958,8 +960,10 @@ pub(super) fn pause_x(host: &RuntimeHost, reason: &str) {
 
 /// Review N-1 through the host on X (`stop_emulator`): a start that cannot use a record (an
 /// earlier start kept none), with X's only work waiting for a status reading that expired
-/// meanwhile. Its plan has no task due and no task wake, and the reading alone wakes nothing, yet
-/// X is woken once at the start's first check. Its wake's configured emulator start finds X's
+/// meanwhile. Its plan has no task due and no task wake. #486 ASLEEP-3 fix round 1 (0.12.79,
+/// register §1.512, ruling 1; adapted): the reading alone wakes nothing at the start either, nor
+/// does the ordinary check stop X's running emulator while the reading is due; X stays closed
+/// until a task really comes due, which wakes it. Its wake's configured emulator start finds X's
 /// emulator running and starts nothing; since review M-1 (0.12.25) it still queues X's startup
 /// package once, and X stays woken until that claim has given X's key up (#405 O-2). The next
 /// plan, after the reading, then closes X again with its proper wake: the task's next wake minus
@@ -987,20 +991,34 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
         !plan.due_now && plan.next_wake_unix_ms.is_none() && plan.reading_due_unix_ms.is_some(),
         "no task due or waking, the reading held back: {plan:?}"
     );
-    // The start's first check (the lease sweep's may be the one that takes the wake).
+    // The start's first check: #486 ASLEEP-3 fix round 1 (adapted), the reading alone wakes
+    // nothing, and with the reading due the ordinary check takes no action either.
     host.check_idle_instances_for_test(&expired)
         .expect("the start's check");
+    assert!(
+        idle_records(&host, x, 0).is_empty(),
+        "no wake and no action for the reading alone"
+    );
+    assert_eq!(stops(&state), 0, "X's emulator is left as it is");
+    // A task of X comes due: the wake.
+    host.check_idle_instances_for_test(&x_due_plan_at(started_at))
+        .expect("the check with a task due");
     // #405 O-2 (0.12.25, adapted): woken, X is kept closed and woken until its wake's claims
-    // have ended (what follows depends on which check finds it free first).
+    // have ended (what follows depends on which check finds it free first). The start's first
+    // plan replaced the time the start owed the wake at with the plan's wake, none.
     assert_eq!(
-        kept_history(&host)[..2],
-        [vec![x_row(Some(started_at))], vec![x_woken_row(started_at)]],
-        "X is restored closed with its wake at the start, then woken"
+        kept_history(&host)[..3],
+        [
+            vec![x_row(Some(started_at))],
+            vec![x_row(None)],
+            vec![x_woken_row(started_at)]
+        ],
+        "X is restored closed owing its wake to the start, then waits with no wake, then is woken"
     );
     assert_eq!(
         idle_records(&host, x, 0),
         wake_records(),
-        "one wake at the start's first check"
+        "one wake, for the task due"
     );
     await_wake_start_end(&host);
     assert!(
@@ -1045,8 +1063,9 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
 
 /// Review N-1 through the host on X with the production action `close_app` (its wake is its
 /// startup package alone), at the start that follows an older build (the v0.12.19 → v0.12.20
-/// deploy: no record), with X's only work waiting for an expired status reading. X is woken at the
-/// start's first check and its startup package is claimed. Under a pause of X restored at the
+/// deploy: no record), with X's only work waiting for an expired status reading. #486 ASLEEP-3 fix
+/// round 1 (0.12.79, ruling 1; adapted): the reading alone wakes nothing at the start; X is woken
+/// once a task of it comes due, and its startup package is claimed. Under a pause of X restored at the
 /// start (a person's standing pause, or the install hold, which pauses every instance with its
 /// reason) the wake neither overrides it nor is lost: the startup claim waits queued, a later
 /// check claims nothing more, nothing is granted until the pause ends, and the resume grants it.
@@ -1085,15 +1104,23 @@ fn idle1p_n1_the_wakes_startup_claim_waits_behind_a_pause_or_the_install_hold() 
         let expired = x_explained(status_expired(), started_at);
         host.check_idle_instances_for_test(&expired)
             .expect("the start's check");
+        assert!(
+            idle_records(&host, x, 0).is_empty(),
+            "{held:?}: the reading alone wakes nothing"
+        );
+        host.check_idle_instances_for_test(&x_due_plan_at(started_at))
+            .expect("the check with a task due");
         // #405 O-2 (0.12.25, adapted): woken, X is kept closed and woken until its startup
-        // package has run.
+        // package has run. The start's first plan replaced the time the start owed the wake at
+        // with the plan's wake, none.
         assert_eq!(
-            kept_history(&host)[..2],
+            kept_history(&host)[..3],
             [
                 vec![x_row_of("close_app", Some(started_at))],
+                vec![x_row_of("close_app", None)],
                 vec![x_woken_row_of("close_app", started_at)]
             ],
-            "{held:?}: X is restored closed with its wake at the start, then woken"
+            "{held:?}: X is restored closed owing its wake to the start, then woken for the task"
         );
         assert_eq!(
             idle_records(&host, x, 0),

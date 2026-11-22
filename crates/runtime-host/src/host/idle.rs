@@ -76,10 +76,10 @@
 //!   evaluation inside the action's own claim, a client's run or a start's preparation no longer
 //!   wakes the application the action just closed. #486 ASLEEP-3 (0.12.79, register §1.512,
 //!   ruling 2): the one `instance_idle_stop_withheld` of a wake no scheduled run answered says when
-//!   its hold ends (`next_eligible_unix_ms`: from the first check that withheld the action, twice
-//!   the wake lead in effect, doubled for each consecutive unanswered wake of the instance before
-//!   it, at most 24 leads); the action taken after it is an ordinary `instance_idle_action`. An
-//!   instance
+//!   its hold ends (`next_eligible_unix_ms`: from the first check that withheld the action, the
+//!   larger of twice the wake lead in effect and 10 minutes, doubled for each consecutive unanswered
+//!   wake of the instance before it, at most two hours); the action taken after it is an ordinary
+//!   `instance_idle_action`. An instance
 //!   whose action in effect cannot bring it back (no startup package, or for `stop_emulator` no
 //!   configured emulator start) never acts and gets one `instance_idle_action_unsupported`
 //!   warning (`member` naming what it lacks) per action in effect, not a silent skip.
@@ -123,10 +123,10 @@
 //!   back): a wake the start owes (restored woken, or with no usable record) waits for the start's
 //!   first plan and comes as a sleeping instance's (a task the evaluation, judged with every gate
 //!   the dispatch applies, counts due; a switched action; the plan's own time), never at the time
-//!   the start owed it at; review N-1's case stays (a plan with no task wake at all while a reading
-//!   waits wakes it). One restored after `stop_emulator` whose emulator in fact runs, and for which
-//!   no wake comes, gets the ordinary check's action (its emulator stopped, with its wake from the
-//!   plan) with no startup package first.
+//!   the start owed it at, and (fix round 1) never for a reading alone. One restored after
+//!   `stop_emulator` whose emulator in fact runs, and for which no wake comes, gets the ordinary
+//!   check's action (its emulator stopped, with its wake from the plan) with no startup package
+//!   first.
 //! - **A startup package queued behind a pause** (W2-B, 0.12.26; review W1-6 M1): the same record
 //!   keeps each instance whose startup package an emulator start (an operator's `start` /
 //!   `restart`, or a configured start) queued behind a scheduling pause, from the hand-off until
@@ -865,9 +865,9 @@ impl HostShared {
     ///   rather than open, owing its wake to the start (review N-1; the record keeps the start's
     ///   time): #486 ASLEEP-3 (register §1.512, ruling 3), the first idle check with the start's
     ///   first plan wakes it as a sleeping instance is woken (a task due, a switched action, the
-    ///   plan's time, or review N-1's case of a reading the plan names no task wake beside), its
-    ///   startup package waiting behind any pause; one restored after `stop_emulator` whose emulator
-    ///   in fact runs gets the ordinary check's action instead when no wake comes;
+    ///   plan's time; a reading alone never), its startup package waiting behind any pause; one
+    ///   restored after `stop_emulator` whose emulator in fact runs gets the ordinary check's action
+    ///   instead when no wake comes;
     /// - on the ledger's first start nothing was closed.
     ///
     /// W2-B (0.12.26): that current record also names the instances whose startup package an
@@ -987,12 +987,12 @@ impl HostShared {
             }
             None => {
                 // Review N-1: each such instance owes its wake to the start. #486 ASLEEP-3 (register
-                // §1.512, ruling 3): the start's first plan decides it as for a sleeping instance
-                // (a task due, a switched action, the plan's time), and an instance whose only work
-                // waits for a status reading that expired meanwhile (the plan names no task wake
-                // while a reading waits) is still brought back once through its startup package
-                // (which waits behind any pause or install hold, as after every wake), so it is not
-                // left with no wake at all. #484 IDLE-W2: a wake the start owes (`owed_at_start`).
+                // §1.512, ruling 3; fix round 1, ruling 1): the start's first plan decides it as for a
+                // sleeping instance (a task due, a switched action, the plan's time; a reading alone
+                // never), its startup package waiting behind any pause or install hold as after
+                // every wake. The known limit: an instance none of whose tasks can be selected
+                // without a fresh reading sleeps until a task with a real time comes due. #484
+                // IDLE-W2: a wake the start owes (`owed_at_start`).
                 let started_at_unix_ms = self.runtime_clock_sample()?.unix_ms;
                 for (alias, (action, wakeable)) in &configured {
                     if *action != IdleAction::None && *wakeable {

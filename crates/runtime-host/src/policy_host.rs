@@ -1593,29 +1593,33 @@ fn deferred_wake(eligibility: &CandidateEligibility) -> Option<u64> {
 }
 
 /// #486 ASLEEP-3 (register §1.512, ruling 3; `runtime-config.md`, "What wakes an idle instance"):
-/// for the idle plan alone, a task candidate of an asleep instance (`asleep`) that a later position
-/// of the order of the deferrals defers with no time of its own while no hold of the instance
-/// defers it (`eligibility`: a suspended package, a closed pack schedule's row with no end, an owed
-/// rerun's pacing, the quiet before a blackout, a remedy round, a denial with no release) counts as
-/// held back by a later position that names no time (`held_ahead`, `None`), as #484's look ahead
-/// counts such a candidate behind a hold: not due, no wake of its own. Before, the plan counted an
-/// eligible decision with no wake due, and so woke the sleeping instance for a task the next
-/// evaluation would hold back again (production v0.12.78 on 11-22: a closed pack schedule). The
-/// decision, the not-run explanation and every dispatch are unchanged; a candidate the closure lets
-/// through, one a time-bound position defers, the fact refresh and every instance not asleep are
-/// left as they were.
+/// for the idle plan alone, a task candidate that a later position of the order of the deferrals
+/// defers with no time of its own while no hold of its instance defers it (`eligibility`: a
+/// suspended package, a closed pack schedule's row with no end, an owed rerun's pacing, the quiet
+/// before a blackout, a remedy round, a denial with no release) counts as held back by a later
+/// position that names no time (`held_ahead`, `None`), as #484's look ahead counts such a candidate
+/// behind a hold: not due, no wake of its own. Before, the plan counted an eligible decision with no
+/// wake due, and so woke a sleeping instance for a task the next evaluation would hold back again
+/// (production v0.12.78 on 11-22: a closed pack schedule) and kept an awake one from its action.
+/// Fix round 1 (ruling 3): on every instance whose idle action can put it to sleep
+/// (`idle_sleepers`), awake or not, and on every instance asleep (`asleep`); "eligible with no wake
+/// is due" stays for a hold of the instance itself (positions 1 and 2). The decision, the not-run
+/// explanation and every dispatch are unchanged; a candidate the closure lets through, one a
+/// time-bound position defers, the fact refresh and an instance whose idle action is `none` (or one
+/// it cannot take) are left as they were.
 fn hold_back_untimed(
     held_ahead: &mut crate::schedule_explanation::IdleHeldAhead,
-    asleep: &BTreeSet<String>,
+    sleepers: (&BTreeSet<String>, &BTreeSet<String>),
     intent: &DispatchIntent,
     eligibility: &CandidateEligibility,
 ) {
+    let (asleep, idle_sleepers) = sleepers;
     if let CandidateEligibility::Deferred {
         next_wake_unix_ms: None,
         ..
     } = eligibility
         && intent.task_id != FACT_REFRESH_TASK_ID
-        && asleep.contains(&intent.instance_id)
+        && (asleep.contains(&intent.instance_id) || idle_sleepers.contains(&intent.instance_id))
     {
         held_ahead
             .entry(intent.instance_id.clone())
@@ -4161,6 +4165,10 @@ impl PolicyHost {
         // cycle says in the daemon's log.
         let mut held_ahead = crate::schedule_explanation::IdleHeldAhead::new();
         let mut look_ahead_failures = Vec::new();
+        // #486 ASLEEP-3 (register §1.512, ruling 3; fix round 1): the instances on which a later
+        // position that names no time holds a candidate back for the idle plan, outside any hold
+        // (`hold_back_untimed`): the asleep ones and every one whose idle action can sleep.
+        let sleepers = (asleep, idle_sleepers);
         let look_ahead = |intent: &DispatchIntent| -> RuntimeHostResult<Option<Option<u64>>> {
             // Fix round 1, tests: the look ahead fails as a position that cannot answer fails.
             #[cfg(test)]
@@ -4347,7 +4355,7 @@ impl PolicyHost {
                     };
                     // #486 ASLEEP-3 (register §1.512, ruling 3): on an asleep instance, for the
                     // idle plan alone, held back with no time (`hold_back_untimed`).
-                    hold_back_untimed(&mut held_ahead, asleep, intent, &suspended);
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &suspended);
                     return Ok(suspended);
                 }
                 // Workflow #386 SR-4a2 (`scheduling-blackout.md`, "Order of the deferrals",
@@ -4401,13 +4409,13 @@ impl PolicyHost {
                 // runs; it wakes when the covering row ends.
                 if let Some(closed) = pack_schedule.deferral(intent, refresh) {
                     // #486 ASLEEP-3 (ruling 3): a row with no end names no time.
-                    hold_back_untimed(&mut held_ahead, asleep, intent, &closed);
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &closed);
                     return Ok(closed);
                 }
                 // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 6): an owed rerun waits for the instance's pacing stage.
                 if let Some(waiting) = rerun_plan.deferral(intent) {
-                    hold_back_untimed(&mut held_ahead, asleep, intent, &waiting);
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &waiting);
                     return Ok(waiting);
                 }
                 let instance = instances
@@ -4426,7 +4434,7 @@ impl PolicyHost {
                     blackout.quiet_gate(&active.compiled, instance, intent, time, deadline_ms)?
                 {
                     let quiet = gate.eligibility(&intent.instance_id, refresh);
-                    hold_back_untimed(&mut held_ahead, asleep, intent, &quiet);
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &quiet);
                     return Ok(quiet);
                 }
                 // Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals",
@@ -4437,7 +4445,7 @@ impl PolicyHost {
                         reason: deferral.reason.clone(),
                         next_wake_unix_ms: deferral.next_wake_unix_ms,
                     };
-                    hold_back_untimed(&mut held_ahead, asleep, intent, &held);
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &held);
                     return Ok(held);
                 }
                 match self.control.preview_admission_lifted(
@@ -4512,7 +4520,7 @@ impl PolicyHost {
                                     reason,
                                     next_wake_unix_ms: rejection.next_eligible_unix_ms,
                                 };
-                                hold_back_untimed(&mut held_ahead, asleep, intent, &denied);
+                                hold_back_untimed(&mut held_ahead, sleepers, intent, &denied);
                                 Ok(denied)
                             }
                         }
