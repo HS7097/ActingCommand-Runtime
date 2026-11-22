@@ -2948,3 +2948,11 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_479_f3a::f3a_check_config_notes_device_acib_missing_and_passes",
 ]
 incident = ["#479 F-3a"]
+
+# #455 P1 (0.12.78; register §1.504; brief rd-1121/brief-455-p1.md, ruling 5; contracts/standard-pack-schedule.md, "`requires`"), actingd's half: the configuration manifest of this build's start-up assembly names standard_pack_schedule and no pool_list_rows among its enabled subsystems, and the composer given those subsystems refuses a schedule.json whose pool is read from rows of a list and whose requires lists pool_list_rows, schedule_requires_missing at /requires/0
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_p1::p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it",
+]
+incident = ["#455 P1"]

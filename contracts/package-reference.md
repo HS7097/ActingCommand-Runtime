@@ -470,11 +470,12 @@ packs name listed once with each of them, in byte order of `model_ref`, then of 
 each model's `packages` in byte order of `package_id`; `[]` for a root whose packs name none. It
 is an added member: every member before it and the exit code are as before. Workflow #463 V1 (since
 0.12.61, register §1.378): after it, `variable_provenance` `{pack: [names], model: [names]}` when a
-package of the root declares variables, each variable that applies by who wrote its default, and
-(V1 fix round 1) `not_applying` `[{name, standard_pack_problem}]`, absent when empty, each
-variable a package that counts as irreversible by the whole root declares
-(`variable_irreversible_by_root`, [package-variables.md](package-variables.md)); absent otherwise, so a
-root without variables answers as before. A root without any root file is
+package of the root declares variables, each variable that applies by who wrote its default
+([package-variables.md](package-variables.md); from V1 fix round 1 to 0.12.77 also `not_applying`
+`[{name, standard_pack_problem}]`, absent when empty, each variable a package that counted as
+irreversible by the whole root declared, `variable_irreversible_by_root`, a member Workflow #455
+G-SLx, 0.12.78, removed with the rule); absent otherwise, so a root without variables answers as
+before. A root without any root file is
 `standard_pack_root_invalid` `bundle_missing`; a `bundle.json` whose `packs` lists no pack is
 `package_bundle_packs_empty` with `path` `bundle.json` and `json_pointer` `/packs` (Workflow #411
 A40); a package a root file names that cannot be admitted (its directory missing too) is

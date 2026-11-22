@@ -7855,7 +7855,7 @@
           "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 the package a tier entry's rule runs, or one that declares a placed variable."
         },
         "goal_governs_irreversible": {
-          "description": "An entry of goals.json governs a package, or a tier entry a rule whose package, provides a capability that a package of the game root marks irreversible true in its control declaration's provides; no goal entry governs such a package or rule (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1); nor (Workflow #463 V1) places a variable such a package declares, at the entry's name."
+          "description": "Until 0.12.77: an entry of goals.json governed a package, or a tier entry a rule whose package, provided a capability that a package of the game root marks irreversible true in its control declaration's provides (Workflow #455 G-R1, since 0.12.60; rules and capabilities across the root since its fix round 1, a rule's followers since its fix round 2); or (Workflow #463 V1) placed a variable such a package declares, at the entry's name. Given by no build since 0.12.78 (Workflow #455 G-SLx, register section 1.501: a goal entry governs such a package as any other); kept for what earlier releases printed."
         },
         "goal_rule_unknown": {
           "description": "A tier entry of goals.json governs a rule that is not a rule of schedule.json (Workflow #455 G-R1, since 0.12.60)."
@@ -7897,7 +7897,7 @@
           "description": "An integer variable a package reads as a designated effect's cap (max_repeats from session.dispatch.parameter.<name>) declares a max above 1000, at that package's declaration's max; since its fix round 1 also a min below 0, at its min, or a variable of another type read as a cap, at its type (a cap is read from an integer variable only); it does not apply (Workflow #463 V1, since 0.12.61)."
         },
         "variable_irreversible_by_root": {
-          "description": "A variable declared by a package that counts as able to do something irreversible by the whole game root (it provides, unmarked, a capability another package of the root marks irreversible true, or a remedy of its mappings lists one), at the declaration in its package's control.json; no variable of that name applies. Admission refuses variables on a package whose own provides marks the capability (Workflow #463 V1 fix round 1, since 0.12.61)."
+          "description": "Until 0.12.77: a variable declared by a package that counted as able to do something irreversible by the whole game root (it provided, unmarked, a capability another package of the root marks irreversible true, or a remedy of its mappings listed one), at the declaration in its package's control.json; no variable of that name applied, and admission refused variables on a package whose own provides marked the capability (Workflow #463 V1 fix round 1, since 0.12.61). Given by no build since 0.12.78 (Workflow #455 G-SLx, register section 1.501: such a variable applies as any other, and admission takes variables beside an irreversible capability); kept for what earlier releases printed."
         },
         "variable_undeclared": {
           "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
@@ -9906,10 +9906,10 @@
           "description": "The application's entry row of the name holds a value, but who set it (its set_unix_ms or its channel) could not be read: the value is not applied."
         },
         "irreversible_by_root": {
-          "description": "A package of the game root that declares the variable counts as able to do something irreversible by the whole root (the root check's variable_irreversible_by_root): it provides, or its remedies list, a capability a package of the root marks irreversible."
+          "description": "Until 0.12.77: a package of the game root that declares the variable counted as able to do something irreversible by the whole root (the root check's variable_irreversible_by_root): it provided, or its remedies listed, a capability a package of the root marks irreversible. Given by no build since 0.12.78 (Workflow #455 G-SLx, register section 1.501: a variable of such a package applies as any other); kept for the records earlier builds wrote."
         },
         "package_unreadable": {
-          "description": "A package of the game root could not be read, so the root check counts every package of the root as able to do something irreversible (its variable_irreversible_by_root, the safe side), while no package that declares the variable provides or lists a capability marked irreversible."
+          "description": "Until 0.12.77: a package of the game root could not be read, so the root check counted every package of the root as able to do something irreversible (its variable_irreversible_by_root, the safe side), while no package that declared the variable provided or listed a capability marked irreversible. Given by no build since 0.12.78 (Workflow #455 G-SLx, register section 1.501: a package that cannot be read keeps no other package's variable from applying; a dispatched package that cannot be read still hands no value, goal_value_package_unreadable); kept for the records earlier builds wrote."
         },
         "goals_unreadable": {
           "description": "The game root's goals.json could not be read (an I/O failure other than its absence), so which names it takes is not known."

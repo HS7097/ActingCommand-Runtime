@@ -299,6 +299,10 @@ mod gate_398_db2;
 // check, carries an accepted one in its zip and declares the revision it needs.
 #[path = "gate_455_goals_pack.rs"]
 mod gate_455_goals_pack;
+// Workflow #455 G-SLx: the revision table counts a pack's variables beside a capability its own
+// `provides` marks irreversible as `package` 23, and nothing else so.
+#[path = "gate_455_gslx.rs"]
+mod gate_455_gslx;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

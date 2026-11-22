@@ -3,19 +3,21 @@
 //! Workflow #463 V1 (register §1.378; contracts/package-variables.md): a package's `variables`
 //! read by the one reader of the contract crate, with the goal declaration's value-type code: the
 //! four kinds read with their members; each refusal at its pointer with its word; a name a
-//! parameter has, and any variable on a package that provides an irreversible capability, are
-//! refused. The root check: byte-identical declarations of one name share one variable, a
-//! differing one, a name a `goals.json` entry uses, a 97th name and an `integer` read as a cap
-//! above 1000 do not apply, each reported at its pointer; the provenance listing names each
-//! variable that applies by its default's origin. A placement is held to the variables the root
-//! declares. Fix round 1: a variable of a package that counts as irreversible by the whole root
-//! does not apply and is listed so, and a cap read from a negative `min` or from a variable of
-//! another type is reported. Every package, name, option and text is made up.
+//! parameter has is refused. The root check: byte-identical declarations of one name share one
+//! variable, a differing one, a name a `goals.json` entry uses, a 97th name and an `integer` read
+//! as a cap above 1000 do not apply, each reported at its pointer; the provenance listing names
+//! each variable that applies by its default's origin. A placement is held to the variables the
+//! root declares. Fix round 1: a cap read from a negative `min` or from a variable of another type
+//! is reported. Workflow #455 G-SLx (register §1.501): a package that provides an irreversible
+//! capability declares variables as any other (V1 refused them, `variables_on_irreversible`), and
+//! a variable of a package that counts as irreversible by the whole root applies (V1 fix round 1
+//! kept it from applying, `variable_irreversible_by_root`). Every package, name, option and text
+//! is made up.
 
 use super::*;
 use crate::standard_pack_goals::{
-    DeclaredCapabilities, DeclaredGoalKind, GoalReferences, StandardPackGoals,
-    check_standard_pack_goal_references, parse_standard_pack_goals,
+    DeclaredGoalKind, GoalReferences, StandardPackGoals, check_standard_pack_goal_references,
+    parse_standard_pack_goals,
 };
 use serde_json::json;
 
@@ -181,7 +183,7 @@ fn v1_each_kind_reads_with_its_members() {
 
 #[test]
 fn v1_each_refusal_is_at_its_pointer() {
-    use VariablesProblem::{VariableNameTaken, VariablesInvalid, VariablesOnIrreversible};
+    use VariablesProblem::{VariableNameTaken, VariablesInvalid};
     let seventeen = Value::Array(
         (0..17)
             .map(|index| {
@@ -398,12 +400,14 @@ fn v1_each_refusal_is_at_its_pointer() {
             VariableNameTaken,
             "/variables/1/name",
         ),
+        // Workflow #455 G-SLx (register §1.501): a parameter of a capability marked irreversible
+        // takes its name as any parameter does; the mark itself refuses nothing.
         (
-            "a package that provides an irreversible capability",
-            declared(),
+            "a name a parameter of an irreversible capability has",
+            with(|value| value[1]["name"] = json!("param_p")),
             provides(true),
-            VariablesOnIrreversible,
-            "/variables",
+            VariableNameTaken,
+            "/variables/1/name",
         ),
     ];
     for (case, variables, provides, problem, pointer) in cases {
@@ -416,15 +420,21 @@ fn v1_each_refusal_is_at_its_pointer() {
             "{case}"
         );
     }
+    // Workflow #455 G-SLx: a package that provides an irreversible capability declares the four
+    // kinds as a package that provides a reversible one does (until 0.12.77 refused
+    // `variables_on_irreversible` at `/variables`).
+    assert_eq!(
+        parse_package_variables(&declared(), &provides(true)),
+        parse_package_variables(&declared(), &provides(false))
+    );
+    assert_eq!(
+        parse_package_variables(&declared(), &provides(true)).map(|read| read.len()),
+        Ok(4)
+    );
     // The words, as kernel admission's `reason` and the source parser's message write them.
     assert_eq!(
-        [VariablesInvalid, VariableNameTaken, VariablesOnIrreversible]
-            .map(VariablesProblem::as_str),
-        [
-            "variables_invalid",
-            "variable_name_taken",
-            "variables_on_irreversible"
-        ]
+        [VariablesInvalid, VariableNameTaken].map(VariablesProblem::as_str),
+        ["variables_invalid", "variable_name_taken"]
     );
 }
 
@@ -475,27 +485,10 @@ fn applied(checked: &RootVariables) -> Vec<(&str, Vec<&str>)> {
         .collect()
 }
 
-/// Fix round 1: the rule of irreversibility over the root of `packages`, every one of them read,
-/// providing nothing and listing no remedy.
-fn nothing_irreversible(packages: &[RootPackageVariables]) -> IrreversiblePackages {
-    IrreversiblePackages::new(
-        packages
-            .iter()
-            .map(|package| {
-                let nothing = DeclaredCapabilities {
-                    provides: BTreeMap::new(),
-                    remedies: BTreeSet::new(),
-                };
-                (package.package_id.clone(), Some(nothing))
-            })
-            .collect(),
-    )
-}
-
-/// [`check_root_variables`] of `packages` against `goal_names` on a root where no package can do
-/// something irreversible ([`nothing_irreversible`]).
+/// [`check_root_variables`] of `packages` against `goal_names` (Workflow #455 G-SLx: no longer
+/// with the root's judgement of irreversibility, which these tests gave as nothing irreversible).
 fn root_check(packages: &[RootPackageVariables], goal_names: &BTreeSet<&str>) -> RootVariables {
-    check_root_variables(packages, goal_names, &nothing_irreversible(packages))
+    check_root_variables(packages, goal_names)
 }
 
 #[test]
@@ -645,7 +638,6 @@ fn v1_provenance_lists_each_variable_by_its_default_s_origin() {
         VariableOrigins {
             pack: owned(&["floor", "order", "extra", "other"]),
             model: owned(&["pick"]),
-            not_applying: Vec::new(),
         }
     );
     assert_eq!(
@@ -654,38 +646,20 @@ fn v1_provenance_lists_each_variable_by_its_default_s_origin() {
     );
 }
 
-// Fix round 1 (the coordinator's ruling of 11-14 on the review's suggestions 2 to 4): the root
-// check judges irreversibility over the whole root with the goal check's rule. `neutral.marks`
-// marks `cap_x` irreversible and declares no variable (admission keeps it so); `neutral.provides`
-// provides `cap_x` unmarked and declares `floor` and `extra`; a remedy of `neutral.blocked` lists
-// `cap_x` and it declares `other`; `neutral.keeps` provides `cap_y` and declares `extra`, as
-// `neutral.provides` does, and `own`. Each variable of the two packages that count is
-// `variable_irreversible_by_root` at its declaration there and nothing else, `extra` at
-// `neutral.provides` only, and none of them applies in any package: only `own` applies, and the
-// provenance listing marks the three as not applying with the word. A package the judgement was
-// not told of counts as irreversible.
+// Workflow #455 G-SLx (register §1.501), where V1 fix round 1 judged irreversibility over the whole
+// root: the root check takes no judgement of irreversibility, so the root of V1's fixture, in which
+// `neutral.marks` marks `cap_x` irreversible and declares `mine` (which admission refused until
+// 0.12.77), `neutral.provides` provides `cap_x` unmarked and declares `floor` and `extra`, a remedy
+// of `neutral.blocked` lists `cap_x` and it declares `other`, and `neutral.keeps` provides `cap_y`
+// and declares `extra`, as `neutral.provides` does, and `own`, has no problem: every variable
+// applies, `extra` once with both packages that declare it, the provenance listing lists each by
+// its default's origin and has no `not_applying` member, and the root's judgement keeps none from
+// applying. A package no reader was told of is held to nothing either.
 #[test]
-fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
-    use StandardPackProblem::VariableIrreversibleByRoot;
+fn gslx_root_check_applies_a_variable_of_a_package_irreversible_by_the_root() {
     let none = BTreeSet::new();
-    let read = |provides: &[(&str, bool)], remedies: &[&str]| {
-        Some(DeclaredCapabilities {
-            provides: provides
-                .iter()
-                .map(|(capability, marked)| ((*capability).to_owned(), *marked))
-                .collect(),
-            remedies: remedies
-                .iter()
-                .map(|capability| (*capability).to_owned())
-                .collect(),
-        })
-    };
     let packages = [
-        RootPackageVariables {
-            package_id: "neutral.marks".to_owned(),
-            variables: Vec::new(),
-            cap_fact_keys: Vec::new(),
-        },
+        package("neutral.marks", json!([switch("mine")]), &[]),
         package(
             "neutral.provides",
             json!([floor(200), switch("extra")]),
@@ -698,81 +672,39 @@ fn v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root() {
             &[],
         ),
     ];
-    let irreversible = IrreversiblePackages::new(BTreeMap::from([
-        ("neutral.marks".to_owned(), read(&[("cap_x", true)], &[])),
-        (
-            "neutral.provides".to_owned(),
-            read(&[("cap_x", false)], &[]),
-        ),
-        ("neutral.blocked".to_owned(), read(&[], &["cap_x"])),
-        ("neutral.keeps".to_owned(), read(&[("cap_y", false)], &[])),
-    ]));
-    let checked = check_root_variables(&packages, &none, &irreversible);
+    let checked = check_root_variables(&packages, &none);
+    assert!(checked.issues.is_empty(), "{:?}", checked.issues);
     assert_eq!(
-        checked.issues,
+        applied(&checked),
         [
-            root_issue(
-                "neutral.provides",
-                VariableIrreversibleByRoot,
-                "/variables/0"
-            ),
-            root_issue(
-                "neutral.provides",
-                VariableIrreversibleByRoot,
-                "/variables/1"
-            ),
-            root_issue(
-                "neutral.blocked",
-                VariableIrreversibleByRoot,
-                "/variables/0"
-            ),
+            ("mine", vec!["neutral.marks"]),
+            ("floor", vec!["neutral.provides"]),
+            ("extra", vec!["neutral.provides", "neutral.keeps"]),
+            ("other", vec!["neutral.blocked"]),
+            ("own", vec!["neutral.keeps"]),
         ]
     );
-    assert_eq!(applied(&checked), [("own", vec!["neutral.keeps"])]);
-    let not_applying = |name: &str| NotApplyingVariable {
-        name: name.to_owned(),
-        standard_pack_problem: VariableIrreversibleByRoot,
-    };
     let provenance = checked.provenance();
     assert_eq!(
         provenance,
         VariableOrigins {
-            pack: owned(&["own"]),
+            pack: owned(&["mine", "floor", "extra", "other", "own"]),
             model: Vec::new(),
-            not_applying: vec![
-                not_applying("floor"),
-                not_applying("extra"),
-                not_applying("other"),
-            ],
         }
     );
-    let word = VariableIrreversibleByRoot.as_str();
     assert_eq!(
         serde_json::to_value(&provenance).expect("the listing"),
-        json!({
-            "pack": ["own"],
-            "model": [],
-            "not_applying": [
-                {"name": "floor", "standard_pack_problem": word},
-                {"name": "extra", "standard_pack_problem": word},
-                {"name": "other", "standard_pack_problem": word}
-            ]
-        })
+        json!({"pack": ["mine", "floor", "extra", "other", "own"], "model": []})
     );
+    let judged = judge_root_variables(&packages, RootGoalDocument::Absent);
+    assert_eq!(judged.checked, checked);
+    assert!(judged.not_applying().is_empty());
+    assert!(judged.verdicts.iter().all(RootVariableVerdict::applies));
 
-    // The safe side: a package the judgement was not told of counts as irreversible.
     let untold = [package("neutral.keeps", json!([switch("own")]), &[])];
-    let told_nothing =
-        check_root_variables(&untold, &none, &IrreversiblePackages::new(BTreeMap::new()));
-    assert_eq!(
-        told_nothing.issues,
-        [root_issue(
-            "neutral.keeps",
-            VariableIrreversibleByRoot,
-            "/variables/0"
-        )]
-    );
-    assert!(told_nothing.applied.is_empty());
+    let alone = check_root_variables(&untold, &none);
+    assert!(alone.issues.is_empty(), "{:?}", alone.issues);
+    assert_eq!(applied(&alone), [("own", vec!["neutral.keeps"])]);
 }
 
 // Fix round 1 (the review's suggestion 6): a designated effect's cap is not negative, so an
@@ -872,14 +804,10 @@ fn v1_a_placement_is_held_to_the_variables_the_root_declares() {
             .iter()
             .all(|entry| entry.kind == DeclaredGoalKind::Variable)
     );
-    // Two packages that provide nothing and list no remedy.
-    let nothing = || DeclaredCapabilities {
-        provides: BTreeMap::new(),
-        remedies: BTreeSet::new(),
-    };
-    let mut references = GoalReferences::new(BTreeMap::from([
-        ("neutral.a".to_owned(), nothing()),
-        ("neutral.b".to_owned(), nothing()),
+    // The root's two packages (Workflow #455 G-SLx: by id alone).
+    let mut references = GoalReferences::new(BTreeSet::from([
+        "neutral.a".to_owned(),
+        "neutral.b".to_owned(),
     ]));
     references.variables = variables;
     let issue = |problem, pointer: &str| StandardPackRootIssue {

@@ -1502,7 +1502,44 @@ pub enum ObservationRef {
         task_id: String,
         outcome_key: String,
     },
+    /// #455 P1 (register §1.504; `contracts/scheduling/README.md`, "A pool read from rows of a
+    /// list"; `actingcommand.scheduling.v2` only, with a `ledger_fact` value source): the pool's
+    /// inventory is the sum, over `rows`, of the integer `value_column` holds in the row of the
+    /// list reading `fact_key` (a key under `inventory.list.`) whose `key_column` is the row's
+    /// `key`, times its `factor`. The kind is [`POOL_LIST_ROWS_KIND`]. The host computes that sum
+    /// before each evaluation from a later slice on; until then no evaluation is given one, and a
+    /// pool of this kind has no reading.
+    ListRows {
+        fact_key: String,
+        key_column: String,
+        value_column: String,
+        rows: Vec<PoolListRow>,
+    },
 }
+
+/// #455 P1 (register §1.504): one row a `list_rows` observation reads: the list's row whose key
+/// column holds `key`, its value column counted `factor` times.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolListRow {
+    pub key: String,
+    pub factor: u64,
+}
+
+/// #455 P1 (register §1.504): the `kind` of [`ObservationRef::ListRows`], as written.
+pub const POOL_LIST_ROWS_KIND: &str = "list_rows";
+
+/// #455 P1: the most rows one `list_rows` observation names (at least one).
+pub const MAX_POOL_LIST_ROWS: usize = 64;
+
+/// #455 P1: the largest `factor` of one row of a `list_rows` observation (the least is 1).
+pub const MAX_POOL_LIST_ROW_FACTOR: u64 = 1_000_000;
+
+/// #455 P1 (register §1.504): the configuration-manifest subsystem of a Runtime that reads a pool
+/// whose observation is `list_rows`; a `schedule.json` whose pool writes one names it in
+/// `requires`. No Runtime of 0.12.78 names it, so every Runtime of that version refuses such a
+/// file (`schedule_requires_missing`) and keeps the game's last good rules.
+pub const POOL_LIST_ROWS_SUBSYSTEM: &str = "pool_list_rows";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -17,7 +17,8 @@
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
-//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `queue_wait` when a rule
+//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
+//!    pool's `observation` is of the kind `list_rows` (#455 P1), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -1384,53 +1385,6 @@ pub fn compose_standard_pack_rules(
     })
 }
 
-/// Workflow #455 G-R2s fix round 1 (register §1.369; `contracts/standard-pack-schedule.md`, "The
-/// irreversible mark"): the rules that follow each rule of one game's `schedule.json`, by the
-/// rule's file id, each list in file order. A rule follows another when its trigger has a chain
-/// link to it as the evaluator reads one (`required_predecessors`, `contracts/scheduling/README.md`,
-/// "Ties and chain heads"): a `dependency_completed` reached from the trigger's root only through
-/// `all` whose `terminal_states` holds `succeeded`, whatever else it accepts and whether it writes
-/// `since_own_run`, a link to the rule itself excepted; both rules not held (a held rule is no task
-/// of the catalog, and the evaluator's walk passes no link to one). A rule with its own `produces`
-/// or its own value follows as any other.
-///
-/// Which of these rules rides with which head the evaluator decides by each run's state (the link
-/// whose latest run succeeded and is not served yet, its dispatch against the next link's), which
-/// no composition knows; so every link counts, the safe side: walked through further followers
-/// ([`IrreversiblePackages::followers_irreversible`]), these lists name every rule that can ride
-/// with a rule or run after it. The goal check (`GoalRule::followers`) reads these lists; since
-/// Workflow #455 G-R2x (register §1.499) the composer marks nothing by them.
-pub fn standard_pack_rule_followers(
-    schedule: &StandardPackSchedule,
-) -> BTreeMap<String, Vec<String>> {
-    let composed = schedule
-        .rules
-        .iter()
-        .filter(|rule| !schedule.holds(&rule.package_id))
-        .map(|rule| rule.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut followers = BTreeMap::<String, Vec<String>>::new();
-    for rule in &schedule.rules {
-        if !composed.contains(rule.id.as_str()) {
-            continue;
-        }
-        let mut required = Vec::new();
-        if let Some(trigger) = rule.body.get("trigger") {
-            required_nodes(trigger, &mut required);
-        }
-        let mut linked = BTreeSet::new();
-        for (task_id, _) in required.into_iter().filter_map(chain_link) {
-            if task_id != rule.id
-                && composed.contains(task_id.as_str())
-                && linked.insert(task_id.clone())
-            {
-                followers.entry(task_id).or_default().push(rule.id.clone());
-            }
-        }
-    }
-    followers
-}
-
 /// Reads one game's `schedule.json` (step 2): the contract reader, `requires` against
 /// `subsystems`, the references into the registry, and the classification.
 fn read_game(
@@ -1554,6 +1508,27 @@ fn read_game(
             format!(
                 "a pool's {POOL_TRIGGER_LINE_MEMBER} needs requires to name {}",
                 crate::POOL_TRIGGER_LINE_SUBSYSTEM
+            ),
+        ));
+    }
+    // #455 P1 (register §1.504): likewise a pool whose `observation` is of the kind `list_rows`,
+    // at the first such pool's `observation`. No Runtime of 0.12.78 names the subsystem, so every
+    // such Runtime refuses the file at `requires` instead of reading the pool without its rows.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_LIST_ROWS_SUBSYSTEM)
+        && let Some(index) = schedule.pools.iter().position(list_rows_observation)
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/observation"),
+            ),
+            format!(
+                "a pool's {} observation needs requires to name {}",
+                crate::POOL_LIST_ROWS_KIND,
+                crate::POOL_LIST_ROWS_SUBSYSTEM
             ),
         ));
     }
@@ -1884,6 +1859,16 @@ fn first_trigger_line(schedule: &StandardPackSchedule) -> Option<String> {
         .iter()
         .position(|pool| pool.body.contains_key(POOL_TRIGGER_LINE_MEMBER))
         .map(|index| format!("/pools/{index}/{POOL_TRIGGER_LINE_MEMBER}"))
+}
+
+/// #455 P1 (register §1.504): whether a `schedule.json` pool's `observation` is an object whose
+/// `kind` is `list_rows` ([`crate::POOL_LIST_ROWS_KIND`]). The compiler checks the rest.
+fn list_rows_observation(pool: &ScheduleItem) -> bool {
+    pool.body
+        .get("observation")
+        .and_then(|observation| observation.get("kind"))
+        .and_then(Value::as_str)
+        == Some(crate::POOL_LIST_ROWS_KIND)
 }
 
 /// #386 CF-4: the pointer of the first fact reference a rule's `trigger` or `feedback_stop`

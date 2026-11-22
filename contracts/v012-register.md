@@ -45100,6 +45100,228 @@ answers the same. So the rollback stays open while no root is placed from such a
 `package` row 22). In the release notes' language:
 线性包（录制出来的包）的一步现在可以读一张会滚动的列表（`read_list`），声明和页图里的一样：从这一步页面出现的那一帧开始滚，滚到底整张读到就照旧在运行成功结束时写进 `inventory.list.` 下面那个事实，下一步就在最后一屏上接着判断；漏读一行只记警告、运行照常走完；滚动本身失败就以它自己的码、阶段 `read_list` 结束运行，不重试、不发布。读取步不能放最后一步，不能紧挨在可选步前面，不能从任意屏幕开始；`key` 不能和 `read_list` 写在同一步。内核加了一个离线入口，可在存下来的各屏上把读取跑一遍、答出和实际运行一样的结果（给后面 Lab 自检用）。包的修订升到 22：带读取步的线性包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`reason=read_list`）。
 
+### 1.501 Slice #455 G-SLx (0.12.78): the last two locks on packages that can do something irreversible are lifted: such a package may declare variables, and goal entries may govern it (Workflow #455; the owner's words of 10-28, 11-18 and 11-21, quoted below; the rulings are the coordinator's on those words, not the owner's; coordinator work order `rd-1121/brief-455-locks.md`, on main `d128e370`)
+
+[standard-pack-goals.md](standard-pack-goals.md) ("What is not this file's", rewritten; "The
+checks"; "Who reads it"; "Interface"; "Before any pack carries the file") and
+[package-variables.md](package-variables.md) ("A package that can do something irreversible", in
+place of "Irreversibility is the line between a parameter and a variable"; "The refusals"; "Shared
+names and the root check"; "A variable that does not apply"; "Interface", `package` 23) are the
+contract; [component-interfaces.md](component-interfaces.md) (the `package` row 23),
+[resource-verify.md](resource-verify.md) (its row 23), [standard-pack-schedule.md](standard-pack-schedule.md)
+("The irreversible mark"), [resource-targets.md](resource-targets.md),
+[resource-declarations.md](resource-declarations.md) and [package-reference.md](package-reference.md)
+follow it.
+
+**What is lifted, and on whose words.** `standard-pack-goals.md` kept "premium currency, real
+money, retiring and scrapping" out of goals at three places and said the owner decides later. Her
+words:
+- 10-28: 「这个可以自主突破，并且这个自主突破需要是共通的，因为我在启用RT的调度后，这个账号就相当于直接交给RT了。」
+- 11-18 (premium currency and tickets spent by the scheduler): 「234，批准，好兄弟，可以跑，换句话说，只有跑了才知道符不符合我们的预期，否则全都是纸上谈兵。」
+- 11-21, to the coordinator's question whether goals and a package's variables may govern packages that can do something irreversible (retiring, scrapping, buying, drawing, training that spends materials), where the coordinator wrote that he leaned to lifting both locks, real money excepted: 「7，这个早该拆掉了，好兄弟」
+
+The scheduler's line (G-R2s, the evaluator) went with G-R2x (§1.499). The coordinator's rulings:
+(1) kernel admission no longer refuses `variables` on a package whose own `provides` marks a
+capability irreversible (`variables_on_irreversible`), `standard-pack check` no longer reports
+`variable_irreversible_by_root`, and the workbench's judgement (and every offline reader that
+judges a root as it does) no longer says such a variable does not apply; (2) the goal check no
+longer refuses an entry because it governs, reaches or follows such a package
+(`goal_governs_irreversible` produced nowhere); (3) the declaration stays, and what nothing reads
+afterwards is removed; (4) the contract says what is true: real money alone is kept out, and by
+the packages themselves (no package holds a press that leads to a platform payment, a rule of pack
+making), and the resource-side review goes; (5) the retired words leave the catalogue as its rules
+ask; (6) a revision where the registry's rule asks for one; (7) nothing names a game, package or
+alias.
+
+**Built.**
+- *The contract crate.* `parse_package_variables` reads `variables` beside any `provides`; its
+  refusal `VariablesProblem::VariablesOnIrreversible` is removed (a name of a parameter of an
+  irreversible capability is still `variable_name_taken`). `check_root_variables`,
+  `variables_not_applying` and `judge_root_variables` take no `IrreversiblePackages`: their rules
+  are `variable_out_of_limits`, `variable_conflict` and `variable_cap_range`. `GoalReferences::new`
+  takes the root's package ids (`BTreeSet<String>`), which a rule's package and a placement's
+  packages are held to (`goal_package_unknown`); a `tier` is held to its rules and their fixed
+  value only, and `GoalRule` lost `followers`.
+- *The kernel and the source parser* call that reader: nothing of theirs changed but their texts.
+- *The policy crate.* `VariableTable::build` judges a game's packages without the rule (a task
+  whose package could not be read adds nothing to its game's judgement); `VariablePackage` lost
+  `capabilities`; `standard_pack_rule_followers`, read by the goal check alone, is removed.
+- *The Runtime host.* The workbench's `read_declarations` judges the root's variables without the
+  rule and still builds `IrreversiblePackages` for the composer; the remedy table builds
+  `VariablePackage` without capabilities; the goal page maps the two causes that are gone no more.
+- *The resource tooling.* `goal_issues` makes its references of the registry's package ids (every
+  package still read by the Runtime's metadata reader, for its variables; one it refuses is still
+  the check's error), with no followers; `variable_report` judges without the rule.
+- *`standard-pack build`'s revision table* (`apps/actinglab/src/resource_verify/revision.rs`, a
+  constant, a function and one line of `document_revision`): row 23 (below).
+- *The declaration* `distribution/windows/component-interfaces.json`: `package` [3, 23].
+
+**Removed whole, and what had to stay** (ruling 3). Removed: `IrreversiblePackages::followers_irreversible`
+(the walk over followers), `GoalReferences`' judgement of irreversibility, `GoalRule::followers`,
+`standard_pack_rule_followers`, `VariablesProblem::VariablesOnIrreversible`, the judgement's
+`irreversible` parameter, `RootVariables::not_applying`, `VariableOrigins::not_applying` (absent
+whenever empty, so no answer changes for a root that never had it) with `NotApplyingVariable`,
+`VariableCause::IrreversibleCapabilities` and `::UnreadablePackages`, `VariablePackage::capabilities`
+and the resource tooling's reading of capabilities for the goal check and the root check.
+`IrreversiblePackages` stays (`new`, `package`, `irreversible_capabilities`, `unreadable`,
+`counts_irreversible`), with `DeclaredCapabilities` and `RemedyDeclarations::declared_capabilities`,
+because two readers that need the reading of every package's declaration still read it: the
+composer's required input `StandardPackGameFiles.irreversible`, read for which packages could not
+be read, its warning `standard_pack_package_unreadable` (built by the workbench, check-config and
+`actingd suspended`, lab-ops' `game_irreversibility` and the resource tooling's
+`root_irreversibility` for `standard-pack check`, `compose` and `package bundle --schedule`); and
+the standard-pack trial's irreversible mark (`judge_irreversible`: `counts_irreversible`,
+`irreversible_capabilities`, `unreadable`; `trial_irreversible_unacknowledged`), which asks a
+person's acknowledgement before a trial run of such a package and is none of the two locks. The
+irreversible mark in a package's declaration, the `irreversible` member of the Lab's `packs` rows,
+the record of who started an irreversible Lab operation, the remedy layer and the evaluator are
+unchanged. The goal page's wire type `GoalVariableCause` keeps its members
+`irreversible_capabilities` and `unreadable_packages` (`runtime-client` does not move); no Runtime
+answers them since.
+
+**The retired words** (ruling 5). None of the three the work order names is a code:
+`goal_governs_irreversible` and `variable_irreversible_by_root` are words of the vocabulary
+`standard_pack_problem` (code `standard_pack_root_invalid`), and `variables_on_irreversible` was a
+`reason` word of `contained_task_control_invalid`'s detail and of the source parser's message,
+registered in no catalogue. The slice also leaves two words of `variable_problem` unproduced,
+`irreversible_by_root` and `package_unreadable`. The catalogue's rules for an entry a release
+produced: a code is never deleted, it is retired (the writing rules; G1 and G9 of the outcome
+guard keep a released retired entry retired), while a vocabulary's tokens carry no status and must
+equal their enum (G7). So a released word stays registered with its description saying it is no
+longer given, as `goal_table_unknown` (V1) and `live_pool_key` (POOL-1) stayed: the four words were
+released (`goal_governs_irreversible` in 0.12.60, the three others in 0.12.61), and the two of
+`variable_problem` are written into ledger records
+(`policy_dispatch_parameters`' `variable_values`, `goal_value_not_applied`), so each stays in its
+enum and its vocabulary with its description changed. `variables_on_irreversible` is written no
+more. No code is added or retired; the descriptions of `standard_pack_package_unreadable`
+(contract), `goal_value_not_applied` and `run_variable_not_applying` (runtime host) changed, no
+signature. `ci/outcome_codes_index.py --check` says the index is current.
+
+**Revisions** (ruling 6). A package that declares variables beside a capability its own
+`provides` marks irreversible was refused by every kernel so far at admission (and by its metadata
+reader), so, by the registry's rule for a package that needs a newer kernel (row 13's reasoning, as
+row 14 for variables and row 21 for `lines`), it takes `package` 23 (22 is §1.500's): the Runtime
+declares [3, 23]; `standard-pack build` counts 23 for a pack whose `control.json` holds both
+members and for no other (variables beside a reversible capability stay 14); `place` asks nothing
+of 23, as of rows 13 and 15 to 22. **What v0.12.77 answers such a package:** its installer (range
+[3, 21]) refuses a bundle that declares [23, 23] at its `package` edge (`interface_edge`), in the
+plan, before the hold and any write. A bundle that declares 14 to 21 passes the plan (`place` asks
+14 of variables) and its items are laid, but its `place` then runs the checks after the placement
+(`post_check`, read in `check_step` of `crates/lab-rescue/src/install/place.rs` on main
+`3285143f`, the release commit of 0.12.77), among them that build's own `standard-pack check` of
+the game root (`tools\actinglab.exe --json standard-pack check --root <game root>`), which fails
+the root `package_invalid` naming the package and the word `variables_on_irreversible`: its row
+`standard_pack_check` is `fail`, and the placement ends `post_check_failed` with the items placed
+and the instances its `pause` held staying paused, the hold kept (`next` names `release-hold`;
+`undo` puts the items back); a placement made while no Runtime runs ends the same way with no hold
+and `next` naming `undo`. Should a person release the hold over the placed root, its admission
+refuses the package at every run before `PackageAdmitted` (`contained_task_control_invalid`,
+`reason=variables_on_irreversible json_pointer=/variables`), and its workbench counts it a package
+that cannot be read (`standard_pack_package_unreadable` with that refusal as cause, which keeps
+every variable of its root from applying there, `package_unreadable`).
+**`goals.json`** needs no mark: the document's versioning asks a new version for a new shape, and
+the shape and the reader do not change, only the Tools' references check accepts more; so the file
+stays version 2 at `package` 14. What 0.12.77 answers a version 2 file whose entries govern such a
+package: its `standard-pack check` warns `goal_governs_irreversible` at each such entry and checks
+the root as without the file (the post check of its `place` passes); its `package bundle --goals`
+refuses the bundle with that word, `--out` not written, and its `resource verify` and
+`standard-pack build` fail their `bundle` step, no zip; its workbench reads the file with the reader
+alone and accepts it, the goal page listing its entries, while a variable of such a package does
+not apply there (`irreversible_by_root`, or `package_unreadable` as above). No stop condition of
+the work order held: the run's preparation hands such a package's variables to its run with the
+exclusion removed alone (the dispatch's `variable_values`, the overlay, a direct run's given values
+take the same paths as any package's); neither the goal document nor the target record needs a new
+version; and the one rule of the three places that guards something other than irreversibility,
+"no entry kind writes anything else" (a remedy choice, a capability's parameter, a configuration
+key, a pack switch), is kept as its own item, as are `goal_package_unknown` and `goal_rule_unknown`
+in the arms the lifted refusal shared.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GSLX-1 | `variables` beside a `provides` entry with `irreversible: true` | package content, `package` 23 | G-SLx | the packs' authors; `standard-pack build` counts 23 | every Runtime before refuses it at admission |
+| GSLX-2 | `goal_governs_irreversible`, `variable_irreversible_by_root` | words of `standard_pack_problem`, no longer given | G-SLx | none since 0.12.78 | kept registered |
+| GSLX-3 | `irreversible_by_root`, `package_unreadable` | words of `variable_problem`, no longer given | G-SLx | none since 0.12.78 | kept for the records earlier builds wrote |
+| GSLX-4 | `variable_provenance.not_applying` | member of `standard-pack check`'s answer, removed | G-SLx | none since 0.12.78 | absent when empty, so a root without it answers byte for byte as before |
+| GSLX-5 | `GoalVariableCause` `irreversible_capabilities`, `unreadable_packages` | members of the goal page's answer, kept, no longer answered | G-SLx | none since 0.12.78 | `runtime-client` unchanged |
+
+**Interface.** `package` [3, 22] to [3, 23] (row 23). `ledger`, `runtime-client`, `actingd-config`
+and `runtime-outcomes` do not move: such a package's variables are judged, recorded and overlaid in
+the shapes of any package's.
+
+**Tests** (gate rows "#455 G-SLx" of the contract, exec and host maps; the tests that pinned the
+lifted rules left the maps with their `[[retired]]` entries in `ci/retired-gates.toml`, as §1.499's
+did).
+
+| Test | What it shows |
+|---|---|
+| kernel `gate_463_v1::gslx_a_package_with_an_irreversible_capability_declares_variables_and_its_runs_read_them` (work order 1) | Admitted for real with its four variables beside a `provides` that marks its capability irreversible, declaring them as beside a reversible one; without a dispatch the defaults, from a dispatch's values `pick` item_a and `floor` 100 those values with the dispatch's parameter, given values alike, equal to the reversible package's |
+| host `gate_463_v2::gslx_host_a_variable_of_an_irreversible_package_reaches_its_run` (1, 2) | In composer mode the set value reaches the dispatch's record (source `set`), the run's parameters and its snapshots, no `goal_value_not_applied`: the dispatched package marking its own capability, a package no rule runs marking the one it provides unmarked, a package of the root that cannot be read |
+| contract `package_variables::tests::gslx_root_check_applies_a_variable_of_a_package_irreversible_by_the_root` (2) | V1 fix round 1's root (marked, unmarked provider, remedy, reversible): every variable applies, no `not_applying`, the judgement keeps none from applying |
+| resource tooling `gate_455_gr1::gslx_a_package_that_marks_its_capability_irreversible_declares_a_variable_a_goal_places` (1, 2, 3) | The marked package declares a variable a goal places: `standard-pack check` without a warning, the variable listed, every other refusal of the check as before, `package bundle --goals` lays the file |
+| resource tooling `gate_455_gr1::gslx_an_unmarked_provider_of_an_irreversible_capability_is_governed_and_its_variable_applies` (2, 3) | The unmarked provider's variable applies and its placement is accepted, as on the root where it provides its own capability; other refusals unchanged; the bundle laid |
+| resource tooling `gate_455_gr1::gslx_a_tier_over_a_rule_of_an_irreversible_package_is_accepted` (3) | A `tier` over the marked package's rule, alone and beside another's, accepted by the check and the bundle; with a rule the schedule lacks `goal_rule_unknown` at it alone; other refusals unchanged |
+| resource tooling `gate_455_gr1::gslx_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_accepted` (3) | The `tier` over a chain head whose follower runs the marked package accepted, the composition's followers as before; other refusals unchanged; the bundle laid |
+| resource tooling `gate_455_gr2s::gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted` (3) | The goal check accepts G-R2s's `tier` over four chain heads and one over their irreversible followers |
+| contract `standard_pack_goals::tests::gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root` (3) | References of package ids alone: the `tier` and the placements are `goal_package_unknown` at the untold package only |
+| resource tooling `gate_455_gr1::gslx_a_root_without_an_irreversible_capability_answers_as_before` (4) | A root none of whose packages marks a capability: no warning with the valid file, each refusal of the check as before, the bundle laid |
+| actinglab `gate_455_gslx::gslx_variables_beside_an_irreversible_capability_need_revision_23_and_nothing_else_does` (5) | 23 for the pair in one `control.json` whatever `variables` holds; 14 beside a capability marked `false` or unmarked, 4 for the capability alone, 14 for the members in two packs, 23 beside a task that needs 21 |
+
+Adapted, their names kept (work order 6): `gate_455_gr1::gr1_check_reports_each_refusal_at_its_pointer`
+(its last fixture, a `tier` over the marked package's rule, is accepted now; its twelve refusals
+are a shared table the `gslx_` tests run too); `gate_455_gr2s::gr2s_r3_a_remedy_that_lists_an_irreversible_capability_makes_its_package_irreversible`
+(the composer's input as before, the goal half accepted, the variable applying);
+`gate_463_v1::v1_variables_violations_are_refused_with_their_reason_and_pointer` and the source
+parser's `v1_source_parser_takes_variables_and_refuses_each_at_its_pointer` (no
+`variables_on_irreversible`; a parameter's name of an irreversible capability `variable_name_taken`);
+the contract crate's `v1_each_refusal_is_at_its_pointer`, `v1_provenance_lists_each_variable_by_its_default_s_origin`,
+`v1_a_placement_is_held_to_the_variables_the_root_declares` and the goal reader's first two tests
+(the new constructor, the listing without `not_applying`); policy `gate_463_v2::v2_a_variable_that_does_not_apply_reads_its_default_whatever_is_set`
+and `v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause` (the irreversible and
+unreadable cases read as set, no word); host `gate_463_v2::v2_fix1_the_whole_root_keeps_a_variable_from_applying`
+(its two lifted cases moved to the `gslx_` host test). For the range [3, 23]:
+`gate_463_kp1`, `gate_463_sel2l`, the rescue module's `gate_463_v1`, the Lab's `gate_463_sel2l_rows`
+and actinglab-architecture's `component_interfaces`. Left the maps: the contract crate's
+`goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root` and
+`v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root`, the resource tooling's four
+`gr1_` tests of the safety line and `gr2s_t7`.
+
+**What is not changed.** For a package that declares no irreversible capability, in a root none
+of whose packages does and all of whose packages can be read: every refusal of the goal check,
+every judgement of the variables and every refusal of admission are byte for byte main's (the
+code paths that remain are the old ones minus the arms that judged irreversibility; test 4 and the
+unchanged tests of G-R1, V1 and V2 pin them). The one change on such a root: **a package that
+cannot be read** no longer keeps the other packages' variables from applying (until 0.12.77
+`package_unreadable`, the safe side of the lifted rule, since it might have marked a capability);
+it still gets its warning, and a dispatch of that package itself still hands no value
+(`goal_value_package_unreadable`). The evaluator, the remedy layer, the composer's composition,
+the irreversible mark, the `packs` rows and the trial's mark are unchanged.
+
+**At deploy.** Nothing changes for the packages in production, because none declares a variable
+beside an irreversible capability and no installed root carries a `goals.json`. A person verifies
+both on the installation, without a resource repository: (1) `actinglab standard-pack check --root
+<standard_packs.root>\<game>` of the live build (0.12.77), per installed game, checks the root
+(exit 0): it would fail `package_invalid` with `variables_on_irreversible` for such a package, and
+`actingd check-config` would note such a package `standard_pack_package_unreadable` with that
+refusal as its cause; (2) the same answer's `root_files` lists no `goals.json` (nor does the game
+root's directory hold one), and `actinglab goals <instance>` shows no declaration. One thing can
+change: on a game whose root holds a package the workbench cannot read, a value set for another
+package's variable now applies where 0.12.77 read the default with `package_unreadable`; a person
+sees beforehand whether that is so in check-config's notes (`standard_pack_package_unreadable`)
+and in the ledger (`goal_value_not_applied` with `variable_problem` `package_unreadable`). **A
+rollback to v0.12.77** meets: a bundle made for the new rules (`package` [23, 23]) refused by its
+installer at the `package` edge; one with such a package that declares less (14 to 21) laid by its
+`place`, whose checks after the placement then fail it (its own `standard-pack check` fails the root
+`package_invalid` with `variables_on_irreversible`), the placement ending `post_check_failed` with
+the items placed and the instances it paused staying paused (no hold when no Runtime runs; `next`
+names `undo`); a root already holding such a package (placed by this build)
+run with that package refused at every run and counted unreadable, its root's variables then
+`package_unreadable`, its `standard-pack check` failing `package_invalid` (its rollback gate warns
+`pack_declaration_unknown` per game root and does not refuse, the register keeping no root's
+range); a `goals.json` whose entries govern such a package: its `standard-pack check` warns
+`goal_governs_irreversible` (the post check passes), its workbench applies the file's entries with
+such a package's variables not applying, and its bundle tools refuse the file. The records this
+build writes have no new code, word, member or shape, so v0.12.77 reads them.
+
 ### 1.502 Slice #429 AB-1 (0.12.78): the A/B install layer that nothing calls is removed (Workflow #429; the owner's words of 2026-11-21 on board #429, quoted below; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-429-ab1.md`, after the read-only inventory `rd-1121/study-ab-removal.md`; on main `3285143f`, the v0.12.77 release)
 
 This section takes 1.502: §1.500 is pull request #1860's and §1.501 pull request G-SLx's.
@@ -45168,6 +45390,141 @@ it) and `gate_434_lab3` (`!serves("clean")`) still hold; only their comments cha
 guard ids, which no build evaluated). A person sees that an installation is single-location in
 `install status`'s member `layout`, `single`. A rollback to v0.12.77 meets nothing
 new: no document, journal kind, code or interface range of this build is one v0.12.77 lacks.
+
+### 1.504 Slice #455 P1 (0.12.78): a pool may declare that its inventory is read from rows of a list (`observation.kind` `list_rows`): the declaration, the compile's checks and the composer's `requires`; no Runtime gives it a reading yet (board #455; the rulings 1 to 9 are the coordinator's of 11-21, no words of the owner's behind them; coordinator work order `rd-1121/brief-455-p1.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition; on main `3285143f`, the 0.12.77 release)
+
+This section takes 1.504: §1.500 to §1.503 belong to other slices of this version.
+[scheduling/README.md](scheduling/README.md) ("A pool read from rows of a list", new; "Pool fact
+references", "Pool lines" (its capability bullet) and "Record lists and the projection" (the one
+exception)) and [scheduling/v2/README.md](scheduling/v2/README.md) with `v2/pools.schema.json`
+are the contract; [standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`",
+"Composition"), [resource-readings.md](resource-readings.md) and
+[instance-fact-store.md](instance-fact-store.md) (who reads a list fact: the host, from P2) follow
+it. Why: a game with dozens of materials cannot give each a fact of its own (an instance holds at
+most 224), a reading by a fixed place on the screen is not allowed, and what a recorded package
+reads is a whole list kept as one fact under `inventory.list.`, which stays out of the
+scheduler's projection. The host computing the number before each evaluation is P2's (§1.505).
+
+**The shape** (ruling 1). `ObservationRef::ListRows { fact_key, key_column, value_column, rows:
+Vec<PoolListRow { key, factor }> }`, a third kind beside `fact` and `outcome`
+(`crates/policy/src/schema.rs`), serialized `{"kind": "list_rows", "fact_key", "key_column",
+"value_column", "rows": [{"key", "factor"}]}`, V2 only, beside `ledger_fact` (its minimum
+confidence as for a fact observation; the compile's `ledger_fact` check admits it beside `fact`).
+A pool has one observation, so a fact observation is excluded by construction. Adding a variant to
+the internally tagged enum leaves the two others' reading, writing and hashing as they were (the
+first stop condition did not hold). Constants: `POOL_LIST_ROWS_KIND`, `MAX_POOL_LIST_ROWS` (64),
+`MAX_POOL_LIST_ROW_FACTOR` (1 000 000), `POOL_LIST_ROWS_SUBSYSTEM` (`pool_list_rows`).
+
+**The limits** (ruling 2): 1 to 64 rows, keys distinct, a factor 1 to 1 000 000, both columns by
+the rule of a list reading's column names (`list_reading_column_valid`, `^[a-z][a-z0-9_]{0,31}$`),
+the key by the list reading's own (`list_reading_fact_key_valid`: under `inventory.list.`, an
+instance fact key) and the catalog's bounded identifier. Added, with its reason: a row's key is a
+text of 1 to 1024 bytes without a control character, the bound of a fact's text, since no row a
+list reading writes holds another. That the sum stays within 2^53 − 1 is P2's.
+
+**The refusals** (ruling 3; `validate_list_rows` in `crates/policy/src/validation.rs`), each at
+its pointer, every code one the compile has (no new code; the second stop condition did not hold):
+
+| Case | Code | Pointer |
+|---|---|---|
+| the kind in a V1 document (nothing else checked) | `unknown_field` | `/pools/<i>/observation/kind` |
+| beside `static_snapshot` (the pool would take the caller's value, never the rows; the precedent: a `ledger_fact` pool without a fact observation) | `limit_exceeded` | `/pools/<i>` |
+| a pool whose scope is not an instance | `type_mismatch` | `/pools/<i>/observation/kind` |
+| a key that is no identifier or not under `inventory.list.` | `type_mismatch` | `…/observation/fact_key` |
+| a column against the rule | `type_mismatch` | `…/observation/key_column`, `…/value_column` |
+| the two columns the same | `type_mismatch` | `…/observation/value_column` |
+| no row, more than 64 | `limit_exceeded` | `…/observation/rows` |
+| a key empty or with a control character; longer than 1024 bytes | `type_mismatch`; `limit_exceeded` | `…/observation/rows/<j>/key` |
+| a key twice (at the second) | `duplicate_id` | `…/observation/rows/<j>/key` |
+| a factor outside `1..=1000000` | `limit_exceeded` | `…/observation/rows/<j>/factor` |
+
+**The one exception** (ruling 4). The `list_rows` arm checks its key itself and does not call
+`validate_read_fact_key`, which keeps refusing every other member under the prefix (a `fact`
+observation, a predicate, a fact reference, a capacity or line reference, a consumption read from
+a fact, a selection document's fact); the list still does not enter the projection.
+
+**`requires`** (ruling 5; `read_game`, `crates/policy/src/compose.rs`). A `schedule.json` whose
+pool's `observation` has the `kind` `list_rows` without `pool_list_rows` in `requires` is
+`schedule_invalid` at the first such pool's `observation`, as `pool_lines` was built (the third
+stop condition did not hold). The observation passes through `compose_item` as written (it names
+no `task_id`). **No Runtime names the subsystem in this version** (`apps/actingd/src/config/manifest.rs`
+unchanged; P2 adds the row): the workbench and check-config compose with the manifest's enabled
+subsystems, so a file that lists it is `schedule_requires_missing` at that entry, and the
+workbench keeps the game's last good rules (pinned by host `gate_rl1b::rl1b_a6_…` for every
+refusal of a game's file).
+
+**No reading before P2: unknown, never zero** (ruling 6). Only a catalog given directly reaches
+an evaluator with such a pool. `pool_fact` reads no fact for it, so `project_fact_pools` drops a
+caller's snapshot of it and `evaluation_pool_values` gives it none. Each reader of the reading, as
+for a missing fact: `resource_projection` Unknown with the suggestion (L, `fact_missing`), so
+`trigger_unknown` and the refresh's demand for L (no reader marks it); the cost term of a
+regenerating pool `benefit_unknown` `reading_unknown` (L, `fact_missing`); the capped state of a
+pool with lines `pool_line_held` `capped_cap_unknown` (L, `fact_missing`); the reserve gate case
+1; the forward projection leaves it out. A resource target on it is `resource_not_observable`, as
+on an outcome pool (`resolve_target_pool`, unchanged; P2 opens it). In the host, a configured
+`policy.catalog` holding one makes each evaluation's input `policy_pool_binding_invalid`
+(`validate_static_fact_pool_authority`, unchanged; P2 changes it). The local change is one arm in
+each of three matches.
+
+**Every place that tells the observation's kinds apart** (`git grep ObservationRef`, `.observation`):
+the `match`es that gained an arm: `validation.rs` (`validate_pools`: `validate_list_rows`),
+`evaluator.rs` (`resource_suggestion`), `evaluator/benefit.rs` (the reading's key and reason),
+`evaluator/capped.rs` (`lines`), `apps/actinglab/src/resource_declarations.rs`
+(`check_pool_producers`: its wildcard written out, the kind publishes no fact of its own). The
+pattern tests where the kind is not a fact and needs nothing: `compiler.rs`
+(`referenced_outcome_keys`), `evaluator.rs` (`pool_fact`), `evaluator/no_progress.rs`
+(`basis_keys`), `evaluator/tie_break.rs`, `resource_targets.rs` (`resolve_target_pool`),
+`validation.rs` (the realization's fact observation, kept: such a pool is refused there), the host's
+`fact_store.rs` (`validate_pool_sources`) and `host/policy_dispatch.rs` (above); the composer's
+string test `reading_key` (`kind` `fact`).
+
+**The tools** (ruling 8). `actinglab scheduling compile`, `standard-pack check`, `compose` and
+`adopt` compile through the one compiler and composer, so they accept and carry the member (adopt
+writes rules only and leaves pools as written). The cross-check is left out: `standard-pack check`
+reads a package's reading marks only (`PreparedContainedTask::read_reading_marks`, its
+`resource_readings`); a package's list readings (a `read_list` step's `fact_key`, `key_column` and
+`columns` in a page graph or, since §1.500, in a linear plan, and a field list's) have no reader
+that the check could call without preparing the package. What is missing is such a metadata reader beside `read_reading_marks`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P1-1 | `observation` `{"kind": "list_rows", …}` (`PoolSpec`, V2) | catalog member | #455 P1 | a resource repository's `schedule.json`, once a Runtime names `pool_list_rows` | no reading before P2 |
+| P1-2 | `pool_list_rows` | `requires` subsystem | #455 P1 | none in 0.12.78 (P2's manifest row) | every 0.12.78 Runtime refuses a file that lists it |
+
+**Interface.** No revision moves: no `package` revision (a feature of `schedule.json` goes by
+`requires` alone, as the pools' lines and the trigger line), no `ledger`, `runtime-client`,
+`actingd-config` or `runtime-outcomes` shape; no outcome code or word.
+
+**Tests** (policy gate row "#455 P1", `crates/policy/src/tests/gate_455_p1.rs`; apps row "#455 P1").
+
+| Test | What it shows |
+|---|---|
+| `p1_t1_a_list_rows_pool_compiles_round_trips_and_keeps_its_rows_in_written_order` (1) | One row and four rows (factors 200, 400, 1000, 2000, out of key order) compile; the compiled pool holds them in that order, serializes them under `list_rows`, reads back equal and compiles again to the same hash |
+| `p1_t2_each_refusal_is_its_code_at_its_pointer` (2) | Every row of the table above, one case each |
+| `p1_t3_only_a_list_rows_observation_names_the_list_prefix` (3) | A `fact` observation, a capacity and a line reference and a `fact` predicate under the prefix stay `type_mismatch` at their key; a `list_rows` observation of `resource.` is refused at its `fact_key` |
+| `p1_t4_the_composer_requires_pool_list_rows_and_a_runtime_without_it_refuses_the_file` (4) | The member composes as written; without the entry `schedule_invalid` at `/pools/0/observation`; a manifest without the subsystem `schedule_requires_missing` at `/requires/0` |
+| actingd `gate_455_p1::p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it` (4) | This build's assembled manifest names no `pool_list_rows`, and the composer given its enabled subsystems refuses such a file at `/requires/0` |
+| `p1_t5_the_cost_term_of_a_list_pool_is_unknown_and_never_zero` (5) | `benefit_unknown` `reading_unknown` (pool, L, `fact_missing`), not dispatched, also with the list in the input and a caller's snapshot of 0 |
+| `p1_t6_the_capped_state_of_a_list_pool_is_unknown_and_never_zero` (5) | `pool_line_held` `capped_cap_unknown` (pool, L, `fact_missing`), not dispatched, the same two inputs |
+| `p1_t7_a_catalog_without_the_kind_keeps_its_golden_identity` (6) | `catalog-a` keeps its V1 and V2 golden hashes (`gate_ord1`'s) and serializes no `list_rows` |
+
+No existing test was touched (7).
+
+**What is not changed.** Every pool without the kind: its checks, its identity, its decisions (the
+`ledger_fact` check's message stays word for word). The refusals of ruling 4 for every other
+member. The projection: no list enters it. Every declared interface range.
+
+**At deploy.** Nothing changes for an installation: the kind is new, so no `schedule.json` and no
+configured catalog names it, and a Runtime of this version refuses a file that does. Read at the
+tag `v0.12.77` (`3285143f`): its composer and its `standard-pack check` know no `pool_list_rows`
+and check no `requires` in the tools, so they compose such a file and its compile refuses the
+unknown `kind` (`parse_document`: serde's unknown variant is `type_mismatch`, at the parser's
+nearest pointer inside the observation), `standard_pack_root_invalid` `schedule_invalid` at the
+pool; a Runtime of v0.12.77 answers `schedule_requires_missing` for a file that lists the
+subsystem (that check comes before the compile) and the same `schedule_invalid` for one that does
+not, keeping the game's last good rules either way. A rollback meets nothing: no Runtime has
+activated a catalogue with the kind (a configured one would have to be written after this deploy;
+a 0.12.77 start would then refuse that generation at its compile).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
