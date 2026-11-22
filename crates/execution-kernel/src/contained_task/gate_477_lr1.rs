@@ -13,8 +13,9 @@
 // recorded and counted in its `attempts`. The declaration gate refuses the member at its pointer on
 // a step that is no press, on one that leaves its page, (fix round 1) on one no earlier step leads
 // into from another page, and a constant, a key or a `minus` out of its range; a page graph refuses
-// it at admission; the root check holds a variable a count reads to a cap's range. A package without
-// the member runs as before.
+// it at admission. A package without the member runs as before. (That the root check holds a
+// variable a count reads to a cap's range is the resource tools' gate, `gate_477_lr1` of
+// `crates/resource-tooling`, fix round 2: it reads a package on disk.)
 //
 // Every expected value comes from those rulings and the package values below, never from the code.
 // The packages are synthetic `neutral` packages admitted by the kernel's whole admission
@@ -26,15 +27,13 @@
 // (EXEC-I4): the device shows `screens[n]` after `n` inputs, each segment's last frame repeating;
 // the runtime around it answers the run's fact snapshot as the host does (`selection_state`).
 
-use super::tests::admission_deadline;
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
 use actingcommand_contract::{
     FactContent, FactRecord, FactValue, InstanceFactContext, InstanceFactSnapshot,
-    ResourceDeclarationReason, RootPackageVariables, StandardPackProblem, check_root_variables,
+    ResourceDeclarationReason,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
 
@@ -51,7 +50,7 @@ const INSTANCE: &str = "neutral.instance";
 // Fix round 1: the schedule value a policy dispatch hands its run, the turns its allowances pay
 // for (SS-6), which the press count reads.
 const RUN_CAP_KEY: &str = "session.dispatch.schedule.run_cap";
-// The key of the package variable `turns`, which the root check holds to a cap's range.
+// The key of the package variable `turns`, which a press count may read.
 const TURNS_KEY: &str = "session.dispatch.parameter.turns";
 // The detector pages.
 const LIST_PAGE: &str = "neutral/list";
@@ -104,15 +103,6 @@ fn control(package_id: &str, max_steps: usize) -> Value {
 // The press path's control: three operations.
 fn press_control() -> Value {
     control("neutral.linear.press", 3)
-}
-
-// The press path's control with the integer variable `turns`, from 0 to `max`, which a run reads
-// as `session.dispatch.parameter.turns`.
-fn variable_control(max: i64) -> Value {
-    let mut control = press_control();
-    control["variables"] = json!([{"name": "turns", "type": "integer", "title": {"en": "Turns"},
-                                   "min": 0, "max": max, "default": 1}]);
-    control
 }
 
 // A trusted tap `id` from `from` to `to`, expected within the arrival budget (KP-1's).
@@ -226,25 +216,6 @@ fn package(control: &Value, task: &Value) -> Vec<u8> {
 // The package as contained task admission prepares it, or its refusal.
 fn load(control: &Value, task: &Value) -> Result<PreparedContainedTask, ContainedTaskError> {
     PreparedContainedTask::load(INSTANCE, &package(control, task))
-}
-
-// Fix round 1: the declarations the root check reads of the package (`read_remedy_declarations`,
-// the Runtime's metadata reader, on the package's zip written to the system's temporary directory
-// under a name of this process and `name`, removed once read), or its refusal.
-fn read_declarations(
-    name: &str,
-    control: &Value,
-    task: &Value,
-) -> Result<RemedyDeclarations, ContainedTaskError> {
-    let path = std::env::temp_dir().join(format!(
-        "actingcommand-gate-477-lr1-{}-{name}.zip",
-        std::process::id()
-    ));
-    std::fs::write(&path, package(control, task)).expect("the package's zip file");
-    let read =
-        PreparedContainedTask::read_remedy_declarations(INSTANCE, &path, admission_deadline());
-    std::fs::remove_file(&path).expect("the package's zip file removed");
-    read
 }
 
 fn admitted(case: &str, control: &Value, task: &Value) -> PreparedContainedTask {
@@ -817,56 +788,9 @@ fn lr1_a_package_without_the_member_runs_byte_for_byte_as_before() {
     assert_eq!(device.fact_reads, 0);
 }
 
-// Fix round 1, test 7 (the review's missing test; the coordinator's ruling 3): the root check reads
-// a press step's key as a cap's. The press path whose count reads the package's integer variable
-// `turns` (`session.dispatch.parameter.turns`, `minus` 1), read by the Runtime's metadata reader as
-// the root check reads every package of a root (`read_remedy_declarations`), answers that key among
-// its cap keys; the root check (`check_root_variables`) then refuses the variable
-// (`variable_cap_range` at `/variables/0/max`) when its `max` is 2000, above a cap's 1000, and lets
-// it apply when its `max` is 1000.
-#[test]
-fn lr1_fix1_the_root_check_holds_a_variable_a_press_count_reads_to_a_caps_range() {
-    let task = press_task(press_step(json!({"fact_key": TURNS_KEY, "minus": 1})));
-    for (case, max, issues, applied) in [
-        ("max 1000", 1000, Vec::new(), vec!["turns"]),
-        (
-            "max 2000",
-            2000,
-            vec![(StandardPackProblem::VariableCapRange, "/variables/0/max")],
-            Vec::new(),
-        ),
-    ] {
-        let read = read_declarations(&format!("max{max}"), &variable_control(max), &task)
-            .unwrap_or_else(|error| panic!("{case}: refused: {error}"));
-        assert_eq!(read.cap_fact_keys, [TURNS_KEY], "{case}");
-        let checked = check_root_variables(
-            &[RootPackageVariables {
-                package_id: read.package_id,
-                variables: read.variables,
-                cap_fact_keys: read.cap_fact_keys,
-            }],
-            &BTreeSet::new(),
-        );
-        assert_eq!(
-            checked
-                .issues
-                .iter()
-                .map(|issue| (issue.issue.problem, issue.issue.pointer.as_str()))
-                .collect::<Vec<_>>(),
-            issues,
-            "{case}"
-        );
-        assert_eq!(
-            checked
-                .applied
-                .iter()
-                .map(|variable| variable.name.as_str())
-                .collect::<Vec<_>>(),
-            applied,
-            "{case}"
-        );
-    }
-}
+// Fix round 1, test 7, the root check's holding of a variable a press count reads to a cap's
+// range, is the resource tools' (`crates/resource-tooling/src/gate_477_lr1.rs`, fix round 2): it
+// reads a package on disk, which no source of this crate does.
 
 // Fix round 1, test 8 (the review's missing test): a page-graph package (`navigable_route`) on the
 // same path, whose `plus` writes the member, passes the declaration gate, which reads no mode, and

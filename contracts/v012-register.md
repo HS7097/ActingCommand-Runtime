@@ -46441,7 +46441,7 @@ holds.
   admits the run cap and a variable's key. Added: `lr1_fix1_the_root_check_holds_a_variable_a_press_count_reads_to_a_caps_range`
   (the metadata reader over the package's zip in the temporary directory answers the variable's key
   among `cap_fact_keys`; `check_root_variables` refuses `variable_cap_range` at `/variables/0/max`
-  for a `max` of 2000 and applies the variable for 1000),
+  for a `max` of 2000 and applies the variable for 1000; moved to the resource tools in fix round 2),
   `lr1_fix1_a_page_graph_package_that_writes_the_member_is_refused_at_admission`
   (`operation=plus presses requires linear_steps`) and
   `lr1_fix1_a_press_step_no_earlier_step_leads_into_is_refused_the_first_step_included`
@@ -46453,6 +46453,27 @@ holds.
   [linear-steps.md](linear-steps.md) ("Pressing on one page", the admission table, "Failure codes",
   "Tools") and [component-interfaces.md](component-interfaces.md) (row 25). No code, key, value or
   word of the catalogue added; no interface range moves beyond `package` 25.
+
+**Fix round 2** (CI on the fix round's head and the coordinator's two instructions).
+- *The test that writes a file.* The architecture guard
+  `c3b_execution_kernel_is_a_daemon_only_backend_shell` holds every source of
+  `crates/execution-kernel/src` free of `std::fs`, and test 7 wrote the package's zip to the
+  temporary directory there. It moved, its name kept, to the crate whose root check it exercises,
+  `crates/resource-tooling/src/gate_477_lr1.rs` (`standard-pack check`'s `variable_report`, which
+  reads each package of a root with the Runtime's metadata reader and judges the root's variables
+  by the contract crate's `judge_root_variables`; that guard reads no source outside the kernel's
+  directory, and the metadata reader takes a path only, no bytes). It now reads a game root on disk
+  in a temporary directory, the press path as a package directory: with `max` 2000 one
+  `standard_pack_root_invalid` warning, `variable_cap_range` at `/variables/0/max`, and no variable
+  applies; with `max` 1000, and with `max` 2000 beside a constant count, which reads no key, `turns`
+  applies and nothing is warned. The kernel's gate keeps tests 1 to 6, 8 and 9; the exec gate map
+  row "#477 LR-1" names the moved test by its new path. It is new in this slice, so no retired entry.
+- *Stacked on §1.507 and §1.512.* The branch merges `claude/486-asleep3-withheld-expires` (main
+  `f773b3d1` with §1.507 and §1.512). Both sides kept: `package` [3, 25] with the rows 24 and 25
+  ([component-interfaces.md](component-interfaces.md), [resource-verify.md](resource-verify.md));
+  the register's sections in the order §1.505, §1.506, §1.507, §1.512, §1.513; every gate row and
+  retired entry of both sides. §1.507's `gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16`
+  pins the range at [3, 25] now, as the five tests above do.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
