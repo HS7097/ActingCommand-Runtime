@@ -10,7 +10,10 @@ skipped when its page does not appear ([Workflow #339](https://github.com/HS7097
 "Optional steps" below). A step may instead choose one item of a list by what its frame shows
 and tap it once (Workflow #463 K1, "Select steps" below), press the back key on its page
 (Workflow #463 KP-1, "Key steps" below), or read a list its page shows, scrolling it to its end,
-and stay on that page (Workflow #428 S168-LK, "List reading steps" below). Besides its target page, a task may name
+and stay on that page (Workflow #428 S168-LK, "List reading steps" below). A click step that stays
+on its page may press a number of times there, the number a constant or a fact the run is handed,
+such as the scheduler's run cap
+(Workflow #477 LR-1, "Pressing on one page" below). Besides its target page, a task may name
 pages its path ends on after its last press, its ending pages, each a normal end (Workflow #463 K2,
 "Endings" below). Packages that do not declare the mode keep their page-graph execution unchanged.
 No game-specific values are part of this contract.
@@ -73,7 +76,7 @@ one operation is at fault; an existing check keeps its existing code.
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted); (Workflow #428 S168-LK, since 0.12.78) no `field_lists`, which group OCR fields a step plan does not read | the field name |
 | (Workflow #428 S168-LK, since 0.12.78) every `read_list` step's members, checked as on the page graph before the rules below ("List reading steps" below): its refusal is `contained_task_resource_reading_invalid`, detail `<operation id>:<member>` | as [resource-readings.md](resource-readings.md), "List readings", says |
-| each operation's effect is `click`, `application`, (Workflow #463 K1, since 0.12.61) `select`, (Workflow #463 KP-1, since 0.12.69) `key` or (Workflow #428 S168-LK, since 0.12.78) `read_list`, exactly one of them; no `on_error` | `operation_effect` |
+| each operation's effect is `click`, `application`, (Workflow #463 K1, since 0.12.61) `select`, (Workflow #463 KP-1, since 0.12.69) `key` or (Workflow #428 S168-LK, since 0.12.78) `read_list`, exactly one of them; no `on_error`; (Workflow #477 LR-1, since 0.12.79) `presses` only beside `click`, which the declaration gate refuses first ("Pressing on one page") | `operation_effect` |
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
@@ -81,7 +84,8 @@ one operation is at fault; an existing check keeps its existing code.
 | a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37); nor (LOAD-4b, since 0.12.38) any other page its waits await, an optional page its input may reach or its run's skip target ("Loading pages" below) | `loading_page` |
 | no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
-| each operation's destination differs from its `from`, but a list reading's, whose `to` is its `from` (Workflow #428 S168-LK) | `to_equals_from` |
+| each operation's destination differs from its `from`, but a list reading's, whose `to` is its `from` (Workflow #428 S168-LK), and (Workflow #477 LR-1, since 0.12.79) a press step's, whose destination must be its `from`: one that declares `presses` and whose resolved destination is another page is refused too (the declaration gate refuses one written so first, "Pressing on one page") | `to_equals_from` |
+| (Workflow #477 LR-1 fix round 1) a step that declares `presses` comes after a step of the plan that leads into its page from another page, so never first (the declaration gate refuses one written so first, "Pressing on one page") | `presses_not_entered` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |
 | each operation's destination equals the next operation's `from` | `chain` |
 | `target_page` names one page, equal to the last operation's destination | `target_page` |
@@ -108,7 +112,8 @@ id (`<game>/<page>`, with or without the game prefix in the declaration); a page
 to none or to several is the
 existing `contained_task_page_set_invalid`. All comparisons use the resolved ids. A
 `transition` on an operation of any other mode is `contained_task_operation_invalid`, and so
-is an `optional` (detail `operation=<id> optional requires linear_steps`). The
+is an `optional` (detail `operation=<id> optional requires linear_steps`) and (Workflow #477 LR-1)
+a `presses` (`operation=<id> presses requires linear_steps`). The
 page-graph checks (scheduling outcome coverage, phases) are not run; the rules above check a linear
 task's terminal pages, and a linear task has no
 required home entry page, so the host runs no home entry preflight for it; a task with a
@@ -176,7 +181,9 @@ operation dispatched, with `step_index` `d` the number of operations dispatched 
    (Workflow #463 K1) replaces items 2 and 3 with its attempt ([selection-graph.md](selection-graph.md),
    "Execution", "Select over a scan"): its confirmation frame binds its one tap; an empty decision
    with `on_empty` ends the run ("Select steps" below). A key step (Workflow #463 KP-1) goes
-   through items 2 and 3 as a click does, its input its key ("Key steps" below).
+   through items 2 and 3 as a click does, its input its key ("Key steps" below). A press step
+   (Workflow #477 LR-1) goes through items 2 to 5 once per press, awaiting its own page, and none
+   for a count of 0 ("Pressing on one page" below).
 3. The effect intent, the input bound to that frame's input context and the effect completion
    follow, in the order of the page-graph path.
 4. The post-input wait is `post_delay_ms`, or the window's `min_ms` when larger.
@@ -198,7 +205,9 @@ end runs on to its last operation.
 each step arrives on are handed to recognition when their page carries a mark the run reads;
 the run does not wait, and a successful run joins the readings before `Finalizing`. A path that
 starts on a page, ends on it and returns to it on the way, without optional operations, has one
-segment per return: each leaves the entry page, reaches its pages and comes back. A run given a
+segment per return: each leaves the entry page, reaches its pages and comes back (Workflow #477
+LR-1: a press step on the entry page does not leave it and ends no segment; its presses belong to
+the segment after it, and after the path's last return to no segment, so they always run). A run given a
 requested key set (the scheduler's reading dispatch) does not run a segment that reaches no page
 marking one of its keys, so it stays on the entry page; every other path, and every run without
 a key set, runs whole.
@@ -741,6 +750,159 @@ answers what the step's run records ([resource-readings.md](resource-readings.md
 
 A task without a reading is admitted, run and recorded as before.
 
+## Pressing on one page
+
+Workflow #477 LR-1 (since 0.12.79, [v012-register.md](v012-register.md) §1.513; the coordinator's
+rulings 1 to 8 in the work order of board #477 and its fix round 1, not the owner's words). A
+stamina sweep runs the turns the scheduler allows its run, the schedule value `run_cap` a policy
+dispatch hands it ([remedies.md](remedies.md), section 4, SS-6's values), and in every game the
+Runtime drives the number is set on one page: a "+" pressed some times, or a multiplier chosen by
+name (a select step whose policy reads the value, "Select steps"). A click step whose page after its
+press is its page before it may declare `presses`, how often it presses there:
+
+```json
+{"id": "step_04_plus", "from": "step_04", "to": "step_04",
+ "click": {"kind": "rect", "x": 600, "y": 400, "width": 40, "height": 40},
+ "guard": {"page_id": "step_04", "target_id": "step_04/plus", "color_probe": "step_04/plus",
+           "expected_rect": {"x": 600, "y": 400, "width": 40, "height": 40}},
+ "expect_after": {"page_id": "step_04", "timeout_ms": 3000},
+ "presses": {"fact_key": "session.dispatch.schedule.run_cap", "minus": 1}}
+```
+
+**The count.** `presses` is a whole number from 1 to 1000, or `{"fact_key": <key>, "minus": <whole
+number from 1 to 1000>}` (`minus` optional): the value of the instance fact `<key>` in the run's fact
+snapshot, read as a page graph reads a designated effect's fact cap (`max_repeats: {fact_key}`,
+[resource-declarations.md](resource-declarations.md), "Fact caps": an unexpired integer from 0 to
+1000), less `minus`, never below 0. `<key>` is any key such a fact cap takes, by the one definition
+of that check (`validate_fact_cap_key` of the contract crate, which the page graph's declaration
+check calls too): an instance fact key of the families `identity.`, `display.`, `session.`,
+`resource.`, `inventory.`, `timeline.`, `health.` and `env.`, at most 192 bytes, with no control
+character. The count a sweep's screen shows usually starts at 1, so a sweep of N turns presses
+N − 1 times (`minus` 1). A step without `presses` is the click step it was, and a package without it
+is read, checked, written and run byte for byte as before.
+
+**Where the count comes from** (fix round 1, the coordinator's ruling 3). Two keys give one today:
+
+- `session.dispatch.schedule.run_cap`, the scheduler's run cap: the runs (here the turns) the task's
+  allowances pay for, at most 1000, which the host overlays for a policy dispatch that carries it
+  ([remedies.md](remedies.md), section 4). A dispatch carries none when the task reserves none of the
+  pools it consumes, or a projection or a declaration it needs is unknown or incomplete; and a run
+  started without a dispatch (a direct run, a Lab run, a run the host starts itself, a ladder rung)
+  reads no `run_cap`: its count cannot be read and the run ends before any press (below).
+- `session.dispatch.parameter.<name>` of the package's `integer` variable
+  ([package-variables.md](package-variables.md), "The overlay"): the value a person or an agent
+  stored on the application, which a dispatch hands its run, a direct run's given value, or the
+  variable's default for a run that has neither. The root check holds a variable a count reads to
+  an `integer` from 0 to at most 1000, as it holds one a cap reads (`variable_cap_range`). A run
+  without a dispatch presses "default − `minus`" times, so a package that must not press there gives
+  the variable a default no larger than its `minus`. A remedy parameter is overlaid as a string, so
+  a count read from one is `type_mismatch` (below).
+
+**A step that stays on its page** is declared as a list reading stays: its `to` (and its
+`expect_after.page_id`, when it declares one) is its `from`. Until this slice a click step so
+declared was refused (`to_equals_from`); a package without `presses` still is, so no package read
+before is read otherwise now.
+
+**The declaration gate** (the coordinator's ruling 6; `resource_declaration_invalid`, each at its
+pointer, in a task of either mode, since the gate reads no mode):
+
+| Rule | Pointer | Reason |
+|---|---|---|
+| `presses` stands only on a press: a click of the kind `point`, `rect`, `specific_rect`, `offset`, `target` or `target_center` (one press of a control; a drag, a swipe or a long press is none), with no `application`, `select`, `key`, `wait` or `read_list` beside it | `/operations/<i>/presses` | `InvalidValue` |
+| it stands only on a step that stays on its page: its `from` a page (not `any`), and every destination it declares (`to`, `expect_after.page_id`) one page written as its `from` is | `/operations/<i>/presses` | `InvalidValue` |
+| (fix round 1, the coordinator's ruling 2 on the review) it stands only after a step of the same task that leads into its page from another page: an earlier operation whose declared destination is that page and whose `from` is another, as written; so never on the first step ("Presses add to the screen's number" below) | `/operations/<i>/presses` | `InvalidValue` |
+| a press step declares no retry (`retryable` is not `true`): a retry would press again after a press it cannot tell was taken (the coordinator's ruling 4: the presses never exceed the count) | `/operations/<i>/retryable` | `InvalidValue` |
+| a whole number from 1 to 1000 | `/operations/<i>/presses` | `InvalidValue`; neither an unsigned integer nor an object `InvalidType` |
+| the object holds `fact_key` and at most `minus` | `/operations/<i>/presses/fact_key`, the other member | `MissingField`, `UnknownField` |
+| `fact_key` is a key a page graph's fact cap takes (fix round 1: `validate_fact_cap_key`, the one definition; `session.dispatch.schedule.run_cap` and `session.dispatch.parameter.<name>` among them) | `/operations/<i>/presses/fact_key` | `InvalidValue`; no string `InvalidType` |
+| `minus` is a whole number from 1 to 1000 | `/operations/<i>/presses/minus` | `InvalidValue`; no unsigned integer `InvalidType` |
+
+The gate compares the pages as written; admission compares the pages it resolves. **Admission:**
+`presses` in a task of any other mode is `contained_task_operation_invalid`, detail
+`operation=<id> presses requires linear_steps`. Under `linear_steps` a press step is admitted by a
+click step's rules but one: it is the one click step whose resolved destination is its `from`, and
+one whose resolved destination is another page is `to_equals_from`; `presses` beside another effect
+is `operation_effect`; (fix round 1) a press step that no earlier step of the plan leads into from
+another page, the resolved pages compared, is `presses_not_entered` (the gate refuses each first). An
+optional press step is refused by the existing `optional_candidates` (its page would be its run's
+next optional page or its skip target), and so is a press step right before a run of optional steps
+(its page is the run's first optional page); from `any` it is refused as a click is
+(`any_requires_application`). It may stand last or anywhere else after its page is entered.
+
+**Reading the count** (rulings 1 and 3). Every press step's count is read once per run, after
+`RunStarted` and before the run's first capture: a constant is its count; a key's value comes from
+the instance's fact snapshot the runtime gives the run, the one a select step reads, where the host
+overlays a policy dispatch's schedule values (`run_cap`) and its variables' values, a direct run's given values
+or, for a run without either, the variables' defaults ([package-variables.md](package-variables.md),
+"The overlay" and "Runs without a dispatch"), by a fact cap's rules. A count that cannot be read ends the run
+there with `contained_task_designated_effect_cap_unresolved`, the code a page graph's unresolved cap
+ends with: `pack_operation_id` the step, `fact_key`, and `unknown_reason` (`fact_missing`,
+`fact_expired`, `fact_not_scalar`, `type_mismatch`) or, for an integer out of range, `count` and
+`limit_count`; neither when the runtime gives no snapshot (the offline simulation given no time, a
+runtime without one). No step has started then, and nothing is captured, pressed or intended.
+
+**Execution** (ruling 2). The step's `StepStarted` is written once ("Execution", item 1). Then, for
+each press, the step goes through items 2 to 5 as a click step's one attempt does: its input on
+the frame its page passed on last (with a step gap, ACT-2, a fresh frame of its page first; its
+guard and a declared input recheck there; the effect intent, the input and the effect completion),
+the post-input wait (`post_delay_ms`, or its window's `min_ms` when larger) and the arrival: its
+intermediate state when it declares one, then its own page awaited for its arrival budget `T` (at
+the path's end the ending pages before it, "Endings"), each press with an allowance of its own for
+its loading pages. The frame its page passed on is the next press's decision frame. After the last
+press the step finishes on that frame (`StepFinished` naming its page), the next step's decision
+frame. A count of 0 presses nothing: the step starts and finishes on the frame it started on, which
+the next step decides on, and it is done (`executed_steps` counts it). On a last step, an ending
+page that passes after a press ends the step there and the run finishes on it ("Endings"), the
+presses not made left.
+
+**Endings** (ruling 3; no new code).
+
+| Situation | End |
+|---|---|
+| the count cannot be read ("Reading the count") | `contained_task_designated_effect_cap_unresolved`, before any capture or press |
+| a press whose page does not come | as a click step's last attempt ends ("Retries"): the closing decision, then `page_confirmation_failed` with the click step's detail (`operation=<id> attempts=<k> after_page=<unrecognized> ...`), its postcondition timing and its word, or `contained_task_linear_unrecorded_screen` (its value `attempts` `<k>`) where the decision finds a screen the package never recorded; (fix round 1) `<k>` is the number of presses made, the last of them the one whose page did not come; the closing decision awaits the step's page once; the step's `StepFinished` names `<unrecognized>` |
+| (fix round 1) with a step gap (ACT-2), the fresh frame taken before a press shows no page of the step | `contained_task_page_unknown`, as for a click step's fresh frame ("Execution"), before that press, the presses made before it recorded |
+| the task's deadline, a guard's refusal, an input recheck's, a capture or recognition error | as for a click step |
+
+A press step has no retry decision.
+
+**Presses add to the screen's number** (ruling 4, as fix round 1 states it). Nothing reads the
+number the screen shows. The presses are never more than the count resolved: a press the game did
+not take leaves the screen on the step's page, which the arrival passes as it passes after a press
+that was taken, so the run goes on with fewer turns than it was allowed. They add to the number the
+screen shows when the step begins, so the package opens the page in the same run before the step
+(the declaration gate's rule above): a dialog an earlier run left open, showing 1 + k after k
+presses whose page was then lost, is never pressed on again, since the run enters the page from
+another page first. A game whose dialog remembers its last number is the package author's to
+handle, by a step that sets it back first. A package that must know the number reads it on a later
+page (a reading mark) or sets it by choosing a multiplier by name (a select step).
+
+**What the records show** (ruling 5; no record, member or value added). Each press is one
+`EffectIntent` (`step_index` the step's dispatch index, its operation id, its input, its sampling
+and the guard it was decided under) and one `EffectCompleted` (the same `step_index` and operation
+id), and after each the arrival's `RecognitionStarted` and `RecognitionCompleted` with the step's
+page as their candidate and, on the frame that passed, as their matched page. On success the count
+the run resolved shows as the number of those pairs between the step's one `StepStarted` and its
+`StepFinished` naming its page; a count of 0 as none. On a failure the presses made show as those
+pairs and (fix round 1) as `attempts=<k>` of the failure's detail (and the value `attempts` of
+`contained_task_linear_unrecorded_screen`). The count resolved itself is carried by no member of
+any record: a run that failed after a press does not show it. What it was read from is on record
+elsewhere: the dispatch's `policy_dispatch_parameters` reason carries `run_cap`
+([remedies.md](remedies.md), section 4), and the run's admission record's `variables` a variable's
+value a dispatch or a direct run handed ([package-variables.md](package-variables.md), "The run's
+admission record"), otherwise the package's default, which the record's `content_hash` names; the
+package's `minus` is in its content.
+
+**Writing it** (ruling 7). The recording tools do not write `presses` in this slice: `record stop`
+generates no such step, and `record amend` takes no such member (its parameters are a step's `from`,
+`to` and click, a mark's id, region, colour check and threshold, and drift diagnostics; it edits an
+active recording, not a package). A person or an agent writes it by hand into the task file, or with
+`actinglab package edit` (`--file resources/operations/<task>/task.json`, `--add
+/operations/<i>/presses` with `--value`, and `--replace` of the step's `to` and `expect_after/page_id`
+by its `from`), and builds the package again.
+
+A task without a press step is admitted, run and recorded as before.
+
 ## Loading pages
 
 Workflow #407 LOAD-4 (since 0.12.38, [v012-register.md](v012-register.md) §1.262; design
@@ -1271,6 +1433,9 @@ dispatched from. A `fresh_frame` recheck's refusal is the guard's own and carrie
 | After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | Workflow #463 KP-1 (since 0.12.69): the instance's input does not send a key step's key, as its capability table declares ("Key steps") | `contained_task_linear_key_unsupported` (class `declaration_error`), detail `operation=<id>`, value `pack_operation_id`, the package's first key step, after `RunStarted` and before any capture, input or effect intent | none |
+| Workflow #477 LR-1 (since 0.12.79): a press step's count, a key's value (the run cap or a variable), cannot be read, a run without a dispatch's `run_cap` included ("Pressing on one page") | `contained_task_designated_effect_cap_unresolved` (class `declaration_error`, the page graph's code of an unresolved cap), values `pack_operation_id`, `fact_key` and `unknown_reason`, or `count` and `limit_count`, after `RunStarted` and before any capture, input or effect intent | none |
+| Workflow #477 LR-1: a press step's page does not come after one of its presses | as the rows above give a click step's last attempt (`page_confirmation_failed`, or `contained_task_linear_unrecorded_screen`), detail `operation=<id> attempts=<k> ...`, (fix round 1) `<k>` the presses made | as there |
+| Workflow #477 LR-1 fix round 1: with a step gap, the fresh frame before a press shows no page of the step | `contained_task_page_unknown`, before that press | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30), and (Workflow #469 K2) why, `guard_problem` `page_mismatch` or `target_not_passed` with the target's reason as `failure_code` (above) | none |
 | A select step's attempt fails (Workflow #463 K1, "Select steps") | the select step's codes ([selection-graph.md](selection-graph.md), "Execution", "Record per path"), with their own ladder classes | as there |
@@ -1453,7 +1618,7 @@ refuses; a ledger written by a linear run is read by every build from that revis
 | Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), at the path's end with the ending pages before the target page (Workflow #463 K2), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
 | Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |
 | Skipped optional step | none | a skip shows as the preceding `StepFinished` naming the skip target instead of its declared destination, and as no `StepStarted` of that operation in the run |
-| Input | `EffectIntent`, `EffectCompleted` | unchanged |
+| Input | `EffectIntent`, `EffectCompleted` | unchanged; (Workflow #477 LR-1) a press step writes one pair per press, all of its one `step_index`, and none for a count of 0 ("Pressing on one page", "What the records show") |
 | Select step (Workflow #463 K1) | `task.selection_evaluated`, then its tap's `EffectIntent` and `EffectCompleted`, or none of them after an empty decision | its one decision record, as on the page graph ([selection-graph.md](selection-graph.md), "Record per path") |
 | Key step (Workflow #463 KP-1) | `EffectIntent`, `EffectCompleted` | the intent's action `Key`, its key written `[redacted]` as every key input's is, with no sampling; a run refused `contained_task_linear_key_unsupported` writes no `StepStarted` and none of them ("Key steps") |
 | Application effect | `application.intent`, then `application.completed` followed by `EffectCompleted`, or `application.failed`, which ends the step and the task with no `EffectCompleted` (the `application.*` records are written by the host, with the task and run ids and their own action id); no `EffectIntent` | unchanged |
@@ -1533,6 +1698,17 @@ in a `linear_steps` pack as 22, [resource-verify.md](resource-verify.md), "The `
 revision"), and checked by nothing when a bundle is placed or a package is admitted, so an earlier
 installer places such a bundle that declares less, and an earlier Runtime refuses its package at
 every run.
+A build before Workflow #477 LR-1 (below 0.12.79) refuses a press step's `presses` before
+`PackageAdmitted`: its declaration gate does not know the member (`resource_declaration_invalid`,
+`UnknownField` at `/operations/<i>/presses`), whatever it holds, in a package of any mode. A bundle
+whose packs declare one declares `package` [25, 25], which the `package` edge of an earlier installer
+(its range ending below 25) refuses before it places anything
+([component-interfaces.md](component-interfaces.md), the `package` row 25). That 25 is written by the
+resource repository's packaging and computed by `standard-pack build` for a bundle it builds (its
+revision table counts an operation's `presses` in a `linear_steps` pack as 25,
+[resource-verify.md](resource-verify.md), "The `package` revision"), and checked by nothing when a
+bundle is placed or a package is admitted, so an earlier installer places such a bundle that declares
+less, and an earlier Runtime refuses its package at every run.
 
 ## Tools
 
@@ -1546,6 +1722,11 @@ under), never a `would_click`; the simulation declares no capability table, so i
 key. A list reading (Workflow #428 S168-LK, since 0.12.78) is simulated as the page graph's is: its
 scan runs on the frames given, its first move is an input like any, and no list is published. The
 reading's own dry run over saved viewports is `dry_run_list_reading` ("List reading steps").
+A press step (Workflow #477 LR-1, since 0.12.79) is never a package's first step (fix round 1), so
+the first decision is never one of its presses; but its count is read before the first decision,
+from the simulation's snapshot with every variable at its default and no `run_cap` (none at all
+without a time), so a package whose count reads `run_cap`, or any key without a time, is refused
+`contained_task_designated_effect_cap_unresolved` before its first decision.
 A first select step that ends empty (`on_empty`) completes the run with its step counted, so its
 offline simulation reports `offline_simulation_executed_step_invariant`, as a page-graph task's
 empty end does. A package
@@ -1567,8 +1748,10 @@ provider, before it writes it.
 ## What a linear task cannot express
 
 Branches and loops of variable length: only the declared path runs, a run of optional steps only
-skips steps of it, a select step only chooses what its one tap presses, and endings only name the
-page the path ends on after its last press (Workflow #463 K2). A run of a package
+skips steps of it, a select step only chooses what its one tap presses, endings only name the
+page the path ends on after its last press (Workflow #463 K2), and a press step (Workflow #477
+LR-1) only presses one control a number of times on one page; a block of steps repeated is not
+expressed. A run of a package
 without a prerequisite package or return-home
 fallback that does not start on the first step's page, including one already on the target
 page, fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not

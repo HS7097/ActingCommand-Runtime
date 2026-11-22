@@ -60,6 +60,10 @@
 //!   a pack's `control.json` that declares `variables` beside a `provides` entry marking its
 //!   capability irreversible, two members of one file, so read on its own
 //!   ([`variables_beside_irreversible`]).
+//! - **A `linear_steps` press step's count**, 25 (Workflow #477 LR-1, register §1.513): an
+//!   operation's `presses` in a `linear_steps` pack, read where the kernel's admission reads it,
+//!   as revisions 13, 17 and 22 read a select step, a key step and a list reading, a row of
+//!   [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -142,6 +146,9 @@ const SHARED_LINES_REVISION: u64 = 21;
 /// (Workflow #455 G-SLx), and the members it reads: `control.json`'s `variables` and `provides`,
 /// and a `provides` entry's `irreversible`.
 const IRREVERSIBLE_VARIABLES_REVISION: u64 = 23;
+/// Revision 25: a `linear_steps` press step's count (Workflow #477 LR-1), the member `presses` of
+/// an operation (a row of [`ROWS`]).
+const PRESSES_REVISION: u64 = 25;
 const VARIABLES: &str = "variables";
 const PROVIDES: &str = "provides";
 const IRREVERSIBLE: &str = "irreversible";
@@ -270,11 +277,11 @@ const fn when(
 }
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
-/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21 and (Workflow #428 S168-LK) 22 and the register
-/// sections they cite, and the B train's sections, put into a revision: each with its file, its
-/// place, what it holds, its condition and its revision (`contracts/resource-verify.md`, "The
-/// `package` revision", lists them with their sources).
-const ROWS: [Row; 50] = [
+/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22 and (Workflow #477
+/// LR-1) 25 and the register sections they cite, and the B train's sections, put into a revision:
+/// each with its file, its place, what it holds, its condition and its revision
+/// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
+const ROWS: [Row; 51] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -507,6 +514,21 @@ const ROWS: [Row; 50] = [
         condition: Condition::LinearSteps,
         revision: 22,
     },
+    // 25, Workflow #477 LR-1 (§1.513; contracts/linear-steps.md, "Pressing on one page"): a press
+    // step's count, found where the kernel's admission finds it, as rows 13, 17 and 22 find a select
+    // step, a key step and a list reading: in a pack whose control's `execution_mode` is
+    // `linear_steps`, the member `presses` of an element of the task's `operations`
+    // (`TaskOperation.presses`), whatever it holds, a whole number, `{fact_key, minus?}` or `null`:
+    // every Runtime before it refuses the member's name at its declaration gate (`UnknownField` at
+    // `/operations/<i>/presses`), whatever it holds, in every pack. A page-graph task's `presses`
+    // is refused by this build too (`presses requires linear_steps`), so it needs nothing here.
+    when(
+        TASK,
+        "presses",
+        Place::Under("operations"),
+        Condition::LinearSteps,
+        PRESSES_REVISION,
+    ),
 ];
 
 /// What the rows read of the document they walk.

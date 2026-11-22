@@ -195,7 +195,9 @@ application (one entry row of its name, which every package declaring it reads, 
 
 `actinglab standard-pack check --root <game root>` reads every package of the registry with the
 Runtime's metadata reader (`read_remedy_declarations`, which answers a package's `variables` and the
-fact keys its designated effects read their caps from) and runs the contract crate's root check
+fact keys its designated effects read their caps from, and, Workflow #477 LR-1 since 0.12.79, the
+keys its press steps read their counts from, [linear-steps.md](linear-steps.md), "Pressing on one
+page") and runs the contract crate's root check
 (`check_root_variables`). Name by name, in the order the root first declares it (registry order,
 then declaration order), the first of these holds:
 
@@ -204,7 +206,7 @@ then declaration order), the first of these holds:
 | `variable_out_of_limits` | the name is the root's 97th or later (96 names: the entry rows an application's goal record keeps, as `goals.json` holds at most 96 entries) | `/variables/<i>/name` of each declaration |
 | `variable_conflict` | the declarations of the name are not byte-identical | `/variables/<i>` of each declaration |
 | `variable_conflict` | an entry of an accepted `goals.json` uses the name for anything but its placement | `/variables/<i>/name` of each declaration |
-| `variable_cap_range` | a package that declares it reads a designated effect's cap from `session.dispatch.parameter.<name>` (`max_repeats: {fact_key}`, which takes a whole number from 0 to 1000), and the variable is of another type than `integer` (fix round 1: a cap is read from an `integer` variable only), or an `integer` whose `min` is below 0 (fix round 1) or whose `max` is above 1000, the first of these | `/variables/<i>/type`, `/variables/<i>/min` or `/variables/<i>/max` of each such package's declaration |
+| `variable_cap_range` | a package that declares it reads a designated effect's cap from `session.dispatch.parameter.<name>` (`max_repeats: {fact_key}`, which takes a whole number from 0 to 1000), or (Workflow #477 LR-1, since 0.12.79) a press step's count from it (`presses: {fact_key}`, read as such a cap is), and the variable is of another type than `integer` (fix round 1: a cap is read from an `integer` variable only), or an `integer` whose `min` is below 0 (fix round 1) or whose `max` is above 1000, the first of these | `/variables/<i>/type`, `/variables/<i>/min` or `/variables/<i>/max` of each such package's declaration |
 
 Each problem is one `standard_pack_root_invalid` warning with `game`, `path` (the package's
 `control.json`), `standard_pack_problem` and `json_pointer`, after the composition's warnings and
@@ -408,11 +410,15 @@ parameters use, with its kind's type (`PackageVariable::fact_value`): a `choice`
 `{key, rank}` per key in its order, `rank` from 1. It is observed at the dispatch's admission, in
 instance scope, with confidence 1000 and no expiry, after the parameters and before the schedule
 values, in every instance fact snapshot the host takes for the run (the select steps' and the
-designated effects' cap read), and the select step's `input_sha256` covers it. A policy reads a
-`choice` as an `enum_string` fact, a `switch` as `boolean`, an `integer` as `integer` (an
-`integer_compare` threshold, or `max_repeats: {fact_key}`, whose cap of 0 to 1000 the root check
-holds the variable to), and an `ordered` variable through `keyed_fact` (key column `key`, column
-`rank`). Within one package a variable and a parameter never share a name (`variable_name_taken`),
+designated effects' cap read, and, Workflow #477 LR-1 since 0.12.79, a linear plan's press counts'
+read, one read before the run's first capture), and the select step's `input_sha256` covers it. A
+policy reads a `choice` as an `enum_string` fact, a `switch` as `boolean`, an `integer` as `integer`
+(an `integer_compare` threshold, or `max_repeats: {fact_key}`, whose cap of 0 to 1000 the root check
+holds the variable to, or, Workflow #477 LR-1, a press step's `presses: {fact_key, minus?}`, read as
+such a cap is and held by the root check alike, [linear-steps.md](linear-steps.md), "Pressing on one
+page"), and an `ordered` variable through `keyed_fact` (key column `key`, column `rank`). So what
+reads a dispatch parameter is a select step's policy, a page graph's designated effect cap and a
+linear press step's count. Within one package a variable and a parameter never share a name (`variable_name_taken`),
 so one overlay holds each key once; a name shared across packages is overlaid only for the run of
 a package that declares it. The kernel reads the dispatched value (`value_json`) under the
 prepared package's own declaration, so a package changed since its dispatch reads the default for

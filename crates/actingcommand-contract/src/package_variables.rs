@@ -912,7 +912,9 @@ impl Check {
 
 /// One package of a game root as the root check reads it: its id, the variables its control
 /// declaration declares (admitted) and the fact keys its designated effects read their caps from
-/// (`scheduling_outcome.designated_effects[].max_repeats.fact_key`), in declaration order.
+/// (`scheduling_outcome.designated_effects[].max_repeats.fact_key`), in declaration order, then
+/// (Workflow #477 LR-1) the keys its press steps read their counts from, which a count reads as a
+/// cap is read (`operations[].presses.fact_key`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootPackageVariables {
     pub package_id: String,
