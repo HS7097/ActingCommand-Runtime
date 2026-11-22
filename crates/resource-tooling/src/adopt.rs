@@ -2045,12 +2045,18 @@ fn leftovers(repo: &Path) -> LabResult<Vec<String>> {
 /// leaves theirs. On any other root adopt writes no catalog and its `.part` is not looked at.
 fn with_catalog_part(repo: &Path, mut leftovers: Vec<String>) -> Vec<String> {
     let part = format!("{STANDARD_PACK_CATALOG_FILE}.{PART}");
-    let switched = fs::read(repo.join(STANDARD_PACK_SCHEDULE_FILE))
-        .is_ok_and(|bytes| standard_pack_schedule_takes_catalog(&bytes));
-    if switched && fs::symlink_metadata(repo.join(&part)).is_ok() {
+    if switched_on_disk(repo) && fs::symlink_metadata(repo.join(&part)).is_ok() {
         leftovers.insert(0, part);
     }
     leftovers
+}
+
+/// Workflow #477 CV-2b: whether the checkout `repo`'s `schedule.json`, as it stands, names
+/// `catalog_business`: a switched root, whose adoption writes `pack-catalog.json` as one of its
+/// root files ([`with_catalog_part`], [`interrupted`]).
+fn switched_on_disk(repo: &Path) -> bool {
+    fs::read(repo.join(STANDARD_PACK_SCHEDULE_FILE))
+        .is_ok_and(|bytes| standard_pack_schedule_takes_catalog(&bytes))
 }
 
 /// The message of a refusal for what an interrupted adoption left: each leftover by name, what it
@@ -2075,10 +2081,11 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
                 .to_owned(),
         );
     }
-    // Workflow #477 CV-2b: on a switched root the catalog is a root file the call writes, and its
-    // `.part` is among the leftovers only there ([`with_catalog_part`]).
-    let catalog_part = leftovers.contains(&format!("{STANDARD_PACK_CATALOG_FILE}.{PART}"));
-    let root_files: &[&str] = if catalog_part {
+    // Workflow #477 CV-2b (fix round 1): on a switched root the catalog is a root file the call
+    // writes, renamed right before `schedule.json`, whether its `.part` is left or not: the call
+    // may have renamed it already ([`with_catalog_part`] takes its `.part` only there).
+    let switched = switched_on_disk(repo);
+    let root_files: &[&str] = if switched {
         &[
             STANDARD_PACK_CATALOG_FILE,
             STANDARD_PACK_SCHEDULE_FILE,
@@ -2095,7 +2102,7 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
     if parts.is_empty() {
         return said.join("; ");
     }
-    let renames = if catalog_part {
+    let renames = if switched {
         "renames pack-catalog.json, schedule.json and maintenance.json one after the other \
          (pack-catalog.json right before schedule.json, maintenance.json first for the class \
          maintenance and last for the others)"
@@ -2133,7 +2140,7 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
          file and every root file is as it was before that call; renaming does not finish that \
          adoption"
             .to_owned()
-    } else if catalog_part {
+    } else if switched {
         // Workflow #477 CV-2b: the root files with no `.part` left, of the three.
         let others = root_files
             .iter()
@@ -2150,9 +2157,10 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
                 "{others:?} were renamed by that call, or were not to change in it, or were to \
                  change and the call stopped before it wrote their .part: when each already is as \
                  that call decided it (the package's rule, held entry or maintenance.json entry \
-                 there, or gone where the call ended one), renaming each .part left over its file, \
-                 pack-catalog.json before schedule.json, finishes that adoption and nothing more \
-                 is run; when one is not, renaming does not finish it"
+                 there, or gone where the call ended one, and the business part of its rule in \
+                 pack-catalog.json), renaming each .part left over its file, pack-catalog.json \
+                 before schedule.json, finishes that adoption and nothing more is run; when one \
+                 is not, renaming does not finish it"
             )
         }
     } else if let [one] = trusted.as_slice() {
@@ -2174,14 +2182,24 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
             .to_owned()
     };
     said.push(finish);
+    // CV-2b (fix round 1): on a switched root the undo restores the catalog too, which a call that
+    // left `schedule.json.part` alone has replaced already.
+    let restored = if switched {
+        "a root file that call renamed, pack-catalog.json among them (on this switched root that \
+         call renamed it right before schedule.json, so when schedule.json.part is left and \
+         pack-catalog.json.part is not, pack-catalog.json is that call's already: restore it from \
+         the repository's history too, or the rule as it was composes with the new business part \
+         of pack-catalog.json)"
+    } else {
+        "a root file that call renamed"
+    };
     said.push(format!(
         "to run that adoption again instead: move the root .part files out of the checkout; {}; \
          then run adopt with --replace and the decision that call was given (--decide, or \
          --held-reason, with --held-reference when that call had one), if any, which writes the \
          package's one role from the root files as they are; to undo it: move the root .part \
          files out, put packs/<package_id> back as it was, and restore with the version control \
-         a root file that call renamed (to its last commit: a change not committed before that \
-         call is not in it)",
+         {restored} (to its last commit: a change not committed before that call is not in it)",
         new_directory_step("packs/<package_id>", "that call")
     ));
     said.join("; ")

@@ -620,7 +620,10 @@ impl Check<'_> {
                 self.error(StandardPackProblem::Malformed, at_id);
                 continue;
             };
-            if self.registry.get(package_id).is_none() {
+            if self
+                .registry
+                .is_some_and(|registry| registry.get(package_id).is_none())
+            {
                 self.error(StandardPackProblem::PackageNotListed, at_id.clone());
             }
             let at_rule = at(&pointer, "rule_id");
@@ -710,7 +713,7 @@ pub(super) fn read_values_file(
     facts: &CatalogScheduleFacts,
 ) -> Result<Vec<ValuesFileEntry>, Vec<CatalogDisplayFileIssue>> {
     let mut check = Check {
-        registry,
+        registry: Some(registry),
         declared_pools: None,
         facts: Some(facts),
         version: CatalogVersion::V2,
@@ -1374,10 +1377,11 @@ fn same_order(rule: &ScheduleRule, part: &CatalogPart, side: CatalogSide) -> boo
 /// Workflow #477 CV-2b (register §1.515; `contracts/standard-pack-authoring.md`, "On a switched
 /// root"; the coordinator's rulings 1, 5 and 6): the version 2 `pack-catalog.json` of a switched
 /// game root as `standard-pack adopt` reads it before it lays out the root it checks. The file is
-/// read by its one reader (`read_catalog`) without the root's registry, which the adoption has
-/// not made yet, and without the facts of `schedule.json`: every `package_not_listed` is set aside,
-/// as the writer's merge sets it aside, and the check of the root as it would be written reads the
-/// file again with the registry and every reference to `schedule.json`
+/// read by its one reader (`read_catalog`) without judging it against the root's registry, which
+/// the adoption has not made yet, or the facts of `schedule.json` (fix round 1: the reader is
+/// given no registry, so no `package_not_listed` arises and none counts toward the reader's bound
+/// of errors); any error it reports refuses the adoption, and the check of the root as it would be
+/// written reads the file again with the registry and every reference to `schedule.json`
 /// ([`take_catalog_business`]), so nothing is written that its reader refuses.
 #[derive(Debug, Clone)]
 pub struct AdoptionCatalog {
@@ -1402,16 +1406,12 @@ pub struct CatalogAdoption {
 
 impl AdoptionCatalog {
     /// `bytes`, the `pack-catalog.json` of the game directory `game`, read as above: the reader's
-    /// first error but `package_not_listed` refuses it, as [`take_catalog_business`] refuses a file
-    /// its reader refuses; then a file of version 1, `catalog_version_1` at its `schema_version`.
+    /// first error, of whatever kind, refuses it, as [`take_catalog_business`] refuses a file its
+    /// reader refuses (a broken element of an entry, which the reader leaves out, is never lost by
+    /// a rewrite); then a file of version 1, `catalog_version_1` at its `schema_version`.
     pub fn read(bytes: &[u8], game: &str) -> Result<Self, StandardPackRootIssue> {
-        let registry = StandardPackRegistry::default();
-        let read = read_catalog(bytes, game, &registry, None, None);
-        if let Some(first) = read
-            .errors
-            .into_iter()
-            .find(|issue| !matches!(issue.problem, StandardPackProblem::PackageNotListed))
-        {
+        let read = read_catalog(bytes, game, None, None, None);
+        if let Some(first) = read.errors.into_iter().next() {
             return Err(first);
         }
         if read.catalog.version() != CatalogVersion::V2 {

@@ -32,7 +32,7 @@ use crate::{
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{LabResult, canonical_json_bytes};
 use actingcommand_policy::{BENEFIT_FIXED_VALUE_SUBSYSTEM, CATALOG_BUSINESS_SUBSYSTEM};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -724,22 +724,25 @@ fn cv2b_r2_a_readoption_of_one_of_two_rules_equals_adopting_then_cutting_over() 
 
     assert_same_roots(&plain, &cut_first);
     assert_switched(&cut_first);
-    let part = |rule_id: &str, milli: u64| {
-        json!({
-            "rule_id": rule_id,
-            "consumes": [consumed(3)],
-            "produces": [],
-            "value": {"milli": milli},
-            "limited": true
-        })
-    };
     assert_eq!(
         entry_in_catalog(&cut_first, ADOPTED).1,
         json!({
             "package_id": ADOPTED,
-            "rules": [part(ADOPTED, 7_000), part(SECOND_RULE, 9_000)]
+            "rules": [per_rule_part(ADOPTED, 7_000), per_rule_part(SECOND_RULE, 9_000)]
         })
     );
+}
+
+/// The per-rule part of the rule `rule_id` as the catalog writes it: consuming 3 of [`POOL`] a
+/// run, the value `milli`, limited.
+fn per_rule_part(rule_id: &str, milli: u64) -> Value {
+    json!({
+        "rule_id": rule_id,
+        "consumes": [consumed(3)],
+        "produces": [],
+        "value": {"milli": milli},
+        "limited": true
+    })
 }
 
 /// The outcome a refused or failed call's error carries, after asserting that it is
@@ -818,17 +821,28 @@ fn cv2b_r3_an_adoption_that_would_not_compose_writes_neither_file() {
     assert_eq!(fixture.bytes(SCHEDULE_FILE), schedule_before);
     assert!(fixture.repo().join("schedule.json.part").is_file());
     assert!(!fixture.repo().join("pack-catalog.json.part").exists());
-    let outcome = refusal(
-        adoption(
-            &fixture,
-            "after",
-            Some(&business(9_000)),
-            true,
-            THIRD,
-            &Committed,
-        ),
-        AdoptProblem::RepositoryInvalid,
+    let error = adoption(
+        &fixture,
+        "after",
+        Some(&business(9_000)),
+        true,
+        THIRD,
+        &Committed,
+    )
+    .expect_err("the leftover refuses the next call");
+    // Fix round 1: the refusal names the catalog that call replaced already, and its undo
+    // restores the catalog too.
+    assert!(
+        error
+            .message
+            .contains("renames pack-catalog.json, schedule.json and maintenance.json")
+            && error
+                .message
+                .contains("restore it from the repository's history too"),
+        "{}",
+        error.message
     );
+    let outcome = refusal(Err(error), AdoptProblem::RepositoryInvalid);
     assert_eq!(
         outcome["values"]["entry"], "schedule.json.part",
         "{outcome}"
@@ -962,6 +976,158 @@ fn cv2b_a_switched_root_without_a_catalog_of_version_2_is_refused_with_its_word(
     );
     assert_eq!(
         outcome["values"]["json_pointer"], "/schema_version",
+        "{outcome}"
+    );
+    assert_eq!(tree(&fixture.repo()), before, "nothing written");
+}
+
+/// The checkout's catalog with the entry of `package_id` replaced by what `edit` makes of it,
+/// written in the canonical form, as the writer writes the file.
+fn edit_entry(fixture: &Fixture, package_id: &str, edit: impl FnOnce(&Value) -> Value) {
+    let mut written = fixture.json(CATALOG_FILE);
+    let (position, entry) = entry_in_catalog(fixture, package_id);
+    written["packs"][position] = edit(&entry);
+    write(&fixture.repo().join(CATALOG_FILE), &written);
+}
+
+/// Fix round 1, ruling 6: an entry that carries its display (`title`, `summary`, written before its
+/// business part) keeps it, member for member and in its place, when an adoption writes its
+/// business part (the value 9 000 to 7 000 milli).
+#[test]
+fn cv2b_fr1_an_entrys_display_is_written_as_it_stands() {
+    let fixture = prepared_root(adopted_first);
+    cut_over(&fixture);
+    edit_entry(&fixture, ADOPTED, |entry| {
+        let mut displayed = Map::new();
+        displayed.insert("package_id".to_owned(), json!(ADOPTED));
+        displayed.insert("title".to_owned(), json!({"en-US": "Daily"}));
+        displayed.insert(
+            "summary".to_owned(),
+            json!({"en-US": "Collects the daily points."}),
+        );
+        for (name, value) in entry.as_object().expect("an entry") {
+            if name != "package_id" {
+                displayed.insert(name.clone(), value.clone());
+            }
+        }
+        Value::Object(displayed)
+    });
+
+    adopted_by(&fixture, "again", Some(&value_only(7_000)), true, SECOND);
+
+    let (_, entry) = entry_in_catalog(&fixture, ADOPTED);
+    assert_eq!(
+        entry
+            .as_object()
+            .expect("an entry")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "package_id",
+            "title",
+            "summary",
+            "consumes",
+            "produces",
+            "value",
+            "limited"
+        ]
+    );
+    assert_eq!(entry["title"], json!({"en-US": "Daily"}));
+    assert_eq!(
+        entry["summary"],
+        json!({"en-US": "Collects the daily points."})
+    );
+    assert_eq!(entry["value"], json!({"milli": 7000}));
+}
+
+/// Fix round 1, ruling 1: a package run by one rule whose entry holds a per-rule part for it (as
+/// `--values` with a `rule_id` makes one, its own part beside it): the per-rule part, which stands
+/// for the rule, is the one written, and the own part stays as it stood.
+#[test]
+fn cv2b_fr1_a_package_of_one_rule_whose_entry_holds_its_per_rule_part() {
+    let fixture = prepared_root(adopted_first);
+    cut_over(&fixture);
+    edit_entry(&fixture, ADOPTED, |entry| {
+        let mut held = entry.clone();
+        held["rules"] = json!([per_rule_part(ADOPTED, 8_000)]);
+        held
+    });
+
+    adopted_by(&fixture, "again", Some(&value_only(7_000)), true, SECOND);
+
+    let (_, entry) = entry_in_catalog(&fixture, ADOPTED);
+    assert_eq!(
+        entry["value"],
+        json!({"milli": 9000}),
+        "the own part as it stood: {entry}"
+    );
+    assert_eq!(entry["rules"], json!([per_rule_part(ADOPTED, 7_000)]));
+}
+
+/// Fix round 1, ruling 1: an entry holding a per-rule part for another rule of the package (the
+/// second rule's, beside the own part the first rule stands on): the adopted first rule gets a
+/// per-rule part of its own, after the one there, which is kept, and the entry keeps no own part,
+/// which no rule stands on any more.
+#[test]
+fn cv2b_fr1_an_entry_with_a_per_rule_part_of_another_rule_keeps_it() {
+    let fixture = prepared_root(two_rules);
+    cut_over(&fixture);
+    edit_entry(&fixture, ADOPTED, |entry| {
+        let mut held = entry.clone();
+        held["rules"] = json!([per_rule_part(SECOND_RULE, 8_000)]);
+        held
+    });
+
+    adopted_by(&fixture, "again", Some(&value_only(7_000)), true, SECOND);
+
+    assert_eq!(
+        entry_in_catalog(&fixture, ADOPTED).1,
+        json!({
+            "package_id": ADOPTED,
+            "rules": [per_rule_part(SECOND_RULE, 8_000), per_rule_part(ADOPTED, 7_000)]
+        })
+    );
+}
+
+/// Fix round 1 (the reading without a registry): a catalog of more than 64 entries, the last of
+/// them, the adopted package's, holding an effect with a member an effect does not know. The
+/// adoption reads the file without judging it against a registry, so no `package_not_listed`
+/// fills the reader's bound of 64 errors, and the broken effect, which the reader leaves out,
+/// refuses the adoption before anything is written: `repository_invalid` at `pack-catalog.json`,
+/// `malformed` at the effect.
+#[test]
+fn cv2b_fr1_a_broken_element_past_64_entries_refuses_the_adoption() {
+    let fixture = prepared_root(as_is);
+    cut_over(&fixture);
+    let mut written = fixture.json(CATALOG_FILE);
+    let packs = written["packs"].as_array_mut().expect("the entries");
+    for filler in 0..64 {
+        packs.push(json!({"package_id": format!("neutral.filler.{filler}")}));
+    }
+    let mut broken = consumed(3);
+    broken["colour"] = json!("blue");
+    packs.push(json!({"package_id": ADOPTED, "consumes": [broken], "produces": []}));
+    let broken_at = format!("/packs/{}/consumes/0", packs.len() - 1);
+    write(&fixture.repo().join(CATALOG_FILE), &written);
+    let before = tree(&fixture.repo());
+
+    let outcome = refusal(
+        adoption(
+            &fixture,
+            "broken",
+            Some(&business(9_000)),
+            false,
+            FIRST,
+            &Committed,
+        ),
+        AdoptProblem::RepositoryInvalid,
+    );
+
+    assert_eq!(outcome["values"]["entry"], CATALOG_FILE, "{outcome}");
+    assert_eq!(outcome["values"]["json_pointer"], broken_at, "{outcome}");
+    assert_eq!(
+        outcome["causes"][0]["values"]["standard_pack_problem"], "malformed",
         "{outcome}"
     );
     assert_eq!(tree(&fixture.repo()), before, "nothing written");

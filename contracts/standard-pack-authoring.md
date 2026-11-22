@@ -542,12 +542,16 @@ six business members (`consumes`, `produces`, `fixed_value_milli`, `fixed_value_
 ([pack-catalog.md](pack-catalog.md), "Version 2"). On such a root adoption writes them there.
 
 - **Read.** The call reads the checkout's `pack-catalog.json` with the other root files (stage
-  `repository`) by the file's one reader, its registry, which the call has not laid out yet, set
-  aside (the check of the tree reads the file again with it). A root without the file is refused
-  `repository_invalid` at it, caused by `standard_pack_root_invalid` `catalog_missing`; one of
-  version 1 the same with `catalog_version_1` at `/schema_version`; one its reader refuses, with the
-  reader's first error. These are the words the composer and the writer use for a switched root
-  ([pack-catalog.md](pack-catalog.md), "Who writes it"): the file is restored, not rebuilt.
+  `repository`) by the file's one reader, judging no `package_id` against a registry, which the
+  call has not laid out yet (the check of the tree reads the file again with it; fix round 1: so no
+  `package_not_listed` arises here and none counts toward the reader's bound of 64 errors). A root
+  without the file is refused `repository_invalid` at it, caused by `standard_pack_root_invalid`
+  `catalog_missing`; one of version 1 the same with `catalog_version_1` at `/schema_version`; one
+  of which its reader reports any error, with the reader's first error at its pointer (fix round 1:
+  so a broken element of an entry, which the reader leaves out, is never lost by the rewrite). These
+  are the words the composer uses for a switched root, and the writer answers the same roots
+  `validation_failed` ([pack-catalog.md](pack-catalog.md), "Who writes it"): the file is restored,
+  not rebuilt.
 - **Where each member goes** (ruling 1). The package's rule is read with the business part that
   stands for it in the catalog (its per-rule part, else its entry's own part, else none), as the
   composer gives it the part, so the value the model wrote (`model_kept`), the words `requires`
@@ -582,11 +586,18 @@ six business members (`consumes`, `produces`, `fixed_value_milli`, `fixed_value_
   the package unclassified), never a new rule without its business part, which would compose as a
   rule with none. A re-adoption that gives a rule its first fixed value or a consumption read from
   a fact leaves a part the old `requires` does not cover, which the composer refuses. A
-  re-adoption that changes both a business member and another member of a rule leaves, until the
-  `.part` is renamed or the call is run again, the rule's new business part beside its other
-  members as they were; the `.part` the next call refuses says so. A `pack-catalog.json.part` left
-  on a switched root is refused as the other root files' `.part` are, the message naming the files
-  left and the order they are renamed in.
+  `pack-catalog.json.part` left on a switched root is refused as the other root files' `.part`
+  are. On a switched root the refusal of what an interrupted call left (fix round 1: whatever
+  `.part` is left, `schedule.json.part` alone included) names the three files and the order they
+  are renamed in, says that a call which left `schedule.json.part` and no `pack-catalog.json.part`
+  had replaced `pack-catalog.json` already, and its undo restores `pack-catalog.json` from the
+  repository's history too, beside the root file that call renamed.
+- **A known limit** (fix round 1). A re-adoption interrupted between its two renames, after it
+  changed both a business member and another member of a rule, leaves a root that composes: the
+  rule's other members as they were beside its new business part. Nothing refuses it but the next
+  adoption (`repository_invalid` at the `.part` left): `standard-pack check`, the build,
+  `standard-pack compose` and `standard-pack catalog` do not look at a `.part` file. Finish or undo
+  it as the refusal says before anything else is built or placed from the checkout.
 - **The answer.** `rule` is the rule as `schedule.json` holds it, without its business part;
   `catalog_entry` the package's entry of `pack-catalog.json` after the call (absent when it has
   none, and on any other root); `replaced_entries` names the entry (`pack-catalog.json`, its pointer

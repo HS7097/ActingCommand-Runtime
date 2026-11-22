@@ -586,8 +586,11 @@ Workflow #477 CV-2 (0.12.80; register §1.508; the coordinator's ruling 7; the t
   per-rule part, else into the rule's per-rule part), `--values` (values and marks) and an edit of
   the file. Adopting into a root not switched, `--refresh` of the package and `--cut` give the
   same file, byte for byte, as `--cut` and then adopting. A switched root without the file or with
-  one of version 1 is refused by `adopt` as by this writer: `repository_invalid` caused by
-  `standard_pack_root_invalid` `catalog_missing` or `catalog_version_1`.
+  one of version 1 is refused by both, each with its own answer, nothing written: this writer
+  answers `validation_failed`, the root named switched and its business part to be restored, not
+  rebuilt (above); `adopt` answers `adopt_refused` `repository_invalid` at `pack-catalog.json`,
+  caused by `standard_pack_root_invalid` `catalog_missing` (the whole document) or
+  `catalog_version_1` (at `/schema_version`), with the same advice.
 
 ## `ui.json` is retired
 
