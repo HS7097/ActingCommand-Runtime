@@ -46,6 +46,16 @@
 //! ([`STANDARD_PACK_CATALOG_DISPLAYS_SCHEMA_VERSION`]) may carry groups, which the line adds to the
 //! catalog's `groups`, never removing or renaming one; and an issue's pointer the key table would
 //! not take (a very long member or locale name) is cut to its entry's ([`issue_pointer`]).
+//!
+//! Workflow #477 CV-1 (register §1.507; 0.12.79): version 2
+//! ([`STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2`]) carries the business part in full: an entry's
+//! `consumes` and `produces` are V2 resource effects as a `schedule.json` rule writes them (the
+//! contract crate's one definition, [`crate::resource_effect`]), beside a fixed value and the marks
+//! `limited` and `realization`, and per-rule parts keyed by a rule's id stand in place of the
+//! entry's own part for their rule. Its reader, its writer's rule, its differences and its values
+//! file are the child module `v2`'s; version 1 is read, written and compared as before, byte for
+//! byte. Every reader reads both versions; a zip that carries a version 2 file declares `package`
+//! 24 ([`catalog_package_revision`]). No Runtime component reads the file.
 
 use crate::codes::SharedCode;
 use crate::outcome::{KeyKind, Outcome, VocabularyToken, key_text_fits};
@@ -63,10 +73,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+#[path = "standard_pack_catalog_v2.rs"]
+mod v2;
+
+pub use v2::{
+    CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart, CatalogScheduleFacts,
+    CatalogValue, CatalogValuesFile,
+};
+
 /// The game root's package declaration (Workflow #477 PC-1).
 pub const STANDARD_PACK_CATALOG_FILE: &str = "pack-catalog.json";
-/// The one version of `pack-catalog.json` this build reads and writes.
+/// Version 1 of `pack-catalog.json`, which every reader reads and the writer writes unless a line
+/// asks for version 2 or the file is of version 2 already (Workflow #477 CV-1).
 pub const STANDARD_PACK_CATALOG_SCHEMA_VERSION: &str = "actingcommand.pack-catalog.v1";
+/// Workflow #477 CV-1 (register §1.507): version 2 of `pack-catalog.json`, whose entries carry the
+/// business part in full ([`CatalogParts`]). A reader of 0.12.78 or earlier reads it as `malformed`
+/// at `/schema_version`, a version it does not know.
+pub const STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2: &str = "actingcommand.pack-catalog.v2";
+/// Workflow #477 CV-1: the one version of the values file `standard-pack catalog --values` reads
+/// (an input of one line, never stored), the entry point of the model's export.
+pub const STANDARD_PACK_CATALOG_VALUES_SCHEMA_VERSION: &str =
+    "actingcommand.pack-catalog-values.v1";
 /// Workflow #477 PC-2 fix round 1: the one version of the display file `standard-pack catalog
 /// --displays` reads (an input of one line, never stored); a file without it or with another is
 /// refused before anything else of it is read.
@@ -113,6 +140,18 @@ pub const MAX_PACK_CATALOG_AMOUNT: u64 = (1 << 53) - 1;
 /// knows no such root file, refuses the bundle at its `package` edge and not as a member it does
 /// not know.
 pub const CATALOG_PACKAGE_REVISION: u64 = 16;
+/// Workflow #477 CV-1 (`contracts/component-interfaces.md`, the `package` row 24): the `package`
+/// revision a bundle that carries a version 2 `pack-catalog.json` declares, so that an installer of
+/// an earlier build, whose own reader takes the file as `malformed`, refuses the bundle at its
+/// `package` edge.
+pub const CATALOG_V2_PACKAGE_REVISION: u64 = 24;
+/// Workflow #477 CV-1: the most per-rule business parts of one entry (`rules`), the most tasks a
+/// V2 scheduling catalog holds and so the most rules one root can run.
+pub const MAX_PACK_CATALOG_RULE_PARTS: usize = 4096;
+/// Workflow #477 CV-1: the most items of the values file's `packs`, one per part it names: every
+/// entry's own part and as many per-rule parts.
+pub const MAX_PACK_CATALOG_VALUE_ITEMS: usize =
+    MAX_PACK_CATALOG_PACKS + MAX_PACK_CATALOG_RULE_PARTS;
 
 /// The members of the document.
 const DOCUMENT_MEMBERS: [&str; 5] = ["schema_version", "game", "groups", "display", "packs"];
@@ -167,6 +206,57 @@ crate::outcome_vocabulary! {
         CatalogLacks => "catalog_lacks",
         /// The package's entry lists the pool on that side; no rule of the package names it there.
         ScheduleLacks => "schedule_lacks",
+        /// Workflow #477 CV-1: a rule of the package and the version 2 part that stands for it
+        /// both name the pool on that side, with another quantity or other evidence.
+        QuantityDiffers => "quantity_differs",
+        /// CV-1: the fixed value of a rule of the package, or its origin, is not that of the
+        /// version 2 part that stands for it (one of the two writing none included).
+        ValueDiffers => "value_differs",
+        /// CV-1: a rule of the package and the version 2 part that stands for it differ in the
+        /// limited mark.
+        LimitedDiffers => "limited_differs",
+        /// CV-1: a rule of the package and the version 2 part that stands for it differ in the
+        /// realization mark.
+        RealizationDiffers => "realization_differs",
+    }
+}
+
+/// Workflow #477 CV-1: a version of `pack-catalog.json`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CatalogVersion {
+    /// [`STANDARD_PACK_CATALOG_SCHEMA_VERSION`]: an entry's business part is the relations and
+    /// their quantities ([`CatalogBusiness`]).
+    #[default]
+    V1,
+    /// [`STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2`]: an entry's business part is in full
+    /// ([`CatalogParts`]).
+    V2,
+}
+
+impl CatalogVersion {
+    /// The `schema_version` of a file of this version.
+    pub const fn schema_version(self) -> &'static str {
+        match self {
+            Self::V1 => STANDARD_PACK_CATALOG_SCHEMA_VERSION,
+            Self::V2 => STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2,
+        }
+    }
+}
+
+/// Workflow #477 CV-1 (`contracts/component-interfaces.md`, the `package` rows 16 and 24): the
+/// `package` revision a bundle zip that carries `pack-catalog.json` (`bytes`) needs: 24
+/// ([`CATALOG_V2_PACKAGE_REVISION`]) for a file of version 2, 16 ([`CATALOG_PACKAGE_REVISION`]) for
+/// any other (a file the bundle step refuses is never built into a zip).
+pub fn catalog_package_revision(bytes: &[u8]) -> u64 {
+    let document = serde_json::from_slice::<Value>(bytes).ok();
+    let version = document
+        .as_ref()
+        .and_then(|document| document.get("schema_version"))
+        .and_then(Value::as_str);
+    if version == Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2) {
+        CATALOG_V2_PACKAGE_REVISION
+    } else {
+        CATALOG_PACKAGE_REVISION
     }
 }
 
@@ -227,7 +317,23 @@ pub struct CatalogEntry {
     /// `risk` it writes, in the file's order) when they keep every rule; `None` when it writes
     /// none of them or one of them has a defect: the package then shows with its id.
     pub display: Option<Map<String, Value>>,
+    /// Version 1: its business part as read. Workflow #477 CV-1, version 2: the relations of its
+    /// parts ([`CatalogParts`], the index's input), each pool once per side, without a quantity.
     pub business: CatalogBusiness,
+    /// Workflow #477 CV-1: of a version 2 file, its business part in full as read; `None` for
+    /// version 1.
+    pub parts: Option<CatalogParts>,
+}
+
+impl CatalogEntry {
+    /// Workflow #477 CV-1: its business part as the file writes it: version 1's `{consumes,
+    /// produces}` ([`CatalogBusiness`]), version 2's members ([`CatalogParts::members`]).
+    pub fn business_document(&self) -> Value {
+        match &self.parts {
+            None => json!(self.business),
+            Some(parts) => Value::Object(parts.members()),
+        }
+    }
 }
 
 /// The index both ways of one game root's catalog, computed by the reader and never stored: per
@@ -243,6 +349,8 @@ pub struct StandardPackCatalogIndex {
 /// A `pack-catalog.json` whose business part keeps every rule, as read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandardPackCatalog {
+    /// Workflow #477 CV-1: the version the file declares.
+    version: CatalogVersion,
     /// The groups that keep every rule, as written, in the file's order.
     groups: Vec<Value>,
     /// `display`, as written, when it keeps every rule.
@@ -252,6 +360,11 @@ pub struct StandardPackCatalog {
 }
 
 impl StandardPackCatalog {
+    /// Workflow #477 CV-1: the version the file declares.
+    pub fn version(&self) -> CatalogVersion {
+        self.version
+    }
+
     /// Every package's entry, in the file's order.
     pub fn entries(&self) -> &[CatalogEntry] {
         &self.entries
@@ -378,7 +491,42 @@ pub fn parse_standard_pack_catalog(
     registry: &StandardPackRegistry,
     pools: Option<&BTreeSet<String>>,
 ) -> Result<StandardPackCatalog, Vec<StandardPackRootIssue>> {
-    let read = read_catalog(bytes, game, registry, pools);
+    let read = read_catalog(bytes, game, registry, pools, None);
+    if read.errors.is_empty() {
+        Ok(read.catalog)
+    } else {
+        Err(read.errors)
+    }
+}
+
+/// Workflow #477 CV-1 (register §1.507): [`parse_standard_pack_catalog`] of a game root whose
+/// `schedule.json` gives `facts` ([`CatalogScheduleFacts`]: `Some` of none for a root without the
+/// file; `None` when that file could not be read, which is its own refusal: then no reference to
+/// it is judged), the reader every tool of this build calls: version 1 is read exactly as there,
+/// against the pools `facts` declares, and version 2 against them and the rules and valuations it
+/// holds too. Version 2's errors beside version 1's, each at its pointer: an effect not of its form
+/// or outside its bounds ([`crate::resource_effect::ResourceEffectSpec::form_fault`]: `malformed`
+/// or `catalog_out_of_limits` at the member; a member an effect does not know, `malformed` at the
+/// effect), more than [`crate::resource_effect::MAX_EFFECTS_PER_TASK`] effects on one side or
+/// more than [`MAX_PACK_CATALOG_RULE_PARTS`] per-rule parts (`catalog_out_of_limits`), a value
+/// whose `milli` is outside 1 to 2^53 - 1 (`catalog_out_of_limits`) or whose `origin` is not
+/// `"model"`, a mark other than `true` (`malformed`), a value beside the realization mark or beside
+/// a production of a pool with a valuation (`catalog_value_conflict`), a per-rule part's `rule_id`
+/// off the rule-id grammar, twice in an entry (`catalog_duplicate`) or of no rule that runs the
+/// entry's package (`catalog_rule_unknown`).
+pub fn parse_standard_pack_catalog_with(
+    bytes: &[u8],
+    game: &str,
+    registry: &StandardPackRegistry,
+    facts: Option<&CatalogScheduleFacts>,
+) -> Result<StandardPackCatalog, Vec<StandardPackRootIssue>> {
+    let read = read_catalog(
+        bytes,
+        game,
+        registry,
+        facts.map(CatalogScheduleFacts::pools),
+        facts,
+    );
     if read.errors.is_empty() {
         Ok(read.catalog)
     } else {
@@ -399,10 +547,13 @@ fn read_catalog(
     game: &str,
     registry: &StandardPackRegistry,
     pools: Option<&BTreeSet<String>>,
+    facts: Option<&CatalogScheduleFacts>,
 ) -> CatalogRead {
     let mut check = Check {
         registry,
         declared_pools: pools,
+        facts,
+        version: CatalogVersion::V1,
         errors: Vec::new(),
         warnings: Vec::new(),
         defects: 0,
@@ -532,6 +683,11 @@ struct Check<'a> {
     registry: &'a StandardPackRegistry,
     /// The pools the root's `schedule.json` declares; `None`: not judged.
     declared_pools: Option<&'a BTreeSet<String>>,
+    /// Workflow #477 CV-1: what version 2 is held to of the root's `schedule.json`, its valuations
+    /// and its rules; `None`: not judged.
+    facts: Option<&'a CatalogScheduleFacts>,
+    /// CV-1: the version the document declares (version 1's rules for one it does not).
+    version: CatalogVersion,
     errors: Vec<StandardPackRootIssue>,
     warnings: Vec<StandardPackRootIssue>,
     /// Every display defect found, those beyond the issue bound counted too.
@@ -574,6 +730,7 @@ impl Check<'_> {
         CatalogRead {
             document,
             catalog: StandardPackCatalog {
+                version: self.version,
                 groups,
                 display,
                 entries,
@@ -612,10 +769,12 @@ impl Check<'_> {
         game: &str,
     ) -> (Vec<Value>, Option<Value>, Vec<CatalogEntry>) {
         self.unknown(document, "", &DOCUMENT_MEMBERS);
-        if document.get("schema_version").and_then(Value::as_str)
-            != Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION)
-        {
-            self.error(StandardPackProblem::Malformed, "/schema_version");
+        // Workflow #477 CV-1: either version; one this build does not know is read by version 1's
+        // rules, as before, beside its error.
+        match document.get("schema_version").and_then(Value::as_str) {
+            Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION) => {}
+            Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2) => self.version = CatalogVersion::V2,
+            _ => self.error(StandardPackProblem::Malformed, "/schema_version"),
         }
         match document.get("game") {
             Some(Value::String(declared)) if declared == game => {}
@@ -748,7 +907,11 @@ impl Check<'_> {
                 self.error(StandardPackProblem::Malformed, pointer);
                 continue;
             };
-            self.unknown(object, &pointer, &ENTRY_MEMBERS);
+            let known: &[&str] = match self.version {
+                CatalogVersion::V1 => &ENTRY_MEMBERS,
+                CatalogVersion::V2 => &v2::ENTRY_MEMBERS_V2,
+            };
+            self.unknown(object, &pointer, known);
             let at_id = at(&pointer, "package_id");
             let package_id = match object.get("package_id") {
                 Some(Value::String(package_id)) => {
@@ -767,14 +930,25 @@ impl Check<'_> {
                     None
                 }
             };
-            let consumes = self.pools(object.get("consumes"), &at(&pointer, "consumes"));
-            let produces = self.pools(object.get("produces"), &at(&pointer, "produces"));
+            let (business, parts) = match self.version {
+                CatalogVersion::V1 => {
+                    let consumes = self.pools(object.get("consumes"), &at(&pointer, "consumes"));
+                    let produces = self.pools(object.get("produces"), &at(&pointer, "produces"));
+                    (CatalogBusiness { consumes, produces }, None)
+                }
+                // Workflow #477 CV-1: the business part in full, its relations the index's.
+                CatalogVersion::V2 => {
+                    let parts = self.parts(object, &pointer, package_id.as_deref());
+                    (parts.relations(), Some(parts))
+                }
+            };
             let display = self.entry_display(object, &pointer, groups);
             if let Some(package_id) = package_id {
                 entries.push(CatalogEntry {
                     package_id,
                     display,
-                    business: CatalogBusiness { consumes, produces },
+                    business,
+                    parts,
                 });
             }
         }
@@ -1137,14 +1311,32 @@ fn token<S: Serializer, T: VocabularyToken>(value: &T, serializer: S) -> Result<
     serializer.serialize_str((*value).token())
 }
 
+/// Workflow #477 CV-1: a vocabulary token that may be absent as its spelling (a member skipped
+/// while absent).
+fn optional_token<S: Serializer, T: VocabularyToken>(
+    value: &Option<T>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => token(value, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// One difference between a package's entry and the rules of `schedule.json` that run it
 /// ([`standard_pack_catalog_differences`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CatalogScheduleDifference {
     pub package_id: String,
-    pub pool_id: String,
-    #[serde(serialize_with = "token")]
-    pub side: CatalogSide,
+    /// The pool and its side; Workflow #477 CV-1: absent for a difference of a version 2 part's
+    /// fixed value or mark (`value_differs`, `limited_differs`, `realization_differs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_id: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "optional_token"
+    )]
+    pub side: Option<CatalogSide>,
     #[serde(serialize_with = "token")]
     pub difference: CatalogDifference,
     /// Of `catalog_lacks`, the rule of `schedule.json` that names the pool; of `schedule_lacks`,
@@ -1158,12 +1350,16 @@ impl CatalogScheduleDifference {
     /// package, the pool, the side, which file lacks it and, when a rule names it, the rule
     /// (`task_id`).
     pub fn outcome(&self, game: &str) -> Outcome {
-        let outcome = Outcome::new(SharedCode::StandardPackCatalogScheduleDiffers)
+        let mut outcome = Outcome::new(SharedCode::StandardPackCatalogScheduleDiffers)
             .game(game)
-            .package_id(self.package_id.as_str())
-            .pool_id(self.pool_id.as_str())
-            .catalog_side(self.side)
-            .catalog_difference(self.difference);
+            .package_id(self.package_id.as_str());
+        if let Some(pool_id) = &self.pool_id {
+            outcome = outcome.pool_id(pool_id.as_str());
+        }
+        if let Some(side) = self.side {
+            outcome = outcome.catalog_side(side);
+        }
+        let outcome = outcome.catalog_difference(self.difference);
         match &self.rule_id {
             Some(rule_id) => outcome.task_id(rule_id.as_str()),
             None => outcome,
@@ -1243,6 +1439,12 @@ pub fn standard_pack_catalog_differences(
     let mut differences = Vec::new();
     for entry in &catalog.entries {
         let rules = package_rules(schedule, &entry.package_id);
+        // Workflow #477 CV-1: a version 2 entry is compared rule by rule with the part that stands
+        // for each.
+        if let Some(parts) = &entry.parts {
+            v2::part_differences(&entry.package_id, parts, &rules, &mut differences);
+            continue;
+        }
         for side in CatalogSide::ALL.iter().copied() {
             let listed = entry
                 .business
@@ -1257,8 +1459,8 @@ pub fn standard_pack_catalog_differences(
                     if !listed.contains(pool_id.as_str()) {
                         differences.push(CatalogScheduleDifference {
                             package_id: entry.package_id.clone(),
-                            pool_id,
-                            side,
+                            pool_id: Some(pool_id),
+                            side: Some(side),
                             difference: CatalogDifference::CatalogLacks,
                             rule_id: Some(rule.id.clone()),
                         });
@@ -1269,8 +1471,8 @@ pub fn standard_pack_catalog_differences(
                 if !named.contains(&pool.pool_id) {
                     differences.push(CatalogScheduleDifference {
                         package_id: entry.package_id.clone(),
-                        pool_id: pool.pool_id.clone(),
-                        side,
+                        pool_id: Some(pool.pool_id.clone()),
+                        side: Some(side),
                         difference: CatalogDifference::ScheduleLacks,
                         rule_id: None,
                     });
@@ -1376,6 +1578,9 @@ pub struct CatalogDropped {
     #[serde(serialize_with = "token")]
     pub side: CatalogSide,
     pub pool_id: String,
+    /// Workflow #477 CV-1: of a version 2 per-rule part, its rule; absent for the entry's own part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
 }
 
 /// Fix round 1 (the independent review): one thing [`merge_standard_pack_catalog`] left out of the
@@ -1390,6 +1595,9 @@ pub struct CatalogLeftOut {
     pub package_id: String,
     /// The pool left out; `None` for an entry.
     pub pool_id: Option<String>,
+    /// Workflow #477 CV-1: the rule of a version 2 per-rule part left out (`catalog_rule_unknown`:
+    /// no rule of the package has the id any more) or whose pool is left out; `None` otherwise.
+    pub rule_id: Option<String>,
     /// What was left out, in the existing file.
     pub pointer: String,
 }
@@ -1417,8 +1625,12 @@ impl CatalogLeftOut {
             .standard_pack_problem(self.problem)
             .json_pointer(self.pointer.clone())
             .package_id(self.package_id.as_str());
-        match &self.pool_id {
+        let outcome = match &self.pool_id {
             Some(pool_id) => outcome.pool_id(pool_id.as_str()),
+            None => outcome,
+        };
+        match &self.rule_id {
+            Some(rule_id) => outcome.task_id(rule_id.as_str()),
             None => outcome,
         }
     }
@@ -1434,6 +1646,12 @@ pub struct CatalogEdits<'a> {
     pub refresh: &'a [String],
     /// The display file whose entries replace the named entries' displays whole (`displays`).
     pub displays: Option<CatalogDisplayFile<'a>>,
+    /// Workflow #477 CV-1: the line asks for version 2 (`--schema-version 2`). A file of version
+    /// 2 stays of version 2 without it; one of version 1 is converted, every entry's business part
+    /// then being its rules' ([`merge_standard_pack_catalog`]).
+    pub version_2: bool,
+    /// CV-1: the values file whose items replace the named parts' value and marks (`values`).
+    pub values: Option<CatalogValuesFile<'a>>,
 }
 
 /// Workflow #477 PC-2: the display file a line of `standard-pack catalog` gives: where it is,
@@ -1497,6 +1715,16 @@ pub enum CatalogMergeRefusal {
         path: PathBuf,
         issues: Vec<CatalogDisplayFileIssue>,
     },
+    /// Workflow #477 CV-1: the values file ([`CatalogEdits::values`]) at `path`: its errors, at
+    /// their pointers in it, by the catalog's own words, or each item that names a part the
+    /// catalog does not write (`catalog_part_absent`).
+    Values {
+        path: PathBuf,
+        issues: Vec<CatalogDisplayFileIssue>,
+    },
+    /// CV-1: the line gives a values file and writes version 1 (it neither asks for version 2
+    /// nor finds a file of version 2): version 1 has no value.
+    ValuesNeedVersion2,
 }
 
 /// Workflow #477 PC-2: how a package `refresh` names stands after the merge.
@@ -1517,11 +1745,12 @@ pub enum CatalogRefreshState {
 pub struct CatalogRefreshed {
     pub package_id: String,
     pub state: CatalogRefreshState,
-    /// The business part the existing entry wrote; absent for a package that had no entry.
+    /// The business part the existing entry wrote ([`CatalogEntry::business_document`]: Workflow
+    /// #477 CV-1, of its version); absent for a package that had no entry.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub before: Option<CatalogBusiness>,
-    /// The business part its rules give, which the written entry holds.
-    pub after: CatalogBusiness,
+    pub before: Option<Value>,
+    /// The business part its rules give, which the written entry holds, as the file writes it.
+    pub after: Value,
 }
 
 /// Workflow #477 PC-2: one entry of the display file: its package and its display members as
@@ -1594,6 +1823,12 @@ pub struct StandardPackCatalogMerge {
     /// PC-2 fix round 1: the ids of the groups the display file added to `groups`, in that file's
     /// order; empty without one, or when each of its groups was there already.
     pub groups_added: Vec<String>,
+    /// Workflow #477 CV-1: the entries of a version 1 file the line converted to version 2, their
+    /// business part made their rules', in the file's order; empty when it converts none.
+    pub converted: Vec<String>,
+    /// CV-1: the parts whose value and marks the values file replaced, in that file's order;
+    /// empty without one.
+    pub values_written: Vec<CatalogPartAddress>,
 }
 
 /// Workflow #477 PC-1: the writer's one rule (`standard-pack catalog`; `contracts/pack-catalog.md`,
@@ -1653,6 +1888,19 @@ pub struct StandardPackCatalogMerge {
 ///   title is simply there, one there with another title refuses the merge, and no group is
 ///   removed or renamed. Without a new group `groups` are as they were, byte for byte (a `groups`
 ///   that is no list holds no group for the reader, and the new ones are then the list).
+///
+/// Workflow #477 CV-1 (register §1.507): the version written is 2 when `edits` asks for it
+/// ([`CatalogEdits::version_2`]) or the existing file is of version 2, else 1, which is written by
+/// the rules above, byte for byte. Of version 2, a refreshed and a new entry hold the parts their
+/// rules give (the child module's `rules_parts`: one own part when every rule of the package writes
+/// the same, a per-rule part for each rule and no own part when they differ); a kept entry drops a
+/// pool `schedule.json` no longer declares from each of its parts and leaves out a per-rule part
+/// whose rule no longer runs the package (`catalog_rule_unknown`, in `left_out`); a file of version
+/// 1 is converted, each entry's business part its rules' ([`StandardPackCatalogMerge::converted`]).
+/// **`values`** ([`CatalogEdits::values`]; with version 1 refused
+/// [`CatalogMergeRefusal::ValuesNeedVersion2`]): the values file, read after the display file and
+/// checked by the catalog's own checks ([`CatalogMergeRefusal::Values`]); each part it names takes
+/// its value and its marks whole, after the displays ([`StandardPackCatalogMerge::values_written`]).
 pub fn merge_standard_pack_catalog(
     game: &str,
     registry: &StandardPackRegistry,
@@ -1665,10 +1913,11 @@ pub fn merge_standard_pack_catalog(
     let pools = schedule
         .map(standard_pack_schedule_pools)
         .unwrap_or_default();
+    let facts = CatalogScheduleFacts::of(schedule);
     let existing = match existing {
         None => None,
         Some(bytes) => {
-            let read = read_catalog(bytes, game, registry, Some(&pools));
+            let read = read_catalog(bytes, game, registry, Some(&pools), Some(&facts));
             let refused = read
                 .errors
                 .iter()
@@ -1677,6 +1926,7 @@ pub fn merge_standard_pack_catalog(
                         issue.problem,
                         StandardPackProblem::PackageNotListed
                             | StandardPackProblem::CatalogPoolUndeclared
+                            | StandardPackProblem::CatalogRuleUnknown
                     )
                 })
                 .cloned()
@@ -1687,11 +1937,28 @@ pub fn merge_standard_pack_catalog(
             Some(read)
         }
     };
+    // Workflow #477 CV-1: the version written is 2 when the line asks for it or the file is of
+    // version 2 already, else 1; a file of version 1 written as version 2 is converted, each entry's
+    // business part then its rules'.
+    let found_version = existing
+        .as_ref()
+        .map_or(CatalogVersion::V1, |read| read.catalog.version());
+    let version = if edits.version_2 || found_version == CatalogVersion::V2 {
+        CatalogVersion::V2
+    } else {
+        CatalogVersion::V1
+    };
+    let converting =
+        version == CatalogVersion::V2 && found_version == CatalogVersion::V1 && existing.is_some();
+    if edits.values.is_some() && version == CatalogVersion::V1 {
+        return Err(CatalogMergeRefusal::ValuesNeedVersion2);
+    }
     let existing_document = existing.as_ref().and_then(|read| read.document.as_ref());
     let mut kept = Vec::new();
     let mut removed = Vec::new();
     let mut dropped = Vec::new();
     let mut left_out = Vec::new();
+    let mut converted = Vec::new();
     let mut refreshed_by_package = BTreeMap::new();
     let mut packs = Vec::new();
     let mut listed = BTreeSet::new();
@@ -1715,68 +1982,113 @@ pub fn merge_standard_pack_catalog(
                 problem: StandardPackProblem::PackageNotListed,
                 package_id: package_id.to_owned(),
                 pool_id: None,
+                rule_id: None,
                 pointer: at(&pointer, "package_id"),
             });
             continue;
         }
         let mut written = object.clone();
-        if refresh.contains(package_id) {
+        if refresh.contains(package_id) || converting {
             // PC-2: the business part computed again by the rule a new entry is made by; the
             // display and the place stay, and an entry that holds it already stays as written.
-            let before = existing
+            // CV-1: of version 2, the parts the rules give; converted, every entry is so.
+            let read_entry = existing
                 .as_ref()
-                .and_then(|read| read.catalog.entry(package_id))
-                .map(|read_entry| read_entry.business.clone());
-            let after = schedule_business(schedule, package_id);
-            let state = if before.as_ref() == Some(&after) {
-                CatalogRefreshState::Agrees
-            } else {
-                for side in CatalogSide::ALL.iter().copied() {
-                    written.insert(
-                        side.as_str().to_owned(),
-                        Value::Array(after.side(side).iter().map(pool_value).collect()),
-                    );
-                }
-                CatalogRefreshState::Replaced
-            };
-            refreshed_by_package.insert(
-                package_id.to_owned(),
-                CatalogRefreshed {
-                    package_id: package_id.to_owned(),
-                    state,
-                    before,
-                    after,
-                },
-            );
-        } else {
-            for side in CatalogSide::ALL.iter().copied() {
-                let at_side = at(&pointer, side.as_str());
-                if let Some(Value::Array(items)) = written.get_mut(side.as_str()) {
-                    let mut position = 0_usize;
-                    items.retain(|item| {
-                        let at_pool = format!("{at_side}/{position}/pool_id");
-                        position += 1;
-                        let pool_id = item
-                            .get("pool_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        let declared = pools.contains(pool_id);
-                        if !declared {
-                            dropped.push(CatalogDropped {
-                                package_id: package_id.to_owned(),
-                                side,
-                                pool_id: pool_id.to_owned(),
-                            });
-                            left_out.push(CatalogLeftOut {
-                                problem: StandardPackProblem::CatalogPoolUndeclared,
-                                package_id: package_id.to_owned(),
-                                pool_id: Some(pool_id.to_owned()),
-                                pointer: at_pool,
-                            });
+                .and_then(|read| read.catalog.entry(package_id));
+            let (state, after) = match version {
+                CatalogVersion::V1 => {
+                    let before = read_entry.map(|read_entry| read_entry.business.clone());
+                    let after = schedule_business(schedule, package_id);
+                    let state = if before.as_ref() == Some(&after) {
+                        CatalogRefreshState::Agrees
+                    } else {
+                        for side in CatalogSide::ALL.iter().copied() {
+                            written.insert(
+                                side.as_str().to_owned(),
+                                Value::Array(after.side(side).iter().map(pool_value).collect()),
+                            );
                         }
-                        declared
-                    });
+                        CatalogRefreshState::Replaced
+                    };
+                    (state, json!(after))
                 }
+                CatalogVersion::V2 => {
+                    let after =
+                        v2::rules_parts(schedule, package_id).map_err(CatalogMergeRefusal::Root)?;
+                    let state = if read_entry.and_then(|read_entry| read_entry.parts.as_ref())
+                        == Some(&after)
+                    {
+                        CatalogRefreshState::Agrees
+                    } else {
+                        written = v2::with_business(&written, &after);
+                        CatalogRefreshState::Replaced
+                    };
+                    (state, Value::Object(after.members()))
+                }
+            };
+            if converting {
+                converted.push(package_id.to_owned());
+            }
+            if refresh.contains(package_id) {
+                refreshed_by_package.insert(
+                    package_id.to_owned(),
+                    CatalogRefreshed {
+                        package_id: package_id.to_owned(),
+                        state,
+                        before: read_entry.map(CatalogEntry::business_document),
+                        after,
+                    },
+                );
+            }
+        } else {
+            retain_declared(
+                &mut written,
+                &pointer,
+                (package_id, None),
+                &pools,
+                &mut dropped,
+                &mut left_out,
+            );
+            // CV-1: a per-rule part whose rule no longer runs the package is left out, as the
+            // entry of a package the registry no longer holds; a kept part's pools as the entry's.
+            if let Some(Value::Array(rules)) = written.get_mut("rules") {
+                let at_rules = at(&pointer, "rules");
+                let mut parts = Vec::new();
+                for (position, rule) in rules.drain(..).enumerate() {
+                    let at_rule = format!("{at_rules}/{position}");
+                    let mut part = match rule {
+                        Value::Object(part) => part,
+                        other => {
+                            parts.push(other);
+                            continue;
+                        }
+                    };
+                    let rule_id = part
+                        .get("rule_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    if !facts.runs(&rule_id, package_id) {
+                        left_out.push(CatalogLeftOut {
+                            problem: StandardPackProblem::CatalogRuleUnknown,
+                            package_id: package_id.to_owned(),
+                            pool_id: None,
+                            rule_id: Some(rule_id),
+                            pointer: at(&at_rule, "rule_id"),
+                        });
+                        continue;
+                    }
+                    retain_declared(
+                        &mut part,
+                        &at_rule,
+                        (package_id, Some(rule_id.as_str())),
+                        &pools,
+                        &mut dropped,
+                        &mut left_out,
+                    );
+                    parts.push(Value::Object(part));
+                }
+                *rules = parts;
             }
         }
         listed.insert(package_id.to_owned());
@@ -1797,10 +2109,12 @@ pub fn merge_standard_pack_catalog(
     }
     // Fix round 1: a new entry's pools are its rules'; one that `schedule.json` does not declare is
     // refused there, where it is missing, before anything is made. PC-2: a refreshed entry's are
-    // its rules' too.
+    // its rules' too, and (CV-1) a converted one's.
     let fresh = registry
         .package_ids()
-        .filter(|package_id| !listed.contains(*package_id) || refresh.contains(*package_id))
+        .filter(|package_id| {
+            !listed.contains(*package_id) || refresh.contains(*package_id) || converting
+        })
         .collect::<BTreeSet<_>>();
     let undeclared = undeclared_rule_pools(schedule, &pools, &fresh);
     if !undeclared.is_empty() {
@@ -1822,6 +2136,19 @@ pub fn merge_standard_pack_catalog(
                     issues,
                 }
             })
+        })
+        .transpose()?;
+    // CV-1: the values file, checked by the catalog's own checks against the registry and the
+    // rules.
+    let values = edits
+        .values
+        .map(|file| {
+            v2::read_values_file(file.bytes, registry, &facts)
+                .map(|entries| (file.path, entries))
+                .map_err(|issues| CatalogMergeRefusal::Values {
+                    path: file.path.to_owned(),
+                    issues,
+                })
         })
         .transpose()?;
     let ui_packs = retired_ui
@@ -1862,13 +2189,25 @@ pub fn merge_standard_pack_catalog(
                 display_from_ui.push(package_id.to_owned());
             }
         }
-        let business = schedule_business(schedule, package_id);
-        for side in CatalogSide::ALL.iter().copied() {
-            entry.insert(
-                side.as_str().to_owned(),
-                Value::Array(business.side(side).iter().map(pool_value).collect()),
-            );
-        }
+        let after = match version {
+            CatalogVersion::V1 => {
+                let business = schedule_business(schedule, package_id);
+                for side in CatalogSide::ALL.iter().copied() {
+                    entry.insert(
+                        side.as_str().to_owned(),
+                        Value::Array(business.side(side).iter().map(pool_value).collect()),
+                    );
+                }
+                json!(business)
+            }
+            // CV-1: a new entry of version 2 holds the parts its rules give.
+            CatalogVersion::V2 => {
+                let parts =
+                    v2::rules_parts(schedule, package_id).map_err(CatalogMergeRefusal::Root)?;
+                entry.extend(parts.members());
+                Value::Object(parts.members())
+            }
+        };
         if refresh.contains(package_id) {
             refreshed_by_package.insert(
                 package_id.to_owned(),
@@ -1876,7 +2215,7 @@ pub fn merge_standard_pack_catalog(
                     package_id: package_id.to_owned(),
                     state: CatalogRefreshState::Added,
                     before: None,
-                    after: business,
+                    after,
                 },
             );
         }
@@ -1896,6 +2235,16 @@ pub fn merge_standard_pack_catalog(
             display_written.push(named.package_id.clone());
         }
     }
+    // CV-1: each part the values file names takes its value and its marks.
+    let mut values_written = Vec::new();
+    if let Some((path, entries)) = &values {
+        v2::apply_values(&mut packs, entries, &mut values_written).map_err(|issues| {
+            CatalogMergeRefusal::Values {
+                path: path.to_path_buf(),
+                issues,
+            }
+        })?;
+    }
     let refreshed = edits
         .refresh
         .iter()
@@ -1904,7 +2253,7 @@ pub fn merge_standard_pack_catalog(
     let mut document = Map::new();
     document.insert(
         "schema_version".to_owned(),
-        Value::String(STANDARD_PACK_CATALOG_SCHEMA_VERSION.to_owned()),
+        Value::String(version.schema_version().to_owned()),
     );
     document.insert("game".to_owned(), Value::String(game.to_owned()));
     // PC-2 fix round 1: the groups the display file adds follow the written file's, in the display
@@ -1938,7 +2287,7 @@ pub fn merge_standard_pack_catalog(
         )])
     })?;
     bytes.push(b'\n');
-    let catalog = parse_standard_pack_catalog(&bytes, game, registry, Some(&pools))
+    let catalog = parse_standard_pack_catalog_with(&bytes, game, registry, Some(&facts))
         .map_err(CatalogMergeRefusal::Root)?;
     let differences = standard_pack_catalog_differences(&catalog, schedule);
     Ok(StandardPackCatalogMerge {
@@ -1954,7 +2303,54 @@ pub fn merge_standard_pack_catalog(
         refreshed,
         display_written,
         groups_added,
+        converted,
+        values_written,
     })
+}
+
+/// The pools of the business part `object` at `pointer` (an entry's own, or (Workflow #477 CV-1)
+/// a version 2 per-rule part) of `owner` (the package, and the part's rule) that `schedule.json`
+/// still declares (`pools`): each other pool is left out of its side, answered in `dropped` and
+/// in `left_out` at its pointer in the existing file, in that file's order.
+fn retain_declared(
+    object: &mut Map<String, Value>,
+    pointer: &str,
+    (package_id, rule_id): (&str, Option<&str>),
+    pools: &BTreeSet<String>,
+    dropped: &mut Vec<CatalogDropped>,
+    left_out: &mut Vec<CatalogLeftOut>,
+) {
+    for side in CatalogSide::ALL.iter().copied() {
+        let at_side = at(pointer, side.as_str());
+        if let Some(Value::Array(items)) = object.get_mut(side.as_str()) {
+            let mut position = 0_usize;
+            items.retain(|item| {
+                let at_pool = format!("{at_side}/{position}/pool_id");
+                position += 1;
+                let pool_id = item
+                    .get("pool_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let declared = pools.contains(pool_id);
+                if !declared {
+                    dropped.push(CatalogDropped {
+                        package_id: package_id.to_owned(),
+                        side,
+                        pool_id: pool_id.to_owned(),
+                        rule_id: rule_id.map(str::to_owned),
+                    });
+                    left_out.push(CatalogLeftOut {
+                        problem: StandardPackProblem::CatalogPoolUndeclared,
+                        package_id: package_id.to_owned(),
+                        pool_id: Some(pool_id.to_owned()),
+                        rule_id: rule_id.map(str::to_owned),
+                        pointer: at_pool,
+                    });
+                }
+                declared
+            });
+        }
+    }
 }
 
 /// Workflow #477 PC-2: the packages `refresh` names, each one the registry holds and named once;
@@ -2003,6 +2399,8 @@ fn read_display_file(
     let mut check = Check {
         registry,
         declared_pools: None,
+        facts: None,
+        version: CatalogVersion::V1,
         errors: Vec::new(),
         warnings: Vec::new(),
         defects: 0,

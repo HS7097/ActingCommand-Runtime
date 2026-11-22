@@ -259,10 +259,12 @@ fn pc1_each_business_refusal_is_an_error_at_its_pointer() {
             issues(&[(Malformed, "/game")]),
         ),
         (
+            // Workflow #477 CV-1: version 2 is a version of the file since 0.12.79, so the version
+            // no build knows is a third one.
             "another version",
             encode(&replaced(
                 "/schema_version",
-                json!("actingcommand.pack-catalog.v2"),
+                json!("actingcommand.pack-catalog.v3"),
             )),
             issues(&[(Malformed, "/schema_version")]),
         ),

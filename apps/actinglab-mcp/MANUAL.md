@@ -812,6 +812,14 @@ naming this file.
   `standard_pack_catalog_display_refused`) before anything is written. `ac_packs` answers each
   game's `index` (per pool the packages that produce and consume it) and each composed row's
   `catalog`; `ac_standard_pack_check` answers the root's `catalog` note and the file's warnings.
+  Workflow #477 CV-1 (0.12.79): `schema_version` 2 writes version 2 of the file, an entry's
+  business part in full (its `consumes` and `produces` as a rule writes its effects, `value`
+  `{milli, origin?}`, the marks `limited` and `realization`, and per-rule parts `rules`
+  `[{rule_id, ...}]` where the rules of one package differ), converting a version 1 file
+  (`converted`); `values`, an absolute path of `{"schema_version":
+  "actingcommand.pack-catalog-values.v1", "packs": [{package_id, rule_id?, value?, limited?,
+  realization?}]}`, replaces the named parts' value and marks (`values_written`), checked and
+  refused as a display file is. No Runtime component reads the file.
 - **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).
   `ac_resource_regression` (`repo`, `game`, `case`, `package_id`) runs the regression cases of a
   resource repository's checkout offline, through a child: each case `regression/<game>/<case>/`
