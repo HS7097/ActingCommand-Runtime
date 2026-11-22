@@ -1469,6 +1469,7 @@ fn compose(
             root: &root,
             maintenance: &maintenance,
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let instances = BTreeMap::from([(

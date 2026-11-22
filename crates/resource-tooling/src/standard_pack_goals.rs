@@ -26,6 +26,7 @@
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
+use crate::standard_pack_schedule::issue_path;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -33,8 +34,10 @@ use actingcommand_contract::{
     MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootGoalDocument, RootPackageVariables,
     StandardPackRoot, StandardPackRootIssue, VariableOrigins, check_standard_pack_goal_references,
     goal_variables, judge_root_variables, parse_standard_pack_goals, parse_standard_pack_schedule,
+    take_catalog_business,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
+use actingcommand_policy::standard_pack_schedule_takes_catalog;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -98,11 +101,15 @@ fn package_variables(
 /// G-SLx, register §1.501: no longer with the rules that follow it); `pack_directory` is where a
 /// registry entry's directory lies. Workflow #463 V1: no entry takes a table any more, so no
 /// table is read. Empty for a file that keeps every rule. A package that cannot be read is the
-/// caller's error, not a problem of the file.
+/// caller's error, not a problem of the file. Workflow #477 CV-2 (register §1.508): a
+/// `schedule.json` that names `catalog_business` is held with its rules' business part taken from
+/// `catalog`, the root's `pack-catalog.json`, as the composer takes it (a `tier` entry's rule has
+/// its fixed value there); a refusal of it is the caller's error, at the file it names.
 pub(crate) fn goal_issues(
     game: &str,
     root: &StandardPackRoot,
     schedule: Option<(&[u8], &Path)>,
+    catalog: Option<&[u8]>,
     goals: &[u8],
     pack_directory: &dyn Fn(&str) -> PathBuf,
 ) -> LabResult<Vec<StandardPackRootIssue>> {
@@ -118,8 +125,12 @@ pub(crate) fn goal_issues(
     // Workflow #463 V1: every variable a package declares, which a placement names.
     references.variables = goal_variables(&variables);
     if let Some((bytes, path)) = schedule {
-        let schedule = parse_standard_pack_schedule(bytes)
+        let mut schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
+        if standard_pack_schedule_takes_catalog(bytes) {
+            take_catalog_business(&mut schedule, catalog, game, &root.registry)
+                .map_err(|issue| root_invalid(game, &issue_path(path, &issue), &issue))?;
+        }
         for pool in &schedule.pools {
             // A pool a goal may name has a valuation block with its step and its gap weight.
             let valued = matches!(

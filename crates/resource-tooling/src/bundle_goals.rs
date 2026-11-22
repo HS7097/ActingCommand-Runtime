@@ -14,6 +14,7 @@
 use crate::StandardPackRootFiles;
 use crate::standard_pack_check::RootFileInputs;
 use crate::standard_pack_goals::{goal_issues, goal_warnings, read_goals_file};
+use crate::standard_pack_schedule::switched_catalog;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleIndex, GoalType, LabError, LabResult, STANDARD_PACK_BUNDLE_FILE,
@@ -90,12 +91,21 @@ pub fn check_bundle_goals(request: &BundleGoalsRequest) -> LabResult<BundleGoals
         LabError::usage(format!("{}: no such root file", request.goals.display()))
     })?;
     let packs = request.bundle.join(PACKS_DIRECTORY);
+    // Workflow #477 CV-2 (register §1.508): a `schedule.json` that names `catalog_business` is held
+    // with the `pack-catalog.json` of the root `goals.json` is read from (the checkout's, beside
+    // it): `package bundle` lays no such file, which `standard-pack build` carries into the zip
+    // itself.
+    let catalog = match inputs.schedule() {
+        Some(schedule) => switched_catalog(&schedule.bytes, &request.goals)?,
+        None => None,
+    };
     let issues = goal_issues(
         &game,
         &root,
         inputs
             .schedule()
             .map(|schedule| (schedule.bytes.as_slice(), schedule.path.as_path())),
+        catalog.as_deref(),
         &goals,
         &|directory: &str| packs.join(directory),
     )?;

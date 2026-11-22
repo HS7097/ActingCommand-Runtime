@@ -302,6 +302,7 @@ impl Fixture {
                 root: &root,
                 maintenance: &[],
                 irreversible: &irreversible,
+                catalog: None,
             },
         )]);
         let composition: StandardPackComposition =

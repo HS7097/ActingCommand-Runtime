@@ -50,7 +50,13 @@
 //!   `goals.json` takes. A check that reads roots keeps each game's judgement and builds the
 //!   variable table the policy cycle reads from memory (`standard_pack_variables`); `goals.json`
 //!   is marked with the root's files, so a change of it, of a package's declaration files, of
-//!   `schedule.json` or of `bundle.json` is read again at the next check. Fix round 2: the
+//!   `schedule.json` or of `bundle.json` is read again at the next check. Workflow #477 CV-2
+//!   (register §1.508): a root whose `schedule.json` names `catalog_business` is read with its
+//!   `pack-catalog.json`, which the composer takes the rules' business part from; the file is
+//!   marked with the root's (a placement that changes it alone is composed at the next check), a
+//!   composed generation keeps it beside the game's fragment (`fragment-catalogs/<game>.json`),
+//!   and a refused or missing catalog keeps the game's last good rules as a refused file does. A
+//!   root that does not name it is read, marked and kept as before. Fix round 2: the
 //!   judgement is the contract crate's `judge_root_variables`, which takes the goal document as
 //!   its reader read it; each check builds the table again with the games no check judges now
 //!   (`uncomposed`: their root failed its check, or their composition was refused or not
@@ -69,17 +75,18 @@ use actingcommand_contract::{
     CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
     ConfigCatalogProvenance, ConfigCatalogWarnings, IrreversiblePackages,
     MAX_STANDARD_PACK_GOALS_BYTES, RootGoalDocument, RootPackageVariables,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackGoals,
-    StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue, judge_root_variables,
-    parse_standard_pack_goals, read_standard_pack_root,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    StandardPackGoals, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    judge_root_variables, parse_standard_pack_goals, read_standard_pack_root,
 };
 use actingcommand_policy::{
     BenefitProvenance, CompiledCatalog, PolicyCode, RootVariableJudgement,
     STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
     StandardPackCompileWarning, StandardPackComposeInput, StandardPackComposition,
     StandardPackGameFiles, StandardPackRuleIssue, VariableTable, compose_standard_pack_rules,
+    standard_pack_schedule_takes_catalog,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -137,13 +144,17 @@ enum DeclarationMark {
 /// The marks of a game root the workbench compares at each check: `schedule.json`,
 /// `bundle.json`, Workflow #463 V2 fix round 1 `goals.json` (a failed mark never stops the check:
 /// the root's variables are then judged without it), and, G-R2s, the declaration files of each
-/// package the root registered when the workbench last read it, by package id.
+/// package the root registered when the workbench last read it, by package id. Workflow #477
+/// CV-2: and `pack-catalog.json` of a root whose `schedule.json` named `catalog_business` when it
+/// was last read (`None`: not marked, the root is not switched; a failure of its metadata is the
+/// root's own, as `schedule.json`'s is).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GameMarks {
     schedule: FileMark,
     bundle: FileMark,
     goals: DeclarationMark,
     packages: BTreeMap<String, Vec<DeclarationMark>>,
+    catalog: Option<FileMark>,
 }
 
 /// Workflow #463 V2 fix round 1: the mark of the game root's `goals.json` in `directory`.
@@ -581,6 +592,12 @@ struct ScheduleGame {
     /// G-R2s: the declarations of every package the root registers, read when the root holds
     /// `schedule.json` (the composer's required input); `None` without it.
     declarations: Option<RootDeclarations>,
+    /// Workflow #477 CV-2: of a `schedule.json` that names `catalog_business`, the mark of
+    /// `pack-catalog.json` taken just before it was read (`Some(None)`: the root holds none);
+    /// `None` for any other root, whose catalog is not looked at.
+    catalog_mark: Option<FileMark>,
+    /// CV-2: that file's bytes, which the composer takes the rules' business part from.
+    catalog: Option<Vec<u8>>,
 }
 
 /// G-R2s (register §1.369): one game root's package declarations as the composer takes them.
@@ -842,11 +859,23 @@ fn read_schedule_game(
     let declarations = schedule
         .as_ref()
         .map(|_| read_declarations(directory, game, &root));
+    // Workflow #477 CV-2: a file that names `catalog_business` is read with `pack-catalog.json`,
+    // marked just before it is read, so a change after the mark is seen by the next check.
+    let (catalog_mark, catalog) = match &schedule {
+        Some(bytes) if standard_pack_schedule_takes_catalog(bytes) => {
+            let path = path_of(STANDARD_PACK_CATALOG_FILE);
+            let mark = file_mark(&path)?;
+            (Some(mark), read_root_file(&path)?)
+        }
+        _ => (None, None),
+    };
     Ok(Some(ScheduleGame {
         root,
         maintenance,
         schedule,
         declarations,
+        catalog_mark,
+        catalog,
     }))
 }
 
@@ -912,10 +941,12 @@ fn provenance_entries(game: &str, provenance: &BenefitProvenance) -> Vec<Catalog
 /// The composer's per-game files of every game of `read` whose rules `schedule` gives (`None`
 /// leaves the game out), each with its root, its maintenance entries and, G-R2s, the
 /// irreversibility of its packages as [`read_declarations`] read them: a game whose root holds
-/// `schedule.json` always has them, so a game without them is left out too.
+/// `schedule.json` always has them, so a game without them is left out too. Workflow #477 CV-2:
+/// with the `pack-catalog.json` `catalog` gives for it (a switched file's, or none).
 fn composer_inputs<'a>(
     read: &'a BTreeMap<String, ScheduleGame>,
     schedule: impl Fn(&str) -> Option<&'a [u8]>,
+    catalog: impl Fn(&str) -> Option<&'a [u8]>,
 ) -> BTreeMap<String, StandardPackGameFiles<'a>> {
     read.iter()
         .filter_map(|(game, files)| {
@@ -928,13 +959,15 @@ fn composer_inputs<'a>(
                     root: &files.root,
                     maintenance: files.maintenance.as_slice(),
                     irreversible: &declarations.irreversible,
+                    catalog: catalog(game.as_str()),
                 },
             ))
         })
         .collect()
 }
 
-/// The refusal record of one issue of `game`'s `schedule.json` at `path`.
+/// The refusal record of one issue of `game`'s `schedule.json` at `path`; Workflow #477 CV-2: or
+/// of its `pack-catalog.json`, at the path of the file the issue names.
 fn schedule_refusal(game: &str, path: &Path, issue: &StandardPackRuleIssue) -> Outcome {
     RootFailure::Invalid {
         path: path.to_owned(),
@@ -1145,13 +1178,27 @@ impl HostShared {
         if let Some(root) = &root {
             for game in &games {
                 let directory = root.join(game);
-                let read =
-                    file_mark(&directory.join(STANDARD_PACK_SCHEDULE_FILE)).and_then(|schedule| {
+                // Workflow #477 CV-2: and `pack-catalog.json` of a root the last composed read
+                // found switched.
+                let switched = state
+                    .marks
+                    .get(game)
+                    .is_some_and(|marks| marks.catalog.is_some());
+                let read = file_mark(&directory.join(STANDARD_PACK_SCHEDULE_FILE))
+                    .and_then(|schedule| {
                         file_mark(&directory.join(STANDARD_PACK_BUNDLE_FILE))
                             .map(|bundle| (schedule, bundle))
+                    })
+                    .and_then(|(schedule, bundle)| {
+                        let catalog = if switched {
+                            Some(file_mark(&directory.join(STANDARD_PACK_CATALOG_FILE))?)
+                        } else {
+                            None
+                        };
+                        Ok((schedule, bundle, catalog))
                     });
                 match read {
-                    Ok((schedule, bundle)) => {
+                    Ok((schedule, bundle, catalog)) => {
                         // G-R2s: and the declaration files of each package the root registered
                         // when the workbench last read it; a metadata failure there is that
                         // package's own mark and never stops the check.
@@ -1176,6 +1223,7 @@ impl HostShared {
                                 // again too.
                                 goals: goals_mark(&directory),
                                 packages,
+                                catalog,
                             },
                         );
                     }
@@ -1259,6 +1307,13 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #477 CV-2: a root read now is marked by what this read found of its catalog:
+        // the mark taken just before the catalog was read, of a switched file, else none.
+        for (game, files) in &read {
+            if let Some(game_marks) = marks.get_mut(game) {
+                game_marks.catalog = files.catalog_mark;
+            }
+        }
         // Workflow #463 V2 fix round 1: the variables of every root this check read, judged over
         // the whole root, for the policy cycle; before any composition, which may not succeed.
         self.keep_root_variables(state, &games, &root_failures, &read, root.as_deref())?;
@@ -1271,6 +1326,21 @@ impl HostShared {
                     .map(|bytes| (game.clone(), bytes.clone()))
             })
             .collect::<BTreeMap<_, _>>();
+        // CV-2: the catalog each switched file composes with, and the switched files, by game.
+        let mut catalogs = read
+            .iter()
+            .filter_map(|(game, files)| {
+                files
+                    .catalog
+                    .as_ref()
+                    .map(|bytes| (game.clone(), bytes.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let switched = read
+            .iter()
+            .filter(|(_, files)| files.catalog_mark.is_some())
+            .map(|(game, _)| game.clone())
+            .collect::<BTreeSet<_>>();
         let catalog_version = self
             .ledger
             .latest_sequence()
@@ -1278,7 +1348,11 @@ impl HostShared {
             .saturating_add(1);
         let mut fallen_back = BTreeSet::new();
         let composition = loop {
-            let inputs = composer_inputs(&read, |game| schedules.get(game).map(Vec::as_slice));
+            let inputs = composer_inputs(
+                &read,
+                |game| schedules.get(game).map(Vec::as_slice),
+                |game| catalogs.get(game).map(Vec::as_slice),
+            );
             let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
                 instances: &bound,
                 games: &inputs,
@@ -1332,7 +1406,8 @@ impl HostShared {
                 let Some(bytes) = take_refused_schedule(&mut schedules, &game, root.as_deref())
                 else {
                     if let Some(root) = &root {
-                        let path = root.join(&game).join(STANDARD_PACK_SCHEDULE_FILE);
+                        // Workflow #477 CV-2: a refusal in `pack-catalog.json` names that file.
+                        let path = root.join(&game).join(issue.issue.file);
                         let refusal = schedule_refusal(&game, &path, issue);
                         self.report_once(state, &game, "unplaced", refusal)?;
                     }
@@ -1340,12 +1415,21 @@ impl HostShared {
                 };
                 progressed = true;
                 let sha = sha256(&bytes);
+                // CV-2: a switched file is composed with its catalog, which is refused with it and
+                // recorded once per pair of the two.
+                let refused_catalog = catalogs.remove(&game);
+                let key = match &refused_catalog {
+                    Some(catalog) => format!("{sha}+{}", sha256(catalog)),
+                    None => sha.clone(),
+                };
                 if let Some(root) = &root {
-                    let path = root.join(&game).join(STANDARD_PACK_SCHEDULE_FILE);
-                    self.report_once(state, &game, &sha, schedule_refusal(&game, &path, issue))?;
+                    let path = root.join(&game).join(issue.issue.file);
+                    self.report_once(state, &game, &key, schedule_refusal(&game, &path, issue))?;
                 }
                 // §3.6: the game keeps its last good `schedule.json`, the active generation's
-                // fragment; a game that never had one has no rules.
+                // fragment; a game that never had one has no rules. CV-2: a switched file keeps
+                // the catalog that generation composed it with too, so a game whose catalog alone
+                // is refused or gone keeps its last good rules as well.
                 if fallen_back.insert(game.clone())
                     && let (Some(hash), Some(Some(good))) = (
                         state.active_hash.as_deref(),
@@ -1354,11 +1438,24 @@ impl HostShared {
                             .as_ref()
                             .and_then(|record| record.games.get(&game)),
                     )
-                    && *good != sha
-                    && let Some(fragment) = lock(self.policy()?, HostLocation::StandardPackRead)?
-                        .composed_fragment(hash, &game)?
+                    && (*good != sha || switched.contains(&game))
                 {
-                    schedules.insert(game, fragment);
+                    // One lock for both files: a guard of a condition lives through its block.
+                    let (fragment, kept) = {
+                        let policy = lock(self.policy()?, HostLocation::StandardPackRead)?;
+                        (
+                            policy.composed_fragment(hash, &game)?,
+                            policy.composed_fragment_catalog(hash, &game)?,
+                        )
+                    };
+                    if let Some(fragment) = fragment
+                        && (*good != sha || kept != refused_catalog)
+                    {
+                        schedules.insert(game.clone(), fragment);
+                        if let Some(kept) = kept {
+                            catalogs.insert(game, kept);
+                        }
+                    }
                 }
             }
             if !progressed {
@@ -1464,6 +1561,16 @@ impl HostShared {
                         .map(|bytes| (game.game_id.clone(), bytes.clone()))
                 })
                 .collect::<BTreeMap<_, _>>();
+            // Workflow #477 CV-2: and the catalog each switched file was composed with.
+            let fragment_catalogs = composition
+                .games()
+                .iter()
+                .filter_map(|game| {
+                    catalogs
+                        .get(&game.game_id)
+                        .map(|bytes| (game.game_id.clone(), bytes.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
             let record_bytes = serde_json::to_vec_pretty(&record).map_err(|_| {
                 RuntimeHostError::fatal(
                     HostCode::CatalogManifestEncodeFailed,
@@ -1477,7 +1584,12 @@ impl HostShared {
                     return Err(error);
                 }
                 (
-                    policy.stage_composed(&composition, &fragments, &record_bytes)?,
+                    policy.stage_composed(
+                        &composition,
+                        &fragments,
+                        &fragment_catalogs,
+                        &record_bytes,
+                    )?,
                     policy.active_generation(),
                 )
             };
@@ -2016,8 +2128,13 @@ pub fn compose_configured_standard_packs(
         })
         .collect::<BTreeMap<_, _>>();
     let composition = loop {
-        // G-R2s: with each game's package declarations, read as the workbench reads them.
-        let inputs = composer_inputs(&read, |game| schedules.get(game).copied());
+        // G-R2s: with each game's package declarations, read as the workbench reads them;
+        // Workflow #477 CV-2: and a switched file's catalog.
+        let inputs = composer_inputs(
+            &read,
+            |game| schedules.get(game).copied(),
+            |game| read.get(game).and_then(|files| files.catalog.as_deref()),
+        );
         let failure = match compose_standard_pack_rules(&StandardPackComposeInput {
             instances: &bound,
             games: &inputs,
@@ -2030,7 +2147,8 @@ pub fn compose_configured_standard_packs(
         let mut refused = BTreeSet::new();
         for issue in failure.issues() {
             // A refusal of the composition as a whole is each composed game's problem: every
-            // `standard_pack_root_invalid` names its game and file.
+            // `standard_pack_root_invalid` names its game and file (CV-2: the file the issue
+            // names, `pack-catalog.json` for a refusal there).
             let games = match &issue.game_id {
                 Some(game) => vec![game.clone()],
                 None => schedules.keys().cloned().collect(),
@@ -2039,7 +2157,7 @@ pub fn compose_configured_standard_packs(
                 for game in &games {
                     problems.push(
                         RootFailure::Invalid {
-                            path: root.join(game).join(STANDARD_PACK_SCHEDULE_FILE),
+                            path: root.join(game).join(issue.issue.file),
                             issue: issue.issue.clone(),
                         }
                         .outcome(Some(game.as_str())),
@@ -2164,10 +2282,13 @@ pub fn preview_standard_pack_schedule(
             Err(_) => preview.left_out.push(game.clone()),
         }
     }
-    // G-R2s: with each game's package declarations, read as the workbench reads them.
-    let inputs = composer_inputs(&read, |game| {
-        read.get(game).and_then(|files| files.schedule.as_deref())
-    });
+    // G-R2s: with each game's package declarations, read as the workbench reads them; Workflow
+    // #477 CV-2: and a switched file's catalog.
+    let inputs = composer_inputs(
+        &read,
+        |game| read.get(game).and_then(|files| files.schedule.as_deref()),
+        |game| read.get(game).and_then(|files| files.catalog.as_deref()),
+    );
     match compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &bound,
         games: &inputs,
@@ -2210,9 +2331,10 @@ pub fn preview_standard_pack_schedule(
                     None => inputs.keys().cloned().collect(),
                 };
                 for game in &games {
+                    // Workflow #477 CV-2: at the file the issue names.
                     preview.problems.push(
                         RootFailure::Invalid {
-                            path: root.join(game).join(STANDARD_PACK_SCHEDULE_FILE),
+                            path: root.join(game).join(issue.issue.file),
                             issue: issue.issue.clone(),
                         }
                         .outcome(Some(game.as_str())),

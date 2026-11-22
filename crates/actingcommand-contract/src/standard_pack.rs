@@ -213,6 +213,18 @@ crate::outcome_vocabulary! {
         /// entry's own part where the entry writes none, or a rule's part where the entry writes
         /// neither it nor an own part (an error).
         CatalogPartAbsent => "catalog_part_absent",
+        /// Workflow #477 CV-2 (since 0.12.80): a rule of a `schedule.json` whose `requires` names
+        /// `catalog_business` writes a member of its business part (`consumes`, `produces`,
+        /// `limited`, `realization`, `fixed_value_origin`, `fixed_value_milli`), which belongs to
+        /// its package's entry of `pack-catalog.json` (an error, at the member).
+        CatalogBusinessMember => "catalog_business_member",
+        /// CV-2: a game root whose `schedule.json` names `catalog_business` in `requires` holds no
+        /// `pack-catalog.json` (an error of that file, the whole document).
+        CatalogMissing => "catalog_missing",
+        /// CV-2: a game root whose `schedule.json` names `catalog_business` in `requires` holds a
+        /// `pack-catalog.json` of version 1, which carries no business part a rule can take (an
+        /// error, at its `schema_version`).
+        CatalogVersion1 => "catalog_version_1",
         /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
         /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
         /// template target's `template` is not `loading/<file>.png`.

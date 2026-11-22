@@ -316,6 +316,41 @@ pub struct StandardPackCatalogResponse {
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
+/// Workflow #477 CV-2 (register §1.508; contracts/pack-catalog.md, "Who writes it"): `actinglab
+/// standard-pack catalog --cut --root <root> [--plan]`, the cut-over of a root to its version 2
+/// `pack-catalog.json`: its `schedule.json` switched (`catalog_business` in `requires`, the rules'
+/// business members taken off) only when the root composes byte for byte the same after as
+/// before.
+#[derive(Debug, Clone)]
+pub struct StandardPackCatalogCutRequest {
+    /// As [`StandardPackCatalogRequest::root`]: a resource repository's checkout or a built game
+    /// root, never one inside an installation.
+    pub root: PathBuf,
+    /// `--plan`: write nothing, answer the `schedule.json` the line would write.
+    pub plan: bool,
+}
+
+/// Workflow #477 CV-2: the answer of `standard-pack catalog --cut`.
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardPackCatalogCutResponse {
+    /// `planned` (`--plan`), `written`, or `unchanged`: the root's `schedule.json` names
+    /// `catalog_business` already, its cut-over done.
+    pub status: String,
+    pub root: String,
+    pub game: String,
+    /// The `schedule.json` switched, or that would be.
+    pub path: String,
+    /// The rules digest the root composes to before and after the cut (the two are equal); absent
+    /// for a root cut over already, which is not composed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules_digest: Option<String>,
+    /// The rules switched: every rule of the file, in its order; empty for a root cut over already.
+    pub rules: Vec<String>,
+    /// With `--plan`: the `schedule.json` the line would write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<Value>,
+}
+
 /// Workflow #453 S8: one model a game root's packs need, as `standard-pack check` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StandardPackModel {

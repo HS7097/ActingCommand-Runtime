@@ -100,13 +100,14 @@ use actingcommand_lab_ops::wait::{Waited, wait_at_most};
 use actingcommand_lab_ops::{instance_selector, run_evidence, run_show, wait};
 use actingcommand_resource_tooling::{
     AdoptDecision, AdoptSource, AdoptWorktree, PackTrialRecord, ResourceToolingCode,
-    StandardPackAdoptRequest, StandardPackCatalogRequest, StandardPackCheckRequest,
-    StandardPackComposeRequest, StandardPackReadyRequest, StandardPackStatusRequest,
-    StandardPackTrialAnswer, StandardPackTrialRequest, StatusInstallation, TrialCollectProblem,
-    TrialRecordPlan, TrialRunEnd, TrialRunUnconfirmed, check_standard_pack_root, check_trial_run,
-    compose_standard_packs, judge_standard_pack_readiness, plan_standard_pack_trial,
-    standard_pack_adopt, standard_pack_status_with, trial_record_of_run,
-    write_standard_pack_catalog, write_trial_record,
+    StandardPackAdoptRequest, StandardPackCatalogCutRequest, StandardPackCatalogRequest,
+    StandardPackCheckRequest, StandardPackComposeRequest, StandardPackReadyRequest,
+    StandardPackStatusRequest, StandardPackTrialAnswer, StandardPackTrialRequest,
+    StatusInstallation, TrialCollectProblem, TrialRecordPlan, TrialRunEnd, TrialRunUnconfirmed,
+    check_standard_pack_root, check_trial_run, compose_standard_packs, cut_standard_pack_catalog,
+    judge_standard_pack_readiness, plan_standard_pack_trial, standard_pack_adopt,
+    standard_pack_status_with, trial_record_of_run, write_standard_pack_catalog,
+    write_trial_record,
 };
 // Workflow #463 AC-1: the Lab's own parts adoption calls: `record ready`'s one function (#463
 // S3-17) and the one runner of a regression case; fix round 1: `resource regression`'s one reading
@@ -237,16 +238,20 @@ const STATUS: &str = "standard-pack status";
 /// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
 /// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
 /// Workflow #477 PC-2: and `--refresh`, repeatable, and `--displays`. Workflow #477 CV-1: and
-/// `--values` and `--schema-version`.
-pub(crate) const CATALOG_FLAGS: [&str; 6] = [
+/// `--values` and `--schema-version`. Workflow #477 CV-2: and the switch `--cut`.
+pub(crate) const CATALOG_FLAGS: [&str; 7] = [
     "--root",
     "--plan",
     REFRESH_FLAG,
     DISPLAYS_FLAG,
     VALUES_FLAG,
     SCHEMA_VERSION_FLAG,
+    CUT_FLAG,
 ];
-pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
+pub(crate) const CATALOG_SWITCHES: [&str; 2] = ["--plan", CUT_FLAG];
+/// Workflow #477 CV-2: the cut-over of the root's `schedule.json` to its version 2
+/// `pack-catalog.json`, which takes `--root` and `--plan` alone.
+const CUT_FLAG: &str = "--cut";
 /// Workflow #477 PC-2: the package whose entry's business part is brought up to date from its
 /// rules, once per package; and the display file whose entries replace named entries' displays.
 const REFRESH_FLAG: &str = "--refresh";
@@ -292,8 +297,9 @@ pub(crate) fn adopt_options() -> [&'static str; 9] {
 }
 
 /// Workflow #477 PC-1: the flags of `standard-pack catalog`. Workflow #477 PC-2: `--refresh` and
-/// `--displays`. Workflow #477 CV-1: `--values` and `--schema-version`.
-pub(crate) fn catalog_options() -> [&'static str; 6] {
+/// `--displays`. Workflow #477 CV-1: `--values` and `--schema-version`. Workflow #477 CV-2:
+/// `--cut`.
+pub(crate) fn catalog_options() -> [&'static str; 7] {
     [
         "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
@@ -301,6 +307,7 @@ pub(crate) fn catalog_options() -> [&'static str; 6] {
         "--displays <absolute path of {schema_version: actingcommand.pack-catalog-displays.v1, groups?: [{id, title}], packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole, its business part untouched; a group not in the catalog added, answered in groups_added; one there with another title refused)",
         "--values <absolute path of {schema_version: actingcommand.pack-catalog-values.v1, packs: [{package_id, rule_id?, value?: {milli, origin?}, limited?, realization?}]}> (version 2 only: each named part's value and marks replaced whole, its effects untouched, answered in values_written; refused as a display file is, standard_pack_catalog_display_refused)",
         "--schema-version 2 (writes version 2: the business part in full, a version 1 file converted, each entry's business part its rules', answered in converted; without it a file keeps its version)",
+        "--cut (with --root and --plan alone: switches schedule.json to catalog_business, its rules' business members taken off, only when the root composes byte for byte the same with its version 2 catalog; otherwise refused with each difference and nothing written)",
     ]
 }
 
@@ -469,6 +476,36 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }
     let root = flags.required_path("--root")?;
     let plan = flags.bool("--plan");
+    // Workflow #477 CV-2: the cut-over takes the root and `--plan` alone.
+    if flags.bool(CUT_FLAG) {
+        if let Some(flag) = [
+            REFRESH_FLAG,
+            DISPLAYS_FLAG,
+            VALUES_FLAG,
+            SCHEMA_VERSION_FLAG,
+        ]
+        .into_iter()
+        .find(|flag| flags.given(flag))
+        {
+            return Err(CliError::usage(format!(
+                "standard-pack catalog {CUT_FLAG} takes --root and --plan alone, not {flag}"
+            )));
+        }
+        if !plan {
+            crate::dry_run_gate::refuse(
+                global,
+                "standard-pack catalog --cut",
+                Some("standard-pack catalog --cut --plan"),
+                Value::Null,
+            )?;
+        }
+        let response = cut_standard_pack_catalog(StandardPackCatalogCutRequest { root, plan })?;
+        return serde_json::to_value(response).map_err(|error| {
+            CliError::device(format!(
+                "failed to serialize the standard-pack catalog --cut answer: {error}"
+            ))
+        });
+    }
     let refresh = flags.values(REFRESH_FLAG);
     // A flag without its value takes `true` (`FlagArgs::parse_switches`), as `required` reads it.
     if refresh.iter().any(|package_id| package_id == "true") {

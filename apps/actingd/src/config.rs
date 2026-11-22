@@ -110,6 +110,10 @@ mod gate_452_inst5;
 // `schedule.json` that requires it.
 #[cfg(test)]
 mod gate_455_p1;
+// Test-only: Workflow #477 CV-2, this build names `catalog_business`, so it composes a
+// `schedule.json` that requires it with the root's `pack-catalog.json`.
+#[cfg(test)]
+mod gate_477_cv2;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;

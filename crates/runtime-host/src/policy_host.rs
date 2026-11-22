@@ -88,6 +88,10 @@ const MAX_CATALOG_MEMO_GENERATIONS: usize = 8;
 /// ROUT-L RL-1b (frozen model v1.0 §3.3): a composed generation's directory holds each game's
 /// `schedule.json` as composed under `fragments/`, and the composition record.
 const FRAGMENTS_DIR: &str = "fragments";
+/// Workflow #477 CV-2 (register §1.508): a composed generation's directory of the
+/// `pack-catalog.json` each switched `schedule.json` (one that names `catalog_business`) was
+/// composed with, `<game>.json`, so that its game keeps its last good rules with them.
+const FRAGMENT_CATALOGS_DIR: &str = "fragment-catalogs";
 const COMPOSITION_RECORD_FILE: &str = actingcommand_contract::STANDARD_PACK_COMPOSITION_RECORD_FILE;
 const DEFAULT_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_COOLDOWN_MS: u64 = 1_000;
@@ -3005,14 +3009,18 @@ impl PolicyHost {
     /// ROUT-L RL-1b (frozen model v1.0 §3.3): stages a composed generation: its four documents,
     /// `fragments/<game>.json` (each game's `schedule.json` as composed) and the composition
     /// record beside its manifest. The compiled catalog is the composition's own; no source byte
-    /// is kept in memory.
+    /// is kept in memory. Workflow #477 CV-2 (register §1.508): and
+    /// `fragment-catalogs/<game>.json`, the `pack-catalog.json` each switched `schedule.json` was
+    /// composed with (`catalogs`; the directory only when there is one).
     pub(crate) fn stage_composed(
         &self,
         composition: &actingcommand_policy::StandardPackComposition,
         fragments: &BTreeMap<String, Vec<u8>>,
+        catalogs: &BTreeMap<String, Vec<u8>>,
         record: &[u8],
     ) -> RuntimeHostResult<LoadedCatalog> {
-        self.store.stage_composed(composition, fragments, record)
+        self.store
+            .stage_composed(composition, fragments, catalogs, record)
     }
 
     /// ROUT-L RL-1b: the composition record of the generation `hash`, `None` when it has none
@@ -3030,6 +3038,18 @@ impl PolicyHost {
     ) -> RuntimeHostResult<Option<Vec<u8>>> {
         self.store
             .read_composed_file(hash, &format!("{FRAGMENTS_DIR}/{game}.json"))
+    }
+
+    /// Workflow #477 CV-2 (register §1.508): the `pack-catalog.json` the generation `hash`
+    /// composed `game`'s switched `schedule.json` with, `None` when it composed none (a file that
+    /// does not name `catalog_business`, or no file).
+    pub(crate) fn composed_fragment_catalog(
+        &self,
+        hash: &str,
+        game: &str,
+    ) -> RuntimeHostResult<Option<Vec<u8>>> {
+        self.store
+            .read_composed_file(hash, &format!("{FRAGMENT_CATALOGS_DIR}/{game}.json"))
     }
 
     /// ROUT-L RL-1b (`standard_packs.cached_generations`): the memo keeps the active generation
@@ -8554,6 +8574,7 @@ impl CatalogStore {
         &self,
         composition: &actingcommand_policy::StandardPackComposition,
         fragments: &BTreeMap<String, Vec<u8>>,
+        catalogs: &BTreeMap<String, Vec<u8>>,
         record: &[u8],
     ) -> RuntimeHostResult<LoadedCatalog> {
         let sources = composition.sources();
@@ -8589,6 +8610,20 @@ impl CatalogStore {
             })?;
             for (game, bytes) in fragments {
                 write_new_file(&fragments_dir.join(format!("{game}.json")), bytes)?;
+            }
+            // Workflow #477 CV-2: the catalogs of switched files, only when there is one, so a
+            // generation without one holds what it held before.
+            if !catalogs.is_empty() {
+                let catalogs_dir = temporary.join(FRAGMENT_CATALOGS_DIR);
+                fs::create_dir(&catalogs_dir).map_err(|_| {
+                    fatal(
+                        HostCode::CatalogGenerationCreateFailed,
+                        HostLocation::StageCatalogGeneration,
+                    )
+                })?;
+                for (game, bytes) in catalogs {
+                    write_new_file(&catalogs_dir.join(format!("{game}.json")), bytes)?;
+                }
             }
             write_new_file(&temporary.join(COMPOSITION_RECORD_FILE), record)?;
             let manifest = serde_json::to_vec_pretty(&generation).map_err(|_| {

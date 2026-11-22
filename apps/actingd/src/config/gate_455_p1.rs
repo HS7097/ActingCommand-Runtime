@@ -167,6 +167,7 @@ fn p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it() {
             root: &root,
             maintenance: &[],
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let instances = BTreeMap::from([(

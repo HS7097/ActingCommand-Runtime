@@ -48,6 +48,7 @@ use actingcommand_contract::{
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
     StandardPackComposition, StandardPackGameFiles, compose_standard_pack_rules,
+    standard_pack_schedule_takes_catalog,
 };
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -831,6 +832,7 @@ impl Rows {
                             root: &files.root,
                             maintenance: files.maintenance.as_slice(),
                             irreversible: irreversible.get(game)?,
+                            catalog: files.catalog.as_deref(),
                         },
                     ))
                 })
@@ -853,9 +855,10 @@ impl Rows {
                     None => schedules.keys().cloned().collect(),
                 };
                 for game in &games {
+                    // Workflow #477 CV-2: a refusal in `pack-catalog.json` names that file.
                     let mut warning = Outcome::new(SharedCode::StandardPackRootInvalid)
                         .game(game.as_str())
-                        .path(root.join(game).join(STANDARD_PACK_SCHEDULE_FILE))
+                        .path(root.join(game).join(issue.issue.file))
                         .standard_pack_problem(issue.issue.problem)
                         .json_pointer(issue.issue.pointer.clone());
                     // RL-1c fix 1 (#411 M1): the refused file, by its sha256.
@@ -959,7 +962,8 @@ impl Rows {
     /// then listed as without the file. Each display defect of a file that reads is
     /// `standard_pack_catalog_display_invalid`. A root that still holds `ui.json` gets one
     /// `standard_pack_ui_retired` (the game, the file's path): nothing reads that file. No Runtime
-    /// component reads either file.
+    /// component reads `ui.json`; Workflow #477 CV-2: the Runtime's composer reads
+    /// `pack-catalog.json` of a root whose `schedule.json` names `catalog_business`, of no other.
     fn game_catalog(
         &mut self,
         directory: &Path,
@@ -1280,6 +1284,10 @@ struct ScheduleGame {
     root: StandardPackRoot,
     maintenance: Vec<BundleMaintenance>,
     schedule: Option<Vec<u8>>,
+    /// Workflow #477 CV-2 (register §1.508): `pack-catalog.json`'s bytes, read for a
+    /// `schedule.json` that names `catalog_business`, whose rules the composer takes their business
+    /// part from it for; `None` otherwise.
+    catalog: Option<Vec<u8>>,
 }
 
 /// ROUT-L RL-1c: the game root of `game` at `directory` as the scheduler workbench reads it for
@@ -1330,10 +1338,18 @@ fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, O
         .map(|index| index.maintenance().to_vec())
         .unwrap_or_default();
     let schedule = read(STANDARD_PACK_SCHEDULE_FILE)?;
+    // Workflow #477 CV-2: the catalog the composer takes a switched file's business part from.
+    let catalog = match &schedule {
+        Some(bytes) if standard_pack_schedule_takes_catalog(bytes) => {
+            read(STANDARD_PACK_CATALOG_FILE)?
+        }
+        _ => None,
+    };
     Ok(Some(ScheduleGame {
         root,
         maintenance,
         schedule,
+        catalog,
     }))
 }
 

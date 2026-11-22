@@ -118,7 +118,7 @@ use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_goals::{
     goal_issues, goal_warnings, read_goals_file, root_irreversibility, variable_report,
 };
-use crate::standard_pack_schedule::report_schedule;
+use crate::standard_pack_schedule::{report_schedule, switched_catalog};
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCatalogReport, StandardPackCheckRequest,
     StandardPackCheckResponse, StandardPackModel, StandardPackRootFiles,
@@ -139,7 +139,9 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
 };
-use actingcommand_policy::{CompiledCatalog, standard_pack_fact_probes};
+use actingcommand_policy::{
+    CATALOG_BUSINESS_SUBSYSTEM, CompiledCatalog, standard_pack_fact_probes,
+};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -480,10 +482,17 @@ pub(crate) fn check_standard_pack_root_with_catalog(
     // root stays as valid as it is without the file.
     if let Some(goals) = &goals {
         let schedule_path = root.join(STANDARD_PACK_SCHEDULE_FILE);
+        // Workflow #477 CV-2: a file that names `catalog_business` is held with its rules'
+        // business part, the root's `pack-catalog.json`'s.
+        let catalog = match bytes(STANDARD_PACK_SCHEDULE_FILE) {
+            Some(schedule) => switched_catalog(schedule, &schedule_path)?,
+            None => None,
+        };
         let issues = goal_issues(
             &game,
             &checked,
             bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
+            catalog.as_deref(),
             goals,
             &|directory: &str| root.join(directory),
         )?;
@@ -568,8 +577,18 @@ fn catalog_report(
             for issue in catalog.display_issues() {
                 warnings.push(catalog_display_outcome(game, &path, issue));
             }
-            for difference in standard_pack_catalog_differences(&catalog, schedule.as_ref()) {
-                warnings.push(difference.outcome(game));
+            // Workflow #477 CV-2: a root whose rules take their business part from the file has
+            // no second copy of it to differ from.
+            let switched = schedule.as_ref().is_some_and(|schedule| {
+                schedule
+                    .requires
+                    .iter()
+                    .any(|name| name == CATALOG_BUSINESS_SUBSYSTEM)
+            });
+            if !switched {
+                for difference in standard_pack_catalog_differences(&catalog, schedule.as_ref()) {
+                    warnings.push(difference.outcome(game));
+                }
             }
             let unlisted = catalog.unlisted(&checked.registry);
             StandardPackCatalogReport {

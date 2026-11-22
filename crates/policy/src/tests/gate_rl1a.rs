@@ -632,6 +632,7 @@ fn compose(
                         root,
                         maintenance: maintenance.as_slice(),
                         irreversible,
+                        catalog: None,
                     },
                 )
             })

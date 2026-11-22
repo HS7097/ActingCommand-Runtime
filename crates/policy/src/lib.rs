@@ -188,6 +188,9 @@ mod tests {
     // #455 P2 (0.12.79; register §1.505): the evaluator is given the reading the host computed for
     // a pool read from rows of a list, and every reader of a pool's reading takes it.
     mod gate_455_p2;
+    // #477 CV-2 (0.12.80; register §1.508): a `schedule.json` that names `catalog_business` takes
+    // its rules' business part from the root's version 2 `pack-catalog.json`.
+    mod gate_477_cv2;
     // #477 LF-1 (0.12.80; register §1.509): the turn cap a dispatch carries counts the lines of the
     // pools its task consumes.
     mod gate_477_lf1;
