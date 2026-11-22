@@ -3112,6 +3112,20 @@ then held back; the idle check stopped it again, with no end.
   be selected wakes the instance. After a Runtime start it is asleep once
   the start's preparation made it available ([runtime-config.md](../runtime-config.md), "What wakes
   an idle instance").
+- **A later position that names no time** (#486 ASLEEP-3, since 0.12.79; register §1.512, the
+  coordinator's ruling 3 of 11-22). On an asleep instance that no hold of positions 1 or 2 holds,
+  a candidate a later position of the order of the deferrals defers with no time of its own (a
+  suspended package, a closed pack schedule's row with no end, an owed rerun's pacing, the quiet
+  before a blackout, a remedy round, an availability denial with no release) counts for the idle
+  plan as held back with no time, as behind a hold: not due, no wake of its own. Its decision, its
+  reason and the not-run explanation are as before. Before 0.12.79 the plan counted such an
+  eligible decision with no wake due, and woke the instance for a task the next evaluation held
+  back again (production v0.12.78 on 11-22, a closed pack schedule, after a start). An entry
+  block's candidates (position 4b) still count due.
+- **At a start** (#486 ASLEEP-3, ruling 3): a wake the start owes waits for the start's first
+  plan and comes as a sleeping instance's ([runtime-config.md](../runtime-config.md), "At a start"),
+  and the wake a scheduled run does not answer withholds the idle action for its hold alone (the
+  same file, "The withheld action expires by itself").
 - **Not asleep.** An instance unavailable for any other cause, an application closed among them
   (its candidates are blocked at placement as before, and #484's fix round 2 holds for it); an
   instance whose emulator a person stopped. An asleep instance under a person's pause waits for the

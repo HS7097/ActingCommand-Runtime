@@ -630,11 +630,25 @@ fn idle_w2_the_wake_says_why_it_came_the_first_that_holds() {
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::ActionChanged));
-    // A start with no usable record owes the wake at its time.
+    // A start with no usable record owes the wake. #486 ASLEEP-3 (0.12.79, register §1.512, ruling
+    // 3; adapted): not at the start's time: it waits for the start's first plan, and comes as a
+    // sleeping instance's, or for review N-1's case: a plan that names no task wake at all while a
+    // reading waits.
+    let reading_alone = IdlePlan {
+        due_now: false,
+        next_wake_unix_ms: None,
+        reading_due_unix_ms: Some(now),
+        ..far
+    };
     let mut planner = IdlePlanner::default();
     planner.restore_owed(ALIAS, IdleAction::CloseApp, now);
     assert_eq!(
         planner.check(ALIAS, &PRODUCTION, free(), None, now),
+        None,
+        "no wake before the start's first plan"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(reading_alone), now),
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::OwedAtStart));
@@ -642,6 +656,11 @@ fn idle_w2_the_wake_says_why_it_came_the_first_that_holds() {
     let mut planner = closed(Some(now - MINUTE_MS), true);
     assert_eq!(
         planner.check(ALIAS, &PRODUCTION, free(), None, now),
+        None,
+        "no wake before the start's first plan"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(reading_alone), now),
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::OwedAtStart));

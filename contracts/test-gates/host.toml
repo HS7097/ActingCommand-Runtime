@@ -4732,3 +4732,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep2_r7_a_pool_regenerating_below_its_trigger_lets_the_closed_instance_sleep",
 ]
 incident = ["#486", "ASLEEP-2"]
+
+# #486 ASLEEP-3 (0.12.79; register §1.512; brief rd-1122/brief-486-asleep3.md; contracts/runtime-config.md, "The withheld action expires by itself", "A later position that names no time", "At a start"; contracts/scheduling/README.md, "An asleep instance"), the host half, on ASLEEP-1's replay instance (stop_emulator, its configured emulator start, a startup package), no clock read: the incident's replay: a start that cannot use a record restores the instance closed, its emulator running, its only task deferred pack_schedule_closed by a row with no end: the plan counts it held back, not due, no wake and no startup package, the ordinary check stops the emulator, and asleep nothing wakes it (r8); a wake no scheduled run answers: the first check withholds the stop and its one warning names next_eligible_unix_ms, twice the wake lead from that check; withheld up to it, and the ordinary stop just past it (r9); the planner: each consecutive unanswered wake doubles the hold, 10, 20, 40, 80, 120 and 120 minutes, and an admitted run ends the streak (h13); with every wake due and no run admitted, four stops and four wakes in two hours (h14)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep3_r8_a_start_restores_the_instance_closed_and_its_closed_pack_schedule_wakes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep3_r9_a_wake_no_run_answers_withholds_the_stop_for_its_hold_and_then_stops",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours",
+]
+incident = ["#486", "ASLEEP-3"]

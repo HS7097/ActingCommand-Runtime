@@ -74,8 +74,9 @@ use crate::idle_action::{
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, FactScalar, InstanceStuckRecovery,
-    MAX_RUNTIME_SUBSCRIPTION_WAIT_MS, RuntimeConfigManifest, RuntimeLifecyclePhase,
-    RuntimeSubscriptionRequest, SchedulingResumeSelfCheck, SubscriptionCursor,
+    MAX_RUNTIME_SUBSCRIPTION_WAIT_MS, PackScheduleEditRow, RuntimeConfigManifest,
+    RuntimeLifecyclePhase, RuntimeSubscriptionRequest, SchedulingResumeSelfCheck,
+    SubscriptionCursor,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
 use actingcommand_policy::{EligibilityState, PolicyCode, SchedulingDecisionState, TaskDecision};
@@ -2798,4 +2799,613 @@ fn asleep2_r6_none_and_an_awake_close_app_instance_decide_and_plan_as_before() {
     );
     assert!(awake.claims_free(), "no idle action");
     awake.close();
+}
+
+// ---- #486 ASLEEP-3 (0.12.79; register §1.512): a stop withheld after a wake that no scheduled
+// run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a
+// start (the coordinator's rulings 1 to 5 of 11-22).
+//
+// Production v0.12.78 on 11-22: a deploy's start restored an instance whose idle action is
+// `stop_emulator` closed (its emulator in fact ran before the restart), and its first check woke
+// it for a task (`task_due`) whose pack's schedule was closed with no end; the startup package ran,
+// and from then on the stop stayed withheld with no end of its own, no scheduled run being
+// admitted on the instance. The plan counted the task due because the evaluation deferred it
+// `pack_schedule_closed` with no wake, eligibility true, and the plan counts every eligible decision
+// with no wake of its own due; behind no hold, no look ahead reads it. And a wake the start owes
+// came at the start's time, whatever the plan.
+// - r8 (test 1): the incident's replay: a start that cannot use a record (an earlier start kept
+//   none) restores the instance closed, its emulator running, the only task held back by its
+//   pack's closed schedule: no wake and no startup package; the ordinary check stops the
+//   emulator, and the instance sleeps on.
+// - r9 (test 2): a wake no run answers: the stop is withheld for its first hold, twice the wake
+//   lead from the first withholding check, which its warning names (`next_eligible_unix_ms`), and
+//   past it the ordinary stop.
+// - h13 (test 3): each consecutive unanswered wake doubles the hold, up to its cap of 24 leads; an
+//   admitted run ends the streak.
+// - h14 (test 4): the loop bound: a wake predicate always due and no run ever admitted give at most
+//   four stops and four wakes in two hours.
+
+/// The package id the incident's task runs.
+const CLOSED_PACK: &str = "neutral.pack.asleep3";
+/// The code of a candidate its pack's schedule holds back.
+const PACK_SCHEDULE_CLOSED: &str = "pack_schedule_closed";
+
+/// A task package under `root` declaring [`CLOSED_PACK`], as the remedy table's scan reads a bound
+/// package (`gate_429_r8`'s fixture package: its control declaration, its resource list and one
+/// task).
+fn closed_pack_package(root: &TempDir) -> PathBuf {
+    let path = root.path().join("asleep3-package");
+    let control = json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": CLOSED_PACK,
+        "execution_mode": "navigable_route",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 16, "height": 9},
+        "entry_task_id": "task",
+        "capture_interval_ms": 10,
+        "step_timeout_ms": 600,
+        "timeout_ms": 8000,
+        "max_steps": 2
+    });
+    let probe = |page: &str, expected: [u8; 3]| {
+        json!({
+            "id": format!("{page}_colour"),
+            "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
+            "expected": expected
+        })
+    };
+    let task = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "ASLEEP-3 fixture",
+        "coordinate_space": {"width": 16, "height": 9},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [probe("home", [0, 0, 255]), probe("page_b", [255, 0, 0])],
+        "page_rules": {
+            "home": {"required": ["home_colour"]},
+            "page_b": {"required": ["page_b_colour"]}
+        },
+        "entry_page": "home",
+        "target_page": "page_b",
+        "operations": [{
+            "id": "go",
+            "from": "home",
+            "to": "page_b",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }]
+    });
+    for (file, value) in [
+        ("control.json", control),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ] {
+        let file = path.join(file);
+        fs::create_dir_all(file.parent().expect("a package file's directory"))
+            .expect("the package's directory");
+        fs::write(
+            file,
+            serde_json::to_vec_pretty(&value).expect("the package's JSON"),
+        )
+        .expect("a package file");
+    }
+    path
+}
+
+/// The fixture's procedures, `procedure.observe` (the budget task's) bound at `package`, as
+/// actingd binds a scheduled procedure.
+fn bound_procedures(package: &Path) -> ProcedureManifest {
+    ProcedureManifest::new(
+        [
+            "procedure.observe",
+            "procedure.observe-b",
+            "procedure.detect",
+        ]
+        .into_iter()
+        .map(|procedure_ref| {
+            let binding = ProcedureBinding::new(
+                procedure_ref,
+                "operation.observe",
+                vec!["after_observation".to_owned()],
+            )
+            .expect("a procedure binding");
+            if procedure_ref == "procedure.observe" {
+                binding.with_package_path(package.to_string_lossy())
+            } else {
+                binding
+            }
+        }),
+    )
+    .expect("the procedure manifest")
+}
+
+/// A start of the incident's host on `root`: the replay instance of [`open_replay_host`]
+/// (`stop_emulator`, its configured emulator start, a startup package, its stuck recovery off),
+/// the budget task's procedure bound at `package`; `keeps_idle_state` false: a start that keeps no
+/// idle state, as a build before it.
+fn open_incident_host(
+    root: &TempDir,
+    registered: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    package: &Path,
+    keeps_idle_state: bool,
+) -> RuntimeHost {
+    // `gate_ord1c`'s fix round 3, as `open_host` above.
+    let moved = Arc::clone(clock);
+    *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || moved.advance(1)));
+    let startup_package = root.path().join("asleep3-startup-package.zip");
+    fs::write(&startup_package, neutral_contained_task_package(true))
+        .expect("write the startup package");
+    let startup = ContainedTaskRequest::new(startup_package.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(60_000))
+        .expect("the startup package request");
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    let config = config(root)
+        .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
+        .with_procedure_manifest(bound_procedures(package))
+        .with_runtime_clock(clock.clone())
+        .with_config_manifest(stop_emulator_manifest(registered))
+        .with_stuck_recovery(BTreeMap::from([(
+            ALIAS.to_owned(),
+            InstanceStuckRecovery {
+                enabled: false,
+                cooldown_secs: 600,
+            },
+        )]))
+        .with_emulator_autostart(vec![ALIAS.to_owned()])
+        .with_network_connectivity_for_test(read)
+        .with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)]));
+    let config = if keeps_idle_state {
+        config
+    } else {
+        config.with_idle_state_unkept_for_test()
+    };
+    RuntimeHost::start(
+        config,
+        Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(state))),
+    )
+    .expect("start the incident's host")
+}
+
+/// The replay instance's row of `host.idle_state` stopped by `stop_emulator` with no wake planned.
+fn stopped_row_without_wake() -> BTreeMap<String, FactScalar> {
+    BTreeMap::from([
+        (
+            "instance_alias".to_owned(),
+            FactScalar::String(ALIAS.to_owned()),
+        ),
+        (
+            "action".to_owned(),
+            FactScalar::String(IdleAction::StopEmulator.as_str().to_owned()),
+        ),
+    ])
+}
+
+impl Replay {
+    /// #486 ASLEEP-3: the `next_eligible_unix_ms` of each `instance_idle_stop_withheld` of the
+    /// instance after `after`, in order.
+    fn withheld_ends(&self, after: u64) -> Vec<Option<u64>> {
+        let events = all_events(&self.host);
+        phases(&events)
+            .into_iter()
+            .filter(|(event, _)| {
+                event.sequence() > after && event.links().instance_id() == Some(&self.registered)
+            })
+            .filter_map(|(_, phase)| {
+                let RuntimeLifecyclePhase::DeviceStateObserved { outcome } = phase else {
+                    return None;
+                };
+                (outcome.code().as_str() == IdleCode::StopWithheld.as_str()).then(|| {
+                    outcome
+                        .value("next_eligible_unix_ms")
+                        .and_then(Value::as_u64)
+                })
+            })
+            .collect()
+    }
+
+    /// #486 ASLEEP-3: the operator's closing of [`CLOSED_PACK`] on the instance from `from_unix_ms`,
+    /// a row with no end (`EditPackSchedule`), as the resource side closes a package.
+    fn close_pack(&self, from_unix_ms: u64) {
+        let mut client = TestClient::connect(&self.host);
+        let request = client.request(RuntimeOperation::EditPackSchedule {
+            scope: FactScope::Instance {
+                instance_id: ALIAS.to_owned(),
+            },
+            package_id: CLOSED_PACK.to_owned(),
+            rows: vec![PackScheduleEditRow {
+                from_unix_ms,
+                until_unix_ms: None,
+                schedulable: false,
+            }],
+            expected_version: None,
+        });
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "the pack schedule is edited: {receipt:?}"
+        );
+    }
+}
+
+#[test]
+fn asleep3_r8_a_start_restores_the_instance_closed_and_its_closed_pack_schedule_wakes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let package = closed_pack_package(&root);
+    // An earlier start keeps no idle state (as a build before it; or a record the next start cannot
+    // use): the instance awake, its emulator running.
+    let earlier_clock = Arc::new(ManualRuntimeClock::new(at(1, 6, 0), 0));
+    let earlier = open_incident_host(
+        &root,
+        registered,
+        &earlier_clock,
+        &device_state(),
+        &package,
+        false,
+    );
+    earlier
+        .activate_policy_catalog(&sources(&[budget_task()]))
+        .expect("activate the budget catalogue");
+    earlier.close().expect("close the earlier start");
+
+    // The start does not know what the idle action left: it restores the instance closed after
+    // `stop_emulator`, owing its wake to the start. Its emulator in fact runs, as before the start.
+    let started_at = at(1, 6, 10);
+    let clock = Arc::new(ManualRuntimeClock::new(started_at, 0));
+    let state = device_state();
+    let host = open_incident_host(&root, registered, &clock, &state, &package, true);
+    let replay = Replay {
+        host,
+        clock,
+        state,
+        registered,
+        approved: BTreeSet::new(),
+        root,
+    };
+    let started = head(&replay.host);
+    let restored = kept_rows(&replay.host).expect("the start keeps its state");
+    let stop_emulator = FactScalar::String(IdleAction::StopEmulator.as_str().to_owned());
+    assert!(
+        matches!(
+            &restored[..],
+            [row] if row.get("action") == Some(&stop_emulator) && !row.contains_key("woken")
+        ),
+        "restored closed after stop_emulator: {restored:?}"
+    );
+
+    // Its task's package is closed by its pack's schedule, with no end.
+    replay.set_time(at(1, 6, 15));
+    replay.close_pack(started_at);
+
+    // The start's first evaluation: asleep, the instance is judged as available, and its pack's
+    // schedule holds the task back with no time (deferred, eligibility true, no wake: what the
+    // schedule explanation showed in production). The plan counts it held back, not due, and
+    // names no task to wake for.
+    assert_eq!(
+        deferred_by(&replay.cycle(at(1, 6, 20)), TASK, PACK_SCHEDULE_CLOSED),
+        None,
+        "a row with no end names no wake"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms.is_none(),
+        "not due, no wake: {read:?}"
+    );
+    assert_eq!(replay.due_task(), None, "no task to wake for");
+
+    // No wake and no startup package: the ordinary check carries out the idle action on the
+    // emulator, which in fact runs.
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(
+        stops(&replay.state),
+        1,
+        "the ordinary check stopped the emulator"
+    );
+    assert_eq!(emulator_starts(&replay.state), 0, "nothing started it");
+    assert_eq!(
+        replay.records(started),
+        [stop_record()],
+        "one stop and no wake"
+    );
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row_without_wake()]),
+        "kept stopped, no wake planned"
+    );
+
+    // Asleep after the stop: the pack's schedule still holds the task back, and nothing wakes it.
+    assert_eq!(
+        deferred_by(&replay.cycle(at(1, 7, 0)), TASK, PACK_SCHEDULE_CLOSED),
+        None,
+        "still held back with no wake"
+    );
+    assert_eq!(
+        replay.records(started),
+        [stop_record()],
+        "no wake for the closed pack"
+    );
+    assert_eq!(emulator_starts(&replay.state), 0, "nothing starts it");
+    replay.close();
+}
+
+#[test]
+fn asleep3_r9_a_wake_no_run_answers_withholds_the_stop_for_its_hold_and_then_stops() {
+    let mut replay = Replay::start(at(1, 6, 0));
+    let before = head(&replay.host);
+    // The day's two runs spend the task's budget; the check stops the emulator, its wake at the
+    // release less the lead.
+    replay.dispatch(at(1, 6, 10));
+    replay.dispatch(at(1, 6, 20));
+    let release = deferred_by(
+        &replay.cycle(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+
+    // The wake at its planned time starts the emulator, and its startup package runs.
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    replay.cycle(release - LEAD_MS);
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    replay.await_free(woken_at);
+
+    // No run admitted. The first check that would stop the emulator again withholds the stop, and
+    // its one warning names the hold's end: twice the wake lead from that check.
+    let withheld_at = at(3, 1, 0);
+    replay.cycle(withheld_at);
+    assert!(replay.claims_free(), "the stop is withheld");
+    let hold_end = withheld_at + 2 * LEAD_MS;
+    assert_eq!(
+        replay.withheld_ends(before),
+        [Some(hold_end)],
+        "one warning, naming when the hold ends"
+    );
+
+    // Up to the hold's end the stop stays withheld, with no second warning.
+    replay.cycle(hold_end);
+    assert!(replay.claims_free(), "still withheld at its end");
+    assert_eq!(stops(&replay.state), 1, "not stopped again yet");
+
+    // Past it, as if no wake had been: the ordinary stop, an `instance_idle_action`.
+    replay.cycle(hold_end + 1);
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(2, GATE_WAIT),
+        Some(2),
+        "the stop after the hold ended"
+    );
+    assert_eq!(
+        stops(&replay.state),
+        2,
+        "stopped again once the hold passed"
+    );
+    assert_eq!(
+        replay.records(before),
+        [
+            stop_record(),
+            wake_record(),
+            withheld_record(),
+            stop_record()
+        ],
+        "the stop, the wake, its one warning, the stop after the hold"
+    );
+    replay.close();
+}
+
+/// #486 ASLEEP-3, the planner: from `planner` (the instance stopped), one wake at `woken_at` for a
+/// due task whose configured start starts the emulator, its claims a minute, then the instance free
+/// with nothing due before `far`, every view showing the latest admission `admitted`. The hold the
+/// first withholding check gives (none: the stop was taken at once), checked to hold up to its end
+/// and to pass after it, and the time the stop was taken.
+fn unanswered_round(
+    planner: &mut IdlePlanner,
+    woken_at: u64,
+    far: u64,
+    admitted: Option<u64>,
+) -> (Option<u64>, u64) {
+    let view = |shown: IdleView| IdleView {
+        latest_admission: admitted,
+        ..shown
+    };
+    assert_eq!(
+        planner.check_with_due_task(
+            ALIAS,
+            &STOP,
+            view(stopped()),
+            Some(plan_at(woken_at, true, None)),
+            woken_at,
+            Some(TASK),
+        ),
+        Some(STOP_WAKE),
+        "the wake at {woken_at}"
+    );
+    planner.wake_started_emulator(ALIAS);
+    let held = woken_at + MINUTE_MS;
+    assert_eq!(
+        planner.check(
+            ALIAS,
+            &STOP,
+            view(leased()),
+            Some(plan_at(held, true, None)),
+            held
+        ),
+        None
+    );
+    let free_at = held + MINUTE_MS;
+    let first = planner.check(
+        ALIAS,
+        &STOP,
+        view(free()),
+        Some(plan_at(free_at, false, Some(far))),
+        free_at,
+    );
+    if matches!(first, Some(IdleStep::Act { .. })) {
+        planner.finished(ALIAS, IdleEnd::Done);
+        return (None, free_at);
+    }
+    assert_eq!(first, None, "the stop is withheld at {free_at}");
+    assert!(
+        planner.take_withheld_stop(ALIAS).is_some(),
+        "one warning for the wake at {woken_at}"
+    );
+    let end = planner.hold_end(ALIAS).expect("the hold's end");
+    assert_eq!(
+        planner.check(
+            ALIAS,
+            &STOP,
+            view(free()),
+            Some(plan_at(end, false, Some(far))),
+            end
+        ),
+        None,
+        "withheld up to its end"
+    );
+    assert_eq!(planner.take_withheld_stop(ALIAS), None, "once per wake");
+    let after = end + 1;
+    assert!(
+        matches!(
+            planner.check(
+                ALIAS,
+                &STOP,
+                view(free()),
+                Some(plan_at(after, false, Some(far))),
+                after
+            ),
+            Some(IdleStep::Act {
+                action: IdleAction::StopEmulator,
+                ..
+            })
+        ),
+        "past its end the stop is taken"
+    );
+    planner.finished(ALIAS, IdleEnd::Done);
+    (Some(end - free_at), after)
+}
+
+#[test]
+fn asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak() {
+    let far = at(3, 0, 0);
+    let mut planner = stopped_planner(None);
+    let mut woken_at = at(1, 6, 0);
+    let mut holds = Vec::new();
+    for _ in 0..6 {
+        let (hold, stopped_at) = unanswered_round(&mut planner, woken_at, far, None);
+        holds.push(hold);
+        woken_at = stopped_at + MINUTE_MS;
+    }
+    // Twice the lead (10 minutes), doubled for each consecutive unanswered wake before it, at most
+    // 24 leads (two hours).
+    assert_eq!(
+        holds,
+        [2, 4, 8, 16, 24, 24].map(|leads| Some(leads * LEAD_MS)),
+        "10, 20, 40, 80, 120 and 120 minutes"
+    );
+    // A scheduled run admitted since the last wake answers it and ends the streak: the next wake's
+    // hold is the first again.
+    let (hold, _) = unanswered_round(&mut planner, woken_at, far, Some(7));
+    assert_eq!(hold, Some(2 * LEAD_MS), "an admitted run ended the streak");
+}
+
+#[test]
+fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours() {
+    /// Where the instance stands between two checks of the loop.
+    #[derive(Clone, Copy)]
+    enum Standing {
+        Awake,
+        Stopped,
+        Woken,
+    }
+    let start = at(1, 6, 0);
+    let end = start + 2 * HOUR_MS;
+    let mut planner = IdlePlanner::default();
+    let mut standing = Standing::Awake;
+    let (mut stops_taken, mut wakes, mut warnings) = (0_u32, 0_u32, 0_u32);
+    let mut now = start;
+    // A check every minute for two hours. Awake, the plan shows no work, so the check would stop
+    // the emulator; stopped, the wake predicate always says due; no run is ever admitted.
+    while now <= end {
+        match standing {
+            Standing::Awake => {
+                if let Some(step) =
+                    planner.check(ALIAS, &STOP, free(), Some(plan_at(now, false, None)), now)
+                {
+                    assert!(
+                        matches!(
+                            step,
+                            IdleStep::Act {
+                                action: IdleAction::StopEmulator,
+                                ..
+                            }
+                        ),
+                        "{step:?} at {now}"
+                    );
+                    planner.finished(ALIAS, IdleEnd::Done);
+                    stops_taken += 1;
+                    standing = Standing::Stopped;
+                }
+                if planner.take_withheld_stop(ALIAS).is_some() {
+                    warnings += 1;
+                }
+            }
+            Standing::Stopped => {
+                assert_eq!(
+                    planner.check_with_due_task(
+                        ALIAS,
+                        &STOP,
+                        stopped(),
+                        Some(plan_at(now, true, None)),
+                        now,
+                        Some(TASK),
+                    ),
+                    Some(STOP_WAKE),
+                    "woken at once at {now}"
+                );
+                planner.wake_started_emulator(ALIAS);
+                wakes += 1;
+                standing = Standing::Woken;
+            }
+            Standing::Woken => {
+                assert_eq!(
+                    planner.check(ALIAS, &STOP, leased(), Some(plan_at(now, true, None)), now),
+                    None
+                );
+                standing = Standing::Awake;
+            }
+        }
+        now += MINUTE_MS;
+    }
+    // The first stop, then one after each hold: 10 minutes from the first withholding check, then
+    // 20 and 40; the fourth hold, 80 minutes, outlasts the two hours (11-21's loop went round
+    // eleven times in sixteen minutes).
+    assert_eq!(
+        (stops_taken, wakes, warnings),
+        (4, 4, 4),
+        "four stops, four wakes and one warning each"
+    );
 }

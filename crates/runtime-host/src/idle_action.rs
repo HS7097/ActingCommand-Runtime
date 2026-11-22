@@ -141,6 +141,21 @@
 //! startup package ran to its end ([`IdlePlanner::wake_started_application`]) stays unanswered as
 //! above: meanwhile the application is not closed again (`auto` rests at home at most, a plain
 //! `close_app` nothing), with the same one warning.
+//!
+//! #486 ASLEEP-3 (0.12.79; register §1.512; production v0.12.78 on 11-22: a wake no scheduled run
+//! answered kept an emulator running with no end). Ruling 1: the withheld action expires by itself.
+//! From the first check that withholds it, an unanswered wake holds the action back for its hold
+//! ([`unanswered_hold_ms`]: twice the wake lead in effect of the action it brought the instance back
+//! from, doubled for each consecutive unanswered wake of the instance before it, at most
+//! [`HOLD_CAP_LEADS`] leads), and once the hold has passed the check takes the action as if no wake
+//! had been; an answer (an admitted scheduled run, another idle configuration, a catalog's
+//! activation) ends the streak, and a Runtime start forgets it. Ruling 3: a wake the start owes
+//! (an instance restored woken, or with no usable record) waits for the start's first plan and
+//! comes, as a sleeping instance's, for a task due, a switched action or the plan's own time, the
+//! time the start owed it at being none; but for review N-1's case (the plan names no task wake at
+//! all while a reading waits for the wake). Restored after `stop_emulator` with its emulator in
+//! fact running and no wake come, the instance gets the ordinary check's action with no startup
+//! package first ([`IdlePlanner::check_with_due_task`]).
 
 use crate::codes::IdleWakeCause;
 use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
@@ -532,7 +547,8 @@ struct InstanceIdle {
     /// once, and again only for another action.
     unsupported: Option<IdleAction>,
     /// #484 IDLE-W2: an idle instance owes its wake to the start that restored it (restored
-    /// woken, or with no usable record), until the wake is queued.
+    /// woken, or with no usable record), until the wake is queued (#486 ASLEEP-3: or the ordinary
+    /// check takes its action, `act_on_restored`).
     owed_at_start: bool,
     /// #486 ASLEEP-1 (ruling 6): the wake that started the instance's emulator, while no scheduled
     /// run admitted on the instance since answered it.
@@ -563,6 +579,26 @@ pub(crate) struct WithheldStop {
     pub(crate) woken_at_unix_ms: u64,
 }
 
+/// #486 ASLEEP-3 (register §1.512, ruling 1): the first hold of an unanswered wake, in wake leads of
+/// the action it brought the instance back from (10 minutes with the factory lead of 5).
+const HOLD_FIRST_LEADS: u64 = 2;
+/// #486 ASLEEP-3 (ruling 1): the longest hold, in the same wake leads (two hours with the factory
+/// lead of 5 minutes).
+const HOLD_CAP_LEADS: u64 = 24;
+
+/// #486 ASLEEP-3 (register §1.512, ruling 1): how long the idle check withholds the action after an
+/// unanswered wake back from `action` under `config`, `streak` the consecutive unanswered wakes of
+/// the instance before it: [`HOLD_FIRST_LEADS`] wake leads of `action` in effect, doubled for each
+/// of them, at most [`HOLD_CAP_LEADS`] leads (with the factory lead of 5 minutes: 10, 20, 40, 80,
+/// then 120 minutes). No key: the hold is derived from the wake lead.
+fn unanswered_hold_ms(config: &IdleConfig, action: IdleAction, streak: u32) -> u64 {
+    let lead_ms = config.wake_lead_ms(action);
+    lead_ms
+        .saturating_mul(HOLD_FIRST_LEADS)
+        .saturating_mul(2_u64.saturating_pow(streak))
+        .min(lead_ms.saturating_mul(HOLD_CAP_LEADS))
+}
+
 /// #486 ASLEEP-1 (ruling 6): where the one warning of an unanswered wake stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopWarning {
@@ -588,6 +624,11 @@ enum StopWarning {
 /// ([`IdlePlanner::wake_started_application`]), the idle check does not close the application
 /// again while it stands: under `auto` the tier stops at the rest, under a plain `close_app`
 /// nothing is taken. The same ends end it.
+///
+/// #486 ASLEEP-3 (register §1.512, ruling 1): and it holds the action back for its hold alone,
+/// counted from the first check that withholds it; once that hold has passed the wake withholds
+/// nothing more, as if it had not been, and stays only to be answered or to pass its streak on to
+/// the instance's next wake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UnansweredWake {
     /// #486 ASLEEP-2: the action the wake brought the instance back from (`stop_emulator` or
@@ -603,6 +644,15 @@ struct UnansweredWake {
     /// `close_app`, whether its startup package ran to its end).
     started: bool,
     warning: StopWarning,
+    /// #486 ASLEEP-3: the consecutive unanswered wakes of the instance before this one (each a
+    /// wake that started what it woke, none answered since).
+    streak: u32,
+    /// #486 ASLEEP-3: how long the action is withheld once a check first withholds it
+    /// ([`unanswered_hold_ms`] of the action, the idle keys and the streak as the wake was queued).
+    hold_ms: u64,
+    /// #486 ASLEEP-3: when the hold ends (the first withholding check's time plus `hold_ms`); none
+    /// before a check withheld the action.
+    hold_until_unix_ms: Option<u64>,
 }
 
 impl UnansweredWake {
@@ -612,6 +662,22 @@ impl UnansweredWake {
         self.config != *config
             || latest_admission
                 .is_some_and(|latest| self.admitted_through.is_none_or(|through| latest > through))
+    }
+
+    /// #486 ASLEEP-3 (ruling 1): whether the hold has passed at `now_unix_ms` (strictly after its
+    /// end), so the wake withholds nothing more.
+    fn hold_passed(&self, now_unix_ms: u64) -> bool {
+        self.hold_until_unix_ms
+            .is_some_and(|until| now_unix_ms > until)
+    }
+
+    /// A check at `now_unix_ms` withholds the action: the first time, the one warning is due and
+    /// (#486 ASLEEP-3) the hold starts.
+    fn withhold(&mut self, now_unix_ms: u64) {
+        if self.warning == StopWarning::Unsaid {
+            self.warning = StopWarning::Due;
+            self.hold_until_unix_ms = Some(now_unix_ms.saturating_add(self.hold_ms));
+        }
     }
 }
 
@@ -668,7 +734,13 @@ impl IdlePlanner {
     /// emulator is not stopped again, and the first check that would have stopped it makes its
     /// one warning due ([`Self::take_withheld`]). #486 ASLEEP-2 (register §1.506, ruling 3): so is
     /// a wake after `close_app` that queues the startup package, which binds the close once that
-    /// package ran to its end.
+    /// package ran to its end. #486 ASLEEP-3 (register §1.512, ruling 1): it withholds the action
+    /// for its hold alone, from the first check that withholds it ([`unanswered_hold_ms`], its
+    /// streak the instance's consecutive unanswered wakes before it). Ruling 3: a wake the start owes
+    /// waits for the start's first plan, which wakes the instance as it wakes a sleeping one, but
+    /// for review N-1's case (no task wake at all, a reading waiting); an instance so restored after
+    /// `stop_emulator` whose emulator in fact runs, and for which no wake comes, gets the action of
+    /// an active instance's check instead, with no startup package first (`act_on_restored`).
     pub(crate) fn check_with_due_task(
         &mut self,
         alias: &str,
@@ -723,6 +795,11 @@ impl IdlePlanner {
                     // After the wake, an action waits for a plan made after this work.
                     entry.in_use_at_unix_ms = Some(now_unix_ms);
                 }
+                // #486 ASLEEP-3 (register §1.512, ruling 3): a wake the start owes waits for the
+                // start's first plan; nothing else judges whether a task wakes the instance.
+                if entry.owed_at_start && plan.is_none() {
+                    return None;
+                }
                 let step = wake(
                     entry,
                     config,
@@ -745,6 +822,16 @@ impl IdlePlanner {
                 ) = (step, entry.phase)
                     && binds_wake(woken_from, work, view)
                 {
+                    // #486 ASLEEP-3 (ruling 1): the instance's consecutive unanswered wakes before
+                    // this one: an earlier wake still standing unanswered passes its streak on,
+                    // counting itself when it started what it woke.
+                    let streak = entry.unanswered.as_ref().map_or(0, |earlier| {
+                        if earlier.started {
+                            earlier.streak.saturating_add(1)
+                        } else {
+                            earlier.streak
+                        }
+                    });
                     entry.unanswered = Some(UnansweredWake {
                         action: woken_from,
                         withheld: WithheldStop {
@@ -758,7 +845,20 @@ impl IdlePlanner {
                         config: *config,
                         started: false,
                         warning: StopWarning::Unsaid,
+                        streak,
+                        hold_ms: unanswered_hold_ms(config, woken_from, streak),
+                        hold_until_unix_ms: None,
                     });
+                }
+                // #486 ASLEEP-3 (ruling 3): restored by the start after `stop_emulator` while its
+                // emulator in fact runs, with no wake come: the ordinary check's action.
+                if step.is_none()
+                    && entry.owed_at_start
+                    && action == IdleAction::StopEmulator
+                    && view.emulator_on
+                    && !view.in_use()
+                {
+                    return act_on_restored(entry, config, view, plan, now_unix_ms);
                 }
                 step
             }
@@ -923,6 +1023,17 @@ impl IdlePlanner {
         self.take_withheld(alias).map(|(_, withheld)| withheld)
     }
 
+    /// #486 ASLEEP-3 (register §1.512, ruling 1): when the hold of the unanswered wake of `alias`
+    /// ends, once a check withheld the action (the warning's `next_eligible_unix_ms`); none
+    /// otherwise.
+    pub(crate) fn hold_end(&self, alias: &str) -> Option<u64> {
+        self.instances
+            .get(alias)?
+            .unanswered
+            .as_ref()?
+            .hold_until_unix_ms
+    }
+
     /// #486 ASLEEP-2 (register §1.506, ruling 3): the startup package of `alias` ran to its end
     /// (the host's startup claim says so): when the unanswered wake of `alias` is one after
     /// `close_app`, from now on it binds the close of that application until it is answered.
@@ -1059,8 +1170,11 @@ impl IdlePlanner {
     /// restored so too: what is left on them is not known, so they count as closed, never as
     /// open, and their wake brings them back through the startup package (the host restores the
     /// latter with its wake at the start's time, review N-1). #405 O-2: so is an instance woken
-    /// before the stop whose startup package had not run (`kept.woken`): its wake, the time it was
-    /// woken, has passed, so the start's first check queues its startup package again.
+    /// before the stop whose startup package had not run (`kept.woken`): it owes its wake to the
+    /// start. #486 ASLEEP-3 (register §1.512, ruling 3): a wake the start owes waits for the start's
+    /// first plan and comes as a sleeping instance's does (a task due, a switched action, the plan's
+    /// own time; review N-1's case aside); the time it was woken is kept in the record, never a
+    /// planned wake.
     pub(crate) fn restore(&mut self, alias: &str, kept: KeptIdle) {
         self.instances.insert(
             alias.to_owned(),
@@ -1077,7 +1191,9 @@ impl IdlePlanner {
 
     /// Review N-1, #484 IDLE-W2: a start that does not know what the idle action left restores
     /// `alias` as closed after `action`, owing its wake at the start's time `at_unix_ms`, a wake
-    /// the start owes ([`IdleWakeCause::OwedAtStart`]).
+    /// the start owes ([`IdleWakeCause::OwedAtStart`]). #486 ASLEEP-3 (register §1.512, ruling 3):
+    /// that time is what the record keeps; the wake itself comes as a restored woken instance's
+    /// ([`Self::restore`]).
     pub(crate) fn restore_owed(&mut self, alias: &str, action: IdleAction, at_unix_ms: u64) {
         self.instances.insert(
             alias.to_owned(),
@@ -1173,13 +1289,14 @@ fn decide(
         IdleAction::Auto(gaps) => {
             let mut tier = auto_tier(gaps, config.min_gap_ms, gap_ms, view.auto_cap())?;
             // #486 ASLEEP-1 (ruling 6): below the emulator's stop while a wake that started it is
-            // unanswered; the lighter tiers stay as they are.
-            if tier == Tier::StopEmulator && withhold_stop(entry) {
+            // unanswered (#486 ASLEEP-3: and its hold has not passed); the lighter tiers stay as
+            // they are.
+            if tier == Tier::StopEmulator && withhold_stop(entry, now_unix_ms) {
                 tier = Tier::CloseApp;
             }
             // #486 ASLEEP-2 (ruling 3): below the application's close, to the rest at most, while
             // a wake that started the application is unanswered.
-            if tier == Tier::CloseApp && withhold_close(entry) {
+            if tier == Tier::CloseApp && withhold_close(entry, now_unix_ms) {
                 tier = Tier::Rest;
             }
             match tier {
@@ -1201,13 +1318,13 @@ fn decide(
                 return None;
             }
             // #486 ASLEEP-1 (ruling 6): no stop of an emulator a wake started while that wake is
-            // unanswered.
-            if action == IdleAction::StopEmulator && withhold_stop(entry) {
+            // unanswered (#486 ASLEEP-3: and its hold has not passed).
+            if action == IdleAction::StopEmulator && withhold_stop(entry, now_unix_ms) {
                 return None;
             }
             // #486 ASLEEP-2 (ruling 3): no close of an application a wake started while that wake
             // is unanswered.
-            if action == IdleAction::CloseApp && withhold_close(entry) {
+            if action == IdleAction::CloseApp && withhold_close(entry, now_unix_ms) {
                 return None;
             }
             action
@@ -1228,35 +1345,60 @@ fn decide(
     })
 }
 
-/// #486 ASLEEP-1 (ruling 6): whether the check withholds the stop of the instance's emulator, which
-/// the unanswered wake of `entry` started; when it does, the wake's one warning is due, unless it
-/// was said already.
-fn withhold_stop(entry: &mut InstanceIdle) -> bool {
-    let Some(wake) = entry.unanswered.as_mut().filter(|wake| wake.started) else {
-        return false;
-    };
-    if wake.warning == StopWarning::Unsaid {
-        wake.warning = StopWarning::Due;
-    }
-    true
-}
-
-/// #486 ASLEEP-2 (register §1.506, ruling 3): whether the check withholds the close of the
-/// instance's application, which the unanswered wake of `entry` after `close_app` started (its
-/// startup package ran to its end); when it does, the wake's one warning is due, unless it was
-/// said already. A wake after `stop_emulator` withholds no close (ASLEEP-1's `auto` cap).
-fn withhold_close(entry: &mut InstanceIdle) -> bool {
+/// #486 ASLEEP-1 (ruling 6): whether the check at `now_unix_ms` withholds the stop of the instance's
+/// emulator, which the unanswered wake of `entry` started; when it does, the wake's one warning is
+/// due, unless it was said already. #486 ASLEEP-3 (register §1.512, ruling 1): the first time, the
+/// wake's hold starts; once it has passed the wake withholds nothing.
+fn withhold_stop(entry: &mut InstanceIdle, now_unix_ms: u64) -> bool {
     let Some(wake) = entry
         .unanswered
         .as_mut()
-        .filter(|wake| wake.started && wake.action == IdleAction::CloseApp)
+        .filter(|wake| wake.started && !wake.hold_passed(now_unix_ms))
     else {
         return false;
     };
-    if wake.warning == StopWarning::Unsaid {
-        wake.warning = StopWarning::Due;
-    }
+    wake.withhold(now_unix_ms);
     true
+}
+
+/// #486 ASLEEP-2 (register §1.506, ruling 3): whether the check at `now_unix_ms` withholds the close
+/// of the instance's application, which the unanswered wake of `entry` after `close_app` started
+/// (its startup package ran to its end); when it does, the wake's one warning is due, unless it was
+/// said already. A wake after `stop_emulator` withholds no close (ASLEEP-1's `auto` cap). #486
+/// ASLEEP-3 (ruling 1): its hold as for the stop.
+fn withhold_close(entry: &mut InstanceIdle, now_unix_ms: u64) -> bool {
+    let Some(wake) = entry.unanswered.as_mut().filter(|wake| {
+        wake.started && wake.action == IdleAction::CloseApp && !wake.hold_passed(now_unix_ms)
+    }) else {
+        return false;
+    };
+    wake.withhold(now_unix_ms);
+    true
+}
+
+/// #486 ASLEEP-3 (register §1.512, ruling 3): the ordinary check of an instance the start restored
+/// closed after `stop_emulator`, owing its wake, whose emulator in fact runs and for which no wake
+/// came: the action of an active instance's check ([`decide`]), with no startup package first.
+/// Taken, the instance is acting and owes the start nothing more; not taken (a gap too short, a
+/// pause, no plan that counts its last work), it stays closed as it was, owing its wake, and only
+/// the one warning of an action it cannot take passes (a rest is no step on an instance whose
+/// application the start does not know).
+fn act_on_restored(
+    entry: &mut InstanceIdle,
+    config: &IdleConfig,
+    view: IdleView,
+    plan: Option<IdlePlan>,
+    now_unix_ms: u64,
+) -> Option<IdleStep> {
+    let closed = entry.phase;
+    entry.phase = Phase::Active;
+    let step = decide(entry, config, view, plan, now_unix_ms, false);
+    if matches!(step, Some(IdleStep::Act { .. })) {
+        entry.owed_at_start = false;
+        return step;
+    }
+    entry.phase = closed;
+    step.filter(|step| matches!(step, IdleStep::Unsupported { .. }))
 }
 
 /// #486 ASLEEP-1 (ruling 6) and ASLEEP-2 (ruling 3): whether a wake after `action` that queues
@@ -1278,7 +1420,12 @@ fn binds_wake(action: IdleAction, work: &[WakeWork], view: IdleView) -> bool {
 /// `start_held` is not queued; the instance stays idle with its wake ([`IdleStep::WakeHeld`]).
 /// IDLE-2: under `auto` the action is switched only when `auto` no longer allows the tier taken
 /// on the instance ([`IdleView::auto_allows`]), so the configured word `auto` beside a kept
-/// `close_app` or `stop_emulator` is no switch.
+/// `close_app` or `stop_emulator` is no switch. #486 ASLEEP-3 (register §1.512, ruling 3): for an
+/// instance owing its wake to the start, `current_unix_ms` (the start's time, or the time it was
+/// woken before the start) is no planned wake: its wake is the plan's, as a sleeping instance's, or
+/// at once for a task due or a switched action; and, review N-1's case, at once when the plan names
+/// no task wake at all while a reading waits (the reading waits for the wake, the task for the
+/// reading, so nothing else would ever wake it).
 fn wake(
     entry: &mut InstanceIdle,
     config: &IdleConfig,
@@ -1290,6 +1437,8 @@ fn wake(
 ) -> Option<IdleStep> {
     let start_held = view.start_held;
     let lead_ms = config.wake_lead_ms(action);
+    let owed_to_start = entry.owed_at_start;
+    let current_unix_ms = current_unix_ms.filter(|_| !owed_to_start);
     let from_plan = plan
         .and_then(|plan| plan.next_due_unix_ms())
         .map(|due| due.saturating_sub(lead_ms));
@@ -1303,7 +1452,12 @@ fn wake(
         IdleAction::Auto(_) => !view.auto_allows(action),
         configured => configured != action,
     };
-    if switched || due_now || wake_at_unix_ms.is_some_and(|at| at <= now_unix_ms) {
+    // #486 ASLEEP-3 (ruling 3): review N-1's case of a wake the start owes.
+    let reading_alone = owed_to_start
+        && plan.is_some_and(|plan| {
+            plan.next_wake_unix_ms.is_none() && plan.reading_due_unix_ms.is_some()
+        });
+    if switched || due_now || reading_alone || wake_at_unix_ms.is_some_and(|at| at <= now_unix_ms) {
         // PAUSE-AUTO: a wake that would start the emulator waits, owed, for the start to be free.
         if start_held && wake_work(action).contains(&WakeWork::EmulatorStart) {
             entry.phase = Phase::Idle {
