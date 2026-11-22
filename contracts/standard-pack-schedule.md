@@ -436,6 +436,20 @@ game's business rules:
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
 
+**Who writes the fixed value and the marks, since Workflow #477 CV-1** (0.12.79; register §1.507;
+[pack-catalog.md](pack-catalog.md), "Version 2"). A rule's `consumes` and `produces`, its
+`fixed_value_milli` with its `fixed_value_origin`, and its `limited` and `realization` marks may
+also stand in its package's entry of a version 2 `pack-catalog.json`, with the same types, bounds
+and meaning (one definition: the contract crate's `resource_effect`), the entry's own part or the
+rule's per-rule part where the rules of one package differ. `actinglab standard-pack catalog
+--refresh` (and `--schema-version 2`) writes them there from the rules; `--values <file>` is the
+entry point of the model's export for the value and the marks (`acmodel bindings apply` still
+writes the rules). **In 0.12.79 the rules are still what the composer reads**: nothing here
+changes, a difference between a rule and its entry is the warning
+`standard_pack_catalog_schedule_differs`, and no Runtime component opens the catalog. The next
+slice (CV-2) has the composer take them from the catalog, switched on per root by an entry of
+`requires`.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's

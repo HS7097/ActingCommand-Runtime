@@ -45918,6 +45918,109 @@ v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in
 language:
 被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
 
+### 1.507 Slice #477 CV-1 (0.12.79): `pack-catalog.json` version 2 carries a package's business part in full, and the tools write, check, build and place it; no Runtime component reads it (Workflow #477; the owner's plan to cut the four resource repositories over at once to one catalogue file holding a task's display, what it consumes and produces, and its value; the rulings 1 to 8 are the coordinator's of 11-22, ruling 7 as the coordinator replaced it during the work (per-rule parts), no words of the owner's behind them; coordinator work order `rd-1122/brief-477-cv1.md` after the read-only study `rd-1122/study-477-step2.md`, its sections 1 to 3 and the coordinator's disposition at its end; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.507 (1.505 belongs to another slice of this version).
+[pack-catalog.md](pack-catalog.md) ("Version 2", "What is wrong", "Differences from
+`schedule.json`", "Who reads it", "Who writes it", "Interface", "What the later slices add") is the
+contract; [standard-pack-schedule.md](standard-pack-schedule.md) ("Who writes the fixed value and
+the marks, since Workflow #477 CV-1"), [component-interfaces.md](component-interfaces.md) (the
+`package` row 24) and [resource-verify.md](resource-verify.md) (the revision row 24) follow it.
+Why: the catalogue's reader refused a value member ("a later slice"), the quantities, the fixed
+value and the marks stood only in each rule of `schedule.json`, and the next slice (CV-2) has the
+composer take them from the catalogue. This slice is that slice's first half: the file carries the
+business part in full and the tools move today's rules into it.
+
+**The shape** (rulings 1, 2, 7). `schema_version` `actingcommand.pack-catalog.v2`; envelope and
+display as version 1. An entry: its own part (`consumes`, `produces`, `value`?, `limited`?,
+`realization`?) and `rules`?, a list of per-rule parts `{rule_id, consumes, produces, value?,
+limited?, realization?}`, each standing for its rule in place of the own part, whole. An effect is
+a V2 resource effect exactly as a rule writes it, read with the one type
+(`crates/actingcommand-contract/src/resource_effect.rs`: `ResourceEffectSpec`, `EffectAmount`,
+`ConsumptionFact`, `EffectDirection`, `ObservationSource`, moved there from the policy crate's
+`schema.rs`, which re-exports them; the compiler reads a rule's effects with them as before) and
+held to its own bounds by one function (`ResourceEffectSpec::form_fault`) and the constants the
+compiler compares with (`MAX_EFFECT_CONFIDENCE_MILLI`, `MAX_EFFECTS_PER_TASK`, the identifier's
+grammar `scheduling_identifier_byte` and `MAX_SCHEDULING_IDENTIFIER_BYTES`, which the compiler's
+validation now names). `value` `{milli, origin?: "model"}`; the marks `true` or absent. In code:
+`CatalogParts { own: Option<CatalogPart>, rules: Vec<CatalogRulePart> }` on `CatalogEntry::parts`
+(`None` for version 1), `CatalogPart { consumes, produces, value: Option<CatalogValue>, limited,
+realization }`, `CatalogValue { milli, origin: ScheduleValueOrigin }` (the rule's origin type).
+
+**The limits**: those of a rule's effect (a constant and a fallback 1 to 2^53 − 1, an expectation
+0 to 2^53 − 1, a confidence 0 to 1000, 128 effects a side, a fact read on `consumes` only, its key
+an identifier holding no list reading); a value's `milli` 1 to 2^53 − 1 (the task member's); 4096
+per-rule parts an entry (`MAX_PACK_CATALOG_RULE_PARTS`, the most tasks a V2 catalog holds); a
+`rule_id` 1 to 128 bytes of the identifier's grammar, once an entry; 5120 items in a values file
+(`MAX_PACK_CATALOG_VALUE_ITEMS`).
+
+**The refusals** (`standard_pack_root_invalid` with its word at its pointer; the display file's
+refusal for the values file). No new code (the third stop condition did not hold); three new words
+of `standard_pack_problem` and four of `catalog_difference`, each one cause:
+
+| Case | Word | Pointer |
+|---|---|---|
+| an effect not of the type, two quantities or none | `malformed` | the effect |
+| a direction not the side's, a fact read on `produces`, a fact key off the grammar | `malformed` | `…/direction`, `…/amount`, `…/amount/fact_key` |
+| an amount, fallback, expectation, confidence or count past its bound | `catalog_out_of_limits` | the member, the side |
+| a value's `milli` past its bound; an `origin` other than `model`; a mark other than `true` | `catalog_out_of_limits`; `malformed` | `…/value/milli`, `…/value/origin`, `…/limited`, `…/realization` |
+| a value beside the realization mark, or beside a production of a pool whose valuation is declared or pending (the compiler's `fixed_value_conflict`) | `catalog_value_conflict` (new) | `…/value` |
+| a per-rule part of no rule that runs the package (as `package_not_listed` for an entry) | `catalog_rule_unknown` (new) | `…/rules/<k>/rule_id` |
+| a values item naming a part the catalogue does not write | `catalog_part_absent` (new) | the item |
+| a `--values` line that writes version 1 | `validation_failed` | (usage) |
+
+**The writer** (ruling 4, 7). `--schema-version 2` (its one value) writes version 2; a file of
+version 2 stays so; a version 1 file is converted, every entry's business part its rules'
+(`converted`). A part from the rules: each rule's effects as written, fixed value with origin, marks;
+equal parts give the entry's own part, differing ones a per-rule part each and **no own part**. A kept
+entry drops an undeclared pool from each part and leaves out a part of no rule
+(`standard_pack_catalog_left_out`, now with `task_id`). `--values <file>`
+(`actingcommand.pack-catalog-values.v1`, `{packs: [{package_id, rule_id?, value?, limited?,
+realization?}]}`) replaces a part's value and marks whole, the own part copied for a rule that has
+none (`values_written`).
+
+**Check** (ruling 5): rule by rule against the part that stands for it; the new words
+`quantity_differs`, `value_differs`, `limited_differs`, `realization_differs`; the warning's
+`pool_id` and `catalog_side` optional for the last three. Nothing is refused for a difference.
+
+**Room left** (ruling 7): a business part per value of a package variable is a per-rule part (each
+value will be a rule), and the composer's reading (CV-2) takes a rule's part from
+`CatalogParts::for_rule`, the per-rule part else the own part, and `CatalogPart::members` is the
+rule's own members' form; nothing of either is built.
+
+**Tests** (apps gate row "#477 CV-1"; `crates/resource-tooling/src/gate_477_cv1.rs`,
+`apps/actinglab/src/tests/gate_477_cv1.rs`).
+
+| Test | What it shows |
+|---|---|
+| `cv1_each_quantity_form_round_trips_and_the_bounds_are_a_rule_s` (1) | The four forms read and are written back as read; every bound at its two sides, a wrong direction, a fact on `produces`, two quantities, an unknown member, 128 and 129 effects |
+| `cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (2) | A value with its origin and both marks taken; each refusal of ruling 2 one case |
+| `cv1_version_2_and_refresh_write_the_rules_business_part_into_the_entry` (3) | A version 1 file converted, each entry equal to its rule; a refresh and a second line change nothing |
+| `cv1_rules_that_differ_get_a_part_each_and_the_entry_no_own_part` (ruling 7) | Two differing rules of one package: a per-rule part each, no own part, no difference |
+| `cv1_values_land_in_the_named_entry_and_one_of_an_unknown_package_is_refused` (4) | Value and marks replaced whole, the differences warned; an unknown package refused as a display file's; version 1 refuses the option |
+| `cv1_values_name_a_rule_s_part_as_well_as_an_entry_s` (ruling 7) | A rule's part written, a rule's part made from the own part; `catalog_part_absent`, `catalog_rule_unknown` |
+| `cv1_check_warns_of_a_difference_from_a_rule_and_refuses_nothing_for_it` (5) | `quantity_differs` warned, the check answering |
+| `cv1_a_rule_is_compared_with_its_own_part_and_a_part_of_no_rule_is_refused_and_left_out` (ruling 7) | Each rule against its own part; a part of no rule refused by check and left out by the writer |
+| `cv1_a_version_1_root_is_written_and_answered_byte_for_byte_as_before` (6, ruling 6) | The golden of PC-1's fixture: the file's bytes, the differences, the refreshed entry, the business part `packs` carries |
+| `cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16` (6) | 24 and 16 by the revision table; this build [3, 24]; an installer of [3, 23] refuses 24 at its edge |
+
+Adapted (8): the three request initializers of the PC-1 and PC-2 writer gates (the two new
+members), and the five tests that pin the shipped `package` range, to [3, 24].
+
+**What is not changed.** Every reader's answer for a version 1 file (the golden); the display part;
+the Runtime: no component opens the file, no schedule, catalogue generation or decision changes;
+the compiler's diagnostics (its bounds now named, their values the same); the files of the other
+slice of this version (the evaluator's readers of a pool, `policy_dispatch.rs`, `fact_store.rs`,
+`apps/actingd/src/config/manifest.rs`, `compose.rs`); every declared interface range but `package`.
+
+**At deploy.** Nothing changes for an installation: no Runtime component reads the file, and no
+repository writes version 2 until it asks (`--schema-version 2`). A tool of 0.12.78 or earlier reads
+a version 2 file as `malformed` at `/schema_version`: its `packs` lists the root as without the
+file, its `check` and build refuse the root, and its installer refuses a zip that carries one at the
+`package` edge (24 above its 23). A rollback meets nothing: an installed version 2 file is read by
+no Runtime of any release, and an earlier installer handles it as any root file (it sets it aside
+when it places a zip of 16 to 23 that carries none or replaces it with that zip's version 1 file).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
