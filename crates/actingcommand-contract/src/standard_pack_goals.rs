@@ -11,26 +11,27 @@
 //! shape and limits, the names, the five types and their members, the blocks, the ranges, the
 //! defaults and the rates. [`check_standard_pack_goal_references`] then holds the typed entries
 //! to what the game root offers ([`GoalReferences`]: the composed schedule's pools and rules, each
-//! rule with the package it runs, the bundle's packages, each with what its control declaration
-//! provides, and the variables its packages declare). Every violation is one
-//! [`StandardPackRootIssue`] of [`STANDARD_PACK_GOALS_FILE`] at its JSON pointer, in document order
-//! (a member repeated in one object first), at most [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the
-//! references are judged only for a file the reader accepts.
+//! rule with the package it runs, the bundle's packages, and the variables its packages declare).
+//! Every violation is one [`StandardPackRootIssue`] of [`STANDARD_PACK_GOALS_FILE`] at its JSON
+//! pointer, in document order (a member repeated in one object first), at most
+//! [`MAX_STANDARD_PACK_GOALS_ISSUES`]; the references are judged only for a file the reader
+//! accepts.
 //!
-//! G-R1 fix round 1 (the independent review): a package can do something irreversible when it
-//! provides a capability that any package of the game root marks irreversible
-//! (contracts/remedies.md §2.3), whether it marks it itself or not; a `tier` entry is held to the
-//! package each rule it governs runs; and [`GoalReferences`] is made only by
-//! [`GoalReferences::new`], from what every package of the root provides, so no reader can leave
-//! that answer empty by omission. G-R1 fix round 2 (the differential review): a `tier` entry is
-//! also held to the packages the rules that follow its rules run ([`GoalRule::followers`]).
+//! G-R1 fix round 1 (the independent review): a `tier` entry is held to the package each rule it
+//! governs runs, which must be a package of the root; and [`GoalReferences`] is made only by
+//! [`GoalReferences::new`], from every package of the root, so no reader can leave the packages
+//! out by omission. Workflow #455 G-SLx (register §1.501): until 0.12.77 the check also refused
+//! an entry that governed, reached or followed a package that can do something irreversible
+//! (`goal_governs_irreversible`, by [`IrreversiblePackages`] over the whole root; a `tier` entry
+//! held to the packages of the rules that follow its rules since G-R1 fix round 2); such an entry
+//! is accepted as for any other package since, and nothing gives that word.
 //!
 //! Workflow #463 V1 (`contracts/package-variables.md`): the four types that governed packages
 //! (`integer`, `choice`, `switch`, `ordered`) are replaced by the placement `variable`, and the
 //! value-type code they had moved to [`crate::package_variables`], which reads a package's
 //! `variables` with this module's [`Check`]. A placement is held to the variables the root's
-//! packages declare (`goal_variable_unknown`) and, as a governed package was, to the packages that
-//! declare it (`goal_governs_irreversible`). V1 fix round 3 (the coordinator's ruling 2 on the
+//! packages declare (`goal_variable_unknown`) and to the packages that declare it, which must be
+//! packages of the root (`goal_package_unknown`). V1 fix round 3 (the coordinator's ruling 2 on the
 //! design's questions, release 0.12.60 having shipped version 1 with its eight types): the
 //! document of the five types is version 2, [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], which a bundle
 //! declares with `package` [`GOALS_PACKAGE_REVISION`]; a version 1 document is
@@ -394,22 +395,14 @@ pub struct GoalTierOption {
 
 /// A rule of `schedule.json` as the references hold it (G-R1 fix round 1): the package it runs,
 /// which a `tier` entry that governs the rule is held to, and whether it writes
-/// `fixed_value_milli`; fix round 2: and the rules that follow it, whose packages the tier is held
-/// to as well.
+/// `fixed_value_milli`. Workflow #455 G-SLx (register §1.501): the rules that follow it, which
+/// G-R1 fix round 2 held the tier to for the rule of irreversibility, are no reference any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalRule {
     /// The rule's `package_id`.
     pub package_id: String,
     /// The rule writes `fixed_value_milli`.
     pub fixed_value: bool,
-    /// G-R1 fix round 2: the ids of the rules that follow this one, which run when it completes
-    /// (`dependency_completed`, contracts/scheduling/README.md, "Ties and chain heads"), so that
-    /// scaling its value makes them run more with it. Workflow #455 G-R2s fix round 1: every rule,
-    /// not held, whose trigger has a chain link to this one as the evaluator reads a link, in file
-    /// order (the policy crate's `standard_pack_rule_followers`, the lists the composer's mark
-    /// reads), not only the followers the coverage lists (`benefit_followers`). Required, so that
-    /// no reader leaves them out by omission.
-    pub followers: Vec<String>,
 }
 
 /// Workflow #463 V1: a variable of the game root as the references hold it: the block its kind is
@@ -422,9 +415,9 @@ pub struct GoalVariable {
 }
 
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
-/// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from what every
-/// package of the root provides; there is no default, so a reader cannot leave the answer to
-/// which packages can do something irreversible empty by omission.
+/// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from every
+/// package of the root; there is no default, so a reader cannot leave the packages out by
+/// omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalReferences {
     /// The pools of the composed schedule by id, each `true` when its `valuation` holds both
@@ -435,25 +428,28 @@ pub struct GoalReferences {
     /// Workflow #463 V1: the variables the packages of the root declare, by name; none until a
     /// reader adds them, so that every placement is then `goal_variable_unknown`.
     pub variables: BTreeMap<String, GoalVariable>,
-    /// The packages of the game root's `bundle.json` by id, each `true` when it can do something
-    /// irreversible ([`GoalReferences::new`]); Workflow #455 G-R2s: held as the one copy of the
-    /// rule, [`IrreversiblePackages`].
-    packages: IrreversiblePackages,
+    /// The packages of the game root's `bundle.json` by id ([`GoalReferences::new`]). Workflow
+    /// #455 G-SLx (register §1.501): only which packages the root has; until 0.12.77 each with
+    /// whether it can do something irreversible.
+    packages: BTreeSet<String>,
 }
 
-/// Workflow #455 G-R2s (register §1.369; contracts/standard-pack-goals.md, "Irreversibility"):
-/// which packages of one game root can do something irreversible, by G-R1's rule over the whole
-/// root ([`IrreversiblePackages::new`]), and which packages of the root could not be read. The
-/// one copy of the rule: the goal check holds one in [`GoalReferences`], and the standard-pack
-/// composer takes one per game root as a required input. Made only by
-/// [`IrreversiblePackages::new`], from what a reader read of every package of the root; there is
-/// no default, so no reader can answer "nothing is irreversible" by omission.
+/// Workflow #455 G-R2s (register §1.369; contracts/standard-pack-schedule.md, "The irreversible
+/// mark"): which packages of one game root can do something irreversible, by G-R1's rule over the
+/// whole root ([`IrreversiblePackages::new`]), and which packages of the root could not be read.
+/// The one copy of the rule. Its readers since Workflow #455 G-SLx (register §1.501), which took
+/// it out of the goal check and out of the variables' judgement: the standard-pack composer, which
+/// takes one per game root as a required input for its `standard_pack_package_unreadable`
+/// warnings (the packages that could not be read), and the standard-pack trial's irreversible
+/// mark. Made only by [`IrreversiblePackages::new`], from what a reader read of every package of
+/// the root; there is no default, so no reader can answer "nothing is irreversible" by omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrreversiblePackages {
     /// The packages whose declaration was read, by id, each with the capabilities it provides or
     /// its remedies list that a package of the root marks irreversible: it can do something
     /// irreversible when there is one. Workflow #463 V2 fix round 2: kept, so that a reader can
-    /// name the capability that makes a package irreversible ([`Self::irreversible_capabilities`]).
+    /// name the capability that makes a package irreversible ([`Self::irreversible_capabilities`];
+    /// since Workflow #455 G-SLx the standard-pack trial's basis alone).
     packages: BTreeMap<String, BTreeSet<String>>,
     /// The packages whose declaration could not be read, by id.
     unreadable: BTreeSet<String>,
@@ -536,64 +532,25 @@ impl IrreversiblePackages {
         &self.unreadable
     }
 
-    /// G-R2s, the safe side: whether a rule that runs `package_id` counts as able to do something
-    /// irreversible. It does unless every package of the root was read and `package_id` is one of
-    /// them that provides no irreversible capability: a package of the root that could not be
+    /// G-R2s, the safe side: whether the package `package_id` counts as able to do something
+    /// irreversible (since Workflow #455 G-SLx, register §1.501, the standard-pack trial's mark
+    /// alone reads it). It does unless every package of the root was read and `package_id` is one
+    /// of them that provides no irreversible capability: a package of the root that could not be
     /// read leaves every capability of the root unknown, and a package no reader read is no
     /// package the rule can clear.
     pub fn counts_irreversible(&self, package_id: &str) -> bool {
         !self.unreadable.is_empty() || self.package(package_id) != Some(false)
     }
-
-    /// G-R1 fix round 2 (the composer's walk of G-R2s until G-R2x withdrew the mark, register
-    /// §1.499; the goal check's alone since): whether a rule among `followers` (the
-    /// rules that follow one rule, [`GoalRule::followers`]), or a rule that follows one of them in
-    /// turn, runs a package that counts as irreversible ([`Self::counts_irreversible`]) or is a
-    /// rule `rule` does not know. `rule` gives a follower's package and its own followers by the
-    /// follower's id. Each follower is visited once, so a cycle of followers ends the walk.
-    pub fn followers_irreversible<'a>(
-        &self,
-        followers: &'a [String],
-        rule: impl Fn(&str) -> Option<(&'a str, &'a [String])>,
-    ) -> bool {
-        let mut visited = BTreeSet::new();
-        let mut pending = vec![followers];
-        while let Some(current) = pending.pop() {
-            for follower_id in current {
-                if !visited.insert(follower_id.as_str()) {
-                    continue;
-                }
-                match rule(follower_id) {
-                    Some((package_id, further)) if !self.counts_irreversible(package_id) => {
-                        pending.push(further);
-                    }
-                    _ => return true,
-                }
-            }
-        }
-        false
-    }
 }
 
 impl GoalReferences {
-    /// The references of a game root whose `bundle.json` lists exactly the packages of
-    /// `declared`, each with what its declarations say ([`DeclaredCapabilities`]: the capabilities
-    /// its control declaration provides, every one `true` when its entry writes `irreversible:
-    /// true`, and, G-R2s fix round 3, every capability its remedies list). A capability is
-    /// irreversible when any package of the root marks it so (contracts/remedies.md §2.3, "any
-    /// provider"), and a package can do something irreversible when it provides such a capability,
-    /// marked by itself or not, or when its remedies list one. A package `declared` does not name
-    /// is no package of the root: a rule that runs it, or (Workflow #463 V1) a variable it
-    /// declares, is never passed. The pools, the rules and the variables start empty.
-    pub fn new(declared: BTreeMap<String, DeclaredCapabilities>) -> Self {
-        // G-R2s: the rule has one copy, [`IrreversiblePackages::new`]; every package of the
-        // check's root was read (a package it cannot read is the check's error).
-        let packages = IrreversiblePackages::new(
-            declared
-                .into_iter()
-                .map(|(package_id, declaration)| (package_id, Some(declaration)))
-                .collect(),
-        );
+    /// The references of a game root whose `bundle.json` lists exactly the packages `packages`,
+    /// by id. A package `packages` does not name is no package of the root: a rule that runs it,
+    /// or (Workflow #463 V1) a variable it declares, is never passed (`goal_package_unknown`). The
+    /// pools, the rules and the variables start empty. Workflow #455 G-SLx (register §1.501):
+    /// until 0.12.77 it took what each package's declarations provide and list, for the rule of
+    /// irreversibility, which the check no longer applies.
+    pub fn new(packages: BTreeSet<String>) -> Self {
         Self {
             pools: BTreeMap::new(),
             rules: BTreeMap::new(),
@@ -602,25 +559,9 @@ impl GoalReferences {
         }
     }
 
-    /// Whether the package `package_id` can do something irreversible; `None` when it is no
-    /// package of the root.
-    fn irreversible(&self, package_id: &str) -> Option<bool> {
-        self.packages.package(package_id)
-    }
-
-    /// G-R1 fix round 2: whether a rule that follows `rule` ([`GoalRule::followers`]), directly
-    /// or through further followers, runs a package that can do something irreversible, or is a
-    /// rule or runs a package the references were not told of (never passed). Each follower is
-    /// visited once, so a cycle of followers ends the walk. The walk is
-    /// [`IrreversiblePackages::followers_irreversible`] (the composer ran it too from G-R2s until
-    /// G-R2x withdrew the mark, register §1.499).
-    fn follower_irreversible(&self, rule: &GoalRule) -> bool {
-        self.packages
-            .followers_irreversible(&rule.followers, |follower_id| {
-                self.rules
-                    .get(follower_id)
-                    .map(|follower| (follower.package_id.as_str(), follower.followers.as_slice()))
-            })
+    /// Whether `package_id` is a package of the root.
+    fn knows(&self, package_id: &str) -> bool {
+        self.packages.contains(package_id)
     }
 }
 
@@ -688,17 +629,16 @@ pub fn parse_standard_pack_goals(
 /// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`;
 /// - `goal_package_unknown`: (fix round 1) the package a governed rule runs, or (Workflow #463 V1)
 ///   a package that declares a placed variable, is not a package of `bundle.json`;
-/// - `goal_governs_irreversible`: (fix round 1) the package a governed rule runs can do something
-///   irreversible ([`GoalReferences::new`]); or (fix round 2, at the governed rule) a rule that
-///   follows it, directly or through further followers, runs such a package or one the
-///   references were not told of; or (Workflow #463 V1, at the placement's `name`) a package that
-///   declares the placed variable can;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
-/// - `goal_tier_without_fixed_value`: that rule, its package and its followers passed, writes no
+/// - `goal_tier_without_fixed_value`: that rule, its package passed, writes no
 ///   `fixed_value_milli`;
 /// - Workflow #463 V1: `goal_variable_unknown` (a placement names no variable a package of the
 ///   root declares, at its `name`) and `goal_block_mismatch` (a placement's `block` is not the
 ///   placed variable's, at its `block`).
+///
+/// Workflow #455 G-SLx (register §1.501): `goal_governs_irreversible`, which until 0.12.77 an
+/// entry got that governed, reached or followed a package that can do something irreversible, is
+/// given here no more; such an entry is judged as for any other package.
 pub fn check_standard_pack_goal_references(
     goals: &StandardPackGoals,
     references: &GoalReferences,
@@ -708,10 +648,9 @@ pub fn check_standard_pack_goal_references(
         let pointer = format!("/entries/{index}");
         let governs = at(&pointer, "governs");
         // G-R1 fix round 2, for whoever adds an entry kind: this match has no wildcard, so a new
-        // kind needs an arm, and that arm must either judge everything the kind can reach (its
-        // packages, its rules and their followers, its pools) against the references, or state
-        // why the kind can reach no package, as a heading and a note reach none. An empty arm
-        // without that reason lets the kind past the safety line.
+        // kind needs an arm, and that arm must either judge everything the kind names (its
+        // packages, its rules, its pools) against the references, or state why the kind names
+        // nothing, as a heading and a note name nothing.
         match &goal.kind {
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {}
             DeclaredGoalKind::Resource { pool, .. } => {
@@ -730,46 +669,31 @@ pub fn check_standard_pack_goal_references(
                         check.issue(StandardPackProblem::GoalRuleUnknown, at_rule);
                         continue;
                     };
-                    // Fix round 1: a rule names the package it runs, and a tier that governs the
-                    // rule scales that package's weight; the rule is held to its package as a
-                    // governed package is.
-                    match references.irreversible(&rule.package_id) {
-                        None => check.issue(StandardPackProblem::GoalPackageUnknown, at_rule),
-                        Some(true) => {
-                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_rule);
-                        }
-                        // Fix round 2: a rule that follows the governed rule runs when it
-                        // completes, so scaling the governed rule's value runs it more too; the
-                        // governed rule is held to its followers' packages, at its own pointer.
-                        Some(false) if references.follower_irreversible(rule) => {
-                            check.issue(StandardPackProblem::GoalGovernsIrreversible, at_rule);
-                        }
-                        Some(false) if !rule.fixed_value => {
-                            check.issue(StandardPackProblem::GoalTierWithoutFixedValue, at_rule);
-                        }
-                        Some(false) => {}
+                    // Fix round 1: a rule names the package it runs, which is held to be a package
+                    // of the root. Workflow #455 G-SLx: whether that package, or one a rule that
+                    // follows it runs, can do something irreversible is not judged any more.
+                    if !references.knows(&rule.package_id) {
+                        check.issue(StandardPackProblem::GoalPackageUnknown, at_rule);
+                    } else if !rule.fixed_value {
+                        check.issue(StandardPackProblem::GoalTierWithoutFixedValue, at_rule);
                     }
                 }
             }
-            // Workflow #463 V1: a placement reaches the packages that declare the variable it
-            // places, so it is held to each of them as a governed package was: admission keeps a
-            // variable off a package that marks an irreversible capability itself, and this arm
-            // keeps a placement off one that provides a capability another package marks so.
+            // Workflow #463 V1: a placement names the packages that declare the variable it
+            // places, each held to be a package of the root. Workflow #455 G-SLx: whether one of
+            // them can do something irreversible is not judged any more.
             DeclaredGoalKind::Variable => {
                 let at_name = at(&pointer, "name");
                 let Some(variable) = references.variables.get(&goal.name) else {
                     check.issue(StandardPackProblem::GoalVariableUnknown, at_name);
                     continue;
                 };
-                let reached = variable
+                if !variable
                     .packages
                     .iter()
-                    .map(|package_id| references.irreversible(package_id))
-                    .collect::<Vec<_>>();
-                if reached.contains(&None) {
+                    .all(|package_id| references.knows(package_id))
+                {
                     check.issue(StandardPackProblem::GoalPackageUnknown, at_name);
-                } else if reached.contains(&Some(true)) {
-                    check.issue(StandardPackProblem::GoalGovernsIrreversible, at_name);
                 } else if goal.block.is_some_and(|block| block != variable.block) {
                     check.issue(
                         StandardPackProblem::GoalBlockMismatch,

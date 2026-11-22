@@ -1587,3 +1587,54 @@ test = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_a_decla
 ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, rulings 2 and 4)"
 reason = "Renamed and adapted: the package whose metadata fails no longer marks its game; the warning and the check that goes on are kept."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on, in the host.toml row of #455 G-R2x."
+
+# contract.toml, the rows of Workflow #455 G-R1 and Workflow #463 V1 (the lifted locks' contract half; Workflow #455 G-SLx).
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::standard_pack_goals::tests::goals_references_judge_packages_and_rules_by_the_capabilities_of_the_root"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, ruling 2: goal_governs_irreversible is produced nowhere)"
+reason = "Renamed and inverted: it pinned goal_governs_irreversible for the package that marks a capability and the one that provides it unmarked; the references are made of the root's package ids alone now, and only goal_package_unknown of the untold package is kept."
+covered_by = "actingcommand-contract::lib::standard_pack_goals::tests::gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root, in the contract.toml row of #455 G-SLx: the same tier and placements are goal_package_unknown at the untold package alone."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::package_variables::tests::v1_root_check_holds_a_variable_of_a_package_irreversible_by_the_root"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, ruling 1: no variable_irreversible_by_root)"
+reason = "Renamed and inverted: it pinned variable_irreversible_by_root and the not_applying listing; the root check takes no judgement of irreversibility now and the listing has no such member."
+covered_by = "actingcommand-contract::lib::package_variables::tests::gslx_root_check_applies_a_variable_of_a_package_irreversible_by_the_root, in the contract.toml row of #455 G-SLx: on the same root every variable applies and nothing is listed as not applying."
+
+# exec.toml, the rows of Workflow #455 G-R1 and G-R2s fix round 3 (the lifted locks' Tools half; Workflow #455 G-SLx).
+[[retired]]
+fragment = "exec"
+test = "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_governs_irreversible_is_refused_by_the_check_and_the_bundle"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, ruling 1: admission no longer refuses variables_on_irreversible)"
+reason = "Renamed and inverted: it pinned that the package of the irreversible capability that declares a variable fails the check and the bundle with variables_on_irreversible; such a package declares variables now."
+covered_by = "actingcommand-resource-tooling::lib::gate_455_gr1::gslx_a_package_that_marks_its_capability_irreversible_declares_a_variable_a_goal_places, in the exec.toml row of #455 G-SLx: the same package declares a variable a goal places, the check and the bundle take the root."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_a_tier_over_a_rule_of_an_irreversible_package_is_refused"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, ruling 2)"
+reason = "Renamed and inverted: it pinned goal_governs_irreversible of a tier over the irreversible package's rule; the goal check accepts it now."
+covered_by = "actingcommand-resource-tooling::lib::gate_455_gr1::gslx_a_tier_over_a_rule_of_an_irreversible_package_is_accepted, in the exec.toml row of #455 G-SLx: the same tier is accepted by the check and the bundle, every other refusal unchanged."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_a_package_that_provides_unmarked_an_irreversible_capability_is_refused"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, rulings 1 and 2)"
+reason = "Renamed and inverted: it pinned variable_irreversible_by_root of the unmarked provider's variable and goal_governs_irreversible of its placement; the variable applies and the placement is accepted now."
+covered_by = "actingcommand-resource-tooling::lib::gate_455_gr1::gslx_an_unmarked_provider_of_an_irreversible_capability_is_governed_and_its_variable_applies, in the exec.toml row of #455 G-SLx."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-resource-tooling::lib::gate_455_gr1::gr1_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_refused"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, rulings 2 and 3: the walk over followers is removed)"
+reason = "Renamed and inverted: it pinned goal_governs_irreversible of a tier over a chain head whose follower runs the irreversible package; the goal check reads no followers now."
+covered_by = "actingcommand-resource-tooling::lib::gate_455_gr1::gslx_a_tier_over_a_chain_head_whose_follower_runs_an_irreversible_package_is_accepted, in the exec.toml row of #455 G-SLx: the composition lists both followers as before and the tier is accepted."
+
+[[retired]]
+fragment = "exec"
+test = "actingcommand-resource-tooling::lib::gate_455_gr2s::gr2s_t7_the_goal_check_reads_the_same_chain_links"
+ruling = "Workflow #455 G-SLx (0.12.78; register §1.501; the coordinator's work order rd-1121/brief-455-locks.md, rulings 2 and 3: the walk over followers is removed)"
+reason = "Renamed and inverted: it pinned goal_governs_irreversible at three chain heads whose followers run irreversible packages; the goal check reads no chain links now."
+covered_by = "actingcommand-resource-tooling::lib::gate_455_gr2s::gslx_t7_a_tier_over_the_heads_of_irreversible_followers_is_accepted, in the exec.toml row of #455 G-SLx: the same tier, and one over the followers, are accepted."

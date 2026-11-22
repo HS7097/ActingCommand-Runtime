@@ -196,7 +196,6 @@ against the root.
 | `goal_pool_unknown` | a `resource` entry's pool is not a pool of the composed schedule (no pool without `schedule.json`) | `/entries/<i>/governs/pool` |
 | `goal_pool_unvalued` | that pool's `valuation` lacks `scale` or `gap` (a pending or absent valuation too) | `/entries/<i>/governs/pool` |
 | `goal_package_unknown` | (G-R1 fix round 1) the package a `tier` entry's rule runs is not a package of `bundle.json`, which the composition has refused before (`rule_package_unregistered`), so that the check never passes a rule whose package it was not told of; Workflow #463 V1: or a package that declares a placed variable is not | `.../governs/rules/<j>`, or `/entries/<i>/name` |
-| `goal_governs_irreversible` | (G-R1 fix round 1) the package a `tier` entry's rule runs (`package_id` of the rule) can do something irreversible: it provides a capability that a package of the game root marks irreversible, a `provides[]` entry of that package's `control.json` with the capability and `irreversible: true` ([resource-declarations.md](resource-declarations.md), the `control.json` members). A capability is irreversible when any provider declares it so ([remedies.md](remedies.md) §2.3), so the check first collects the capabilities every package of the root marks, then judges each governed rule's package against them, whether it marks the capability itself or not. Workflow #463 V1: a `variable` entry, as a governed package was, when a package that declares the placed variable can (a package that marks such a capability itself declares no variable, `variables_on_irreversible`; one that provides it unmarked, or whose remedies list it, is caught here) | `.../governs/rules/<j>`, or `/entries/<i>/name` |
 | `goal_rule_unknown` | a `tier` entry's rule is not a rule of `schedule.json` | `/entries/<i>/governs/rules/<j>` |
 | `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
 | `goal_variable_unknown` | Workflow #463 V1: a `variable` entry's name is no variable a package of `bundle.json` declares (every declared name counts, one the root check lets apply or not) | `/entries/<i>/name` |
@@ -205,11 +204,18 @@ against the root.
 given: Workflow #463 V1 replaced the `ordered` entry, and no entry or variable takes a table until
 a later slice brings `from_table` to a variable.
 
-**`goal_governs_irreversible` is not optional.** It is one of the three places that keep the
-safety lines out ("What is not this file's"). The references it judges are made only from what
-every package of the root provides (the contract crate's `GoalReferences::new`, G-R1 fix round 1):
-there is no default that says no package is irreversible, and a package the references were not
-told of is never passed.
+`goal_governs_irreversible` stays registered and is no longer given (Workflow #455 G-SLx, Runtime
+0.12.78, register [v012-register.md](v012-register.md) §1.501): until 0.12.77 the check refused at
+`.../governs/rules/<j>` a `tier` entry's rule whose package could do something irreversible (it
+provided a capability any package of the root marks `irreversible: true`, or its remedies listed
+one), or one of whose followers' packages could, and at `/entries/<i>/name` a `variable` entry
+whose variable such a package declared. An entry governs, reaches or follows such a package as
+any other since ("What is not this file's").
+
+**The references are made only from the root's packages** (the contract crate's
+`GoalReferences::new`, G-R1 fix round 1; since G-SLx it takes their ids alone, no longer what each
+provides): there is no default that leaves a package out, and a package the references were not
+told of is never passed (`goal_package_unknown`).
 
 **A refused file never fails its game root.** The game runs as without the file: no entry applies
 for that game, and a reader of the declaration says why.
@@ -220,9 +226,10 @@ for that game, and a reader of the declaration says why.
   and lists it in `root_files` (after `display-layout.json`, before `loading.json`). After the
   composition of `schedule.json` it already runs, it reads the file and holds an accepted file to
   the root: the pools of `schedule.json` and its rules with the packages they run, and every package
-  of `bundle.json` with the capabilities its `control.json` provides and their `irreversible` marks
-  and (Workflow #463 V1) the variables it declares (read by the Runtime's metadata reader, as the
-  remedy report reads them); since V1 it reads no table. A version 1 file is the warning
+  of `bundle.json` with (Workflow #463 V1) the variables it declares (read by the Runtime's metadata
+  reader, as the remedy report reads them; until Workflow #455 G-SLx, 0.12.77, also the
+  capabilities its `control.json` provides and their `irreversible` marks); since V1 it reads no
+  table. A version 1 file is the warning
   `goal_version_retired` and is read no further (V1 fix round 3). Each problem is one
   `standard_pack_root_invalid` warning, after the other warnings (the root check of the packages'
   variables among them, [package-variables.md](package-variables.md)), in file order; the root is
@@ -286,11 +293,13 @@ for that game, and a reader of the declaration says why.
 - **The Runtime** opens no `goals.json` in G-R1: its root reader, its startup and run preparation,
   the policy crate and check-config read named files only. A later slice's scheduler workbench reads
   it with `schedule.json`. Since G-R2s (0.12.60) the workbench reads every package's declaration
-  as this check does, with the same reader and the same rule; since Workflow #455 G-R2x (0.12.77,
-  register §1.499) that reading serves the warning for a package that cannot be read
+  as this check does, with the same reader; since Workflow #455 G-R2x (0.12.77, register §1.499)
+  that reading serves the warning for a package that cannot be read
   (`standard_pack_package_unreadable`) and the variables' judgement (from 0.12.60 to 0.12.76 it
   served the composer's irreversible mark too,
-  [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"). **Since
+  [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"), and since
+  Workflow #455 G-SLx (0.12.78, register §1.501) the judgement reads only the variables each
+  package declares, no longer the rule of irreversibility. **Since
   Workflow #463 V2 fix round 1 (Runtime 0.12.61, register §1.382)** the workbench reads
   `goals.json` too, where it reads every package's declaration (and so do the offline readers that
   read a root as it does, check-config and `actingd suspended`): with this reader, once per read of
@@ -365,6 +374,29 @@ holds a version 2 file runs as without it on that Runtime, its check warns, and 
 refuses a bundle that declares 14 and sets an existing `goals.json` aside when it places a bundle
 without one, as it does today.
 
+**Workflow #455 G-SLx (Runtime 0.12.78; register §1.501) moves no version and no revision.** The
+file's shape and its reader do not change; only the references' check accepts more (an entry
+that governs, reaches or follows a package that can do something irreversible), and the check is
+the Tools', not the file's version. The document's versioning asks a new version for a new shape
+("a released format does not change its shape in place", the head of this file), and there is
+none, so a bundle that carries the file still declares 14. What the programs of 0.12.77 answer
+for a version 2 file one of whose entries governs such a package:
+
+- **`standard-pack check`** warns `goal_governs_irreversible` at each such entry (one
+  `standard_pack_root_invalid` warning each, at its pointer), applies no entry and checks the root
+  as without the file, as for any refused file; **`package bundle --goals`** refuses the bundle with
+  that word, `--out` not written, and **`resource verify`** and **`standard-pack build`** fail their
+  `bundle` step with it, no zip. Each refusal is clean: nothing is written or placed.
+- **The installer's `place`** reads the file's name only and places it.
+- **The Runtime's workbench** reads the file with the reader alone (it holds no references), so it
+  accepts it and the goal page lists its entries. A variable such an entry places does not apply on
+  that Runtime (its judgement keeps it from applying, `irreversible_by_root`), and a package whose
+  own `provides` marks the capability and that declares variables cannot be read there at all
+  (`standard_pack_package_unreadable`; its admission refuses it, `variables_on_irreversible`), which
+  keeps every variable of its root from applying (`package_unreadable`). Its installer does not let
+  such a package in through a bundle that declares its revision ([package-variables.md](package-variables.md),
+  "Interface").
+
 ## What is not this file's
 
 - **No value is stored in it.** A value is the installation's, written by a person or an agent
@@ -372,73 +404,39 @@ without one, as it does today.
 - **No pointer into the schedule.** An entry names a pool or rules, or places a variable; its
   default is its own or the variable's. No entry writes a rule's member, a configuration key, a
   remedy choice or a pack switch.
-- **The safety lines stay out.** Premium currency, real money, retiring and scrapping are not opened
-  here (the owner decides later). They are kept out at three places:
-  1. **The check refuses** any entry that governs a package with an irreversible capability
-     (`goal_governs_irreversible`): retire and purchase packages that declare it cannot read a
-     goal; a package that does something irreversible without declaring it is caught only by the
-     third place. Since Workflow #463 V1 a package that marks such a capability declares no
-     variable at all (kernel admission's `variables_on_irreversible`), and a `variable` entry is
-     held to every package that declares the variable it places, as a governed package was. Since G-R1 fix round 1 the check follows a `tier` entry's rules to the packages
-     they run, and judges a capability across the whole root: a package that provides a capability
-     another package marks irreversible is refused as that package is.
-     Since G-R1 fix round 2 a `tier` entry's rule is also `goal_governs_irreversible` at its own
-     pointer when a rule that follows it (which runs when it completes), directly or through
-     further followers, runs such a package or one the references were not told of, each follower
-     visited once. Since Workflow #455 G-R2s fix round 1 (0.12.60, register §1.369) the rules that
-     follow a rule are every rule, not held, whose trigger has a chain link to it as the evaluator
-     reads one (a `dependency_completed` reached only through `all` whose `terminal_states` holds
-     `succeeded`), the lists the policy crate's `standard_pack_rule_followers` gives (before G-R2x
-     the composer's irreversible mark read them too,
-     [standard-pack-schedule.md](standard-pack-schedule.md), "The irreversible mark"): a follower
-     with a value of its own, one whose link also accepts another end and one behind a complete rule
-     count too, not only the followers the coverage lists as riding (`benefit_followers`).
-     **A limit that the slice which makes a tier act must lift first:** a rule whose trigger depends
-     on the governed rule's completion only through a node the evaluator reads as no chain link (a
-     `dependency_completed` under `any` or `not`, or one that does not accept `succeeded`) is not
-     followed here, although a governed rule that runs more often can let it run more often too.
-     Before a tier can scale anything, the check judges every rule whose trigger depends on the
-     governed rule's completion.
-     A `resource` entry can push such a package indirectly: its pool may be produced by a rule of
-     that package, and a goal's shortfall raises the weight of what produces the pool. The check
-     does not refuse such an entry (it would forbid goals on ordinary pools). **Since Workflow #455
-     G-R2x (0.12.77, register §1.499) a goal's shortfall raises such a rule like any other**: the
-     line Workflow #455 G-R2s (0.12.60, register §1.369) had the scheduler keep (the composer's
-     `irreversible_reach` and the evaluator weighing a marked candidate as on an instance without a
-     target record) is withdrawn ([resource-targets.md](resource-targets.md), "A task that can do
-     something irreversible"; [standard-pack-schedule.md](standard-pack-schedule.md), "The
-     irreversible mark"), and the lists of the rules that follow a rule are this check's own since.
-     **This check's own refusal stands until the owner decides** whether goals and variables may
-     govern such packages: an entry that governs one is `goal_governs_irreversible` as below.
-     **One copy of the rule:** the contract
-     crate's `IrreversiblePackages` (a capability is irreversible when any package of the root
-     marks it; a package is irreversible when it provides such a capability or, since G-R2s fix
-     round 3 (the coordinator's ruling of 11-14), when a remedy declaration of its mappings lists
-     one, every capability the remedy lists judged from the declarations alone; a package that
-     could not be read leaves every package of the root counting as irreversible; the walk over the
-     rules that follow a rule) is what `GoalReferences::new` holds and what the composer takes per
-     game root (since G-R2x for its unreadable-package warning alone), and the policy crate's
-     `standard_pack_rule_followers` gives the check its lists of followers; there is no second
-     implementation. So an entry that reaches a package whose
-     blocked run asks for an irreversible provider (since Workflow #463 V1 a `variable` entry
-     whose variable it declares), a `tier` over its rule, and a `tier` over a rule it follows are
-     `goal_governs_irreversible` too.
-  2. **No entry kind writes anything else**: not a remedy choice or a capability's parameter
-     (those stay in the remedy layer), not a configuration key, not a pack switch. The one run value
-     an entry sets is a package's variable ([package-variables.md](package-variables.md)). Kernel
-     admission refuses `variables` on a package whose own `provides` marks a capability
-     irreversible (`variables_on_irreversible`); a package that counts as irreversible only by the
-     whole root (it provides such a capability unmarked, or its remedies list one) may declare
-     them, and then (Workflow #463 V1 fix round 1) `standard-pack check` reports each of its
-     variables `variable_irreversible_by_root`, the variable does not apply, and a placement of it is
-     `goal_governs_irreversible` (item 1). In V1 "does not apply" is a warning only: no run reads a
-     variable, and the slice that hands values to a run enforces it in the Runtime
-     ([package-variables.md](package-variables.md), "What is built now, and what is not").
-     Packages keep their own refusals of
-     premium-currency and real-money buttons, and no package reads a goal for them.
-  3. **Resource-side review**: the Runtime is game-neutral and cannot know which pool is a premium
-     currency, so no `goals.json` of version 2 (as none of version 1) declares a premium-currency
-     pool or an entry about spending premium currency, real money, retiring or scrapping.
+- **No entry kind writes anything else**: not a remedy choice or a capability's parameter (those
+  stay in the remedy layer), not a configuration key, not a pack switch. The one run value an entry
+  sets is a package's variable ([package-variables.md](package-variables.md)).
+- **Real money is kept out by the packages themselves** (Workflow #455 G-SLx, Runtime 0.12.78,
+  register [v012-register.md](v012-register.md) §1.501, on the owner's decision recorded there).
+  No package holds a press that leads to a platform payment (a rule of pack making), so no goal
+  entry and no variable can reach one; the Runtime holds no lock of its own for it. Everything else
+  a package may do, premium currency, retiring, scrapping, buying, drawing and training that spends
+  materials included, is a goal's and a variable's to govern like anything else:
+  - an entry may govern, reach or follow a package that can do something irreversible: a `tier`
+    over its rule or over a rule it follows, a `variable` entry whose variable it declares, an
+    entry that reaches a package whose remedies list such a capability; the check holds each to
+    the root as it holds any other ("The checks"), and a `resource` entry's goal raises every rule
+    that produces its pool (since Workflow #455 G-R2x, 0.12.77, register §1.499;
+    [resource-targets.md](resource-targets.md), "A task that can do something irreversible");
+  - a package that provides an irreversible capability, marked by itself or by another package of
+    the root, may declare variables, which apply and are handed to its runs as any package's
+    ([package-variables.md](package-variables.md)).
+
+  What stays: a capability's `irreversible` mark in a package's declaration, which the remedy layer
+  reads ([remedies.md](remedies.md) §2.3), the Lab's `packs` and the console show, and the
+  standard-pack trial asks an acknowledgement for ([standard-pack-trial.md](standard-pack-trial.md));
+  a Lab operation that is irreversible records who started it. Until 0.12.77 this section kept
+  "premium currency, real money, retiring and scrapping" out at three places: the check refused
+  an entry that governed, reached or followed such a package (`goal_governs_irreversible`, judged
+  by the contract crate's `IrreversiblePackages` over the whole root, the rules that follow a rule
+  walked since G-R1 fix round 2), kernel admission refused variables on a package whose own
+  `provides` marked such a capability (`variables_on_irreversible`) and `standard-pack check` kept
+  a variable of a package irreversible by the whole root from applying
+  (`variable_irreversible_by_root`), and the resource side was to review every file for entries
+  about them; the scheduler's line (G-R2s) went with G-R2x. G-SLx removed the check's refusal, its
+  walk over the rules that follow a rule (the policy crate's `standard_pack_rule_followers` went
+  with it, read by nothing else), the two refusals of variables and that review.
 
 ## Before any pack carries the file
 
@@ -464,5 +462,8 @@ accepted one and declared the revision its content needs since 0.12.61, and `pac
   later: an earlier `resource verify` leaves the file out of its zip and says nothing of it;
 - a zip that carries the file and declares `package` [14, 14] is placed by the installers of
   0.12.61 and later; the installer of 0.12.60 (`package` [3, 12]) and every earlier one refuse it in
-  the plan at their `package` edge (`interface_edge`), before the hold and any write;
-- the resource-side review of every file ("What is not this file's", item 3).
+  the plan at their `package` edge (`interface_edge`), before the hold and any write.
+
+(Until Workflow #455 G-SLx, 0.12.78, this list also owed a resource-side review of every file for
+entries about premium currency, real money, retiring and scrapping; it went with the safety lines,
+"What is not this file's".)

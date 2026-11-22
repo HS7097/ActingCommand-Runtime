@@ -357,7 +357,10 @@ impl GoalViewEntry {
 /// could not be read (`package_unreadable`); the name's place in the root's order, from 1
 /// (`name_out_of_limits`); the packages that read the variable as a designated effect's cap and
 /// the member of the declaration at fault (`cap_range`). A word without a detail
-/// (`goals_unreadable`, `root_unchecked`) has none.
+/// (`goals_unreadable`, `root_unchecked`) has none. Workflow #455 G-SLx (Runtime 0.12.78, register
+/// §1.501): no judgement gives `irreversible_by_root` or `package_unreadable` any more, so no
+/// Runtime answers `irreversible_capabilities` or `unreadable_packages`; the two members stay in
+/// the shape, which this slice does not change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cause", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GoalVariableCause {
