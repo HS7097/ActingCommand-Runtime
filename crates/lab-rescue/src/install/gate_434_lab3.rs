@@ -319,7 +319,8 @@ fn irreversible_journal_initiator() {
         fs::read(&candidate).expect("the candidate")
     );
 
-    // `clean` comes with its source (R-15d); until then the module does not serve it.
+    // `clean`, a row whose source (R-15d) was never built, left the table with the A/B layout
+    // (Workflow #429 AB-1, 0.12.78); the module does not serve it.
     assert!(!rescue::serves("clean"));
 
     // A confirmation parameter given anyway is an unknown argument.

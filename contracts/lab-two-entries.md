@@ -408,7 +408,7 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
 
 ## 5 Irreversible operations
 
-- **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`, `convert`, `clean`,
+- **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`,
   `undo`, `config replace`, `config restore`, `config file commit`, `instance add` (Workflow #421
   INST-5: its first slice commits the configuration it composes, as `config replace` does),
   `place`, `pack remove`, `pack restore`, `unlock`, `state-root claim` (Workflow #453 S12: it
@@ -424,17 +424,17 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   - `--plan <id>` for apply: `deploy`, `rollback`, `config file commit`, `pack remove` and
     `place` plan and apply in one call, and `--plan` (a switch) asks for the plan only;
   - `--accept-ledger-one-way`: a one-way update records `one_way: true` in its journal;
-  - `install clean --ui-confirmed <selection> --via ui|cli`;
+  - `--ui-confirmed <selection>` and `--via ui|cli`;
   - `--known-pause`: every pause found on an instance is a known pause, kept, and listed in the
     answer and the journal; `release-hold` hands back only the operation's own hold;
   - `--ack-guard` (section 6).
 - **`unlock`** passes no confirmation from its caller; it runs `actingd unlock-owner` and records
   the initiator. actingd's `--confirm-resources-released` goes with LAB-7, once UI-L1 no longer
   passes it.
-- **Through MCP**, `deploy`, `rollback` and `convert` always run detached: they replace the
+- **Through MCP**, `deploy` and `rollback` always run detached: they replace the
   programs MCP itself runs. Since Workflow #434 LAB-6S0 (0.12.58; the coordinator's ruling of
   2026-11-13 on board #434, not the owner's words) `actinglab-mcp` serves `ac_deploy` and
-  `ac_rollback` on Windows (`convert` is not offered: its source is not built). The front gives
+  `ac_rollback` on Windows. The front gives
   the row's `detach` true, and the module starts the `actinglab.exe` beside the server (one that
   is not there is refused before the start, with its path) with the
   row's words, the initiator `Lab-MCP` and the marker of section 4.2, and answers at once:
@@ -502,8 +502,8 @@ Alice's answer 4. From LAB-3, in the rescue module:
   "The Lab's rescue module"): the module is `crates/lab-rescue`, which actingctl answers
   `install`, `start`, `restart`, `mcp-entry` and `agent-channel` from, unchanged, until LAB-7;
   actinglab runs from `<root>\tools\` until LAB-7 moves it, and the default location takes both;
-  a row whose source command is not built yet (`convert`, `clean`, `prepare`,
-  `config file …`, `instance remove`, `pack remove` and `restore`) is not offered until the
+  a row whose source command is not built yet (`config file …`, `instance remove`, `pack remove`
+  and `restore`) is not offered until the
   slice that builds the source (Workflow #421 INST-5 opened `instance add` with the module's own
   command first, [install-cli.md](install-cli.md), "Configuration, instances, packs and a fresh
   root", and Workflow #453 S4 `new` the same way, "Fresh root"); until LAB-6S2 the module's
@@ -1462,14 +1462,11 @@ the five kinds emitted (register §1.287, "Slice LAB-6S4a"). `invalid_client_ori
    reports the row (`guard_failed`); dropping it later changes only that wait.
 5. **`install-root`.** The journal's `initiator` and `one_way` are members of the installers'
    private documents; whether they raise `install-root` (the A/B journal v2) is LAB-3's to judge by
-   the bump rule. Settled by LAB-3: no raise. `install-root` 1 covers the A/B root's private files
-   (`install-operation.v2`, the slot documents), which no build writes yet and no build declares
-   (component-interfaces.md: every build reads as `install-root` [0, 0]); the members go into the
+   the bump rule. Settled by LAB-3: no raise. The members go into the
    single-location journal `install-operation.v1`, which that interface does not cover; both are
    optional members written only by the rescue module, so `actingctl install` writes the journal
    byte for byte as before; an older installer refusing a journal the new one wrote is the old-
-   version compatibility testing does not keep (Alice, 2026-10-11). The A/B journal v2 takes them
-   when R-15c builds it, inside `install-root` 1.
+   version compatibility testing does not keep (Alice, 2026-10-11).
 6. **Recordings' initiator.** Settled (the coordinator's ruling, 2026-11-09): LAB-2 writes it,
    section 4.3 "Recordings"; the format changes without compatibility.
 7. **actinglab's own `config get` and `config set`** (its user configuration file) collide with

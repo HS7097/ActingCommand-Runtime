@@ -388,3 +388,25 @@ entry of one task on one pool with the form `effect_incompatible` at its `amount
 beside it add to it). The form is hashed as written; a catalog without it serializes, hashes and
 decides exactly as before. A `schedule.json` whose rule writes it names `consumption_fact` in
 `requires`.
+
+#455 P1 (since 0.12.78; register §1.504; `../README.md`, "A pool read from rows of a list"), V2
+only: a pool's `observation` may be `{"kind": "list_rows", "fact_key": L, "key_column": K,
+"value_column": V, "rows": [{"key": k, "factor": f}, …]}` beside a `ledger_fact` value source (its
+`minimum_confidence_milli` as for a fact observation): the pool's inventory is the sum over `rows`
+of the integer the column V holds in the row of the list reading L whose column K holds k, times
+f. No host computes that sum in 0.12.78 (a later slice does): until then the pool has no reading.
+Refused, each at its pointer: in a V1 document `unknown_field` at `observation/kind`; beside
+`static_snapshot` `limit_exceeded` at the pool, as a `ledger_fact` pool without a fact observation
+is; a pool whose scope is not an instance `type_mismatch` at `observation/kind`; an L that is no
+identifier or not under `inventory.list.` `type_mismatch` at `observation/fact_key`; a K or V that
+is no list column's name (`^[a-z][a-z0-9_]{0,31}$`, the rule of a list reading's columns)
+`type_mismatch` at the column, and V equal to K `type_mismatch` at `observation/value_column`; no
+row, or more than 64, `limit_exceeded` at `observation/rows`; a key that is empty or holds a
+control character `type_mismatch`, one of more than 1024 bytes `limit_exceeded`, and the key of an
+earlier row `duplicate_id`, at `observation/rows/<j>/key`; an f outside `1..=1000000`
+`limit_exceeded` at `observation/rows/<j>/factor`; a missing member `missing_required_field`, any
+other member `unknown_field`, a member of another type `type_mismatch` (the reader). The rows are
+kept and hashed in the order written. A `benefit_realization` task still needs a fact observation
+of each pool it consumes. A `schedule.json` whose pool writes the kind names `pool_list_rows` in
+`requires`, which no Runtime of 0.12.78 names. A pool without it serializes, hashes and decides
+exactly as before.

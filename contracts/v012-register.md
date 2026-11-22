@@ -45322,6 +45322,210 @@ range); a `goals.json` whose entries govern such a package: its `standard-pack c
 such a package's variables not applying, and its bundle tools refuse the file. The records this
 build writes have no new code, word, member or shape, so v0.12.77 reads them.
 
+### 1.502 Slice #429 AB-1 (0.12.78): the A/B install layer that nothing calls is removed (Workflow #429; the owner's words of 2026-11-21 on board #429, quoted below; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-429-ab1.md`, after the read-only inventory `rd-1121/study-ab-removal.md`; on main `3285143f`, the v0.12.77 release)
+
+This section takes 1.502: §1.500 is pull request #1860's and §1.501 pull request G-SLx's.
+
+**What is removed, and on whose words.** On 10-31 the owner approved an A/B (two slot)
+installation for production (her items 131 and 132); R-15b (0.12.35, §1.237) froze its
+contracts, and the slices that build slots, activate and convert (R-15c to R-15e) were never
+written: production stayed a single-location installation. Asked on 11-21 whether it should
+still be built, the owner answered (2026-11-21): 「8，废除吧，连代码也直接剔除也可以」. Removed:
+install-cli.md's section "The A/B layout" and the sentences that existed only for it;
+`contracts/stable-entry.md`; the A/B sentences of runtime-watchdog.md, lab-two-entries.md,
+contracts/README.md and state-root-installation.md; the contract crate's
+`installation/selection_v2.rs` (`InstallSelectionV2`, `InstallSlotDocument` and their constants);
+the workspace member `apps/actingcommand-entry`; the A/B-only codes, locations and words of
+`crates/lab-ops/src/codes.rs`, `apps/actingd/src/codes.rs` and the contract crate; the operation
+table's rows `convert`, `clean` and `prepare` (planned, never served; 194 rows are 191) and the
+A/B remark and source `actingctl install restart` of the row `restart`. Moved, word for word, to
+the single location's text of install-cli.md: the #452 entries ("Layout"), the single
+location's words of `install_operation_kind` and `install_step_kind` ("Outcome codes"), and the
+paragraph on `tools\actingwatch.exe` without its A/B sentence ("Locks and the watchdog";
+state-root-installation.md names it).
+
+**Codes.** Every removed entry was pending since 0.12.35 and in no release file: by the
+catalogue's rule a release file holds only the settled and retired entries its release binds,
+and G9 holds a later catalogue only to those ([runtime-outcomes.md](runtime-outcomes.md),
+"Catalog files"), so they leave with their registry entries (G1) and no `retired` entry, as
+PKG-S2 and NAV-3a removed theirs: the contract's five (`install_selection_v2_invalid`,
+`install_slot_document_mismatch`, `install_member_identity_invalid`,
+`install_member_pairing_mismatch`, `install_slot_document_invalid`), the ten `entry_*` codes with
+the fragment `actingcommand-entry.json`, its `fragments` entry and its owner in the domain
+`entry_` (which other owners keep), actingd's `unlock_owner_install_unfinished`, the five
+locations `install_prepare`, `install_convert_plan`, `install_convert_apply`, `install_clean`
+and `install_restart`, and `install_command_refused`'s optional value `attempt_phase`. Words:
+29 vocabularies no kept key names; of kept vocabularies, the words only the A/B layout used and
+no kept code emits (G7 holds each enum equal to its vocabulary, and no release file holds a
+word): 28 of `install_refusal`, 19 of `install_caveat`, 4 of `install_guard`, 4 of
+`install_operation_kind` and 18 of `install_step_kind`. The key table only grows: the eleven keys
+R-15b added stay, with `install_attempt_phase`, `entry_child_state` and `install_member`. The
+catalogue holds 4051 codes (3961 active) where it held 4067 (3977), and 1774 locations where it
+held 1779; the index was edited by hand and `ci/outcome_codes_index.py --check` says "is
+current".
+
+**Kept** (ruling 5): every document of the single location and its version; `refuse_ab`,
+`layout_ab_unsupported` and `not_single_location`; `install status`'s `layout` and the watchdog
+report's `layout`, `generation` and `slot`; the version 1 selection reader and everything that
+calls it, with its released codes and the watchdog smoke, which go with LAB-7 (#1741); the
+release reader's UI branch with `selection_schema_mismatch` and its text, which AB-2 takes;
+`apps/mcp-entry` and `apps/mcp-entry-g2`. Also kept, against the inventory: `ui_edges` with
+`gate_r15a_ui_edges` and install-cli.md's "UI edges" (gate_429_r0b_pairing's console pairing
+calls `ui_edges`); the guard word `player_holds` (player-hold.md and the `player-hold` row name it
+as #421's guard); the row `up`'s remark (its A/B start is the version 1 reader's).
+
+**Withdrawn numbers** ([component-interfaces.md](component-interfaces.md)): `install-selection`
+2, `tools-layout` 4, `install-cli` 1 and `install-root` 1, each frozen for the A/B layout in
+0.12.35, declared by no build, withdrawn in 0.12.78, the number not used again; `install-cli` 2
+is written to stand alone. No declared range moves: `distribution/windows/component-interfaces.json`
+is untouched, `install-selection` [1, 1] and `install-control` [0, 0] stay.
+
+**Tests.** No new test. Retired (`ci/retired-gates.toml`): the eight tests of
+`gate_r15b_selection` (contract.toml) and `gate_r15b_registry` (apps.toml), which read the
+removed text; nine entries. `gate_434_lab2` (`clean` is now a word no row begins with: the same refusal naming
+it) and `gate_434_lab3` (`!serves("clean")`) still hold; only their comments changed.
+
+**At deploy.** Nothing changes for a single-location installation: every path of
+`crates/lab-rescue/src/install` it uses answers as on main (no journal holds the four removed
+guard ids, which no build evaluated). A person sees that an installation is single-location in
+`install status`'s member `layout`, `single`. A rollback to v0.12.77 meets nothing
+new: no document, journal kind, code or interface range of this build is one v0.12.77 lacks.
+
+### 1.504 Slice #455 P1 (0.12.78): a pool may declare that its inventory is read from rows of a list (`observation.kind` `list_rows`): the declaration, the compile's checks and the composer's `requires`; no Runtime gives it a reading yet (board #455; the rulings 1 to 9 are the coordinator's of 11-21, no words of the owner's behind them; coordinator work order `rd-1121/brief-455-p1.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition; on main `3285143f`, the 0.12.77 release)
+
+This section takes 1.504: §1.500 to §1.503 belong to other slices of this version.
+[scheduling/README.md](scheduling/README.md) ("A pool read from rows of a list", new; "Pool fact
+references", "Pool lines" (its capability bullet) and "Record lists and the projection" (the one
+exception)) and [scheduling/v2/README.md](scheduling/v2/README.md) with `v2/pools.schema.json`
+are the contract; [standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`",
+"Composition"), [resource-readings.md](resource-readings.md) and
+[instance-fact-store.md](instance-fact-store.md) (who reads a list fact: the host, from P2) follow
+it. Why: a game with dozens of materials cannot give each a fact of its own (an instance holds at
+most 224), a reading by a fixed place on the screen is not allowed, and what a recorded package
+reads is a whole list kept as one fact under `inventory.list.`, which stays out of the
+scheduler's projection. The host computing the number before each evaluation is P2's (§1.505).
+
+**The shape** (ruling 1). `ObservationRef::ListRows { fact_key, key_column, value_column, rows:
+Vec<PoolListRow { key, factor }> }`, a third kind beside `fact` and `outcome`
+(`crates/policy/src/schema.rs`), serialized `{"kind": "list_rows", "fact_key", "key_column",
+"value_column", "rows": [{"key", "factor"}]}`, V2 only, beside `ledger_fact` (its minimum
+confidence as for a fact observation; the compile's `ledger_fact` check admits it beside `fact`).
+A pool has one observation, so a fact observation is excluded by construction. Adding a variant to
+the internally tagged enum leaves the two others' reading, writing and hashing as they were (the
+first stop condition did not hold). Constants: `POOL_LIST_ROWS_KIND`, `MAX_POOL_LIST_ROWS` (64),
+`MAX_POOL_LIST_ROW_FACTOR` (1 000 000), `POOL_LIST_ROWS_SUBSYSTEM` (`pool_list_rows`).
+
+**The limits** (ruling 2): 1 to 64 rows, keys distinct, a factor 1 to 1 000 000, both columns by
+the rule of a list reading's column names (`list_reading_column_valid`, `^[a-z][a-z0-9_]{0,31}$`),
+the key by the list reading's own (`list_reading_fact_key_valid`: under `inventory.list.`, an
+instance fact key) and the catalog's bounded identifier. Added, with its reason: a row's key is a
+text of 1 to 1024 bytes without a control character, the bound of a fact's text, since no row a
+list reading writes holds another. That the sum stays within 2^53 − 1 is P2's.
+
+**The refusals** (ruling 3; `validate_list_rows` in `crates/policy/src/validation.rs`), each at
+its pointer, every code one the compile has (no new code; the second stop condition did not hold):
+
+| Case | Code | Pointer |
+|---|---|---|
+| the kind in a V1 document (nothing else checked) | `unknown_field` | `/pools/<i>/observation/kind` |
+| beside `static_snapshot` (the pool would take the caller's value, never the rows; the precedent: a `ledger_fact` pool without a fact observation) | `limit_exceeded` | `/pools/<i>` |
+| a pool whose scope is not an instance | `type_mismatch` | `/pools/<i>/observation/kind` |
+| a key that is no identifier or not under `inventory.list.` | `type_mismatch` | `…/observation/fact_key` |
+| a column against the rule | `type_mismatch` | `…/observation/key_column`, `…/value_column` |
+| the two columns the same | `type_mismatch` | `…/observation/value_column` |
+| no row, more than 64 | `limit_exceeded` | `…/observation/rows` |
+| a key empty or with a control character; longer than 1024 bytes | `type_mismatch`; `limit_exceeded` | `…/observation/rows/<j>/key` |
+| a key twice (at the second) | `duplicate_id` | `…/observation/rows/<j>/key` |
+| a factor outside `1..=1000000` | `limit_exceeded` | `…/observation/rows/<j>/factor` |
+
+**The one exception** (ruling 4). The `list_rows` arm checks its key itself and does not call
+`validate_read_fact_key`, which keeps refusing every other member under the prefix (a `fact`
+observation, a predicate, a fact reference, a capacity or line reference, a consumption read from
+a fact, a selection document's fact); the list still does not enter the projection.
+
+**`requires`** (ruling 5; `read_game`, `crates/policy/src/compose.rs`). A `schedule.json` whose
+pool's `observation` has the `kind` `list_rows` without `pool_list_rows` in `requires` is
+`schedule_invalid` at the first such pool's `observation`, as `pool_lines` was built (the third
+stop condition did not hold). The observation passes through `compose_item` as written (it names
+no `task_id`). **No Runtime names the subsystem in this version** (`apps/actingd/src/config/manifest.rs`
+unchanged; P2 adds the row): the workbench and check-config compose with the manifest's enabled
+subsystems, so a file that lists it is `schedule_requires_missing` at that entry, and the
+workbench keeps the game's last good rules (pinned by host `gate_rl1b::rl1b_a6_…` for every
+refusal of a game's file).
+
+**No reading before P2: unknown, never zero** (ruling 6). Only a catalog given directly reaches
+an evaluator with such a pool. `pool_fact` reads no fact for it, so `project_fact_pools` drops a
+caller's snapshot of it and `evaluation_pool_values` gives it none. Each reader of the reading, as
+for a missing fact: `resource_projection` Unknown with the suggestion (L, `fact_missing`), so
+`trigger_unknown` and the refresh's demand for L (no reader marks it); the cost term of a
+regenerating pool `benefit_unknown` `reading_unknown` (L, `fact_missing`); the capped state of a
+pool with lines `pool_line_held` `capped_cap_unknown` (L, `fact_missing`); the reserve gate case
+1; the forward projection leaves it out. A resource target on it is `resource_not_observable`, as
+on an outcome pool (`resolve_target_pool`, unchanged; P2 opens it). In the host, a configured
+`policy.catalog` holding one makes each evaluation's input `policy_pool_binding_invalid`
+(`validate_static_fact_pool_authority`, unchanged; P2 changes it). The local change is one arm in
+each of three matches.
+
+**Every place that tells the observation's kinds apart** (`git grep ObservationRef`, `.observation`):
+the `match`es that gained an arm: `validation.rs` (`validate_pools`: `validate_list_rows`),
+`evaluator.rs` (`resource_suggestion`), `evaluator/benefit.rs` (the reading's key and reason),
+`evaluator/capped.rs` (`lines`), `apps/actinglab/src/resource_declarations.rs`
+(`check_pool_producers`: its wildcard written out, the kind publishes no fact of its own). The
+pattern tests where the kind is not a fact and needs nothing: `compiler.rs`
+(`referenced_outcome_keys`), `evaluator.rs` (`pool_fact`), `evaluator/no_progress.rs`
+(`basis_keys`), `evaluator/tie_break.rs`, `resource_targets.rs` (`resolve_target_pool`),
+`validation.rs` (the realization's fact observation, kept: such a pool is refused there), the host's
+`fact_store.rs` (`validate_pool_sources`) and `host/policy_dispatch.rs` (above); the composer's
+string test `reading_key` (`kind` `fact`).
+
+**The tools** (ruling 8). `actinglab scheduling compile`, `standard-pack check`, `compose` and
+`adopt` compile through the one compiler and composer, so they accept and carry the member (adopt
+writes rules only and leaves pools as written). The cross-check is left out: `standard-pack check`
+reads a package's reading marks only (`PreparedContainedTask::read_reading_marks`, its
+`resource_readings`); a package's list readings (a `read_list` step's `fact_key`, `key_column` and
+`columns` in a page graph or, since §1.500, in a linear plan, and a field list's) have no reader
+that the check could call without preparing the package. What is missing is such a metadata reader beside `read_reading_marks`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P1-1 | `observation` `{"kind": "list_rows", …}` (`PoolSpec`, V2) | catalog member | #455 P1 | a resource repository's `schedule.json`, once a Runtime names `pool_list_rows` | no reading before P2 |
+| P1-2 | `pool_list_rows` | `requires` subsystem | #455 P1 | none in 0.12.78 (P2's manifest row) | every 0.12.78 Runtime refuses a file that lists it |
+
+**Interface.** No revision moves: no `package` revision (a feature of `schedule.json` goes by
+`requires` alone, as the pools' lines and the trigger line), no `ledger`, `runtime-client`,
+`actingd-config` or `runtime-outcomes` shape; no outcome code or word.
+
+**Tests** (policy gate row "#455 P1", `crates/policy/src/tests/gate_455_p1.rs`; apps row "#455 P1").
+
+| Test | What it shows |
+|---|---|
+| `p1_t1_a_list_rows_pool_compiles_round_trips_and_keeps_its_rows_in_written_order` (1) | One row and four rows (factors 200, 400, 1000, 2000, out of key order) compile; the compiled pool holds them in that order, serializes them under `list_rows`, reads back equal and compiles again to the same hash |
+| `p1_t2_each_refusal_is_its_code_at_its_pointer` (2) | Every row of the table above, one case each |
+| `p1_t3_only_a_list_rows_observation_names_the_list_prefix` (3) | A `fact` observation, a capacity and a line reference and a `fact` predicate under the prefix stay `type_mismatch` at their key; a `list_rows` observation of `resource.` is refused at its `fact_key` |
+| `p1_t4_the_composer_requires_pool_list_rows_and_a_runtime_without_it_refuses_the_file` (4) | The member composes as written; without the entry `schedule_invalid` at `/pools/0/observation`; a manifest without the subsystem `schedule_requires_missing` at `/requires/0` |
+| actingd `gate_455_p1::p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it` (4) | This build's assembled manifest names no `pool_list_rows`, and the composer given its enabled subsystems refuses such a file at `/requires/0` |
+| `p1_t5_the_cost_term_of_a_list_pool_is_unknown_and_never_zero` (5) | `benefit_unknown` `reading_unknown` (pool, L, `fact_missing`), not dispatched, also with the list in the input and a caller's snapshot of 0 |
+| `p1_t6_the_capped_state_of_a_list_pool_is_unknown_and_never_zero` (5) | `pool_line_held` `capped_cap_unknown` (pool, L, `fact_missing`), not dispatched, the same two inputs |
+| `p1_t7_a_catalog_without_the_kind_keeps_its_golden_identity` (6) | `catalog-a` keeps its V1 and V2 golden hashes (`gate_ord1`'s) and serializes no `list_rows` |
+
+No existing test was touched (7).
+
+**What is not changed.** Every pool without the kind: its checks, its identity, its decisions (the
+`ledger_fact` check's message stays word for word). The refusals of ruling 4 for every other
+member. The projection: no list enters it. Every declared interface range.
+
+**At deploy.** Nothing changes for an installation: the kind is new, so no `schedule.json` and no
+configured catalog names it, and a Runtime of this version refuses a file that does. Read at the
+tag `v0.12.77` (`3285143f`): its composer and its `standard-pack check` know no `pool_list_rows`
+and check no `requires` in the tools, so they compose such a file and its compile refuses the
+unknown `kind` (`parse_document`: serde's unknown variant is `type_mismatch`, at the parser's
+nearest pointer inside the observation), `standard_pack_root_invalid` `schedule_invalid` at the
+pool; a Runtime of v0.12.77 answers `schedule_requires_missing` for a file that lists the
+subsystem (that check comes before the compile) and the same `schedule_invalid` for one that does
+not, keeping the game's last good rules either way. A rollback meets nothing: no Runtime has
+activated a catalogue with the kind (a configured one would have to be written after this deploy;
+a 0.12.77 start would then refuse that generation at its compile).
+
 ### 1.506 Slice #486 ASLEEP-2 (0.12.78): an instance whose application its idle action closed is asleep too; the close and wake loop seen in production on 11-21 (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-22, not the owner's words; the owner's words behind them, her order of 11-02 that an instance without a task is closed and her order of 11-22 that the scheduler must first run stably; coordinator work order `rd-1122/brief-486-asleep2.md`; on main `1dff8fcb`, merged with main `a2d31d86`)
 
 This section takes 1.506 (1.501 to 1.505 belong to other slices of 0.12.78). It ships in 0.12.78.

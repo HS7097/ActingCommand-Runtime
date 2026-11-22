@@ -359,7 +359,10 @@ run-duration samples. It leaves out two more:
 
 1. **Every record under `inventory.list.`**, whatever its rows. A list reading is a selection's
    input, read by a select or judge step through its own snapshot ("List reading facts"), never
-   the scheduler's. No decision changes: no catalog predicate reads such a key, and a record list
+   the scheduler's; its one other reader is the host, from #455 P2 on, for a pool whose observation
+   is of the kind `list_rows` (#455 P1, 0.12.78; [scheduling/README.md](scheduling/README.md), "A
+   pool read from rows of a list"): it hands the evaluation the number it computes from the rows,
+   never the list. No decision changes: no catalog predicate reads such a key, and a record list
    is unusable to the scheduler's selection document. The evaluation's `facts`, its
    `fact_snapshot_id` and an intent's instance view (above) no longer hold the lists, so a list's
    publication no longer makes an evaluated intent `policy_facts_stale`. The catalog compile
@@ -622,7 +625,8 @@ The store accepts or refuses it like any other observation.
 - **Projection.** An ordinary instance fact: visible to `InstanceFactSnapshot` and `ac_facts`,
   carried with its rows in the snapshot of a select or judge step whose document declares it,
   and loaded at the start as every tagged instance record. No catalog predicate and no
-  scheduling consumer reads it: record lists stay unusable to the scheduler. Since S168-LB1a
+  scheduling consumer reads it: record lists stay unusable to the scheduler (a pool read from rows
+  of a list, #455 P1, gets a number the host computes from them, from #455 P2 on). Since S168-LB1a
   (0.12.55) the scheduler's projection leaves the prefix out altogether ("Projection into the
   evaluation", "Left out of the projection").
 - **Capacity.** One active fact identity per list per instance, however many rows and however

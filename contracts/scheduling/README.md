@@ -2356,6 +2356,68 @@ An account's cap is read, never written as a constant (Alice 10-26). Two more V2
 - **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
 - **Capability.** A Runtime that reads both forms reports the always-on subsystem `pool_fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` that writes either must list `pool_fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with either refuses it at its reader.
 - For example, a task due while the projected amount is at least the read capacity less 20: the pool `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and the trigger `{"kind": "resource_projection", "pool_id": "pool.neutral", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20}}`.
+- **A pool's own value read from a list** (#455 P1, since 0.12.78): a pool whose inventory is a sum over rows of a list reading writes no fact reference; its `observation` is of the kind `list_rows` ("A pool read from rows of a list" below).
+
+## A pool read from rows of a list (#455 P1, since 0.12.78)
+
+Register §1.504; the coordinator's rulings of 11-21 (board #455), not the owner's words. A game
+with dozens of materials cannot give each its own fact (an instance holds at most 224), and no
+reading by a fixed place on the screen is allowed; what a package reads is a whole list, one fact
+under `inventory.list.` ("Record lists and the projection" below). So a V2 pool may declare that
+its inventory is read from rows of that list ([v2/README.md](v2/README.md);
+`actingcommand.scheduling.v2` only):
+
+```text
+"observation": {"kind": "list_rows", "fact_key": L, "key_column": K, "value_column": V,
+                "rows": [{"key": k1, "factor": f1}, {"key": k2, "factor": f2}, …]},
+"value_source": {"kind": "ledger_fact", "minimum_confidence_milli": C}
+```
+
+- **What it means.** The pool's inventory is `Σ f_j × v_j`, `v_j` the integer the column V holds
+  in the row of the list reading L (in the pool's own scope, an instance) whose column K holds
+  `k_j`. L is read with at least the confidence C, as a `fact` observation reads its key. The host
+  computes that number before each evaluation and hands it to the evaluation as the pool's value;
+  the list itself does not enter the projection. **No host computes it in 0.12.78** (#455 P2
+  does, with what a missing list, a stale one, a key without a row and a sum over 2^53 − 1 give).
+- **Until then the pool has no reading: unknown, never 0.** A caller's snapshot of the pool is
+  not read (the fact projection drops it, as every `ledger_fact` pool's), and the list in the input
+  is not read either. Every reader meets the pool as a `ledger_fact` pool whose fact is missing,
+  under the list's key L with `fact_missing`: a `resource_projection` on it is Unknown with that
+  detection suggestion (`trigger_unknown` or `feedback_stop_unknown`, and the fact refresh's demand
+  for L, which no reader marks); a judged task that consumes it, when it regenerates, is
+  `benefit_unknown` `reading_unknown` (`pool_id`, `fact_key` L, `unknown_reason` `fact_missing`);
+  when it writes its lines, its judged candidates are held with `pool_line_held`
+  `capped_cap_unknown` (`fact_key` L, `fact_missing`); a reserve on it is case 1 of "Task
+  Reserves"; the forward projection leaves it out as a pool without a snapshot. A resource target
+  on it is refused `resource_not_observable`, as on a pool observed by an outcome
+  ([resource-targets.md](../resource-targets.md)). A Runtime given such a pool in a configured
+  catalog (`policy.catalog`, no composer in front of it) refuses each evaluation's input with
+  `policy_pool_binding_invalid`, its check that a `ledger_fact` pool reads a fact; a composed
+  catalog never holds one (below).
+- **Refusals**, each at its pointer, with the compile's codes ([v2/README.md](v2/README.md)): in
+  a V1 document `unknown_field` at `observation/kind`; beside `static_snapshot`, which would take
+  the caller's fixed value and never the rows, `limit_exceeded` at the pool, as a `ledger_fact`
+  pool without a fact observation is; a pool whose scope is not an instance (a list reading is a
+  fact of one instance) `type_mismatch` at `observation/kind`; an L not under `inventory.list.`
+  `type_mismatch` at `observation/fact_key`; a K or V that breaks the rule of a list's column names
+  (`^[a-z][a-z0-9_]{0,31}$`) `type_mismatch` at the column, and V the same as K `type_mismatch` at
+  `observation/value_column`; no row or more than 64 `limit_exceeded` at `observation/rows`; a key
+  empty or with a control character `type_mismatch`, longer than 1024 bytes (a fact text's bound)
+  `limit_exceeded`, a key twice `duplicate_id` (at the second), at `observation/rows/<j>/key`; a
+  factor outside `1..=1000000` `limit_exceeded` at `observation/rows/<j>/factor`.
+- **The one member that names the prefix.** An observation of this kind is the only catalog member
+  that may name a key under `inventory.list.`, and it may name no other; every other member that
+  names one stays refused ("Record lists and the projection").
+- **Capability.** The subsystem is `pool_list_rows`. A `schedule.json` whose pool writes the kind
+  must list it in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the
+  composer refuses the file without it (`schedule_invalid` at the first such pool's
+  `observation`). **No Runtime of 0.12.78 names the subsystem** (#455 P2 adds it to
+  `config.subsystems`), so every Runtime of this version refuses such a file
+  (`schedule_requires_missing` at that `requires` entry) and keeps the game's last good rules. A
+  Runtime of 0.12.77 refuses it there too; given a catalog with the kind, its reader refuses it
+  (`type_mismatch`: an unknown `kind`).
+- **Identity.** A pool without the kind serializes, hashes and decides exactly as before; a
+  catalog without it compiles byte for byte as before.
 
 ## Pool lines (SS-2h)
 
@@ -2440,7 +2502,9 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   Runtime given a catalog with either member refuses it at its reader (`unknown_field`).
   SCHED-C1c (since 0.12.53): `trigger_line` likewise with its own always-on subsystem
   `pool_trigger_line`, which a `schedule.json` whose pool writes it lists in `requires` (a Runtime
-  that names `pool_lines` alone does not read it).
+  that names `pool_lines` alone does not read it). #455 P1 (since 0.12.78): a pool whose
+  `observation` is `list_rows` likewise lists `pool_list_rows`, which no Runtime of 0.12.78 names
+  ("A pool read from rows of a list").
 - **Identity.** A pool without the members serializes, and hashes, exactly as before.
 - For example, a pool whose cap is read, its stop line 40 below the cap and its hard line 76 below
   it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
@@ -3255,7 +3319,11 @@ long list must not stop the scheduler for every instance.
   evaluation. Before S168-LB1a such a catalog compiled and its predicate read the list record as
   any record list; S168-LB1a read the four resource repositories' `main` before it built the
   refusal and found no catalog that names one (register §1.311). A timeline event's prefixes name keys to invalidate, not to read, and are not
-  refused.
+  refused. **The one exception** (#455 P1, since 0.12.78, register §1.504): a pool's observation
+  of the kind `list_rows` names a key under the prefix, and only under it ("A pool read from rows
+  of a list"). The list itself still does not enter the projection: the host hands the evaluation
+  the number it computes from the list's rows (#455 P2; in 0.12.78 no host computes it, and such a
+  pool has no reading).
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
   policy's own bound, is left out for the instances its scope applies to. The host records the
   warning `policy_fact_rows_exceeded` (since 0.12.55) once for each such record after a start,

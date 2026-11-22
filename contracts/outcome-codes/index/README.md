@@ -15,50 +15,49 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1779 locations are not in it, and 11 of the header's 42 owners have no fragment file and so no file
+1774 locations are not in it, and 11 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3977 |
+| active | 3961 |
 | retired | 90 |
-| all | 4067 |
+| all | 4051 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
-| success | 125 |
-| info | 225 |
+| success | 124 |
+| info | 224 |
 | warning | 189 |
-| error | 3421 |
-| fatal | 17 |
+| error | 3409 |
+| fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 823 |
+| `common_causes` and `handling` both written | 807 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3150 |
 | `settled` | 154 |
-| `pending` | 3823 |
-| all active codes | 3977 |
+| `pending` | 3807 |
+| all active codes | 3961 |
 
 ## By owner
 
 | Owner | Codes | Active | Text written | Settled |
 |---|---:|---:|---:|---:|
-| [actingcommand-entry](actingcommand-entry.md) | 10 | 10 | 10 | 0 |
 | [actingctl](actingctl.md) | 209 | 204 | 41 | 8 |
-| [actingd](actingd.md) | 157 | 155 | 100 | 85 |
+| [actingd](actingd.md) | 156 | 154 | 99 | 85 |
 | [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
-| [contract](contract.md) | 930 | 906 | 165 | 32 |
+| [contract](contract.md) | 925 | 901 | 160 | 32 |
 | [device](device.md) | 33 | 33 | 27 | 23 |
 | [display-adapter](display-adapter.md) | 2 | 2 | 0 | 0 |
 | [execution-kernel](execution-kernel.md) | 206 | 203 | 32 | 0 |
@@ -82,4 +81,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4067 | 3977 | 823 | 154 |
+| all | 4051 | 3961 | 807 | 154 |

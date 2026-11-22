@@ -997,6 +997,8 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
     else {
         return None;
     };
+    // #455 P1 (register §1.504): a `list_rows` pool reads no fact of its own; until the host
+    // computes its sum (a later slice) it has no value, and a caller's snapshot of it is not read.
     let ObservationRef::Fact { fact_key } = &pool.observation else {
         return None;
     };
@@ -7046,6 +7048,14 @@ fn resource_suggestion(
             fact_key: format!("outcome.{task_id}.{outcome_key}"),
             reason: "resource_outcome_missing".to_owned(),
         }),
+        // #455 P1 (register §1.504): no evaluation is given a list pool's reading before the host
+        // computes it (a later slice), so the pool reads as a ledger pool whose fact is missing,
+        // under the list's key.
+        ObservationRef::ListRows { fact_key, .. } => DetectionSuggestion {
+            scope: pool.scope.clone(),
+            fact_key: fact_key.clone(),
+            reason: unknown_token(UnknownReason::FactMissing).to_owned(),
+        },
     }
 }
 

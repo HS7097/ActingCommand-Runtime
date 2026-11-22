@@ -3225,10 +3225,10 @@
       "runtime": "offline",
       "entries": ["lab"],
       "requests": ["Status", "RequestShutdown"],
-      "source": ["actingctl restart", "actingctl install restart"],
+      "source": ["actingctl restart"],
       "slice": "LAB-3",
       "status": "planned",
-      "notes": "LAB-3: actingctl restart for the root (its configuration on a single-location root); install restart (R-15d) is not built"
+      "notes": "LAB-3: actingctl restart for the root (its configuration on a single-location root)"
     },
     {
       "name": "down",
@@ -3306,41 +3306,6 @@
       "slice": "LAB-3",
       "status": "planned",
       "notes": "always detached through MCP. LAB-6S0: served by actinglab-mcp on Windows; the front gives detach true, the answer is at once (detached, the run's pid and log, next op status) and the detached run journals Lab-MCP (the marker of lab-two-entries.md section 4.2); until LAB-7 production rolls back through actingctl install. LAB-3: without --to the build the live one replaced; without a running Runtime only the plan and the files"
-    },
-    {
-      "name": "convert",
-      "module": "rescue",
-      "params": [
-        {"name": "plan", "form": "switch", "type": "boolean", "required": false, "note": "only the plan"},
-        {"name": "detach", "form": "switch", "type": "boolean", "required": false}
-      ],
-      "params_more": "actingctl install convert",
-      "output": "the operation id and each step's result",
-      "writes": true,
-      "irreversible": true,
-      "runtime": "optional",
-      "entries": ["lab"],
-      "requests": ["Status", "PauseScheduling", "RequestShutdown", "ScheduleExplanation", "StartReport", "ResumeScheduling"],
-      "source": ["actingctl install convert"],
-      "slice": "LAB-3",
-      "status": "planned",
-      "notes": "always detached through MCP. LAB-3: not served yet: its source, actingctl install convert (R-15e), is not built; the slice that builds it opens the row"
-    },
-    {
-      "name": "clean",
-      "module": "rescue",
-      "params": [],
-      "params_more": "actingctl install clean (without --ui-confirmed and --via)",
-      "output": "what was cleaned",
-      "writes": true,
-      "irreversible": true,
-      "runtime": "offline",
-      "entries": ["lab"],
-      "requests": [],
-      "source": ["actingctl install clean"],
-      "slice": "LAB-3",
-      "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install clean (R-15d), is not built; the slice that builds it opens the row"
     },
     {
       "name": "undo",
@@ -3532,22 +3497,6 @@
       "slice": "LAB-3",
       "status": "planned",
       "notes": "LAB-3: install adopt; its journal carries the initiator"
-    },
-    {
-      "name": "prepare",
-      "module": "rescue",
-      "params": [],
-      "params_more": "actingctl install prepare",
-      "output": "the prepared operation",
-      "writes": true,
-      "irreversible": false,
-      "runtime": "offline",
-      "entries": ["lab"],
-      "requests": [],
-      "source": ["actingctl install prepare"],
-      "slice": "LAB-3",
-      "status": "planned",
-      "notes": "LAB-3: not served yet: its source, actingctl install prepare (R-15c), is not built; the slice that builds it opens the row"
     },
     {
       "name": "config replace",
