@@ -3041,7 +3041,11 @@ then held back; the idle check stopped it again, with no end.
   answer, counts for the idle plan as held back by a later position that names no time (not due,
   no wake of its own), behind any hold of positions 1 or 2. Its idle plan takes no wake from a
   decision a gate without a time holds, as for an instance whose idle action can stop its emulator
-  (fix round 1 above; `close_app`, and `auto` at any tier). After a Runtime start it is asleep once
+  (fix round 1 above; `close_app`, and `auto` at any tier). Ruling 7: on every such instance a
+  decision whose wake is only a regenerating pool's next projection step (the evaluation's next
+  reading of the pool, `pool_projection_steps`; a `trigger_false` on a `resource_projection`
+  among them) names no wake in the idle plan either; the evaluation in which the candidate would
+  be selected wakes the instance. After a Runtime start it is asleep once
   the start's preparation made it available ([runtime-config.md](../runtime-config.md), "What wakes
   an idle instance").
 - **Not asleep.** An instance unavailable for any other cause, an application closed among them

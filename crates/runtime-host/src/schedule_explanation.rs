@@ -58,6 +58,22 @@ pub(crate) struct IdleGates<'a> {
     pub(crate) update_hold: IdleUpdateHold<'a>,
 }
 
+/// #486 ASLEEP-1 fix round 1 and ASLEEP-2 (register §1.506, rulings 2 and 7): what the idle plan of
+/// an instance that its idle action can put to sleep reads beside an evaluation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdleSleepers<'a> {
+    /// The instances whose idle action in effect can stop their emulator or close their
+    /// application, by alias (`HostShared::idle_sleepers_for_policy`).
+    pub(crate) instances: &'a BTreeSet<String>,
+    /// Ruling 7: the next projection step of each regenerating pool the evaluation read
+    /// (`actingcommand_policy::pool_projection_steps`). A decision's wake that is one of them is
+    /// the evaluation's own next reading of that pool, no time a task is due, so on such an
+    /// instance it is no wake of the plan. A wake a time names (a clock or timeline time, a
+    /// cooldown's end, a budget's release, an activity window's opening, a deadline) is another
+    /// time and stays.
+    pub(crate) pool_steps: &'a BTreeSet<u64>,
+}
+
 const DAY_MS: i128 = 86_400_000;
 const MINUTE_MS: i128 = 60_000;
 
@@ -210,9 +226,10 @@ impl IdleDraft {
     /// `held_ahead`: the decision's entry of [`IdleHeldAhead`], when a hold of the instance hides
     /// a later position that holds it back. `update_held`: the instance waits for its client update
     /// and the decision is no store update task's
-    /// ([`crate::application_update::IdleUpdateHold::holds`]). `sleeps` (#486 ASLEEP-1 fix round
-    /// 1; ASLEEP-2, ruling 2): the instance's idle action in effect can stop its emulator or close
-    /// its application.
+    /// ([`crate::application_update::IdleUpdateHold::holds`]). `sleeper` (#486 ASLEEP-1 fix round
+    /// 1; ASLEEP-2, rulings 2 and 7): when the instance's idle action in effect can stop its
+    /// emulator or close its application, the next projection steps of the regenerating pools the
+    /// evaluation read ([`IdleSleepers::pool_steps`]); none on any other instance.
     fn add(
         &mut self,
         decision: &TaskDecision,
@@ -220,7 +237,7 @@ impl IdleDraft {
         held_back: Option<Option<u64>>,
         held_ahead: Option<Option<u64>>,
         update_held: bool,
-        sleeps: bool,
+        sleeper: Option<&BTreeSet<u64>>,
     ) {
         // UPD-1 (design §4.2; fix round 1, review M1): on an instance that waits for its client
         // update, a decision other than the store update task's is neither due nor a wake,
@@ -308,8 +325,17 @@ impl IdleDraft {
             self.task_due |= due;
             // #486 ASLEEP-1 fix round 1: on an instance whose idle action can stop its emulator
             // (#486 ASLEEP-2, ruling 2: or close its application), a decision a gate without a
-            // time holds names no wake, whatever its trigger's next time.
-            let wakes_nothing = benefit_held && sleeps;
+            // time holds names no wake, whatever its trigger's next time. #486 ASLEEP-2, ruling 7:
+            // nor does one whose wake is only the evaluation's next reading of a regenerating
+            // pool (a pool's next projection step, whatever the decision's code): no task is due
+            // then, and the evaluation in which the candidate can be dispatched wakes the
+            // instance for it.
+            let wakes_nothing = sleeper.is_some_and(|pool_steps| {
+                benefit_held
+                    || decision
+                        .next_wake_unix_ms
+                        .is_some_and(|wake| pool_steps.contains(&wake))
+            });
             if !wakes_nothing {
                 self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);
             }
@@ -414,15 +440,18 @@ impl ScheduleExplanationTable {
             evaluated_at_unix_ms,
             expected,
             gates,
-            &BTreeSet::new(),
+            IdleSleepers {
+                instances: &BTreeSet::new(),
+                pool_steps: &BTreeSet::new(),
+            },
         );
     }
 
     /// `record_gated` with, #486 ASLEEP-1 fix round 1 (register §1.497), `sleepers`: the
     /// instances whose idle action in effect can stop their emulator (#486 ASLEEP-2, register
-    /// §1.506, ruling 2: or close their application), by alias
-    /// (`HostShared::idle_sleepers_for_policy`), whose idle plan takes no wake from a decision a
-    /// gate without a time holds ([`IdleDraft`]). Only the idle plan reads it.
+    /// §1.506, ruling 2: or close their application), whose idle plan takes no wake from a decision
+    /// a gate without a time holds, nor (ruling 7) from one whose wake is only a regenerating
+    /// pool's next projection step ([`IdleSleepers`], [`IdleDraft`]). Only the idle plan reads it.
     pub(crate) fn record_stopping(
         &mut self,
         evaluation: &PolicyEvaluation,
@@ -430,7 +459,7 @@ impl ScheduleExplanationTable {
         evaluated_at_unix_ms: u64,
         expected: &ExpectedRuntimeOf<'_>,
         gates: IdleGates<'_>,
-        sleepers: &BTreeSet<String>,
+        sleepers: IdleSleepers<'_>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -453,7 +482,10 @@ impl ScheduleExplanationTable {
                     .and_then(|tasks| tasks.get(&decision.task_id))
                     .copied(),
                 gates.update_hold.holds(decision),
-                sleepers.contains(alias),
+                sleepers
+                    .instances
+                    .contains(alias)
+                    .then_some(sleepers.pool_steps),
             );
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {

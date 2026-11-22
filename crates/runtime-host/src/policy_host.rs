@@ -4697,6 +4697,15 @@ impl PolicyHost {
                     .insert(decision.task_id.clone(), None);
             }
         }
+        // #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating
+        // pool this evaluation read, as the evaluator finds them, for the idle plan of the
+        // instances whose idle action can put them to sleep; none is read while there is no such
+        // instance.
+        let pool_steps = if idle_sleepers.is_empty() {
+            BTreeSet::new()
+        } else {
+            actingcommand_policy::pool_projection_steps(&active.compiled, facts, resources, time)?
+        };
         self.explanation.record_stopping(
             &evaluation,
             active.compiled.catalog_hash(),
@@ -4732,9 +4741,13 @@ impl PolicyHost {
                     store_tasks: &store_tasks,
                 },
             },
-            // #486 ASLEEP-1 fix round 1 (#486 ASLEEP-2, ruling 2): the instances whose idle plan
-            // takes no wake from a decision a gate without a time holds.
-            idle_sleepers,
+            // #486 ASLEEP-1 fix round 1 (#486 ASLEEP-2, rulings 2 and 7): the instances whose idle
+            // plan takes no wake from a decision a gate without a time holds, nor from one whose
+            // wake is only a regenerating pool's next step.
+            crate::schedule_explanation::IdleSleepers {
+                instances: idle_sleepers,
+                pool_steps: &pool_steps,
+            },
         );
         // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
         // dispatches, replaced with the explanation it belongs to.

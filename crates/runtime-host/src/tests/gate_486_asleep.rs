@@ -2534,6 +2534,218 @@ fn asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_wa
     assert_eq!(emulator.take_withheld(ALIAS), None);
 }
 
+// ---- #486 ASLEEP-2 ruling 7 (the coordinator's, 11-22 14:0x): a regenerating pool's next step
+// is no wake of a sleeper.
+//
+// Production v0.12.77 on 11-22: four instances set to `stop_emulator` never idled (nor had
+// `close_app` idled them for six hours): each plan held a wake less than five minutes ahead, the
+// wake of a judged candidate blocked `trigger_false` whose trigger reads a pool that gains one unit
+// every five minutes. That wake is the pool's next projection step, the evaluation's own next
+// reading of it, no time the task is due; the plan took it as the trigger's time.
+// - r7: the fixture's static pool regenerating one unit every six minutes below a judged task's
+//   threshold, and a task on a clock two hours ahead: the plan's wake is the clock's time, the host's
+//   own check closes the application once with its wake at that time less the lead, and the
+//   instance stays asleep across four steps; once the pool reaches the threshold the instance is
+//   woken once for that task, which is dispatched.
+
+/// The fixture's static pool (`contracts/scheduling/examples/catalog-a`): 10 read at
+/// `POLICY_NOW_UNIX_MS`, one unit more every six minutes.
+const FIXTURE_POOL: &str = "fixture-pool-a";
+const REGENERATION_MS: u64 = 360_000;
+/// The judged task's threshold on the fixture's pool: reached at 06:36 of day 1.
+const THRESHOLD: u64 = 436;
+/// A task on a clock `at` 08:10 of day 1, no step of the pool.
+const CLOCKED: &str = "fixture.asleep2_clock";
+
+/// A trigger true once `at_ms` (UTC) has passed, naming that time before it.
+fn at_clock(at_ms: u64) -> Value {
+    json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "at",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "etc/utc",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "at_ms": at_ms
+        }
+    })
+}
+
+/// [`sources`] of [`TASK`], judged, producing 5 of the valued pool and triggered once the
+/// fixture's pool reaches [`THRESHOLD`], and of [`CLOCKED`] at 08:10; the fixture's pool may hold
+/// 1000, so it regenerates through the day.
+fn regenerating_sources() -> CatalogSources {
+    let mut sources = sources(&[
+        SlotTask {
+            id: TASK,
+            priority: 100,
+            trigger: json!({
+                "kind": "resource_projection",
+                "pool_id": FIXTURE_POOL,
+                "comparison": "greater_than_or_equal",
+                "value": THRESHOLD
+            }),
+            daily_limit: 2,
+        },
+        SlotTask {
+            id: CLOCKED,
+            priority: 100,
+            trigger: at_clock(at(1, 8, 10)),
+            daily_limit: 2,
+        },
+    ]);
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the tasks");
+    for spec in tasks["tasks"].as_array_mut().expect("the task list") {
+        if spec["id"] == json!(TASK) {
+            spec["benefit_judged"] = json!(true);
+            spec["consumes"] = json!([]);
+            spec["produces"] = json!([effect(OUT, "produce", 5)]);
+        }
+    }
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the tasks' bytes");
+    let mut pools: Value = serde_json::from_slice(&sources.pools.bytes).expect("the pools");
+    let entries = pools["pools"].as_array_mut().expect("the pool list");
+    for pool in entries.iter_mut() {
+        if pool["id"] == json!(FIXTURE_POOL) {
+            pool["capacity"] = json!(1000);
+        }
+    }
+    entries.push(valued_pool(OUT, 1_000_000));
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("the pools' bytes");
+    sources
+}
+
+/// `task_id`'s decision is blocked, its trigger false: its wake.
+fn trigger_false_wake(cycle: &PolicyCycle, task_id: &str) -> Option<u64> {
+    let decision = decision(cycle, task_id);
+    assert_eq!(
+        decision.state,
+        SchedulingDecisionState::Blocked,
+        "{decision:#?}"
+    );
+    assert_eq!(
+        decision.eligibility,
+        EligibilityState::False,
+        "{decision:#?}"
+    );
+    assert!(
+        decision
+            .reasons
+            .last()
+            .is_some_and(|reason| reason.outcome.is(PolicyCode::TriggerFalse)),
+        "{decision:#?}"
+    );
+    decision.next_wake_unix_ms
+}
+
+/// The replay instance's row of `host.idle_state`: closed by `close_app`, its wake at `wake`.
+fn closed_row(wake: u64) -> BTreeMap<String, FactScalar> {
+    BTreeMap::from([
+        (
+            "instance_alias".to_owned(),
+            FactScalar::String(ALIAS.to_owned()),
+        ),
+        (
+            "action".to_owned(),
+            FactScalar::String(IdleAction::CloseApp.as_str().to_owned()),
+        ),
+        ("wake_at_unix_ms".to_owned(), FactScalar::TimestampMs(wake)),
+    ])
+}
+
+#[test]
+fn asleep2_r7_a_pool_regenerating_below_its_trigger_lets_the_closed_instance_sleep() {
+    let mut replay = Replay::closing(at(1, 6, 0), IdleAction::CloseApp, &regenerating_sources());
+    let before = head(&replay.host);
+    let clock = at(1, 8, 10);
+    let crossed = POLICY_NOW_UNIX_MS + (THRESHOLD - 10) * REGENERATION_MS;
+    assert_eq!(
+        crossed,
+        at(1, 6, 36),
+        "the pool reaches the threshold at 06:36"
+    );
+
+    // 06:10, 431 of 436: the trigger is false and names the pool's next step, 06:12, as its wake,
+    // the evaluation's own next reading. The plan's wake is the clock task's time, and the host's
+    // own check closes the application, its wake at that time less the lead. On the head before
+    // ruling 7 the plan's wake was the step, two minutes away, closer than `idle.min_gap_ms`: the
+    // check took no action, here and at every later step.
+    let first = replay.cycle(at(1, 6, 10));
+    assert_eq!(
+        trigger_false_wake(&first, TASK),
+        Some(at(1, 6, 12)),
+        "the pool's next step"
+    );
+    assert_eq!(trigger_false_wake(&first, CLOCKED), Some(clock));
+    let plan = replay.plan();
+    assert!(!plan.due_now, "{plan:?}");
+    assert_eq!(
+        plan.next_wake_unix_ms,
+        Some(clock),
+        "the clock's time, not the pool's step"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the close ended"
+    );
+    assert_eq!(closes(&replay.state), 1, "the host's own check closed it");
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![closed_row(clock - LEAD_MS)]),
+        "its wake: the clock task's time less the lead"
+    );
+
+    // Four steps, still below the threshold: asleep, and nothing wakes it.
+    for moment in [at(1, 6, 13), at(1, 6, 19), at(1, 6, 25), at(1, 6, 31)] {
+        let cycle = replay.cycle(moment);
+        assert!(
+            trigger_false_wake(&cycle, TASK).is_some_and(|step| step > moment),
+            "the trigger is false at {moment}, its wake the pool's next step"
+        );
+        let read = replay.plan();
+        assert!(!read.due_now, "{moment}: {read:?}");
+        assert_eq!(read.next_wake_unix_ms, Some(clock), "{moment}: {read:?}");
+    }
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "one close, no wake across the steps"
+    );
+
+    // Past the threshold: the task the instance is woken for, one wake; its startup package runs,
+    // and the task is dispatched.
+    let woken_at = head(&replay.host);
+    let reached = crossed + MINUTE_MS;
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(reached),
+            TASK,
+            PolicyCode::InstanceAsleepWakeDue.as_str()
+        ),
+        Some(reached),
+        "the task it is woken for"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "woken once, for the task"
+    );
+    replay.await_free(woken_at);
+    replay.dispatch(crossed + 4 * MINUTE_MS);
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "woken once"
+    );
+    assert_eq!(closes(&replay.state), 1, "closed once");
+    replay.close();
+}
+
 #[test]
 fn asleep2_r6_none_and_an_awake_close_app_instance_decide_and_plan_as_before() {
     // `idle.action` `none`: the judged task on an interval clock names its trigger's next time as

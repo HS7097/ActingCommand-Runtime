@@ -1133,6 +1133,42 @@ fn evaluation_pool_values<'a>(
         .collect()
 }
 
+/// #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating pool
+/// an evaluation of `facts` and `resources` at `time` reads (the step a pool below its capacity
+/// gains its next amount at), as the evaluation itself finds them: from the pool values it reads
+/// (`evaluation_pool_values`, over the facts as the timeline's resets leave them). A
+/// `resource_projection` predicate names that step as its wake, and so does the benefit of a
+/// judged candidate that consumes such a pool: it is when the evaluation reads the pool again, no
+/// time a task is due. The Runtime's idle plan reads them to tell such a wake from one a time
+/// names. Empty when no pool the evaluation reads regenerates.
+pub fn pool_projection_steps(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeSet<u64>> {
+    let effective = project_time_validity(catalog, facts, time)?;
+    let pool_specs: BTreeMap<&str, &PoolSpec> = catalog
+        .catalog()
+        .pools
+        .pools
+        .iter()
+        .map(|pool| (pool.id.as_str(), pool))
+        .collect();
+    let mut steps = BTreeSet::new();
+    for (pool_id, reading) in evaluation_pool_values(&pool_specs, resources, &effective, time) {
+        let Some(spec) = pool_specs.get(pool_id) else {
+            continue;
+        };
+        if let Some(step) =
+            next_pool_projection_change(spec, reading.bound, reading.snapshot, time.unix_ms)?
+        {
+            steps.insert(step);
+        }
+    }
+    Ok(steps)
+}
+
 /// The facts as the timeline's resets leave them at `time`: an observation of a key an event
 /// invalidates (`TimelineEvent::invalidates_key`) at or before the event's latest occurrence is
 /// removed, and a task whose settled run is that old loses its `terminal_state` and

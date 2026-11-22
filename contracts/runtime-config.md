@@ -1468,6 +1468,23 @@ application, `close_app` and `auto` at any tier, with its startup package in eff
 application the trigger's time would start for nothing. On an instance whose idle action is `none`,
 or one it cannot take (no startup package), the plan is as before.
 
+A regenerating pool's next step wakes no such instance either (#486 ASLEEP-2, ruling 7; production
+v0.12.77 on 11-22: instances set to `stop_emulator`, and before them to `close_app`, never idled,
+because each plan held a wake less than five minutes ahead, the wake of a candidate blocked
+`trigger_false` whose trigger reads a pool that gains one unit every five minutes). A
+`resource_projection` trigger, and the benefit of a judged candidate that consumes a regenerating
+pool, name the pool's next projection step as their wake: that is when the evaluation reads the
+pool again, no time a task is due. On an instance whose idle action in effect can stop its emulator
+or close its application, a decision whose wake is such a step (one of the next projection steps
+of the regenerating pools the evaluation read, `actingcommand_policy::pool_projection_steps`),
+whatever its code, contributes no wake to the idle plan. The evaluation goes on at those steps as
+before; the one in which the candidate would be selected wakes the asleep instance for it
+(`instance_asleep_wake_due`), one wake lead later than a wake at the crossing would have (the
+evaluator names no time at which a projection crosses a threshold). A wake a time names stays: a
+clock or timeline time of the trigger, a cooldown's end, a budget's release, an activity window's
+opening, a deadline, a reading's expiry. An instance whose idle action is `none`, and the plan the
+evaluation's own rows show, are as before.
+
 A Runtime start keeps an asleep instance asleep (#486 ASLEEP-1 fix round 1, ruling 5). The start
 restores the instance stopped with its wake (IDLE-1P above), withdraws its availability as for every
 device self-checked instance (`backend_selfcheck:unchecked`), and does not prepare it: its emulator
