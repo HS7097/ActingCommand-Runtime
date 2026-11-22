@@ -242,9 +242,14 @@ fn emu_w_a_a_paused_instance_is_not_started_at_the_daemon_start_and_a_persons_st
         .emulator
         .script_read(running_state(FAKE_EMULATOR_PORT));
     let resumed_at = head(&host);
+    // A denied resume says why (its code and outcome values: a `lease_queue_expired` names the
+    // key's holder and the claim's place) and who holds or waits for the key after it.
+    let resumed = resume(&host, instance_scope(FIRST), 303);
     assert_eq!(
-        resume(&host, instance_scope(FIRST), 303).state(),
-        RuntimeReceiptState::Completed
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "the resume: {resumed:?}; the instance's claims after it: {:?}",
+        host.instance_claims_for_test(FIRST)
     );
     await_recorded(&host, EventType::TaskRequested, resumed_at);
     assert!(host.fatal_error().expect("runtime health").is_none());
