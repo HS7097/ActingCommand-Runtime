@@ -416,7 +416,9 @@ register §1.458, so it computes 18; row 19, an `interrupts.json` entry without 
 whose `interrupts.json` holds such an entry; row 20, a `repeated_anchor` layout's shared read,
 Workflow #463 SEL-2L, register §1.480, so it computes 20 for a zip whose pack holds such a layout;
 row 21, the lines of a shared read's name boxes, Workflow #463 SEL-GRID G2, register §1.491, so it
-computes 21 for a zip whose pack declares them);
+computes 21 for a zip whose pack declares them; row 22, a `linear_steps` task's list reading,
+Workflow #428 S168-LK, register §1.500, so it computes 22 for a zip whose `linear_steps` pack has
+one);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -473,6 +475,7 @@ as an element of its array.
 | 19 | root `interrupts.json` | `handlers` under `interrupts` when it holds an empty array (an entry that names no handler), and `result` under `interrupts` when it holds `environment_reset`; an entry with handlers and a `result` of before keep row 6's revision, and a file without them its bytes | INT-1, §1.473; [package-reference.md](package-reference.md), "An entry without handlers" |
 | 20 | task | `shared_ocr` of an element of `candidate_layouts` whose `kind` is `repeated_anchor`, in a pack of any execution mode (a Runtime before 20 refuses it in its declaration gate, `UnknownField`, in every pack): a member a row finds only beside its layout's `kind`, so read on its own (`anchored_shared_read`); a `fixed_slots` layout's `shared_ocr` keeps its revision (row 6 for its `preprocess`) | SEL-2L, §1.480; [selection-graph.md](selection-graph.md), "Shared OCR read" |
 | 21 | task | `lines` under `shared_ocr`, of a layout of either kind, in a pack of any execution mode (a Runtime before 21 refuses it in its declaration gate, `UnknownField` at `…/shared_ocr/lines`, in every pack); a shared read without it keeps its revision | SEL-GRID G2, §1.491; [selection-graph.md](selection-graph.md), "The lines of a name box" |
+| 22 | task | `read_list` under `operations` when it holds an object (a list reading), in a pack whose `control.json` `execution_mode` is `linear_steps` only (a page-graph list reading keeps row 8's revision): where the kernel's admission finds it (`TaskOperation.read_list`; `TaskProgram::validate_linear`, `LinearEffect::ReadList`), as rows 13 and 17 find a select step and a key step; a Runtime before 22 refuses it at admission, `contained_task_linear_invalid`, `reason=read_list` | S168-LK, §1.500; [linear-steps.md](linear-steps.md), "List reading steps" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

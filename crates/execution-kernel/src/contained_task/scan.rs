@@ -49,7 +49,7 @@ pub(super) use online::RuntimeScanSource;
 #[cfg(test)]
 pub(super) use online::run_scan;
 pub use online::{
-    dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
+    dry_run_list_reading, dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
     replay_scan_with_tables,
 };
 pub(super) use select::{
@@ -2494,6 +2494,9 @@ impl<'a> ScanSession<'a> {
                     ..
                 } => gated_out.push(position.identity.clone().unwrap_or_default()),
                 PositionState::Unread => {}
+                // Workflow #428 S168-LK: a list reading evaluates nothing, so a fixed position is
+                // one of its rows, not unknown; its unknown positions are those it could not read.
+                PositionState::Fixed { .. } if self.policy.is_none() => {}
                 state => {
                     let cause = match state {
                         PositionState::Contradicted => ScanUnknownCause::Contradicted,
