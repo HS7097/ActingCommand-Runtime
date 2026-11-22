@@ -7,6 +7,10 @@
 //! first step, from the instance's ledger-pinned fact snapshot through the runtime's
 //! `selection_state` seam; a cap that cannot be read ends the run before any input with
 //! `contained_task_designated_effect_cap_unresolved`.
+//!
+//! Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): a linear plan's press
+//! counts read from a dispatch parameter are read by the same snapshot and the same rules
+//! ([`PreparedContainedTask::cap_facts`], [`CapFacts::read`]), one reading for both.
 
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, PreparedContainedTask,
@@ -16,9 +20,7 @@ use crate::DesignatedEffectCap;
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Outcome, VocabularyToken};
-use actingcommand_contract::{
-    DesignatedEffectDeclaration, DesignatedEffectRepeats, MAX_DESIGNATED_EFFECT_REPEATS,
-};
+use actingcommand_contract::{DesignatedEffectRepeats, MAX_DESIGNATED_EFFECT_REPEATS};
 use actingcommand_selection_policy::{
     ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason,
 };
@@ -52,8 +54,9 @@ enum FactCap {
     OutOfRange(i64),
 }
 
-/// The run's fact snapshot, read once for every fact cap of the set.
-struct CapFacts {
+/// The run's fact snapshot, read once for every fact cap of the set. Workflow #477 LR-1: and for
+/// every press count of a linear plan that a dispatch parameter gives.
+pub(super) struct CapFacts {
     facts: SelectionFactSnapshot,
     now_unix_ms: u64,
 }
@@ -85,23 +88,39 @@ impl CapFacts {
             }
         }
     }
+
+    /// The cap the operation `operation_id` reads under `fact_key`: an unexpired integer from 0 to
+    /// [`MAX_DESIGNATED_EFFECT_REPEATS`], or `contained_task_designated_effect_cap_unresolved` with
+    /// why it is none (`unknown_reason`, or `count` and `limit_count`).
+    pub(super) fn read(
+        &self,
+        operation_id: &str,
+        fact_key: &str,
+    ) -> Result<u32, ContainedTaskError> {
+        match self.cap(fact_key) {
+            FactCap::Cap(cap) => Ok(cap),
+            FactCap::Unknown(reason) => Err(unresolved(operation_id, fact_key, |outcome| {
+                outcome.unknown_reason(CapUnknownReason(reason))
+            })),
+            FactCap::OutOfRange(value) => Err(unresolved(operation_id, fact_key, |outcome| {
+                outcome
+                    .count(value)
+                    .limit_count(MAX_DESIGNATED_EFFECT_REPEATS)
+            })),
+        }
+    }
 }
 
-/// `contained_task_designated_effect_cap_unresolved` for `effect`'s fact cap under `fact_key`,
-/// with the values `outcome` adds.
+/// `contained_task_designated_effect_cap_unresolved` for the fact cap the operation
+/// `operation_id` reads under `fact_key`, with the values `outcome` adds.
 fn unresolved(
-    effect: &DesignatedEffectDeclaration,
+    operation_id: &str,
     fact_key: &str,
     outcome: impl FnOnce(Outcome) -> Outcome,
 ) -> ContainedTaskError {
     ContainedTaskError::valued(
         ExecutionKernelCode::ContainedTaskDesignatedEffectCapUnresolved.code(),
-        |base| {
-            outcome(
-                base.pack_operation_id(effect.operation_id())
-                    .fact_key(fact_key),
-            )
-        },
+        |base| outcome(base.pack_operation_id(operation_id).fact_key(fact_key)),
     )
 }
 
@@ -130,27 +149,11 @@ impl PreparedContainedTask {
                     let fact_key = fact.fact_key();
                     let read = match facts.take() {
                         Some(read) => read,
-                        None => self.cap_facts(runtime, effect, fact_key)?,
+                        None => self.cap_facts(runtime, effect.operation_id(), fact_key)?,
                     };
-                    let cap = read.cap(fact_key);
+                    let cap = read.read(effect.operation_id(), fact_key);
                     facts = Some(read);
-                    match cap {
-                        FactCap::Cap(cap) => cap,
-                        FactCap::Unknown(reason) => {
-                            return Err(unresolved(effect, fact_key, |outcome| {
-                                outcome.unknown_reason(CapUnknownReason(reason))
-                            })
-                            .into());
-                        }
-                        FactCap::OutOfRange(value) => {
-                            return Err(unresolved(effect, fact_key, |outcome| {
-                                outcome
-                                    .count(value)
-                                    .limit_count(MAX_DESIGNATED_EFFECT_REPEATS)
-                            })
-                            .into());
-                        }
-                    }
+                    cap?
                 }
             };
             caps.push(DesignatedEffectCap {
@@ -161,18 +164,19 @@ impl PreparedContainedTask {
         Ok(caps)
     }
 
-    /// The instance's fact snapshot for the set's fact caps. A runtime without one, or a snapshot
-    /// that is invalid or of another game or server, leaves the cap unresolved.
-    fn cap_facts<R: ContainedTaskRuntime>(
+    /// The instance's fact snapshot for the fact caps, asked for the operation `operation_id`
+    /// whose cap reads `fact_key`. A runtime without one, or a snapshot that is invalid or of
+    /// another game or server, leaves that cap unresolved.
+    pub(super) fn cap_facts<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-        effect: &DesignatedEffectDeclaration,
+        operation_id: &str,
         fact_key: &str,
     ) -> Result<CapFacts, ContainedTaskRunError<R::Error>> {
         let state = runtime
             .selection_state(SelectionStateRequest {
                 step_index: 0,
-                operation_label: effect.operation_id().to_owned(),
+                operation_label: operation_id.to_owned(),
                 game: self.control.game.clone(),
                 server: self.control.server.clone(),
             })
@@ -182,14 +186,14 @@ impl PreparedContainedTask {
             now_unix_ms,
         } = state
         else {
-            return Err(unresolved(effect, fact_key, |outcome| outcome).into());
+            return Err(unresolved(operation_id, fact_key, |outcome| outcome).into());
         };
         if now_unix_ms == 0
             || snapshot.validate().is_err()
             || snapshot.context.game_id != self.control.game
             || snapshot.context.server_id != self.control.server
         {
-            return Err(unresolved(effect, fact_key, |outcome| outcome).into());
+            return Err(unresolved(operation_id, fact_key, |outcome| outcome).into());
         }
         Ok(CapFacts {
             facts: SelectionFactSnapshot::from_instance_snapshot(&snapshot, now_unix_ms),

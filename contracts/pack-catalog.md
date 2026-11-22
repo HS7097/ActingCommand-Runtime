@@ -532,7 +532,8 @@ earlier installer's.
 `/schema_version` and would refuse the zip as a root file wrong in its business part
 (`pack_invalid`), not at the boundary. So a zip that carries a version 2 file declares `package`
 [24, 24] (the contract crate's `CATALOG_V2_PACKAGE_REVISION`, by `catalog_package_revision`; a
-version 1 file keeps 16), this build declares [3, 24], and an earlier installer refuses such a zip
+version 1 file keeps 16), this build declares [3, 25] (25 is Workflow #477 LR-1's, a press step's
+count), and an earlier installer refuses such a zip
 at its `package` edge (`interface_edge`), in the plan, before the hold. A rollback meets nothing:
 no Runtime component of any release reads the file, and an earlier installer refuses only a zip
 that carries version 2 (an installed file it handles as any root file: set aside when a zip carries

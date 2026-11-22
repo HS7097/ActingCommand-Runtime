@@ -98,11 +98,21 @@ pub(super) fn validate_designated_effects(
                 }
             }
             Some(DesignatedEffectRepeats::Fact(fact)) => {
-                crate::fact::validate_fact_key(&fact.fact_key)?;
+                validate_fact_cap_key(&fact.fact_key)?;
             }
         }
     }
     Ok(())
+}
+
+/// The keys a fact cap may read (`max_repeats: {"fact_key": ...}`): an instance fact key, of one
+/// of its families (`identity.`, `display.`, `session.`, `resource.`, `inventory.`, `timeline.`,
+/// `health.`, `env.`), at most 192 bytes, with no control character; the schedule value
+/// `session.dispatch.schedule.run_cap` and a variable's `session.dispatch.parameter.<name>` among
+/// them. Workflow #477 LR-1: the one definition a linear press step's count
+/// (`presses: {"fact_key": ...}`) is held to as well.
+pub fn validate_fact_cap_key(fact_key: &str) -> Result<(), SanitizationError> {
+    crate::fact::validate_fact_key(fact_key)
 }
 
 /// How often one designated effect of a set completed in a run (`count`), and the cap the run

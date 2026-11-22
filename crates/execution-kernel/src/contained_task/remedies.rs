@@ -174,7 +174,9 @@ pub struct RemedyDeclarations {
     pub variables: Vec<PackageVariable>,
     /// Workflow #463 V1: the fact keys its designated effects read their caps from
     /// (`scheduling_outcome.designated_effects[].max_repeats.fact_key`), in declaration order,
-    /// which the root check holds a variable read as a cap to.
+    /// which the root check holds a variable read as a cap to. Workflow #477 LR-1: then the keys
+    /// its press steps read their counts from (`operations[].presses.fact_key`), in operation
+    /// order, which a count reads as a cap is read.
     pub cap_fact_keys: Vec<String>,
 }
 
@@ -219,6 +221,32 @@ fn dispatched_value(
         .and_then(|(_, value)| variable.judge(value).ok())
 }
 
+/// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): the fact keys the
+/// press steps of the task document `task` read their counts from (`operations[].presses`, the
+/// kernel's own reader of the member, [`super::linear::TaskPresses`]), in operation order. A member
+/// that does not read refuses the package, as the task's own reader refuses it at admission
+/// (`contained_task_program_invalid`).
+fn press_fact_keys(task: &serde_json::Value) -> Result<Vec<String>, ContainedTaskError> {
+    let mut keys = Vec::new();
+    let operations = task
+        .get("operations")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten();
+    for declared in operations.filter_map(|operation| {
+        operation
+            .get(super::linear::PRESSES_MEMBER)
+            .filter(|value| !value.is_null())
+    }) {
+        let presses: super::linear::TaskPresses = serde_json::from_value(declared.clone())
+            .map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
+            })?;
+        keys.extend(presses.fact_key().map(str::to_owned));
+    }
+    Ok(keys)
+}
+
 impl PreparedContainedTask {
     /// The [`RemedyDeclarations`] of the package `locator` names, admitted by its path through
     /// the metadata-only containment as [`Self::read_reading_marks`] admits it, but without
@@ -252,6 +280,15 @@ impl PreparedContainedTask {
             }
         };
         validate_own_remedies(&control, scheduling.as_ref())?;
+        let mut cap_fact_keys = scheduling
+            .iter()
+            .filter_map(SchedulingOutcomeDeclaration::designated_effects)
+            .flatten()
+            .filter_map(|effect| effect.cap_fact_key())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        // Workflow #477 LR-1: a press count read from a dispatch parameter is read as a cap is.
+        cap_fact_keys.extend(press_fact_keys(bundle.operation())?);
         Ok(RemedyDeclarations {
             store_update: control.store_update.is_some(),
             package_id: control.package_id,
@@ -266,13 +303,7 @@ impl PreparedContainedTask {
                 .collect(),
             provides: control.provides,
             variables: control.variables,
-            cap_fact_keys: scheduling
-                .iter()
-                .filter_map(SchedulingOutcomeDeclaration::designated_effects)
-                .flatten()
-                .filter_map(|effect| effect.cap_fact_key())
-                .map(str::to_owned)
-                .collect(),
+            cap_fact_keys,
         })
     }
 

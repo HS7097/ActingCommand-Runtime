@@ -121,6 +121,9 @@ mod gate_463_k2;
 // Workflow #463 KP-1: a linear step presses the back key.
 #[cfg(test)]
 mod gate_463_kp1;
+// Workflow #477 LR-1: a press step of a linear plan presses its count on its page.
+#[cfg(test)]
+mod gate_477_lr1;
 // Workflow #463 V1: a package's declared variables at kernel admission.
 #[cfg(test)]
 mod gate_463_v1;
@@ -9827,6 +9830,17 @@ impl TaskProgram {
                     ),
                 ));
             }
+            // Workflow #477 LR-1: so is a press count.
+            if operation.presses.is_some() {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    format!(
+                        "operation={} presses requires {}",
+                        operation.id,
+                        linear::LINEAR_STEPS
+                    ),
+                ));
+            }
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -11722,6 +11736,11 @@ struct TaskOperation {
     /// admitted only under `linear_steps`.
     #[serde(default)]
     optional: Option<linear::TaskOptional>,
+    /// Workflow #477 LR-1: how often a click step whose page after its press is its page before
+    /// it presses there (a whole number, or the value of a fact cap's key less `minus`); admitted
+    /// only under `linear_steps`.
+    #[serde(default)]
+    presses: Option<linear::TaskPresses>,
     /// Workflow #390 EXEC-2: the screen is watched for a while after the operation's destination
     /// passed; task schema `0.9`, page-graph tasks only.
     #[serde(default)]
