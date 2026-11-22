@@ -552,11 +552,15 @@ fn judge(
                 live_pool_unknown_reason(first, fact_key, facts, context.time),
             ),
             ObservationRef::Outcome { .. } => (None, None),
-            // #455 P1 (register §1.504): a list pool has no reading before the host computes one
-            // (a later slice): its list's key, read as a missing fact.
-            ObservationRef::ListRows { fact_key, .. } => {
-                (Some(fact_key.clone()), Some(UnknownReason::FactMissing))
-            }
+            // #455 P2 (register §1.505): a pool read from rows of a list, its list's key with the
+            // reason of the reading the host gave it.
+            ObservationRef::ListRows { fact_key, .. } => (
+                Some(fact_key.clone()),
+                context
+                    .pool_values
+                    .given()
+                    .unknown_reason(first, context.time),
+            ),
         };
         return Ok(Judgement::Unknown {
             gap: Gap::ReadingUnknown {
@@ -566,7 +570,9 @@ fn judge(
             },
             suggestions: readings
                 .iter()
-                .map(|pool| resource_suggestion(pool, facts, context.time))
+                .map(|pool| {
+                    resource_suggestion(pool, facts, context.pool_values.given(), context.time)
+                })
                 .collect(),
         });
     }

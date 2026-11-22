@@ -941,11 +941,15 @@ fn lines(
                 live_pool_unknown_reason(pool, fact_key, facts, context.time),
             ),
             ObservationRef::Outcome { .. } => unknown(None, None),
-            // #455 P1 (register §1.504): a list pool has no reading before the host computes one
-            // (a later slice): its list's key, read as a missing fact.
-            ObservationRef::ListRows { fact_key, .. } => {
-                unknown(Some(fact_key.clone()), Some(UnknownReason::FactMissing))
-            }
+            // #455 P2 (register §1.505): a pool read from rows of a list, its list's key with the
+            // reason of the reading the host gave it.
+            ObservationRef::ListRows { fact_key, .. } => unknown(
+                Some(fact_key.clone()),
+                context
+                    .pool_values
+                    .given()
+                    .unknown_reason(pool, context.time),
+            ),
         }));
     };
     let Ok(projected) =
