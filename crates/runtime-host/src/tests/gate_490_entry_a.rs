@@ -645,20 +645,32 @@ fn entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_th
 // ---- The pairs' runs at the policy level.
 
 /// The clock moved to `at` and the next dispatch on the policy instance evaluated and admitted
-/// there: its intent.
+/// there: its intent. The run admitted before it still holds its lease (the settlement hook
+/// releases none), lapsed by now (every caller admits past the 5 s TTL of `config`).
 fn admit_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64) -> DispatchIntent {
     advance_manual_clock_to(clock, at);
-    // A claim on the policy instance's key (a recovery's, released on its own thread) may still
-    // be on its way out here: wait until nothing holds the key, so the admission below is not
-    // refused `dispatch_instance_contended` by it (seen once on a slow CI runner, 2026-11-22, in
-    // `entry_m3_b`). Every caller expects a grant; a claim that stays fails this wait loudly.
-    wait_until("nothing holds the policy instance's key", || {
-        host.instance_claims_for_test(POLICY_INSTANCE_ALIAS)
-            .expect("instance claims")
-            .0
-            .is_none()
-    });
-    admit(host, at, seed, false).0
+    // The lease sweep's thread ends a lapsed lease under the instance's admission guard, without
+    // its key (`expire_due_leases`, `cleanup_expired_if_guard_free`): on a loaded CI runner its
+    // records and the session's close held the guard past the admission's 100 ms retry, which
+    // refused the admission `dispatch_instance_contended` (2026-11-22, `entry_m3_b` and
+    // `entry_p3_b`). So the lapsed lease is ended here, on this thread, by the sweep's own scan,
+    // which waits for a scan of the sweep under way; the sweep's scans are then held off until the
+    // admission is done, so nothing else holds the guard at the admission.
+    host.expire_due_leases_for_test()
+        .expect("end the run before's lapsed lease");
+    let scan = host
+        .hold_lease_expiry_scan_for_test()
+        .expect("hold the lease sweep's expiry scan");
+    let (holder, waiting) = host
+        .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("instance claims");
+    assert!(
+        holder.is_none() && waiting.is_empty(),
+        "the lease before has ended and nothing waits for the key: {holder:?}, {waiting:?}"
+    );
+    let intent = admit(host, at, seed, false).0;
+    drop(scan);
+    intent
 }
 
 /// `intent`'s run, `RUN_MS` long, settled as one that failed at its entry in its prerequisite
