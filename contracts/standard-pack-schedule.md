@@ -511,9 +511,13 @@ without their business members, `catalog_business` in `requires`) only when the 
 byte the same and no rule differs from its part. From then on the root's business part, its effects,
 values and marks, is written in `pack-catalog.json` alone (effects by editing the entry, `--values`
 for the model's values and marks; the writer takes nothing from the rules: `--refresh`, a missing
-file and one of version 1 refused, a new entry its display only, fix round 1; `standard-pack adopt`
-refused until a later slice writes the adopted entry: [pack-catalog.md](pack-catalog.md), "Who
-writes it"), and the composer, in the tools and the Runtime alike, reads it there ("`requires`").
+file and one of version 1 refused, a new entry its display only, fix round 1; Workflow #477 CV-2b,
+0.12.80, register §1.515: `standard-pack adopt` writes the adopted rule's effects, value and marks
+into the rule's part there and the rule without them, [standard-pack-authoring.md](standard-pack-authoring.md),
+"On a switched root"; [pack-catalog.md](pack-catalog.md), "Who writes it"), and the composer, in
+the tools and the Runtime alike, reads it there ("`requires`"). A repository adopts packages
+before and after its cut-over alike: adopting into the root before it, `--refresh` of the package
+and the cut give the files adopting after it gives, byte for byte.
 
 **How many turns a sweep runs** (#477 LF-1, since 0.12.80; register §1.509). A package whose run
 repeats one turn until it has spent enough (a sweep of a regenerating pool) reads how many from

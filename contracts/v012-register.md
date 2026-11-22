@@ -46968,6 +46968,144 @@ in flight pins (above). In the release notes' language:
 No existing test changed. The register's ruling-3 lines above and the contract's "What the target
 names", "A target whose check-config did not pass" and "The refusal" say the same.
 
+### 1.515 Slice #477 CV-2b (0.12.80): on a switched root `standard-pack adopt` writes an adopted package's business part into `pack-catalog.json`, the bytes adopting before the cut-over and cutting over give (Workflow #477; the rulings 1 to 7 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-477-cv2b.md`; on main `0e25182e`, with CV-2 of #477)
+
+This section takes 1.515 (1.509 and 1.514 belong to two other slices of this version).
+[standard-pack-authoring.md](standard-pack-authoring.md) ("On a switched root", "The checks",
+"What it writes", "The answer") is the contract; [pack-catalog.md](pack-catalog.md) ("Who writes
+it", "What the later slices add") and [standard-pack-schedule.md](standard-pack-schedule.md) ("The
+cut-over, since Workflow #477 CV-2") follow it. Why: since CV-2 (§1.508) the rules of a root whose
+`schedule.json` names `catalog_business` write none of the six business members, and `standard-pack
+adopt` still wrote them into the rule it made or updated, so on such a root it was refused (read
+from the code: a first adoption `adopt_refused` `rule_refused` caused by `catalog_business_member`,
+a re-adoption that writes none `standard_pack_root_invalid` `catalog_missing` at the check tree's
+catalogue, which held none). A repository that cut over could adopt nothing, so none could cut over.
+
+**Where adopt writes a rule's members** (the first stop condition did not hold). In two places, both
+inside `Plan::make` (`crates/resource-tooling/src/adopt.rs`): `Plan::new_rule`, a first rule, and
+`Plan::named`, a re-adoption's decision; both write into the rule's map, and one path routes them.
+On a switched root the plan reads the package's rule with the members its catalogue part gives it
+(`AdoptionCatalog::rule_members`, as `take_catalog_business` gives a rule its part), lets both
+write as before (so `model_kept`, the words `requires` needs, the coverage and the value's wait read
+the rule the composer composes), reads the file as it would be written by the schedule's reader,
+takes the rule's part from it as `--refresh` takes a rule's (`rule_part`), writes it into the
+catalogue (`AdoptionCatalog::adopted`) and writes the rule without the six members.
+
+**Which part** (ruling 1). The entry's own part when the package is run by that one rule and the
+entry holds no per-rule part; otherwise the rule's per-rule part, the one it had, else a new one.
+Adopt never adds a second rule of a package (`Existing::of` takes the package's first rule, and a
+new rule is made only for a package without one), so ruling 1's second rule is met as the first of
+a package's two rules adopted again: when the own part stood for both and the adopted rule gets a
+part of its own, the other rule's part is **moved to a per-rule part** (a copy of the own part), in
+the file's order, and the entry keeps no own part. Every other rule composes as before; the entry is
+the one `--refresh` makes of rules that differ, which ruling 2 needs. A package without an entry
+gets `{package_id}` and its part after the other entries (as the writer adds a new entry); the
+entry's display is written as it stands (ruling 6).
+
+**The proof** (ruling 2; the second stop condition did not hold: no member's equality fails). The
+cut writes only `schedule.json` and refuses a rule that differs from its part, so a package adopted
+into a root before its cut-over has its entry brought up to its rules first, the cut-over's
+documented first step: the test adopts into the root not switched, runs `standard-pack catalog
+--refresh <package>`, cuts over, and compares with the same root cut over and then adopted:
+`schedule.json` and `pack-catalog.json` byte for byte, every other file, and `standard-pack compose`
+of both (rules digest, catalog hash, the composed documents). `requires`: a word the rule needs goes
+before `catalog_business`, which the cut names last. Where `--refresh` and ruling 1 part ways the
+bytes would differ and the composition not: an entry whose per-rule parts all become equal
+(`--refresh` makes one own part of them, adopt keeps the parts) and an entry holding a per-rule part
+for its package's only rule (as `--values` with a `rule_id` makes one; adopt writes that part,
+`--refresh` an own part). Neither is a test case of ruling 2.
+
+**Written as checked** (ruling 3). The check tree holds both files as they would be written
+(`pack-catalog.json` beside `schedule.json` for the bundle's composition and in the installed
+layout), so the composer, `standard-pack check` and the readiness read the root as it would be after
+both writes; a refusal writes neither. A refusal at the catalogue is `rule_refused` with `entry`
+`pack-catalog.json` (`composed`), one at a rule whose part cannot be written `rule_refused` at its
+member in `schedule.json`. **The order**: `pack-catalog.json` is renamed right before `schedule.json`
+(`root_order`: business and held `pack-catalog.json`, `schedule.json`, `maintenance.json`;
+maintenance `maintenance.json`, `pack-catalog.json`, `schedule.json`). Why: a call stopped between
+the two leaves `schedule.json.part`, which the next call refuses (`repository_invalid` at it), and
+leaves no new rule without its business part (the other order would leave the package's first rule
+composing with an empty part, judged and never refused); a first rule's new part stands for no rule
+until `schedule.json` is renamed, so the root composes as before, the package unclassified; a part
+whose first fixed value or fact consumption the old `requires` does not cover is refused by the
+composer. What is not loud, **a known limit** (fix round 1): a re-adoption interrupted between its two
+renames after it changed both a business member and another member of a rule leaves a root that
+composes, the rule's old other members beside its new business part; only the next adoption refuses
+it (`repository_invalid` at the `.part` left), since `standard-pack check`, the build, `compose` and
+`catalog` look at no `.part` file. A `pack-catalog.json.part` left on a switched root is refused as
+the other root files' `.part` are (`with_catalog_part`; `finished_part` trusts a whole canonical
+document of version 2). Fix round 1 (the review's one must-fix): on a switched root (as
+`with_catalog_part` tells it, `switched_on_disk`), not only when the catalogue's `.part` is left,
+`interrupted` names the three files and their order, so the state this slice leaves itself
+(`schedule.json.part` alone, the catalogue renamed) says that `pack-catalog.json` was replaced, and
+its undo restores `pack-catalog.json` from the repository's history too.
+
+**Refusals.** No new code and no new word (the third stop condition did not hold):
+
+| Case | Code, word | Named by |
+|---|---|---|
+| a switched root without `pack-catalog.json` | `adopt_refused` `repository_invalid`, caused by `standard_pack_root_invalid` `catalog_missing` | `entry` `pack-catalog.json`, the whole document |
+| its catalogue of version 1 | the same, `catalog_version_1` | `/schema_version` |
+| any error its reader reports, the file judged against no registry, which the call has not laid out (fix round 1: no `package_not_listed` arises, so none fills the reader's bound of 64 errors) | the same, the reader's first word | its pointer |
+| `pack-catalog.json.part` left on a switched root | `adopt_refused` `repository_invalid` | `entry` the `.part` |
+| the root as it would be written refused at the catalogue | `adopt_refused` `rule_refused`, caused by `standard_pack_root_invalid` | `entry` `pack-catalog.json`, its pointer |
+
+**No business member, no change** (ruling 5): a rule adopted before, its id kept, whose part is the
+one that stood for it leaves the file byte for byte, also where the own part stands for several
+rules. **The answer**: `rule` is the rule as `schedule.json` holds it; `catalog_entry` (new, absent
+on any other root) the package's entry after the call; `replaced_entries` names a catalogue entry
+the call changed; `written` lists `pack-catalog.json` before `schedule.json`. In the contract crate
+(`standard_pack_catalog_v2.rs`): `AdoptionCatalog` (`read`, `entry`, `rule_members`, `adopted`) and
+`CatalogAdoption`, built on the file's one reader (`read_catalog`), `rule_part`, `with_business` and
+`CatalogParts::members`. No game, package or alias is named in code (ruling 7).
+
+**Tests** (apps gate row "#477 CV-2b"; `crates/resource-tooling/src/gate_477_cv2b.rs`, #464 P1's
+made-up checkout).
+
+| Test | What it shows |
+|---|---|
+| `cv2b_r2_a_first_adoption_into_a_switched_root_equals_adopting_then_cutting_over` (ruling 2) | The two roots the same; `requires` `[benefit_fixed_value, catalog_business]`; the entry `{package_id, consumes, produces, value, limited}` last; written pack directory, catalogue, `schedule.json`; `rule` without its business part, `catalog_entry` the entry |
+| `cv2b_r2_a_readoption_that_changes_the_value_equals_adopting_then_cutting_over` (ruling 2) | The two roots the same; the own part's value replaced, effects and mark kept; the entry in `replaced_entries` |
+| `cv2b_r2_a_readoption_of_one_of_two_rules_equals_adopting_then_cutting_over` (rulings 1, 2) | The two roots the same; per-rule parts of both rules in file order, no own part |
+| `cv2b_r3_an_adoption_that_would_not_compose_writes_neither_file` (ruling 3) | An amount 0: `rule_refused` at `pack-catalog.json`, `catalog_out_of_limits`, nothing written; a call stopped before renaming `schedule.json.part` has renamed the catalogue, the next call `repository_invalid` at the `.part` |
+| `cv2b_r4_a_root_that_is_not_switched_is_adopted_byte_for_byte_as_before` (ruling 4) | #464 P1's golden of its first adoption on a root holding a catalogue of version 2: the tree, the catalogue's bytes, the answer without `catalog_entry` |
+| `cv2b_r5_a_readoption_without_a_business_member_leaves_the_catalog_alone` (ruling 5) | A trigger-only decision and a call without a decision leave the catalogue's bytes; the first changes `schedule.json` |
+| `cv2b_a_switched_root_without_a_catalog_of_version_2_is_refused_with_its_word` | `catalog_missing`, `catalog_version_1` at `/schema_version`, nothing written |
+| `cv2b_fr1_an_entrys_display_is_written_as_it_stands` (ruling 6, fix round 1) | An entry's `title` and `summary` kept in their place while its business part is written |
+| `cv2b_fr1_a_package_of_one_rule_whose_entry_holds_its_per_rule_part` (ruling 1, fix round 1) | That per-rule part written, the own part as it stood |
+| `cv2b_fr1_an_entry_with_a_per_rule_part_of_another_rule_keeps_it` (ruling 1, fix round 1) | The other rule's per-rule part kept, the adopted rule's after it, no own part |
+| `cv2b_fr1_a_broken_element_past_64_entries_refuses_the_adoption` (fix round 1) | 65 entries, the last holding an effect with an unknown member: `repository_invalid` at `pack-catalog.json`, `malformed` at the effect, nothing written |
+
+No existing test is touched.
+
+**Fix round 1** (the independent review of #1877 and the coordinator's rulings on it). The must-fix:
+the refusal after an interrupted call on a switched root (above, "a known limit"; `r3` asserts the
+message names `pack-catalog.json` among the files renamed and restores it in its undo). Ordered: the
+catalogue's first reading judges no registry: the contract crate's `read_catalog` takes the registry
+as an `Option`, `None` "not judged", as it takes the pools and the schedule's facts; every reader but
+`AdoptionCatalog::read` passes its registry and answers byte for byte as before; `AdoptionCatalog::read`
+refuses on any error the reading reports. [pack-catalog.md](pack-catalog.md) says what the writer
+(`validation_failed`) and `adopt` (`repository_invalid`) each answer for a switched root without a
+catalogue of version 2. The three tests of ruling 6 and of per-rule parts above, and the known limit
+in the contract ("On a switched root") and here. An entry already holding per-rule parts for other
+rules gets the adopted rule's part after them, where `--refresh` would order the parts as the file
+orders the rules: other bytes, the same composition.
+
+**What is not changed.** `adopt` on a root that does not name `catalog_business` (ruling 4's
+golden; its catalogue is not read, written or laid in the check tree); the composer and
+`take_catalog_business`; the cut command and the writer (`merge_standard_pack_catalog`); the
+installer's plan, the policy crate's `resource_targets.rs` and evaluator, the host's
+`policy_host.rs` (other slices'); every declared interface range, no `package` revision; `next`,
+whose value binding still names the rule's `/fixed_value_milli` (on a switched root the model's
+value reaches the catalogue by `--values`).
+
+**At deploy.** Nothing changes for an installation: no Runtime component is changed, and a
+repository's adoptions write what the build and `place` carry already (a version 2 catalogue,
+`package` 24). A tool of 0.12.79 or older knows no switched root: it does not adopt into one as
+this build does (its `adopt` writes the members into the rule, which every composer of 0.12.80
+refuses, `catalog_business_member`), so a repository adopts only with tools of this build once it
+has cut over.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

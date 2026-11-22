@@ -15,7 +15,10 @@ S3-5); whether the package is ready to be scheduled on an installation is anothe
 Workflow #463 AC-1 (Runtime 0.12.71; [v012-register.md](v012-register.md) §1.461): with
 `--record-id` it takes the recording's regression cases into the checkout too, each run before the
 first write ("The cases"), and judges the recording by `record ready`'s one function ("One
-judgement of the recording").
+judgement of the recording"). Workflow #477 CV-2b (Runtime 0.12.80;
+[v012-register.md](v012-register.md) §1.515): on a root whose `schedule.json` names
+`catalog_business` it writes the adopted rule's business part into `pack-catalog.json` instead of
+into the rule ("On a switched root").
 
 ## The operation
 
@@ -256,7 +259,7 @@ the repository and keeps no copy.
 
 | Check | `adopt_problem` | Named by |
 |---|---|---|
-| `--repo` holds `applications.json` (its game and servers), `maintenance.json`, `packs/` and a `schedule.json` that reads; no `.part` of a root file is left ("If a call was interrupted") | `repository_invalid` | `entry`; for `schedule.json` the reader's `json_pointer` and its refusal as the cause |
+| `--repo` holds `applications.json` (its game and servers), `maintenance.json`, `packs/` and a `schedule.json` that reads; no `.part` of a root file is left ("If a call was interrupted"). Workflow #477 CV-2b: of a switched root, a `pack-catalog.json` of version 2 that its reader reads, and no `pack-catalog.json.part` left ("On a switched root") | `repository_invalid` | `entry`; for `schedule.json` the reader's `json_pointer` and its refusal as the cause; CV-2b: for `pack-catalog.json` its `json_pointer` and `standard_pack_root_invalid` as the cause, `catalog_missing` (the whole document), `catalog_version_1` (`/schema_version`) or the reader's first error |
 | The recording is as its last stop left it: `actingcommand.lab-recording.v1`, its `record_id`, `stopped`, not marked again since (`amended_at_unix_ms` absent or null), its package there. Workflow #463 S3-17: after its schema and its `record_id`, its status by `record ready`'s one function is `packaged` ("One judgement of the recording"); Workflow #463 AC-1: a cases directory beside its package can be listed | `recording_not_current` | `path` of `recording.json`, `member`; for a status other than `packaged` no `member`, the details' `record_ready` that function's answer; `path` the cases directory or its entry |
 | Workflow #463 AC-1 fix round 1: `record ready`'s one function judged the recording, or refused it only as one the Lab cannot read whole (`lab_recording_unreadable`, which the check of its own members above judges) | `recording_not_judged` | `path` of `recording.json`; that function's refusal as the cause |
 | The package is admitted as `package preflight` admits it, and its `package_id` names one directory `packs/<package_id>` that no root file reserves | `package_invalid` | `path`, the loader's refusal as the cause; or `package_id` |
@@ -273,7 +276,7 @@ the repository and keeps no copy.
 | No text of the package holds an absolute local path (a drive or network path, the state directory, the checkout) | `local_path` | `entry` the file, `json_pointer` the string |
 | A root file adopt must change is in the canonical form ("The canonical form") | `root_file_not_canonical` | `entry` |
 | The checkout's check tree is no link, the tool's own and free, and no directory beside it named as one a call makes the tree whole in is a link (below) | `check_tree_link`, `check_tree_unmarked`, `check_tree_busy` | `path` the check tree, or that directory |
-| The tree as it would be written composes (below) | `rule_refused` | `entry` `schedule.json`, the composer's `json_pointer`, its refusal as the cause; or `package_id` when the package comes out unclassified |
+| The tree as it would be written composes (below) | `rule_refused` | `entry` `schedule.json`, the composer's `json_pointer`, its refusal as the cause; or `package_id` when the package comes out unclassified. Workflow #477 CV-2b: of a switched root, `entry` `pack-catalog.json` for a refusal there (both files as they would be written), and `schedule.json` at the member for a rule whose business part cannot be written into the catalog ("On a switched root") |
 | Every key the schedule as the check compiled it reads of the rule's own outcome is one the package's entry task declares (`scheduling_outcome.mappings`): the policy crate's own `referenced_outcome_keys`, which the Runtime runs, collects them from every composed rule's trigger and `feedback_stop` (the rule's own, given, derived or kept, and another rule's), every pool's observation and every activity target's measure. And every key an outcome predicate of the rule as it would be written reads of another task is one the package of that task declares. The Runtime refuses every dispatch of a task whose outcome is read for a key its package does not declare ([scheduling/README.md](scheduling/README.md)): the rule, or the task it reads and so the rule, would never run | `decision_invalid` | `path` the decision and `json_pointer` in it (`/trigger/…`, `/overrides/feedback_stop/…`) when the decision gave the member; otherwise `entry` `schedule.json` and `json_pointer` in the file as it would be written (`/rules/<i>/…`, `/pools/<i>/…`, `/activity/<i>/goals/<j>/metric/outcome_key`); the message names who reads, the rule, pool or activity profile by its id; the details carry `declared_outcome_keys` of the package of the task read and, for another task, its `task_id` and `package_id` |
 | A business rule's value ("A pending value") | `decision_invalid` | `path`, `json_pointer` `/value` |
 | Workflow #463 AC-1, when the adoption takes cases ("The cases"): each case's directory `<package_id>.<case>` is one file name: the case's name holds no dot, the whole is one path segment, and with its `.part` it is at most 255 bytes | `case_name_invalid` | `path` the case in the recording, `package_id` |
@@ -384,6 +387,10 @@ the crash lost:
   again; after the call put its new `packs/<package_id>` in place, the steps "to run it again"
   below. A root file with changes not committed is read and written as it is: several adoptions in
   a row before one commit are normal use.
+- Workflow #477 CV-2b: of a switched root, `pack-catalog.json` (the adopted rule's business part,
+  "On a switched root"), when it changes: written whole as its `.part` with the other root files,
+  read again and compared as they are, and renamed right before `schedule.json` (after
+  `maintenance.json` for the class `maintenance`, before it for the others).
 - Workflow #463 AC-1, last, after both root files are renamed, when the adoption takes cases ("The
   cases"): with `--replace` first the cases of the package an earlier adoption took from a
   recording, moved one directory at a time into `<state>/adopt/<package_id>.cases.old-<ms>/` (the
@@ -524,6 +531,90 @@ with the written and the derived value, and never written. Workflow #463 AC-1: w
 takes cases, the cases an earlier adoption of the package took from a recording are replaced as a
 set ("The cases").
 
+## On a switched root
+
+Workflow #477 CV-2b (Runtime 0.12.80; [v012-register.md](v012-register.md) §1.515; the
+coordinator's rulings 1 to 7, not the owner's words). A switched root is a checkout whose
+`schedule.json` names `catalog_business` in `requires`
+([standard-pack-schedule.md](standard-pack-schedule.md), "`requires`"): its rules write none of the
+six business members (`consumes`, `produces`, `fixed_value_milli`, `fixed_value_origin`,
+`limited`, `realization`), which stand in its version 2 `pack-catalog.json`
+([pack-catalog.md](pack-catalog.md), "Version 2"). On such a root adoption writes them there.
+
+- **Read.** The call reads the checkout's `pack-catalog.json` with the other root files (stage
+  `repository`) by the file's one reader, judging no `package_id` against a registry, which the
+  call has not laid out yet (the check of the tree reads the file again with it; fix round 1: so no
+  `package_not_listed` arises here and none counts toward the reader's bound of 64 errors). A root
+  without the file is refused `repository_invalid` at it, caused by `standard_pack_root_invalid`
+  `catalog_missing`; one of version 1 the same with `catalog_version_1` at `/schema_version`; one
+  of which its reader reports any error, with the reader's first error at its pointer (fix round 1:
+  so a broken element of an entry, which the reader leaves out, is never lost by the rewrite). These
+  are the words the composer uses for a switched root, and the writer answers the same roots
+  `validation_failed` ([pack-catalog.md](pack-catalog.md), "Who writes it"): the file is restored,
+  not rebuilt.
+- **Where each member goes** (ruling 1). The package's rule is read with the business part that
+  stands for it in the catalog (its per-rule part, else its entry's own part, else none), as the
+  composer gives it the part, so the value the model wrote (`model_kept`), the words `requires`
+  needs, the coverage and the value's wait are those of the rule the composer composes. Every
+  business member the call would write into the rule (from the decision, or derived) is written
+  into the catalog's part for the rule instead, and `schedule.json` holds the rule without them.
+  The part is the entry's own part when the package is run by that one rule and the entry holds
+  no per-rule part; otherwise the rule's per-rule part (the one it had, else a new one). When a
+  package run by several rules has its own part standing for them and the adopted rule gets a
+  part of its own, each other rule the own part stood for gets a copy of it as its per-rule part,
+  in the file's order, and the entry keeps no own part: every other rule composes as before, and
+  the entry is the one `standard-pack catalog --refresh` makes of rules that differ. The part is
+  read from the rule as `--refresh` reads one, so its effects are written as the catalog's one
+  type of an effect writes them. A package without an entry gets one, `{package_id}` and its
+  business part, after the other entries; an entry's display is written as it stands (ruling 6).
+  Adoption adds no second rule of a package: it takes the package's first rule ("One role").
+- **No business member, no change** (ruling 5). A rule adopted before, its id kept, whose part is
+  the one that stood for it (a decision that names no business member, a call without a decision,
+  a held decision) leaves `pack-catalog.json` byte for byte.
+- **`requires`.** A word the rule needs is written before `catalog_business`, which a cut-over
+  names last.
+- **Checked as written** (ruling 3). The check tree holds both files as they would be written
+  (`pack-catalog.json` beside `schedule.json` for the bundle's composition, and in the installed
+  layout), so the composition, `standard-pack check` and the readiness read the root as it would be
+  after both writes, and a refusal writes neither file. A refusal of the catalog as it would be
+  written is `rule_refused` at its member in `pack-catalog.json`; a rule whose part cannot be
+  written (an effect that is no V2 effect) `rule_refused` at its member in `schedule.json`.
+- **The order** (ruling 3). `pack-catalog.json` is renamed right before `schedule.json`. A call
+  interrupted between the two leaves `schedule.json.part`, which the next call refuses
+  (`repository_invalid` at it, "If a call was interrupted"), and a catalog whose new part stands for
+  no rule yet when the call adds the package's first rule (the root composes as before the call,
+  the package unclassified), never a new rule without its business part, which would compose as a
+  rule with none. A re-adoption that gives a rule its first fixed value or a consumption read from
+  a fact leaves a part the old `requires` does not cover, which the composer refuses. A
+  `pack-catalog.json.part` left on a switched root is refused as the other root files' `.part`
+  are. On a switched root the refusal of what an interrupted call left (fix round 1: whatever
+  `.part` is left, `schedule.json.part` alone included) names the three files and the order they
+  are renamed in, says that a call which left `schedule.json.part` and no `pack-catalog.json.part`
+  had replaced `pack-catalog.json` already, and its undo restores `pack-catalog.json` from the
+  repository's history too, beside the root file that call renamed.
+- **A known limit** (fix round 1). A re-adoption interrupted between its two renames, after it
+  changed both a business member and another member of a rule, leaves a root that composes: the
+  rule's other members as they were beside its new business part. Nothing refuses it but the next
+  adoption (`repository_invalid` at the `.part` left): `standard-pack check`, the build,
+  `standard-pack compose` and `standard-pack catalog` do not look at a `.part` file. Finish or undo
+  it as the refusal says before anything else is built or placed from the checkout.
+- **The answer.** `rule` is the rule as `schedule.json` holds it, without its business part;
+  `catalog_entry` the package's entry of `pack-catalog.json` after the call (absent when it has
+  none, and on any other root); `replaced_entries` names the entry (`pack-catalog.json`, its pointer
+  `/packs/<e>`, as it was and as written) when the call changed an entry there; `written` and
+  `would_write` list `pack-catalog.json` before `schedule.json`.
+- **The proof** (ruling 2). Adopting a package into a root not switched, bringing its entry up to
+  its rules (`standard-pack catalog --refresh`, the cut-over's first step) and cutting the root
+  over (`--cut`) gives the same `schedule.json` and `pack-catalog.json`, byte for byte, and the same
+  composition as adopting it into the root cut over first (register §1.515, its tests).
+- **A root that does not name `catalog_business`** is adopted exactly as before: its catalog, if it
+  holds one, is not read, written or laid in the check tree.
+
+Not changed by this slice: `next` names `ours/model/bindings.json` with a value binding at the
+rule's `/fixed_value_milli` while the adopted rule has no value; on a switched root the model's
+value reaches the catalog by `standard-pack catalog --values` ([pack-catalog.md](pack-catalog.md),
+"Who writes it").
+
 ## `--dry-run`
 
 Every check runs, the check tree under `<state>/adopt-check/` included; the answer is `validated`
@@ -542,7 +633,10 @@ does `cases.would_write`, and `cases.replaced` the earlier cases an adoption wou
 `trial_not_read`; "The trial and the two warnings" below; Workflow #463 S3-17: `ready_not_read`
 `{outcome, text}` when `record ready`'s function did not read the recording, "One judgement of the
 recording"), `rule`, `held` and
-`maintenance` as written, `removed_entries` and `replaced_entries` ("One role"),
+`maintenance` as written (Workflow #477 CV-2b: of a switched root the `rule` without its business
+part, and `catalog_entry`, the package's entry of `pack-catalog.json` after the call, "On a switched
+root"), `removed_entries` and `replaced_entries` ("One role"; CV-2b: and the package's catalog entry
+the call changed),
 `requires_added`, `given`, `derived` (each `member`, `value`, `from` and, where it says more,
 `how`), `derived_drift`, `model_kept`, `coverage` (a business rule: `complete`, `pending`,
 `undeclared` or `follower`, as the composer counts the file's judged rules), `waits_for_value` and

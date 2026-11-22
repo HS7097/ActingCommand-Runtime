@@ -83,9 +83,9 @@ use std::path::{Path, PathBuf};
 mod v2;
 
 pub use v2::{
-    CatalogBusinessPlaces, CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart,
-    CatalogScheduleFacts, CatalogValue, CatalogValuesFile, SCHEDULE_RULE_BUSINESS_MEMBERS,
-    standard_pack_catalog_cut_differences, take_catalog_business,
+    AdoptionCatalog, CatalogAdoption, CatalogBusinessPlaces, CatalogPart, CatalogPartAddress,
+    CatalogParts, CatalogRulePart, CatalogScheduleFacts, CatalogValue, CatalogValuesFile,
+    SCHEDULE_RULE_BUSINESS_MEMBERS, standard_pack_catalog_cut_differences, take_catalog_business,
 };
 
 /// The game root's package declaration (Workflow #477 PC-1).
@@ -502,7 +502,7 @@ pub fn parse_standard_pack_catalog(
     registry: &StandardPackRegistry,
     pools: Option<&BTreeSet<String>>,
 ) -> Result<StandardPackCatalog, Vec<StandardPackRootIssue>> {
-    let read = read_catalog(bytes, game, registry, pools, None);
+    let read = read_catalog(bytes, game, Some(registry), pools, None);
     if read.errors.is_empty() {
         Ok(read.catalog)
     } else {
@@ -534,7 +534,7 @@ pub fn parse_standard_pack_catalog_with(
     let read = read_catalog(
         bytes,
         game,
-        registry,
+        Some(registry),
         facts.map(CatalogScheduleFacts::pools),
         facts,
     );
@@ -553,10 +553,13 @@ struct CatalogRead {
     errors: Vec<StandardPackRootIssue>,
 }
 
+/// Workflow #477 CV-2b: `registry` `None` judges no `package_id` against a registry
+/// (`AdoptionCatalog::read`, before the adoption has laid one out); every other reader gives the
+/// root's.
 fn read_catalog(
     bytes: &[u8],
     game: &str,
-    registry: &StandardPackRegistry,
+    registry: Option<&StandardPackRegistry>,
     pools: Option<&BTreeSet<String>>,
     facts: Option<&CatalogScheduleFacts>,
 ) -> CatalogRead {
@@ -691,7 +694,8 @@ impl<'de> Visitor<'de> for Tracked<'_> {
 
 /// The checks of one document: the errors and the display defects found so far.
 struct Check<'a> {
-    registry: &'a StandardPackRegistry,
+    /// The root's registry; `None`: not judged (Workflow #477 CV-2b, an adoption's first reading).
+    registry: Option<&'a StandardPackRegistry>,
     /// The pools the root's `schedule.json` declares; `None`: not judged.
     declared_pools: Option<&'a BTreeSet<String>>,
     /// Workflow #477 CV-1: what version 2 is held to of the root's `schedule.json`, its valuations
@@ -926,7 +930,10 @@ impl Check<'_> {
             let at_id = at(&pointer, "package_id");
             let package_id = match object.get("package_id") {
                 Some(Value::String(package_id)) => {
-                    if self.registry.get(package_id).is_none() {
+                    if self
+                        .registry
+                        .is_some_and(|registry| registry.get(package_id).is_none())
+                    {
                         self.error(StandardPackProblem::PackageNotListed, at_id.clone());
                     }
                     if listed.insert(package_id.clone()) {
@@ -1247,7 +1254,10 @@ impl Check<'_> {
                 self.error(StandardPackProblem::Malformed, at_id);
                 continue;
             };
-            if self.registry.get(package_id).is_none() {
+            if self
+                .registry
+                .is_some_and(|registry| registry.get(package_id).is_none())
+            {
                 self.error(StandardPackProblem::PackageNotListed, at_id.clone());
             }
             if !named.insert(package_id) {
@@ -1938,7 +1948,7 @@ pub fn merge_standard_pack_catalog(
     let existing = match existing {
         None => None,
         Some(bytes) => {
-            let read = read_catalog(bytes, game, registry, Some(&pools), Some(&facts));
+            let read = read_catalog(bytes, game, Some(registry), Some(&pools), Some(&facts));
             let refused = read
                 .errors
                 .iter()
@@ -2421,7 +2431,7 @@ fn read_display_file(
     groups: Option<&Value>,
 ) -> Result<DisplayFile, Vec<CatalogDisplayFileIssue>> {
     let mut check = Check {
-        registry,
+        registry: Some(registry),
         declared_pools: None,
         facts: None,
         version: CatalogVersion::V1,
