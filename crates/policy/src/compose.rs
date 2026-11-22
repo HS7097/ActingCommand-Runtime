@@ -23,7 +23,12 @@
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
-//!    with its game id.
+//!    with its game id. Workflow #477 CV-2 (register §1.508): a file whose `requires` names
+//!    `catalog_business` (and that the subsystems given, when given, name too) writes none of its
+//!    rules' business members, and each rule takes its business part from the root's version 2
+//!    `pack-catalog.json` (`actingcommand_contract::take_catalog_business`) before any other check
+//!    reads the rules, so the composition is the one the rules would give had they written it;
+//!    every refusal at a member a rule took from there names the catalog's entry and member.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
 //!    `s`, each scope filled with `{kind: instance, instance_id: i}` (the item's own and those of
@@ -52,12 +57,13 @@ use std::fmt;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogCompileWarning,
-    IrreversiblePackages, SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER, SCHEDULE_RULE_FIXED_VALUE_MEMBER,
-    SCHEDULE_RULE_REALIZATION_MEMBER, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember,
-    ScheduleRule, ScheduleValueOrigin, StandardPackClassification, StandardPackProblem,
-    StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
-    parse_standard_pack_schedule, standard_pack_maintenance_packages,
+    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogBusinessPlaces,
+    CatalogCompileWarning, IrreversiblePackages, SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER,
+    SCHEDULE_RULE_FIXED_VALUE_MEMBER, SCHEDULE_RULE_REALIZATION_MEMBER,
+    STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember, ScheduleRule, ScheduleValueOrigin,
+    StandardPackClassification, StandardPackProblem, StandardPackRoot, StandardPackRootIssue,
+    StandardPackSchedule, classify_standard_pack_packages, parse_standard_pack_schedule,
+    standard_pack_maintenance_packages, take_catalog_business,
     validate_standard_pack_schedule_references,
 };
 use serde::Serialize;
@@ -66,9 +72,9 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CONSUMPTION_FACT_SUBSYSTEM,
-    CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
+    ActivityProfile, BENEFIT_FIXED_VALUE_SUBSYSTEM, CATALOG_BUSINESS_SUBSYSTEM,
+    CONSUMPTION_FACT_SUBSYSTEM, CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources,
+    CompiledCatalog, FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
     POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec, PredicateSpec,
     RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
     TaskTerminalState, TimelineEvent, compile_composed_catalog,
@@ -104,6 +110,11 @@ pub struct StandardPackGameFiles<'a> {
     /// only which packages could not be read, for its `standard_pack_package_unreadable` warning
     /// ([`StandardPackComposition::warnings`]); nothing else of the composition depends on it.
     pub irreversible: &'a IrreversiblePackages,
+    /// Workflow #477 CV-2 (register §1.508): the root's `pack-catalog.json`'s bytes, `None` when
+    /// the root holds none. Read only for a `schedule.json` that names `catalog_business` in
+    /// `requires`, whose rules take their business part from it; a caller may leave it `None` for
+    /// any other root.
+    pub catalog: Option<&'a [u8]>,
 }
 
 /// What [`compose_standard_pack_rules`] composes.
@@ -1080,9 +1091,29 @@ struct Composed {
     pools: Vec<(Value, Origin)>,
     profiles: Vec<(Value, Origin)>,
     events: Vec<(Value, Origin)>,
+    /// Workflow #477 CV-2: of each game whose rules took their business part from its
+    /// `pack-catalog.json`, by game id, where each rule's part stands there.
+    places: BTreeMap<String, CatalogBusinessPlaces>,
 }
 
 impl Composed {
+    /// The refusal of a compiler diagnostic at `path` of `document` (its game and the file pointer
+    /// [`Self::locate`] gives), `schedule_invalid`; CV-2: placed in the game's `pack-catalog.json`
+    /// when it lies at a member a rule took from there.
+    fn located_issue(
+        &self,
+        document: SchedulingDocumentKind,
+        path: &str,
+    ) -> (Option<String>, StandardPackRootIssue) {
+        let (game_id, pointer) = self.locate(document, path);
+        let issue = schedule_issue(StandardPackProblem::ScheduleInvalid, pointer);
+        let issue = match game_id.as_ref().and_then(|game| self.places.get(game)) {
+            Some(places) => places.issue(issue),
+            None => issue,
+        };
+        (game_id, issue)
+    }
+
     fn list(&mut self, member: ScheduleMember) -> &mut Vec<(Value, Origin)> {
         match member {
             ScheduleMember::Rules => &mut self.tasks,
@@ -1181,6 +1212,9 @@ struct ReadGame<'a> {
     files: StandardPackGameFiles<'a>,
     schedule: StandardPackSchedule,
     classification: StandardPackClassification,
+    /// Workflow #477 CV-2: where each rule's business part stands in `pack-catalog.json`, of a
+    /// file that names `catalog_business`; `None` for any other.
+    places: Option<CatalogBusinessPlaces>,
 }
 
 /// Composes the standard packs' schedule rules (module doc). Pure: no file, clock or ledger.
@@ -1213,18 +1247,28 @@ pub fn compose_standard_pack_rules(
             continue;
         };
         match read_game(game_id, *files, input.subsystems) {
-            Ok((schedule, classification)) => read.push(ReadGame {
+            Ok((schedule, classification, places)) => read.push(ReadGame {
                 game_id,
                 bound: bound.clone(),
                 files: *files,
                 schedule,
                 classification,
+                places,
             }),
             Err(issue) => issues.push(issue),
         }
     }
 
     let mut composed = Composed::default();
+    // Workflow #477 CV-2: a compiler diagnostic at a member a rule took from `pack-catalog.json`
+    // names the catalog's entry and member.
+    for game in &read {
+        if let Some(places) = &game.places {
+            composed
+                .places
+                .insert(game.game_id.to_owned(), places.clone());
+        }
+    }
     let mut manifest = BTreeMap::<String, ComposedProcedure>::new();
     let mut priority_tiers = Vec::new();
     let mut benefit = Vec::new();
@@ -1314,11 +1358,11 @@ pub fn compose_standard_pack_rules(
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let (game_id, pointer) =
-                    composed.locate(diagnostic.source.document, &diagnostic.json_path);
+                let (game_id, issue) =
+                    composed.located_issue(diagnostic.source.document, &diagnostic.json_path);
                 StandardPackRuleIssue {
                     game_id,
-                    issue: schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+                    issue,
                     detail: format!(
                         "{} at {}: {}",
                         diagnostic.code.code().as_str(),
@@ -1385,20 +1429,80 @@ pub fn compose_standard_pack_rules(
     })
 }
 
-/// Reads one game's `schedule.json` (step 2): the contract reader, `requires` against
-/// `subsystems`, the references into the registry, and the classification.
+/// Workflow #477 CV-2 (register §1.508): whether the `schedule.json` `schedule` (its bytes) names
+/// `catalog_business` in `requires`, so that its rules take their business part from the root's
+/// `pack-catalog.json`: what a reader of a game root reads that file for beside the schedule
+/// ([`StandardPackGameFiles::catalog`]). A file its reader refuses names nothing.
+pub fn standard_pack_schedule_takes_catalog(schedule: &[u8]) -> bool {
+    parse_standard_pack_schedule(schedule).is_ok_and(|schedule| names_catalog_business(&schedule))
+}
+
+/// CV-2: whether `schedule`'s `requires` names `catalog_business`.
+fn names_catalog_business(schedule: &StandardPackSchedule) -> bool {
+    schedule
+        .requires
+        .iter()
+        .any(|name| name == CATALOG_BUSINESS_SUBSYSTEM)
+}
+
+/// CV-2: whether the composer takes `schedule`'s rules' business part from `pack-catalog.json`:
+/// its `requires` names `catalog_business`, and `subsystems`, when given, name it too. A Runtime
+/// whose subsystems do not name it reads the file as written, as a Runtime of 0.12.79 does, and
+/// refuses it at `requires` (`schedule_requires_missing`).
+fn takes_catalog_business(
+    schedule: &StandardPackSchedule,
+    subsystems: Option<&BTreeSet<String>>,
+) -> bool {
+    names_catalog_business(schedule)
+        && subsystems.is_none_or(|subsystems| subsystems.contains(CATALOG_BUSINESS_SUBSYSTEM))
+}
+
+/// Reads one game's `schedule.json` (step 2): the contract reader, Workflow #477 CV-2 the rules'
+/// business part from `pack-catalog.json` for a file that names `catalog_business`, `requires`
+/// against `subsystems`, the references into the registry, and the classification.
 fn read_game(
     game_id: &str,
     files: StandardPackGameFiles<'_>,
     subsystems: Option<&BTreeSet<String>>,
-) -> Result<(StandardPackSchedule, StandardPackClassification), StandardPackRuleIssue> {
-    let refused = |issue: StandardPackRootIssue, detail: String| StandardPackRuleIssue {
+) -> Result<
+    (
+        StandardPackSchedule,
+        StandardPackClassification,
+        Option<CatalogBusinessPlaces>,
+    ),
+    StandardPackRuleIssue,
+> {
+    let read_refused = |issue: StandardPackRootIssue, detail: &str| StandardPackRuleIssue {
         game_id: Some(game_id.to_owned()),
         issue,
+        detail: detail.to_owned(),
+    };
+    let mut schedule = parse_standard_pack_schedule(files.schedule)
+        .map_err(|issue| read_refused(issue, "schedule.json breaks its own rules"))?;
+    // CV-2: the business part taken before anything below reads a rule, so every check and the
+    // composition see the rules as they would be had they written it.
+    let places = if takes_catalog_business(&schedule, subsystems) {
+        let places =
+            take_catalog_business(&mut schedule, files.catalog, game_id, &files.root.registry)
+                .map_err(|issue| {
+                    read_refused(
+                        issue,
+                        "the rules' business part in pack-catalog.json is refused",
+                    )
+                })?;
+        Some(places)
+    } else {
+        None
+    };
+    // CV-2: a refusal below at a member a rule took from `pack-catalog.json` names it there.
+    let refused = |issue: StandardPackRootIssue, detail: String| StandardPackRuleIssue {
+        game_id: Some(game_id.to_owned()),
+        issue: match &places {
+            Some(places) => places.issue(issue),
+            None => issue,
+        },
         detail,
     };
-    let schedule = parse_standard_pack_schedule(files.schedule)
-        .map_err(|issue| refused(issue, "schedule.json breaks its own rules".to_owned()))?;
     // #386 CF-4: rules that write a fact reference name its subsystem in `requires`, so that a
     // Runtime that cannot read one refuses the file instead of misreading it.
     if !schedule
@@ -1768,7 +1872,7 @@ fn read_game(
             ),
         ));
     }
-    Ok((schedule, classification))
+    Ok((schedule, classification, places))
 }
 
 /// SCHED-C1a (register §1.299): the pointer of the first member that requires

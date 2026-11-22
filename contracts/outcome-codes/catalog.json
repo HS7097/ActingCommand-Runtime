@@ -7797,6 +7797,15 @@
         "catalog_part_absent": {
           "description": "An item of the values file standard-pack catalog --values reads names a business part the catalog does not write: an entry's own part where the entry writes none (its rules differ, each has its own part), or a rule's part where the entry writes neither it nor an own part; at the item (an error; Workflow #477 CV-1, since 0.12.79)."
         },
+        "catalog_business_member": {
+          "description": "A rule of a schedule.json whose requires names catalog_business writes a member of its business part (consumes, produces, limited, realization, fixed_value_origin or fixed_value_milli, the first in that order), which belongs to its package's entry of pack-catalog.json; at the member in schedule.json (an error of the composer, Runtime and tools alike; Workflow #477 CV-2, since 0.12.80)."
+        },
+        "catalog_missing": {
+          "description": "A game root whose schedule.json names catalog_business in requires holds no pack-catalog.json, which its rules take their business part from; the whole document of pack-catalog.json (an error of the composer; Workflow #477 CV-2, since 0.12.80)."
+        },
+        "catalog_version_1": {
+          "description": "A game root whose schedule.json names catalog_business in requires holds a pack-catalog.json of version 1, which carries no business part a rule can take; at its schema_version (an error of the composer; Workflow #477 CV-2, since 0.12.80)."
+        },
         "loading_target_invalid": {
           "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
         },
@@ -7944,6 +7953,9 @@
         },
         "realization_differs": {
           "description": "A rule of the package and the version 2 business part that stands for it differ in the realization mark; no pool and no side (Workflow #477 CV-1, since 0.12.79)."
+        },
+        "order_differs": {
+          "description": "A rule of the package and the version 2 business part that would stand for it hold the same effects on that side in another order, which the composed task keeps; the side, no pool; given by standard-pack catalog --cut only (Workflow #477 CV-2, since 0.12.80)."
         }
       }
     },

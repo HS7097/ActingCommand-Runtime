@@ -52,24 +52,43 @@
 //! and marks, refused as the display file is (`standard_pack_catalog_display_refused`, naming the
 //! values file), and a usage error on a line that writes version 1. The answer gains `converted`
 //! and `values_written`, each only with its option.
+//!
+//! Workflow #477 CV-2 (register §1.508; the coordinator's ruling 7): `--cut`
+//! ([`cut_standard_pack_catalog`]) cuts a root over to its version 2 file: it composes the root as
+//! it stands, makes in memory the `schedule.json` that names `catalog_business` and writes none of
+//! its rules' business members, composes that with the file by the same composer, and writes it
+//! only when the two compositions are byte for byte the same (the rules digest, the catalog hash,
+//! who wrote each value) and no rule differs from the part that would stand for it; otherwise it
+//! writes nothing and is refused with every difference, rule by rule, by the catalog's own words.
 
 use crate::standard_pack_check::{catalog_refused, read_bounded, root_invalid};
+use crate::standard_pack_schedule::compose_per_server;
 use crate::{
-    PackageBundleRequest, StandardPackCatalogRequest, StandardPackCatalogResponse,
-    StandardPackRootFiles, installed_root_containing, package_bundle,
+    PackageBundleRequest, StandardPackCatalogCutRequest, StandardPackCatalogCutResponse,
+    StandardPackCatalogRequest, StandardPackCatalogResponse, StandardPackRootFiles,
+    installed_root_containing, package_bundle,
 };
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{
     Detail, IoOp, KeyKind, NAME_MAX_BYTES, Outcome, key_text_fits,
 };
 use actingcommand_contract::{
-    CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits, CatalogMergeRefusal,
-    CatalogValuesFile, LabError, LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    StandardPackProblem, StandardPackRegistry, StandardPackRootIssue, catalog_display_outcome,
-    merge_standard_pack_catalog, parse_standard_pack_schedule, retired_ui_outcome,
+    BundleIndex, BundleMaintenance, CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits,
+    CatalogMergeRefusal, CatalogScheduleDifference, CatalogScheduleFacts, CatalogValuesFile,
+    DeclaredCapabilities, IrreversiblePackages, LabError, LabErrorClass, LabResult,
+    SCHEDULE_RULE_BUSINESS_MEMBERS, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, catalog_display_outcome,
+    merge_standard_pack_catalog, parse_standard_pack_catalog_with, parse_standard_pack_schedule,
+    read_standard_pack_root, retired_ui_outcome, standard_pack_catalog_cut_differences,
 };
-use serde_json::{Value, json};
+use actingcommand_policy::{
+    CATALOG_BUSINESS_SUBSYSTEM, StandardPackComposeFailure, standard_pack_schedule_takes_catalog,
+};
+use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -96,35 +115,28 @@ pub fn write_standard_pack_catalog(
     request: StandardPackCatalogRequest,
 ) -> LabResult<StandardPackCatalogResponse> {
     refresh_ids_fit(&request.refresh)?;
-    let root = std::path::absolute(&request.root)
-        .map_err(|error| LabError::usage(format!("{}: {error}", request.root.display())))?;
-    if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
-        return Err(LabError::usage(format!(
-            "--root {} is no directory",
-            root.display()
-        )));
-    }
-    if let Some(installation) = installed_root_containing(&root)? {
-        return Err(refused(
-            Outcome::new(SharedCode::StandardPackCatalogRootRefused)
-                .path(&root)
-                .install_root(&installation),
-            LabErrorClass::UsageValidation,
-            format!(
-                "{} lies inside the installation {}; standard-pack catalog writes a resource \
-                 repository's checkout or a built game root outside an installation only, and an \
-                 installed root takes the file through standard-pack build and place",
-                root.display(),
-                installation.display()
-            ),
-        ));
-    }
-    let (game, registry) = root_registry(&root)?;
+    let root = writable_root(&request.root)?;
+    let (game, registry, _) = root_registry(&root)?;
     let schedule_path = root.join(STANDARD_PACK_SCHEDULE_FILE);
     let schedule = read_bounded(&schedule_path)?
         .map(|bytes| parse_standard_pack_schedule(&bytes))
         .transpose()
         .map_err(|issue| root_invalid(&game, &schedule_path, &issue))?;
+    // Workflow #477 CV-2: the rules of a root cut over write no business part, so none is brought
+    // back from them: the catalog holds the only copy.
+    let cut = schedule.as_ref().is_some_and(|schedule| {
+        schedule
+            .requires
+            .iter()
+            .any(|name| name == CATALOG_BUSINESS_SUBSYSTEM)
+    });
+    if cut && !request.refresh.is_empty() {
+        return Err(LabError::usage(format!(
+            "--refresh: {} names {CATALOG_BUSINESS_SUBSYSTEM}, so its rules write no business part \
+             to bring an entry back to; the entry in {STANDARD_PACK_CATALOG_FILE} is the only copy",
+            schedule_path.display()
+        )));
+    }
     let path = root.join(STANDARD_PACK_CATALOG_FILE);
     let existing = read_bounded(&path)?;
     let retired_path = root.join(STANDARD_PACK_RETIRED_UI_FILE);
@@ -211,9 +223,10 @@ pub fn write_standard_pack_catalog(
             .iter()
             .map(|left_out| left_out.outcome(&game, &path)),
     );
+    // CV-2: a root cut over has no second copy of the business part to differ from.
+    let differences = if cut { Vec::new() } else { merge.differences };
     warnings.extend(
-        merge
-            .differences
+        differences
             .iter()
             .map(|difference| difference.outcome(&game)),
     );
@@ -243,7 +256,7 @@ pub fn write_standard_pack_catalog(
         kept: merge.kept,
         removed: merge.removed,
         dropped: merge.dropped,
-        differences: merge.differences,
+        differences,
         display_from_ui: merge.display_from_ui,
         refreshed: (!request.refresh.is_empty()).then_some(merge.refreshed),
         display_written: request.displays.is_some().then_some(merge.display_written),
@@ -253,6 +266,296 @@ pub fn write_standard_pack_catalog(
         document,
         warnings,
     })
+}
+
+/// The absolute directory `root` a line of `standard-pack catalog` writes in: a directory (a usage
+/// error otherwise) outside every installation (`standard_pack_catalog_root_refused` otherwise,
+/// before anything is read: an installed root takes the file through the build and `place`).
+fn writable_root(root: &Path) -> LabResult<PathBuf> {
+    let root = std::path::absolute(root)
+        .map_err(|error| LabError::usage(format!("{}: {error}", root.display())))?;
+    if !fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err(LabError::usage(format!(
+            "--root {} is no directory",
+            root.display()
+        )));
+    }
+    if let Some(installation) = installed_root_containing(&root)? {
+        return Err(refused(
+            Outcome::new(SharedCode::StandardPackCatalogRootRefused)
+                .path(&root)
+                .install_root(&installation),
+            LabErrorClass::UsageValidation,
+            format!(
+                "{} lies inside the installation {}; standard-pack catalog writes a resource \
+                 repository's checkout or a built game root outside an installation only, and an \
+                 installed root takes the file through standard-pack build and place",
+                root.display(),
+                installation.display()
+            ),
+        ));
+    }
+    Ok(root)
+}
+
+/// The answer's `status` of a cut a root has had already (its `schedule.json` names
+/// `catalog_business`).
+const CUT_ALREADY: &str = UNCHANGED;
+
+/// Workflow #477 CV-2 (register §1.508; `contracts/pack-catalog.md`, "Who writes it"; the
+/// coordinator's ruling 7): `standard-pack catalog --cut` of the root `request.root` (a checkout
+/// or a built game root, as a plain line takes, never one inside an installation). A root whose
+/// `schedule.json` names `catalog_business` already is answered `unchanged`, done, and nothing is
+/// read further. Otherwise the root is composed as it stands (its registry, the root files beside
+/// `schedule.json`, `bundle.json`'s maintenance entries; its packages' declarations, which no
+/// composed task reads since Workflow #455 G-R2x, taken as read and providing nothing), the
+/// switched `schedule.json` is made in memory ([`switched_schedule`]) and composed with the root's
+/// `pack-catalog.json` by the same composer, and a refusal of either composition is the line's
+/// (`standard_pack_root_invalid` at the file it names: a catalog that is absent or of version 1
+/// included). The two compositions must be byte for byte the same (their rules digest and catalog
+/// hash, and who wrote each fixed value and valuation, which no digest holds) and no rule of the
+/// file, a held one included, may differ from the part that would stand for it
+/// ([`standard_pack_catalog_cut_differences`]); else nothing is written and the line is refused
+/// `validation_failed` with each difference ([`cut_differs`]). With `--plan` nothing is written and
+/// the switched document is answered (`planned`); without it the file is written atomically
+/// (`written`; a failure is `standard_pack_catalog_write_failed` naming `schedule.json`).
+pub fn cut_standard_pack_catalog(
+    request: StandardPackCatalogCutRequest,
+) -> LabResult<StandardPackCatalogCutResponse> {
+    let root = writable_root(&request.root)?;
+    let (game, registry, bundle) = root_registry(&root)?;
+    let path = root.join(STANDARD_PACK_SCHEDULE_FILE);
+    let Some(bytes) = read_bounded(&path)? else {
+        return Err(LabError::usage(format!(
+            "{} holds no {STANDARD_PACK_SCHEDULE_FILE}: it has no rules to cut over",
+            root.display()
+        )));
+    };
+    let schedule =
+        parse_standard_pack_schedule(&bytes).map_err(|issue| root_invalid(&game, &path, &issue))?;
+    let answer = |status: &str, rules_digest: Option<String>, document: Option<Value>| {
+        StandardPackCatalogCutResponse {
+            status: status.to_owned(),
+            root: root.display().to_string(),
+            game: game.clone(),
+            path: path.display().to_string(),
+            rules_digest,
+            rules: if status == CUT_ALREADY {
+                Vec::new()
+            } else {
+                schedule.rules.iter().map(|rule| rule.id.clone()).collect()
+            },
+            document,
+        }
+    };
+    if standard_pack_schedule_takes_catalog(&bytes) {
+        return Ok(answer(CUT_ALREADY, None, None));
+    }
+    let catalog = read_bounded(&root.join(STANDARD_PACK_CATALOG_FILE))?;
+    let (checked, maintenance) = cut_root(&root, &game, &bundle)?;
+    let irreversible = IrreversiblePackages::new(
+        checked
+            .registry
+            .package_ids()
+            .map(|package_id| {
+                let declared = DeclaredCapabilities {
+                    provides: BTreeMap::new(),
+                    remedies: BTreeSet::new(),
+                };
+                (package_id.to_owned(), Some(declared))
+            })
+            .collect(),
+    );
+    let compose = |schedule: &[u8]| {
+        compose_per_server(
+            &game,
+            &checked,
+            &maintenance,
+            schedule,
+            &irreversible,
+            None,
+            catalog.as_deref(),
+        )
+        .map_err(|failure| cut_refused(&failure, &game, &root))
+    };
+    let before = compose(&bytes)?;
+    let switched = switched_schedule(&bytes, &path)?;
+    let after = compose(&switched)?;
+    // The second composition accepted the file, so its reader reads it.
+    let facts = CatalogScheduleFacts::of(Some(&schedule));
+    let read = parse_standard_pack_catalog_with(
+        catalog.as_deref().unwrap_or_default(),
+        &game,
+        &registry,
+        Some(&facts),
+    )
+    .map_err(|issues| catalog_refused(&game, &root, issues))?;
+    let differences = standard_pack_catalog_cut_differences(&read, &schedule);
+    let same = before.rules_digest() == after.rules_digest()
+        && before.compiled().catalog_hash() == after.compiled().catalog_hash()
+        && before.benefit_provenance() == after.benefit_provenance();
+    if !same || !differences.is_empty() {
+        return Err(cut_differs(&game, &path, &differences));
+    }
+    let digest = Some(after.rules_digest().to_owned());
+    if request.plan {
+        let document = serde_json::from_slice::<Value>(&switched).map_err(|error| {
+            LabError::usage(format!(
+                "the schedule.json standard-pack catalog --cut makes does not read back: {error}"
+            ))
+        })?;
+        return Ok(answer(PLANNED, digest, Some(document)));
+    }
+    write_atomically(&path, &switched)?;
+    Ok(answer(WRITTEN, digest, None))
+}
+
+/// CV-2: the game root `standard-pack catalog --cut` composes, `root` of `game` whose registry's
+/// `bundle.json` is `bundle` (a checkout's the build's `package_bundle` makes): its root files
+/// beside `schedule.json` read by the one structure check of every reader, and the bundle's
+/// maintenance entries (a checkout's bundle names none: its `maintenance.json` is the build's, and
+/// both compositions are made of the one root).
+fn cut_root(
+    root: &Path,
+    game: &str,
+    bundle: &[u8],
+) -> LabResult<(StandardPackRoot, Vec<BundleMaintenance>)> {
+    let mut files = BTreeMap::new();
+    for name in [
+        STANDARD_PACK_PAGES_FILE,
+        STANDARD_PACK_INTERRUPTS_FILE,
+        STANDARD_PACK_NAVIGATION_FILE,
+        STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    ] {
+        if let Some(bytes) = read_bounded(&root.join(name))? {
+            files.insert(name, bytes);
+        }
+    }
+    let bytes = |name: &str| files.get(name).map(Vec::as_slice);
+    let checked = read_standard_pack_root(
+        StandardPackRootBytes {
+            bundle: Some(bundle),
+            pages: bytes(STANDARD_PACK_PAGES_FILE),
+            interrupts: bytes(STANDARD_PACK_INTERRUPTS_FILE),
+            navigation: bytes(STANDARD_PACK_NAVIGATION_FILE),
+            tables: false,
+            display_layout: bytes(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
+        },
+        game,
+    )
+    .map_err(|issue| root_invalid(game, &root.join(issue.file), &issue))?
+    .ok_or_else(|| LabError::usage(format!("{} holds no game root to cut over", root.display())))?;
+    let maintenance = serde_json::from_slice::<BundleIndex>(bundle)
+        .map(|index| index.maintenance().to_vec())
+        .unwrap_or_default();
+    Ok((checked, maintenance))
+}
+
+/// CV-2: the `schedule.json` of `bytes` (at `path`, which its reader accepted) cut over: every
+/// member as written, in its order, but `requires`, which names `catalog_business` last (after
+/// `schema_version` when the file has none), and each rule without its business members
+/// ([`SCHEDULE_RULE_BUSINESS_MEMBERS`]); two-space indented with a line feed at the end, each line
+/// ending as the file's do (a carriage return before each line feed when the file has one).
+fn switched_schedule(bytes: &[u8], path: &Path) -> LabResult<Vec<u8>> {
+    let unread = |error: String| {
+        LabError::usage(format!(
+            "{}: the file standard-pack catalog --cut switches does not read: {error}",
+            path.display()
+        ))
+    };
+    let Value::Object(document) =
+        serde_json::from_slice::<Value>(bytes).map_err(|error| unread(error.to_string()))?
+    else {
+        return Err(unread("no JSON object".to_owned()));
+    };
+    let named = document.contains_key("requires");
+    let mut switched = Map::new();
+    for (name, value) in document {
+        let value = match (name.as_str(), value) {
+            ("requires", Value::Array(mut names)) => {
+                names.push(Value::String(CATALOG_BUSINESS_SUBSYSTEM.to_owned()));
+                Value::Array(names)
+            }
+            ("rules", Value::Array(rules)) => {
+                Value::Array(rules.into_iter().map(without_business).collect())
+            }
+            (_, value) => value,
+        };
+        let opens = name == "schema_version";
+        switched.insert(name, value);
+        if opens && !named {
+            switched.insert("requires".to_owned(), json!([CATALOG_BUSINESS_SUBSYSTEM]));
+        }
+    }
+    let mut written = serde_json::to_vec_pretty(&Value::Object(switched))
+        .map_err(|error| unread(error.to_string()))?;
+    written.push(b'\n');
+    if !bytes.windows(2).any(|pair| pair == b"\r\n") {
+        return Ok(written);
+    }
+    let mut crlf = Vec::with_capacity(written.len() * 2);
+    for byte in written {
+        if byte == b'\n' {
+            crlf.push(b'\r');
+        }
+        crlf.push(byte);
+    }
+    Ok(crlf)
+}
+
+/// CV-2: the rule `rule` without its business members, every other member as written, in its
+/// order.
+fn without_business(rule: Value) -> Value {
+    match rule {
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .filter(|(name, _)| !SCHEDULE_RULE_BUSINESS_MEMBERS.contains(&name.as_str()))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// CV-2: the refusal of a composition the cut made of the root `root` of `game`:
+/// `standard_pack_root_invalid` for the first refusal of `failure`, at the file it names
+/// (`schedule.json`, or `pack-catalog.json` for a part taken from there); the developer message
+/// lists every refusal.
+fn cut_refused(failure: &StandardPackComposeFailure, game: &str, root: &Path) -> LabError {
+    let Some(first) = failure.issues().first() else {
+        return LabError::usage(format!("{failure} (no issue named)"));
+    };
+    let mut error = root_invalid(game, &root.join(first.issue.file), &first.issue);
+    error.message = format!("{}; {failure}", error.message);
+    error
+}
+
+/// CV-2: the refusal of a cut whose two compositions are not the same, or where a rule differs
+/// from the part that would stand for it: `validation_failed` (the line cannot be carried out as
+/// the root stands: its catalog does not hold what its rules write), nothing written, with every
+/// difference, rule by rule, in `details.differences` (`{package_id, pool_id?, side?, difference,
+/// rule_id}`, the words of `catalog_difference`) and as one `standard_pack_catalog_schedule_differs`
+/// each in `details.warnings`.
+fn cut_differs(game: &str, path: &Path, differences: &[CatalogScheduleDifference]) -> LabError {
+    let rules = differences
+        .iter()
+        .filter_map(|difference| difference.rule_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    LabError::usage(format!(
+        "{} is not cut over: with its rules' business part taken from {STANDARD_PACK_CATALOG_FILE} \
+         the root would compose otherwise ({} difference(s) in {} rule(s)); bring the catalog's \
+         entries up to the rules (standard-pack catalog --refresh) and cut again",
+        path.display(),
+        differences.len(),
+        rules.len()
+    ))
+    .with_details(json!({
+        "differences": differences,
+        "warnings": differences
+            .iter()
+            .map(|difference| difference.outcome(game).envelope(Detail::Full))
+            .collect::<Vec<_>>(),
+    }))
 }
 
 /// Workflow #477 PC-2 fix round 1 (the independent review): each `--refresh` id is one an answer's
@@ -338,7 +641,9 @@ fn whole_display_file() -> CatalogDisplayFileIssue {
 /// `bundle.json` is a built game root: its game is its directory's name and its registry that
 /// file's. One that holds `applications.json` instead is a checkout ([`checkout_registry`]). One
 /// that holds neither is `standard_pack_root_invalid`, `bundle_missing`, at `bundle.json`.
-fn root_registry(root: &Path) -> LabResult<(String, StandardPackRegistry)> {
+/// Workflow #477 CV-2: and the bytes of the `bundle.json` the registry is read from, which the cut
+/// composes the root with.
+fn root_registry(root: &Path) -> LabResult<(String, StandardPackRegistry, Vec<u8>)> {
     let bundle_path = root.join(STANDARD_PACK_BUNDLE_FILE);
     let named = || {
         root.file_name()
@@ -352,7 +657,7 @@ fn root_registry(root: &Path) -> LabResult<(String, StandardPackRegistry)> {
         let game = named()?;
         let registry = StandardPackRegistry::from_bundle_bytes(&bundle, &game)
             .map_err(|issue| root_invalid(&game, &bundle_path, &issue))?;
-        return Ok((game, registry));
+        return Ok((game, registry, bundle));
     }
     if fs::symlink_metadata(root.join(APPLICATIONS_FILE)).is_ok() {
         return checkout_registry(root);
@@ -382,8 +687,8 @@ fn root_registry(root: &Path) -> LabResult<(String, StandardPackRegistry)> {
 /// The scratch directory is removed whatever the bundle's end. A refusal of `package_bundle` is
 /// its own (a checkout without a package is `package_bundle_packs_empty`); an OS failure of the
 /// scratch directory is `foreign_os_error` ([`scratch_failed`]), and one that cannot be removed
-/// refuses the line too, naming it.
-fn checkout_registry(root: &Path) -> LabResult<(String, StandardPackRegistry)> {
+/// refuses the line too, naming it. Workflow #477 CV-2: and that `bundle.json`'s bytes.
+fn checkout_registry(root: &Path) -> LabResult<(String, StandardPackRegistry, Vec<u8>)> {
     let scratch = make_scratch()?;
     let made = bundle_in(root, &scratch);
     let removed = fs::remove_dir_all(&scratch);
@@ -429,7 +734,7 @@ fn make_scratch() -> LabResult<PathBuf> {
 
 /// [`checkout_registry`]'s work in `scratch`: the directories of `<root>/packs` copied into
 /// `<scratch>/packs-root`, in name order, then `package_bundle` into `<scratch>/bundle`.
-fn bundle_in(root: &Path, scratch: &Path) -> LabResult<(String, StandardPackRegistry)> {
+fn bundle_in(root: &Path, scratch: &Path) -> LabResult<(String, StandardPackRegistry, Vec<u8>)> {
     let stage = scratch.join("packs-root");
     fs::create_dir(&stage).map_err(|error| scratch_failed(&stage, &error, IoOp::CreateDir))?;
     let packs = root.join(PACKS_DIRECTORY);
@@ -469,7 +774,7 @@ fn bundle_in(root: &Path, scratch: &Path) -> LabResult<(String, StandardPackRegi
         fs::read(&bundle_path).map_err(|error| scratch_failed(&bundle_path, &error, IoOp::Read))?;
     let registry = StandardPackRegistry::from_bundle_bytes(&bundle, &game)
         .map_err(|issue| root_invalid(&game, &bundle_path, &issue))?;
-    Ok((game, registry))
+    Ok((game, registry, bundle))
 }
 
 /// Copies the directory tree `from` into the new directory `to`, file by file, following links as

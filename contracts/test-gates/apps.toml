@@ -2973,3 +2973,14 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16",
 ]
 incident = ["#477 CV-1"]
+
+# #477 CV-2 (0.12.80; register §1.508; brief rd-1122/brief-477-cv2.md; contracts/pack-catalog.md, "Who writes it"; contracts/standard-pack-schedule.md, "`requires`"), the tools' and actingd's half: standard-pack catalog --cut on a built game root whose rules write their business part and whose version 2 catalog holds the same writes schedule.json (written): requires names benefit_fixed_value then catalog_business, no rule writes consumes, produces, limited, realization, fixed_value_origin or fixed_value_milli, other members kept; standard-pack compose of the root cut over, for the instance the cut composes with, gives the digest the cut answered; a second line answers unchanged and writes nothing (1); an entry whose consumption differs from its rule's refuses the cut validation_failed with details.differences [{package_id, pool_id, side consumes, difference quantity_differs, rule_id}] and one warning, nothing written; a root without pack-catalog.json is refused standard_pack_root_invalid catalog_missing at that file, nothing written (2); --plan answers planned with the switched document and writes nothing (3); this build's configuration manifest names catalog_business among its enabled subsystems, and the composer given those subsystems composes a switched root with its catalog, the composed task holding the catalog's production (the actingd gate)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_477_cv2::cv2_cut_equal_results_write_the_file_and_a_second_line_answers_done",
+    "actingcommand-resource-tooling::lib::gate_477_cv2::cv2_cut_a_difference_writes_nothing_and_names_the_rule",
+    "actingcommand-resource-tooling::lib::gate_477_cv2::cv2_cut_plan_writes_nothing",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_477_cv2::cv2_this_runtime_names_catalog_business_and_composes_a_switched_root",
+]
+incident = ["#477 CV-2"]

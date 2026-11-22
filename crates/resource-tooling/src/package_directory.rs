@@ -29,7 +29,7 @@ use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
 };
 use crate::standard_pack_goals::{goal_issues, refuse_goals, root_irreversibility};
-use crate::standard_pack_schedule::{ScheduleReport, report_schedule};
+use crate::standard_pack_schedule::{ScheduleReport, report_schedule, switched_catalog};
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -373,12 +373,19 @@ fn write_bundle(
         // refuses the bundle as a refused root file does. Workflow #463 V1: no entry takes a
         // table any more, and a placement is held to the variables the bundle's packs declare.
         if let Some(goals) = root_files.goals() {
+            // Workflow #477 CV-2: a `--schedule` that names `catalog_business` is held with the
+            // `pack-catalog.json` beside it, as its composition above was.
+            let catalog = match root_files.schedule() {
+                Some(schedule) => switched_catalog(&schedule.bytes, &schedule.path)?,
+                None => None,
+            };
             let issues = goal_issues(
                 &applications.game,
                 &root,
                 root_files
                     .schedule()
                     .map(|schedule| (schedule.bytes.as_slice(), schedule.path.as_path())),
+                catalog.as_deref(),
                 &goals.bytes,
                 &|directory: &str| packs_dir.join(directory),
             )?;

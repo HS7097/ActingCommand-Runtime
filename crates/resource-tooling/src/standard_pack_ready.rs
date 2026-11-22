@@ -91,7 +91,7 @@ use crate::standard_pack_check::{
     CHECK_LABEL, check_standard_pack_root, read_bounded, root_invalid, root_issue_outcome,
 };
 use crate::standard_pack_goals::root_irreversibility;
-use crate::standard_pack_schedule::compose_per_server;
+use crate::standard_pack_schedule::{compose_per_server, switched_catalog};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Outcome, OutcomeEnvelope};
 use actingcommand_contract::{
@@ -904,8 +904,9 @@ impl Rules {
         let Some(bytes) = read_bounded(&path)? else {
             return Ok(Self::Absent { maintenance });
         };
+        // Workflow #477 CV-2: a refusal in `pack-catalog.json` names that file.
         let refusal = |failure: &StandardPackComposeFailure| match failure.issues().first() {
-            Some(first) => root_issue_outcome(game, &path, &first.issue),
+            Some(first) => root_issue_outcome(game, &root.join(first.issue.file), &first.issue),
             None => Outcome::new(SharedCode::StandardPackRootInvalid)
                 .game(game)
                 .path(&path)
@@ -916,6 +917,9 @@ impl Rules {
         // it, so the composition is the one the check runs.
         let irreversible =
             root_irreversibility(&checked.root, &|directory: &str| root.join(directory));
+        // Workflow #477 CV-2: with the root's `pack-catalog.json` for a file that names
+        // `catalog_business`, as `standard-pack check` composes it.
+        let catalog = switched_catalog(&bytes, &path)?;
         let compose = |subsystems: Option<&BTreeSet<String>>| {
             compose_per_server(
                 game,
@@ -924,6 +928,7 @@ impl Rules {
                 &bytes,
                 &irreversible.packages,
                 subsystems,
+                catalog.as_deref(),
             )
         };
         let composition = match compose(None) {

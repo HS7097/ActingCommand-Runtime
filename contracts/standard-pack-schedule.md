@@ -133,6 +133,43 @@ columns K and V: the check reads a package's reading marks only (`resource_readi
 readings. At evaluation a list not keyed by them (a row without a text under K, or no row with V)
 leaves the pool unknown, `type_mismatch` (#455 P2 fix round 1), never a known 0.
 
+Workflow #477 CV-2 (register §1.508, since 0.12.80; the coordinator's rulings, the owner's words
+being only "one cut-over, no coexistence"). **`catalog_business` switches a root's business part to
+its `pack-catalog.json`** ([pack-catalog.md](pack-catalog.md), "Version 2"). A file whose
+`requires` names it:
+
+- writes none of the six business members on any rule (`consumes`, `produces`,
+  `fixed_value_milli`, `fixed_value_origin`, `limited`, `realization`): the composer refuses one
+  with its code for a refused file, `standard_pack_root_invalid`, and the word
+  `catalog_business_member` at the member (the first of `consumes`, `produces`, `limited`,
+  `realization`, `fixed_value_origin`, `fixed_value_milli` a rule writes);
+- stands in a root whose `pack-catalog.json` is of version 2: a root without the file is refused
+  `catalog_missing` (the whole document), one of version 1 `catalog_version_1` at its
+  `schema_version`, one its reader refuses with its first error, each at `pack-catalog.json`;
+- has every rule's business part taken from the file before any other check reads the rules
+  (`take_catalog_business` of the contract crate, which the composer calls): the per-rule part
+  where the package's entry holds one for the rule's id, else the entry's own part, else none (a
+  rule with no effect, no fixed value and no mark, as one that writes empty `consumes` and
+  `produces` and nothing more). The rule then holds what the reader would have given it had it
+  written the part itself, its `consumes` and `produces` after its other members, so the
+  composition is byte for byte the one of that file: the same documents, compiled catalog, catalog
+  hash and rules digest, coverage and provenance. A part holding the realization mark or a value
+  for a rule that declares itself maintenance is refused `schedule_invalid` at the part's member,
+  as the reader refuses either beside the declaration.
+
+Every refusal at a member a rule took from the file, the composer's own (`requires`, a mark on a
+maintenance-role package) and the compiler's diagnostics alike, names the file and the part's
+member: `/packs/<e>/<member>` for an entry's own part, `/packs/<e>/rules/<r>/<member>` for a
+per-rule part (`value` for `fixed_value_milli`, `value/origin` for its origin), the rest of the
+pointer kept. A file that does not name the subsystem is composed exactly as before and the file is
+not read for it: no root mixes the two readings. A Runtime names `catalog_business` in
+`config.subsystems`, always on, from 0.12.80; given subsystems that do not name it (a Runtime of
+0.12.79) the composer reads the file as written and refuses it at `requires`,
+`schedule_requires_missing`, by the rule above. The other requirements stay: a switched file whose
+parts hold a fixed value still names `benefit_fixed_value`, one whose part reads a consumption from
+a fact `consumption_fact`. The resource tools, which check no `requires`, compose a switched file
+with the `pack-catalog.json` beside it.
+
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
@@ -425,6 +462,10 @@ replace.
   with the code).
 - An origin changes no decision and no catalog: two files that differ only in it compose the same
   catalog hash and rules digest.
+- Workflow #477 CV-2 (0.12.80): of a root whose `schedule.json` names `catalog_business`, a fixed
+  value's origin is its part's `value.origin` in `pack-catalog.json` (`"model"`, else the pack's),
+  reported, in the tools' `benefit_provenance` and the workbench's `config.catalog_provenance`
+  alike, in the form a rule's `fixed_value_origin` was; the list's ids are still the rules'.
 
 **What a resource repository writes** (SCHED-C1; the coordinator's point 7). By rule class, for a
 game's business rules:
@@ -449,6 +490,16 @@ changes, a difference between a rule and its entry is the warning
 `standard_pack_catalog_schedule_differs`, and no Runtime component opens the catalog. The next
 slice (CV-2) has the composer take them from the catalog, switched on per root by an entry of
 `requires`.
+
+**The cut-over, since Workflow #477 CV-2** (0.12.80; register §1.508). A resource repository brings
+every entry of its version 2 catalog up to its rules (`standard-pack catalog --refresh`, no
+`standard_pack_catalog_schedule_differs` left) and then runs `standard-pack catalog --cut`, which
+composes the root as it stands and switched and writes the switched `schedule.json` (its rules
+without their business members, `catalog_business` in `requires`) only when the two are byte for
+byte the same and no rule differs from its part. From then on the root's business part, its effects,
+values and marks, is written in `pack-catalog.json` alone (`--values` for the model's values and
+marks, `--refresh` refused), and the composer, in the tools and the Runtime alike, reads it there
+("`requires`").
 
 ## Composition
 
@@ -484,7 +535,11 @@ pure: its caller reads the packages.
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event
    invalidating `health.application.update_required` ("The store update rule"), the references
-   and the classification. A refused game is reported with its game id.
+   and the classification. A refused game is reported with its game id. Workflow #477 CV-2
+   (0.12.80): a file whose `requires` names `catalog_business` (and the given subsystems too, when
+   given) first has each rule's business part taken from the root's `pack-catalog.json`, which the
+   caller reads beside `schedule.json` and gives with it (`StandardPackGameFiles::catalog`;
+   "`requires`").
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own
@@ -837,7 +892,13 @@ nothing.
   reads the game roots only when one of them, or the bound instances, changed:
   「用到的时候再加载」. A game root without a bound instance is never read. A check that reads a
   root of N packages stats 3 + 2N files (2 + 2N before 0.12.61); the declarations and `goals.json`
-  are read (N package reads and one file) only when one of those marks changed.
+  are read (N package reads and one file) only when one of those marks changed. Workflow #477 CV-2
+  (0.12.80): **of a root whose `schedule.json` named `catalog_business` when it was last read, the
+  check stats `pack-catalog.json` too** (4 + 2N), marked just before the file is read with the
+  root, so a placement that changes only the catalog is read and composed at the next check (its
+  length and modification time, the standard of the other marks, and its limit); its metadata
+  failing is the root's own, as `schedule.json`'s. A root that does not name it is not looked at
+  for the file, as before.
 - **Compose and activate.** The roots are composed with `compose_standard_pack_rules`, its
   `requires` checked against the configuration manifest's subsystems (this build names
   `standard_pack_schedule`), and the catalog version is the ledger head plus one. A composition
@@ -886,7 +947,13 @@ nothing.
   generation's `fragments/`; a game that never had a good one has no rules. The other games are
   composed as they are. A broken game root (its `bundle.json` or siblings) is recorded once and
   keeps the active generation until it is fixed. An unclassified package is recorded once per
-  (game, package, sha256).
+  (game, package, sha256). Workflow #477 CV-2 (0.12.80): a composed generation keeps beside the
+  fragment of each switched `schedule.json` the `pack-catalog.json` it was composed with
+  (`fragment-catalogs/<game>.json`, the directory only when there is one). A switched root whose
+  catalog is missing or refused is refused as a file that does not compose is, its record naming
+  `pack-catalog.json` (once per pair of the two files' sha256), and the game keeps its last good
+  rules: the active generation's fragment with the catalog kept with it, also when
+  `schedule.json` itself did not change.
 - **Static pool readings.** Under a composed generation a `policy.resources.pools` reading for a
   pool no composed game declares is left out of the evaluation and recorded once as
   `policy_pool_reading_unused` (`pool_id`), so it never stops the other instances.

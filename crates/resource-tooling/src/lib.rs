@@ -178,6 +178,12 @@ mod gate_477_pc2;
 #[cfg(test)]
 mod gate_477_cv1;
 
+// Workflow #477 CV-2 (register §1.508): a root whose `schedule.json` names `catalog_business` is
+// checked and composed with its rules' business part from `pack-catalog.json`, and
+// `standard-pack catalog --cut` switches a root only when both compositions are the same.
+#[cfg(test)]
+mod gate_477_cv2;
+
 // Workflow #463 S2b-1 (register §1.477): adoption answers each stage's time and checks the
 // package root once.
 #[cfg(test)]
@@ -270,7 +276,7 @@ pub use resource_convert::{
     canonical_server, resolve_resource_root, validate_maa_semantic_declarations,
 };
 pub use resource_restore::*;
-pub use standard_pack_catalog::write_standard_pack_catalog;
+pub use standard_pack_catalog::{cut_standard_pack_catalog, write_standard_pack_catalog};
 pub use standard_pack_check::check_standard_pack_root;
 pub use standard_pack_ready::{
     InstallationRead, ItemState, PackReadiness, ReadinessAnswer, ReadinessBasis, ReadinessBinding,

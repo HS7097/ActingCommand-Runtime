@@ -21,6 +21,15 @@ their quantities and evidence, its fixed value with its origin, its marks `limit
 build and place it; still no Runtime component opens the file, and a root of version 1 is read,
 written and answered byte for byte as before.
 
+Workflow #477 CV-2 (Runtime 0.12.80; [v012-register.md](v012-register.md) §1.508; the coordinator's
+rulings, not the owner's words, who ruled one cut-over with no coexistence) makes the file the
+scheduler's: a root whose `schedule.json` names `catalog_business` in `requires` writes no business
+member on its rules, and the composer, in the tools and the Runtime alike, takes each rule's
+business part from the root's version 2 file ([standard-pack-schedule.md](standard-pack-schedule.md),
+"`requires`"); `standard-pack catalog --cut` switches a root only when it composes byte for byte the
+same both ways ("Who writes it"). A root that does not name it is composed as before and its file
+is read by no Runtime component.
+
 ## The owner's six answers
 
 Each choice below follows one of the owner's answers for this slice (board #477, her ruling of
@@ -283,7 +292,23 @@ warning since 0.12.79, present for every other word). A package without a rule: 
 own part is `schedule_lacks` without a rule, as in version 1. Still nothing is refused for a
 difference.
 
+Workflow #477 CV-2 (0.12.80): a root whose `schedule.json` names `catalog_business` holds its
+business part in this file alone, so `standard-pack check` and `standard-pack catalog` compare
+nothing and give no difference for it. The same words are what `standard-pack catalog --cut` lists
+when it refuses a cut ("Who writes it"), with one more, `order_differs`.
+
 ## Who reads it
+
+Workflow #477 CV-2 (0.12.80; register §1.508): **the composer, for a switched root**, a game root
+whose `schedule.json` names `catalog_business` in `requires`
+([standard-pack-schedule.md](standard-pack-schedule.md), "`requires`"). Every reader that composes
+such a root gives the composer the root's file, read beside `schedule.json`, and the composer takes
+each rule's business part from it by the one reader below (`take_catalog_business` of the contract
+crate): the Runtime's scheduler workbench, which marks the file with the root's and keeps it with
+the generation it composed, check-config and `actingd suspended`; and `standard-pack check`,
+`compose`, `ready`, `status`, the build's `bundle` step and the check of the root it installs,
+`package bundle --schedule` (the file beside the `schedule.json` it names), `actingctl packs` and
+`ac_packs`. For any other root the rest of this section holds as it was:
 
 None of the Runtime's components: its root reader, its startup and run preparation, the policy
 crate, the scheduler workbench and check-config never open it, so the file never changes a run,
@@ -504,6 +529,42 @@ Workflow #477 CV-1 (0.12.79; the tool's `schema_version` and `values`):
   production of a valued pool refuses the line as the catalog's error.
 - Without the two options a line answers and writes as before, byte for byte.
 
+Workflow #477 CV-2 (0.12.80; register §1.508; the coordinator's ruling 7; the tool's `cut`):
+
+- **`--cut`** (with `--root` and `--plan` alone; another option is `validation_failed`) cuts a root
+  over to its version 2 file, the one cut-over. On a root whose `schedule.json` does not name
+  `catalog_business` yet it composes the root as it stands (its registry, the root files beside
+  `schedule.json`, `bundle.json`'s maintenance entries; its packages' declarations, which no
+  composed task reads, taken as read), makes in memory the switched `schedule.json` (every member
+  as written, in its order, but `catalog_business` added last to `requires`, after
+  `schema_version` when the file has none, and each rule without `consumes`, `produces`,
+  `limited`, `realization`, `fixed_value_origin` and `fixed_value_milli`), and composes that with
+  the file by the same composer. A refusal of either composition is the line's,
+  `standard_pack_root_invalid` at the file it names (a root without the file is `catalog_missing`
+  there, one of version 1 `catalog_version_1`).
+- **It writes the file only when the two compositions are byte for byte the same** (their rules
+  digest and catalog hash, and who wrote each fixed value and valuation, which no digest holds)
+  **and no rule differs from the part that would stand for it**, a held rule included (a package
+  without an entry has an empty part): each difference is one of the words of "Differences from
+  `schedule.json`", rule by rule in the file's order, or `order_differs` (the same effects on a side
+  in another order, which the composed task keeps; the side, no pool). Otherwise nothing is written
+  and the line is refused `validation_failed`, every difference in `details.differences`
+  (`{package_id, pool_id?, side?, difference, rule_id}`) and each as one
+  `standard_pack_catalog_schedule_differs` in `details.warnings`: bring the entries up to the rules
+  (`--refresh`) and cut again.
+- With `--plan` nothing is written and the switched document is answered (`status` `planned`);
+  without it `schedule.json` is written atomically (`written`; two-space indented with a line feed
+  at the end, each line ended as the file's lines were, a carriage return kept), a failure
+  `standard_pack_catalog_write_failed` naming it. The answer: `status`, `root`, `game`, `path` (the
+  `schedule.json`), `rules_digest` (the one both compositions give), `rules` (the rules switched,
+  in file order) and `document` (with `--plan`). A root whose `schedule.json` names
+  `catalog_business` already is answered `unchanged`, done, and nothing more is read. Under the
+  global `--dry-run` only `--plan` runs.
+- **A root cut over** has its business part here alone: the writer refuses `--refresh` on it
+  (`validation_failed`; its rules hold nothing to bring an entry back to) and gives no difference;
+  a new entry gets an empty part, as its rules give it. Edit the business part through the file's
+  writer (`--values` for the value and the marks).
+
 ## `ui.json` is retired
 
 `ui.json` (Workflow #429 R-11, 0.12.36 to 0.12.67) is no longer read by anything. A root that still
@@ -548,12 +609,13 @@ members a client read are where they were.
 
 - **The value**: here since Workflow #477 CV-1 (0.12.79), a fixed value per package (or per rule)
   under version 2 ("Version 2"); version 1 still refuses a value member.
-- **The scheduler's reading** (the next slice, CV-2): the composer takes a rule's business part
-  from the catalog, switched on per root by an entry of `requires`, and the business part replaces
-  the consumption, production, fixed value and marks the rules carry today; the Runtime reads the
-  index to find which packages produce what a resource goal lacks. A per-rule part is the rule's;
-  an entry's own part is every other rule's of the package. Until then no Runtime component reads
-  the file.
+- **The scheduler's reading**: here since Workflow #477 CV-2 (0.12.80): the composer takes a rule's
+  business part from the catalog, switched on per root by `catalog_business` in `requires`, and the
+  business part replaces the consumption, production, fixed value and marks the rules carried; a
+  per-rule part is the rule's, an entry's own part every other rule's of the package. Still to
+  come: the Runtime's reading of the index to find which packages produce what a resource goal
+  lacks, and, once the four resource repositories have cut over, the end of the rules' own
+  business members (the old reading).
 - **A business part per value of a package variable**: each value will be a rule, so it is a
   per-rule part of version 2's shape; nothing more is added for it.
 - **The adoption's entries**: `standard-pack adopt` writes the entry of the package it adopts.

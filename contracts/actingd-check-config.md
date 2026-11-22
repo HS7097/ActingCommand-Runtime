@@ -385,6 +385,15 @@ The members of `report`:
       ([scheduling/README.md](scheduling/README.md), "A pool read from rows of
       a list"); a `schedule.json` whose pool writes the kind requires it, so it
       is composed only by a Runtime that names this row.
+    - `catalog_business` (#477 CV-2, since 0.12.80, register §1.508): always
+      on (`config_subsystem_always_on`). The composer takes a game root's
+      business part (each rule's effects, fixed value and marks) from its
+      version 2 `pack-catalog.json`
+      ([standard-pack-schedule.md](standard-pack-schedule.md), "`requires`");
+      a `schedule.json` whose rules write none of it requires it, so it is
+      composed only by a Runtime that names this row. check-config's preview
+      of the schedule composes such a root with its catalog, and names
+      `pack-catalog.json` in a refusal of a part taken from there.
     - `consumption_fact` (#428 SCHED-C1f1, since 0.12.54, register §1.303):
       always on (`config_subsystem_always_on`). The Runtime reads a `consumes`
       entry's `amount` written as a fact with a fallback, one run's amount read

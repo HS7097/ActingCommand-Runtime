@@ -56,6 +56,12 @@
 //! file are the child module `v2`'s; version 1 is read, written and compared as before, byte for
 //! byte. Every reader reads both versions; a zip that carries a version 2 file declares `package`
 //! 24 ([`catalog_package_revision`]). No Runtime component reads the file.
+//!
+//! Workflow #477 CV-2 (register §1.508; 0.12.80): a game root whose `schedule.json` names
+//! `catalog_business` in `requires` takes its rules' business part from its version 2 file, and
+//! the composer, which every reader that composes a root runs, the Runtime's included, reads the
+//! file for it ([`take_catalog_business`]); a root that does not name it is composed as before and
+//! its file is read by no Runtime component.
 
 use crate::codes::SharedCode;
 use crate::outcome::{KeyKind, Outcome, VocabularyToken, key_text_fits};
@@ -77,8 +83,9 @@ use std::path::{Path, PathBuf};
 mod v2;
 
 pub use v2::{
-    CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart, CatalogScheduleFacts,
-    CatalogValue, CatalogValuesFile,
+    CatalogBusinessPlaces, CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart,
+    CatalogScheduleFacts, CatalogValue, CatalogValuesFile, SCHEDULE_RULE_BUSINESS_MEMBERS,
+    standard_pack_catalog_cut_differences, take_catalog_business,
 };
 
 /// The game root's package declaration (Workflow #477 PC-1).
@@ -218,6 +225,10 @@ crate::outcome_vocabulary! {
         /// CV-1: a rule of the package and the version 2 part that stands for it differ in the
         /// realization mark.
         RealizationDiffers => "realization_differs",
+        /// Workflow #477 CV-2 (`standard-pack catalog --cut`): a rule of the package and the
+        /// version 2 part that stands for it hold the same effects on that side in another order,
+        /// which the composed task keeps.
+        OrderDiffers => "order_differs",
     }
 }
 

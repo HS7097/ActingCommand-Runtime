@@ -859,6 +859,7 @@ fn compose(
             root: &root,
             maintenance: &[],
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let instances = BTreeMap::from([(

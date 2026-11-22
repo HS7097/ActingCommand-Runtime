@@ -24,6 +24,11 @@
 //!   `activity.json`, `timeline.json`, as compiled) and `manifest.json` (`procedure_ref` → game,
 //!   package and directory) into `<out>.part`, renamed to `<out>` once all are written. It reads
 //!   only the game roots and writes only that new directory.
+//!
+//! Workflow #477 CV-2 (register §1.508): a `schedule.json` that names `catalog_business` in
+//! `requires` is composed with the `pack-catalog.json` beside it, its game root's
+//! ([`switched_catalog`]), from which the composer takes its rules' business part; a refusal in
+//! that file names it. Any other file is composed as before and its catalog is not read.
 
 use crate::standard_pack_check::{read_bounded, root_invalid};
 use crate::standard_pack_goals::{RootIrreversibility, root_irreversibility};
@@ -31,15 +36,16 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, IrreversiblePackages, LabError, LabErrorClass, LabResult,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
     BenefitCoverage, BenefitFollower, BenefitProvenance, CompiledCatalog, ComposedGame,
     ComposedProcedure, ConsumptionFactRule, StandardPackBinding, StandardPackComposeFailure,
     StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
-    compose_standard_pack_rules,
+    compose_standard_pack_rules, standard_pack_schedule_takes_catalog,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -209,6 +215,8 @@ pub(crate) fn report_schedule(
 }
 
 /// The composition [`report_schedule`] reads: one bound instance per server of the registry.
+/// Workflow #477 CV-2: with the `pack-catalog.json` beside `path` for a file that names
+/// `catalog_business` ([`switched_catalog`]).
 fn compose_check(
     game: &str,
     root: &StandardPackRoot,
@@ -217,8 +225,40 @@ fn compose_check(
     path: &Path,
     irreversible: &IrreversiblePackages,
 ) -> LabResult<StandardPackComposition> {
-    compose_per_server(game, root, maintenance, schedule, irreversible, None)
-        .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
+    let catalog = switched_catalog(schedule, path)?;
+    compose_per_server(
+        game,
+        root,
+        maintenance,
+        schedule,
+        irreversible,
+        None,
+        catalog.as_deref(),
+    )
+    .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
+}
+
+/// Workflow #477 CV-2 (register §1.508): the bytes of the `pack-catalog.json` beside the
+/// `schedule.json` at `path` (`schedule`, its bytes), its game root's, which a file that names
+/// `catalog_business` in `requires` takes its rules' business part from; `None` for any other
+/// file, whose catalog is not read here, and when the root holds none (the composer's
+/// `catalog_missing`). A catalog that cannot be read is a usage error naming it, as a root file's.
+pub(crate) fn switched_catalog(schedule: &[u8], path: &Path) -> LabResult<Option<Vec<u8>>> {
+    if !standard_pack_schedule_takes_catalog(schedule) {
+        return Ok(None);
+    }
+    read_bounded(&path.with_file_name(STANDARD_PACK_CATALOG_FILE))
+}
+
+/// Workflow #477 CV-2: the file `issue` lies in, of the game root whose `schedule.json` is at
+/// `schedule`: that path for an issue of `schedule.json`, else the root file of the issue beside
+/// it (`pack-catalog.json`).
+pub(crate) fn issue_path(schedule: &Path, issue: &StandardPackRootIssue) -> PathBuf {
+    if issue.file == STANDARD_PACK_SCHEDULE_FILE {
+        schedule.to_owned()
+    } else {
+        schedule.with_file_name(issue.file)
+    }
 }
 
 /// The composition of `schedule` with one bound instance per server of the registry of `root`
@@ -227,7 +267,8 @@ fn compose_check(
 /// the subsystems a live build's configuration manifest names, which `requires` must name, as the
 /// Runtime that loads the rules checks them; `None` (the tools) reports `requires` unchecked.
 /// Workflow #455 G-R2s: composed with `irreversible`, the root's packages as
-/// `root_irreversibility` read them.
+/// `root_irreversibility` read them. Workflow #477 CV-2: and with `catalog`, the root's
+/// `pack-catalog.json`, which a file that names `catalog_business` takes its business part from.
 pub(crate) fn compose_per_server(
     game: &str,
     root: &StandardPackRoot,
@@ -235,6 +276,7 @@ pub(crate) fn compose_per_server(
     schedule: &[u8],
     irreversible: &IrreversiblePackages,
     subsystems: Option<&BTreeSet<String>>,
+    catalog: Option<&[u8]>,
 ) -> Result<StandardPackComposition, StandardPackComposeFailure> {
     let servers = root
         .registry
@@ -261,6 +303,7 @@ pub(crate) fn compose_per_server(
             root,
             maintenance,
             irreversible,
+            catalog,
         },
     )]);
     compose_standard_pack_rules(&StandardPackComposeInput {
@@ -342,6 +385,7 @@ pub fn compose_standard_packs(
                         root: &read.root,
                         maintenance: read.maintenance.as_slice(),
                         irreversible: &read.irreversible.packages,
+                        catalog: read.catalog.as_deref(),
                     },
                 )
             })
@@ -403,6 +447,9 @@ struct GameRoot {
     /// Workflow #455 G-R2s: the root's packages, each read below the game root by the reader the
     /// goal check uses (`root_irreversibility`), with the reader's refusal of each it refused.
     irreversible: RootIrreversibility,
+    /// Workflow #477 CV-2: `pack-catalog.json`'s bytes, read for a `schedule.json` that names
+    /// `catalog_business` ([`switched_catalog`]); `None` otherwise.
+    catalog: Option<Vec<u8>>,
 }
 
 /// Reads `<root>/<game>/`: its root files by the one structure check of every reader, the
@@ -453,12 +500,19 @@ fn read_game_root(root: &Path, game: &str) -> LabResult<GameRoot> {
         .map(|index| index.maintenance().to_vec())
         .unwrap_or_default();
     let irreversible = root_irreversibility(&checked, &|package: &str| directory.join(package));
+    let schedule_path = directory.join(STANDARD_PACK_SCHEDULE_FILE);
+    let schedule = read_bounded(&schedule_path)?;
+    let catalog = match &schedule {
+        Some(bytes) => switched_catalog(bytes, &schedule_path)?,
+        None => None,
+    };
     Ok(GameRoot {
         game: game.to_owned(),
         root: checked,
         maintenance,
-        schedule: read_bounded(&directory.join(STANDARD_PACK_SCHEDULE_FILE))?,
+        schedule,
         irreversible,
+        catalog,
     })
 }
 
@@ -483,8 +537,9 @@ fn write_composition(directory: &Path, composition: &StandardPackComposition) ->
 }
 
 /// `standard_pack_root_invalid` for the first refusal of `failure`, at the `schedule.json` of its
-/// game (`path_of`; `fallback_game` for a refusal of the composition as a whole). The developer
-/// message lists every refusal.
+/// game (`path_of`; `fallback_game` for a refusal of the composition as a whole); Workflow #477
+/// CV-2: at the `pack-catalog.json` beside it for a refusal in that file. The developer message
+/// lists every refusal.
 fn refused(
     failure: &StandardPackComposeFailure,
     fallback_game: &str,
@@ -494,7 +549,8 @@ fn refused(
         return LabError::usage(format!("{failure} (no issue named)"));
     };
     let game = first.game_id.as_deref().unwrap_or(fallback_game);
-    let mut error = root_invalid(game, &path_of(game), &first.issue);
+    let path = issue_path(&path_of(game), &first.issue);
+    let mut error = root_invalid(game, &path, &first.issue);
     error.message = format!("{}; {failure}", error.message);
     error
 }
