@@ -260,6 +260,9 @@ mod gate_455_p2;
 // `schedule.json` names `catalog_business` with its `pack-catalog.json`, watches that file, and
 // keeps the game's last good rules when it is refused or gone.
 mod gate_477_cv2;
+// #477 LF-1 (0.12.80; register §1.509): after a run handed a `run_cap` its pool is unknown to the
+// evaluation until it is read after that run's end, through the host and across a restart.
+mod gate_477_lf1;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;
