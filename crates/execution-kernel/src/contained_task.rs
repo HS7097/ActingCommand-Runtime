@@ -98,6 +98,9 @@ mod list_reading;
 // Workflow #428 S168-4: the list reading's named tests, the kernel's halves.
 #[cfg(test)]
 mod gate_428_s168_4;
+// Workflow #428 S168-LK: a step of a linear plan reads a list.
+#[cfg(test)]
+mod gate_428_s168_lk;
 // Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
 mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.
@@ -371,7 +374,9 @@ use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
-pub use list_reading::{ListReadingDeclaration, ListReadingMiss, ListReadingRows};
+pub use list_reading::{
+    ListReadingDeclaration, ListReadingDryRun, ListReadingMiss, ListReadingRows,
+};
 pub use loading::{LoadingEvent, LoadingMode, LoadingRecord};
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -384,8 +389,8 @@ pub use remedies::{
 pub use run_tables::{RunTableFailure, RunTableRead, RunTables};
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunDecided, ScanDryRunMember, ScanDryRunUnknown,
-    ScanDryRunViewport, dry_run_scan, dry_run_scan_decide, dry_run_scan_with_tables, replay_scan,
-    replay_scan_with_tables,
+    ScanDryRunViewport, dry_run_list_reading, dry_run_scan, dry_run_scan_decide,
+    dry_run_scan_with_tables, replay_scan, replay_scan_with_tables,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use settled_path::{SettledHolds, SettledPath};

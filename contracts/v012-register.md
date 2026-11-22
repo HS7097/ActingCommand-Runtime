@@ -44182,9 +44182,12 @@ Nothing to configure; the exclusion list is not changed. **A v0.12.75 console or
 schedule explanation's check is its shape rules alone): its status read of an entry-blocked
 instance is byte for byte as before, since the status gains nothing from this slice; its schedule
 explanation read (`ac_overview`'s not-running rows) decodes the new `why`; its deploy, place and
-post-check read the status only and meet nothing new; the ledger's new records (`runtime.failed`
-with the new codes, `policy.not_run_changed` naming `instance_entry_blocked`) are codes it reads as
-text, their values (`entry_recovery_end`, `trigger_rule` among them) a map it takes as it is. **A rollback to
+post-check read the status only and meet nothing new; the ledger's new records are `runtime.failed`
+with the new codes, which it reads as text, their values (`entry_recovery_end`, `trigger_rule` among
+them) a map it takes as it is. No record of the ledger marks a block's beginning or end (no code
+writes `policy.not_run_changed`: 114-A added its reader alone, §1.236); what shows a block is the
+schedule explanation's `why` and the three warnings (`instance_entry_blocked_recovery_failed`,
+`instance_entry_blocked_awaiting_person`, `instance_entry_task_set_aside_reported`). **A rollback to
 v0.12.75** passes the installer's edges as AVAIL-1's does; the blocks were memory and are gone, so
 the instance is scheduled again and the 11-20 storm can return; a record settled at the entry
 replays as the condition it is, but v0.12.75 reads no `i` mark (its parse gives no identity), so it
@@ -44927,6 +44930,176 @@ that cannot be read and the variables' judgement; in the followers' sentence of 
 place, the lists are those `standard_pack_rule_followers` gives. No other paragraph of that file
 changed.
 
+### 1.500 Slice #428 S168-LK (0.12.78): a step of a linear plan reads a list (board #428; the owner's rule of 11-15 that packages are made by recording, which gives step plans, while only a page graph could read a scrolling list; the rules below are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-428-linear-read-list-k.md`, after the read-only study `rd-1121/study-linear-read-list.md` and the coordinator's disposition at its end; on main `f6e2cd26`, v0.12.76)
+
+This section takes 1.500: 1.494 and 1.497 to 1.499 belong to four slices in flight and 1.495 is
+reserved. It ships in 0.12.78 (0.12.77 is closed to new slices). It is the execution kernel's half
+and the declaration gate's: a `linear_steps` task admits and runs `read_list` as the effect of a
+step, the kernel gains an offline entry for the reading, and `package` takes revision 22. The Lab's
+recording is not changed. [linear-steps.md](linear-steps.md) ("List reading steps") and
+[resource-readings.md](resource-readings.md) ("List readings", "Offline") are the contract.
+
+**What it rests on** (read in the code; the work order's three stop conditions, none met).
+- *The host needs no change.* The host takes a run's `ListReadingFrame` and `ListReading` without
+  reading the execution mode (`host/contained_task.rs`, the trace's arms, and the terminal draft that
+  carries `taken_list_readings`), and binds the end frame to the frame captured last, which a
+  scan's capture is in either mode (the scan captures through `capture_frame`, as every capture).
+  Tests only (test 6).
+- *The last viewport is the next step's decision frame* with no second capture: the reading returns
+  the frame its scan captured last, with its input context, and the next step judges its guard on
+  it, as every linear step judges the frame the step before it arrived on (a step gap, ACT-2, takes
+  a fresh frame for any step). It is not handed to the reading marks again and confirms no
+  adjustment, as on the page graph, so no mark's recognition meets it twice.
+- *A linear plan's admission runs the declaration gate*: `prepare_bundle` runs
+  `validate_contained_declarations` on the sealed task before the program's own checks, in every
+  mode, and so does every parse of a source tree.
+
+**Where the study was right, and where not.** Verified and relied on: the linear refusal before the
+member checks (`validate_linear`, and `validate_list_reading_members` after the step plan's early
+return in `TaskProgram::validate`); `prepare_list_readings` and SBUD-1 already running in both
+modes; `scan_max_ms` already holding the reading's `max_ms`; `read_list_step` touching no page-graph
+state machine; `dry_run_scan_decide` refusing a step that is no select step; the declaration gate
+reading no mode and missing `key` among the other effects (and so did the kernel's member check,
+`refused_read_list_member`); revisions 13 and 17 as the precedent of the table. Wrong or narrow:
+(1) `standard-pack check` counts no `package` revision: only `standard-pack build` computes a
+bundle's (`content_revision`), and the check admits the pack through the kernel, which this build
+does; (2) a requested key set would leave a reading out not only on the entry page: any segment
+whose pages carry no mark the key set wants was left out, a reading in it included; (3) a step plan
+did not refuse `field_lists` by its own rules (only `post_admission_ocr`); it does now, by name.
+
+**The rule** (the coordinator's rulings 1 to 9).
+- *Declaration*: the page graph's, unchanged (ruling 1). *Admission* (ruling 4): `validate_linear`
+  runs the reading's member checks (`validate_list_reading_members`) after the task's own checks
+  and before its operation rules, so a step plan refuses as the page graph does, at the step, with
+  `contained_task_resource_reading_invalid` and `<operation id>:<member>`: an optional reading
+  (`optional`), one with `transition`, another effect beside it, a `key` or a `select` included
+  (`read_list`), the 17th (`operations`), no outcome, no guard, a retry, `to` not its `from`. Then
+  `LinearEffect::ReadList`, the one effect exempt from `to_equals_from`, and the plan's refusals
+  (`contained_task_linear_invalid`, `operation=<id>`): `when` (as every step), `any_requires_application`
+  (from `any`), `read_list_before_optional` (right before a run of optional steps), `read_list_last`
+  (the plan's last step), and for the task `field_lists` (no `operation=`). A package with a reading
+  is no prerequisite, return-home or startup package (`read_list`, the existing incompatibilities,
+  which read no mode). The sampling budget counts no arrival for the step (SBUD-1 covers its scan).
+- *Run* (rulings 2 and 3): when the plan reaches it, the step reads from the frame on which its page
+  passed with the page graph's own function (`read_list_step`, whose scan and list are `scan_list`),
+  its guard judged on every viewport, within its scan's `max_ms`; no arrival, no retry, no closing
+  decision. The list whole: `ListReadingFrame`, `ListReading`, `StepFinished` on its last viewport's
+  page, the next step deciding on that viewport. A miss: its warning and the run goes on. A scan
+  failure: the run ends with the scan's code at the stage `read_list`; the host publishes nothing
+  for a failed run. Key sets (ruling 2): `segments_without_reads` never leaves out a segment that
+  holds a reading.
+- *The declaration gate* (ruling 5): `key` joins `READ_LIST_OTHER_EFFECTS`, refused beside
+  `read_list` (`InvalidValue` at `/operations/<i>/read_list`) in a task of either mode; the kernel's
+  member check names it too. A page-graph package was refused for it before (`key requires
+  linear_steps`), at a later check.
+- *The offline entry* (ruling 6): `dry_run_list_reading(task, operation_id, frames) ->
+  Result<ListReadingDryRun, ContainedTaskError>`; `ListReadingDryRun { declaration, viewports, list,
+  unknown }` with `warning()`. Its shape and refusals are [resource-readings.md](resource-readings.md),
+  "Offline". The scan and the rows are `scan_list`, which the run's step calls, so the two cannot
+  read the same viewports differently. `unknown` (round 2, the coordinator's disposition of the
+  independent review) is the positions the scan could not read, each a `ScanDryRunUnknown` of the
+  session's own account (`ScanSession::summary`, where a list reading's fixed position is a row and
+  no longer counts as unknown), so that the recording side's self-check can name which place was not
+  read. The entry is offline and its answer is in memory only, no interface of
+  `component-interfaces.json` (resource-readings.md, "Offline"), so no revision moves for it.
+- *Nothing else* (rulings 8 and 9): `judge` stays refused in a step plan; no list reaches the
+  scheduler; no game, package or alias is named.
+
+**Codes and words.** No code, key, value or vocabulary word of the catalogue is added, and the index
+check is current. The new `reason=` tokens are details of the existing
+`contained_task_linear_invalid` (error, `declaration_error`; a refusal of the package, exit 1 where
+a process ends on it, as every admission refusal): `read_list_before_optional`, `read_list_last`,
+`field_lists`. A `key` beside `read_list` is the existing `contained_task_resource_reading_invalid`
+(`<operation id>:read_list`) and the gate's existing `resource_declaration_invalid` (`InvalidValue`).
+The offline entry's refusals are existing codes (`contained_task_resource_reading_invalid`,
+`contained_task_operation_missing`, `select_page_mismatch`, `selection_scan_replay_frame_missing`).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The admission and the run | `crates/execution-kernel/src/contained_task/linear.rs`: `LinearEffect::ReadList`, `TaskProgram::validate_linear`, `LinearPlan::validate_sampling_budget`, `LinearPlan::segments_without_reads`, `run_linear_steps`, `run_linear_step` |
+| The scan, its list and the member check | `crates/execution-kernel/src/contained_task/list_reading.rs`: `PreparedContainedTask::scan_list`, `read_list_step`, `ScannedList`, `PreparedListReading::declaration`, `ListReadingDryRun`, `refused_read_list_member` |
+| The offline entry | `crates/execution-kernel/src/contained_task/scan/online.rs`: `dry_run_list_reading`; exported with `ListReadingDryRun` from the kernel; its `unknown` (round 2): `crates/execution-kernel/src/contained_task/scan.rs`, `ScanSession::summary`, the arm of a list reading's fixed position |
+| The declaration gate | `crates/pack-containment/src/source/declarations.rs`: `READ_LIST_OTHER_EFFECTS` |
+| The revision | `distribution/windows/component-interfaces.json` `package` [3, 22]; `apps/actinglab/src/resource_verify/revision.rs`: the row `read_list` under `operations`, an object, `linear_steps`, 22 |
+| Texts | [linear-steps.md](linear-steps.md) (the admission table, "Execution", "List reading steps", "Older builds", "Tools"); [resource-readings.md](resource-readings.md) ("List readings": the effect's row, the members' rows `key`, `when`, `transition` and `optional`, the admission, "Once per run", "Reading", "Offline"); [selection-graph.md](selection-graph.md) (the list reading's scan, "Offline"); [component-interfaces.md](component-interfaces.md) (the `package` row 22); [resource-verify.md](resource-verify.md) (row 22) |
+
+**The `package` revision** (ruling 7). A Runtime before this one (0.12.76, read on main `f6e2cd26`)
+admits the declaration at its gate in every mode and refuses the step plan at admission,
+`contained_task_linear_invalid`, `reason=read_list operation=<id>`, before `PackageAdmitted` and any
+input, at every run; its installer, whose range ends at 21, refuses a bundle that declares 22 at its
+`package` edge (`interface_edge`), in the plan, before the hold and any write. This build declares
+[3, 22]; `standard-pack build` computes 22 for a zip whose `linear_steps` pack has an operation whose
+`read_list` holds an object, and keeps every other zip's revision (a page-graph reading 8). `place`
+and admission check nothing new (row 20's precedent).
+
+**Tests** (exec gate map row "#428 S168-LK", host gate map row "#428 S168-LK"; synthetic `neutral`
+frames of 64 x 60 drawn as SEL-L3's list, a noise marker and a patch a scripted OCR provider reads;
+the kernel's scripted runtime and clock; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_428_s168_lk::lk_a_list_is_read_over_three_viewports_and_the_next_step_decides_on_the_last` (1) | open, read, close: seven cards over three viewports (offsets 0, 24, 48), two moves the reading's only inputs; the list whole (seven rows in byte order, confidence 990), `ListReadingFrame` then `ListReading` on the end frame, before the reading's `StepFinished` on `neutral/list`; close, guarded by the end mark, presses with no frame of its own (the last viewport shown exactly twice, the settle's); Completed on done after three steps, eight frames |
+| `lk_an_empty_list_an_unread_position_and_a_failed_scan_end_as_list_readings_say` (2) | an empty list whole with no row at 1000 and no move; an unread card the miss `list_position_unread` count 1 on the end frame and the run on to done; a misaligned second viewport `selection_scan_alignment_rejected` (`unexpected_displacement`) at the stage `read_list` after one move, five frames, no list, no finish, no `Finalizing` |
+| `lk_admission_refuses_each_reading_the_rulings_refuse_at_its_operation` (3) | the member checks' refusals (`optional`, `transition`, `read_list` for a key and for a select, `read_17:operations`) and the plan's (`when`, `any_requires_application`, `read_list_before_optional`, `read_list_last`, `field_lists`); the admitted path no prerequisite, return-home or startup package |
+| `lk_a_plan_with_key_sets_never_leaves_its_list_reading_out` (3) | a reading on the entry page stays while the next segment may go ({1: 3}); a reading inside the one segment keeps it whole |
+| `lk_the_declaration_gate_refuses_a_key_beside_read_list_in_both_modes` (4) | `resource_declaration_invalid`, `InvalidValue` at `/operations/1/read_list`, under `navigable_route` and `linear_steps` |
+| `lk_the_offline_entry_answers_what_the_run_records_on_the_same_viewports` (5) | over v0, v0, v1, v1, v2, v2 the run's declaration and whole list, end checks false, false, true, no warning; over the unread card the run's miss and its warning; over the misaligned frames the run's code, stage, failure and viewport; `close:read_list` for a step that reads no list |
+| `lk_the_offline_entry_names_each_position_it_could_not_read` (8, round 2) | over the three viewports the list whole and no unknown position; over the unread card the miss `list_position_unread` count 1 and its one unknown position: position 1, first read on viewport 0, `identity_unread`, no identity |
+| `apps/actinglab/src/tests/gate_464_p2.rs` `p2_revision_22_read_list_of_a_linear_steps_pack_only` (7) | 22 over 21 for a linear reading; the same reading under `navigable_route` and a linear click stay at 21; a page-graph reading over nothing 8 |
+| `crates/runtime-host/src/tests/gate_428_s168_lk.rs` `lk_a_linear_tasks_list_is_published_at_the_run_end_as_a_page_graph_tasks` (6) | the S168-4 host package and the same as a step plan on one host: the step plan's publication has the page graph's scope, rows, confidence, lifetime, detector, schema, bundle hash and trigger, its own run and a later time, and is the key's record; both runs' step records alike |
+| `lk_a_full_store_refuses_a_linear_tasks_list_as_a_page_graph_tasks` (6) | on an instance at its bound, the step plan's new list and the page graph's both fail `contained_task_resource_reading_rejected`, `read_members:fact_store_capacity_exceeded`, nothing published or evicted |
+
+Adapted, the requirement moving what they pin: `gate_428_s168_4::list_reading_declaration_refusals`
+(its last block pinned the step plan's refusal `reason=read_list`; it now pins the step admitted and
+prepared, every page-graph case of it unchanged); the shipped range [3, 21] to [3, 22] in
+`gate_463_v1::v1_the_build_declares_package_through_revision_14`,
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 5`), `gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`
+(`SHARED_READ_REVISION + 2`), `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`
+and `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`; `gate_464_p2`'s
+base gains the entries that need 21. No golden re-recorded.
+
+**What is not changed.** A page-graph reading, its records, its publication and its refusals, byte
+for byte; every run of a task without a reading; the host (`crates/runtime-host` gains a test file
+and its module line only) and the policy; the Lab, `record` and `trial` (a read step is not authored
+or reported yet); the ledger, `runtime-client`, `actingd-config` and `runtime-outcomes`; the source
+parser, which already passed a `read_list` step on as declared in either mode; `judge`, refused in a
+step plan.
+
+**What later slices owe.** The Lab's authoring of a read step (the coordinator's disposition: the
+request form of `record mark` with `fold_scan`, a `read_list` written before the step's own effect,
+its self-check through `dry_run_list_reading` and a check that the next step's guard passes on the
+last viewport, `trial` reporting whether a list was published and the miss's word and count, never
+its rows; the Lab generates no integer column and no image feature today). A pool's inventory from a
+list's row: the scheduler's projection leaves `inventory.list.` out (since 0.12.55), so a list feeds
+selections only until a later slice gives a pool its reading from one row of a list.
+
+**At deploy.** Nothing to configure, and nothing changes for the packages in production: no
+`linear_steps` package can carry a reading today (every build refused it), a page-graph reading
+keeps its revision and its run, and no package admitted before is refused now: what changes is
+which check answers a package refused before as well, and with which code. A `key` beside
+`read_list` is refused by the declaration gate, `resource_declaration_invalid` (`InvalidValue` at
+`/operations/<i>/read_list`), in a source tree's parse too (the Lab's `check` and `build`), where
+admission refused it before, in a page graph with `contained_task_operation_invalid`
+(`operation=<id> key requires linear_steps`) and in a step plan with `contained_task_linear_invalid`
+(`reason=read_list`). A step plan's own rules refuse `field_lists` by name
+(`contained_task_linear_invalid`, `reason=field_lists`), where they had no rule of it; at admission
+a linear package with field lists still meets an earlier refusal first, as before: the gate's rule
+of the field lists (`MissingField` at `/post_admission_ocr` when the task declares no fields), and
+when it declares them the plan's `reason=post_admission_ocr`, which its rules ask before
+`field_lists`. So `reason=field_lists` is the answer of the plan's rules (`validate_linear`) where
+no earlier check stands before them, and no package answers it at admission today. A package of
+revision 22 is adopted only once this build is live. A rollback to v0.12.76 meets a package of
+revision 22 as an earlier Runtime meets it: its installer refuses a bundle that declares 22 at the
+`package` edge, and a placed one (from a bundle that declared less) is refused at every admission
+with `contained_task_linear_invalid`, `reason=read_list`, before any input; v0.12.77, whose slices
+the work order names as the host's, the policy's and the goals files', declares at most 21 and
+answers the same. So the rollback stays open while no root is placed from such a bundle (the
+`package` row 22). In the release notes' language:
+线性包（录制出来的包）的一步现在可以读一张会滚动的列表（`read_list`），声明和页图里的一样：从这一步页面出现的那一帧开始滚，滚到底整张读到就照旧在运行成功结束时写进 `inventory.list.` 下面那个事实，下一步就在最后一屏上接着判断；漏读一行只记警告、运行照常走完；滚动本身失败就以它自己的码、阶段 `read_list` 结束运行，不重试、不发布。读取步不能放最后一步，不能紧挨在可选步前面，不能从任意屏幕开始；`key` 不能和 `read_list` 写在同一步。内核加了一个离线入口，可在存下来的各屏上把读取跑一遍、答出和实际运行一样的结果（给后面 Lab 自检用）。包的修订升到 22：带读取步的线性包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`reason=read_list`）。
+
 ### 1.504 Slice #455 P1 (0.12.78): a pool may declare that its inventory is read from rows of a list (`observation.kind` `list_rows`): the declaration, the compile's checks and the composer's `requires`; no Runtime gives it a reading yet (board #455; the rulings 1 to 9 are the coordinator's of 11-21, no words of the owner's behind them; coordinator work order `rd-1121/brief-455-p1.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition; on main `3285143f`, the 0.12.77 release)
 
 This section takes 1.504: §1.500 to §1.503 belong to other slices of this version.
@@ -45019,8 +45192,8 @@ string test `reading_key` (`kind` `fact`).
 writes rules only and leaves pools as written). The cross-check is left out: `standard-pack check`
 reads a package's reading marks only (`PreparedContainedTask::read_reading_marks`, its
 `resource_readings`); a package's list readings (a `read_list` step's `fact_key`, `key_column` and
-`columns`, a field list's) have no reader that the check could call without preparing the
-package. What is missing is such a metadata reader beside `read_reading_marks`.
+`columns` in a page graph or, since §1.500, in a linear plan, and a field list's) have no reader
+that the check could call without preparing the package. What is missing is such a metadata reader beside `read_reading_marks`.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
