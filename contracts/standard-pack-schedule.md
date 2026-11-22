@@ -118,13 +118,20 @@ pool read from rows of a list"), requires `pool_list_rows`, alike: the composer 
 writes one while `requires` does not name it, `schedule_invalid` at the first such pool's
 `observation` in file order (for example `/pools/0/observation`). The observation passes through
 as written (it names no id and no scope; the composer fills the pool's), and the catalog compiler
-checks it, mapped back to the pool. **No Runtime of 0.12.78 names `pool_list_rows`** (#455 P2 adds
-it to `config.subsystems`): such a Runtime, and check-config, refuse a file that lists it with
+checks it, mapped back to the pool. A Runtime names `pool_list_rows` in `config.subsystems`,
+always on, from 0.12.79 (#455 P2, register §1.505): its workbench and check-config compose such a
+file, and the host computes the pool's reading from the instance's list before each evaluation
+([scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"). **No Runtime of
+0.12.78 names it**: such a Runtime, and its check-config, refuse a file that lists it with
 `schedule_requires_missing` at that entry, and the workbench keeps the game's last good rules
-("The scheduler workbench"). The resource tools check no `requires`: `actinglab standard-pack
-check`, `compose` and `adopt` accept and carry the member. `standard-pack check` does not check
-that a package of the root reads the list L with the columns K and V: the check reads a package's
-reading marks only (`resource_readings`), not its list readings.
+("The scheduler workbench") when the active generation holds another file of the game; after a
+rollback from 0.12.79 the refused file is the one the active generation was composed from, so
+there is none to keep and the game has no rules (register §1.505, "At deploy"). The resource tools
+check no `requires`: `actinglab standard-pack check`, `compose` and `adopt` accept and carry the
+member. `standard-pack check` does not check that a package of the root reads the list L with the
+columns K and V: the check reads a package's reading marks only (`resource_readings`), not its list
+readings. At evaluation a list not keyed by them (a row without a text under K, or no row with V)
+leaves the pool unknown, `type_mismatch` (#455 P2 fix round 1), never a known 0.
 
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
@@ -428,6 +435,20 @@ game's business rules:
 | Consumer of a regenerating pool | its `consumes` (one run's amount), `fixed_value_milli` (`V`, its value without the pool's cost), `"limited": true` where a limit counts its runs; no "reading ≥ capacity − margin" threshold once the pool is valued ("Tools", the redundant trigger) | a constant `valuation` (`scale` Q, `base_weight_milli` W) beside its `stop_line` and `hard_line` (and `trigger_line`), `H = S − (the costliest run)` | below the trigger line `V − W·c`; from the trigger line the capped order by `V ÷ c`. A pack that wants a consumer to run only in capped rounds writes its pool's `W` so that `W·c ≥ V` for that consumer; a consumer meant to spend the reserve below the stop line (a time-limited, high-value run) has `V > W·c` and is still held by the hard line: the reserve Alice's planned red line keeps (11-07, #428 6706630435: 「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」) |
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
+
+**Who writes the fixed value and the marks, since Workflow #477 CV-1** (0.12.79; register §1.507;
+[pack-catalog.md](pack-catalog.md), "Version 2"). A rule's `consumes` and `produces`, its
+`fixed_value_milli` with its `fixed_value_origin`, and its `limited` and `realization` marks may
+also stand in its package's entry of a version 2 `pack-catalog.json`, with the same types, bounds
+and meaning (one definition: the contract crate's `resource_effect`), the entry's own part or the
+rule's per-rule part where the rules of one package differ. `actinglab standard-pack catalog
+--refresh` (and `--schema-version 2`) writes them there from the rules; `--values <file>` is the
+entry point of the model's export for the value and the marks (`acmodel bindings apply` still
+writes the rules). **In 0.12.79 the rules are still what the composer reads**: nothing here
+changes, a difference between a rule and its entry is the warning
+`standard_pack_catalog_schedule_differs`, and no Runtime component opens the catalog. The next
+slice (CV-2) has the composer take them from the catalog, switched on per root by an entry of
+`requires`.
 
 ## Composition
 

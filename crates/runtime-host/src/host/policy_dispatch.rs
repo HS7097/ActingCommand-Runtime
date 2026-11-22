@@ -476,16 +476,25 @@ fn validate_static_fact_pool_authority(
     resources: &EvaluationResources,
     operation: impl Into<Location>,
 ) -> RuntimeHostResult<()> {
+    use actingcommand_policy::ObservationRef;
     let operation: Location = operation.into();
     for pool in &catalog.catalog().pools.pools {
         if pool.value_source.is_static() {
             continue;
         }
-        let actingcommand_policy::ObservationRef::Fact { fact_key } = &pool.observation else {
-            return Err(policy_admission_request(
-                HostCode::PolicyPoolBindingInvalid,
-                operation,
-            ));
+        // #455 P2 (register §1.505, ruling 10): a pool read from rows of a list is bound to its
+        // list, whose reading the host computes; a configured reading of it, or a configured fact
+        // under its list's key, is a second authority, as for a pool read from its own fact.
+        let fact_key = match &pool.observation {
+            ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } => {
+                fact_key
+            }
+            ObservationRef::Outcome { .. } => {
+                return Err(policy_admission_request(
+                    HostCode::PolicyPoolBindingInvalid,
+                    operation,
+                ));
+            }
         };
         if resources.pools.iter().any(|value| value.pool_id == pool.id)
             || facts
@@ -1952,6 +1961,7 @@ impl HostShared {
             unknown_offset_tasks,
             left_out_lists,
             availability_withdrawals,
+            pool_readings,
             dispatches_read,
             queue_wait_starts,
             entry_blocked,
@@ -1999,6 +2009,7 @@ impl HostShared {
                 unknown_offset_tasks,
                 left_out_lists,
                 availability_withdrawals,
+                pool_readings,
             ) = self.project_authoritative_policy_inputs_with_gaps_under_gate(
                 &mut policy,
                 HostLocation::EvaluatePolicyCycle,
@@ -2021,6 +2032,7 @@ impl HostShared {
                 unknown_offset_tasks,
                 left_out_lists,
                 availability_withdrawals,
+                pool_readings,
                 dispatches_read,
                 queue_wait_starts,
                 entry_blocked,
@@ -2031,6 +2043,10 @@ impl HostShared {
         // after a start, and its key raises no fact refresh demand on the instances it applies to.
         self.report_left_out_record_lists(&left_out_lists)?;
         let mut left_out = left_out_facts(&left_out_lists);
+        // #455 P2 (register §1.505, rulings 6 and 8): the evaluation is given the readings of the
+        // pools read from rows of a list beside the left-out facts, and each list's key is left
+        // out for its pool's instance, so it raises no fact refresh demand.
+        left_out.give_pool_readings(pool_readings);
         // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task
         // that can do something irreversible"): a game whose root cannot be composed has no goals
         // in effect until it composes; every instance of it reads as without a target record.
@@ -2395,14 +2411,20 @@ impl HostShared {
         Ok(())
     }
 
+    /// #455 P2 (register §1.505): with the readings of the pools read from rows of a list, computed
+    /// from the same projection.
     pub(super) fn project_authoritative_policy_inputs_under_gate(
         &self,
         policy: &mut PolicyHost,
         operation: impl Into<Location>,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
-    ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
-        let (facts, resources, _, _, _, _) = self
+    ) -> RuntimeHostResult<(
+        EvaluationFacts,
+        EvaluationResources,
+        actingcommand_policy::GivenPoolReadings,
+    )> {
+        let (facts, resources, _, _, _, _, readings) = self
             .project_authoritative_policy_inputs_with_gaps_under_gate(
                 policy,
                 operation,
@@ -2411,7 +2433,7 @@ impl HostShared {
                 None,
                 None,
             )?;
-        Ok((facts, resources))
+        Ok((facts, resources, readings))
     }
 
     /// Projects the evaluation inputs at the requested position and reports, per instance
@@ -2422,7 +2444,10 @@ impl HostShared {
     /// `eligibility_as_of_unix_ms` is the evaluation instant whose memory-only eligibility
     /// ages are projected (Workflow #308 slice 5b); without it none are. Workflow #428 S168-LB1a:
     /// and the record lists the projection left out for their rows. Workflow #469 H1: and who
-    /// withdrew the availability of each instance projected unavailable.
+    /// withdrew the availability of each instance projected unavailable. #455 P2 (register
+    /// §1.505, ruling 1): and the readings of the active catalog's pools read from rows of a list,
+    /// each computed from its instance's list in the same projection, whose numbers the resources
+    /// hold where a fact pool's projected reading goes.
     /// The caller holds `policy` and then `fact_write_gate` (Workflow #191 L1 lock order).
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
@@ -2439,6 +2464,7 @@ impl HostShared {
         UnknownPriorityOffsetTasks,
         LeftOutRecordLists,
         AvailabilityWithdrawals,
+        actingcommand_policy::GivenPoolReadings,
     )> {
         let operation: Location = operation.into();
         self.synchronize_fact_store_under_gate()?;
@@ -2787,13 +2813,27 @@ impl HostShared {
             &static_resources,
             ledger_position,
         )?;
-        let resources = if let Some(catalog) = catalog {
+        let (resources, readings) = if let Some(catalog) = catalog {
             fact_projection.validate_pool_sources(catalog.compiled(), |scope| {
                 self.fact_scope_instances(scope)
             })?;
-            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, &static_resources)
+            // #455 P2 (register §1.505, rulings 1 and 5): each pool read from rows of a list is
+            // read from its instance's list in this projection, at this position, under the gate
+            // the fact pools are projected under; its number goes where a fact pool's projected
+            // reading goes, so it enters the snapshot's identity below and each instance's view.
+            let readings = fact_projection.list_pool_readings(catalog.compiled());
+            let resources = actingcommand_policy::project_fact_pools_with_readings(
+                catalog.compiled(),
+                &facts,
+                &static_resources,
+                &readings,
+            );
+            (resources, readings)
         } else {
-            static_resources
+            (
+                static_resources,
+                actingcommand_policy::GivenPoolReadings::default(),
+            )
         };
         // Workflow #428 S168-LB1a: with the record lists the projection left out for their rows.
         let (facts, left_out) = fact_projection.overlay_policy_facts_with_left_out(
@@ -2808,6 +2848,7 @@ impl HostShared {
             unknown_offset_tasks,
             left_out,
             availability_withdrawals,
+            readings,
         ))
     }
 
@@ -2896,8 +2937,16 @@ impl HostShared {
         )?;
         fact_projection
             .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
-        let mut resources =
-            actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
+        // #455 P2 (register §1.505, ruling 7): a pool read from rows of a list starts from the
+        // reading computed from its instance's list in the same projection, carried across the
+        // horizon as a fact reading is.
+        let readings = fact_projection.list_pool_readings(catalog.compiled());
+        let mut resources = actingcommand_policy::project_fact_pools_with_readings(
+            catalog.compiled(),
+            &facts,
+            resources,
+            &readings,
+        );
         // Workflow #429 R-2: the heavy-dispatch limits in effect, as an evaluation reads them.
         let run_limits = self.shared_run_limits()?;
         lock(
@@ -2905,15 +2954,22 @@ impl HostShared {
             HostLocation::ApplyForwardPerformanceControl,
         )?
         .apply_to_resources_with(&mut resources.hosts, &workloads, run_limits.heavy)?;
-        project_forward(catalog.compiled(), &facts, &resources, time, seed, config).map_err(
-            |error| {
-                RuntimeHostError::request(
-                    error.code(),
-                    ContractLocation::ProjectPolicyForward,
-                    RuntimeErrorCode::InvalidRequest,
-                )
-            },
+        project_forward_with_readings(
+            catalog.compiled(),
+            &facts,
+            &resources,
+            &readings,
+            time,
+            seed,
+            config,
         )
+        .map_err(|error| {
+            RuntimeHostError::request(
+                error.code(),
+                ContractLocation::ProjectPolicyForward,
+                RuntimeErrorCode::InvalidRequest,
+            )
+        })
     }
 
     pub(super) fn admit_policy_dispatch(
@@ -3240,7 +3296,7 @@ impl HostShared {
                 )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
-                let (current_facts, current_resources, _, _, _, _) = self
+                let (current_facts, current_resources, _, _, _, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
                         HostLocation::AdmitPolicyDispatch,
@@ -5656,7 +5712,7 @@ impl HostShared {
                 &self.fact_write_gate,
                 HostLocation::ProjectPolicyInputIdentityFacts,
             )?;
-            let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+            let (facts, _, _) = self.project_authoritative_policy_inputs_under_gate(
                 &mut policy,
                 ContractLocation::ProjectPolicyInputIdentity,
                 &outcome_keys,

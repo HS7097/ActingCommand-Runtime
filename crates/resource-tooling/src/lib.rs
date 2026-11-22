@@ -172,6 +172,12 @@ mod gate_477_pc1;
 #[cfg(test)]
 mod gate_477_pc2;
 
+// Workflow #477 CV-1 (register §1.507): version 2 of `pack-catalog.json`, its business part in
+// full, written by `standard-pack catalog --schema-version 2`, `--refresh` and `--values` and
+// read by `standard-pack check`.
+#[cfg(test)]
+mod gate_477_cv1;
+
 // Workflow #463 S2b-1 (register §1.477): adoption answers each stage's time and checks the
 // package root once.
 #[cfg(test)]

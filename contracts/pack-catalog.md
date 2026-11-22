@@ -13,6 +13,14 @@ writes it, and what the later slices add.
 file; nothing is scored, dispatched or composed differently. Only the Lab's tools and, through
 the Lab's `packs` answer, the console see it.
 
+Workflow #477 CV-1 (Runtime 0.12.79; [v012-register.md](v012-register.md) §1.507; the
+coordinator's rulings, not the owner's words) adds **version 2** of the file ("Version 2" below):
+an entry's business part in full, what a rule of `schedule.json` writes today (its effects with
+their quantities and evidence, its fixed value with its origin, its marks `limited` and
+`realization`), and per-rule parts where the rules of one package differ. The tools write, check,
+build and place it; still no Runtime component opens the file, and a root of version 1 is read,
+written and answered byte for byte as before.
+
 ## The owner's six answers
 
 Each choice below follows one of the owner's answers for this slice (board #477, her ruling of
@@ -26,7 +34,8 @@ Each choice below follows one of the owner's answers for this slice (board #477,
    list every difference ("Differences from `schedule.json`"), and the writer never overwrites an
    entry silently.
 3. **No value in this slice**: only what is produced and what is consumed. Hence: there is no value
-   member, and the reader refuses one ("Strictness").
+   member, and the reader refuses one ("Strictness"). Workflow #477 CV-1: version 2 carries the
+   value under its own schema step, as this answer foresaw; version 1 still refuses one.
 4. **The scheduler (the Runtime) does not read the file in this slice.** Hence: no Runtime
    component opens it, and a change of the file triggers no composition. (Fix round 1: a zip that
    carries it declares `package` 16, the installer's boundary, not the Runtime's: "Interface".)
@@ -44,7 +53,8 @@ Each choice below follows one of the owner's answers for this slice (board #477,
 resource repository the file at its checkout's root, beside `applications.json` and `packs/`
 (fix round 1: a checkout holds no `bundle.json`, which the build makes of those two, and the build
 carries the file from there into the zip's root). `schema_version` is
-`actingcommand.pack-catalog.v1` and `game` the root's game: the directory's name in an
+`actingcommand.pack-catalog.v1` (Workflow #477 CV-1: or `actingcommand.pack-catalog.v2`,
+"Version 2") and `game` the root's game: the directory's name in an
 installation, the `game` of `applications.json` (the zip's `bundle.json`'s) for a checkout.
 
 ```text
@@ -102,6 +112,66 @@ step (a `value` member there is refused today), and a misspelt member is never r
 Fix round 1 (the owner's answer 6): a member a group or `display` does not know is a display
 defect, a warning, and that group or that `display` is left out ("Warnings: a display defect").
 
+### Version 2
+
+Workflow #477 CV-1 (0.12.79). `schema_version` `actingcommand.pack-catalog.v2`; the envelope, the
+groups, `display` and an entry's display are version 1's, member for member. An entry's business
+part is in full:
+
+```text
+{schema_version: "actingcommand.pack-catalog.v2", game, groups?, display?,
+ packs: [{package_id, title?, summary?, group?, risk?,
+          consumes?, produces?, value?, limited?, realization?,      the entry's own part
+          rules?: [{rule_id, consumes, produces, value?, limited?, realization?}]}]}
+
+effect:  a V2 resource effect as a schedule.json rule writes it (scheduling/v2/common.schema.json,
+         resourceEffect): {pool_id, direction, amount | expected_amount_milli,
+                           observation_source, confidence_milli}
+         amount:  N (1 to 2^53 - 1) | "pending" | {type: "fact", fact_key, fallback} (consumes only)
+value:   {milli: V (1 to 2^53 - 1), origin?: "model"}
+marks:   limited: true, realization: true (absent: no mark)
+```
+
+```json
+{"package_id": "neutral.daily",
+ "consumes": [{"pool_id": "pool.energy", "direction": "consume", "amount": 6,
+               "observation_source": "self_reported", "confidence_milli": 1000}],
+ "produces": [],
+ "value": {"milli": 12000, "origin": "model"},
+ "limited": true}
+```
+
+- **One definition.** An effect is read with the contract crate's one type of a rule's effect
+  (`actingcommand_contract::resource_effect::ResourceEffectSpec`, which the policy crate's compiler
+  reads a rule's effects with) and held to its own bounds (`ResourceEffectSpec::form_fault`, the
+  constants the compiler compares with): its `direction` the side's (`consume` on `consumes`,
+  `produce` on `produces`); exactly one quantity; a constant of 1 to 2^53 - 1, an expectation of at
+  most 2^53 - 1 thousandths, the pending marker, or on `consumes` only a consumption read from a
+  fact whose `fact_key` is a scheduling identifier (no list reading) and whose `fallback` is 1 to
+  2^53 - 1; a `confidence_milli` of at most 1000; at most 128 effects on a side, a task's. What a
+  pool decides (its capacity) is the compiler's, judged where a rule meets its pool.
+- **The value and the marks** have the meaning and the bounds of a rule's `fixed_value_milli` with
+  its `fixed_value_origin` and of its `limited` and `realization` ([standard-pack-schedule.md](standard-pack-schedule.md),
+  "The fixed value", "The limited mark", "The realization mark"). What the compiler refuses beside
+  a rule's fixed value (`fixed_value_conflict`) the reader refuses beside a part's:
+  `catalog_value_conflict` at `value`, beside the realization mark and beside a production of a
+  pool whose `valuation` `schedule.json` declares or leaves pending.
+- **The entry's own part** is present when the entry writes one of its members, and then writes
+  `consumes` and `produces`; an entry may write none (a package whose rules differ, below).
+- **Per-rule parts** (`rules`, the coordinator's ruling 7 of 11-22): each keyed by the `rule_id` of
+  a rule of `schedule.json` that runs the entry's package, a scheduling identifier given once in the
+  entry; for that rule it stands **in place of** the entry's own part, whole (no member is taken
+  from the own part). At most 4096 in an entry (the most tasks a V2 catalog holds). The same shape
+  is where a package run by several rules with different values of a variable will carry each
+  value's part (each value will be a rule).
+- **The index** holds the relations of every part, the own part's and each rule's, each package
+  once per pool.
+
+A reader of 0.12.78 or earlier reads a version 2 file as `malformed` at `/schema_version`, a
+version it does not know, as an unknown member is: `packs` lists the root as without the file,
+`standard-pack check` and the build refuse it, the installer's `place` of such a build refuses
+the zip (at its `package` edge first: "Interface").
+
 ## What is wrong
 
 ### Errors: the root's declaration is wrong
@@ -118,6 +188,21 @@ document; Workflow #477 PC-2 fix round 1: a pointer longer than 512 bytes is cut
 | `catalog_duplicate` | a `package_id` listed twice, or a pool twice on one side of an entry (at the later one) |
 | `catalog_pool_undeclared` | a `pool_id` the root's `schedule.json` does not declare (any pool, for a root without `schedule.json`) |
 | `catalog_out_of_limits` | the file is larger than 1 MiB, `packs` holds more than 1024 entries, a side more than 256 pools, a `pool_id` is empty or longer than 128 bytes |
+
+Version 2 (Workflow #477 CV-1) beside those, each at its pointer:
+
+| Problem | When |
+|---|---|
+| `malformed` | an effect not of a rule effect's type (a member it does not know, a type: at the effect), its `direction` not the side's, two quantities or none (at the effect), a consumption read from a fact on `produces` or with a `fact_key` that is no scheduling identifier, an object `amount` not of that form; a `value` not `{milli, origin?}` or whose `milli` is no whole number, an `origin` other than `"model"`; a mark other than `true`; a `consumes` without `produces` or the reverse; a `rule_id` that is no string or off the identifier grammar |
+| `catalog_out_of_limits` | a constant `amount` or a `fallback` outside 1 to 2^53 - 1, an `expected_amount_milli` above 2^53 - 1, a `confidence_milli` above 1000, more than 128 effects on a side, a `value`'s `milli` outside 1 to 2^53 - 1, more than 4096 per-rule parts, a `rule_id` empty or over 128 bytes |
+| `catalog_value_conflict` | a fixed value beside the realization mark, or beside a production of a pool whose valuation `schedule.json` declares or leaves pending |
+| `catalog_rule_unknown` | a per-rule part's `rule_id` is no rule of `schedule.json` that runs the entry's package |
+| `catalog_duplicate` | a pool twice on one side of a part, a `rule_id` twice in an entry |
+| `catalog_pool_undeclared` | an effect's `pool_id` `schedule.json` does not declare |
+
+The references to `schedule.json` (pools, valuations, rules) are judged where the reader holds the
+root's `schedule.json` (`parse_standard_pack_catalog_with`, which every tool of 0.12.79 calls), and
+not when that file could not be read (its own refusal).
 
 Where a tool reports one, it is `standard_pack_root_invalid` (`game`, `path` the file,
 `standard_pack_problem`, `json_pointer`). A file that exists and cannot be read is the same kind of
@@ -186,6 +271,18 @@ difference is the warning `standard_pack_catalog_schedule_differs` (`game`, `pac
 A package without an entry is not compared. Nothing is refused for a difference: the rules run as
 before, and the file's business part feeds only the index.
 
+Version 2 (Workflow #477 CV-1): while a root's rules still write their business part themselves
+(every root, in 0.12.79), an entry is compared **rule by rule**, each rule of its package in
+`schedule.json`'s order with the part that stands for it (its per-rule part where the entry has
+one, else the entry's own part, else none), every difference naming the rule (`task_id`): on each
+side, `consumes` before `produces`, `catalog_lacks` and (new) `quantity_differs` (the rule and the
+part both name the pool, with another quantity or other evidence) in the rule's order, then
+`schedule_lacks`; then (new) `value_differs` (the fixed value or its origin), `limited_differs`
+and `realization_differs`, which name no `pool_id` and no `catalog_side` (both optional in the
+warning since 0.12.79, present for every other word). A package without a rule: each pool of the
+own part is `schedule_lacks` without a rule, as in version 1. Still nothing is refused for a
+difference.
+
 ## Who reads it
 
 None of the Runtime's components: its root reader, its startup and run preparation, the policy
@@ -219,6 +316,13 @@ it is `bundle_missing`).
   `pack-catalog.json.old-<ms>` when a later zip carries none; a zip whose file is wrong in its
   business part is refused (`pack_invalid` caused by `standard_pack_root_invalid`) in the plan,
   before the hold.
+
+Workflow #477 CV-1: each of the four reads both versions through the one reader,
+`parse_standard_pack_catalog_with`, held to the root's `schedule.json` (its pools, and of version 2
+its rules and valuations); `packs` carries a row's business part as the file writes it (version
+1's `{consumes, produces}` as before, version 2's members, `CatalogEntry::business_document`);
+`check` warns of version 2's differences ("Differences from `schedule.json`"); `build` carries the
+file and declares 24 for version 2 ("Interface"); `place` places either version alike.
 
 ## Who writes it
 
@@ -355,6 +459,51 @@ It builds or brings up to date the file from what the root already declares, by 
   global `--dry-run` the line without `--plan` is `dry_run_unsupported`
   ([actinglab-dry-run.md](actinglab-dry-run.md)).
 
+Workflow #477 CV-1 (0.12.79; the tool's `schema_version` and `values`):
+
+- **The version written** is 2 when the line gives `--schema-version 2` (its one value; another is
+  `validation_failed`) or the existing file is of version 2, else 1, written by the rules above,
+  byte for byte. A file of version 1 written as version 2 is **converted**: every entry's business
+  part is computed from its rules by the rule below, its display and its place kept; the answer's
+  `converted` names them in the file's order (present with `--schema-version` only).
+- **A business part from the rules** (a new entry's, a refreshed one's, a converted one's): each
+  rule of the package in `schedule.json` gives the part it writes today, its `consumes` and
+  `produces` effects as written, its `fixed_value_milli` with its `fixed_value_origin`, its
+  `limited` and its `realization`. A package without a rule gets an empty own part. When every
+  rule's part is the same (on each side the same effects in any order, the same value and marks),
+  that part is the entry's own part. **When they differ** (the coordinator's ruling 7), each rule
+  gets its per-rule part, in the file's order, and the entry **no own part**: nothing is chosen for
+  a person. A rule whose part cannot be written (an effect that is no V2 effect, a
+  `fixed_value_milli` that is no whole number, a `limited` other than `true`) refuses the line,
+  `standard_pack_root_invalid` at `schedule.json`, `schedule_invalid` at the member. `refreshed`
+  gives `before` and `after` as the file writes the business part.
+- **A kept entry** of version 2 keeps its parts as written, but a pool `schedule.json` no longer
+  declares is dropped from each part (`dropped`, with the part's `rule_id`) and a per-rule part
+  whose `rule_id` no rule that runs the package has any more is left out: both are
+  `standard_pack_catalog_left_out` (`catalog_pool_undeclared`, `catalog_rule_unknown`; `task_id`
+  the part's rule), as the entry of a package the registry no longer holds is.
+- **`--values <file>`** (an absolute path; the entry point of the model's export, whose code is not
+  in this repository) gives a values file,
+  `{"schema_version": "actingcommand.pack-catalog-values.v1", "packs": [{"package_id",
+  "rule_id"?, "value"?, "limited"?, "realization"?}]}`, at most 5120 items, the way `--displays`
+  gives titles. Each item names a part: without `rule_id` the entry's own part, with it the part
+  of that rule (where the entry has none for the rule, the entry's own part, which stood for it, is
+  copied as the rule's part). The part's value and marks are replaced whole by the item's (one the
+  item does not give is removed); its effects are untouched. The file is checked by the catalog's
+  own checks before anything is written, as the display file is: its size, its JSON, its
+  `schema_version` first, its members, a package the registry does not hold
+  (`package_not_listed`), a `rule_id` off the grammar or of no rule that runs the package
+  (`catalog_rule_unknown`), a part named twice (`catalog_duplicate`), the value and the marks by the
+  reader's checks (`malformed`, `catalog_out_of_limits`, `catalog_value_conflict` beside the
+  realization mark); an item naming a part the catalog does not write is `catalog_part_absent` at
+  the item. Any of them refuses the line with the display file's refusal,
+  `standard_pack_catalog_display_refused` (`path` the values file). A line that writes version 1
+  refuses the option, `validation_failed`: version 1 has no value. The answer's `values_written`
+  names each part written, `{package_id, rule_id?}`, in the file's order (present with `--values`
+  only). The written file is read back by the reader, so a value the item gives beside a
+  production of a valued pool refuses the line as the catalog's error.
+- Without the two options a line answers and writes as before, byte for byte.
+
 ## `ui.json` is retired
 
 `ui.json` (Workflow #429 R-11, 0.12.36 to 0.12.67) is no longer read by anything. A root that still
@@ -378,6 +527,18 @@ hold. This build's `place` does not refuse a zip that carries the file and decla
 zip is built (the build that writes the file declares 16), and the boundary that matters is the
 earlier installer's.
 
+**`package` 24** (Workflow #477 CV-1; [component-interfaces.md](component-interfaces.md), the
+`package` row 24): an installer of 0.12.78 or earlier reads a version 2 file as `malformed` at
+`/schema_version` and would refuse the zip as a root file wrong in its business part
+(`pack_invalid`), not at the boundary. So a zip that carries a version 2 file declares `package`
+[24, 24] (the contract crate's `CATALOG_V2_PACKAGE_REVISION`, by `catalog_package_revision`; a
+version 1 file keeps 16), this build declares [3, 25] (25 is Workflow #477 LR-1's, a press step's
+count), and an earlier installer refuses such a zip
+at its `package` edge (`interface_edge`), in the plan, before the hold. A rollback meets nothing:
+no Runtime component of any release reads the file, and an earlier installer refuses only a zip
+that carries version 2 (an installed file it handles as any root file: set aside when a zip carries
+none, replaced by a zip's version 1 file).
+
 The `packs` answer is the Lab's offline read, which no revision covers. Its new members (`index` on
 a game, `catalog` on a row) are added beside the old ones; a client that reads the answer by member
 name (the console) ignores them and keeps reading `ui` and `display` as before. A game's `ui` is
@@ -386,9 +547,16 @@ members a client read are where they were.
 
 ## What the later slices add
 
-- **The value**: a value per package or per pool, under its own schema step (the reader refuses
-  a value member until then).
-- **The scheduler's reading**: the Runtime reads the index to find which packages produce what a
-  resource goal lacks, and the business part replaces the consumption the rules carry today.
+- **The value**: here since Workflow #477 CV-1 (0.12.79), a fixed value per package (or per rule)
+  under version 2 ("Version 2"); version 1 still refuses a value member.
+- **The scheduler's reading** (the next slice, CV-2): the composer takes a rule's business part
+  from the catalog, switched on per root by an entry of `requires`, and the business part replaces
+  the consumption, production, fixed value and marks the rules carry today; the Runtime reads the
+  index to find which packages produce what a resource goal lacks. A per-rule part is the rule's;
+  an entry's own part is every other rule's of the package. Until then no Runtime component reads
+  the file.
+- **A business part per value of a package variable**: each value will be a rule, so it is a
+  per-rule part of version 2's shape; nothing more is added for it.
 - **The adoption's entries**: `standard-pack adopt` writes the entry of the package it adopts.
-- **The model writer's entries**: the model's export writes the quantities and, later, the values.
+- **The model writer's entries**: the model's export writes the values and the marks through
+  `--values` (CV-1), and the quantities.

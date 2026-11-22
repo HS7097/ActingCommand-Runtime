@@ -48,16 +48,16 @@ use sha2::{Digest, Sha256};
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
 use crate::evaluator::{
-    Amounts, ConsumptionAmounts, activity_scope_specificity, pool_bound, project_pool_value,
-    project_time_validity, scope_matches_instance, with_values,
+    Amounts, ConsumptionAmounts, activity_scope_specificity, pool_bound, project_given_validity,
+    project_pool_value, project_time_validity, scope_matches_instance, with_values,
 };
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
     CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, ConsumptionFact, DecisionReason,
-    EvaluationFacts, EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES,
-    ObservationRef, ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec,
-    PoolValueSnapshot, PoolValueSource, ResourceEffectSpec, SchedulingDocumentKind, ScopeSelector,
-    TaskRuntimeSnapshot, TaskSpec,
+    EvaluationFacts, EvaluationTime, FactScalar, FactValue, GivenPoolReadings, GivenReadingState,
+    InstanceSnapshot, MAX_ID_BYTES, ObservationRef, ObservedFact, PolicyEvaluationError,
+    PolicyEvaluationResult, PoolSpec, PoolValueSnapshot, PoolValueSource, ResourceEffectSpec,
+    SchedulingDocumentKind, ScopeSelector, TaskRuntimeSnapshot, TaskSpec,
 };
 use actingcommand_selection_policy::UnknownReason;
 
@@ -545,12 +545,34 @@ pub fn check_resource_targets(
     facts: &EvaluationFacts,
     time: EvaluationTime,
 ) -> Result<CheckedResourceTargets, ResourceTargetsError> {
+    check_resource_targets_with_readings(
+        parsed,
+        catalog,
+        facts,
+        &GivenPoolReadings::default(),
+        time,
+    )
+}
+
+/// #455 P2 (register §1.505, ruling 7): [`check_resource_targets`] with the readings the host gave
+/// the pools read from rows of a list (`readings`), taken under the same locks as `facts`: a
+/// target on such a pool is checked as one on a fact pool, and its condition is computed from the
+/// reading ([`observe_target`]).
+pub fn check_resource_targets_with_readings(
+    parsed: &ParsedResourceTargets,
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    readings: &GivenPoolReadings,
+    time: EvaluationTime,
+) -> Result<CheckedResourceTargets, ResourceTargetsError> {
     use ResourceTargetsRejectionReason as Reason;
+    let given = project_given_validity(catalog, readings, &facts.instances, time)
+        .map_err(ResourceTargetsError::Evaluation)?;
     if let Some(document) = &parsed.document_v3 {
-        return v3::check_resource_targets_v3(parsed, document, catalog, facts, time);
+        return v3::check_resource_targets_v3(parsed, document, catalog, facts, &given, time);
     }
     if let Some(document) = &parsed.document_v2 {
-        return check_resource_targets_v2(parsed, document, catalog, facts, time);
+        return check_resource_targets_v2(parsed, document, catalog, facts, &given, time);
     }
     let document = &parsed.document;
     let at = |path: String, reason| rejected_at(&parsed.source_map, path, reason);
@@ -596,6 +618,7 @@ pub fn check_resource_targets(
                 fact_key: resolved.fact_key.clone(),
                 state: match observe_target(
                     &projected,
+                    &given,
                     instance,
                     resolved.pool,
                     &resolved.fact_key,
@@ -643,6 +666,7 @@ fn check_resource_targets_v2(
     document: &ResourceTargetsDocumentV2,
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
     time: EvaluationTime,
 ) -> Result<CheckedResourceTargets, ResourceTargetsError> {
     use ResourceTargetsRejectionReason as Reason;
@@ -687,7 +711,7 @@ fn check_resource_targets_v2(
                 target_id: target.id.clone(),
                 resource: pool.id.clone(),
                 fact_key: fact_key.clone(),
-                state: match observe_target(&projected, instance, pool, fact_key, time) {
+                state: match observe_target(&projected, given, instance, pool, fact_key, time) {
                     TargetObservation::Known {
                         current,
                         observed_at_unix_ms,
@@ -825,8 +849,13 @@ pub(crate) fn resolve_target_pool<'a>(
         .iter()
         .find(|pool| pool.id == resource)
         .ok_or_else(|| (Reason::UnknownResource, "/resource".to_owned()))?;
-    let ObservationRef::Fact { fact_key } = &pool.observation else {
-        return Err((Reason::ResourceNotObservable, "/resource".to_owned()));
+    // #455 P2 (register §1.505, ruling 7): a pool read from rows of a list is observable, under
+    // its list's key; its inventory is the reading the host gave it ([`observe_target`]).
+    let fact_key = match &pool.observation {
+        ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } => fact_key,
+        ObservationRef::Outcome { .. } => {
+            return Err((Reason::ResourceNotObservable, "/resource".to_owned()));
+        }
     };
     if !(fact_key.starts_with("resource.") || fact_key.starts_with("inventory.")) {
         return Err((Reason::ResourceNotObservable, "/resource".to_owned()));
@@ -937,15 +966,21 @@ pub(crate) enum TargetObservation {
 /// unexpired record; otherwise the first failing reason in the order missing,
 /// low_confidence, expired, invalid_value. A known inventory of a `ledger_fact` pool is
 /// projected by the pool's regeneration rule (Workflow #390 POOL-1). The entry check and the
-/// evaluator share it.
+/// evaluator share it. #455 P2 (register §1.505, ruling 7): a pool read from rows of a list reads
+/// no fact: its inventory is the reading the host gave it (`given`, as the timeline's resets leave
+/// it), its observation and expiry the list's, or awaits observation with that reading's reason.
 pub(crate) fn observe_target(
     projected_facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
     instance: &InstanceSnapshot,
     pool: &PoolSpec,
     fact_key: &str,
     time: EvaluationTime,
 ) -> TargetObservation {
     use ResourceTargetPendingReason as Reason;
+    if let ObservationRef::ListRows { .. } = &pool.observation {
+        return observe_given(projected_facts, given, pool, time);
+    }
     let fact = projected_facts
         .facts
         .iter()
@@ -998,6 +1033,67 @@ pub(crate) fn observe_target(
     }
 }
 
+/// #455 P2: [`observe_target`] of a pool read from rows of a list, from the reading the host gave
+/// it: unknown with its reason (`missing` without one, `low_confidence`, `invalid_value`), expired
+/// past the list's expiry, else known, the number projected by the pool's regeneration rule as a
+/// fact reading's is ([`live_pool_inventory`]).
+fn observe_given(
+    projected_facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
+    pool: &PoolSpec,
+    time: EvaluationTime,
+) -> TargetObservation {
+    use ResourceTargetPendingReason as Reason;
+    let (value, observed_at_unix_ms, expires_at_unix_ms) =
+        match given.get(&pool.id).map(|reading| reading.state) {
+            None => {
+                return TargetObservation::Pending {
+                    reason: Reason::Missing,
+                };
+            }
+            Some(GivenReadingState::Unknown(unknown)) => {
+                return TargetObservation::Pending {
+                    reason: pending_reason(unknown.reason()),
+                };
+            }
+            Some(GivenReadingState::Read {
+                value,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+            }) => (value, observed_at_unix_ms, expires_at_unix_ms),
+        };
+    if expires_at_unix_ms.is_some_and(|expires| time.unix_ms > expires) {
+        return TargetObservation::Pending {
+            reason: Reason::Expired,
+        };
+    }
+    let Ok(current) = i64::try_from(value) else {
+        return TargetObservation::Pending {
+            reason: Reason::InvalidValue,
+        };
+    };
+    match live_pool_inventory(projected_facts, pool, current, observed_at_unix_ms, time) {
+        Ok((current, capacity_fresh_until)) => TargetObservation::Known {
+            current,
+            observed_at_unix_ms,
+            fresh_until_unix_ms: min_expiry(expires_at_unix_ms, capacity_fresh_until),
+        },
+        Err(reason) => TargetObservation::Pending { reason },
+    }
+}
+
+/// The reason a target's inventory awaits observation for a reading's `unknown_reason`.
+fn pending_reason(unknown_reason: UnknownReason) -> ResourceTargetPendingReason {
+    match unknown_reason {
+        UnknownReason::FactMissing => ResourceTargetPendingReason::Missing,
+        UnknownReason::FactLowConfidence => ResourceTargetPendingReason::LowConfidence,
+        UnknownReason::FactExpired | UnknownReason::FactStale => {
+            ResourceTargetPendingReason::Expired
+        }
+        _ => ResourceTargetPendingReason::InvalidValue,
+    }
+}
+
 /// The earlier of two optional expiries.
 fn min_expiry(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     match (left, right) {
@@ -1025,15 +1121,7 @@ fn live_pool_inventory(
     if pool.value_source.is_static() {
         return Ok((current, None));
     }
-    let bound =
-        pool_bound(pool, projected_facts, time).map_err(|unknown_reason| match unknown_reason {
-            UnknownReason::FactMissing => ResourceTargetPendingReason::Missing,
-            UnknownReason::FactLowConfidence => ResourceTargetPendingReason::LowConfidence,
-            UnknownReason::FactExpired | UnknownReason::FactStale => {
-                ResourceTargetPendingReason::Expired
-            }
-            _ => ResourceTargetPendingReason::InvalidValue,
-        })?;
+    let bound = pool_bound(pool, projected_facts, time).map_err(pending_reason)?;
     let Ok(value) = u64::try_from(current) else {
         return Ok((current, bound.fresh_until()));
     };
@@ -1783,8 +1871,29 @@ pub fn targetable_resources(
     instance: &InstanceSnapshot,
     time: EvaluationTime,
 ) -> Result<(Vec<TargetableResource>, Vec<NotTargetableResource>), ResourceTargetsError> {
+    targetable_resources_with_readings(
+        catalog,
+        facts,
+        &GivenPoolReadings::default(),
+        instance,
+        time,
+    )
+}
+
+/// #455 P2 (register §1.505, ruling 7): [`targetable_resources`] with the readings the host gave
+/// the pools read from rows of a list (`readings`): such a pool is targetable, its observation
+/// the reading ([`observe_target`]).
+pub fn targetable_resources_with_readings(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    readings: &GivenPoolReadings,
+    instance: &InstanceSnapshot,
+    time: EvaluationTime,
+) -> Result<(Vec<TargetableResource>, Vec<NotTargetableResource>), ResourceTargetsError> {
     let projected =
         project_time_validity(catalog, facts, time).map_err(ResourceTargetsError::Evaluation)?;
+    let given = project_given_validity(catalog, readings, &facts.instances, time)
+        .map_err(ResourceTargetsError::Evaluation)?;
     let mut targetable = Vec::new();
     let mut not_targetable = Vec::new();
     for declared in &catalog.catalog().pools.pools {
@@ -1820,7 +1929,8 @@ pub fn targetable_resources(
         let default_importance_milli = valuation
             .and_then(|valuation| valuation.gap.as_ref())
             .map(|gap| u64::from(gap.weight_milli));
-        let observation = match observe_target(&projected, instance, pool, &fact_key, time) {
+        let observation = match observe_target(&projected, &given, instance, pool, &fact_key, time)
+        {
             TargetObservation::Known {
                 current,
                 observed_at_unix_ms,
@@ -1883,10 +1993,13 @@ type StoredTarget = (serde_json::Value, String, String, u64);
 
 /// Reads `instance`'s stored policy through [`instance_target_policies`] (the decoders and the
 /// active or expired state the evaluator uses), then, with an active `catalog`, the condition of
-/// every target whose pool still resolves, as `ApplyResourceTargets` reports it. Pure.
+/// every target whose pool still resolves, as `ApplyResourceTargets` reports it. Pure. #455 P2:
+/// a target on a pool read from rows of a list is computed from the reading the host gave it
+/// (`readings`).
 pub fn active_resource_targets(
     catalog: Option<&CompiledCatalog>,
     facts: &EvaluationFacts,
+    readings: &GivenPoolReadings,
     instance: &InstanceSnapshot,
     time: EvaluationTime,
 ) -> Result<StoredResourceTargets, ResourceTargetsError> {
@@ -2014,11 +2127,13 @@ pub fn active_resource_targets(
     if let Some(catalog) = catalog {
         let projected = project_time_validity(catalog, facts, time)
             .map_err(ResourceTargetsError::Evaluation)?;
+        let given = project_given_validity(catalog, readings, &facts.instances, time)
+            .map_err(ResourceTargetsError::Evaluation)?;
         for (_, target_id, resource, amount) in &targets {
             let Ok((pool, fact_key)) = resolve_target_pool(catalog, resource, instance) else {
                 continue;
             };
-            let state = match observe_target(&projected, instance, pool, &fact_key, time) {
+            let state = match observe_target(&projected, &given, instance, pool, &fact_key, time) {
                 TargetObservation::Known {
                     current,
                     observed_at_unix_ms,
@@ -2537,6 +2652,8 @@ impl ResolvedTargetV2<'_> {
 struct TargetContext<'a> {
     catalog: &'a CompiledCatalog,
     projected_facts: &'a EvaluationFacts,
+    /// #455 P2: the readings given to the pools read from rows of a list, as the resets leave them.
+    given: &'a GivenPoolReadings,
     instance: &'a InstanceSnapshot,
     time: EvaluationTime,
     policy_sha256: &'a str,
@@ -2547,10 +2664,12 @@ struct TargetContext<'a> {
 }
 
 /// Resolves `policy` for `instance`: each target's pool once, each named task once, and the
-/// inventory once per target in `projected_facts`. The error names a state only a bug reaches.
+/// inventory once per target in `projected_facts` (#455 P2: a pool read from rows of a list, in
+/// `given`, as the resets leave it). The error names a state only a bug reaches.
 pub(crate) fn resolve_instance_targets(
     catalog: &CompiledCatalog,
     projected_facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
     instance: &InstanceSnapshot,
     policy: &InstanceTargetPolicy,
     time: EvaluationTime,
@@ -2581,6 +2700,7 @@ pub(crate) fn resolve_instance_targets(
             let context = TargetContext {
                 catalog,
                 projected_facts,
+                given,
                 instance,
                 time,
                 policy_sha256,
@@ -2618,6 +2738,7 @@ pub(crate) fn resolve_instance_targets(
             &TargetContext {
                 catalog,
                 projected_facts,
+                given,
                 instance,
                 time,
                 policy_sha256,
@@ -2832,6 +2953,7 @@ fn resolve_v2(
     let TargetContext {
         catalog,
         projected_facts,
+        given,
         instance,
         time,
         ..
@@ -2921,7 +3043,7 @@ fn resolve_v2(
                 },
             },
             Ok((step, importance_milli)) => {
-                match observe_target(projected_facts, instance, pool, &fact_key, time) {
+                match observe_target(projected_facts, given, instance, pool, &fact_key, time) {
                     TargetObservation::Pending { reason } => TargetStatus::Pending { reason },
                     TargetObservation::Known {
                         current,
@@ -3051,6 +3173,7 @@ fn target_effects(
     let TargetContext {
         catalog,
         projected_facts,
+        given,
         instance,
         time,
         ..
@@ -3110,7 +3233,7 @@ fn target_effects(
     }
     let TargetCondition::AtLeast { amount: at_least } = target.condition;
     let (current, inventory_expires_at_unix_ms) =
-        match observe_target(projected_facts, instance, pool, &fact_key, time) {
+        match observe_target(projected_facts, given, instance, pool, &fact_key, time) {
             TargetObservation::Pending { reason } => {
                 for (task, _) in mapped {
                     effects.insert(

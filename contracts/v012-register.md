@@ -45526,6 +45526,236 @@ not, keeping the game's last good rules either way. A rollback meets nothing: no
 activated a catalogue with the kind (a configured one would have to be written after this deploy;
 a 0.12.77 start would then refuse that generation at its compile).
 
+### 1.505 Slice #455 P2 (0.12.79): the host computes the reading of a pool read from rows of a list before each evaluation, gives it to the evaluator, and every reader of a pool's reading takes it; the Runtime names `pool_list_rows` (board #455; the rulings 1 to 13 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-455-p2.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition, and P1's report; on main `9491d936`, the 0.12.78 release)
+
+This section takes 1.505, reserved for this slice (1.506 is ASLEEP-2's, in 0.12.78).
+[scheduling/README.md](scheduling/README.md) ("A pool read from rows of a list", rewritten from
+"What it means" to "In 0.12.78"; the capability bullets there and under "Pool lines"; the
+exception in "Record lists and the projection") is the contract;
+[scheduling/v2/README.md](scheduling/v2/README.md), [resource-targets.md](resource-targets.md)
+("A pool read from rows of a list", new; the `resource` row of the v1 table; the view's
+`targetable`), [instance-fact-store.md](instance-fact-store.md),
+[resource-readings.md](resource-readings.md), [standard-pack-schedule.md](standard-pack-schedule.md)
+("`requires`") and [actingd-check-config.md](actingd-check-config.md) (the row `pool_list_rows`)
+follow it. No `package` revision moves and no declared interface range: a feature of
+`schedule.json` goes by `requires` alone, as the pools' lines did.
+
+**Where the number is made** (rulings 1, 2, 3 and 4). In the host, before each evaluation, under
+the fact write gate the fact pools are projected under
+(`project_authoritative_policy_inputs_with_gaps_under_gate`, `crates/runtime-host/src/host/policy_dispatch.rs`):
+for each pool of the active catalog whose observation is `list_rows`,
+`InstanceFactStore::list_pool_readings` (`fact_store.rs`) reads the pool's instance's active list
+fact at the projection's ledger position (a historical one for an older position) and calls one
+pure function, `list_rows_reading` (`crates/runtime-host/src/pool_list_rows.rs`): for each declared
+row, the list's row whose key column holds the row's key (a text) gives its value column, an
+integer at least 0, times the factor; the reading is the sum. A key the list does not hold counts 0
+(a list is written whole or not at all). Unknown, never 0, each a closed word
+(`actingcommand_policy::ListRowsUnknown`): no list `fact_missing`; a confidence below the pool's
+`ledger_fact` minimum `fact_low_confidence`; a named row's value that is a text, a negative integer,
+another scalar or absent, or a sum beyond 2^53 − 1 (`MAX_LIST_ROWS_READING`), `type_mismatch`; a
+record that is no inline record list `type_mismatch`; fix round 1 (the review's must fix 1; the
+coordinator's ruling in `rd-1122/brief-1868-fix1.md`): a list that is not empty and is not keyed by
+the pool's columns, one of its rows holding no text under `key_column` or none of them holding
+`value_column`, `type_mismatch` (before, a `key_column` the package does not write read every key
+as absent, a known 0, and so did a `value_column` no row carries while no declared key was held; a
+held key's row without it was `type_mismatch` already; nothing checks the pool's column names
+against the package that reads the list). An empty list holds no key and reads 0. A reading
+carries the list's observation
+time and expiry; the evaluator judges the expiry (`fact_expired`) and a sum a constant capacity
+cannot hold (`type_mismatch`), as for a fact reading. The skip of `inventory.list.` in the fact
+store's projection and the compile's refusal of every other member under the prefix are unchanged:
+no list enters the projection or `facts`.
+
+**Identity** (ruling 5). `project_fact_pools_with_readings` (`crates/policy/src/evaluator.rs`)
+writes each `Read` reading the pool can hold as the pool's snapshot where a fact pool's projected
+reading goes (`resources.pools`: the sum, observed when the list was; a caller's snapshot of the
+pool dropped as every `ledger_fact` pool's), so it enters `fact_snapshot_id`
+(`combined_policy_snapshot_id`, over the resources) and each instance's view identity
+(`dispatch_view_identity`, over the pools whose scope selects the instance) by the path that
+exists; no section of identity is added. `project_fact_pools` is that function with no reading,
+byte for byte the one of main.
+
+**The evaluator is given the reading** (ruling 6). `GivenPoolReadings` (pool id → the pool's
+instance, the list's key, `Read {value, observed_at_unix_ms, expires_at_unix_ms}` or
+`Unknown(ListRowsUnknown)`), memory only, beside the left-out facts:
+`LeftOutFacts::give_pool_readings`, which the policy cycle calls with the projection's readings.
+The evaluation projects them through the timeline's resets by the rule a fact obeys
+(`project_given_validity`, sharing `survives_resets` with `project_time_validity`: a reset that
+invalidates the list's key in the pool's scope at or after the list's observation leaves the pool
+`fact_missing`; one still to come bounds the expiry). Where the evaluator checks that a pool's
+snapshot is still backed by its record (`evaluation_pool_values`, now through
+`pool_record_times`), such a pool takes the given reading's observation and expiry. The pool values
+an evaluation reads travel with the readings (`PoolValues`), so every reader below reaches the
+reason of an unknown one (`GivenPoolReadings::unknown_reason`, in the order of
+`live_pool_unknown_reason`). Nothing in the policy crate reads a list, and nothing in it writes a
+weight.
+
+**Readers** (ruling 7; from `git grep` of `pool_values`, `pool_fact`, `ObservationRef`,
+`observe_target`, `project_fact_pools` and the study's section 1):
+
+| Reader | Where | Unknown reading | Test |
+|---|---|---|---|
+| `resource_projection` in a trigger, and its freshness | `evaluate_predicate` | Unknown, the suggestion (L, its reason): `trigger_unknown` | t2, t3, t4, h3, h4 |
+| `resource_projection` in a feedback stop | `evaluate_predicate` | `feedback_stop_unknown` with the suggestion | the same accessor; not tested on its own |
+| the suggestion a reason carries | `resource_suggestion` | (L, `fact_missing` without a reading, else its reason) | t2, t3, t4, h4 |
+| the net benefit's cost term (regenerating pool) | `evaluator/benefit.rs` `judge` | `benefit_unknown` `reading_unknown` (pool, L, its reason) | t5 |
+| the pool's lines and the capped spending order; `capped_spend` | `evaluator/capped.rs` `lines` | `pool_line_held` `capped_cap_unknown` (L, its reason) | t6; `capped_spend`'s `pool_reading` t14 |
+| the reserve gate | `reserve_views` | case 1: `resource_reserve_insufficient` without `amount_after` | t7 |
+| the consumption a reading does not show yet | `reserve_unshown`, `lines` (the snapshot's observation, the list's) | none (no reading, no unshown) | t8 |
+| the urgency and the tie-break | `resource_urgency_milli`, `tie_break::projected` | no urgency; the tie-break's bound unknown | the same accessor; not tested on its own |
+| the evaluation's wake | `evaluate_scheduling` `pool_fresh_until` | no wake | t3 |
+| the forward projection | `forward.rs` `project_forward_with_readings` (the snapshot its start, every step given the readings) | the pool out of each step; the gap (its reason, L) | t9 |
+| a resource target's check and receipt | `resolve_target_pool` (admits the kind under L), `observe_target`, `check_resource_targets_with_readings` | `awaiting_observation` with the reading's reason | t10, h6 |
+| the target's gap and weight in the evaluation | `resolve_instance_targets`, `resolve_v2`, `target_effects` | `pending` with the reading's reason | t11 |
+| the views | `targetable_resources_with_readings`, `active_resource_targets`, host `resource_target_view_of` | `pending` | t12, h6 |
+| a goal entry's `current` (`GoalView`) | host `read_goal_page` (the page's `targetable`, the resource target view's) | `pending` | h9 |
+| the idle plan's projection steps | `pool_projection_steps` (host `policy_host.rs`) | no step | the same accessor; not tested on its own |
+| the clock slots' liveness | `clock_slot_live` (host `clock_slot.rs`) | not live | the same accessor; not tested on its own |
+| the strategic report's pool metric | `strategy.rs` (reads `resources.pools`) | no value | the snapshot t1 and h3 pin; not tested on its own |
+| the no-progress guard (fix round 1) | `NoProgressMemory::capture_with_readings`, `observe_with_readings`, `NoProgressGuards::hold` (`decision.pool_values.given()`) | no reading now: releases nothing, as a fact's | t13 |
+| the probe's planning signal (fix round 1) | host `preview_detection_planning_signals` | no `planning_fact_unknown`, no allowance taken for a key the left-out set covers | h8 |
+
+**The no-progress guard** (fix round 1, the coordinator's ruling C1 in `rd-1122/brief-1868-fix1.md`,
+from the review's "may fix"). Before, the guard's capture read the pools without the readings, so a
+task whose trigger held only through such a pool captured no basis and was never held: it could run
+and spend again for as long as the list was not read again. Now the guard's basis takes such a pool
+as it takes a fact pool's reading: a pool a `resource_projection` projects or the task reserves adds
+the basis key (the pool's instance, L), whose value is the sum the host computed (an `integer`;
+when several pools read the one list, each one's sum, a record list of rows `{pool_id, value}` in
+the order of the pools' ids, so that another sum of any of them releases), observed when the list
+was. Capture, release and hold read it from the readings the evaluation was given, as the timeline's
+resets leave them (`capture_with_readings`, `observe_with_readings`, which the policy cycle calls
+with `left_out.pool_readings()`; `hold` from the evaluation's `PoolValues`); a key no fact holds is
+read from them (`basis_value`, `list_reading` in `evaluator/no_progress.rs`). `capture` and
+`observe` are those with no reading. A list read again with the same sum is no progress; one with
+another sum releases the guard; an unknown reading releases nothing, as a fact no longer read. A
+`benefit_realization` task still needs a fact observation of each pool it consumes (the compile's
+refusal, unchanged).
+
+**No refresh is asked** (ruling 8). `give_pool_readings` notes each reading's list key as left out
+for its pool's instance, so a pool whose reading is unknown raises no fact refresh demand (the
+refresh asks the recognition maintenance package for its marked keys, and no mark may name the
+prefix): no `fact_refresh_*` reason, no `key_not_marked`. Fix round 1 (ruling C2): nor is a probe
+planned for it: `preview_detection_planning_signals` skips a suggestion whose key the left-out set
+covers for the decision's instance, so no `planning_fact_unknown` is written and no detection
+allowance is taken for L (nor for a record list left out for its rows). Refresh on demand is a
+later slice.
+
+**Expiry wakes** (ruling 9). The given reading's expiry enters the evaluation's wake
+(`pool_fresh_until`, as a fact reading's, a millisecond after it; test t3). A list's publication
+wakes the evaluation already: a list reading is a `fact.published` record, and every event of the
+fact family is `FactsChanged` (`policy_trigger_for_family`, `host/policy_wake.rs`), which the
+existing actingd test `resident_driver_coalesces_relevant_event_bursts_without_terminal_feedback`
+pins.
+
+**The Runtime names the subsystem** (ruling 10). `pool_list_rows` is an always-on row of
+`config.subsystems` (`apps/actingd/src/config/manifest.rs`), so the workbench and check-config
+compose a `schedule.json` that requires it. `validate_static_fact_pool_authority` (the evaluation's
+and the forward projection's) accepts such a pool: it is bound to its list, and a configured reading
+of it, or a configured fact under its list's key, is a second authority
+(`policy_pool_authority_conflict`), as for a fact pool. `fact_store.rs`' `validate_pool_sources`
+leaves the kind out, as before.
+
+**What a person sees** (ruling 11): a reason names the list's key as its `fact_key`; `capped_spend`
+and a goal entry's `current` show the sum; no member or word is added, no range of
+`runtime-client`, `ledger` or `runtime-outcomes` moves. No game, package or alias is named in code
+(ruling 13).
+
+| # | Shape | Kind | Code slice | Notes |
+|---|---|---|---|---|
+| P2-1 | `pool_list_rows` | `config.subsystems` row, always on | #455 P2 | P1's `requires` entry is now accepted |
+| P2-2 | `GivenPoolReadings`, `GivenPoolReading`, `GivenReadingState`, `ListRowsUnknown` | policy crate types, memory only | #455 P2 | beside `LeftOutFacts` |
+| P2-3 | `project_fact_pools_with_readings`, `project_forward_with_readings`, `check_resource_targets_with_readings`, `targetable_resources_with_readings`; fix round 1 `NoProgressMemory::capture_with_readings`, `NoProgressMemory::observe_with_readings` | policy crate functions | #455 P2 | the plain functions are these with no reading |
+
+**Tests** (policy gate row "#455 P2", `crates/policy/src/tests/gate_455_p2.rs`; host row "#455
+P2", `crates/runtime-host/src/tests/gate_455_p2.rs`; apps row "#455 P2"; no clock read).
+
+| Test | What it shows |
+|---|---|
+| host `p2_h1_the_reading_is_the_sum_of_the_declared_rows_and_a_key_the_list_does_not_hold_counts_0` (1) | one row; four rows of factors 200, 400, 1000 and 2000 out of the list's order; a key the list does not hold counts 0; a list of 300 rows; the list's observation and expiry |
+| host `p2_h2_a_reading_is_unknown_never_zero` (2) | no list `fact_missing`; confidence 499 below 500 `fact_low_confidence`; a text, a negative integer, a timestamp and an absent value `type_mismatch`; 2^53 − 1 read, beyond it by one row or two `type_mismatch`; fix round 1: a list keyed by `name` (not `id`) and one whose rows carry `amount` (not `count`) `type_mismatch`, an empty list 0 |
+| policy `p2_t3_the_lists_expiry_wakes_the_evaluation_and_then_reads_fact_expired` (2) | the evaluation's wake a millisecond after the list's expiry; then `trigger_unknown` with (L, `fact_expired`) |
+| policy `p2_t4_a_reset_that_invalidates_the_list_invalidates_the_reading` (2) | a reset after the list's observation: `fact_missing`; before it: the task runs |
+| policy `p2_t5_the_cost_term_reads_the_reading_and_names_the_list_when_unknown` (3) | known benefit on a reading; `benefit_unknown` `reading_unknown` (pool, L, `fact_low_confidence`; `type_mismatch` for a sum above the capacity) |
+| policy `p2_t6_the_lines_read_the_reading_and_capped_cap_unknown_names_the_list` (3) | `would_cross_hard_line` with `pool_reading` 100; runs on 500; `capped_cap_unknown` with L and `fact_low_confidence` |
+| policy `p2_t7_the_reserve_gate_reads_the_reading_and_holds_on_an_unknown_one` (3) | runs on 100; case 1 on an unknown reading |
+| policy `p2_t8_the_consumption_since_the_lists_observation_is_counted` (3) | a task dispatched after the list's observation is counted (`amount_after` 40, its `task_id`), one before it not |
+| policy `p2_t10_a_target_on_the_pool_is_checked_and_its_condition_is_the_reading` (3) | the target accepted; its condition 40 (observed when the list was, gap 60), `low_confidence`, `missing` without a reading |
+| policy `p2_t11_the_evaluations_target_is_applied_on_the_reading_and_pending_without_it` (3) | `resource_targets` names it applied (current 40, gap 60) and pending `low_confidence` |
+| policy `p2_t12_the_views_show_the_reading` (3) | targetable under L with the reading; the stored policy's condition |
+| host `p2_h6_a_targets_receipt_and_the_target_view_read_the_reading` (3) | `ApplyResourceTargets`' receipt condition and `ResourceTargetView` (the goal page's `targetable`, a goal entry's `current`) read 1400 |
+| policy `p2_t2_a_projection_reads_the_reading_and_an_unknown_one_suggests_the_list_without_a_refresh` (3, 4) | the trigger reads the reading; unknown: (L, `type_mismatch`) and no `fact_refresh_*`, which without the given reading is asked |
+| host `p2_h4_without_a_list_the_task_waits_with_the_lists_key_and_asks_no_refresh` (4) | on the host: `trigger_unknown`, (L, `fact_missing`), no `fact_refresh*` |
+| host `p2_h3_the_host_computes_the_reading_and_the_evaluation_takes_it` (4, 5) | a configured catalog accepted; no list in the projection or `facts`; the snapshot 1400 at the list's time; the reading; one position, one identity; the task dispatched |
+| policy `p2_t1_the_given_number_goes_where_a_fact_pools_projected_reading_goes` (4) | the snapshot where a fact pool's goes; none unknown, above capacity or without a reading; catalog-a's golden bytes |
+| host `p2_h5_a_catalog_without_the_kind_keeps_its_golden_bytes_and_identity` (4) | catalog-a's projected resources golden, no reading, identity unchanged by a published list |
+| host `p2_h7_a_new_reading_moves_the_instances_view_and_the_intent_is_stale` (4) | the list read again (1600): the identity moved and the intent is `policy_facts_stale` |
+| policy `p2_t9_the_forward_projection_starts_from_the_reading_and_carries_it` (4) | starts from the reading, runs once, names `fact_expired` of L; without it nothing runs and `fact_missing` |
+| actingd `gate_455_p1::p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it` (5) | the manifest names `pool_list_rows`; the composer given its subsystems composes the file |
+| policy `p2_t13_the_no_progress_guard_holds_a_task_on_the_reading_as_on_a_fact` (fix round 1, C1) | over a reading of 1400 the task runs once and its run is admitted; the list not read again, it is held `policy_no_progress` with (L, `{"type":"integer","value":1400}`, the list's observation) exactly as the same task over the pool read from its own fact is held with that fact; a list read again with the same sum still holds it; one of 1600 releases the guard and the task runs |
+| policy `p2_t14_capped_spend_shows_the_reading` (fix round 1, D) | a capped round begun by a reading of 950 (trigger line 900): `capped_spend`'s `pool_reading` 950 with the pool's capacity and lines |
+| host `p2_h8_no_probe_is_planned_for_the_lists_key` (fix round 1, C2) | a task due by the pool or by a fact the instance does not hold: both suggested, a probe planned for the fact alone, none for L |
+| host `p2_h9_a_goal_entry_on_the_pool_shows_the_reading_as_its_current` (fix round 1, D) | composer mode, a `goals.json` resource entry on the pool: `GoalView` shows no current (pending `missing`) before the list and 1400 observed when the list was after it |
+
+**Fix round 1, the four host tests red in CI's first run** (`p2_h3`, `p2_h4`, `p2_h6`, `p2_h7`,
+all at the shared helper `start`: `activate_policy_catalog` answered `catalog_compile_failed` at
+`stage_catalog_generation`). The fixture was wrong, not the product: the helper replaced
+catalog-a's pools with the one list-backed pool, and catalog-a's activity profile keeps a goal whose
+metric names the replaced pool, which the compile refuses `dangling_reference` at
+`/profiles/0/goals/0/metric/pool_id` (`validate_metric`). The fixture's profiles now keep no goal,
+and the helper compiles the sources first with the compiler the staging runs, so a refusal names
+its issues (the host's code carries none; no product code was added for it).
+
+Touched existing tests (6): P1's actingd test `p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it`
+is adapted and renamed (above; its old name retired in `ci/retired-gates.toml`); its requirement
+changed on purpose. In `crates/policy/src/evaluator.rs`' own tests, `r7_evaluate` (used by the R7
+tests) hands `evaluate_predicate` an empty `PoolValues` in place of an empty map, and
+`resource_target_valuation_maps_milli_yields_before_rounding` hands `resolve_instance_targets` no
+reading: both signatures gained the readings; nothing they assert changed. `forward.rs`' tests import
+`evaluate` themselves (the module no longer does). P1's policy tests are unchanged: an entry point
+without readings still reads such a pool as missing. Fix round 1 touches no existing test:
+`NoProgressMemory::capture` and `observe` keep their signatures (the SS-4 and SS-4b tests call them
+as before), and `preview_detection_planning_signals` is private to the host.
+
+**What is not changed.** A pool that does not use the kind: its checks, its identity, every decision
+(`project_fact_pools` is the new function with no reading; the golden of t1 and h5). The projection
+and `facts` (no list enters). The compile's refusals for every other member under `inventory.list.`.
+The list facts' own limits (1024 rows; the evaluator's 256 bound does not apply to a list it never
+reads). The evaluator writes no weight. Every declared interface range.
+
+**At deploy.** Nothing changes for an installation until a `schedule.json` (or a configured
+catalog) names the kind: a catalogue without it projects, hashes and decides as on 0.12.78.
+Rollback (ruling 12), read at the tag `v0.12.78` (`9491d936`, this slice's base) and `v0.12.77`
+(`3285143f`): once a Runtime of this version has activated a catalogue generation that holds a
+`list_rows` pool,
+- **a rollback to v0.12.77 or older fails to start**: the start loads and compiles the active
+  generation (`load_verified_active` → `read_generation`), its compiler does not know the kind, and
+  the load answers the fatal `catalog_generation_invalid`. A generation an intent in flight pins is
+  compiled at the start too (`replay_admission` → `load_generation`), so one that holds the kind
+  fails the start the same way even after another generation was activated;
+- **a rollback to v0.12.78 starts, and the game whose `schedule.json` writes the kind loses all its
+  rules** (fix round 1, the review's must fix 2, which the coordinator checked at the tag): its
+  compiler knows the kind (P1), so the generation loads; at the workbench's first check its composer
+  refuses that game's `schedule.json` (`schedule_requires_missing`, no `pool_list_rows`, recorded
+  once). The fallback to a game's last good file ("§3.6: the game keeps its last good
+  `schedule.json`", `host/standard_pack_schedule.rs`) is taken only when the active generation's
+  recorded hash of the game's file differs from the refused file's; here the refused file is the
+  one the active generation was composed from, so there is no last good fragment: the game is
+  composed with no rule, the other games in use are composed again without it, and the new
+  generation (no such pool) is activated and schedules as usual. By the same reading a composition
+  in which no game keeps a rule is a V2 catalogue without a task, which compiles (`validation.rs`,
+  "a V2 catalog may hold no task"), so it is activated too and nothing is refused. The active
+  generation with the pool stays only where it is not replaced: a catalogue configured directly (no
+  composer), or while a game root fails to read (§3.6 keeps the active generation then); there its
+  `validate_static_fact_pool_authority` refuses every evaluation's input
+  (`policy_pool_binding_invalid`), which is skipped (`policy_evaluation_skipped`) and, after
+  `scheduling.evaluation.escalate_after` skips in a row, `policy_evaluation_awaiting_person`, for
+  every instance, until a generation without the kind is active.
+- **The rollback gate does not see it**: `rollback_window_bounded` is the ledger range alone, and the
+  installer's plan checks the declared interface ranges, none of which this slice moves; a catalogue
+  generation is no interface. Before such a rollback a person removes the kind from the game's
+  `schedule.json` (or rolls the generation back) on this version first.
+
 ### 1.506 Slice #486 ASLEEP-2 (0.12.78): an instance whose application its idle action closed is asleep too; the close and wake loop seen in production on 11-21 (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-22, not the owner's words; the owner's words behind them, her order of 11-02 that an instance without a task is closed and her order of 11-22 that the scheduler must first run stably; coordinator work order `rd-1122/brief-486-asleep2.md`; on main `1dff8fcb`, merged with main `a2d31d86`)
 
 This section takes 1.506 (1.501 to 1.505 belong to other slices of 0.12.78). It ships in 0.12.78.
@@ -45688,11 +45918,326 @@ v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in
 language:
 被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
 
+### 1.507 Slice #477 CV-1 (0.12.79): `pack-catalog.json` version 2 carries a package's business part in full, and the tools write, check, build and place it; no Runtime component reads it (Workflow #477; the owner's plan to cut the four resource repositories over at once to one catalogue file holding a task's display, what it consumes and produces, and its value; the rulings 1 to 8 are the coordinator's of 11-22, ruling 7 as the coordinator replaced it during the work (per-rule parts), no words of the owner's behind them; coordinator work order `rd-1122/brief-477-cv1.md` after the read-only study `rd-1122/study-477-step2.md`, its sections 1 to 3 and the coordinator's disposition at its end; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.507 (1.505 belongs to another slice of this version).
+[pack-catalog.md](pack-catalog.md) ("Version 2", "What is wrong", "Differences from
+`schedule.json`", "Who reads it", "Who writes it", "Interface", "What the later slices add") is the
+contract; [standard-pack-schedule.md](standard-pack-schedule.md) ("Who writes the fixed value and
+the marks, since Workflow #477 CV-1"), [component-interfaces.md](component-interfaces.md) (the
+`package` row 24) and [resource-verify.md](resource-verify.md) (the revision row 24) follow it.
+Why: the catalogue's reader refused a value member ("a later slice"), the quantities, the fixed
+value and the marks stood only in each rule of `schedule.json`, and the next slice (CV-2) has the
+composer take them from the catalogue. This slice is that slice's first half: the file carries the
+business part in full and the tools move today's rules into it.
+
+**The shape** (rulings 1, 2, 7). `schema_version` `actingcommand.pack-catalog.v2`; envelope and
+display as version 1. An entry: its own part (`consumes`, `produces`, `value`?, `limited`?,
+`realization`?) and `rules`?, a list of per-rule parts `{rule_id, consumes, produces, value?,
+limited?, realization?}`, each standing for its rule in place of the own part, whole. An effect is
+a V2 resource effect exactly as a rule writes it, read with the one type
+(`crates/actingcommand-contract/src/resource_effect.rs`: `ResourceEffectSpec`, `EffectAmount`,
+`ConsumptionFact`, `EffectDirection`, `ObservationSource`, moved there from the policy crate's
+`schema.rs`, which re-exports them; the compiler reads a rule's effects with them as before) and
+held to its own bounds by one function (`ResourceEffectSpec::form_fault`) and the constants the
+compiler compares with (`MAX_EFFECT_CONFIDENCE_MILLI`, `MAX_EFFECTS_PER_TASK`, the identifier's
+grammar `scheduling_identifier_byte` and `MAX_SCHEDULING_IDENTIFIER_BYTES`, which the compiler's
+validation now names). `value` `{milli, origin?: "model"}`; the marks `true` or absent. In code:
+`CatalogParts { own: Option<CatalogPart>, rules: Vec<CatalogRulePart> }` on `CatalogEntry::parts`
+(`None` for version 1), `CatalogPart { consumes, produces, value: Option<CatalogValue>, limited,
+realization }`, `CatalogValue { milli, origin: ScheduleValueOrigin }` (the rule's origin type).
+
+**The limits**: those of a rule's effect (a constant and a fallback 1 to 2^53 − 1, an expectation
+0 to 2^53 − 1, a confidence 0 to 1000, 128 effects a side, a fact read on `consumes` only, its key
+an identifier holding no list reading); a value's `milli` 1 to 2^53 − 1 (the task member's); 4096
+per-rule parts an entry (`MAX_PACK_CATALOG_RULE_PARTS`, the most tasks a V2 catalog holds); a
+`rule_id` 1 to 128 bytes of the identifier's grammar, once an entry; 5120 items in a values file
+(`MAX_PACK_CATALOG_VALUE_ITEMS`).
+
+**The refusals** (`standard_pack_root_invalid` with its word at its pointer; the display file's
+refusal for the values file). No new code (the third stop condition did not hold); three new words
+of `standard_pack_problem` and four of `catalog_difference`, each one cause:
+
+| Case | Word | Pointer |
+|---|---|---|
+| an effect not of the type, two quantities or none | `malformed` | the effect |
+| a direction not the side's, a fact read on `produces`, a fact key off the grammar | `malformed` | `…/direction`, `…/amount`, `…/amount/fact_key` |
+| an amount, fallback, expectation, confidence or count past its bound | `catalog_out_of_limits` | the member, the side |
+| a value's `milli` past its bound; an `origin` other than `model`; a mark other than `true` | `catalog_out_of_limits`; `malformed` | `…/value/milli`, `…/value/origin`, `…/limited`, `…/realization` |
+| a value beside the realization mark, or beside a production of a pool whose valuation is declared or pending (the compiler's `fixed_value_conflict`) | `catalog_value_conflict` (new) | `…/value` |
+| a per-rule part of no rule that runs the package (as `package_not_listed` for an entry) | `catalog_rule_unknown` (new) | `…/rules/<k>/rule_id` |
+| a values item naming a part the catalogue does not write | `catalog_part_absent` (new) | the item |
+| a `--values` line that writes version 1 | `validation_failed` | (usage) |
+
+**The writer** (ruling 4, 7). `--schema-version 2` (its one value) writes version 2; a file of
+version 2 stays so; a version 1 file is converted, every entry's business part its rules'
+(`converted`). A part from the rules: each rule's effects as written, fixed value with origin, marks;
+equal parts give the entry's own part, differing ones a per-rule part each and **no own part**. A kept
+entry drops an undeclared pool from each part and leaves out a part of no rule
+(`standard_pack_catalog_left_out`, now with `task_id`). `--values <file>`
+(`actingcommand.pack-catalog-values.v1`, `{packs: [{package_id, rule_id?, value?, limited?,
+realization?}]}`) replaces a part's value and marks whole, the own part copied for a rule that has
+none (`values_written`).
+
+**Check** (ruling 5): rule by rule against the part that stands for it; the new words
+`quantity_differs`, `value_differs`, `limited_differs`, `realization_differs`; the warning's
+`pool_id` and `catalog_side` optional for the last three. Nothing is refused for a difference.
+
+**Room left** (ruling 7): a business part per value of a package variable is a per-rule part (each
+value will be a rule), and the composer's reading (CV-2) takes a rule's part from
+`CatalogParts::for_rule`, the per-rule part else the own part, and `CatalogPart::members` is the
+rule's own members' form; nothing of either is built.
+
+**Tests** (apps gate row "#477 CV-1"; `crates/resource-tooling/src/gate_477_cv1.rs`,
+`apps/actinglab/src/tests/gate_477_cv1.rs`).
+
+| Test | What it shows |
+|---|---|
+| `cv1_each_quantity_form_round_trips_and_the_bounds_are_a_rule_s` (1) | The four forms read and are written back as read; every bound at its two sides, a wrong direction, a fact on `produces`, two quantities, an unknown member, 128 and 129 effects |
+| `cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (2) | A value with its origin and both marks taken; each refusal of ruling 2 one case |
+| `cv1_version_2_and_refresh_write_the_rules_business_part_into_the_entry` (3) | A version 1 file converted, each entry equal to its rule; a refresh and a second line change nothing |
+| `cv1_rules_that_differ_get_a_part_each_and_the_entry_no_own_part` (ruling 7) | Two differing rules of one package: a per-rule part each, no own part, no difference |
+| `cv1_values_land_in_the_named_entry_and_one_of_an_unknown_package_is_refused` (4) | Value and marks replaced whole, the differences warned; an unknown package refused as a display file's; version 1 refuses the option |
+| `cv1_values_name_a_rule_s_part_as_well_as_an_entry_s` (ruling 7) | A rule's part written, a rule's part made from the own part; `catalog_part_absent`, `catalog_rule_unknown` |
+| `cv1_check_warns_of_a_difference_from_a_rule_and_refuses_nothing_for_it` (5) | `quantity_differs` warned, the check answering |
+| `cv1_a_rule_is_compared_with_its_own_part_and_a_part_of_no_rule_is_refused_and_left_out` (ruling 7) | Each rule against its own part; a part of no rule refused by check and left out by the writer |
+| `cv1_a_version_1_root_is_written_and_answered_byte_for_byte_as_before` (6, ruling 6) | The golden of PC-1's fixture: the file's bytes, the differences, the refreshed entry, the business part `packs` carries |
+| `cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16` (6) | 24 and 16 by the revision table; this build [3, 24]; an installer of [3, 23] refuses 24 at its edge |
+
+Adapted (8): the three request initializers of the PC-1 and PC-2 writer gates (the two new
+members), and the five tests that pin the shipped `package` range, to [3, 24].
+
+**What is not changed.** Every reader's answer for a version 1 file (the golden); the display part;
+the Runtime: no component opens the file, no schedule, catalogue generation or decision changes;
+the compiler's diagnostics (its bounds now named, their values the same); the files of the other
+slice of this version (the evaluator's readers of a pool, `policy_dispatch.rs`, `fact_store.rs`,
+`apps/actingd/src/config/manifest.rs`, `compose.rs`); every declared interface range but `package`.
+
+**At deploy.** Nothing changes for an installation: no Runtime component reads the file, and no
+repository writes version 2 until it asks (`--schema-version 2`). A tool of 0.12.78 or earlier reads
+a version 2 file as `malformed` at `/schema_version`: its `packs` lists the root as without the
+file, its `check` and build refuse the root, and its installer refuses a zip that carries one at the
+`package` edge (24 above its 23). A rollback meets nothing: an installed version 2 file is read by
+no Runtime of any release, and an earlier installer handles it as any root file (it sets it aside
+when it places a zip of 16 to 23 that carries none or replaces it with that zip's version 1 file).
+
+### 1.512 Slice #486 ASLEEP-3 (0.12.79): a stop withheld after a wake that no scheduled run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a start (board #486; the rules below are the coordinator's rulings 1 to 5 of 11-22, not the owner's words; coordinator work order `rd-1122/brief-486-asleep3.md`; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.512 (1.505 and 1.507 belong to two other slices of 0.12.79). It ships in
+0.12.79. [runtime-config.md](runtime-config.md) ("What wakes an idle instance": the paragraphs "The
+withheld action expires by itself", "A later position that names no time" and "At a start", new,
+and the sentences on the start's owed wake, the warning's members and "Across a start") and
+[scheduling/README.md](scheduling/README.md) ("An asleep instance", the bullets "A later position
+that names no time" and "At a start") are the contract.
+
+**What happened** (production, v0.12.78, 11-22, the first hour after its deploy; one instance whose
+idle action is `stop_emulator`). The deploy restarted the Runtime at 16:36 JST. The start restored
+the instance as closed and its first check woke it once (`instance_idle_action`, `queue_idle_wake`,
+`idle_wake_cause` `task_due`, naming a task). The startup package ended at 16:38:39; one second
+later the check recorded `instance_idle_stop_withheld` (`stop_emulator`, `task_due`, the same
+task), and from then on the schedule explanation showed that task `deferred`, eligibility true,
+reason `pack_schedule_closed` (its pack's schedule closed by the resource side, with no end). Half
+an hour later the emulator still ran: no scheduled run had been admitted on the instance.
+
+**The reading, checked in the code.**
+- *The withheld stop had no end of its own* (the coordinator's first reading: right). ASLEEP-1's
+  and ASLEEP-2's backstop (`UnansweredWake`, `withhold_stop`, `withhold_close`) ended only by an
+  admitted scheduled run, another idle configuration, a catalog's activation or a Runtime start.
+- *Why the task counted due* (the second reading: right, and not the start's alone). The predicate
+  is the idle plan's (`IdleDraft::add`): an eligible decision with no wake of its own later than
+  the evaluation is due. It was made for a hold of the instance (positions 1 and 2), which #484's
+  look ahead refines; on an instance that no hold holds, the evaluation's own closure answers the
+  later positions, and one that names no time (position 5's closed pack schedule with a row with no
+  end, whose deferral carries `next_wake_unix_ms` none; so do a suspended package, an owed rerun's
+  pacing, the quiet gate, a remedy round and an availability denial with no release) left the
+  decision eligible with no wake, which the plan counted due. The asleep instance at the start
+  (restored `stop_emulator`, not prepared, withdrawn `backend_selfcheck:unchecked`, judged as
+  available) was under no hold, so its pack-closed task counted due: the gates it left out are
+  every position of the order of the deferrals that names no time. Inside the startup package's
+  claim (a hold) the look ahead read position 5 and counted the task held back, so the plan read at
+  16:38:40 had no work and the check withheld the stop.
+- *And the start's own wake.* The record of the start could not be used (none, another start's,
+  or unreadable: the coordinator's reading of the module documentation, "Across a start"; which of
+  the three the ledger does not say here), so the start restored every configured instance closed
+  owing its wake at the start's time (review N-1, `restore_owed`); that wake comes at the first
+  check whatever the plan says (`wake`'s `wake_at <= now`), with `task_due` as its cause only
+  because the plan counted the task due. An instance restored woken (#405 O-2) owes its wake the
+  same way.
+- *None of it lies in another implementer's file*: the plan is built in
+  `crates/runtime-host/src/policy_host.rs` (`evaluate`, the closure and `held_ahead`) and
+  `schedule_explanation.rs`, the planner is `idle_action.rs`.
+
+**The rule.**
+- *The hold* (ruling 1; `crates/runtime-host/src/idle_action.rs`). An unanswered wake withholds the
+  action for its hold alone, counted from the first check that withholds it
+  (`UnansweredWake::withhold`, `hold_until_unix_ms`); strictly after its end it withholds nothing
+  (`hold_passed`), and the check takes the action as if no wake had been. The hold
+  (`unanswered_hold_ms`) is the larger of twice the wake lead in effect of the action the wake
+  brought the instance back from (`IdleConfig::wake_lead_ms`) and 10 minutes (`HOLD_FLOOR_MS`, fix
+  round 1), doubled for each consecutive unanswered wake of the instance before it (`streak`: a
+  wake that still stands unanswered when the next one is bound passes its streak on, counting
+  itself when it started what it woke), at most two hours (`HOLD_CAP_MS`, fix round 1). What
+  answers a wake (the admission of a scheduled task's run on the instance, another idle
+  configuration) clears it and so ends the streak; since fix round 2 a catalog's activation
+  (`switch_policy_catalog` no longer calls the planner; `forget_unanswered_wakes` is gone) and the
+  admission of a fact refresh reading (`PolicyHost::idle_latest_admission` through
+  `latest_task_admission`) answer nothing. A wake whose start met a hold (`wake_held`) is not kept,
+  as before. No key.
+- *The record* (ruling 2). `instance_idle_stop_withheld` keeps its code and members and gains the
+  optional value `next_eligible_unix_ms` (an existing key): the hold's end
+  (`IdlePlanner::hold_end`, `withheld_stop_outcome`). The stop after an expired hold is the
+  ordinary `instance_idle_action` (`run_idle_action`). No code added; the catalogue's description
+  and handling say so (the index checked current); `runtime-outcomes` stays 1, an optional value
+  being added within it.
+- *A later position that names no time* (ruling 3 and fix round 1's ruling 3; `policy_host.rs`,
+  `hold_back_untimed`). On an instance whose idle action can put it to sleep (`idle_sleepers`),
+  awake or asleep, and on every asleep one, a task candidate positions 3, 5, 6, 8a or 8 defer
+  with no time of their own (position 7, the quiet gate, always names its time; fix round 2 takes
+  it off the list), while no hold of positions 1 or 2 defers it, is put in `IdleHeldAhead`
+  with no time, so the plan counts it as #484's look ahead counts such a candidate behind a hold:
+  not due, no wake. "Eligible with no wake is due" stays for a hold of the instance itself. The
+  decision, its reason and wake, the not-run explanation and every dispatch are unchanged; position
+  4b's entry block still counts due (ASLEEP-1 fix round 2); an instance whose idle action is `none`
+  (or one it cannot take) and the fact refresh are as before. No code is compared: the position
+  that answered decides.
+- *The start's owed wake* (ruling 3; `idle_action.rs`, `check_with_due_task`, `wake`). A wake the
+  start owes (`owed_at_start`: restored woken, or with no usable record) waits for the start's
+  first plan (a check with none returns nothing) and comes as a sleeping instance's: for a task the
+  plan counts due, a switched action, or the plan's own time less the lead; the time the start owed
+  it at (`restore_owed`'s, or the time it was woken) is no planned wake, though the record keeps it
+  until a check replaces it. A reading alone never wakes it (fix round 1, ruling 1: review N-1's
+  wake at the start, kept in the first round, is dropped). The known limit, accepted: an instance
+  none of whose tasks can become selectable without a fresh reading sleeps until a task with a
+  real time (a clock, a cooldown's end) comes due.
+- *Its emulator in fact on* (ruling 3, the coordinator's ruling on the question). An instance so
+  restored after `stop_emulator` whose emulator state is on with its endpoint bound
+  (`IdleView::emulator_on`), not in use, for which no wake comes, gets the ordinary check's action
+  (`act_on_restored`: `decide` as on an active instance): taken, its emulator is stopped with its
+  wake from the plan and it owes the start nothing more; not taken (a task near, a pause, no plan
+  that counts its last work), it stays closed owing its wake, and only an unsupported action's one
+  warning passes (a rest is not taken there). No startup package runs first. `close_app` has no such
+  case: its closed state is the application's, which the emulator says nothing of. Fix round 2
+  (ruling 4): its readings are left out of that judgement (`IdlePlan::without_reading`) and of the
+  check on the action's key (`IdlePlanner::readings_apart`, `PendingIdleAction::readings_apart`,
+  `idle_step_stands`), so an instance for which only readings wait is stopped; an action that does
+  not stand on its key leaves it closed, owing its wake (`abandoned`).
+- *Across a restart* (ruling 4): the streak and the hold are forgotten (a new planner); carrying
+  them in `host.idle_state` is more than a line (a new member of its rows and of `kept_idle`).
+- *Neutral* (ruling 5): no instance, game or package is named in code.
+
+**The hold's values** (`idle.stop_emulator_wake_lead_ms` or `idle.close_app_wake_lead_ms` in
+effect): with a lead of 5 minutes or less (the factory lead, and 0) 10, 20, 40, 80, then 120
+minutes for each further unanswered wake; with a lead of 30 minutes 60, then 120; with the
+longest lead, one hour, 120 from the first.
+
+**The loop's bound.** With a plan that always counts a task due when the instance sleeps and none
+when it is awake, and no run ever admitted, a check every minute gives in two hours four stops
+(the first, then one 10, 20 and 40 minutes after each first withholding check) and four wakes,
+each wake one warning; the fourth hold, 80 minutes, outlasts the two hours, and after it one cycle
+every two hours. Since fix round 1 no setting lowers it (a lead of 0 gives the same); since fix
+round 2 neither do catalogs activated as often as placements come nor a reading's run admitted
+after every wake, which answer no wake: only a scheduled task's run admitted on the instance
+starts the doubling over. Had a reading's admission answered the wake, the same loop would have
+gone round every three minutes, 41 stops in two hours. On 11-21 the loop went round eleven times in
+sixteen minutes. Ending a hold cannot bring that back: each round needs a hold to pass.
+
+**What does not change** (the work order's list; fix round 1's ruling 3 relaxes the second item
+for exactly that rule). An instance whose idle action is `none` (it sleeps in no set and its plan
+reads no new entry). An instance never woken for nothing: its stops and wakes and their records
+and times are main's, but for a start's owed wake and, fix round 1, an instance whose only
+due-looking task a later position holds back with no time, which now becomes idle. ASLEEP-2's judgement of a sleeping instance (the
+evaluator's set and branch, the look ahead behind a hold, the benefit-held and pool-step rules) and
+its rule about a regenerating pool's next step. The wake lead. Every declared interface range; no
+configuration key.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The hold and its streak | `crates/runtime-host/src/idle_action.rs` (`HOLD_FIRST_LEADS`, `HOLD_FLOOR_MS`, `HOLD_CAP_MS`, `unanswered_hold_ms`, `UnansweredWake::{streak, hold_ms, hold_until_unix_ms, hold_passed, withhold}`, `withhold_stop`, `withhold_close`, `check_with_due_task`, `IdlePlanner::hold_end`) |
+| The record | `crates/runtime-host/src/host/idle.rs` (`withheld_stop_outcome`, `check_idle`); `crates/runtime-host/src/codes.rs` (`IdleCode::StopWithheld`'s text); `contracts/outcome-codes/runtime-host.json` |
+| A later position that names no time | `crates/runtime-host/src/policy_host.rs` (`hold_back_untimed`, `evaluate`'s closure) |
+| The start's owed wake and the emulator in fact on | `crates/runtime-host/src/idle_action.rs` (`check_with_due_task`, `wake`, `act_on_restored`); `crates/runtime-host/src/host/idle.rs` (the module text, `restore_idle_state`'s) |
+
+**Tests** (incident `#486 ASLEEP-3`: `crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate
+map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `asleep3_r8_a_start_restores_the_instance_closed_and_its_closed_pack_schedule_wakes_nothing` (1) | The incident's replay: an earlier start that keeps no idle state, then a start with the instance's emulator running restores it closed after `stop_emulator`; its task's package closed by an `EditPackSchedule` row with no end; the evaluation defers it `pack_schedule_closed` (eligibility true, no wake, not `instance_unavailable`); the plan not due, no task named; no wake record, no emulator start, one stop by the ordinary check, kept stopped with no wake; asleep a later evaluation still defers it and nothing wakes it |
+| `asleep3_r9_a_wake_no_run_answers_withholds_the_stop_for_its_hold_and_then_stops` (2) | ASLEEP-1's replay to the wake that started the emulator; no run admitted: the first check withholds the stop, its warning's `next_eligible_unix_ms` that check plus twice the lead; withheld at that end; one millisecond after it the ordinary stop (`instance_idle_action`), records stop, wake, warning, stop |
+| `asleep3_r10_an_awake_instance_whose_pack_schedule_is_closed_sleeps_and_wakes_when_it_reopens` (fix round 1, ruling 3) | The replay instance awake on its first start, its only task's package closed by a row with no end: deferred `pack_schedule_closed`, the plan not due and no wake, the host's own check stops the emulator; the schedule reopened: `instance_asleep_wake_due` at the evaluation's time, one wake `task_due`, its start starts the emulator and its startup package runs; awake, the task is dispatched |
+| `asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak` (3) | The planner, consecutive unanswered wakes, each withheld up to its end and the stop taken just after: 10, 20, 40, 80, 120 and 120 minutes with the factory lead and with a lead of 0; 60, 120 and 120 with a lead of 30 minutes; after three of them an admitted run: the next hold 10 minutes again |
+| `asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours` (4) | The loop bound: a check a minute for two hours, a plan due whenever the instance sleeps and none while it is awake, no task's run admitted: four stops, four wakes, four warnings, with the factory lead, with a lead of 0, and (fix round 2) with a reading's run admitted after every wake read through `latest_task_admission`; read as before fix round 2 (the reading answering the wake) the same journal gives 41 stops, 40 wakes and no warning |
+
+Test 5: `asleep2_r3_the_loop_of_11_21_closes_once_and_queues_no_wake_for_an_untimed_gate` is
+unchanged; so are r1 and r5 (they check at the hold's end at the latest, which the strict end keeps
+withheld, and answer the wake by the day's task runs). Fix round 2 (ruling 1) adapts the three
+ASLEEP tests that pinned a catalog's activation answering the wake:
+`asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once` loses its case "an
+activation" (the planner has no such end any more), `asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_warns_once`
+replaces its activation case by the hold's end (withheld within it, the close taken past it), and
+`asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wake` (its name kept)
+now asserts that after the activation the check at the hold's end still withholds the stop and the
+check just past it stops the emulator. Adapted (test 6), each because ruling 3 changes what it pinned, the start's owed wake at the
+start's time: `gate_idle1p`'s `idle1p_l3_an_unknown_state_at_start_is_not_treated_as_open` and
+`idle1p_m2_a_record_an_older_build_outlived_leaves_the_instance_closed` (no wake before the plan;
+with it, X's running emulator stopped by the ordinary check with its wake from the plan),
+`idle1p_o2_a_restart_while_the_wake_is_queued_runs_the_startup_package_after_it` (its two checks
+take a plan with a task due), `idle1p_m1_a_stop_emulator_wake_a_pause_holds_queues_the_startup_package_after_the_resume`
+(its start's check takes a plan whose own time has come) and
+`idle1p_o2_a_woken_instance_is_kept_closed_until_its_wakes_claims_end` (its restart's check takes a
+plan whose time has come); `gate_484_idle_w2`'s `idle_w2_the_wake_says_why_it_came_the_first_that_holds`
+(the owed and the woken case: no wake with no plan nor for a reading alone, then `owed_at_start`
+at the plan's own time). Fix round 1 (ruling 1) adapts the two N-1 tests of `gate_idle1p`, which
+pinned review N-1's wake at the start for a reading alone:
+`idle1p_n1_the_wakes_startup_claim_waits_behind_a_pause_or_the_install_hold` (that plan now wakes
+nothing; the wake comes with a plan that has a task due, its startup claim behind the pause as
+before), and the `stop_emulator` one, which fix round 2 (rulings 4 and 5) renames
+`idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading`
+(retired name in `ci/retired-gates.toml`): the start's first plan, the reading left out, stops X's
+running emulator with no wake, and the next plan keeps it closed with its proper wake; the two
+helpers only it used (`await_startup_claim_end`, `await_release`) go with its old body.
+
+**Fix round 2** (the coordinator's rulings 1 to 7 on the independent review `rd-1122/review-1869.md`).
+1: a catalog's activation answers no wake and clears neither the hold nor its streak. 2: only the
+admission of a scheduled task's run answers a wake; a reading's does not. 3: the loop test runs
+with a reading admitted after every wake (an activation no longer reaches the planner). 4: the
+ordinary check of a restored instance leaves readings out. 5: the N-1 test renamed. 6: position 7
+off the list of gates that name no time (its call in `hold_back_untimed`'s sites removed). 7: "At
+deploy" below corrected.
+
+**Fix round 1** (the coordinator's rulings 1 to 3 on the first round's report). Ruling 1: the
+reading-only wake at a start, which the first round kept for review N-1, is dropped, with its known
+limit written above and in the contract. Ruling 2: the hold has a floor of 10 minutes and a fixed
+cap of two hours, so the loop bound depends on no setting. Ruling 3: an awake instance's idle plan
+uses the same judgement as an asleep one's: a candidate a later position holds back with no time
+is not due on any instance whose idle action can sleep; when the gate opens the evaluation selects
+the task, and a sleeping instance is woken by the rule that exists. The replay of 11-21
+(`asleep2_r3`) is unchanged.
+
+**At deploy.** No new key: nothing to configure. The deploy from 0.12.78 restarts the Runtime,
+which forgets every hold: an instance whose stop or close v0.12.78 was withholding is, after the
+restart, an awake instance like any other, stopped or closed by the first plan that allows it, not
+after one more hold. From then on a wake no scheduled task's run answers withholds the action for
+its hold (10 minutes from the first withholding check with the factory lead, never less; the
+warning names its end), and neither catalog activations nor readings shorten the doubling. A start
+that cannot use its record (not this deploy's: v0.12.78 leaves a record this build reads) no
+longer wakes every configured instance at once: each waits for the first plan, a reading alone
+wakes none, and one restored after `stop_emulator` whose emulator runs is stopped by the ordinary
+check if the plan allows, its readings left out. An instance, awake or asleep, whose only
+due-looking task a closed pack schedule, a suspension or another untimed later gate holds back is
+neither kept awake nor woken for it: production instances whose packs the resource side holds
+closed now idle. A rollback to v0.12.78 meets nothing kept on disk (the hold and its streak are
+memory only, `host.idle_state` keeps its shape) and brings back the withheld stop with no end. In
+the release notes' language:
+唤醒后一直没有排程任务被准入时，停模拟器（或关应用）不再一直扣着：从第一次扣下起按住一段时间（取唤醒提前量的两倍和 10 分钟中较大的，连续每多一次没人接的唤醒翻一倍，最多 2 小时），到时照常停，警告 `instance_idle_stop_withheld` 里新带 `next_eligible_unix_ms` 说明按到几点；只有排程任务的运行被准入才清零，激活目录、读数运行都不算。能闲置的实例上（醒着或睡着），被任务包排程关闭（没有结束时间）、暂停中的包这类没有时刻的门挡住的任务不再算到期：醒着的会照常闲置，睡着的不会被它唤醒；门一开，调度就选中它、照常唤醒。Runtime 启动时恢复成关闭、欠着唤醒的实例，要等启动后第一次评估，只有真能派的任务（或计划里的唤醒时刻）才唤醒它，单是读数到期不唤醒；模拟器其实开着的停模拟器实例，由普通的闲置检查直接停掉，不先跑启动包。
+
 ### 1.513 Slice #477 LR-1 (0.12.79): a press step of a linear package presses a number of times on its page, the number a constant or a dispatch parameter (board #477; the rules below are the coordinator's rulings 1 to 8 in the work order, not the owner's words; coordinator work order `rd-1122/brief-477-lr1.md`, after the read-only study `rd-1122/study-477-step2.md`, its section 6 with the coordinator's disposition, and the resource channel's answer that no game needs a repeated block and every game sets its count on one page; on main `9491d936`, the v0.12.78 release)
 
 This section takes 1.513 (1.507 to 1.512 belong to other slices of 0.12.79). It ships in 0.12.79
-and takes `package` 25 (24 is the revision of another slice of this release, built at the same
-time; a build that has both declares [3, 25] and reads both). It is the execution kernel's linear
+and takes `package` 25 (24 is §1.507's, Workflow #477 CV-1, a version 2 `pack-catalog.json`,
+merged before it; this build declares [3, 25] and reads both). It is the execution kernel's linear
 steps and the declaration gate's: a click step of a `linear_steps` task that stays on its page may
 declare `presses`, and the run presses that many times there. [linear-steps.md](linear-steps.md)
 ("Pressing on one page") is the contract, with [package-variables.md](package-variables.md) ("The
@@ -45828,12 +46373,13 @@ answers the run's fact snapshot as the host does; no clock read in a gate file).
 | `lr1_a_package_without_the_member_runs_byte_for_byte_as_before` (6) | KP-1's plain path (`open`, then the trusted tap `back`): Completed on done after two steps, two taps, no fact read, its step and effect records byte for byte the golden of eight lines |
 | `apps/actinglab/src/tests/gate_477_lr1.rs` `lr1_a_press_count_of_a_linear_steps_pack_needs_revision_25_and_nothing_else_does` (5) | 25 for a constant and for the parameter form in a `linear_steps` pack; the same click step without it, and the member in a `navigable_route` pack, 3 |
 
-Adapted, the requirement moving the shipped range [3, 23] to [3, 25]:
-`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+Adapted, the requirement moving the shipped range to [3, 25] (from §1.507's [3, 24], merged
+before it): `gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
 (`KEY_REVISION + 8`), `gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`
 (`SHARED_READ_REVISION + 5`), the rescue module's `gate_463_v1::v1_the_build_declares_package_through_revision_14`,
-the Lab's `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`
-and actinglab-architecture's `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`.
+the Lab's `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`,
+actinglab-architecture's `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`
+and §1.507's `gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16`.
 Every other existing test is unchanged; `run_linear_step`'s end of a missed last attempt moved into
 `linear_attempt_failed` as it was, and the page graph's cap reading took an operation id where it
 took the effect, so `gate_390_out2` and the linear gates pin what they pinned. No golden re-recorded.

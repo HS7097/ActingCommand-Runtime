@@ -126,15 +126,15 @@ use crate::{
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
-    BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
-    NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
-    catalog_display_outcome, parse_standard_pack_catalog, parse_standard_pack_schedule,
-    read_standard_pack_root, retired_ui_outcome, standard_pack_catalog_differences,
-    standard_pack_schedule_pools,
+    BundleIndex, CatalogScheduleFacts, InterruptThen, LabError, LabErrorClass, LabResult,
+    NavigationProblem, NavigationRole, ProvidedCapability, RuntimeErrorCode,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
+    StandardPackRootIssue, catalog_display_outcome, parse_standard_pack_catalog_with,
+    parse_standard_pack_schedule, read_standard_pack_root, retired_ui_outcome,
+    standard_pack_catalog_differences,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -553,15 +553,18 @@ fn catalog_report(
                 .map_err(|issue| {
                     root_invalid(game, &root.join(STANDARD_PACK_SCHEDULE_FILE), &issue)
                 })?;
-            let pools = schedule
-                .as_ref()
-                .map(standard_pack_schedule_pools)
-                .unwrap_or_default();
-            let catalog =
-                match parse_standard_pack_catalog(&bytes, game, &checked.registry, Some(&pools)) {
-                    Ok(catalog) => catalog,
-                    Err(issues) => return Err(catalog_refused(game, root, issues)),
-                };
+            // Workflow #477 CV-1: held to the pools, and of version 2 to the rules and the
+            // valuations, of `schedule.json`.
+            let facts = CatalogScheduleFacts::of(schedule.as_ref());
+            let catalog = match parse_standard_pack_catalog_with(
+                &bytes,
+                game,
+                &checked.registry,
+                Some(&facts),
+            ) {
+                Ok(catalog) => catalog,
+                Err(issues) => return Err(catalog_refused(game, root, issues)),
+            };
             for issue in catalog.display_issues() {
                 warnings.push(catalog_display_outcome(game, &path, issue));
             }

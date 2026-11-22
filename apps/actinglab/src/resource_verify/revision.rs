@@ -18,8 +18,10 @@
 //!   version it holds (a version 1 file is the check's `goal_version_retired`, not the table's);
 //!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a), and an entry
 //!   without handlers or with the `result` `environment_reset`, 19 (Workflow #463 INT-1);
-//!   `pack-catalog.json`, 16 (Workflow #477 PC-1 fix round 1), by its presence. The game root's
-//!   tables need none (row 6: no member of a pack reads them).
+//!   `pack-catalog.json`, 16 (Workflow #477 PC-1 fix round 1), by its presence, and 24 when it is
+//!   of version 2 (Workflow #477 CV-1, register §1.507: the contract crate's
+//!   `catalog_package_revision`). The game root's tables need none (row 6: no member of a pack
+//!   reads them).
 //! - **A pack's loading copy** (`resources/loading.json`, `resources/loading/`), 6 (Workflow #407
 //!   LOAD-1).
 //! - **A member of a pack's file** ([`ROWS`]), read as JSON: of `control.json`, of a task file
@@ -61,16 +63,16 @@
 //! - **A `linear_steps` press step's count**, 25 (Workflow #477 LR-1, register §1.513): an
 //!   operation's `presses` in a `linear_steps` pack, read where the kernel's admission reads it,
 //!   as revisions 13, 17 and 22 read a select step, a key step and a list reading, a row of
-//!   [`ROWS`]; 24 is another slice's.
+//!   [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
 
 use super::bundle::PACKAGE_REVISION;
 use actingcommand_contract::{
-    CATALOG_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
-    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    TaskSchema, VARIABLES_PACKAGE_REVISION, notice_relative_path,
+    GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, TaskSchema,
+    VARIABLES_PACKAGE_REVISION, catalog_package_revision, notice_relative_path,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -667,9 +669,10 @@ fn entry_revision(
     }
     // Workflow #477 PC-1 fix round 1: `pack-catalog.json`, 16 (`CATALOG_PACKAGE_REVISION`), by its
     // name at the zip's root, so that an installer that knows no such root file refuses the zip at
-    // its `package` edge.
+    // its `package` edge. Workflow #477 CV-1: 24 (`CATALOG_V2_PACKAGE_REVISION`) for a file of
+    // version 2, which an installer of an earlier build reads as `malformed`.
     if name == STANDARD_PACK_CATALOG_FILE {
-        return CATALOG_PACKAGE_REVISION;
+        return catalog_package_revision(bytes);
     }
     if name == STANDARD_PACK_INTERRUPTS_FILE {
         return document_revision(bytes, File::Interrupts, false, None);

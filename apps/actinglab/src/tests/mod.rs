@@ -303,6 +303,10 @@ mod gate_455_goals_pack;
 // `provides` marks irreversible as `package` 23, and nothing else so.
 #[path = "gate_455_gslx.rs"]
 mod gate_455_gslx;
+// Workflow #477 CV-1: the revision table counts a version 2 `pack-catalog.json` as `package` 24 and
+// a version 1 file as 16, and an installer of the earlier range refuses the former at its edge.
+#[path = "gate_477_cv1.rs"]
+mod gate_477_cv1;
 // Workflow #477 LR-1: the revision table counts a `linear_steps` press step's count as `package`
 // 25, and nothing else so.
 #[path = "gate_477_lr1.rs"]

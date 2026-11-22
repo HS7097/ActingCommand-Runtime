@@ -1213,7 +1213,9 @@ fn validate_effects(
                     "the pending amount requires actingcommand.scheduling.v2",
                     descriptor,
                 ));
-            } else if effect.expected_amount_milli.is_some() || effect.confidence_milli > 1000 {
+            } else if effect.expected_amount_milli.is_some()
+                || effect.confidence_milli > crate::MAX_EFFECT_CONFIDENCE_MILLI
+            {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::LimitExceeded,
                     effect_path.clone(),
@@ -1232,7 +1234,8 @@ fn validate_effects(
             }
             _ => None,
         };
-        if quantity_milli.is_none() || effect.confidence_milli > 1000 {
+        if quantity_milli.is_none() || effect.confidence_milli > crate::MAX_EFFECT_CONFIDENCE_MILLI
+        {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 effect_path.clone(),
@@ -1303,7 +1306,9 @@ fn validate_consumption_fact(
         ));
         return;
     }
-    if effect.expected_amount_milli.is_some() || effect.confidence_milli > 1000 {
+    if effect.expected_amount_milli.is_some()
+        || effect.confidence_milli > crate::MAX_EFFECT_CONFIDENCE_MILLI
+    {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             effect_path,
@@ -3503,8 +3508,8 @@ fn validate_reference(
     }
 }
 
+/// Workflow #477 CV-1 (register §1.507): the identifier's grammar is the contract crate's one
+/// definition, which a version 2 `pack-catalog.json` holds its rule ids and fact keys to.
 fn is_identifier_byte(index: usize, byte: u8) -> bool {
-    byte.is_ascii_lowercase()
-        || byte.is_ascii_digit()
-        || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'-'))
+    actingcommand_contract::resource_effect::scheduling_identifier_byte(index, byte)
 }

@@ -581,7 +581,7 @@ impl HostShared {
                 )
             })?;
             self.verify_strategic_evidence(report, evidence)?;
-            let (facts, resources) = {
+            let (facts, resources, _) = {
                 let _outcome_gate = lock(
                     &self.policy_outcome_gate,
                     HostLocation::SnapshotStrategicOutcomeState,
