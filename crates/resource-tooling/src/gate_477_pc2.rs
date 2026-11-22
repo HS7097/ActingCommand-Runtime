@@ -136,6 +136,8 @@ fn line(
             .map(|package_id| (*package_id).to_owned())
             .collect(),
         displays: displays.map(Path::to_path_buf),
+        values: None,
+        version_2: false,
     })
 }
 

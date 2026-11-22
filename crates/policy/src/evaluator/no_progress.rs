@@ -13,7 +13,11 @@
 //!   writes) a `fact` or `record_deadline` names, a fact reference's too, each fact a
 //!   `fact_time_reached` names, and the reading, capacity and comparand facts of each pool a
 //!   `resource_projection` projects; and the reading and capacity facts of each pool the task
-//!   reserves (the reserve gate reads them at every admission). A fact of another family (a lock,
+//!   reserves (the reserve gate reads them at every admission). #455 P2 fix round 1 (register
+//!   §1.505): such a pool read from rows of a list is read by its list's key in its instance, and
+//!   its value is the sum the host computed for it (the reading it was given beside the left-out
+//!   facts, as the timeline's resets leave it; when several pools read the one list, each one's
+//!   sum), as a fact pool's is its fact's value. A fact of another family (a lock,
 //!   a health flag) is no basis key, and neither is a pool the task only consumes or produces. A
 //!   dispatch whose trigger was decided by a clock, a timeline, an outcome or a dependency alone,
 //!   or whose trigger is not true as captured (an immediate rerun, a remedy request), has no basis
@@ -51,12 +55,13 @@ use sha2::{Digest, Sha256};
 
 use super::{
     DecisionReason, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
-    FACT_REFRESH_TASK_ID, PolicyEvaluationResult, PoolReading, PredicateTruth, TaskRuntimeSnapshot,
-    evaluate_predicate, evaluation_pool_values, project_time_validity, reason_with,
+    FACT_REFRESH_TASK_ID, GivenPoolReadings, PolicyEvaluationResult, PoolValues, PredicateTruth,
+    TaskRuntimeSnapshot, evaluate_predicate, evaluation_pool_values, project_given_validity,
+    project_time_validity, reason_with,
 };
 use crate::codes::PolicyCode;
 use crate::{
-    CompiledCatalog, FactComparand, FactValue, ObservationRef, PoolCapacity, PoolSpec,
+    CompiledCatalog, FactComparand, FactScalar, FactValue, ObservationRef, PoolCapacity, PoolSpec,
     PredicateSpec, ProjectionComparand, ScopeSelector, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
@@ -158,7 +163,11 @@ impl NoProgressGuards {
         if guard.basis.catalog_hash != catalog_hash
             || !guarded_run
             || guard.basis.readings.is_empty()
-            || changed(&guard.basis.readings, decision.facts)
+            || changed(
+                &guard.basis.readings,
+                decision.facts,
+                decision.pool_values.given(),
+            )
         {
             return Ok(None);
         }
@@ -212,12 +221,39 @@ impl NoProgressMemory {
     /// read as the evaluation reads them (the facts as the resets leave them). An intent replaces
     /// the pair's earlier pending basis. A dispatch with no basis key or more than
     /// [`MAX_NO_PROGRESS_BASIS_KEYS`], the Runtime's fact refresh and a task the catalog does not
-    /// hold capture none, and the pair's pending basis is dropped.
+    /// hold capture none, and the pair's pending basis is dropped. No pool read from rows of a
+    /// list has a reading here ([`Self::capture_with_readings`] gives them).
     pub fn capture(
         &mut self,
         catalog: &CompiledCatalog,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
+        time: EvaluationTime,
+        intents: &[DispatchIntent],
+        enabled: impl Fn(&str) -> bool,
+    ) -> PolicyEvaluationResult<()> {
+        self.capture_with_readings(
+            catalog,
+            facts,
+            resources,
+            &GivenPoolReadings::default(),
+            time,
+            intents,
+            enabled,
+        )
+    }
+
+    /// #455 P2 fix round 1 (register §1.505): [`Self::capture`] with the readings the host gave
+    /// the evaluation for the pools read from rows of a list (`readings`, as it gave them beside
+    /// the left-out facts), read as the evaluation reads them: a trigger such a pool makes true
+    /// captures the list's key in the pool's instance, its value the sum.
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture_with_readings(
+        &mut self,
+        catalog: &CompiledCatalog,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        readings: &GivenPoolReadings,
         time: EvaluationTime,
         intents: &[DispatchIntent],
         enabled: impl Fn(&str) -> bool,
@@ -230,6 +266,7 @@ impl NoProgressMemory {
             return Ok(());
         }
         let effective = project_time_validity(catalog, facts, time)?;
+        let given = project_given_validity(catalog, readings, &facts.instances, time)?;
         let bundle = catalog.catalog();
         let pool_specs: BTreeMap<&str, &PoolSpec> = bundle
             .pools
@@ -237,7 +274,7 @@ impl NoProgressMemory {
             .iter()
             .map(|pool| (pool.id.as_str(), pool))
             .collect();
-        let pool_values = evaluation_pool_values(&pool_specs, resources, &effective, time);
+        let pool_values = evaluation_pool_values(&pool_specs, resources, &effective, &given, time);
         let timeline_events: BTreeMap<&str, &TimelineEvent> = bundle
             .timeline
             .events
@@ -279,10 +316,11 @@ impl NoProgressMemory {
             let readings = keys
                 .into_iter()
                 .map(|(scope, fact_key)| {
-                    let reading = current_reading(&effective, &scope, &fact_key);
+                    let reading = basis_value(&effective, &given, &scope, &fact_key);
+                    let observed_at_unix_ms = reading.as_ref().map(|(_, observed_at)| *observed_at);
                     BasisReading {
-                        value: reading.map(|(value, _)| value.clone()),
-                        observed_at_unix_ms: reading.map(|(_, observed_at)| observed_at),
+                        value: reading.map(|(value, _)| value),
+                        observed_at_unix_ms,
                         scope,
                         fact_key,
                     }
@@ -335,11 +373,27 @@ impl NoProgressMemory {
     /// Forgets every pair of an instance `enabled` does not name (turning the guard off and on
     /// releases it), then releases every armed guard one of whose basis keys reads, in `facts` as
     /// the resets leave them at `time`, a value other than at admission. A released guard is
-    /// gone: a later reading of the old value does not arm it again.
+    /// gone: a later reading of the old value does not arm it again. No pool read from rows of a
+    /// list has a reading here ([`Self::observe_with_readings`] gives them).
     pub fn observe(
         &mut self,
         catalog: &CompiledCatalog,
         facts: &EvaluationFacts,
+        time: EvaluationTime,
+        enabled: impl Fn(&str) -> bool,
+    ) -> PolicyEvaluationResult<()> {
+        self.observe_with_readings(catalog, facts, &GivenPoolReadings::default(), time, enabled)
+    }
+
+    /// #455 P2 fix round 1 (register §1.505): [`Self::observe`] with the readings the host gave
+    /// the evaluation for the pools read from rows of a list (`readings`), as the timeline's
+    /// resets leave them at `time`: a list read again with another sum releases the guard whose
+    /// basis holds its key, as a fact of another value does.
+    pub fn observe_with_readings(
+        &mut self,
+        catalog: &CompiledCatalog,
+        facts: &EvaluationFacts,
+        readings: &GivenPoolReadings,
         time: EvaluationTime,
         enabled: impl Fn(&str) -> bool,
     ) -> PolicyEvaluationResult<()> {
@@ -351,8 +405,9 @@ impl NoProgressMemory {
             return Ok(());
         }
         let facts = project_time_validity(catalog, facts, time)?;
+        let given = project_given_validity(catalog, readings, &facts.instances, time)?;
         self.armed
-            .retain(|_, guard| !changed(&guard.basis.readings, &facts));
+            .retain(|_, guard| !changed(&guard.basis.readings, &facts, &given));
         Ok(())
     }
 
@@ -385,12 +440,72 @@ impl NoProgressMemory {
 }
 
 /// SS-4: whether one of `readings` has a reading in `facts` whose value differs from the one
-/// captured (a reading where none was counts; no reading now counts as none).
-fn changed(readings: &[BasisReading], facts: &EvaluationFacts) -> bool {
-    readings.iter().any(|reading| {
-        current_reading(facts, &reading.scope, &reading.fact_key)
-            .is_some_and(|(value, _)| reading.value.as_ref() != Some(value))
-    })
+/// captured (a reading where none was counts; no reading now counts as none). #455 P2 fix round
+/// 1: a key no fact holds is read from `given` ([`list_reading`]).
+fn changed(readings: &[BasisReading], facts: &EvaluationFacts, given: &GivenPoolReadings) -> bool {
+    readings.iter().any(
+        |reading| match current_reading(facts, &reading.scope, &reading.fact_key) {
+            Some((value, _)) => reading.value.as_ref() != Some(value),
+            None => list_reading(given, &reading.scope, &reading.fact_key)
+                .is_some_and(|(value, _)| reading.value.as_ref() != Some(&value)),
+        },
+    )
+}
+
+/// SS-4, #455 P2 fix round 1: the reading of the basis key (`scope`, `fact_key`) a capture
+/// records: the fact's in `facts` ([`current_reading`]), else the list's in `given`
+/// ([`list_reading`]). Its value and observation time.
+fn basis_value(
+    facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
+    scope: &ScopeSelector,
+    fact_key: &str,
+) -> Option<(FactValue, u64)> {
+    match current_reading(facts, scope, fact_key) {
+        Some((value, observed_at)) => Some((value.clone(), observed_at)),
+        None => list_reading(given, scope, fact_key),
+    }
+}
+
+/// #455 P2 fix round 1 (register §1.505): the reading of the list `fact_key` of the instance
+/// `scope` names, as a basis key holds it: the sum the host computed for the pool read from rows
+/// of it, an integer, observed when the list was. When several pools read the one list, each
+/// one's sum, as rows `{pool_id, value}` in the order of the pools' ids, so a list read again
+/// with another sum for any of them is a reading of another value. `None` when none of them has a
+/// number (no list, one a reset invalidated, or one the host could not read): no reading now.
+fn list_reading(
+    given: &GivenPoolReadings,
+    scope: &ScopeSelector,
+    fact_key: &str,
+) -> Option<(FactValue, u64)> {
+    let ScopeSelector::Instance { instance_id } = scope else {
+        return None;
+    };
+    let reads = given.list_reads(instance_id, fact_key).collect::<Vec<_>>();
+    let (_, first) = reads.first()?;
+    let observed_at = first.observed_at_unix_ms;
+    if let [(_, only)] = reads.as_slice() {
+        return Some((
+            FactValue::Integer(i64::try_from(only.value).ok()?),
+            observed_at,
+        ));
+    }
+    let rows = reads
+        .iter()
+        .map(|(pool_id, read)| {
+            Some(BTreeMap::from([
+                (
+                    "pool_id".to_owned(),
+                    FactScalar::String((*pool_id).to_owned()),
+                ),
+                (
+                    "value".to_owned(),
+                    FactScalar::Integer(i64::try_from(read.value).ok()?),
+                ),
+            ]))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((FactValue::RecordList(rows), observed_at))
 }
 
 /// The reading of (`scope`, `fact_key`) in `facts`, as every predicate reads one: present and
@@ -417,7 +532,7 @@ pub(super) struct Decision<'a> {
     pub(super) scope: &'a ScopeSelector,
     pub(super) facts: &'a EvaluationFacts,
     pub(super) pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
-    pub(super) pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
+    pub(super) pool_values: &'a PoolValues<'a>,
     pub(super) time: EvaluationTime,
     pub(super) timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
 }
@@ -464,7 +579,10 @@ fn basis_keys(
     );
     for pool in decision.pool_specs.values() {
         if pools.read.contains(pool.id.as_str()) {
-            if let ObservationRef::Fact { fact_key } = &pool.observation {
+            // #455 P2 fix round 1: a pool read from rows of a list by its list's key.
+            if let ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } =
+                &pool.observation
+            {
                 add(&pool.scope, fact_key.as_str());
             }
             if let PoolCapacity::Fact(reference) = &pool.capacity {

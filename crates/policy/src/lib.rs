@@ -185,6 +185,9 @@ mod tests {
     // #455 P1 (0.12.78; register §1.504): a pool may declare that its inventory is read from rows
     // of a list (`list_rows`); its checks, the composer's `requires`, and no reading before P2.
     mod gate_455_p1;
+    // #455 P2 (0.12.79; register §1.505): the evaluator is given the reading the host computed for
+    // a pool read from rows of a list, and every reader of a pool's reading takes it.
+    mod gate_455_p2;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'

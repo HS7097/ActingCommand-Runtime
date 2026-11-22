@@ -678,9 +678,10 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     // #463 INT-1 (register §1.473) 19, an interrupt entry without handlers, Workflow #463
     // SEL-2L (register §1.480) 20, a repeated_anchor layout's shared read, Workflow #463
     // SEL-GRID G2 (register §1.491) 21, the lines of a shared read's name boxes, Workflow
-    // #428 S168-LK (register §1.500) 22, a linear step's list reading, and Workflow #455 G-SLx
-    // (register §1.501) 23, a pack's variables beside an irreversible capability.
-    assert_eq!(own, [3, KEY_REVISION + 6]);
+    // #428 S168-LK (register §1.500) 22, a linear step's list reading, Workflow #455 G-SLx
+    // (register §1.501) 23, a pack's variables beside an irreversible capability, and Workflow
+    // #477 CV-1 (register §1.507) 24, a bundle that carries a version 2 package declaration.
+    assert_eq!(own, [3, KEY_REVISION + 7]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));

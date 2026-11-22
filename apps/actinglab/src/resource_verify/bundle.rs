@@ -64,12 +64,12 @@ use crate::codes::{ActinglabCode, BundleProblem, LayoutProblem, ReadbackProblem,
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, BundleSource, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry, notice_relative_path,
-    parse_standard_pack_catalog, parse_standard_pack_schedule, read_standard_pack_tables,
-    retired_ui_outcome, standard_pack_schedule_pools,
+    BundleIndex, BundleMaintenance, BundleSource, CatalogScheduleFacts, GOALS_PACKAGE_REVISION,
+    NOTICES_PACKAGE_REVISION, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry,
+    notice_relative_path, parse_standard_pack_catalog_with, read_standard_pack_tables,
+    retired_ui_outcome,
 };
 use actingcommand_resource_tooling::{
     BundleGoalsRequest, BundleGoalsVerdict, PackageBundleRequest, ResourceToolingCode,
@@ -606,9 +606,10 @@ fn carry_tables(
 /// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the repository `repo`'s
 /// `pack-catalog.json`, a root file of the standard package root (contracts/package-reference.md,
 /// "Standard package root") that `place` places and sets aside when a zip carries none, carried
-/// into the zip's `entries` of `game` byte for byte when its reader, `parse_standard_pack_catalog`,
-/// takes its business part against the zip's `bundle.json` and the pools the repository's
-/// `schedule.json` declares (none without the file). Each error of a refused file fails the step
+/// into the zip's `entries` of `game` byte for byte when its reader,
+/// `parse_standard_pack_catalog_with`, takes its business part against the zip's `bundle.json`
+/// and the pools the repository's `schedule.json` declares (none without the file; Workflow #477
+/// CV-1: and, of version 2, its rules and valuations). Each error of a refused file fails the step
 /// as `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`), and
 /// the file is not carried; its display defects are the installed root's check's warnings. A
 /// repository without the file leaves the entries as they are. A repository that still holds
@@ -635,17 +636,14 @@ fn carry_catalog(
         .and_then(|index| StandardPackRegistry::from_bundle_bytes(index, game).ok())
         .ok_or_else(|| mismatch(STANDARD_PACK_BUNDLE_FILE, BundleProblem::IndexSchema))?;
     // `package bundle` already composed the repository's `schedule.json`, so its reader takes it.
+    // Workflow #477 CV-1: its pools and, of a version 2 file, its rules and valuations.
     let schedule_path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
-    let pools = if is_file(&schedule_path) {
-        let schedule = fs::read(&schedule_path)
-            .map_err(|error| read_failed(&schedule_path, &error, BundleProblem::RootFileDiffers))?;
-        parse_standard_pack_schedule(&schedule)
-            .ok()
-            .map(|schedule| standard_pack_schedule_pools(&schedule))
-    } else {
-        Some(BTreeSet::new())
-    };
-    match parse_standard_pack_catalog(&bytes, game, &registry, pools.as_ref()) {
+    let schedule = is_file(&schedule_path)
+        .then(|| fs::read(&schedule_path))
+        .transpose()
+        .map_err(|error| read_failed(&schedule_path, &error, BundleProblem::RootFileDiffers))?;
+    let facts = CatalogScheduleFacts::from_schedule_bytes(schedule.as_deref());
+    match parse_standard_pack_catalog_with(&bytes, game, &registry, facts.as_ref()) {
         Ok(_) => {
             entries.insert(STANDARD_PACK_CATALOG_FILE.to_owned(), bytes);
             Ok(true)

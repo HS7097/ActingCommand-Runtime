@@ -215,6 +215,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #455 P2 (register §1.505): this build gives a pool whose `observation` is `list_rows`
+        // its reading, computed from its instance's list before each evaluation; a
+        // `schedule.json` whose pool writes the kind requires it, so an older Runtime refuses the
+        // file instead of reading the pool without its rows.
+        subsystem(
+            actingcommand_policy::POOL_LIST_ROWS_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCHED-C1f1 (register §1.303): this build reads a `consumes` entry's `amount` written as
         // a fact with a fallback (one run's amount read from the instance's fact at each
         // evaluation); a `schedule.json` whose rule writes one requires it, so an older Runtime

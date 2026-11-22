@@ -34,17 +34,16 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, CatalogBusiness, DeclaredCapabilities, InstalledProcess,
-    IrreversiblePackages, MAX_STANDARD_PACK_CATALOG_BYTES, MAX_STANDARD_PACK_SCHEDULE_BYTES,
-    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    BundleIndex, BundleMaintenance, CatalogEntry, CatalogScheduleFacts, DeclaredCapabilities,
+    InstalledProcess, IrreversiblePackages, MAX_STANDARD_PACK_CATALOG_BYTES,
+    MAX_STANDARD_PACK_SCHEDULE_BYTES, ProvidedCapability, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackCatalog,
     StandardPackCatalogIndex, StandardPackRegistry, StandardPackRoot, StandardPackRootBytes,
     StandardPackRootIssue, StandardPackTableReport, catalog_display_outcome,
-    parse_standard_pack_catalog, parse_standard_pack_schedule, read_standard_pack_root,
+    parse_standard_pack_catalog_with, read_standard_pack_root,
     read_standard_pack_root_with_catalog, read_standard_pack_tables, retired_ui_outcome,
-    standard_pack_schedule_pools,
 };
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
@@ -211,9 +210,10 @@ struct InstallationRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     display: Option<Value>,
     /// PC-1: the package's business part, `{consumes, produces}`, as its entry of its game's
-    /// `pack-catalog.json` declares it.
+    /// `pack-catalog.json` declares it; Workflow #477 CV-1: of a version 2 file, in full, as the
+    /// file writes it (`CatalogEntry::business_document`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    catalog: Option<CatalogBusiness>,
+    catalog: Option<Value>,
 }
 
 pub struct Answer {
@@ -778,15 +778,15 @@ impl Rows {
                 Ok(Some(files)) => {
                     // Fix round 1: `schedule.json` is parsed for the catalog's pools only when the
                     // root holds the catalog (this runs on every status read).
-                    let pools = if fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE))
+                    let facts = if fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE))
                         .is_ok()
                     {
-                        schedule_pools(files.schedule.as_deref())
+                        schedule_facts(files.schedule.as_deref())
                     } else {
                         None
                     };
                     if let Some(catalog) =
-                        self.game_catalog(&directory, &game, &files.root.registry, pools.as_ref())
+                        self.game_catalog(&directory, &game, &files.root.registry, facts.as_ref())
                     {
                         catalogs.insert(game.clone(), catalog);
                     }
@@ -920,7 +920,7 @@ impl Rows {
                         .and_then(|entry| entry.display.clone())
                         .map(Value::Object),
                     display: catalog.and_then(StandardPackCatalog::display).cloned(),
-                    catalog: entry.map(|entry| entry.business.clone()),
+                    catalog: entry.map(CatalogEntry::business_document),
                 }
             })
             .collect::<Vec<_>>();
@@ -950,8 +950,9 @@ impl Rows {
 
     /// Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): the `pack-catalog.json` of
     /// the game root `directory` of `game`, whose registry is `registry` and whose `schedule.json`
-    /// declares `pools` (`None`: not judged, that file could not be read), when it holds one whose
-    /// business part keeps every rule, read by the contract's [`parse_standard_pack_catalog`]. A
+    /// gives `facts` (its pools and, Workflow #477 CV-1, the rules and valuations a version 2 file
+    /// is held to; `None`: not judged, that file could not be read), when it holds one whose
+    /// business part keeps every rule, read by the contract's [`parse_standard_pack_catalog_with`]. A
     /// file that cannot be read is `package_binding_unreadable` with its path and the OS error
     /// beneath it; each error of a refused one is `standard_pack_root_invalid` (the game, the
     /// file's path, its `standard_pack_problem` and `json_pointer`), and the root and its rows are
@@ -964,7 +965,7 @@ impl Rows {
         directory: &Path,
         game: &str,
         registry: &StandardPackRegistry,
-        pools: Option<&BTreeSet<String>>,
+        facts: Option<&CatalogScheduleFacts>,
     ) -> Option<StandardPackCatalog> {
         let retired = directory.join(STANDARD_PACK_RETIRED_UI_FILE);
         if fs::symlink_metadata(&retired).is_ok() {
@@ -979,7 +980,7 @@ impl Rows {
                 return None;
             }
         };
-        match parse_standard_pack_catalog(&bytes, game, registry, pools) {
+        match parse_standard_pack_catalog_with(&bytes, game, registry, facts) {
             Ok(catalog) => {
                 for issue in catalog.display_issues() {
                     self.warn(catalog_display_outcome(game, &path, issue));
@@ -1107,14 +1108,14 @@ impl Rows {
                     // refuses, and then no pool is judged).
                     let has_catalog =
                         fs::symlink_metadata(directory.join(STANDARD_PACK_CATALOG_FILE)).is_ok();
-                    let pools = if has_catalog {
+                    let facts = if has_catalog {
                         match read_capped(
                             &directory.join(STANDARD_PACK_SCHEDULE_FILE),
                             MAX_STANDARD_PACK_SCHEDULE_BYTES as u64,
                         ) {
-                            Ok(schedule) => schedule_pools(Some(schedule.as_slice())),
+                            Ok(schedule) => schedule_facts(Some(schedule.as_slice())),
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                                schedule_pools(None)
+                                schedule_facts(None)
                             }
                             Err(error) => {
                                 self.unreadable_file(
@@ -1128,7 +1129,7 @@ impl Rows {
                         None
                     };
                     let catalog =
-                        self.game_catalog(&directory, &game, &sound.registry, pools.as_ref());
+                        self.game_catalog(&directory, &game, &sound.registry, facts.as_ref());
                     games.push(StandardPackGameRow {
                         game,
                         tables,
@@ -1212,16 +1213,12 @@ fn sound_game_root(
 }
 
 /// Workflow #477 PC-1: the pools the `schedule.json` of a game root declares, which its
-/// `pack-catalog.json` may name: none for a root without the file (`schedule` `None`), `None` for
-/// one whose file the contract's reader refuses (that refusal is the composition's, and no pool
-/// reference of the catalog is judged by `packs` then).
-fn schedule_pools(schedule: Option<&[u8]>) -> Option<BTreeSet<String>> {
-    match schedule {
-        None => Some(BTreeSet::new()),
-        Some(bytes) => parse_standard_pack_schedule(bytes)
-            .ok()
-            .map(|schedule| standard_pack_schedule_pools(&schedule)),
-    }
+/// `pack-catalog.json` may name, and (Workflow #477 CV-1) the rules and valuations a version 2 file
+/// is held to: none for a root without the file (`schedule` `None`), `None` for one whose file the
+/// contract's reader refuses (that refusal is the composition's, and no reference of the catalog to
+/// it is judged by `packs` then).
+fn schedule_facts(schedule: Option<&[u8]>) -> Option<CatalogScheduleFacts> {
+    CatalogScheduleFacts::from_schedule_bytes(schedule)
 }
 
 /// A refused root file of the game root `directory` of `game` as `standard_pack_root_invalid`:

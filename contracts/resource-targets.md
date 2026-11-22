@@ -192,7 +192,7 @@ mismatches are refused with a line and column.
 | `valid_until_unix_ms` | required when `targets` is non-empty, with `now < v <= now + 31_536_000_000`; absent when `targets` is empty | `missing_field` / `validity_out_of_range` / `invalid_value` @ `/valid_until_unix_ms` |
 | `targets` | `0..=16` entries; `[]` withdraws every target | `out_of_range` @ `/targets` |
 | `targets[i].id` | scheduling identifier `^[a-z0-9][a-z0-9._:-]*$`, at most 128 bytes, unique in the document | `invalid_value` / `duplicate_id` @ `/targets/i/id` |
-| `resource` | a pool id of the active catalog whose `observation` is `fact` with a `fact_key` of the `resource.` or `inventory.` family and whose scope covers the instance | `unknown_resource` / `resource_not_observable` / `resource_out_of_scope` @ `/targets/i/resource` |
+| `resource` | a pool id of the active catalog whose `observation` is `fact` with a `fact_key` of the `resource.` or `inventory.` family, or (#455 P2, since 0.12.79) `list_rows` (its list's key under `inventory.list.`; "A pool read from rows of a list" below), and whose scope covers the instance | `unknown_resource` / `resource_not_observable` / `resource_out_of_scope` @ `/targets/i/resource` |
 | `condition` | `{"kind": "at_least", "amount": 1..=2^53-1}`, the only v1 condition | `invalid_type` / `out_of_range` @ `/targets/i/condition/amount` |
 | `scale` | `1..=2^53-1`: the gap at which the target weight equals `importance_milli` | `out_of_range` @ `/targets/i/scale` |
 | `importance_milli` | `1..=1_000_000` | `out_of_range` @ `/targets/i/importance_milli` |
@@ -1054,6 +1054,9 @@ between the phases is named by `checked_catalog_hash`.
   state its own. `observation` reads the inventory through the time-validity projection
   exactly as a target condition does: `current` and `observed_at_unix_ms`, or `pending` with
   its reason. Without an active catalog both lists are empty and `catalog_hash` is absent.
+  #455 P2 (since 0.12.79): a pool read from rows of a list is targetable under its list's key,
+  its `observation` the reading the host computed under the same locks ("A pool read from rows
+  of a list" below).
 - `active` is the instance's stored policy as the evaluator reads it (the v1 or v2 row decoders
   and the active or expired state), with the `fact.published` event that holds it (`version`,
   `event_id`), `expired` once `valid_until_unix_ms` has passed, the targets in document form
@@ -1085,6 +1088,22 @@ ended before the receipt header does `RuntimeClient::resource_target_view(alias)
 and, when the same owner epoch answers, report `runtime_operation_unsupported`; any other
 failure is returned unchanged; the skill then
 falls back to reading the scheduling catalog.
+
+## A pool read from rows of a list
+
+#455 P2 (since 0.12.79; register §1.505; the coordinator's rulings of 11-22, not the owner's
+words; [scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"). A pool
+whose `observation` is of the kind `list_rows` is observable, under its list's key L (under
+`inventory.list.`, so of the `inventory.` family): a v1, v2 or v3 target may name it, and its
+check refuses it no more with `resource_not_observable` (in 0.12.78 it did, as for a pool observed
+by an outcome). Its inventory is the reading the host computed from the instance's list under the
+same locks as the projection, never the list itself: known, the number projected by the pool's
+regeneration rule, its `observed_at_unix_ms` the list's and its freshness the list's expiry;
+unknown, `awaiting_observation` with the reading's reason (`missing` without a list or after a
+reset that invalidated it, `low_confidence`, `expired`, `invalid_value` for a value that is no
+non-negative integer or a sum beyond 2^53 − 1). The check, the receipt's `conditions`, the
+evaluation's gap and weights (applied, satisfied, pending), `ResourceTargetView` (`targetable`
+and `active`) and a goal entry's `current` all read it; no member and no word is added.
 
 ## Client and CLI
 

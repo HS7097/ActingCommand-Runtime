@@ -45526,6 +45526,236 @@ not, keeping the game's last good rules either way. A rollback meets nothing: no
 activated a catalogue with the kind (a configured one would have to be written after this deploy;
 a 0.12.77 start would then refuse that generation at its compile).
 
+### 1.505 Slice #455 P2 (0.12.79): the host computes the reading of a pool read from rows of a list before each evaluation, gives it to the evaluator, and every reader of a pool's reading takes it; the Runtime names `pool_list_rows` (board #455; the rulings 1 to 13 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-455-p2.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition, and P1's report; on main `9491d936`, the 0.12.78 release)
+
+This section takes 1.505, reserved for this slice (1.506 is ASLEEP-2's, in 0.12.78).
+[scheduling/README.md](scheduling/README.md) ("A pool read from rows of a list", rewritten from
+"What it means" to "In 0.12.78"; the capability bullets there and under "Pool lines"; the
+exception in "Record lists and the projection") is the contract;
+[scheduling/v2/README.md](scheduling/v2/README.md), [resource-targets.md](resource-targets.md)
+("A pool read from rows of a list", new; the `resource` row of the v1 table; the view's
+`targetable`), [instance-fact-store.md](instance-fact-store.md),
+[resource-readings.md](resource-readings.md), [standard-pack-schedule.md](standard-pack-schedule.md)
+("`requires`") and [actingd-check-config.md](actingd-check-config.md) (the row `pool_list_rows`)
+follow it. No `package` revision moves and no declared interface range: a feature of
+`schedule.json` goes by `requires` alone, as the pools' lines did.
+
+**Where the number is made** (rulings 1, 2, 3 and 4). In the host, before each evaluation, under
+the fact write gate the fact pools are projected under
+(`project_authoritative_policy_inputs_with_gaps_under_gate`, `crates/runtime-host/src/host/policy_dispatch.rs`):
+for each pool of the active catalog whose observation is `list_rows`,
+`InstanceFactStore::list_pool_readings` (`fact_store.rs`) reads the pool's instance's active list
+fact at the projection's ledger position (a historical one for an older position) and calls one
+pure function, `list_rows_reading` (`crates/runtime-host/src/pool_list_rows.rs`): for each declared
+row, the list's row whose key column holds the row's key (a text) gives its value column, an
+integer at least 0, times the factor; the reading is the sum. A key the list does not hold counts 0
+(a list is written whole or not at all). Unknown, never 0, each a closed word
+(`actingcommand_policy::ListRowsUnknown`): no list `fact_missing`; a confidence below the pool's
+`ledger_fact` minimum `fact_low_confidence`; a named row's value that is a text, a negative integer,
+another scalar or absent, or a sum beyond 2^53 − 1 (`MAX_LIST_ROWS_READING`), `type_mismatch`; a
+record that is no inline record list `type_mismatch`; fix round 1 (the review's must fix 1; the
+coordinator's ruling in `rd-1122/brief-1868-fix1.md`): a list that is not empty and is not keyed by
+the pool's columns, one of its rows holding no text under `key_column` or none of them holding
+`value_column`, `type_mismatch` (before, a `key_column` the package does not write read every key
+as absent, a known 0, and so did a `value_column` no row carries while no declared key was held; a
+held key's row without it was `type_mismatch` already; nothing checks the pool's column names
+against the package that reads the list). An empty list holds no key and reads 0. A reading
+carries the list's observation
+time and expiry; the evaluator judges the expiry (`fact_expired`) and a sum a constant capacity
+cannot hold (`type_mismatch`), as for a fact reading. The skip of `inventory.list.` in the fact
+store's projection and the compile's refusal of every other member under the prefix are unchanged:
+no list enters the projection or `facts`.
+
+**Identity** (ruling 5). `project_fact_pools_with_readings` (`crates/policy/src/evaluator.rs`)
+writes each `Read` reading the pool can hold as the pool's snapshot where a fact pool's projected
+reading goes (`resources.pools`: the sum, observed when the list was; a caller's snapshot of the
+pool dropped as every `ledger_fact` pool's), so it enters `fact_snapshot_id`
+(`combined_policy_snapshot_id`, over the resources) and each instance's view identity
+(`dispatch_view_identity`, over the pools whose scope selects the instance) by the path that
+exists; no section of identity is added. `project_fact_pools` is that function with no reading,
+byte for byte the one of main.
+
+**The evaluator is given the reading** (ruling 6). `GivenPoolReadings` (pool id → the pool's
+instance, the list's key, `Read {value, observed_at_unix_ms, expires_at_unix_ms}` or
+`Unknown(ListRowsUnknown)`), memory only, beside the left-out facts:
+`LeftOutFacts::give_pool_readings`, which the policy cycle calls with the projection's readings.
+The evaluation projects them through the timeline's resets by the rule a fact obeys
+(`project_given_validity`, sharing `survives_resets` with `project_time_validity`: a reset that
+invalidates the list's key in the pool's scope at or after the list's observation leaves the pool
+`fact_missing`; one still to come bounds the expiry). Where the evaluator checks that a pool's
+snapshot is still backed by its record (`evaluation_pool_values`, now through
+`pool_record_times`), such a pool takes the given reading's observation and expiry. The pool values
+an evaluation reads travel with the readings (`PoolValues`), so every reader below reaches the
+reason of an unknown one (`GivenPoolReadings::unknown_reason`, in the order of
+`live_pool_unknown_reason`). Nothing in the policy crate reads a list, and nothing in it writes a
+weight.
+
+**Readers** (ruling 7; from `git grep` of `pool_values`, `pool_fact`, `ObservationRef`,
+`observe_target`, `project_fact_pools` and the study's section 1):
+
+| Reader | Where | Unknown reading | Test |
+|---|---|---|---|
+| `resource_projection` in a trigger, and its freshness | `evaluate_predicate` | Unknown, the suggestion (L, its reason): `trigger_unknown` | t2, t3, t4, h3, h4 |
+| `resource_projection` in a feedback stop | `evaluate_predicate` | `feedback_stop_unknown` with the suggestion | the same accessor; not tested on its own |
+| the suggestion a reason carries | `resource_suggestion` | (L, `fact_missing` without a reading, else its reason) | t2, t3, t4, h4 |
+| the net benefit's cost term (regenerating pool) | `evaluator/benefit.rs` `judge` | `benefit_unknown` `reading_unknown` (pool, L, its reason) | t5 |
+| the pool's lines and the capped spending order; `capped_spend` | `evaluator/capped.rs` `lines` | `pool_line_held` `capped_cap_unknown` (L, its reason) | t6; `capped_spend`'s `pool_reading` t14 |
+| the reserve gate | `reserve_views` | case 1: `resource_reserve_insufficient` without `amount_after` | t7 |
+| the consumption a reading does not show yet | `reserve_unshown`, `lines` (the snapshot's observation, the list's) | none (no reading, no unshown) | t8 |
+| the urgency and the tie-break | `resource_urgency_milli`, `tie_break::projected` | no urgency; the tie-break's bound unknown | the same accessor; not tested on its own |
+| the evaluation's wake | `evaluate_scheduling` `pool_fresh_until` | no wake | t3 |
+| the forward projection | `forward.rs` `project_forward_with_readings` (the snapshot its start, every step given the readings) | the pool out of each step; the gap (its reason, L) | t9 |
+| a resource target's check and receipt | `resolve_target_pool` (admits the kind under L), `observe_target`, `check_resource_targets_with_readings` | `awaiting_observation` with the reading's reason | t10, h6 |
+| the target's gap and weight in the evaluation | `resolve_instance_targets`, `resolve_v2`, `target_effects` | `pending` with the reading's reason | t11 |
+| the views | `targetable_resources_with_readings`, `active_resource_targets`, host `resource_target_view_of` | `pending` | t12, h6 |
+| a goal entry's `current` (`GoalView`) | host `read_goal_page` (the page's `targetable`, the resource target view's) | `pending` | h9 |
+| the idle plan's projection steps | `pool_projection_steps` (host `policy_host.rs`) | no step | the same accessor; not tested on its own |
+| the clock slots' liveness | `clock_slot_live` (host `clock_slot.rs`) | not live | the same accessor; not tested on its own |
+| the strategic report's pool metric | `strategy.rs` (reads `resources.pools`) | no value | the snapshot t1 and h3 pin; not tested on its own |
+| the no-progress guard (fix round 1) | `NoProgressMemory::capture_with_readings`, `observe_with_readings`, `NoProgressGuards::hold` (`decision.pool_values.given()`) | no reading now: releases nothing, as a fact's | t13 |
+| the probe's planning signal (fix round 1) | host `preview_detection_planning_signals` | no `planning_fact_unknown`, no allowance taken for a key the left-out set covers | h8 |
+
+**The no-progress guard** (fix round 1, the coordinator's ruling C1 in `rd-1122/brief-1868-fix1.md`,
+from the review's "may fix"). Before, the guard's capture read the pools without the readings, so a
+task whose trigger held only through such a pool captured no basis and was never held: it could run
+and spend again for as long as the list was not read again. Now the guard's basis takes such a pool
+as it takes a fact pool's reading: a pool a `resource_projection` projects or the task reserves adds
+the basis key (the pool's instance, L), whose value is the sum the host computed (an `integer`;
+when several pools read the one list, each one's sum, a record list of rows `{pool_id, value}` in
+the order of the pools' ids, so that another sum of any of them releases), observed when the list
+was. Capture, release and hold read it from the readings the evaluation was given, as the timeline's
+resets leave them (`capture_with_readings`, `observe_with_readings`, which the policy cycle calls
+with `left_out.pool_readings()`; `hold` from the evaluation's `PoolValues`); a key no fact holds is
+read from them (`basis_value`, `list_reading` in `evaluator/no_progress.rs`). `capture` and
+`observe` are those with no reading. A list read again with the same sum is no progress; one with
+another sum releases the guard; an unknown reading releases nothing, as a fact no longer read. A
+`benefit_realization` task still needs a fact observation of each pool it consumes (the compile's
+refusal, unchanged).
+
+**No refresh is asked** (ruling 8). `give_pool_readings` notes each reading's list key as left out
+for its pool's instance, so a pool whose reading is unknown raises no fact refresh demand (the
+refresh asks the recognition maintenance package for its marked keys, and no mark may name the
+prefix): no `fact_refresh_*` reason, no `key_not_marked`. Fix round 1 (ruling C2): nor is a probe
+planned for it: `preview_detection_planning_signals` skips a suggestion whose key the left-out set
+covers for the decision's instance, so no `planning_fact_unknown` is written and no detection
+allowance is taken for L (nor for a record list left out for its rows). Refresh on demand is a
+later slice.
+
+**Expiry wakes** (ruling 9). The given reading's expiry enters the evaluation's wake
+(`pool_fresh_until`, as a fact reading's, a millisecond after it; test t3). A list's publication
+wakes the evaluation already: a list reading is a `fact.published` record, and every event of the
+fact family is `FactsChanged` (`policy_trigger_for_family`, `host/policy_wake.rs`), which the
+existing actingd test `resident_driver_coalesces_relevant_event_bursts_without_terminal_feedback`
+pins.
+
+**The Runtime names the subsystem** (ruling 10). `pool_list_rows` is an always-on row of
+`config.subsystems` (`apps/actingd/src/config/manifest.rs`), so the workbench and check-config
+compose a `schedule.json` that requires it. `validate_static_fact_pool_authority` (the evaluation's
+and the forward projection's) accepts such a pool: it is bound to its list, and a configured reading
+of it, or a configured fact under its list's key, is a second authority
+(`policy_pool_authority_conflict`), as for a fact pool. `fact_store.rs`' `validate_pool_sources`
+leaves the kind out, as before.
+
+**What a person sees** (ruling 11): a reason names the list's key as its `fact_key`; `capped_spend`
+and a goal entry's `current` show the sum; no member or word is added, no range of
+`runtime-client`, `ledger` or `runtime-outcomes` moves. No game, package or alias is named in code
+(ruling 13).
+
+| # | Shape | Kind | Code slice | Notes |
+|---|---|---|---|---|
+| P2-1 | `pool_list_rows` | `config.subsystems` row, always on | #455 P2 | P1's `requires` entry is now accepted |
+| P2-2 | `GivenPoolReadings`, `GivenPoolReading`, `GivenReadingState`, `ListRowsUnknown` | policy crate types, memory only | #455 P2 | beside `LeftOutFacts` |
+| P2-3 | `project_fact_pools_with_readings`, `project_forward_with_readings`, `check_resource_targets_with_readings`, `targetable_resources_with_readings`; fix round 1 `NoProgressMemory::capture_with_readings`, `NoProgressMemory::observe_with_readings` | policy crate functions | #455 P2 | the plain functions are these with no reading |
+
+**Tests** (policy gate row "#455 P2", `crates/policy/src/tests/gate_455_p2.rs`; host row "#455
+P2", `crates/runtime-host/src/tests/gate_455_p2.rs`; apps row "#455 P2"; no clock read).
+
+| Test | What it shows |
+|---|---|
+| host `p2_h1_the_reading_is_the_sum_of_the_declared_rows_and_a_key_the_list_does_not_hold_counts_0` (1) | one row; four rows of factors 200, 400, 1000 and 2000 out of the list's order; a key the list does not hold counts 0; a list of 300 rows; the list's observation and expiry |
+| host `p2_h2_a_reading_is_unknown_never_zero` (2) | no list `fact_missing`; confidence 499 below 500 `fact_low_confidence`; a text, a negative integer, a timestamp and an absent value `type_mismatch`; 2^53 − 1 read, beyond it by one row or two `type_mismatch`; fix round 1: a list keyed by `name` (not `id`) and one whose rows carry `amount` (not `count`) `type_mismatch`, an empty list 0 |
+| policy `p2_t3_the_lists_expiry_wakes_the_evaluation_and_then_reads_fact_expired` (2) | the evaluation's wake a millisecond after the list's expiry; then `trigger_unknown` with (L, `fact_expired`) |
+| policy `p2_t4_a_reset_that_invalidates_the_list_invalidates_the_reading` (2) | a reset after the list's observation: `fact_missing`; before it: the task runs |
+| policy `p2_t5_the_cost_term_reads_the_reading_and_names_the_list_when_unknown` (3) | known benefit on a reading; `benefit_unknown` `reading_unknown` (pool, L, `fact_low_confidence`; `type_mismatch` for a sum above the capacity) |
+| policy `p2_t6_the_lines_read_the_reading_and_capped_cap_unknown_names_the_list` (3) | `would_cross_hard_line` with `pool_reading` 100; runs on 500; `capped_cap_unknown` with L and `fact_low_confidence` |
+| policy `p2_t7_the_reserve_gate_reads_the_reading_and_holds_on_an_unknown_one` (3) | runs on 100; case 1 on an unknown reading |
+| policy `p2_t8_the_consumption_since_the_lists_observation_is_counted` (3) | a task dispatched after the list's observation is counted (`amount_after` 40, its `task_id`), one before it not |
+| policy `p2_t10_a_target_on_the_pool_is_checked_and_its_condition_is_the_reading` (3) | the target accepted; its condition 40 (observed when the list was, gap 60), `low_confidence`, `missing` without a reading |
+| policy `p2_t11_the_evaluations_target_is_applied_on_the_reading_and_pending_without_it` (3) | `resource_targets` names it applied (current 40, gap 60) and pending `low_confidence` |
+| policy `p2_t12_the_views_show_the_reading` (3) | targetable under L with the reading; the stored policy's condition |
+| host `p2_h6_a_targets_receipt_and_the_target_view_read_the_reading` (3) | `ApplyResourceTargets`' receipt condition and `ResourceTargetView` (the goal page's `targetable`, a goal entry's `current`) read 1400 |
+| policy `p2_t2_a_projection_reads_the_reading_and_an_unknown_one_suggests_the_list_without_a_refresh` (3, 4) | the trigger reads the reading; unknown: (L, `type_mismatch`) and no `fact_refresh_*`, which without the given reading is asked |
+| host `p2_h4_without_a_list_the_task_waits_with_the_lists_key_and_asks_no_refresh` (4) | on the host: `trigger_unknown`, (L, `fact_missing`), no `fact_refresh*` |
+| host `p2_h3_the_host_computes_the_reading_and_the_evaluation_takes_it` (4, 5) | a configured catalog accepted; no list in the projection or `facts`; the snapshot 1400 at the list's time; the reading; one position, one identity; the task dispatched |
+| policy `p2_t1_the_given_number_goes_where_a_fact_pools_projected_reading_goes` (4) | the snapshot where a fact pool's goes; none unknown, above capacity or without a reading; catalog-a's golden bytes |
+| host `p2_h5_a_catalog_without_the_kind_keeps_its_golden_bytes_and_identity` (4) | catalog-a's projected resources golden, no reading, identity unchanged by a published list |
+| host `p2_h7_a_new_reading_moves_the_instances_view_and_the_intent_is_stale` (4) | the list read again (1600): the identity moved and the intent is `policy_facts_stale` |
+| policy `p2_t9_the_forward_projection_starts_from_the_reading_and_carries_it` (4) | starts from the reading, runs once, names `fact_expired` of L; without it nothing runs and `fact_missing` |
+| actingd `gate_455_p1::p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it` (5) | the manifest names `pool_list_rows`; the composer given its subsystems composes the file |
+| policy `p2_t13_the_no_progress_guard_holds_a_task_on_the_reading_as_on_a_fact` (fix round 1, C1) | over a reading of 1400 the task runs once and its run is admitted; the list not read again, it is held `policy_no_progress` with (L, `{"type":"integer","value":1400}`, the list's observation) exactly as the same task over the pool read from its own fact is held with that fact; a list read again with the same sum still holds it; one of 1600 releases the guard and the task runs |
+| policy `p2_t14_capped_spend_shows_the_reading` (fix round 1, D) | a capped round begun by a reading of 950 (trigger line 900): `capped_spend`'s `pool_reading` 950 with the pool's capacity and lines |
+| host `p2_h8_no_probe_is_planned_for_the_lists_key` (fix round 1, C2) | a task due by the pool or by a fact the instance does not hold: both suggested, a probe planned for the fact alone, none for L |
+| host `p2_h9_a_goal_entry_on_the_pool_shows_the_reading_as_its_current` (fix round 1, D) | composer mode, a `goals.json` resource entry on the pool: `GoalView` shows no current (pending `missing`) before the list and 1400 observed when the list was after it |
+
+**Fix round 1, the four host tests red in CI's first run** (`p2_h3`, `p2_h4`, `p2_h6`, `p2_h7`,
+all at the shared helper `start`: `activate_policy_catalog` answered `catalog_compile_failed` at
+`stage_catalog_generation`). The fixture was wrong, not the product: the helper replaced
+catalog-a's pools with the one list-backed pool, and catalog-a's activity profile keeps a goal whose
+metric names the replaced pool, which the compile refuses `dangling_reference` at
+`/profiles/0/goals/0/metric/pool_id` (`validate_metric`). The fixture's profiles now keep no goal,
+and the helper compiles the sources first with the compiler the staging runs, so a refusal names
+its issues (the host's code carries none; no product code was added for it).
+
+Touched existing tests (6): P1's actingd test `p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it`
+is adapted and renamed (above; its old name retired in `ci/retired-gates.toml`); its requirement
+changed on purpose. In `crates/policy/src/evaluator.rs`' own tests, `r7_evaluate` (used by the R7
+tests) hands `evaluate_predicate` an empty `PoolValues` in place of an empty map, and
+`resource_target_valuation_maps_milli_yields_before_rounding` hands `resolve_instance_targets` no
+reading: both signatures gained the readings; nothing they assert changed. `forward.rs`' tests import
+`evaluate` themselves (the module no longer does). P1's policy tests are unchanged: an entry point
+without readings still reads such a pool as missing. Fix round 1 touches no existing test:
+`NoProgressMemory::capture` and `observe` keep their signatures (the SS-4 and SS-4b tests call them
+as before), and `preview_detection_planning_signals` is private to the host.
+
+**What is not changed.** A pool that does not use the kind: its checks, its identity, every decision
+(`project_fact_pools` is the new function with no reading; the golden of t1 and h5). The projection
+and `facts` (no list enters). The compile's refusals for every other member under `inventory.list.`.
+The list facts' own limits (1024 rows; the evaluator's 256 bound does not apply to a list it never
+reads). The evaluator writes no weight. Every declared interface range.
+
+**At deploy.** Nothing changes for an installation until a `schedule.json` (or a configured
+catalog) names the kind: a catalogue without it projects, hashes and decides as on 0.12.78.
+Rollback (ruling 12), read at the tag `v0.12.78` (`9491d936`, this slice's base) and `v0.12.77`
+(`3285143f`): once a Runtime of this version has activated a catalogue generation that holds a
+`list_rows` pool,
+- **a rollback to v0.12.77 or older fails to start**: the start loads and compiles the active
+  generation (`load_verified_active` → `read_generation`), its compiler does not know the kind, and
+  the load answers the fatal `catalog_generation_invalid`. A generation an intent in flight pins is
+  compiled at the start too (`replay_admission` → `load_generation`), so one that holds the kind
+  fails the start the same way even after another generation was activated;
+- **a rollback to v0.12.78 starts, and the game whose `schedule.json` writes the kind loses all its
+  rules** (fix round 1, the review's must fix 2, which the coordinator checked at the tag): its
+  compiler knows the kind (P1), so the generation loads; at the workbench's first check its composer
+  refuses that game's `schedule.json` (`schedule_requires_missing`, no `pool_list_rows`, recorded
+  once). The fallback to a game's last good file ("§3.6: the game keeps its last good
+  `schedule.json`", `host/standard_pack_schedule.rs`) is taken only when the active generation's
+  recorded hash of the game's file differs from the refused file's; here the refused file is the
+  one the active generation was composed from, so there is no last good fragment: the game is
+  composed with no rule, the other games in use are composed again without it, and the new
+  generation (no such pool) is activated and schedules as usual. By the same reading a composition
+  in which no game keeps a rule is a V2 catalogue without a task, which compiles (`validation.rs`,
+  "a V2 catalog may hold no task"), so it is activated too and nothing is refused. The active
+  generation with the pool stays only where it is not replaced: a catalogue configured directly (no
+  composer), or while a game root fails to read (§3.6 keeps the active generation then); there its
+  `validate_static_fact_pool_authority` refuses every evaluation's input
+  (`policy_pool_binding_invalid`), which is skipped (`policy_evaluation_skipped`) and, after
+  `scheduling.evaluation.escalate_after` skips in a row, `policy_evaluation_awaiting_person`, for
+  every instance, until a generation without the kind is active.
+- **The rollback gate does not see it**: `rollback_window_bounded` is the ledger range alone, and the
+  installer's plan checks the declared interface ranges, none of which this slice moves; a catalogue
+  generation is no interface. Before such a rollback a person removes the kind from the game's
+  `schedule.json` (or rolls the generation back) on this version first.
+
 ### 1.506 Slice #486 ASLEEP-2 (0.12.78): an instance whose application its idle action closed is asleep too; the close and wake loop seen in production on 11-21 (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-22, not the owner's words; the owner's words behind them, her order of 11-02 that an instance without a task is closed and her order of 11-22 that the scheduler must first run stably; coordinator work order `rd-1122/brief-486-asleep2.md`; on main `1dff8fcb`, merged with main `a2d31d86`)
 
 This section takes 1.506 (1.501 to 1.505 belong to other slices of 0.12.78). It ships in 0.12.78.
@@ -45687,6 +45917,109 @@ v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in
 `host.idle_state` keeps its shape) and brings the loop back for `close_app`. In the release notes'
 language:
 被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
+
+### 1.507 Slice #477 CV-1 (0.12.79): `pack-catalog.json` version 2 carries a package's business part in full, and the tools write, check, build and place it; no Runtime component reads it (Workflow #477; the owner's plan to cut the four resource repositories over at once to one catalogue file holding a task's display, what it consumes and produces, and its value; the rulings 1 to 8 are the coordinator's of 11-22, ruling 7 as the coordinator replaced it during the work (per-rule parts), no words of the owner's behind them; coordinator work order `rd-1122/brief-477-cv1.md` after the read-only study `rd-1122/study-477-step2.md`, its sections 1 to 3 and the coordinator's disposition at its end; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.507 (1.505 belongs to another slice of this version).
+[pack-catalog.md](pack-catalog.md) ("Version 2", "What is wrong", "Differences from
+`schedule.json`", "Who reads it", "Who writes it", "Interface", "What the later slices add") is the
+contract; [standard-pack-schedule.md](standard-pack-schedule.md) ("Who writes the fixed value and
+the marks, since Workflow #477 CV-1"), [component-interfaces.md](component-interfaces.md) (the
+`package` row 24) and [resource-verify.md](resource-verify.md) (the revision row 24) follow it.
+Why: the catalogue's reader refused a value member ("a later slice"), the quantities, the fixed
+value and the marks stood only in each rule of `schedule.json`, and the next slice (CV-2) has the
+composer take them from the catalogue. This slice is that slice's first half: the file carries the
+business part in full and the tools move today's rules into it.
+
+**The shape** (rulings 1, 2, 7). `schema_version` `actingcommand.pack-catalog.v2`; envelope and
+display as version 1. An entry: its own part (`consumes`, `produces`, `value`?, `limited`?,
+`realization`?) and `rules`?, a list of per-rule parts `{rule_id, consumes, produces, value?,
+limited?, realization?}`, each standing for its rule in place of the own part, whole. An effect is
+a V2 resource effect exactly as a rule writes it, read with the one type
+(`crates/actingcommand-contract/src/resource_effect.rs`: `ResourceEffectSpec`, `EffectAmount`,
+`ConsumptionFact`, `EffectDirection`, `ObservationSource`, moved there from the policy crate's
+`schema.rs`, which re-exports them; the compiler reads a rule's effects with them as before) and
+held to its own bounds by one function (`ResourceEffectSpec::form_fault`) and the constants the
+compiler compares with (`MAX_EFFECT_CONFIDENCE_MILLI`, `MAX_EFFECTS_PER_TASK`, the identifier's
+grammar `scheduling_identifier_byte` and `MAX_SCHEDULING_IDENTIFIER_BYTES`, which the compiler's
+validation now names). `value` `{milli, origin?: "model"}`; the marks `true` or absent. In code:
+`CatalogParts { own: Option<CatalogPart>, rules: Vec<CatalogRulePart> }` on `CatalogEntry::parts`
+(`None` for version 1), `CatalogPart { consumes, produces, value: Option<CatalogValue>, limited,
+realization }`, `CatalogValue { milli, origin: ScheduleValueOrigin }` (the rule's origin type).
+
+**The limits**: those of a rule's effect (a constant and a fallback 1 to 2^53 − 1, an expectation
+0 to 2^53 − 1, a confidence 0 to 1000, 128 effects a side, a fact read on `consumes` only, its key
+an identifier holding no list reading); a value's `milli` 1 to 2^53 − 1 (the task member's); 4096
+per-rule parts an entry (`MAX_PACK_CATALOG_RULE_PARTS`, the most tasks a V2 catalog holds); a
+`rule_id` 1 to 128 bytes of the identifier's grammar, once an entry; 5120 items in a values file
+(`MAX_PACK_CATALOG_VALUE_ITEMS`).
+
+**The refusals** (`standard_pack_root_invalid` with its word at its pointer; the display file's
+refusal for the values file). No new code (the third stop condition did not hold); three new words
+of `standard_pack_problem` and four of `catalog_difference`, each one cause:
+
+| Case | Word | Pointer |
+|---|---|---|
+| an effect not of the type, two quantities or none | `malformed` | the effect |
+| a direction not the side's, a fact read on `produces`, a fact key off the grammar | `malformed` | `…/direction`, `…/amount`, `…/amount/fact_key` |
+| an amount, fallback, expectation, confidence or count past its bound | `catalog_out_of_limits` | the member, the side |
+| a value's `milli` past its bound; an `origin` other than `model`; a mark other than `true` | `catalog_out_of_limits`; `malformed` | `…/value/milli`, `…/value/origin`, `…/limited`, `…/realization` |
+| a value beside the realization mark, or beside a production of a pool whose valuation is declared or pending (the compiler's `fixed_value_conflict`) | `catalog_value_conflict` (new) | `…/value` |
+| a per-rule part of no rule that runs the package (as `package_not_listed` for an entry) | `catalog_rule_unknown` (new) | `…/rules/<k>/rule_id` |
+| a values item naming a part the catalogue does not write | `catalog_part_absent` (new) | the item |
+| a `--values` line that writes version 1 | `validation_failed` | (usage) |
+
+**The writer** (ruling 4, 7). `--schema-version 2` (its one value) writes version 2; a file of
+version 2 stays so; a version 1 file is converted, every entry's business part its rules'
+(`converted`). A part from the rules: each rule's effects as written, fixed value with origin, marks;
+equal parts give the entry's own part, differing ones a per-rule part each and **no own part**. A kept
+entry drops an undeclared pool from each part and leaves out a part of no rule
+(`standard_pack_catalog_left_out`, now with `task_id`). `--values <file>`
+(`actingcommand.pack-catalog-values.v1`, `{packs: [{package_id, rule_id?, value?, limited?,
+realization?}]}`) replaces a part's value and marks whole, the own part copied for a rule that has
+none (`values_written`).
+
+**Check** (ruling 5): rule by rule against the part that stands for it; the new words
+`quantity_differs`, `value_differs`, `limited_differs`, `realization_differs`; the warning's
+`pool_id` and `catalog_side` optional for the last three. Nothing is refused for a difference.
+
+**Room left** (ruling 7): a business part per value of a package variable is a per-rule part (each
+value will be a rule), and the composer's reading (CV-2) takes a rule's part from
+`CatalogParts::for_rule`, the per-rule part else the own part, and `CatalogPart::members` is the
+rule's own members' form; nothing of either is built.
+
+**Tests** (apps gate row "#477 CV-1"; `crates/resource-tooling/src/gate_477_cv1.rs`,
+`apps/actinglab/src/tests/gate_477_cv1.rs`).
+
+| Test | What it shows |
+|---|---|
+| `cv1_each_quantity_form_round_trips_and_the_bounds_are_a_rule_s` (1) | The four forms read and are written back as read; every bound at its two sides, a wrong direction, a fact on `produces`, two quantities, an unknown member, 128 and 129 effects |
+| `cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (2) | A value with its origin and both marks taken; each refusal of ruling 2 one case |
+| `cv1_version_2_and_refresh_write_the_rules_business_part_into_the_entry` (3) | A version 1 file converted, each entry equal to its rule; a refresh and a second line change nothing |
+| `cv1_rules_that_differ_get_a_part_each_and_the_entry_no_own_part` (ruling 7) | Two differing rules of one package: a per-rule part each, no own part, no difference |
+| `cv1_values_land_in_the_named_entry_and_one_of_an_unknown_package_is_refused` (4) | Value and marks replaced whole, the differences warned; an unknown package refused as a display file's; version 1 refuses the option |
+| `cv1_values_name_a_rule_s_part_as_well_as_an_entry_s` (ruling 7) | A rule's part written, a rule's part made from the own part; `catalog_part_absent`, `catalog_rule_unknown` |
+| `cv1_check_warns_of_a_difference_from_a_rule_and_refuses_nothing_for_it` (5) | `quantity_differs` warned, the check answering |
+| `cv1_a_rule_is_compared_with_its_own_part_and_a_part_of_no_rule_is_refused_and_left_out` (ruling 7) | Each rule against its own part; a part of no rule refused by check and left out by the writer |
+| `cv1_a_version_1_root_is_written_and_answered_byte_for_byte_as_before` (6, ruling 6) | The golden of PC-1's fixture: the file's bytes, the differences, the refreshed entry, the business part `packs` carries |
+| `cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16` (6) | 24 and 16 by the revision table; this build [3, 24]; an installer of [3, 23] refuses 24 at its edge |
+
+Adapted (8): the three request initializers of the PC-1 and PC-2 writer gates (the two new
+members), and the five tests that pin the shipped `package` range, to [3, 24].
+
+**What is not changed.** Every reader's answer for a version 1 file (the golden); the display part;
+the Runtime: no component opens the file, no schedule, catalogue generation or decision changes;
+the compiler's diagnostics (its bounds now named, their values the same); the files of the other
+slice of this version (the evaluator's readers of a pool, `policy_dispatch.rs`, `fact_store.rs`,
+`apps/actingd/src/config/manifest.rs`, `compose.rs`); every declared interface range but `package`.
+
+**At deploy.** Nothing changes for an installation: no Runtime component reads the file, and no
+repository writes version 2 until it asks (`--schema-version 2`). A tool of 0.12.78 or earlier reads
+a version 2 file as `malformed` at `/schema_version`: its `packs` lists the root as without the
+file, its `check` and build refuse the root, and its installer refuses a zip that carries one at the
+`package` edge (24 above its 23). A rollback meets nothing: an installed version 2 file is read by
+no Runtime of any release, and an earlier installer handles it as any root file (it sets it aside
+when it places a zip of 16 to 23 that carries none or replaces it with that zip's version 1 file).
 
 ### 1.512 Slice #486 ASLEEP-3 (0.12.79): a stop withheld after a wake that no scheduled run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a start (board #486; the rules below are the coordinator's rulings 1 to 5 of 11-22, not the owner's words; coordinator work order `rd-1122/brief-486-asleep3.md`; on main `9491d936`, the v0.12.78 release)
 

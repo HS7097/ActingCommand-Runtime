@@ -2375,25 +2375,60 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
 
 - **What it means.** The pool's inventory is `Σ f_j × v_j`, `v_j` the integer the column V holds
   in the row of the list reading L (in the pool's own scope, an instance) whose column K holds
-  `k_j`. L is read with at least the confidence C, as a `fact` observation reads its key. The host
-  computes that number before each evaluation and hands it to the evaluation as the pool's value;
-  the list itself does not enter the projection. **No host computes it in 0.12.78** (#455 P2
-  does, with what a missing list, a stale one, a key without a row and a sum over 2^53 − 1 give).
-- **Until then the pool has no reading: unknown, never 0.** A caller's snapshot of the pool is
-  not read (the fact projection drops it, as every `ledger_fact` pool's), and the list in the input
-  is not read either. Every reader meets the pool as a `ledger_fact` pool whose fact is missing,
-  under the list's key L with `fact_missing`: a `resource_projection` on it is Unknown with that
-  detection suggestion (`trigger_unknown` or `feedback_stop_unknown`, and the fact refresh's demand
-  for L, which no reader marks); a judged task that consumes it, when it regenerates, is
-  `benefit_unknown` `reading_unknown` (`pool_id`, `fact_key` L, `unknown_reason` `fact_missing`);
-  when it writes its lines, its judged candidates are held with `pool_line_held`
-  `capped_cap_unknown` (`fact_key` L, `fact_missing`); a reserve on it is case 1 of "Task
-  Reserves"; the forward projection leaves it out as a pool without a snapshot. A resource target
-  on it is refused `resource_not_observable`, as on a pool observed by an outcome
-  ([resource-targets.md](../resource-targets.md)). A Runtime given such a pool in a configured
-  catalog (`policy.catalog`, no composer in front of it) refuses each evaluation's input with
-  `policy_pool_binding_invalid`, its check that a `ledger_fact` pool reads a fact; a composed
-  catalog never holds one (below).
+  `k_j`. L is read with at least the confidence C, as a `fact` observation reads its key. The list
+  itself enters neither the projection nor the evaluation's `facts`.
+- **Who computes it, and when** (#455 P2, since 0.12.79, register §1.505; the coordinator's
+  rulings of 11-22, not the owner's words). The host, before each evaluation, under the fact write
+  gate it projects the fact pools under: it reads the instance's list fact L at the evaluation's
+  ledger position and computes the sum with one pure function. The number goes where a fact pool's
+  projected reading goes, the pool's snapshot in the evaluation's resources (its value the sum, its
+  observation the list's), so it enters the snapshot's identity and each instance's view identity
+  by the path a fact pool's reading takes; one moment at one ledger position gives one identity,
+  and a catalog without such a pool gives the bytes and identities it gave before. Beside the
+  left-out facts the evaluator is given, in memory only, each such pool's reading: the list's key,
+  its observation time and its expiry, or why there is none. The evaluator reads no list. A
+  forward projection starts from the same reading and carries it across its horizon as it carries
+  a fact reading.
+- **A key the list does not hold counts 0.** A list is written whole or not at all, so a key a
+  list read whole does not hold is not on the screen it was read from. (The cost: a name the
+  reading took for another valid key reads a held item as 0; a producer then runs once too often,
+  which its target caps and the next reading corrects, and a consumer is held by its reserve.)
+- **Unknown, never 0**, each a fact reading's reason under the list's key L: no list,
+  `fact_missing`; a list past its expiry, `fact_expired` (the evaluation judges it by the expiry
+  given with the reading); the list's confidence below C, `fact_low_confidence`; a named row's value
+  that is no non-negative integer, or a sum beyond 2^53 − 1, `type_mismatch` (and, as for a fact
+  reading, a sum a constant capacity cannot hold). A list that is not keyed by the pool's columns is
+  `type_mismatch` too (fix round 1): one of its rows holds no text under K, or none of them holds a
+  value under V, so a column name the package that reads the list does not write reads no key as
+  absent. An empty list holds no key and reads 0. A timeline reset that invalidates L in the pool's
+  scope at or after the list's observation leaves the pool without a reading (`fact_missing`), and
+  one still to come bounds its expiry, as for a fact. Freshness is the list's: the consumption a
+  reading does not show yet is that of every task dispatched since the list's observation.
+- **Every reader takes it**: a `resource_projection` on the pool; the net benefit's cost term of a
+  regenerating pool (`benefit_unknown` `reading_unknown` with L and the reason when unknown); the
+  pool's lines and the capped spending order (`pool_line_held` `capped_cap_unknown` with L and the
+  reason when unknown; `capped_spend` shows the sum); the reserve gate (case 1 when unknown); the
+  urgency and the tie-break; the forward projection; a resource target's check, gap, receipt and
+  views (the pool is observable under L; `awaiting_observation` with the reason when unknown); a
+  goal entry's `current`; the suggestion of an unknown reason (L with its reason). The no-progress
+  guard (fix round 1) takes such a pool into a task's basis as it takes a fact pool, a pool the
+  trigger projects or the task reserves: the basis key is L in the pool's instance and its value
+  the sum (when several pools read the one list, each one's sum), captured, observed and held
+  with the readings the evaluation was given; a list read again with the same sum is no progress,
+  one with another sum releases the guard ("No-progress guard").
+- **No refresh is asked for it.** The fact refresh asks the instance's recognition maintenance
+  package for the keys its marks write, and no mark may name a key under `inventory.list.`; so L is
+  left out for the pool's instance with the reading, and an unknown reading raises no refresh demand
+  (no `fact_refresh_*` reason). Nor (fix round 1) is a probe planned for it: a suggestion of a key
+  the left-out set covers for its instance writes no `planning_fact_unknown` and takes no
+  detection allowance. The package that reads the list is scheduled by its own rule; refresh on
+  demand is a later slice.
+- **Wakes.** The reading's expiry wakes the evaluation a millisecond after it, as a fact reading's
+  does; a list's publication wakes it as every fact publication does.
+- **In 0.12.78** (P1) no host computed the reading: every reader met the pool as a `ledger_fact`
+  pool whose fact is missing, under L with `fact_missing`, a resource target on it was refused
+  `resource_not_observable`, and a configured catalog holding one made each evaluation's input
+  `policy_pool_binding_invalid`. From 0.12.79 a configured catalog holding one is accepted.
 - **Refusals**, each at its pointer, with the compile's codes ([v2/README.md](v2/README.md)): in
   a V1 document `unknown_field` at `observation/kind`; beside `static_snapshot`, which would take
   the caller's fixed value and never the rows, `limit_exceeded` at the pool, as a `ledger_fact`
@@ -2411,10 +2446,10 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
 - **Capability.** The subsystem is `pool_list_rows`. A `schedule.json` whose pool writes the kind
   must list it in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the
   composer refuses the file without it (`schedule_invalid` at the first such pool's
-  `observation`). **No Runtime of 0.12.78 names the subsystem** (#455 P2 adds it to
-  `config.subsystems`), so every Runtime of this version refuses such a file
-  (`schedule_requires_missing` at that `requires` entry) and keeps the game's last good rules. A
-  Runtime of 0.12.77 refuses it there too; given a catalog with the kind, its reader refuses it
+  `observation`). A Runtime names it, always on, from 0.12.79 (#455 P2, `config.subsystems`), and
+  accepts such a file. No Runtime of 0.12.78 names it, so a Runtime of that version refuses such a
+  file (`schedule_requires_missing` at that `requires` entry) and keeps the game's last good rules.
+  A Runtime of 0.12.77 refuses it there too; given a catalog with the kind, its reader refuses it
   (`type_mismatch`: an unknown `kind`).
 - **Identity.** A pool without the kind serializes, hashes and decides exactly as before; a
   catalog without it compiles byte for byte as before.
@@ -2503,8 +2538,8 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   SCHED-C1c (since 0.12.53): `trigger_line` likewise with its own always-on subsystem
   `pool_trigger_line`, which a `schedule.json` whose pool writes it lists in `requires` (a Runtime
   that names `pool_lines` alone does not read it). #455 P1 (since 0.12.78): a pool whose
-  `observation` is `list_rows` likewise lists `pool_list_rows`, which no Runtime of 0.12.78 names
-  ("A pool read from rows of a list").
+  `observation` is `list_rows` likewise lists `pool_list_rows`, which a Runtime names from 0.12.79
+  (#455 P2) and no Runtime of 0.12.78 names ("A pool read from rows of a list").
 - **Identity.** A pool without the members serializes, and hashes, exactly as before.
 - For example, a pool whose cap is read, its stop line 40 below the cap and its hard line 76 below
   it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
@@ -2820,7 +2855,7 @@ A fact that only the task's own package reads (a clear count, an activity level,
 
 Once run counts are optional ("Optional run-count bounds") they no longer stop a task that keeps succeeding without changing anything, so a state guard does (Alice's ruling 105 A: no count-based last line; the no-progress guard and the failure retry cap replace counts; design `rd-1029/design-sch-state.md` §4.7; since 0.12.34, register §1.231). It is an edge, the generalization of `once_per_reading` ("Condition edges"), never a count: when a package spends nothing, a reading is broken or the game does not respond, the task runs at most once more and then waits for a changed reading.
 
-- **The basis.** The basis of a dispatch is the pools, stocks, remaining counts and completion times its admission was decided on, as the evaluation that chose the dispatch held them (after the resets, "Runtime Enforcement"). The trigger is read again part by part as that evaluation read it, and the parts that made it true count: every child of a true `all`, the first true child of an `any` in its order, and below a `not` every fact of the negated predicate. Of those parts: each `resource.` or `inventory.` fact (the families recognition writes, [resource-readings.md](../resource-readings.md)) a `fact` or `record_deadline` names, and a fact reference's ("Fact references"); each fact a `fact_time_reached` names, whatever its family; and the reading, capacity and comparand facts of each pool a `resource_projection` projects ("Pool fact references"). Beside them, the reading and capacity facts of each pool the task reserves, which the reserve gate reads at every admission ("Task Reserves"). A fact of another family (a lock, a health flag, a session value), the feedback stop and a pool the task only consumes or produces are no basis. Each reading is the value present above confidence 0, or none. A dispatch decided by a `clock`, a `timeline_active`, an `outcome` or a `dependency_completed` alone (a clock beside a lock; an `any` whose due clock comes first), or one whose trigger is not true as captured (an immediate rerun, a remedy request), has no basis and no guard: those are edges of their own. A basis of more than 32 keys arms none.
+- **The basis.** The basis of a dispatch is the pools, stocks, remaining counts and completion times its admission was decided on, as the evaluation that chose the dispatch held them (after the resets, "Runtime Enforcement"). The trigger is read again part by part as that evaluation read it, and the parts that made it true count: every child of a true `all`, the first true child of an `any` in its order, and below a `not` every fact of the negated predicate. Of those parts: each `resource.` or `inventory.` fact (the families recognition writes, [resource-readings.md](../resource-readings.md)) a `fact` or `record_deadline` names, and a fact reference's ("Fact references"); each fact a `fact_time_reached` names, whatever its family; and the reading, capacity and comparand facts of each pool a `resource_projection` projects ("Pool fact references"). Beside them, the reading and capacity facts of each pool the task reserves, which the reserve gate reads at every admission ("Task Reserves"). Such a pool read from rows of a list (#455 P2 fix round 1, since 0.12.79, register §1.505; "A pool read from rows of a list") is read by its list's key in its instance, and its reading is the sum the host computed for it, the reading the evaluation was given (when several pools read the one list, each one's sum, as rows `{pool_id, value}` in the order of their ids); a key no fact holds is read from those readings, at capture, at release and at the hold. A fact of another family (a lock, a health flag, a session value), the feedback stop and a pool the task only consumes or produces are no basis. Each reading is the value present above confidence 0, or none. A dispatch decided by a `clock`, a `timeline_active`, an `outcome` or a `dependency_completed` alone (a clock beside a lock; an `any` whose due clock comes first), or one whose trigger is not true as captured (an immediate rerun, a remedy request), has no basis and no guard: those are edges of their own. A basis of more than 32 keys arms none.
 - **Armed.** The Runtime captures the basis of each new dispatch intent as the evaluation that chose it read its facts, and arms the pair's guard when that intent is admitted, replacing the pair's earlier one. Memory only: no ledger record, state file or snapshot carries it.
 - **Released.** At every evaluated cycle, before the evaluation, a guard one of whose basis keys has a reading whose value differs from the admission's reading (a reading where the admission had none counts) is released, and stays released: a later reading of the old value does not arm it again. Only values are compared: a newer reading of the same value, such as a fact refresh that reads the same stock again, is no progress, and a key a reset cleared, which reads nothing, releases nothing. **Released by another cause** (SS-4b, since 0.12.55, register §1.310): at the evaluation that would hold the pair (below), its trigger is read again part by part as at capture, as it is true now, which gives the basis keys of the trigger as it is true now (with the reserve gate's keys, as at capture). When that basis is empty (the trigger is true now by a `clock`, a `timeline_active`, an `outcome` or a `dependency_completed` alone, a clock slot for example), or holds a key the armed guard's basis does not hold, the pair is due for another cause: it is **not held**, and its guard is released and stays released, as a changed reading releases it; the pair's next admitted dispatch arms a new guard on the basis of that dispatch.
 - **Held.** A (task, instance) pair whose guard is armed, whose own latest run (its own last result, which no reset clears, "Reset exclusions and the task's own last result") is the guarded dispatch and **succeeded**, whose catalog generation is the one that dispatch pinned, and which is due **for the cause the guard served** (every key of the basis of its trigger as it is true now, read as under "Released by another cause", is a key of the guard's basis, and, as above, none of them reads another value) is deferred with `policy_no_progress` (info) {`basis_readings` one record per basis key: `fact_key`, and the admission's reading as `reading_value` (its canonical JSON, at most 128 bytes) or `reading_digest` (its SHA-256 when longer) with `observed_at_unix_ms`, nothing more when the key had no reading; `served_by_dispatch_unix_ms` the run's dispatch}, with **no wake**: a reading wakes the scheduler. The bound is 32 records, about 13 KiB at most; real rules name a handful of keys. An operator therefore sees `policy_no_progress` on a pair only while the pair is due for the cause its guarded run was admitted on; once it is due for another (a new completion time, a count, a clock slot), it is a candidate again and its decision reads as any other.
@@ -2831,7 +2866,7 @@ Once run counts are optional ("Optional run-count bounds") they no longer stop a
 - **Chains.** A head held for the cause its guard served is not dispatched, so a successor whose trigger waits for the head's next terminal is not triggered either; the chain waits with its head. A head due for another cause (a clock slot, a completion time its guarded run was not admitted on) is not held: it runs, and its chain follows it. Before SS-4b a head held for one cause waited through every later cause, a clock slot included, until a reading of its basis changed, which only its own chain might have read.
 - **Pauses.** The guard queues nothing and counts nothing: a paused instance dispatches nothing (its candidates wait under the pause as before), and once resumed each pair is held or not by its own guard.
 - **Configuration.** `scheduling.no_progress.enabled` (default `true`), also per instance ([`runtime-config.md`](../runtime-config.md), "No-progress guard"); read at every evaluated cycle. Off on an instance, the evaluation of its pairs is the one before SS-4, the Runtime captures nothing for it and forgets its guards, so turning it off and on releases them. A Runtime start begins with no guard (each pair may run once more before its guard is armed again), and so does a new catalog generation for the pairs it decides.
-- **Entry point.** The policy crate's `evaluate_with_no_progress` takes the armed guards (`NoProgressGuards`) beside the instance holds; `NoProgressMemory` is the Runtime's memory (`capture`, `admit`, `observe`, `guards`, and since SS-4b `forget_released`, which the Runtime calls after every evaluation with the guards it passed, so that a guard the evaluation released for another cause is gone). With no guard the evaluation is `evaluate_with_instance_holds`'s, byte for byte, and a pair held for its served cause decides as before SS-4b.
+- **Entry point.** The policy crate's `evaluate_with_no_progress` takes the armed guards (`NoProgressGuards`) beside the instance holds; `NoProgressMemory` is the Runtime's memory (`capture`, `admit`, `observe`, `guards`, since #455 P2 fix round 1 `capture_with_readings` and `observe_with_readings`, which the Runtime calls with the readings it gave the evaluation, and since SS-4b `forget_released`, which the Runtime calls after every evaluation with the guards it passed, so that a guard the evaluation released for another cause is gone). With no guard the evaluation is `evaluate_with_instance_holds`'s, byte for byte, and a pair held for its served cause decides as before SS-4b.
 
 ## An unavailable instance is probed again (Workflow #489 AVAIL-1, since 0.12.76)
 
@@ -3341,8 +3376,8 @@ long list must not stop the scheduler for every instance.
   refused. **The one exception** (#455 P1, since 0.12.78, register §1.504): a pool's observation
   of the kind `list_rows` names a key under the prefix, and only under it ("A pool read from rows
   of a list"). The list itself still does not enter the projection: the host hands the evaluation
-  the number it computes from the list's rows (#455 P2; in 0.12.78 no host computes it, and such a
-  pool has no reading).
+  the number it computes from the list's rows (#455 P2, since 0.12.79; in 0.12.78 no host computed
+  it, and such a pool had no reading).
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
   policy's own bound, is left out for the instances its scope applies to. The host records the
   warning `policy_fact_rows_exceeded` (since 0.12.55) once for each such record after a start,

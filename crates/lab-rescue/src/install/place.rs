@@ -133,8 +133,8 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleRevisionNeed, CATALOG_GENERATIONS_DIRECTORY,
-    CATALOG_STORE_PATH, InterruptThen, LOADING_PREFIX, LoadingTarget, MAX_NOTICE_FILE_BYTES,
-    MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry, NoticeIssue,
+    CATALOG_STORE_PATH, CatalogScheduleFacts, InterruptThen, LOADING_PREFIX, LoadingTarget,
+    MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry, NoticeIssue,
     RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_COMPOSITION_RECORD_FILE, STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
@@ -144,8 +144,8 @@ use actingcommand_contract::{
     StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule, check_notice_listing,
     check_notice_pack_ids, check_notice_size, check_notice_text, classify_standard_pack_packages,
     control_declares_variables, notice_relative_path, package_edge_holds,
-    parse_standard_pack_catalog, parse_standard_pack_loading, parse_standard_pack_schedule,
-    read_standard_pack_root, standard_pack_maintenance_packages, standard_pack_schedule_pools,
+    parse_standard_pack_catalog_with, parse_standard_pack_loading, parse_standard_pack_schedule,
+    read_standard_pack_root, standard_pack_maintenance_packages,
     validate_standard_pack_schedule_references,
 };
 use serde::{Deserialize, Serialize};
@@ -1009,13 +1009,9 @@ fn check_catalog(
     registry: &StandardPackRegistry,
     schedule: Option<&[u8]>,
 ) -> Result<(), Outcome> {
-    let pools = match schedule {
-        None => Some(BTreeSet::new()),
-        Some(bytes) => parse_standard_pack_schedule(bytes)
-            .ok()
-            .map(|schedule| standard_pack_schedule_pools(&schedule)),
-    };
-    match parse_standard_pack_catalog(catalog, game, registry, pools.as_ref()) {
+    // Workflow #477 CV-1: and, of a version 2 file, the zip's rules and valuations.
+    let facts = CatalogScheduleFacts::from_schedule_bytes(schedule);
+    match parse_standard_pack_catalog_with(catalog, game, registry, facts.as_ref()) {
         Ok(_) => Ok(()),
         Err(issues) => {
             let whole = StandardPackRootIssue {

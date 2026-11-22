@@ -37,6 +37,9 @@ pub mod primitive;
 pub mod project;
 pub mod proposal;
 pub mod resource_declaration;
+// Workflow #477 CV-1 (since 0.12.79): a V2 task's resource effect, the one definition the policy
+// crate's compiler and a version 2 `pack-catalog.json` share; not re-exported at the root.
+pub mod resource_effect;
 pub mod resource_targets;
 // #422 P32 B-1 (since 0.12.27): a contained run's status folded by one commutative accumulator.
 pub mod run_summary;
