@@ -51,6 +51,9 @@ pub(crate) mod plan;
 pub(crate) mod postcheck;
 pub(crate) mod programs;
 pub(crate) mod release;
+// Workflow #429 RB-1: the plan's check that the target names every subsystem the schedules a start
+// of it would read require.
+pub(crate) mod requires;
 pub(crate) mod runtime;
 pub(crate) mod state;
 pub(crate) mod status;
@@ -204,6 +207,10 @@ mod gate_463_s318;
 // the placed root composes.
 #[cfg(test)]
 mod gate_453_s5b;
+// Test-only: Workflow #429 RB-1, the plan refuses a target that does not name a subsystem the
+// schedules a start of it would read require.
+#[cfg(test)]
+mod gate_429_rb1;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
