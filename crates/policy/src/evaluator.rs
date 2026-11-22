@@ -249,6 +249,10 @@ pub struct EvaluationFacts {
 /// list"): also the readings the host computed for the pools read from rows of a list
 /// ([`LeftOutFacts::give_pool_readings`]), whose lists the projection leaves out; each list's key
 /// is left out for its pool's instance with them.
+///
+/// #477 LF-1 fix round 1 (register §1.509): also the turns each task's latest dispatch was handed
+/// ([`LeftOutFacts::give_handed_turns`], [`HandedTurns`]), which the host reads from the
+/// dispatches' recorded reasons.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
@@ -256,9 +260,120 @@ pub struct LeftOutFacts {
     void_targets: BTreeSet<String>,
     /// #455 P2: the readings given to the pools read from rows of a list, by pool id.
     pool_readings: GivenPoolReadings,
+    /// #477 LF-1 fix round 1: the turns the latest dispatch of each task was handed.
+    handed_turns: HandedTurns,
+}
+
+/// #477 LF-1 fix round 1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines", "Task
+/// Reserves"): what the latest admitted dispatch of each task on each instance was handed on its
+/// `policy_dispatch_parameters`: its `run_cap`, and the entries of its `spend_allowances` (the
+/// pools that took part in that cap), with the dispatch's admission time, the task snapshot's
+/// `last_dispatched_unix_ms` of that dispatch. Such a dispatch counts `run_cap` runs (at least
+/// one) of each pool that took part as consumption a reading does not show yet; any other
+/// dispatch counts one run, as before. The host notes them from the
+/// dispatches' recorded reasons ([`HandedTurns::note_dispatch`]) and gives them beside the
+/// left-out facts. Memory only: none of it enters a snapshot or decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HandedTurns {
+    /// By instance alias, then by task id.
+    dispatches: BTreeMap<String, BTreeMap<String, HandedDispatch>>,
+}
+
+/// One dispatch [`HandedTurns`] holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandedDispatch {
+    dispatched_at_unix_ms: u64,
+    runs: u64,
+    effect_indices: BTreeSet<usize>,
+}
+
+impl HandedTurns {
+    /// Notes the latest admitted dispatch of `task_id` on `instance_id`, admitted at
+    /// `dispatched_at_unix_ms`, from its recorded `reasons`: its `policy_dispatch_parameters`'s
+    /// `run_cap` and the `effect_index` of each of its `spend_allowances`. A dispatch whose
+    /// reasons carry no `run_cap` is not noted (it counts one run).
+    pub fn note_dispatch<'r>(
+        &mut self,
+        task_id: &str,
+        instance_id: &str,
+        dispatched_at_unix_ms: u64,
+        reasons: impl IntoIterator<Item = &'r Outcome>,
+    ) {
+        let Some(parameters) = reasons
+            .into_iter()
+            .find(|reason| reason.is(PolicyCode::PolicyDispatchParameters))
+        else {
+            return;
+        };
+        let Some(runs) = parameters
+            .value("run_cap")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return;
+        };
+        let effect_indices = parameters
+            .value("spend_allowances")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|record| {
+                record
+                    .get("effect_index")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .filter_map(|index| usize::try_from(index).ok())
+            .collect();
+        self.dispatches
+            .entry(instance_id.to_owned())
+            .or_default()
+            .insert(
+                task_id.to_owned(),
+                HandedDispatch {
+                    dispatched_at_unix_ms,
+                    runs,
+                    effect_indices,
+                },
+            );
+    }
+
+    /// The runs the dispatch of `task` on `instance_id` admitted at `dispatched_at_unix_ms`
+    /// counts of `pool_id`: the `run_cap` it was handed, at least 1, when it is the dispatch
+    /// noted and the pool took part in that cap (an entry of its `spend_allowances` names one of
+    /// the task's `consumes` entries on the pool); otherwise 1.
+    pub(crate) fn runs(
+        &self,
+        task: &TaskSpec,
+        instance_id: &str,
+        dispatched_at_unix_ms: u64,
+        pool_id: &str,
+    ) -> u64 {
+        self.dispatches
+            .get(instance_id)
+            .and_then(|tasks| tasks.get(task.id.as_str()))
+            .filter(|handed| {
+                handed.dispatched_at_unix_ms == dispatched_at_unix_ms
+                    && handed.effect_indices.iter().any(|index| {
+                        task.consumes
+                            .get(*index)
+                            .is_some_and(|effect| effect.pool_id == pool_id)
+                    })
+            })
+            .map_or(1, |handed| handed.runs.max(1))
+    }
 }
 
 impl LeftOutFacts {
+    /// #477 LF-1 fix round 1 (register §1.509): gives the evaluation the turns each task's
+    /// latest dispatch was handed.
+    pub fn give_handed_turns(&mut self, turns: HandedTurns) {
+        self.handed_turns = turns;
+    }
+
+    /// #477 LF-1 fix round 1: the turns each task's latest dispatch was handed.
+    pub fn handed_turns(&self) -> &HandedTurns {
+        &self.handed_turns
+    }
+
     /// #455 P2 (register §1.505, rulings 6 and 8): gives the evaluation the readings the host
     /// computed for the pools read from rows of a list. Each reading's list key is noted as left
     /// out for its pool's instance, so a pool whose reading is unknown raises no fact refresh
@@ -5523,10 +5638,10 @@ fn apply_priority_selection(
     // spend values, read once the capped order has given its blocks.
     let lines = spend_lines(catalog, facts, context, &ranked)?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
-    // the allowances read the same entries; LF-1: so do the allowances of the pools whose lines
-    // take part.
-    let unshown = if reserves_declared || !lines.is_empty() {
-        reserve_unshown(catalog, facts, context, &reserves, &lines)?
+    // the allowances read the same entries (LF-1 fix round 1: the allowances every task's, the
+    // candidate's own included).
+    let unshown = if reserves_declared {
+        reserve_unshown(catalog, facts, context, &reserves)?
     } else {
         crate::resource_targets::UnshownConsumption::new()
     };
@@ -5552,13 +5667,10 @@ fn apply_priority_selection(
                     .and_then(|views| views.iter().find(|(id, _)| *id == pool_id))
                     .map(|(_, view)| *view)
             },
+            // LF-1 fix round 1 (ruling 2): every task's unshown consumption, the candidate's own
+            // included.
             |pool_id| {
-                crate::resource_targets::pending_total(
-                    &unshown,
-                    &candidate.instance_id,
-                    pool_id,
-                    &task.id,
-                )
+                crate::resource_targets::unshown_total(&unshown, &candidate.instance_id, pool_id)
             },
             &catalog.catalog().pools.pools,
             |pool_id| targets.and_then(|targets| targets.goal_gap(task, pool_id)),
@@ -5684,21 +5796,19 @@ fn spend_lines<'a>(
 
 /// Workflow #411 B16 part 2: the consumption the reserved pools' latest readings do not show yet
 /// (`crate::resource_targets::unshown_consumption`), which the reserve gate's step 3 takes and,
-/// SS-6, the allowances take too; LF-1 (register §1.509): with the pools whose lines take part in
-/// a candidate's spend values (`lined`, [`spend_lines`]), whose allowances take it as well. The
-/// reserve gate reads the entries of its reserved pools only.
+/// SS-6, the allowances take too. #477 LF-1 fix round 1 (register §1.509): a dispatch handed a
+/// `run_cap` that a pool took part in counts that many runs of it. A pool whose lines take part
+/// reads the lines' gate's own reading instead ([`spend_lines`]).
 fn reserve_unshown<'a>(
     catalog: &'a CompiledCatalog,
     facts: &'a EvaluationFacts,
     context: &PlacementContext<'_>,
     reserves: &'a BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
-    lined: &SpendLines<'a>,
 ) -> PolicyEvaluationResult<crate::resource_targets::UnshownConsumption<'a>> {
     let pools = reserves
         .values()
         .flatten()
         .map(|view| view.pool_id.as_str())
-        .chain(lined.values().flatten().map(|(pool_id, _)| *pool_id))
         .collect::<BTreeSet<_>>();
     crate::resource_targets::unshown_consumption(
         &catalog.catalog().tasks.tasks,
@@ -5711,6 +5821,8 @@ fn reserve_unshown<'a>(
                 .map(|reading| reading.snapshot.observed_at_unix_ms)
         },
         context.amounts,
+        // LF-1 fix round 1 (ruling 1): a dispatch handed a `run_cap` by that many runs.
+        context.left_out.handed_turns(),
     )
 }
 

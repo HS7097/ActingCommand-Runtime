@@ -13,7 +13,11 @@
 //   or one below the trigger line when the stop line is the trigger line; everywhere else
 //   ⌊allowance ÷ c⌋;
 // - an unknown reading or line gives no `run_cap`; a pool without lines, a task the lines do not
-//   constrain and a task with reserves only keep their values.
+//   constrain and a task with reserves only keep their values;
+// - fix round 1 (the coordinator's rulings 1 to 4 after the review of #1872): a dispatch handed a
+//   `run_cap` counts that many runs of each pool that took part as consumption a reading does not
+//   show yet (the lines' gate, the reserve gate, the capped plan, the allowance); the allowance is
+//   the gate's own reading, the task's own unshown dispatch taken off too, less the floor.
 //
 // The catalog is neutral and V2, written as SCHED-C1e's: per instance alias X, the pool
 // `pool.neutral@X` of X, read from `resource.neutral`, its capacity read from
@@ -33,11 +37,11 @@ use crate::resource_targets::{LineView, PoolLines, ReserveView, SpendValues, spe
 use crate::{
     CandidateEligibility, CappedMemory, CatalogDocumentSource, CatalogSources, ChainHandoverInputs,
     CompiledCatalog, DecisionReason, DispatchIntent, EvaluationFacts, EvaluationResources,
-    EvaluationTime, FactRefreshInputs, FactRefreshSettings, HostResourceSnapshot, InstanceHolds,
-    InstanceLineSet, InstancePoolLines, NoProgressGuards, OwedReruns, PolicyCode, PolicyEvaluation,
-    PolicyEvaluationError, PoolLine, RemedyPlan, RunSlots, SCHEDULING_SCHEMA_VERSION,
-    SCHEDULING_SCHEMA_VERSION_V2, TaskDecision, TaskRuntimeSnapshot, TaskSpec, TaskTerminalState,
-    compile_catalog, evaluate_with_instance_lines, project_fact_pools,
+    EvaluationTime, FactRefreshInputs, FactRefreshSettings, HandedTurns, HostResourceSnapshot,
+    InstanceHolds, InstanceLineSet, InstancePoolLines, LeftOutFacts, NoProgressGuards, OwedReruns,
+    PolicyCode, PolicyEvaluation, PolicyEvaluationError, PoolLine, RemedyPlan, RunSlots,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, TaskDecision, TaskRuntimeSnapshot,
+    TaskSpec, TaskTerminalState, compile_catalog, evaluate_with_left_out_facts, project_fact_pools,
 };
 
 const A: &str = "fixture-instance-a";
@@ -259,8 +263,8 @@ fn lf1_t5_an_instances_own_lines_give_the_floor_on_that_instance() {
 
 // Test 6 (work order test 6), an unknown value. The spend values of `task_p` (10 a run of the lined
 // pool) and `task_r` (the same, reserving 50 of it), from the views the evaluation hands them. With
-// the lines known (projected 175, hard line 104) `task_p` carries 71 and `run_cap` 7. While the
-// pool's reading or one of its lines gives no value (`LineView::Unknown`; the lines' gate holds such
+// the lines known (the gate's reading 175, hard line 104) `task_p` carries 71 and `run_cap` 7.
+// While the pool's reading or one of its lines gives no value (`LineView::Unknown`; the lines' gate holds such
 // a candidate) neither task carries an allowance or a `run_cap`, though `task_r`'s reserve view
 // knows its projection: as a reserved pool whose projection is unknown gives none (beside it).
 #[test]
@@ -280,7 +284,7 @@ fn lf1_t6_an_unknown_reading_or_line_gives_no_run_cap() {
     let task_p = task_spec(&compiled, "task_p");
     let task_r = task_spec(&compiled, "task_r");
     let known = LineView::Known(PoolLines {
-        projected: 175,
+        reading: 175,
         consumes: 10,
         hard_line: 104,
         spent_at: None,
@@ -425,10 +429,254 @@ fn lf1_t7_a_pool_without_lines_and_a_task_with_reserves_only_keep_their_values()
     assert_eq!(bytes(&given.outcome), bytes(&expected.outcome));
 }
 
+// Fix round 1 (the review's first example; rulings 1 and 2: one number for the gate and for the
+// cap). Lines 140 and 104; the pool read at 134, after which `task_p` (15 a run) ran once more,
+// handed no `run_cap`: the pool really holds 119. The lines' gate reads 134 − 15 = 119 and admits
+// it (119 − 15 = 104, not below the hard line); its allowance is that same reading less the hard
+// line, 15, so `run_cap` is 1 and the pool ends at 104 (before: 134 − 104 = 30, two turns, 89).
+#[test]
+fn lf1_t8_a_reading_older_than_the_tasks_own_dispatch_counts_that_dispatch() {
+    let mut world = World::new(
+        catalog(&[A], &[rule("task_p", 15)], &catalog_lines(None)),
+        134,
+    );
+    world.ran_after_the_reading("task_p", A);
+    let evaluation = world.evaluate();
+    assert_eq!(
+        dispatched(&evaluation),
+        [copy("task_p", A)],
+        "{evaluation:#?}"
+    );
+    assert_eq!(
+        carried(&evaluation, "task_p", A),
+        (
+            Some(json!([{"effect_index": 0, "spend_allowance": 15}])),
+            Some(json!(1))
+        )
+    );
+}
+
+// Fix round 1 (the review's second example; ruling 1). Lines 140 and 104, read at the capacity
+// (180): `task_p` (15 a run), the head, is handed 3 turns (the pool really holds 135). The pool is
+// not read again: a minute later its dispatch counts the 3 turns it was handed, so the gate reads
+// 180 − 45 = 135, the episode is spent and ends, and `task_p` is no head: below the trigger line
+// it is handed ⌊(135 − 104) ÷ 15⌋ = 2 turns, which keep the pool at 105, at or above the hard line
+// (before: the dispatch counted one run, 165, `task_p` the head again with 3 more turns, 90).
+#[test]
+fn lf1_t9_after_a_sweep_without_a_new_reading_the_head_is_not_handed_it_again() {
+    let mut world = World::new(
+        catalog(&[A], &[rule("task_p", 15)], &catalog_lines(None)),
+        180,
+    );
+    let sweep = world.evaluate();
+    assert_eq!(dispatched(&sweep), [copy("task_p", A)], "{sweep:#?}");
+    assert_eq!(
+        carried(&sweep, "task_p", A),
+        (
+            Some(json!([{"effect_index": 0, "spend_allowance": 76}])),
+            Some(json!(3))
+        )
+    );
+    world.run_without_reading(&sweep);
+    let after = world.evaluate();
+    assert_eq!(dispatched(&after), [copy("task_p", A)], "{after:#?}");
+    assert!(
+        !has(decision(&after, "task_p", A), PolicyCode::CappedSpend),
+        "{after:#?}"
+    );
+    assert!(world.memory.is_empty(), "the episode is spent at 135");
+    assert_eq!(
+        carried(&after, "task_p", A),
+        (
+            Some(json!([{"effect_index": 0, "spend_allowance": 31}])),
+            Some(json!(2))
+        )
+    );
+}
+
+// Fix round 1 (ruling 1, a second member of the block). Lines 140 and 104, read at 180. `task_a`
+// (15 a run, 30 of `pool.out`, reserving 150) and `task_b` (10 a run, 15 of `pool.out`) are the
+// round's order, `task_a` first (`V ÷ c` 2000 against 1500). `task_a`, the head, is handed
+// min(⌈40 ÷ 15⌉, ⌊(180 − 150) ÷ 15⌋) = 2 turns (its reserve above the hard line is the floor:
+// a pool both reserved and lined on the head). The pool is not read again: a minute later the
+// round's plan and the gate count those 2 turns, 180 − 30 = 150, above the stop line, so the
+// episode goes on and `task_b` is its head (rank 2 of round 1) and is handed
+// min(⌈(150 − 140) ÷ 10⌉, ⌊(150 − 104) ÷ 10⌋) = 1 turn, which ends at the stop line (before: 165
+// read, 3 turns, 135).
+#[test]
+fn lf1_t10_the_next_member_of_the_block_reads_the_turns_the_head_was_handed() {
+    let tasks = [
+        Rule {
+            reserve: Some(150),
+            ..rule("task_a", 15)
+        },
+        Rule {
+            produced: 15,
+            ..rule("task_b", 10)
+        },
+    ];
+    let mut world = World::new(catalog(&[A], &tasks, &catalog_lines(None)), 180);
+    let first = world.evaluate();
+    assert_eq!(dispatched(&first), [copy("task_a", A)], "{first:#?}");
+    assert_eq!(
+        spend(&first, "task_a", A).value("capped_rank"),
+        Some(&json!(1))
+    );
+    assert_eq!(
+        carried(&first, "task_a", A),
+        (
+            Some(json!([{"effect_index": 0, "spend_allowance": 30}])),
+            Some(json!(2))
+        )
+    );
+    world.run_without_reading(&first);
+    let second = world.evaluate();
+    assert_eq!(dispatched(&second), [copy("task_b", A)], "{second:#?}");
+    let head = spend(&second, "task_b", A);
+    assert_eq!(head.value("capped_episode"), Some(&json!(1)));
+    assert_eq!(head.value("capped_round"), Some(&json!(1)));
+    assert_eq!(head.value("capped_rank"), Some(&json!(2)));
+    assert_eq!(head.value("pool_reading"), Some(&json!(150)));
+    assert_eq!(
+        carried(&second, "task_b", A),
+        (
+            Some(json!([{"effect_index": 0, "spend_allowance": 46}])),
+            Some(json!(1))
+        )
+    );
+}
+
+// Fix round 1 (a pool both reserved and lined on the head). Lines 140 and 104, read at 180;
+// `task_r` (15 a run) alone, the head, reserving the pool. A reserve of 150, above the hard line,
+// is the floor: the allowance 30 allows 2 turns, before the stop line's 3. A reserve of 50, below
+// it, gives way to the hard line: the allowance 76 allows 5, and the stop line's 3 stop the head.
+#[test]
+fn lf1_t11_a_pool_both_reserved_and_lined_on_the_head() {
+    for (at_least, allowance, run_cap) in [(150, 30, 2), (50, 76, 3)] {
+        let reserving = Rule {
+            reserve: Some(at_least),
+            ..rule("task_r", 15)
+        };
+        let mut world = World::new(catalog(&[A], &[reserving], &catalog_lines(None)), 180);
+        let evaluation = world.evaluate();
+        assert_eq!(
+            dispatched(&evaluation),
+            [copy("task_r", A)],
+            "reserve {at_least}: {evaluation:#?}"
+        );
+        assert!(
+            has(decision(&evaluation, "task_r", A), PolicyCode::CappedSpend),
+            "reserve {at_least}: the head"
+        );
+        assert_eq!(
+            carried(&evaluation, "task_r", A),
+            (
+                Some(json!([{"effect_index": 0, "spend_allowance": allowance}])),
+                Some(json!(run_cap))
+            ),
+            "reserve {at_least}"
+        );
+    }
+}
+
+// Fix round 1 (ruling 1; ruling 3: the one change of admissions). Lines 140 and 104, read at 134;
+// `task_p` (15 a run) ran after the reading. Its dispatch handed `run_cap` 2 on the pool counts
+// two runs: the gate reads 134 − 30 = 104, and the run would leave 89, so `task_p` is held
+// `would_cross_hard_line` (`amount_after` 89) and nothing is dispatched. Counted one run, it is
+// admitted with `run_cap` 1 as in test 8: when its dispatch carried no `run_cap`, when the
+// `run_cap` it carried named no entry on the pool, and when the dispatch the host noted is not the
+// one the snapshot shows (another admission time).
+#[test]
+fn lf1_t12_a_dispatch_counts_the_turns_it_was_handed_and_one_run_without_them() {
+    let fresh = || {
+        World::new(
+            catalog(&[A], &[rule("task_p", 15)], &catalog_lines(None)),
+            134,
+        )
+    };
+    let mut handed = fresh();
+    let at = handed.read_at + 30_000;
+    handed.ran_with_turns("task_p", A, (2, &[0]), at);
+    let held = handed.evaluate();
+    assert!(dispatched(&held).is_empty(), "{held:#?}");
+    let reason = last(decision(&held, "task_p", A));
+    assert!(reason.outcome.is(PolicyCode::PoolLineHeld), "{reason:?}");
+    assert_eq!(
+        reason.outcome.value("pool_line_hold"),
+        Some(&json!("would_cross_hard_line"))
+    );
+    assert_eq!(reason.outcome.value("amount_after"), Some(&json!(89)));
+
+    let mut without = fresh();
+    without.ran_after_the_reading("task_p", A);
+    let mut elsewhere = fresh();
+    elsewhere.ran_with_turns("task_p", A, (2, &[]), at);
+    let mut another = fresh();
+    another.ran_with_turns("task_p", A, (2, &[0]), at - 1);
+    for (label, mut world) in [
+        ("no run_cap", without),
+        ("no entry on the pool", elsewhere),
+        ("another dispatch", another),
+    ] {
+        let evaluation = world.evaluate();
+        assert_eq!(
+            dispatched(&evaluation),
+            [copy("task_p", A)],
+            "{label}: {evaluation:#?}"
+        );
+        assert_eq!(
+            carried(&evaluation, "task_p", A),
+            (
+                Some(json!([{"effect_index": 0, "spend_allowance": 15}])),
+                Some(json!(1))
+            ),
+            "{label}"
+        );
+    }
+}
+
+// Fix round 1 (ruling 2, the reserve path of SS-6). A valued pool without lines read at 175;
+// `task_r` (10 a run) reserves 100 of it and ran after the reading. The reserve gate admits it
+// (175 − 10 = 165 ≥ 100, its own dispatch is not the gate's step 3), and its allowance takes its
+// own unshown dispatch off: 175 − 10 − 100 = 65, `run_cap` 6 (before: 75, 7); with that dispatch
+// handed `run_cap` 3, 175 − 30 − 100 = 45, `run_cap` 4.
+#[test]
+fn lf1_t13_the_reserve_path_takes_the_tasks_own_unshown_dispatch_off() {
+    let reserving = || Rule {
+        reserve: Some(100),
+        ..rule("task_r", 10)
+    };
+    let mut once = World::new(catalog(&[A], &[reserving()], &[]), 175);
+    once.ran_after_the_reading("task_r", A);
+    let mut thrice = World::new(catalog(&[A], &[reserving()], &[]), 175);
+    let at = thrice.read_at + 30_000;
+    thrice.ran_with_turns("task_r", A, (3, &[0]), at);
+    for (label, mut world, allowance, run_cap) in [
+        ("one run", once, 65, 6),
+        ("three runs handed", thrice, 45, 4),
+    ] {
+        let evaluation = world.evaluate();
+        assert_eq!(
+            dispatched(&evaluation),
+            [copy("task_r", A)],
+            "{label}: {evaluation:#?}"
+        );
+        assert_eq!(
+            carried(&evaluation, "task_r", A),
+            (
+                Some(json!([{"effect_index": 0, "spend_allowance": allowance}])),
+                Some(json!(run_cap))
+            ),
+            "{label}"
+        );
+    }
+}
+
 // ---- The world a test drives ----
 
 /// The catalog, the Runtime's memory of the capped episodes, the lines the instances set, the
-/// instances, each one's reading of its lined pool, and the tasks' snapshots.
+/// instances, each one's reading of its lined pool, the tasks' snapshots, the turns their latest
+/// dispatches were handed (as the host gives them, fix round 1) and the evaluation's time.
 struct World {
     catalog: CompiledCatalog,
     memory: CappedMemory,
@@ -437,6 +685,8 @@ struct World {
     readings: BTreeMap<&'static str, i64>,
     read_at: u64,
     states: Vec<TaskRuntimeSnapshot>,
+    handed: HandedTurns,
+    now: u64,
 }
 
 impl World {
@@ -463,16 +713,64 @@ impl World {
             readings,
             read_at: NOW - MINUTE_MS,
             states: Vec::new(),
+            handed: HandedTurns::default(),
+            now: NOW,
         }
     }
 
     /// `task`'s copy on `alias` succeeded, dispatched half a minute after the pool's reading (so the
     /// reading does not show its consumption) and after its clock's latest occurrence.
     fn ran_after_the_reading(&mut self, task: &str, alias: &str) {
+        self.ran_at(copy(task, alias), alias, self.read_at + 30_000);
+    }
+
+    /// [`Self::ran_after_the_reading`], its dispatch handed `run_cap` with `spend_allowances` at
+    /// the `consumes` entries `entries`, as its recorded `policy_dispatch_parameters` says;
+    /// `noted_at` the admission time the host notes it at (the snapshot's own unless a test says
+    /// otherwise).
+    fn ran_with_turns(
+        &mut self,
+        task: &str,
+        alias: &str,
+        (run_cap, entries): (u64, &[usize]),
+        noted_at: u64,
+    ) {
+        self.ran_after_the_reading(task, alias);
+        let parameters = ss6_reason(entries.iter().map(|entry| (*entry, 0)).collect(), run_cap);
+        self.handed
+            .note_dispatch(&copy(task, alias), alias, noted_at, [&parameters.outcome]);
+    }
+
+    /// The round's one dispatch: its task succeeded, and the host notes the turns its recorded
+    /// reasons handed it; the pool is not read again, and the next round is a minute later.
+    fn run_without_reading(&mut self, evaluation: &PolicyEvaluation) {
+        let [intent] = evaluation.dispatch_intents.as_slice() else {
+            panic!("one dispatch: {evaluation:#?}");
+        };
+        let chain = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .unwrap_or_else(|| panic!("the dispatch's reason chain: {evaluation:#?}"));
+        self.states.retain(|state| {
+            state.task_id != intent.task_id || state.instance_id != intent.instance_id
+        });
+        self.ran_at(intent.task_id.clone(), &intent.instance_id, self.now);
+        self.handed.note_dispatch(
+            &intent.task_id,
+            &intent.instance_id,
+            self.now,
+            chain.reasons.iter().map(|reason| &reason.outcome),
+        );
+        self.now += MINUTE_MS;
+    }
+
+    /// The task `task_id` on `instance_id` succeeded, dispatched at `at`.
+    fn ran_at(&mut self, task_id: String, instance_id: &str, at: u64) {
         self.states.push(TaskRuntimeSnapshot {
-            task_id: copy(task, alias),
-            instance_id: alias.to_owned(),
-            last_dispatched_unix_ms: Some(self.read_at + 30_000),
+            task_id,
+            instance_id: instance_id.to_owned(),
+            last_dispatched_unix_ms: Some(at),
             eligible_since_unix_ms: None,
             terminal_state: Some(TaskTerminalState::Succeeded),
             completed_window: None,
@@ -505,16 +803,19 @@ impl World {
         }
     }
 
-    /// One round at NOW by the Runtime's entry, with its memory and the instances' sets, every
+    /// One round now by the Runtime's entry, with its memory, the instances' sets and the turns
+    /// the tasks' latest dispatches were handed beside the left-out facts (none left out), every
     /// candidate admitted.
     fn evaluate(&mut self) -> PolicyEvaluation {
         let facts = self.facts();
         let resources = resources(&self.catalog, &facts, &self.instances);
-        evaluate_with_instance_lines::<PolicyEvaluationError>(
+        let mut left_out = LeftOutFacts::default();
+        left_out.give_handed_turns(self.handed.clone());
+        evaluate_with_left_out_facts::<PolicyEvaluationError>(
             &self.catalog,
             &facts,
             &resources,
-            time(NOW),
+            time(self.now),
             11,
             &BTreeSet::new(),
             &refresh_inputs(),
@@ -526,6 +827,7 @@ impl World {
             &NoProgressGuards::default(),
             &mut self.memory,
             &self.lines,
+            &left_out,
             |_, _, _| Ok(false),
             |_: &DispatchIntent| -> Result<CandidateEligibility, PolicyEvaluationError> {
                 Ok(CandidateEligibility::Eligible)
@@ -655,6 +957,14 @@ fn reason(decision: &TaskDecision, code: PolicyCode) -> &DecisionReason {
         .unwrap_or_else(|| panic!("a {} reason on {decision:#?}", code.as_str()))
 }
 
+/// The reason that settled a decision: its last one.
+fn last(decision: &TaskDecision) -> &DecisionReason {
+    decision
+        .reasons
+        .last()
+        .unwrap_or_else(|| panic!("a reason on {decision:#?}"))
+}
+
 /// The `capped_spend` of the dispatch of `task`'s copy on `alias`.
 fn spend<'a>(evaluation: &'a PolicyEvaluation, task: &str, alias: &str) -> &'a Outcome {
     &reason(decision(evaluation, task, alias), PolicyCode::CappedSpend).outcome
@@ -731,21 +1041,24 @@ enum Trigger {
     Hourly,
 }
 
-/// A task of every instance: `consumed` units of the lined pool a run, 30 of `pool.out`, due by
-/// `trigger`, reserving `reserve` of the lined pool when given, judged when `judged`.
+/// A task of every instance: `consumed` units of the lined pool a run, `produced` of `pool.out`,
+/// due by `trigger`, reserving `reserve` of the lined pool when given, judged when `judged`.
 struct Rule {
     id: &'static str,
     consumed: u64,
+    produced: u64,
     trigger: Trigger,
     reserve: Option<u64>,
     judged: bool,
 }
 
-/// A judged task due while the pool holds what it consumes, reserving nothing.
+/// A judged task producing 30 a run, due while the pool holds what it consumes, reserving
+/// nothing.
 fn rule(id: &'static str, consumed: u64) -> Rule {
     Rule {
         id,
         consumed,
+        produced: 30,
         trigger: Trigger::Enough,
         reserve: None,
         judged: true,
@@ -801,7 +1114,7 @@ fn task_copy(alias: &str, rule: &Rule) -> Value {
             "value": {"type": "boolean", "value": true}
         },
         "consumes": [effect(&copy(POOL, alias), "consume", rule.consumed)],
-        "produces": [effect(&copy(OUT, alias), "produce", 30)],
+        "produces": [effect(&copy(OUT, alias), "produce", rule.produced)],
         "on_failure": {
             "action": "continue",
             "retry_limit": 2,

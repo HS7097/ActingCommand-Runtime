@@ -369,7 +369,9 @@ carries a fallback and the amount is never Unknown.
      the bound `ε` of "Within tolerance" reads the same `C`, and an amount read from a fact is an
      integer, so it adds to no `m`.
   2. *The pool's lines* ("Pool lines"): the reading `r`, which takes off the consumption its
-     reading does not show yet, each other task dispatched since by its own amount in effect; and
+     reading does not show yet, each task dispatched since (the candidate's own included) by its
+     own amount in effect (#477 LF-1 fix round 1, since 0.12.80: times the runs a dispatch was
+     handed, "Pool lines", "At each evaluation"); and
      the hold at the hard line below the trigger line, `r − ⌈C/1000⌉ < H` (`would_cross_hard_line`,
      `amount_after`).
   3. *A pool its lines cannot spend* ("Pool lines"): the decision reason `pool_lines_unspendable`
@@ -395,7 +397,8 @@ carries a fallback and the amount is never Unknown.
      allowance below the task's consumption, and `run_cap`, ⌊allowance ÷ one run's amount⌋, which
      the run reads as `session.dispatch.schedule.run_cap`. #477 LF-1 (since 0.12.80): one run's
      amount of a pool whose lines take part in the spend values ("Task Reserves", "Spend
-     values") is the one in effect as well.
+     values") is the one in effect as well; fix round 1: the consumption an allowance takes off is
+     every task's, the task's own included, a dispatch handed a `run_cap` by that many runs.
   8. *The tie-break* ("Ties and chain heads"): a candidate's runs left, by `c`.
   9. *Forward projection* ("Forward Planning And Maintenance", "Pool Projection"): it reads the
      amount once, from the facts it starts from, and holds it across its horizon, as it holds a
@@ -1317,7 +1320,9 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   2. `after < at_least`;
   3. `after`, less the declared consumption of every other task whose latest dispatch on the
      instance is at or after the pool's latest observation (a reading that does not show that
-     run yet), is below `at_least`;
+     run yet), is below `at_least`; #477 LF-1 fix round 1 (since 0.12.80): such a dispatch that
+     was handed a `run_cap` of N in which the pool took part counts N runs ("Pool lines", "At
+     each evaluation");
   4. that amount, less the declared consumption of a candidate of the instance taken before it
      and not held, is below `at_least`: of two tasks that each fit alone but not together, the
      higher `effective_milli` runs this round, whatever their priorities. SS-2b (since 0.12.32):
@@ -1351,19 +1356,31 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   (0.12.60) until G-R2x (0.12.77) a task that carried the irreversible mark carried the values of
   an instance without a record instead; since G-R2x it carries the goal's gap as every task does.
   An allowance below the task's
-  declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
+  declared consumption of the pool, 0 included, is never dispatched: the gate holds it (#477
+  LF-1 fix round 1, below: unless the task's own earlier dispatch is not shown yet).
   #477 LF-1 (since 0.12.80; register §1.509): a pool's own lines take part too, so a rule needs
   no reserve to bound its turns. For a judged candidate (the candidates the lines constrain,
   "Pool lines", "Who is held"), each pool it consumes that has a declared valuation and whose
   lines in effect on the candidate's instance are written (the instance's own set, else the
   catalog's; not the defaults) has the floor of its hard line, whether or not the task reserves
   it; where it does, the floor is the larger of the hard line and `at_least`. Its allowance is
-  `projected − pending − floor`, at least 0, at the same entry, and `run_cap` counts it as it
-  counts a reserved pool; on the head of the pool's capped episode its turns stop where the
-  episode is spent ("Capped spending order", "What the head's run is handed"). The lines' gate
-  holds a candidate whose run would cross the hard line, so a dispatched one's allowance pays for
-  at least one run here too. A pool without lines, a pool without a valuation and a candidate
-  the lines do not constrain hand exactly what they handed before.
+  the lines' gate's own reading `r` ("Pool lines", "At each evaluation") less the floor, at
+  least 0, at the same entry, and `run_cap` counts it as it counts a reserved pool; on the head of
+  the pool's capped episode its turns stop where the episode is spent ("Capped spending order",
+  "What the head's run is handed"). The lines' gate holds a candidate whose run would leave
+  `r − c` below the hard line, so a dispatched one's allowance pays for at least one run here
+  too. A pool without lines, a pool without a valuation and a candidate the lines do not
+  constrain hand exactly what they handed before.
+  #477 LF-1 fix round 1 (since 0.12.80; register §1.509; the coordinator's rulings, not the
+  owner's words): one number for the gate and for the cap. The consumption not shown yet that
+  an allowance takes off is every task's, the candidate's own latest dispatch included (before,
+  the reserve's allowance left it out as step 3 does), and a dispatch handed a `run_cap` counts
+  that many runs of each pool that took part in it (step 3 and the lines' reading alike). So
+  `run_cap` never tells a run more turns than the gates would admit one by one, and never to
+  spend below the reserve line or the hard line. The reserve gate still leaves the candidate's
+  own unshown dispatch out (step 3 is unchanged but for the count of a handed dispatch), so after
+  such a dispatch an allowance whose floor is a reserve can be below one run, 0 included, and
+  `run_cap` 0: the run is told to spend nothing rather than below the line.
 
 ## Shared Run Limits (Workflow #427-B)
 
@@ -2501,7 +2518,14 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   must hold `0 ≤ H < S ≤ cap` (SCHED-C1c, since 0.12.53: `0 ≤ H < S ≤ T ≤ cap`). The reading `r` they are checked against is the pool's projected
   amount less the consumption its reading does not show yet: every task dispatched on the
   instance at or after the reading's observation, by its declared consumption (the reserve gate's
-  step 3, "Task Reserves").
+  step 3, "Task Reserves"), the candidate's own task included. #477 LF-1 fix round 1 (since
+  0.12.80; register §1.509): a task's latest dispatch that was handed a `run_cap` of N
+  (`policy_dispatch_parameters`, [../remedies.md](../remedies.md), section 4) counts N runs (at
+  least one) of each pool that took part in that cap (its `spend_allowances` entries); any other
+  dispatch counts one run, as before. It is an upper bound (a package may do fewer turns), which
+  the pool's next reading corrects: a dispatch older than the reading is shown. The host gives
+  the evaluation what each pair's latest dispatch was handed, from its recorded reasons, beside the
+  left-out facts; a dispatch the host's journal no longer holds counts one run.
 - **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
@@ -2690,6 +2714,8 @@ without a valuation is untouched.
   past the stop line but never below the hard line; with `H = S − (the costliest run)` nothing is
   skipped. The plan is taken again at each evaluation of the round, from the same starting
   reading: one dispatched in the round counts with its consumption, one passed (below) not at all.
+  #477 LF-1 fix round 1 (since 0.12.80): one dispatched with a `run_cap` of N in which the pool
+  took part counts N runs of its consumption ("Pool lines", "At each evaluation").
 - **Dispatch, one at a time** (layout 乙). At each evaluation the head is the first planned
   consumer the round has neither dispatched (a task snapshot whose `last_dispatched_unix_ms` is at
   or after the round's start counts as dispatched in it) nor passed (below) that is a candidate
@@ -2714,8 +2740,10 @@ without a valuation is untouched.
   consumer. A package whose run repeats its turn reads how many from `run_cap`
   (`session.dispatch.schedule.run_cap`, [../remedies.md](../remedies.md), section 4), and for
   the pool of the block it is handed the turns the plan would take with that consumer alone, run
-  by run: from `r`, the pool's projected amount less the other tasks' consumption its reading
-  does not show yet, as many runs of `c` as bring the reading to where the episode is spent
+  by run: from `r`, the lines' gate's own reading ("Pool lines", "At each evaluation": the
+  projected amount less every task's consumption the reading does not show yet, the consumer's
+  own included, a dispatch handed a `run_cap` by that many runs; #477 LF-1 fix round 1), as many
+  runs of `c` as bring the reading to where the episode is spent
   (`r ≤ S` and `r < T`, the episode's rule above), and never one that would end below the floor
   (the hard line, or the task's reserve of the pool where that is larger):
   `min(⌈(r − s) ÷ c⌉, ⌊(r − floor) ÷ c⌋)`, `s` the largest reading the rule reads as spent: `S`,
@@ -2726,7 +2754,13 @@ without a valuation is untouched.
   the capacity 180, read at 180, `c` 15: ⌈40 ÷ 15⌉ = 3 runs (to 135; ⌊40 ÷ 15⌋ = 2 would stop at
   150 and leave the episode under way), the floor allows ⌊76 ÷ 15⌋ = 5: 3. With `S` = `T` = 160
   read at 175: ⌈(175 − 159) ÷ 15⌉ = 2. The order, the plan, the block, every hold and the
-  episode's rule are unchanged: only the values on `policy_dispatch_parameters` are.
+  episode's rule are unchanged: only the values on `policy_dispatch_parameters` are, and (fix
+  round 1) what a dispatch handed them counts until the pool is read again. So a head that swept
+  to the stop line and was not read again makes the next evaluation read the episode spent: it is
+  no head again, and below the trigger line it is handed `⌊(r − floor) ÷ c⌋`. A candidate in the
+  blocks of two pools is the head of the first pool that takes it (pools in id order, the one
+  whose `capped_spend` it carries); for the other pool its turns are `⌊(r − floor) ÷ c⌋`, which
+  may take that pool past its stop line but never below its floor.
 - **A stopped consumer** (Workflow #429 R-6b, since 0.12.55): a consumer whose run a
   `StopInstanceRun` stopped was dispatched in its round (its `last_dispatched_unix_ms`), so the
   plan counts its whole consumption and the round does not list it again; what it spent before

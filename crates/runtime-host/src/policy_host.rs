@@ -3767,6 +3767,69 @@ impl PolicyHost {
         }
     }
 
+    /// #477 LF-1 fix round 1 (register §1.509, ruling 1; `contracts/scheduling/README.md`, "Pool
+    /// lines", "Task Reserves"): the turns the latest admitted dispatch of each (task, instance)
+    /// pair at or before the ledger position `through` was handed, read from its recorded
+    /// `policy_dispatch_parameters` (its `run_cap` and the entries of its `spend_allowances`),
+    /// keyed as the pair's task snapshot is ([`Self::task_runtime_snapshots`]: the task's own id
+    /// in the active catalog, else the one its `continues_from` gives, Workflow #372 K5) and timed
+    /// by its admission, the snapshot's `last_dispatched_unix_ms`. The evaluation counts such a
+    /// dispatch's turns as consumption a pool's reading does not show yet. Read from the resident
+    /// journal: a pair whose latest dispatch it no longer holds is not noted, and that dispatch
+    /// counts one run, as before.
+    pub(crate) fn handed_turns(&self, through: u64) -> actingcommand_policy::HandedTurns {
+        let mut handed = actingcommand_policy::HandedTurns::default();
+        let Some(active) = self.active.as_ref() else {
+            return handed;
+        };
+        let task_ids = active
+            .compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let accounting = accounting_tasks(&active.compiled);
+        let accounted = |task_id: &str| {
+            task_ids
+                .get(task_id)
+                .copied()
+                .or_else(|| accounting.get(task_id).copied())
+        };
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for dispatch in self.seen_dispatches.values() {
+            let Some(task_id) = accounted(dispatch.data.task_id.as_str()) else {
+                continue;
+            };
+            let Some(sequence) = dispatch
+                .admitted_sequence
+                .filter(|sequence| *sequence <= through)
+            else {
+                continue;
+            };
+            let key = (task_id, dispatch.data.instance_id.as_str());
+            if latest
+                .get(&key)
+                .is_none_or(|(previous, _)| *previous < sequence)
+            {
+                latest.insert(key, (sequence, dispatch));
+            }
+        }
+        for ((task_id, instance_id), (_, dispatch)) in latest {
+            let Some(admission) = dispatch.admission.as_ref() else {
+                continue;
+            };
+            handed.note_dispatch(
+                task_id,
+                instance_id,
+                admission.activity.admitted_at_unix_ms,
+                dispatch.data.reasons.iter().map(|reason| &reason.0),
+            );
+        }
+        handed
+    }
+
     /// IDLE-3 (#447, register §1.332): whether the latest evaluated cycle's plan for `alias`
     /// ([`Self::idle_plan`]) counts the end of every run the policy dispatched on the instance:
     /// as that evaluation read its inputs no dispatch of the instance was open, and none has been

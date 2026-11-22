@@ -2167,6 +2167,10 @@ impl HostShared {
             // starts, judged once for the evaluation and the fact refresh's recorder.
             let blackout_holds =
                 policy.blackout_holds(&blackout_context, &facts.instances, time)?;
+            // #477 LF-1 fix round 1 (register §1.509, ruling 1): the turns each pair's latest
+            // dispatch at the inputs' position was handed, which the evaluation counts as the
+            // consumption a pool's reading does not show yet.
+            left_out.give_handed_turns(policy.handed_turns(facts.ledger_position));
             let cycle = policy.evaluate(
                 &facts,
                 &controlled_resources,
