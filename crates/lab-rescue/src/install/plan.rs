@@ -5,7 +5,8 @@
 //! verified, the interface edges, the file plan, the defaults diff, both check-config summaries,
 //! the ledger verification, the running state and the notice block. `plan_id` names the
 //! canonical plan document; process ids, times and the rollback gate's ledger figures are not in
-//! it. Read-only.
+//! it. Read-only. Workflow #429 RB-1: and whether the target names every subsystem the schedules
+//! a start of it would read require (`super::requires`), a failed edge row when it does not.
 
 use super::adopt::verify_live;
 use super::files::{self, join_relative};
@@ -13,6 +14,7 @@ use super::host::{Host, RunningImage};
 use super::journal;
 use super::manifest::{self, Build, BuildProblem, Half, Speaks};
 use super::programs::{self, Checked};
+use super::requires;
 use super::state::{self, InstallState, PackEntry, Paths, StateProblem};
 use super::{Answer, refuse_ab};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal};
@@ -922,6 +924,25 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             ),
         ],
     ));
+    // Workflow #429 RB-1 (register §1.514): the target names every subsystem the schedules a
+    // start of it would read require (the games in use, the active generation's fragments), by its
+    // own check-config answer; one failed row and the member `requires_missing` when it does not,
+    // and nothing when it does, so such a plan is the plan it was.
+    let unnamed = requires::unnamed(
+        paths,
+        &config,
+        &state_root,
+        &target_check,
+        live_check.as_ref(),
+    );
+    if !unnamed.is_empty() {
+        edges.push(edge(
+            requires::INTERFACE,
+            requires::CHECK,
+            false,
+            vec![party("R*", "check_config", None)],
+        ));
+    }
     let ledger_verify = live_speaks.get(LEDGER) != target_speaks.get(LEDGER);
     // The running state.
     let unreadable = |cause: Outcome| {
@@ -973,7 +994,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             running.blocked.push(image);
         }
     }
-    let document = json!({
+    let mut document = json!({
         "schema_version": PLAN_SCHEMA,
         "kind": inputs.kind,
         "inputs": {
@@ -998,6 +1019,9 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         },
         "ledger_verify": ledger_verify,
     });
+    if !unnamed.is_empty() {
+        document[requires::MEMBER] = json!(unnamed);
+    }
     let canonical = actingcommand_runtime_config::canonical_json(&document);
     let id = format!("plan-{}", &files::sha256_bytes(canonical.as_bytes())[..16]);
     let planned = Planned {

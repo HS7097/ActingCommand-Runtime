@@ -279,6 +279,46 @@ stopped, and until INST-3 it leaves the configuration alone.
     (its adb and its default vision root); the plan carries the caveat
     `check_config_without_install_root` (`commit_sha`, `path` its actingd), a `note` link, and
     only the answer's category counts.
+- **Subsystems the schedules require** (Workflow #429 RB-1, since 0.12.80; register §1.514). An
+  update and a rollback alike: the target build must name every subsystem that a `schedule.json` a
+  start of it would read lists in `requires` ([standard-pack-schedule.md](standard-pack-schedule.md),
+  "`requires`": a Runtime that does not name one refuses the file, and a start compiles the active
+  catalogue generation composed from such files).
+  - *What the target names*: the enabled rows of `config_manifest.subsystems` in its own
+    check-config answer, the one above (the set a start of that build gives the composer). An
+    answer without them names none, so any `requires` refuses it: a refusal (which prints no
+    report) or a build without the member. 0.12.77, 0.12.78 and 0.12.79 print it with a
+    configuration they pass (read at their tags); 0.12.77 and 0.12.78 name neither
+    `pool_list_rows` nor `catalog_business`, 0.12.79 names `pool_list_rows` and not
+    `catalog_business`.
+  - *What is read*: the `schedule.json` of each game in use (each `game_id` of
+    `policy.facts.instances`) below `standard_packs.root`; and each fragment
+    (`fragments/<game>.json`) of the active generation's directory in the state root's catalogue
+    store (`policy\catalogs\generations\<hex>\`), the generation each check-config answer, the
+    target's and the live build's, previews as active (`policy_plan.active.catalog_hash`). Each
+    file is read by the one reader of `schedule.json`: a file that is not there requires nothing,
+    nor does one the reader refuses (every Runtime refuses it as well, and check-config notes it).
+    **Not seen**: a generation that only a dispatch still in flight pins, which a start compiles
+    too (register §1.505, "At deploy"); its hash is in the ledger alone, which the plan does not
+    read.
+  - *The refusal*: when a file requires a name the target does not name, or a file or the folder
+    of fragments cannot be read, the plan has one more edge row, `requires`
+    `next_names_required`, failed (party `R*`, source `check_config`, no range), and its document
+    the member `requires_missing`, one entry per such file: `game`, `source` (`root` or
+    `generation`), `catalog_hash` (a fragment's generation), `path`, `missing` (the names the
+    target does not name, in the file's order) and, for a file or a folder that could not be read,
+    `unread` (its failure as a warning; `game` absent for the folder, `missing` empty). The plan
+    refuses `interface_edge` with that row counted; apply, which plans again, refuses the same
+    before any change; a rollback's gate is not reached. `undo` judged as a rollback, `status
+    --check-rollback` and a composite's automatic rollback plan the same way and refuse with it.
+    When nothing is missing there is neither row nor member: the plan is the plan it was. The
+    check writes nothing and runs nothing beyond the two check-configs above.
+  - *The way out* (no flag passes it): place schedules that do not require the name, let the
+    Runtime of the live build compose and activate a generation without it (its workbench's next
+    check after the placement), and plan again. A person sees that the state no longer holds such
+    a generation in the plan itself: its `requires_missing` then lists no `generation` entry, the
+    active generation being another than the `catalog_hash` it named (the Runtime's own is the
+    `catalog_hash` of its schedule explanation, `ac_schedule`).
 - **Ledger verify.** When the target's `ledger` range differs from the live one, apply first
   runs the target's `actingd ledger-maintenance verify --config <root>\actingd.config.json`
   (cold) and refuses `ledger_verify_failed` unless it exits 0 (the acsetup gate of
@@ -1867,7 +1907,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 
 | Operation | Edges (all must pass; each a row of `edges`) |
 |---|---|
-| update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. |
+| update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. Since 0.12.80 (Workflow #429 RB-1): `requires`, R\*'s check-config names every subsystem the schedules a start of R\* would read require (`next_names_required`, a row only when it fails; "Subsystems the schedules require" above). |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
 | pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`), from 0.12.61 ≥ 14 (`goals.json` version 2); and from 0.12.61 one whose packs declare `variables` declares B.max ≥ 14 (`pack_invalid`, `variable_undeclared`). |
 | new | I ∩ R for `actingd-config` (Workflow #453 S4: `installer_meets_next`, before anything is written); R's check-config passes the first configuration (`write_config`). |
@@ -1985,7 +2025,9 @@ evaluated at `rollback plan`, again at apply under the writer lock, by `status
 (v0.12.25); all four parts must pass (`rollback_gate_part`):
 
 1. `interface_edges`: the update edges with R\* the target and Rp the live build; the live
-   build's `ledger` max ∈ the target's range.
+   build's `ledger` max ∈ the target's range. (Since 0.12.80 the row `requires`
+   `next_names_required` is among them; failed, it refuses the plan first, "Subsystems the
+   schedules require".)
 2. `ledger_readability`: S0 is the ledger head the operation that installed the live build
    recorded (its journal's `s0.head`). The **target build's own** `actingledger --state-root
    <state> events --after <S0> --limit 1024` reads every page up to the head with exit 0; the
