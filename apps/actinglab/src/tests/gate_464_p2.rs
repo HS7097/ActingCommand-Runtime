@@ -835,8 +835,9 @@ fn interrupt(entry: &Value) -> Entry {
 /// `linear_steps` pack, for row 17; 17, Workflow #463 S2-9b, by a key step of a `linear_steps`
 /// pack, for row 18; 18, Workflow #463 INT-1, by a select step's scan without an end, for row 19;
 /// 19, Workflow #463 SEL-2L, by an `interrupts.json` entry without handlers, for row 20; 20,
-/// Workflow #463 SEL-GRID G2, by a `repeated_anchor` layout's shared read, for row 21). No
-/// content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
+/// Workflow #463 SEL-GRID G2, by a `repeated_anchor` layout's shared read, for row 21; 21,
+/// Workflow #428 S168-LK, by a `fixed_slots` layout's shared read that declares `lines`, for row
+/// 22). No content needs 12 since `goals.json` needs 14 ("Revisions 13 and 14").
 fn base(revision: u64) -> Vec<Entry> {
     let pack = |path: &str| format!("packs/{BASE_PACK}/{path}");
     let base_task = |value: Value| json_entry(pack(TASK_FILE), &value);
@@ -905,6 +906,12 @@ fn base(revision: u64) -> Vec<Entry> {
             "id": "layout/base",
             "kind": "repeated_anchor",
             "shared_ocr": {"blocks": "detect", "line_merge": {"gap_factor": 0}}
+        }]}))],
+        21 => vec![base_task(json!({"candidate_layouts": [{
+            "id": "layout/base",
+            "kind": "fixed_slots",
+            "shared_ocr": {"blocks": "detect", "line_merge": {"gap_factor": 0},
+                           "lines": {"max": 2, "line_height": 21}}
         }]}))],
         _ => panic!("no base for revision {revision}"),
     }
@@ -1989,5 +1996,36 @@ fn p2_revision_21_the_lines_of_a_shared_read() {
         revision_of(3, &[layout("fixed_slots", false)]),
         3,
         "a fixed_slots layout's shared read without them, as before"
+    );
+}
+
+// Row 22 (Workflow #428 S168-LK, register §1.500; contracts/component-interfaces.md, the `package`
+// row 22): an operation whose effect is `read_list` in a pack whose control names `linear_steps`,
+// as the kernel's admission finds it, needs 22 over entries that need 21 (a shared read's lines in
+// another pack); the same list reading in a `navigable_route` pack (a page-graph list reading,
+// row 8), and a `linear_steps` pack whose operation is a click, stay at 21; over entries that need
+// nothing, the page-graph list reading needs 8, as before. So `standard-pack build` declares
+// [22, 22] for a bundle whose pack has a linear list reading, which the `package` edge of an
+// installer whose range ends below 22 refuses, and keeps the revision of every other bundle.
+#[test]
+fn p2_revision_22_read_list_of_a_linear_steps_pack_only() {
+    let linear = control(&json!({"execution_mode": "linear_steps"}));
+    let page_graph = control(&json!({"execution_mode": "navigable_route"}));
+    let read = operation(&json!({"id": "read_members", "from": "list", "to": "list",
+                                 "read_list": {"fact_key": "inventory.list.example_kind_a"}}));
+    assert_row(
+        22,
+        &[linear.clone(), read.clone()],
+        &[page_graph.clone(), read.clone()],
+    );
+    assert_eq!(
+        revision_of(21, &[linear, operation(&json!({"click": {}}))]),
+        21,
+        "a click step of a linear_steps pack"
+    );
+    assert_eq!(
+        revision_of(3, &[page_graph, read]),
+        8,
+        "a page-graph list reading, as before"
     );
 }

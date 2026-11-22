@@ -887,8 +887,10 @@ fn with_read(patch: impl FnOnce(&mut Value)) -> Value {
 // leaves the run no way on and is refused. Each rule of the declaration table is refused by
 // admission's own checks with `contained_task_resource_reading_invalid` and
 // `<operation id>:<member>`; a scan whose numbers break a select step's static check is refused
-// that way through the whole admission, after the gate; and a `linear_steps` task refuses the
-// step with `contained_task_linear_invalid`, `reason=read_list`.
+// that way through the whole admission, after the gate; and a `linear_steps` task refused the
+// step with `contained_task_linear_invalid`, `reason=read_list`. Workflow #428 S168-LK (register
+// §1.500; adapted, the requirement moving what the last block pins): a step plan admits the step,
+// prepared as the page graph prepares it.
 #[test]
 fn list_reading_declaration_refusals() {
     let base = admit(&task()).expect("the base package is admitted");
@@ -1128,29 +1130,23 @@ fn list_reading_declaration_refusals() {
         "read_members:read_list/scan settle=invalid",
     );
 
-    // A step plan has no list reading.
+    // Workflow #428 S168-LK: a step plan admits the list reading, prepared as on the page graph.
     let mut linear = task();
     linear["entry_page"] = json!("list");
     linear["max_steps"] = json!(2);
-    let refused = match PreparedContainedTask::load(
+    let admitted = PreparedContainedTask::load(
         "neutral.instance",
         &package_with(&linear, |control| {
             control["execution_mode"] = json!("linear_steps");
             control["max_steps"] = json!(2);
         }),
-    ) {
-        Ok(_) => panic!("a step plan with a list reading is refused"),
-        Err(error) => error,
+    )
+    .unwrap_or_else(|error| panic!("a step plan with a list reading is admitted: {error}"));
+    let [read_members, _] = admitted.program.operations.as_slice() else {
+        panic!("two operations");
     };
-    assert_eq!(
-        refused.code().as_str(),
-        ExecutionKernelCode::ContainedTaskLinearInvalid.as_str(),
-        "{refused}"
-    );
-    assert_eq!(
-        refused.detail(),
-        Some("reason=read_list operation=read_members")
-    );
+    assert!(read_members.prepared_list.is_some(), "the step is prepared");
+    assert_eq!(read_members.scan_max_ms(), Some(240_000));
 }
 
 fn mark(id: &str, fact_key: &str, capacity: Option<&str>) -> Value {
