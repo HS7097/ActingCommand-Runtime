@@ -354,12 +354,16 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) availability_withdrawals: &'a AvailabilityWithdrawals,
     /// #486 ASLEEP-1 (register §1.497): the instances asleep as the cycle's inputs were projected,
     /// by alias (`HostShared::asleep_for_policy`): the evaluation judges each as if it were
-    /// available and selects nothing on it (`InstanceHolds::mark_asleep`).
+    /// available and selects nothing on it (`InstanceHolds::mark_asleep`). #486 ASLEEP-2 (register
+    /// §1.506): with them, the instances whose application their idle action closed or is closing,
+    /// whose snapshot holds them available; the idle plan counts no candidate of such an instance
+    /// due through the look ahead.
     pub(crate) asleep: &'a BTreeSet<String>,
     /// #486 ASLEEP-1 fix round 1 (register §1.497): the instances whose idle action in effect can
-    /// stop their emulator, by alias (`HostShared::idle_emulator_stops_for_policy`): their idle
-    /// plan takes no wake from a decision a gate without a time holds. Only the plan reads it.
-    pub(crate) idle_stops_emulator: &'a BTreeSet<String>,
+    /// stop their emulator (#486 ASLEEP-2, ruling 2: or close their application), by alias
+    /// (`HostShared::idle_sleepers_for_policy`): their idle plan takes no wake from a decision a
+    /// gate without a time holds. Only the plan reads it.
+    pub(crate) idle_sleepers: &'a BTreeSet<String>,
     /// Workflow #490 ENTRY-A (`scheduling-blackout.md`, "Order of the deferrals", position 4b):
     /// each instance a scheduled run's failure at its entry blocked, by alias, as the host held them
     /// when the cycle's inputs were read; every candidate of such an instance waits.
@@ -3915,7 +3919,7 @@ impl PolicyHost {
             standard_pack_variables,
             availability_withdrawals,
             asleep,
-            idle_stops_emulator,
+            idle_sleepers,
             entry_blocked,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
@@ -4266,16 +4270,37 @@ impl PolicyHost {
                     // other goes to the cycle, which writes it to the daemon's log as a skipped
                     // background step is written.
                     if !refresh {
-                        match look_ahead(intent) {
-                            Ok(Some(through)) => {
-                                held_ahead
-                                    .entry(intent.instance_id.clone())
-                                    .or_default()
-                                    .insert(intent.task_id.clone(), through);
-                            }
-                            Ok(None) => {}
+                        let answer = match look_ahead(intent) {
+                            Ok(answer) => answer,
                             Err(error) if error.halts_runtime() => return Err(error),
-                            Err(error) => look_ahead_failures.push(error.outcome()),
+                            Err(error) => {
+                                look_ahead_failures.push(error.outcome());
+                                None
+                            }
+                        };
+                        // #486 ASLEEP-2 (register §1.506, ruling 1; `scheduling/README.md`, "An
+                        // asleep instance"): on an instance asleep with its application closed or
+                        // closing (named asleep while the projection holds it available), no
+                        // candidate is due through the look ahead, which reads no benefit gate, no
+                        // pool line and no no-progress guard: one no later position holds back, or
+                        // whose later positions cannot answer, counts as held back by a later
+                        // position that names no time (not due, no wake of its own). Once the hold
+                        // ends, the evaluation judges it, and the candidate it would select there
+                        // is the task the instance is woken for.
+                        let closed = asleep.contains(&intent.instance_id)
+                            && instances
+                                .get(intent.instance_id.as_str())
+                                .is_some_and(|instance| instance.available);
+                        let counted = if answer.is_none() && closed {
+                            Some(None)
+                        } else {
+                            answer
+                        };
+                        if let Some(through) = counted {
+                            held_ahead
+                                .entry(intent.instance_id.clone())
+                                .or_default()
+                                .insert(intent.task_id.clone(), through);
                         }
                     }
                     return Ok(hold.eligibility(refresh));
@@ -4672,6 +4697,15 @@ impl PolicyHost {
                     .insert(decision.task_id.clone(), None);
             }
         }
+        // #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating
+        // pool this evaluation read, as the evaluator finds them, for the idle plan of the
+        // instances whose idle action can put them to sleep; none is read while there is no such
+        // instance.
+        let pool_steps = if idle_sleepers.is_empty() {
+            BTreeSet::new()
+        } else {
+            actingcommand_policy::pool_projection_steps(&active.compiled, facts, resources, time)?
+        };
         self.explanation.record_stopping(
             &evaluation,
             active.compiled.catalog_hash(),
@@ -4707,9 +4741,13 @@ impl PolicyHost {
                     store_tasks: &store_tasks,
                 },
             },
-            // #486 ASLEEP-1 fix round 1: the instances whose idle plan takes no wake from a
-            // decision a gate without a time holds.
-            idle_stops_emulator,
+            // #486 ASLEEP-1 fix round 1 (#486 ASLEEP-2, rulings 2 and 7): the instances whose idle
+            // plan takes no wake from a decision a gate without a time holds, nor from one whose
+            // wake is only a regenerating pool's next step.
+            crate::schedule_explanation::IdleSleepers {
+                instances: idle_sleepers,
+                pool_steps: &pool_steps,
+            },
         );
         // IDLE-3 (#447, register §1.332): what this evaluation's inputs counted of the policy's own
         // dispatches, replaced with the explanation it belongs to.

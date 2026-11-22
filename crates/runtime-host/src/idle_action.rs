@@ -133,7 +133,14 @@
 //! instance, a catalog's activation ([`IdlePlanner::forget_unanswered_wakes`]) or a Runtime start
 //! ends it; meanwhile the emulator is not stopped again (`auto` takes `close_app` at most, a plain
 //! `stop_emulator` nothing) and the first check that would have stopped it makes one warning due
-//! ([`IdlePlanner::take_withheld_stop`]).
+//! ([`IdlePlanner::take_withheld`]).
+//!
+//! #486 ASLEEP-2 (0.12.78; register §1.506): so is an instance whose application its idle action
+//! closes or holds closed ([`IdlePlanner::applications_held_closed`]), its startup package able to
+//! bring it back, while nothing withdrew its availability; and a wake after `close_app` whose
+//! startup package ran to its end ([`IdlePlanner::wake_started_application`]) stays unanswered as
+//! above: meanwhile the application is not closed again (`auto` rests at home at most, a plain
+//! `close_app` nothing), with the same one warning.
 
 use crate::codes::IdleWakeCause;
 use actingcommand_runtime_config::{AutoGaps, IdleAction, IdleConfig};
@@ -561,8 +568,7 @@ pub(crate) struct WithheldStop {
 enum StopWarning {
     /// No check would have stopped the emulator yet.
     Unsaid,
-    /// A check withheld the stop; the host records the warning
-    /// ([`IdlePlanner::take_withheld_stop`]).
+    /// A check withheld the stop; the host records the warning ([`IdlePlanner::take_withheld`]).
     Due,
     /// Recorded: not again for this wake.
     Said,
@@ -576,15 +582,25 @@ enum StopWarning {
 /// `stop_emulator` nothing is taken. The planner's, in memory only: a scheduled run admitted on the
 /// instance after it, another idle configuration of the instance, a catalog's activation
 /// ([`IdlePlanner::forget_unanswered_wakes`]) and a Runtime start (a new planner) end it.
+///
+/// #486 ASLEEP-2 (register §1.506, ruling 3): so is a wake after `close_app` (its startup package
+/// in effect). Once its startup package has run to its end
+/// ([`IdlePlanner::wake_started_application`]), the idle check does not close the application
+/// again while it stands: under `auto` the tier stops at the rest, under a plain `close_app`
+/// nothing is taken. The same ends end it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UnansweredWake {
+    /// #486 ASLEEP-2: the action the wake brought the instance back from (`stop_emulator` or
+    /// `close_app`), the action its warning names.
+    action: IdleAction,
     withheld: WithheldStop,
     /// The latest admission of a scheduled run on the instance as the wake was queued
     /// ([`IdleView::latest_admission`]).
     admitted_through: Option<u64>,
     /// The instance's idle keys in effect as the wake was queued.
     config: IdleConfig,
-    /// Whether the wake's configured start started the emulator.
+    /// Whether the wake's configured start started the emulator (#486 ASLEEP-2: after
+    /// `close_app`, whether its startup package ran to its end).
     started: bool,
     warning: StopWarning,
 }
@@ -650,7 +666,9 @@ impl IdlePlanner {
     /// ([`UnansweredWake`]) until a check finds a scheduled run admitted on the instance after it
     /// (`view.latest_admission`) or other idle keys (`config`); while it stands the instance's
     /// emulator is not stopped again, and the first check that would have stopped it makes its
-    /// one warning due ([`Self::take_withheld_stop`]).
+    /// one warning due ([`Self::take_withheld`]). #486 ASLEEP-2 (register §1.506, ruling 3): so is
+    /// a wake after `close_app` that queues the startup package, which binds the close once that
+    /// package ran to its end.
     pub(crate) fn check_with_due_task(
         &mut self,
         alias: &str,
@@ -716,12 +734,19 @@ impl IdlePlanner {
                 );
                 // #486 ASLEEP-1 (ruling 6): a wake whose work starts the emulator (its configured
                 // start in effect) is unanswered until a scheduled run is admitted after it.
-                if let (Some(IdleStep::Wake { work, .. }), Phase::Woken { cause, .. }) =
-                    (step, entry.phase)
-                    && work.contains(&WakeWork::EmulatorStart)
-                    && view.emulator_wakeable
+                // #486 ASLEEP-2 (ruling 3): so is a wake after `close_app` (its startup package in
+                // effect).
+                if let (
+                    Some(IdleStep::Wake {
+                        action: woken_from,
+                        work,
+                    }),
+                    Phase::Woken { cause, .. },
+                ) = (step, entry.phase)
+                    && binds_wake(woken_from, work, view)
                 {
                     entry.unanswered = Some(UnansweredWake {
+                        action: woken_from,
                         withheld: WithheldStop {
                             cause,
                             task_id: due_task
@@ -854,16 +879,64 @@ impl IdlePlanner {
             .collect()
     }
 
+    /// #486 ASLEEP-2 (register §1.506): the instances whose application their idle action closes
+    /// or holds closed (the `close_app` phases: asked for and not ended, its claim holding the key
+    /// while the close runs, and done, its wake not come), by alias: the ones of them nothing
+    /// withdrew and its startup package can bring back are asleep
+    /// (`HostShared::asleep_for_policy`).
+    pub(crate) fn applications_held_closed(&self) -> BTreeSet<String> {
+        self.instances
+            .iter()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.phase,
+                    Phase::Acting {
+                        action: IdleAction::CloseApp,
+                        ..
+                    } | Phase::Idle {
+                        action: IdleAction::CloseApp,
+                        ..
+                    }
+                )
+            })
+            .map(|(alias, _)| alias.clone())
+            .collect()
+    }
+
     /// #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of the unanswered wake of `alias`
     /// once a check withheld the stop of its emulator; none otherwise, and none again for the same
-    /// wake. The host records it (`instance_idle_stop_withheld`).
-    pub(crate) fn take_withheld_stop(&mut self, alias: &str) -> Option<WithheldStop> {
+    /// wake. #486 ASLEEP-2 (register §1.506, ruling 3): with the action the wake brought the
+    /// instance back from, whose taking again the check withheld (`stop_emulator`, or `close_app`).
+    /// The host records it (`instance_idle_stop_withheld`).
+    pub(crate) fn take_withheld(&mut self, alias: &str) -> Option<(IdleAction, WithheldStop)> {
         let wake = self.instances.get_mut(alias)?.unanswered.as_mut()?;
         if wake.warning != StopWarning::Due {
             return None;
         }
         wake.warning = StopWarning::Said;
-        Some(wake.withheld.clone())
+        Some((wake.action, wake.withheld.clone()))
+    }
+
+    /// [`Self::take_withheld`] without the action, tests only (#486 ASLEEP-1's gates).
+    #[cfg(test)]
+    pub(crate) fn take_withheld_stop(&mut self, alias: &str) -> Option<WithheldStop> {
+        self.take_withheld(alias).map(|(_, withheld)| withheld)
+    }
+
+    /// #486 ASLEEP-2 (register §1.506, ruling 3): the startup package of `alias` ran to its end
+    /// (the host's startup claim says so): when the unanswered wake of `alias` is one after
+    /// `close_app`, from now on it binds the close of that application until it is answered.
+    /// Nothing for an instance with no such wake (a wake after `stop_emulator` binds only once its
+    /// configured start started the emulator, [`Self::wake_started_emulator`]).
+    pub(crate) fn wake_started_application(&mut self, alias: &str) {
+        if let Some(wake) = self
+            .instances
+            .get_mut(alias)
+            .and_then(|entry| entry.unanswered.as_mut())
+            .filter(|wake| wake.action == IdleAction::CloseApp)
+        {
+            wake.started = true;
+        }
     }
 
     /// #486 ASLEEP-1 (ruling 6): the configured start a wake of `alias` queued started its emulator
@@ -1104,6 +1177,11 @@ fn decide(
             if tier == Tier::StopEmulator && withhold_stop(entry) {
                 tier = Tier::CloseApp;
             }
+            // #486 ASLEEP-2 (ruling 3): below the application's close, to the rest at most, while
+            // a wake that started the application is unanswered.
+            if tier == Tier::CloseApp && withhold_close(entry) {
+                tier = Tier::Rest;
+            }
             match tier {
                 Tier::Rest if rested => return None,
                 Tier::Rest => {
@@ -1125,6 +1203,11 @@ fn decide(
             // #486 ASLEEP-1 (ruling 6): no stop of an emulator a wake started while that wake is
             // unanswered.
             if action == IdleAction::StopEmulator && withhold_stop(entry) {
+                return None;
+            }
+            // #486 ASLEEP-2 (ruling 3): no close of an application a wake started while that wake
+            // is unanswered.
+            if action == IdleAction::CloseApp && withhold_close(entry) {
                 return None;
             }
             action
@@ -1156,6 +1239,36 @@ fn withhold_stop(entry: &mut InstanceIdle) -> bool {
         wake.warning = StopWarning::Due;
     }
     true
+}
+
+/// #486 ASLEEP-2 (register §1.506, ruling 3): whether the check withholds the close of the
+/// instance's application, which the unanswered wake of `entry` after `close_app` started (its
+/// startup package ran to its end); when it does, the wake's one warning is due, unless it was
+/// said already. A wake after `stop_emulator` withholds no close (ASLEEP-1's `auto` cap).
+fn withhold_close(entry: &mut InstanceIdle) -> bool {
+    let Some(wake) = entry
+        .unanswered
+        .as_mut()
+        .filter(|wake| wake.started && wake.action == IdleAction::CloseApp)
+    else {
+        return false;
+    };
+    if wake.warning == StopWarning::Unsaid {
+        wake.warning = StopWarning::Due;
+    }
+    true
+}
+
+/// #486 ASLEEP-1 (ruling 6) and ASLEEP-2 (ruling 3): whether a wake after `action` that queues
+/// `work` is kept unanswered: one that starts the emulator with its configured start in effect
+/// (`view.emulator_wakeable`), or one after `close_app` that queues the startup package
+/// (`view.app_wakeable`).
+fn binds_wake(action: IdleAction, work: &[WakeWork], view: IdleView) -> bool {
+    if work.contains(&WakeWork::EmulatorStart) {
+        view.emulator_wakeable
+    } else {
+        action == IdleAction::CloseApp && view.app_wakeable
+    }
 }
 
 /// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake

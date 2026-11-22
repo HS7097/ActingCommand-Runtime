@@ -45526,6 +45526,168 @@ not, keeping the game's last good rules either way. A rollback meets nothing: no
 activated a catalogue with the kind (a configured one would have to be written after this deploy;
 a 0.12.77 start would then refuse that generation at its compile).
 
+### 1.506 Slice #486 ASLEEP-2 (0.12.78): an instance whose application its idle action closed is asleep too; the close and wake loop seen in production on 11-21 (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-22, not the owner's words; the owner's words behind them, her order of 11-02 that an instance without a task is closed and her order of 11-22 that the scheduler must first run stably; coordinator work order `rd-1122/brief-486-asleep2.md`; on main `1dff8fcb`, merged with main `a2d31d86`)
+
+This section takes 1.506 (1.501 to 1.505 belong to other slices of 0.12.78). It ships in 0.12.78.
+[scheduling/README.md](scheduling/README.md) ("An asleep instance", the bullets "An application
+closed" and "Not asleep") and [runtime-config.md](runtime-config.md) (the `idle` section's paragraph
+on when the action runs; "What wakes an idle instance", four paragraphs) are the contract.
+
+**What happened** (production, v0.12.76, 11-21, the ledger of one instance whose idle action is
+`close_app`). From 12:57 to 13:13 JST it went round eleven times, about 85 seconds each. Seq 5204695
+(13:05:01.547): `instance_idle_action`, `queue_idle_wake`, `idle_wake_cause` `task_due`, its
+`task_id` a judged business task, a consumer of a pool; at 13:05:06 the startup package ran and
+ended at the game's home; seq 5205117 (13:06:21.887): `run_idle_action`, `close_app`, its
+`next_occurrence_unix_ms` nearly five hours ahead (the evaluation after the startup saw nothing due
+and no wake near); seq 5205120 (13:06:26.053), four seconds after the close: `queue_idle_wake`,
+`task_due`, the same task; and so on. It began one minute after a placement that gave the pool a
+`trigger_line` and ended when the owner paused the instance by hand.
+
+**The reading, checked in the code.** The coordinator's reading is right. While the close runs, the
+idle action's own emulator-control claim holds the instance's key (`request_idle_action`,
+`ClaimKind::EmulatorControl`), so position 2 defers every candidate `dispatch_instance_held` with no
+wake (`policy_instance_occupancy`); the planner learns the close's end before the claim releases the
+key, so a check after it reads a plan made inside the claim. #484's look ahead (`look_ahead` in
+`policy_host.rs`) answers such a candidate from positions 3 to 8 and 4b only; the benefit gate, the
+pool lines and the capped order and the no-progress guard come after them in the evaluator and are
+never read, so a judged candidate past its trigger that the real evaluation defers by one of them,
+with no time, was counted due behind the claim, and the wake came at once. After the claim nothing
+holds a closed instance: the close withdraws no availability, and the evaluation then deferred the
+candidate by its gate, not due. Nothing else stands in front of such a candidate.
+
+**The rule.**
+- *Asleep* (ruling 1). An instance is asleep while its idle action closes or holds its application
+  closed (the planner's `close_app` phases: asked for and not ended, its claim holding the key while
+  the close runs, and done, its wake not come; `IdlePlanner::applications_held_closed`, read with
+  the closed instances as the cycle starts), its startup package configured, the projection holds
+  it available, no fence holds it and it is no instance AVAIL-1's probes take up
+  (`HostShared::asleep_for_policy`). The host names it in the set ASLEEP-1 passes
+  (`PolicyEvaluationContext::asleep`). No fact changes.
+- *Judged, nothing selected* (ruling 1; `crates/policy/src/evaluator.rs`). The evaluator admits a
+  named instance whose snapshot holds it available to its asleep set
+  (`InstanceHolds::judge_asleep_as_available`; its snapshot is left as it is), so the allocation's
+  asleep branch of ASLEEP-1 applies unchanged: the candidate the round would select there is
+  deferred `instance_asleep_wake_due`, its wake the evaluation's time, and nothing a dispatch alone
+  causes happens. No other change of the evaluator.
+- *The look ahead* (ruling 1; `policy_host.rs`). On an instance named asleep whose snapshot holds it
+  available, a candidate a hold of positions 1 or 2 defers that no later position holds back, or
+  whose later positions cannot answer (the failure still goes to the daemon's log), counts for the
+  idle plan as held back by a later position that names no time (`IdleHeldAhead`, `None`): not due,
+  no wake of its own. A later position that names a release keeps it. The decisions are unchanged.
+- *Untimed gates give no wake* (ruling 2; `HostShared::idle_sleepers_for_policy`, the set ASLEEP-1
+  fix round 1 passed as `idle_stops_emulator`, now `PolicyEvaluationContext::idle_sleepers`). It
+  holds the instances whose idle action in effect can stop their emulator (`stop_emulator` with its
+  startup package and its configured start) or close their application (`close_app`, and `auto` at
+  any tier, with its startup package); `IdleDraft::add` reads it as before.
+- *The backstop* (ruling 3; `crates/runtime-host/src/idle_action.rs`). A wake after `close_app`
+  that queues the startup package (`IdleView::app_wakeable`) is kept unanswered as ASLEEP-1 keeps a
+  wake after `stop_emulator` (`UnansweredWake` gains the action it came back from); the startup
+  claim marks it started when the package ran to its end (`run_startup_claim`,
+  `IdlePlanner::wake_started_application`; a package that failed or never ran binds nothing). While
+  it stands `decide` takes no `close_app`: under `auto` the tier stops at the rest (once per idle
+  stretch), under `close_app` nothing is taken; the first such check makes the one warning due,
+  which the host records as `instance_idle_stop_withheld` with `idle_action` `close_app`
+  (`IdlePlanner::take_withheld`, `withheld_stop_outcome`). The same four things end it as
+  ASLEEP-1's. A wake after `stop_emulator` is bound by its configured start alone: the startup
+  package that start hands the key to marks nothing.
+- *A start* (ruling 4). `host.idle_state` keeps a closed instance (`action` `close_app`, its wake)
+  and the start restores it closed with that wake; the start prepares it as every instance, before
+  its first evaluation, so from that evaluation on it is asleep. Nothing is needed; ruling 3's
+  memory is not kept across a start, as ASLEEP-1's is not.
+- *A pool's next step is no wake* (ruling 7, the coordinator's of 11-22 14:0x, after production
+  v0.12.77 on 11-22: four instances set to `stop_emulator` an hour before had not idled once, nor
+  had `close_app` idled them for six hours before; the schedule explanation of one showed its next
+  wake always less than five minutes ahead, the wake of one judged candidate blocked
+  `trigger_false` whose trigger reads a pool that gains one unit every five minutes; that wake is
+  the pool's next projection step, the evaluation's own re-check, which `IdleDraft::add` took as
+  the trigger's time, so the plan always held a wake closer than `idle.min_gap_ms`). How a wake
+  tells where it came from: a decision carries one `next_wake_unix_ms`, the earliest of what its
+  trigger and its gates name, with no mark of its source, so `IdleDraft::add` could not tell. What
+  is added is the least that lets it, beside the decisions and with no change of them: the policy
+  crate's `pool_projection_steps`, the next projection step of each regenerating pool the
+  evaluation read, found as the evaluation finds them (`evaluation_pool_values` over the facts the
+  timeline's resets leave, `next_pool_projection_change`, the one implementation each), which the
+  policy host computes after the evaluation when some instance can sleep and passes to the idle
+  plan beside the sleepers (`IdleSleepers`, `record_stopping`). On a sleeper a decision whose wake
+  is one of those steps, whatever its code (`trigger_false`, a not-positive benefit, a line's
+  hold), contributes no wake; the evaluation goes on at those steps as before, and the one in
+  which the candidate would be selected wakes the instance (`instance_asleep_wake_due`). The
+  evaluator names no time at which a projection crosses a threshold, and naming one is new
+  machinery, so none is given: such a task starts one wake lead late, as the ruling accepts. A
+  wake a time names stays (a clock or timeline time, a cooldown's end, a budget's release, an
+  activity window's opening, a deadline, a reading's expiry); a step that falls on the same
+  millisecond as such a time takes it with it, at worst one wake lead late as well. An awake
+  instance's rows and `idle.action` `none` are as before.
+- *Codes.* None added. `instance_idle_stop_withheld` gains the word `close_app` in its required
+  value `idle_action`; its description in the catalogue names `close_app` beside `stop_emulator`
+  (the text only; the index checked current).
+
+**What does not change** (ruling 5). An instance that is not asleep: with no instance in the
+planner's `close_app` or `stop_emulator` phases the set is empty and the evaluation is byte for byte
+main's; an instance whose idle action is `none` (it closes nothing and is in no set); ASLEEP-1's
+rules for a stopped emulator (its set, its look ahead, its `auto` cap at `close_app`, its warning);
+every declared interface range; no configuration key. A closed instance whose availability is
+withdrawn, whatever withdrew it, is not asleep (#484 fix round 2 holds for it as before). No game,
+package or alias is named in code (ruling 6).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The evaluator's set | `crates/policy/src/evaluator.rs` (`InstanceHolds::judge_asleep_as_available`, `mark_asleep`'s text) |
+| Who is asleep | `crates/runtime-host/src/idle_action.rs` (`applications_held_closed`); `crates/runtime-host/src/host/idle.rs` (`idle_applications_held_closed`, `asleep_for_policy`); `crates/runtime-host/src/host/policy_dispatch.rs` |
+| The look ahead | `crates/runtime-host/src/policy_host.rs` (`evaluate`, the hold's branch of the deferrals) |
+| Ruling 2 | `crates/runtime-host/src/host/idle.rs` (`idle_sleepers_for_policy`); `policy_host.rs` (`PolicyEvaluationContext::idle_sleepers`); `crates/runtime-host/src/schedule_explanation.rs` (`IdleDraft::add`, `record_stopping`) |
+| Ruling 3 | `crates/runtime-host/src/idle_action.rs` (`UnansweredWake::action`, `binds_wake`, `withhold_close`, `wake_started_application`, `take_withheld`); `crates/runtime-host/src/host/startup_package.rs` (`run_startup_claim`); `crates/runtime-host/src/host/idle.rs` (`check_idle`, `withheld_stop_outcome`) |
+| Ruling 7 | `crates/policy/src/evaluator.rs` (`pool_projection_steps`); `crates/runtime-host/src/policy_host.rs` (`evaluate`); `crates/runtime-host/src/schedule_explanation.rs` (`IdleSleepers`, `IdleDraft::add`, `record_stopping`); `contracts/outcome-codes/runtime-host.json` (the description of `instance_idle_stop_withheld`) |
+
+**Tests** (incident `#486 ASLEEP-2`: `crates/policy/src/tests/gate_486_asleep.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_for` (2) | A named asleep, its snapshot available: the first candidate deferred `instance_asleep_wake_due` (its alias), wake the evaluation's time, no intent, no reason chain; the one behind it as behind a selected one |
+| `asleep2_t6_on_a_closed_instance_an_untimed_gate_decides_as_on_the_instance_awake` (1) | A judged candidate held by a not-positive benefit, and one by a pool line (`would_cross_hard_line`): each decision equal to A awake's, nothing selected, none named `instance_asleep_wake_due` |
+| `asleep2_r3_the_loop_of_11_21_closes_once_and_queues_no_wake_for_an_untimed_gate` (1) | The replay, `close_app`, the two gates (the capped pool's reading published as a package publishes it): the host's own check closes once; inside the close's own claim the task is held `dispatch_instance_held` and the plan is not due, no wake; after it the gate holds the task and nothing wakes it |
+| `asleep2_r4_a_task_that_would_be_selected_wakes_the_application_once_and_is_dispatched` (2) | Closed, a catalogue's activation brings a task that can run: `instance_asleep_wake_due` with no intent, one wake `task_due`; its startup package runs and the task is dispatched |
+| `asleep2_r5_a_wake_whose_startup_package_ran_keeps_the_application_open_until_a_run_is_admitted` (3) | The planned wake's startup package runs; with no run admitted the night's checks do not close the application, one `instance_idle_stop_withheld` naming `close_app`; after two admitted runs the close again |
+| `asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_warns_once` (3) | The planner: an unstarted wake binds nothing; a started one withholds the close, one warning (`close_app`, cause, task, time), once; an admitted run and an activation answer it; `auto` rests at home at most; a wake after `stop_emulator` is bound by no startup package's run |
+| `asleep2_r6_none_and_an_awake_close_app_instance_decide_and_plan_as_before` (4) | `none`: a judged task's own wake stays in the plan; an awake `close_app` instance: the selected task due and named, a spent budget's release its wake |
+| `asleep2_r7_a_pool_regenerating_below_its_trigger_lets_the_closed_instance_sleep` (ruling 7) | The fixture's static pool gaining one unit every six minutes below a judged task's threshold, and a task on a clock two hours ahead: the trigger names the pool's next step, the plan the clock's time; one close, its wake that time less the lead; no wake across four steps; past the threshold one wake `task_due`, and the task dispatched |
+
+Why test 1 fails on main: inside the close's claim main's look ahead answers the judged task with
+no later position holding it, so `IdleDraft::add` counts it due and the plan read there is due,
+which `asleep2_r3` refuses (and the host's own check queued the wake at once, which its record list
+refuses); `asleep2_t5` fails on main because the evaluator ignored a named available instance.
+`asleep2_r7` fails on the head before ruling 7 (`ca62e46f`): the plan of its first evaluation
+takes the pool's next step, two minutes away, as its wake, which it refuses (the clock's time is
+asserted), and the check, finding work closer than `idle.min_gap_ms`, closes nothing.
+
+Adapted: `asleep_t1_with_no_asleep_instance_the_evaluation_is_the_one_without_the_input` (ASLEEP-1's
+test 1) loses its case "an available instance named": such an instance is asleep now (ruling 1),
+which `asleep2_t5` asserts. ASLEEP-1's other twelve gate tests are unchanged; the host file's
+`Replay` gains a second constructor and readers, used by the new tests only, and the planner's
+`take_withheld_stop` is kept for those tests over `take_withheld`.
+
+**At deploy.** No new key: nothing to configure. Every instance whose idle action is `close_app` or
+`auto` changes its idle plan as said: once closed it is asleep, woken only for the task the
+evaluation would select (`instance_asleep_wake_due` on that candidate's row, `task_due` on the
+wake's record), never through the look ahead behind a hold; a decision the benefit gate, a pool's
+lines or the no-progress guard holds names no wake on it, awake or not; and a wake whose startup
+package ran keeps the application open until a scheduled run is admitted, which
+`instance_idle_stop_withheld` (`idle_action` `close_app`) says once. Ruling 7: on every instance
+whose idle action is `stop_emulator`, `close_app` or `auto`, a candidate whose wake is only a
+regenerating pool's next step no longer keeps the plan's wake within minutes, so such an instance
+idles at all; its task wakes it once the evaluation would select it, one wake lead later than at
+the crossing. What a person sees: those two codes, an application that stays closed while its
+only task waits behind such a gate, and instances that idle between a pool's steps. The
+deploy changes no configuration: the stop-gap `idle.action` `none` of 11-21 stays until it is set
+back. A rollback to
+v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in memory only,
+`host.idle_state` keeps its shape) and brings the loop back for `close_app`. In the release notes'
+language:
+被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

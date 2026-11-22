@@ -330,12 +330,14 @@ fn wake_outcome(
 /// #486 ASLEEP-1 (register §1.497, ruling 6): `instance_idle_stop_withheld` for `alias`, the
 /// warning of a wake (`withheld`: why it came, the task it named, when it was queued) after which
 /// the idle check did not stop the instance's emulator again, no scheduled run having been
-/// admitted on the instance since.
-fn withheld_stop_outcome(alias: &str, withheld: &WithheldStop) -> Outcome {
+/// admitted on the instance since. #486 ASLEEP-2 (register §1.506, ruling 3): `action`, the action
+/// the wake brought the instance back from and the check did not take again (`stop_emulator`, or
+/// `close_app`).
+fn withheld_stop_outcome(alias: &str, action: IdleAction, withheld: &WithheldStop) -> Outcome {
     let outcome = Outcome::new(IdleCode::StopWithheld)
         .operation(IdleLocation::Check)
         .alias(alias)
-        .idle_action(IdleAction::StopEmulator.as_str())
+        .idle_action(action.as_str())
         .idle_wake_cause(withheld.cause)
         .at_unix_ms(withheld.woken_at_unix_ms);
     match withheld.task_id.as_deref() {
@@ -502,12 +504,14 @@ impl HostShared {
             );
             // #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of a wake that started the
             // instance's emulator, the first time the check did not stop that emulator again
-            // because no scheduled run has been admitted on the instance since. A record that
-            // fails is this instance's failure (#419).
-            if let Some(withheld) = planner.take_withheld_stop(&alias)
+            // because no scheduled run has been admitted on the instance since (#486 ASLEEP-2,
+            // ruling 3: or of a wake whose startup package started its application, the first time
+            // the check did not close it again). A record that fails is this instance's failure
+            // (#419).
+            if let Some((withheld_action, withheld)) = planner.take_withheld(&alias)
                 && let Err(error) = self.record_idle(
                     self.idle_links(instance_id)?,
-                    withheld_stop_outcome(&alias, &withheld),
+                    withheld_stop_outcome(&alias, withheld_action, &withheld),
                 )
             {
                 self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
@@ -708,15 +712,25 @@ impl HostShared {
         Ok(lock(&self.idle, IdleLocation::Check)?.emulators_held_stopped())
     }
 
+    /// #486 ASLEEP-2 (register §1.506): the instances whose application their idle action closes
+    /// or holds closed as a cycle starts (the planner's `close_app` phases: the action asked for
+    /// and not ended, its claim holding the key while the close runs, and the action done, its wake
+    /// not come), by alias; read with the closed instances, before any other lock of the cycle.
+    pub(super) fn idle_applications_held_closed(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        Ok(lock(&self.idle, IdleLocation::Check)?.applications_held_closed())
+    }
+
     /// #486 ASLEEP-1 fix round 1 (register §1.497; `contracts/runtime-config.md`, "What wakes an
     /// idle instance"): the instances whose idle action in effect can stop their emulator, by
     /// alias: of the instances the idle check plans for (a registered physical instance with a
-    /// device system it can drive), each whose configuration names `stop_emulator`, or `auto`,
-    /// whose highest tier that is, with its startup package and its configured emulator start in
-    /// effect (the check's `IdleView::emulator_wakeable`). The idle plan of each takes no wake from
-    /// a decision a gate without a time holds (`schedule_explanation::IdleDraft::add`). Read as a
+    /// device system it can drive), each whose configuration names `stop_emulator` with its
+    /// startup package and its configured emulator start in effect (the check's
+    /// `IdleView::emulator_wakeable`). #486 ASLEEP-2 (register §1.506, ruling 2): and each whose
+    /// idle action in effect can close its application, `close_app` or `auto` at any tier, with its
+    /// startup package (`IdleView::app_wakeable`). The idle plan of each takes no wake from a
+    /// decision a gate without a time holds (`schedule_explanation::IdleDraft::add`). Read as a
     /// cycle starts, before the policy's lock; each lock is taken alone.
-    pub(super) fn idle_emulator_stops_for_policy(&self) -> RuntimeHostResult<BTreeSet<String>> {
+    pub(super) fn idle_sleepers_for_policy(&self) -> RuntimeHostResult<BTreeSet<String>> {
         let instances = lock(&self.registered_instances, IdleLocation::Check)?
             .values()
             .filter(|instance| {
@@ -726,21 +740,24 @@ impl HostShared {
             .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
             .collect::<Vec<_>>();
         let startup_packages = self.startup_packages()?;
-        let mut stops = BTreeSet::new();
+        let mut sleepers = BTreeSet::new();
         for (instance_id, alias) in instances {
             let Some(config) = self.idle_settings(instance_id)? else {
                 continue;
             };
-            if matches!(
-                config.action,
-                IdleAction::StopEmulator | IdleAction::Auto(_)
-            ) && startup_packages.contains_key(&instance_id)
-                && self.start_emulator_in_effect(instance_id)?
-            {
-                stops.insert(alias);
+            if !startup_packages.contains_key(&instance_id) {
+                continue;
+            }
+            let sleeps = match config.action {
+                IdleAction::StopEmulator => self.start_emulator_in_effect(instance_id)?,
+                IdleAction::CloseApp | IdleAction::Auto(_) => true,
+                IdleAction::None => false,
+            };
+            if sleeps {
+                sleepers.insert(alias);
             }
         }
-        Ok(stops)
+        Ok(sleepers)
     }
 
     /// #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep instance"):
@@ -750,29 +767,49 @@ impl HostShared {
     /// available, and no device link, device state or device system withdrew it), no fence holds
     /// it (`fenced`, the cycle's own), and it is no instance AVAIL-1's probes take up (a self-check
     /// or a preparation step of its own that failed). An instance the projection holds available
-    /// is in no withdrawal, so it is never asleep. By alias.
+    /// is in no withdrawal, so it is never asleep for its stopped emulator. By alias.
+    ///
+    /// #486 ASLEEP-2 (register §1.506; the same section of the contract): with them, of
+    /// `held_closed` ([`Self::idle_applications_held_closed`]), each instance whose application
+    /// its idle action closes or holds closed: the projection holds it available (`instances`, the
+    /// cycle's own; the close withdraws nothing, so nothing withdrew it), its startup package can
+    /// bring it back, no fence holds it and it is no instance the probes take up. A closed instance
+    /// whose availability is withdrawn, whatever withdrew it, is not asleep, as before.
     pub(super) fn asleep_for_policy(
         &self,
         held_stopped: &BTreeSet<String>,
+        held_closed: &BTreeSet<String>,
+        instances: &[actingcommand_policy::InstanceSnapshot],
         withdrawals: &crate::policy_host::AvailabilityWithdrawals,
         fenced: &BTreeSet<String>,
     ) -> RuntimeHostResult<BTreeSet<String>> {
-        if held_stopped.is_empty() {
+        if held_stopped.is_empty() && held_closed.is_empty() {
             return Ok(BTreeSet::new());
         }
-        let stopped = lock(&self.registered_instances, IdleLocation::Check)?
+        let startup_packages = self.startup_packages()?;
+        let idle = lock(&self.registered_instances, IdleLocation::Check)?
             .values()
-            .filter(|instance| held_stopped.contains(&instance.instance_alias))
+            .filter(|instance| {
+                held_stopped.contains(&instance.instance_alias)
+                    || held_closed.contains(&instance.instance_alias)
+            })
             .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
             .collect::<Vec<_>>();
         let probed = lock(&self.unavailable_instances, IdleLocation::Check)?;
-        Ok(stopped
+        Ok(idle
             .into_iter()
             .filter(|(alias, instance_id)| {
-                withdrawals.get(alias).is_some_and(|withdrawal| {
-                    withdrawal.source == crate::codes::AvailabilitySource::SelfCheck
-                }) && !fenced.contains(alias)
-                    && !probed.contains_key(instance_id)
+                let sleeps = if held_stopped.contains(alias) {
+                    withdrawals.get(alias).is_some_and(|withdrawal| {
+                        withdrawal.source == crate::codes::AvailabilitySource::SelfCheck
+                    })
+                } else {
+                    instances
+                        .iter()
+                        .any(|instance| instance.instance_id == *alias && instance.available)
+                        && startup_packages.contains_key(instance_id)
+                };
+                sleeps && !fenced.contains(alias) && !probed.contains_key(instance_id)
             })
             .map(|(alias, _)| alias)
             .collect())

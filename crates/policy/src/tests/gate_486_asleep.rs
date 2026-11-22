@@ -6,10 +6,11 @@
 // availability) is judged, while its snapshot holds it unavailable, as if it were available, and
 // nothing is selected on it.
 //
-// - T1: with no asleep instance (none named, one named whose snapshot holds it available, one
-//   named that the round does not know) the evaluation equals the one of the entry point without
-//   the input, byte for byte and with every decision's wake, and so does an unavailable instance
-//   no one names (T4's case).
+// - T1: with no asleep instance (none named, one named that the round does not know) the
+//   evaluation equals the one of the entry point without the input, byte for byte and with every
+//   decision's wake, and so does an unavailable instance no one names (T4's case). #486 ASLEEP-2
+//   (register §1.506) adapts it: an instance named whose snapshot holds it available is asleep now
+//   (its application closed by its idle action, T5 and T6), so that case left T1.
 // - T2: an asleep instance, one candidate past its trigger with every gate open: it is deferred
 //   with `instance_asleep_wake_due` (its alias) and the evaluation's time as its wake, not
 //   selected, no intent and no reason chain; the eligible candidate behind it carries exactly the
@@ -53,6 +54,10 @@ const BEHIND: &str = "task_behind";
 const UNKNOWN: &str = "task_unknown";
 /// A judged consumer of the capped pool below its cap, whose run would cross its hard line.
 const LINED: &str = "task_lined";
+/// #486 ASLEEP-2: a judged consumer of the capped pool below its cap whose run costs more than it
+/// gives (10 units of it for 5 of the valued pool, each weighed 1000 milli): its net benefit is
+/// not positive.
+const COSTLY: &str = "task_costly";
 /// The capped pool and the facts its reading and capacity are read from (`gate_ss2h`'s).
 const POOL: &str = "pool.neutral";
 const READING_KEY: &str = "resource.neutral";
@@ -70,13 +75,10 @@ fn asleep_t1_with_no_asleep_instance_the_evaluation_is_the_one_without_the_input
     for (case, a_available) in [("A available", true), ("A unavailable", false)] {
         let instances = [snapshot(A, a_available), snapshot(B, true)];
         let plain = round_without_holds(&catalog, &instances, &eligible);
-        let mut available = InstanceHolds::default();
-        available.mark_asleep(B);
         let mut unknown = InstanceHolds::default();
         unknown.mark_asleep("instance-unknown");
         for (holds_case, holds) in [
             ("no instance named", &InstanceHolds::default()),
-            ("an available instance named", &available),
             ("an instance the round does not know named", &unknown),
         ] {
             let asleep = round(&catalog, &instances, holds, &eligible);
@@ -254,6 +256,112 @@ fn asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before() {
             .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAsleepWakeDue)),
         "B, asleep, is woken for its task: {woken_for:#?}"
     );
+}
+
+// ---- #486 ASLEEP-2 (0.12.78; register §1.506): an asleep instance whose snapshot holds it
+// available, its application closed by its idle action (rulings 1 and 2 of the work order). Every
+// expected value comes from the rulings; nothing reads a clock.
+
+// T5 (the work order's test 2, the policy half): A available and named asleep. The candidate the
+// round would select is deferred `instance_asleep_wake_due` (its alias) with the evaluation's time
+// as its wake, nothing is selected, no intent and no reason chain; the candidate behind it carries
+// the decision it carries behind the same candidate selected on A awake.
+#[test]
+fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_for() {
+    let catalog = catalog(vec![maintenance(DUE, 300), maintenance(BEHIND, 100)]);
+    let awake = round_without_holds(&catalog, &[snapshot(A, true)], &eligible);
+    assert_eq!(dispatched(&awake), [DUE], "{awake:#?}");
+    let closed = round(&catalog, &[snapshot(A, true)], &asleep_a(), &eligible);
+
+    assert!(closed.dispatch_intents.is_empty(), "{closed:#?}");
+    assert!(closed.reason_chains.is_empty(), "{closed:#?}");
+    let woken_for = decision(&closed, DUE);
+    assert_eq!(woken_for.state, SchedulingDecisionState::Deferred);
+    assert_eq!(woken_for.eligibility, EligibilityState::True);
+    let last = woken_for.reasons.last().expect("a reason");
+    assert!(
+        last.outcome.is(PolicyCode::InstanceAsleepWakeDue),
+        "{woken_for:#?}"
+    );
+    assert_eq!(last.outcome.value("instance_id"), Some(&json!(A)));
+    assert_eq!(
+        woken_for.next_wake_unix_ms,
+        Some(NOW),
+        "its wake is the evaluation's time"
+    );
+    assert!(
+        !woken_for.reasons.iter().any(|reason| {
+            reason.outcome.is(PolicyCode::PlacementSelected)
+                || reason.outcome.is(PolicyCode::RankAssigned)
+                || reason.outcome.is(PolicyCode::DecisionRecord)
+        }),
+        "no reason claims a selection: {woken_for:#?}"
+    );
+    assert_eq!(
+        closed.next_wake_unix_ms,
+        Some(NOW),
+        "the evaluation wakes now"
+    );
+    let behind = decision(&closed, BEHIND);
+    assert!(
+        behind
+            .reasons
+            .last()
+            .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAlreadySelected)),
+        "{behind:#?}"
+    );
+    assert_eq!(behind, decision(&awake, BEHIND), "as behind a selected one");
+}
+
+// T6 (the work order's test 1, the policy half): on A available and named asleep, a judged
+// candidate past its trigger that a gate without a time holds, its net benefit not positive and a
+// pool's line, carries exactly the decision it carries on A awake, code and wake; nothing is
+// selected and nothing names `instance_asleep_wake_due`.
+#[test]
+fn asleep2_t6_on_a_closed_instance_an_untimed_gate_decides_as_on_the_instance_awake() {
+    for (case, task, id, code) in [
+        (
+            "a not-positive benefit",
+            judged_consumer(COSTLY, 10, 5),
+            COSTLY,
+            PolicyCode::PolicyBenefitNonpositive,
+        ),
+        (
+            "a pool line",
+            judged_consumer(LINED, 30, 40),
+            LINED,
+            PolicyCode::PoolLineHeld,
+        ),
+    ] {
+        let catalog = catalog(vec![task]);
+        let awake = round_without_holds(&catalog, &[snapshot(A, true)], &eligible);
+        let closed = round(&catalog, &[snapshot(A, true)], &asleep_a(), &eligible);
+        let held = decision(&closed, id);
+        assert_eq!(
+            held,
+            decision(&awake, id),
+            "{case}: the decision awake, code and wake"
+        );
+        assert_eq!(held.state, SchedulingDecisionState::Deferred, "{case}");
+        assert_eq!(held.eligibility, EligibilityState::True, "{case}");
+        assert!(
+            held.reasons
+                .last()
+                .is_some_and(|reason| reason.outcome.is(code)),
+            "{case}: {held:#?}"
+        );
+        assert!(
+            closed.dispatch_intents.is_empty() && awake.dispatch_intents.is_empty(),
+            "{case}: nothing is dispatched"
+        );
+        assert!(
+            !closed.decisions.iter().any(|decision| decision
+                .reasons
+                .iter()
+                .any(|reason| reason.outcome.is(PolicyCode::InstanceAsleepWakeDue))),
+            "{case}: no candidate is the task the instance is woken for: {closed:#?}"
+        );
+    }
 }
 
 // ---- The fixture
