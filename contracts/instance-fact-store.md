@@ -359,13 +359,18 @@ run-duration samples. It leaves out two more:
 
 1. **Every record under `inventory.list.`**, whatever its rows. A list reading is a selection's
    input, read by a select or judge step through its own snapshot ("List reading facts"), never
-   the scheduler's; its one other reader is the host, from #455 P2 on, for a pool whose observation
-   is of the kind `list_rows` (#455 P1, 0.12.78; [scheduling/README.md](scheduling/README.md), "A
-   pool read from rows of a list"): it hands the evaluation the number it computes from the rows,
-   never the list. No decision changes: no catalog predicate reads such a key, and a record list
-   is unusable to the scheduler's selection document. The evaluation's `facts`, its
-   `fact_snapshot_id` and an intent's instance view (above) no longer hold the lists, so a list's
-   publication no longer makes an evaluated intent `policy_facts_stale`. The catalog compile
+   the scheduler's; its one other reader is the host, from #455 P2 on (0.12.79, register §1.505),
+   for a pool whose observation is of the kind `list_rows` (#455 P1, 0.12.78;
+   [scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"): before each
+   evaluation, under the fact write gate, it reads the pool's instance's list at the evaluation's
+   ledger position and hands the evaluation the number it computes from the rows, the pool's
+   snapshot with the list's observation time, never the list; the list's key is left out for the
+   instance (no fact refresh demand). No decision changes: no catalog predicate reads such a key,
+   and a record list is unusable to the scheduler's selection document. The evaluation's `facts`,
+   its `fact_snapshot_id` and an intent's instance view (above) no longer hold the lists, so a
+   list's publication no longer makes an evaluated intent `policy_facts_stale`; from #455 P2 on a
+   list that a pool reads changes that pool's number, which is in the identity and the view, so its
+   new reading does. The catalog compile
    refuses a catalog that names a key under the prefix to read
    ([scheduling/README.md](scheduling/README.md), "Record lists and the projection"), so no
    predicate meets the gap at evaluation.
@@ -626,7 +631,8 @@ The store accepts or refuses it like any other observation.
   carried with its rows in the snapshot of a select or judge step whose document declares it,
   and loaded at the start as every tagged instance record. No catalog predicate and no
   scheduling consumer reads it: record lists stay unusable to the scheduler (a pool read from rows
-  of a list, #455 P1, gets a number the host computes from them, from #455 P2 on). Since S168-LB1a
+  of a list, #455 P1, gets a number the host computes from them before each evaluation, from #455
+  P2 on, 0.12.79). Since S168-LB1a
   (0.12.55) the scheduler's projection leaves the prefix out altogether ("Projection into the
   evaluation", "Left out of the projection").
 - **Capacity.** One active fact identity per list per instance, however many rows and however

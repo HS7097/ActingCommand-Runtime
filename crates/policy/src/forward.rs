@@ -4,13 +4,14 @@
 
 use crate::codes::PolicyCode;
 use crate::evaluator::{
-    ConsumptionAmounts, PoolBound, pool_bound, project_time_validity, unknown_token,
+    ConsumptionAmounts, PoolBound, evaluate_with_given_readings, pool_bound, project_time_validity,
+    unknown_token,
 };
 use crate::{
     CompiledCatalog, DetectionSuggestion, EffectDirection, EvaluationFacts, EvaluationResources,
-    EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolCapacity,
-    PoolProjection, PoolSpec, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot,
-    TaskTerminalState, evaluate,
+    EvaluationTime, GivenPoolReadings, HostResourceSnapshot, LeftOutFacts, ObservationSource,
+    PolicyEvaluationError, PoolCapacity, PoolProjection, PoolSpec, PoolValueSnapshot,
+    ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState,
 };
 use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
@@ -188,7 +189,34 @@ pub fn project_forward(
     seed: u64,
     config: ForwardProjectionConfig,
 ) -> ForwardResult<ForwardProjection> {
+    project_forward_with_readings(
+        catalog,
+        facts,
+        resources,
+        &GivenPoolReadings::default(),
+        time,
+        seed,
+        config,
+    )
+}
+
+/// #455 P2 (register §1.505, ruling 7): [`project_forward`] with the readings the host gave the
+/// pools read from rows of a list (`readings`). Such a pool starts from the number the host
+/// computed (its snapshot in `resources`), and its reading is carried across the horizon as a
+/// fact reading is: every step's evaluation is given it, so it is read while its list is fresh and
+/// as the timeline's resets leave it. With no reading the projection is [`project_forward`]'s.
+pub fn project_forward_with_readings(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    readings: &GivenPoolReadings,
+    time: EvaluationTime,
+    seed: u64,
+    config: ForwardProjectionConfig,
+) -> ForwardResult<ForwardProjection> {
     config.validate()?;
+    let mut left_out = LeftOutFacts::default();
+    left_out.give_pool_readings(readings.clone());
     let horizon_end_unix_ms = time
         .unix_ms
         .checked_add(config.horizon_ms)
@@ -223,7 +251,7 @@ pub fn project_forward(
             break;
         }
         let current_resources = projected_resources(&pools, &hosts);
-        let evaluation = evaluate(
+        let evaluation = evaluate_with_given_readings(
             catalog,
             &projected_facts,
             &current_resources,
@@ -232,6 +260,7 @@ pub fn project_forward(
                 monotonic_ms: current_monotonic,
             },
             seed.wrapping_add(u64::from(step_index)),
+            &left_out,
         )
         .map_err(ForwardError::evaluation)?;
         collect_detection_gaps(&evaluation.decisions, &mut gaps);
@@ -1139,7 +1168,7 @@ mod tests {
     use super::*;
     use crate::{
         CatalogDocumentSource, CatalogSources, FactValue, InstanceSnapshot, ObservedOutcome,
-        PoolValueSnapshot, compile_catalog,
+        PoolValueSnapshot, compile_catalog, evaluate,
     };
 
     const NOW: u64 = 1_699_963_200_000;

@@ -383,15 +383,18 @@ impl HostShared {
             let mut policy = lock(self.policy()?, operation)?;
             let outcome_keys = policy.outcome_key_snapshot()?;
             let _fact_gate = lock(&self.fact_write_gate, operation)?;
-            let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+            let (facts, _, readings) = self.project_authoritative_policy_inputs_under_gate(
                 &mut policy,
                 operation,
                 &outcome_keys,
                 None,
             )?;
+            // #455 P2 (register §1.505, ruling 7): a resource entry's current reads a pool read
+            // from rows of a list from its reading, through the resource target view.
             let target_view = self.resource_target_view_of(
                 &policy,
                 &facts,
+                &readings,
                 instance_alias,
                 time,
                 operation.into(),

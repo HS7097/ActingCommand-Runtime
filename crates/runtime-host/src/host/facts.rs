@@ -1505,6 +1505,20 @@ impl RuntimeHost {
     pub(crate) fn projected_policy_facts_for_test(
         &self,
     ) -> RuntimeHostResult<actingcommand_policy::EvaluationFacts> {
+        self.projected_policy_inputs_for_test()
+            .map(|(facts, ..)| facts)
+    }
+
+    /// #455 P2, test only: the evaluation's facts, its resources and the readings of the pools
+    /// read from rows of a list, as the authoritative projection gives them now, under the gates
+    /// an evaluation reads them under.
+    pub(crate) fn projected_policy_inputs_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        actingcommand_policy::EvaluationFacts,
+        actingcommand_policy::EvaluationResources,
+        actingcommand_policy::GivenPoolReadings,
+    )> {
         let shared = self.shared_ref(HostLocation::ProjectPolicyFacts)?;
         let _outcome_gate = lock(
             &shared.policy_outcome_gate,
@@ -1513,13 +1527,11 @@ impl RuntimeHost {
         let mut policy = lock(shared.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
         let outcome_keys = policy.outcome_key_snapshot()?;
         let _fact_gate = lock(&shared.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
-        shared
-            .project_authoritative_policy_inputs_under_gate(
-                &mut policy,
-                HostLocation::ProjectPolicyFacts,
-                &outcome_keys,
-                None,
-            )
-            .map(|(facts, _)| facts)
+        shared.project_authoritative_policy_inputs_under_gate(
+            &mut policy,
+            HostLocation::ProjectPolicyFacts,
+            &outcome_keys,
+            None,
+        )
     }
 }

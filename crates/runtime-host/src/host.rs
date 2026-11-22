@@ -120,7 +120,7 @@ use actingcommand_policy::{
     EvaluationResources, EvaluationTime, FactValue as PolicyFactValue, ForwardProjection,
     ForwardProjectionConfig, InstanceSnapshot, MaintenanceAssessment, MaintenanceTrendPolicy,
     ObservedOutcome, StrategicBand, StrategicEvidencePointer, StrategicProjection, StrategicReport,
-    project_forward, project_strategic_report,
+    project_forward_with_readings, project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::facts::{RuntimeFactChange, RuntimeFactError, RuntimeFactStore};

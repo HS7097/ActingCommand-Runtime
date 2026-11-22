@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // #455 P1 (0.12.78; register §1.504; the coordinator's ruling 5 of 11-21 in its work order, not the
-// owner's words; contracts/standard-pack-schedule.md, "`requires`"): this build's configuration
-// manifest names no `pool_list_rows`, so the composer, given the subsystems the manifest names as
-// the scheduler workbench and check-config give them, refuses a `schedule.json` that lists it in
-// `requires`: `schedule_requires_missing` at that entry. The workbench keeps the game's last good
-// rules on such a refusal, as on every refusal of a game's file (the host gate test
-// `rl1b_a6_a_broken_file_keeps_that_games_last_good_rules_and_spares_the_others`). The names are
-// made up.
+// owner's words; contracts/standard-pack-schedule.md, "`requires`"), adapted by #455 P2 (0.12.79;
+// register §1.505; the coordinator's ruling 10 of 11-22): P1 pinned that the build named no
+// `pool_list_rows` and refused a `schedule.json` that lists it in `requires`
+// (`schedule_requires_missing`). From P2 on this build's configuration manifest names the
+// subsystem, so the composer, given the subsystems the manifest names as the scheduler workbench and
+// check-config give them, composes such a file, and the composed catalog holds the pool read from
+// rows of a list. The names are made up.
 
 use super::*;
 use actingcommand_contract::{
-    DeclaredCapabilities, IdentifierIssuer, IrreversiblePackages, StandardPackProblem,
-    StandardPackRootBytes, read_standard_pack_root,
+    DeclaredCapabilities, IdentifierIssuer, IrreversiblePackages, StandardPackRootBytes,
+    read_standard_pack_root,
 };
 use actingcommand_policy::{
-    POOL_LIST_ROWS_SUBSYSTEM, StandardPackBinding, StandardPackComposeInput, StandardPackGameFiles,
-    compose_standard_pack_rules,
+    ObservationRef, POOL_LIST_ROWS_SUBSYSTEM, StandardPackBinding, StandardPackComposeInput,
+    StandardPackGameFiles, compose_standard_pack_rules,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,7 +111,7 @@ fn schedule() -> Vec<u8> {
 }
 
 #[test]
-fn p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it() {
+fn p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it() {
     let state = TempDir::new().expect("tempdir");
     let assembly = configuration(&state).assemble().expect("runtime assembly");
     let subsystems = assembly
@@ -126,7 +126,7 @@ fn p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it()
         "{subsystems:?}"
     );
     assert!(
-        !subsystems.contains(POOL_LIST_ROWS_SUBSYSTEM),
+        subsystems.contains(POOL_LIST_ROWS_SUBSYSTEM),
         "{subsystems:?}"
     );
 
@@ -176,14 +176,19 @@ fn p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it()
             server_id: SERVER.to_owned(),
         },
     )]);
-    let failure = compose_standard_pack_rules(&StandardPackComposeInput {
+    let composed = compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &instances,
         games: &games,
         subsystems: Some(&subsystems),
         catalog_version: 1,
     })
-    .expect_err("this Runtime refuses the file");
-    let issue = &failure.issues()[0].issue;
-    assert_eq!(issue.problem, StandardPackProblem::ScheduleRequiresMissing);
-    assert_eq!(issue.pointer, "/requires/0");
+    .unwrap_or_else(|failure| panic!("this Runtime composes the file: {failure}"));
+    let pools = &composed.compiled().catalog().pools.pools;
+    assert!(
+        pools.iter().any(|pool| matches!(
+            &pool.observation,
+            ObservationRef::ListRows { fact_key, .. } if fact_key == "inventory.list.example_kind_a"
+        )),
+        "{pools:?}"
+    );
 }

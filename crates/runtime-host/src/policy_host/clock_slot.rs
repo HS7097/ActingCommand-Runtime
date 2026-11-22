@@ -29,8 +29,9 @@ use actingcommand_contract::{
 use actingcommand_policy::{
     ActivityWindowOccurrence, CandidateEligibility, ClockSlotLapseKind, CompiledCatalog,
     DispatchIntent, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
-    InstanceSnapshot, PolicyCode, PolicyEvaluation, SchedulingDecisionState, TaskRuntimeSnapshot,
-    TaskSpec, activity_window_at, clock_slot_lapses, clock_slot_live, clock_slot_view,
+    GivenPoolReadings, InstanceSnapshot, PolicyCode, PolicyEvaluation, SchedulingDecisionState,
+    TaskRuntimeSnapshot, TaskSpec, activity_window_at, clock_slot_lapses, clock_slot_live,
+    clock_slot_view,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -351,6 +352,8 @@ struct Preview<'a> {
     catalog: &'a CompiledCatalog,
     facts: &'a EvaluationFacts,
     resources: &'a EvaluationResources,
+    /// #455 P2: the readings the evaluation was given for the pools read from rows of a list.
+    readings: &'a GivenPoolReadings,
     tasks: &'a [TaskRuntimeSnapshot],
     instances: &'a [InstanceSnapshot],
     in_flight: &'a BTreeSet<(&'a str, &'a str)>,
@@ -369,6 +372,7 @@ pub(super) fn preview(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
+    readings: &GivenPoolReadings,
     evaluation: &PolicyEvaluation,
     pending_dispatch_intents: &[DispatchIntent],
     in_flight: &BTreeSet<(&str, &str)>,
@@ -380,6 +384,7 @@ pub(super) fn preview(
         catalog,
         facts,
         resources,
+        readings,
         tasks: &facts.tasks,
         instances: &facts.instances,
         in_flight,
@@ -646,6 +651,7 @@ impl<'a> Preview<'a> {
                         alias,
                         self.facts,
                         self.resources,
+                        self.readings,
                         self.time,
                     )?;
                     live = Some(is_live);

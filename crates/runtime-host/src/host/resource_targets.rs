@@ -17,8 +17,9 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::{
     ComposedResourceTargets, ResourceTargetsError, StoredResourceTargetPolicy,
-    StoredResourceTargets, TargetSetter, active_resource_targets, check_resource_targets,
-    parse_resource_targets, targetable_resources,
+    StoredResourceTargets, TargetSetter, active_resource_targets,
+    check_resource_targets_with_readings, parse_resource_targets,
+    targetable_resources_with_readings,
 };
 
 const RESOURCE_TARGETS_OPERATION: ContractLocation = ContractLocation::ApplyResourceTargets;
@@ -89,7 +90,7 @@ impl HostShared {
                 &self.fact_write_gate,
                 HostLocation::ApplyResourceTargetsFacts,
             )?;
-            let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+            let (facts, _, readings) = self.project_authoritative_policy_inputs_under_gate(
                 &mut policy,
                 RESOURCE_TARGETS_OPERATION,
                 &outcome_keys,
@@ -103,8 +104,16 @@ impl HostShared {
                     reason: ResourceTargetsRejectionReason::CatalogUnavailable,
                 })
             })?;
-            let checked = check_resource_targets(&parsed, catalog.compiled(), &facts, time)
-                .map_err(resource_targets_error)?;
+            // #455 P2 (register §1.505, ruling 7): a target on a pool read from rows of a list is
+            // checked, and its condition computed, from the reading of the same projection.
+            let checked = check_resource_targets_with_readings(
+                &parsed,
+                catalog.compiled(),
+                &facts,
+                &readings,
+                time,
+            )
+            .map_err(resource_targets_error)?;
             (
                 checked,
                 catalog.compiled().catalog_hash().to_owned(),
@@ -293,7 +302,7 @@ impl HostShared {
         let mut policy = lock(self.policy()?, HostLocation::ResourceTargetViewOutcomeKeys)?;
         let outcome_keys = policy.outcome_key_snapshot()?;
         let _fact_gate = lock(&self.fact_write_gate, HostLocation::ResourceTargetViewFacts)?;
-        let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+        let (facts, _, readings) = self.project_authoritative_policy_inputs_under_gate(
             &mut policy,
             RESOURCE_TARGET_VIEW_OPERATION,
             &outcome_keys,
@@ -302,6 +311,7 @@ impl HostShared {
         let view = self.resource_target_view_of(
             &policy,
             &facts,
+            &readings,
             instance_alias,
             time,
             RESOURCE_TARGET_VIEW_OPERATION.into(),
@@ -319,10 +329,14 @@ impl HostShared {
     /// The view `ResourceTargetView` answers for `instance_alias` from `facts`, the projection
     /// taken under the locks the caller holds (policy outcome gate, `policy`, fact write gate), at
     /// `time`; each refusal names `operation`. Workflow #463 V3: the goal page answers it too.
+    /// #455 P2 (register §1.505, ruling 7): with `readings`, the readings of the pools read from
+    /// rows of a list from the same projection, which a targetable pool's observation and an
+    /// active target's condition on such a pool read.
     pub(super) fn resource_target_view_of(
         &self,
         policy: &PolicyHost,
         facts: &EvaluationFacts,
+        readings: &actingcommand_policy::GivenPoolReadings,
         instance_alias: &str,
         time: EvaluationTime,
         operation: actingcommand_contract::outcome::Location,
@@ -341,11 +355,13 @@ impl HostShared {
         let catalog = policy.active_loaded();
         let compiled = catalog.as_ref().map(|catalog| catalog.compiled());
         let (targetable, not_targetable) = match compiled {
-            Some(compiled) => targetable_resources(compiled, facts, instance, time)
-                .map_err(resource_target_view_error)?,
+            Some(compiled) => {
+                targetable_resources_with_readings(compiled, facts, readings, instance, time)
+                    .map_err(resource_target_view_error)?
+            }
             None => (Vec::new(), Vec::new()),
         };
-        let active = match active_resource_targets(compiled, facts, instance, time)
+        let active = match active_resource_targets(compiled, facts, readings, instance, time)
             .map_err(resource_target_view_error)?
         {
             StoredResourceTargets::None => None,
