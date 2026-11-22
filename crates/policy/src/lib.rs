@@ -182,6 +182,9 @@ mod tests {
     // #486 ASLEEP-1 (0.12.77; register §1.497): an asleep instance is judged as if it were
     // available, and nothing is selected on it.
     mod gate_486_asleep;
+    // #455 P1 (0.12.78; register §1.504): a pool may declare that its inventory is read from rows
+    // of a list (`list_rows`); its checks, the composer's `requires`, and no reading before P2.
+    mod gate_455_p1;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'

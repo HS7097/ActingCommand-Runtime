@@ -849,7 +849,11 @@ the run the same way.
   (0.12.55) the scheduler's fact projection leaves every key under `inventory.list.` out,
   and the catalog compile refuses a catalog that names one to read
   ([instance-fact-store.md](instance-fact-store.md), "Projection into the evaluation"): a list is
-  the selection's input, never the scheduler's.
+  the selection's input, never the scheduler's. #455 P1 (0.12.78): a pool may declare that its
+  inventory is read from rows of a list (an observation of the kind `list_rows`,
+  [scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"); the list still
+  does not enter the projection, and its one other reader is the host, from #455 P2 on, which
+  computes the pool's number from the rows (in 0.12.78 nothing reads it for a pool).
 
 ### Capacity and reserved keys
 

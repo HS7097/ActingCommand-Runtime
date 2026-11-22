@@ -112,6 +112,20 @@ and (SCHED-C1c, since 0.12.53) a pool that writes `trigger_line`
 `requires` does not name its subsystem, `schedule_invalid` at the first such member in file order
 (rules, then pools; for example `/rules/0/fixed_value_milli`, `/pools/0/trigger_line`).
 
+#455 P1 (register §1.504, since 0.12.78). A pool whose `observation` is of the kind `list_rows`,
+its inventory read from rows of a list reading ([scheduling/README.md](scheduling/README.md), "A
+pool read from rows of a list"), requires `pool_list_rows`, alike: the composer refuses a file that
+writes one while `requires` does not name it, `schedule_invalid` at the first such pool's
+`observation` in file order (for example `/pools/0/observation`). The observation passes through
+as written (it names no id and no scope; the composer fills the pool's), and the catalog compiler
+checks it, mapped back to the pool. **No Runtime of 0.12.78 names `pool_list_rows`** (#455 P2 adds
+it to `config.subsystems`): such a Runtime, and check-config, refuse a file that lists it with
+`schedule_requires_missing` at that entry, and the workbench keeps the game's last good rules
+("The scheduler workbench"). The resource tools check no `requires`: `actinglab standard-pack
+check`, `compose` and `adopt` accept and carry the member. `standard-pack check` does not check
+that a package of the root reads the list L with the columns K and V: the check reads a package's
+reading marks only (`resource_readings`), not its list readings.
+
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
@@ -441,7 +455,8 @@ pure: its caller reads the packages.
    `resource_projection`'s `value` is one, `pool_lines` when a pool writes `stop_line` or
    `hard_line`, SCHED-C1c (0.12.53) and SCHED-C1a (0.12.52): `pool_trigger_line` when one writes
    `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
-   `valuation_origin`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
+   `valuation_origin`, #455 P1 (0.12.78): `pool_list_rows` when a pool's `observation` is of the
+   kind `list_rows`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`,
    `reset_exclusions` when a timeline event writes

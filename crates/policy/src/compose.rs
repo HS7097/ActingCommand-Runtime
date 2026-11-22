@@ -17,7 +17,8 @@
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
-//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `queue_wait` when a rule
+//!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
+//!    pool's `observation` is of the kind `list_rows` (#455 P1), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -1557,6 +1558,27 @@ fn read_game(
             ),
         ));
     }
+    // #455 P1 (register §1.504): likewise a pool whose `observation` is of the kind `list_rows`,
+    // at the first such pool's `observation`. No Runtime of 0.12.78 names the subsystem, so every
+    // such Runtime refuses the file at `requires` instead of reading the pool without its rows.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_LIST_ROWS_SUBSYSTEM)
+        && let Some(index) = schedule.pools.iter().position(list_rows_observation)
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/observation"),
+            ),
+            format!(
+                "a pool's {} observation needs requires to name {}",
+                crate::POOL_LIST_ROWS_KIND,
+                crate::POOL_LIST_ROWS_SUBSYSTEM
+            ),
+        ));
+    }
     // SCHED-C1f1 (register §1.303 SC1F-6): likewise a rule whose `consumes` entry writes its
     // `amount` as a fact, the first such `amount` in file order.
     if !schedule
@@ -1884,6 +1906,16 @@ fn first_trigger_line(schedule: &StandardPackSchedule) -> Option<String> {
         .iter()
         .position(|pool| pool.body.contains_key(POOL_TRIGGER_LINE_MEMBER))
         .map(|index| format!("/pools/{index}/{POOL_TRIGGER_LINE_MEMBER}"))
+}
+
+/// #455 P1 (register §1.504): whether a `schedule.json` pool's `observation` is an object whose
+/// `kind` is `list_rows` ([`crate::POOL_LIST_ROWS_KIND`]). The compiler checks the rest.
+fn list_rows_observation(pool: &ScheduleItem) -> bool {
+    pool.body
+        .get("observation")
+        .and_then(|observation| observation.get("kind"))
+        .and_then(Value::as_str)
+        == Some(crate::POOL_LIST_ROWS_KIND)
 }
 
 /// #386 CF-4: the pointer of the first fact reference a rule's `trigger` or `feedback_stop`
