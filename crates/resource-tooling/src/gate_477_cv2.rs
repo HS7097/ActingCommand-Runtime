@@ -287,7 +287,7 @@ fn cv2_cut_a_difference_writes_nothing_and_names_the_rule() {
         "{}",
         error.message
     );
-    let outcome = details(&error)["outcome"].clone();
+    let outcome = self::details(&error)["outcome"].clone();
     assert_eq!(
         outcome["values"]["standard_pack_problem"],
         "catalog_missing"
