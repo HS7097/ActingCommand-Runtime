@@ -4749,6 +4749,14 @@ tests = [
 ]
 incident = ["#455 P2"]
 
+# #477 LF-1 (0.12.80; register §1.509; the coordinator's ruling after the two reviews of #1872; contracts/scheduling/README.md, "Pool lines", "At each evaluation"), the host's half, through the real settlement path, on catalog-a declared V2 with its one pool read from rows of a list (1400), its task due while the pool holds 1000, consuming 400 a run and reserving 200, a manual Runtime clock, no clock read: before each evaluation the host gives the evaluator the pairs whose latest admitted dispatch carried a run_cap on its recorded policy_dispatch_parameters, with when that run ended (PolicyHost::handed_runs); the dispatch handed run_cap 3 is admitted and settled; the next evaluation, the list not read again and still fresh, holds the task, its trigger suggesting the list's key with fact_stale and nothing dispatched; a restart on the same state root gives the same answer at two evaluations; a list read after the run's end releases the pool (no fact_stale suggestion, no trigger_unknown).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_477_lf1::lf1_h1_a_run_handed_a_run_cap_leaves_its_pool_unknown_until_read_after_its_end",
+]
+incident = ["#477 LF-1"]
+
 # #477 CV-2 (0.12.80; register §1.508; brief rd-1122/brief-477-cv2.md; contracts/standard-pack-schedule.md, "`requires`", "The scheduler workbench"), the Runtime's half, in composer mode over gate_rl1b's game A on disk with a manual clock: a root whose schedule.json names catalog_business is composed with its version 2 pack-catalog.json at the first check and activated, the staged tasks holding the catalog's production and fixed value, the generation keeping the catalog as fragment-catalogs/<game>.json, config.catalog_provenance holding the value under the model as the part's origin says, check-config's preview giving the digest the composition record holds; a placement that changes only the catalog is composed at the next check and activated (h1); a manifest that names no subsystem, the stand-in for a Runtime of 0.12.79, refuses the file schedule_requires_missing at /requires/0 and composes no rule of the game (h2); a catalog of version 1 and then none are recorded once each at pack-catalog.json (catalog_version_1 at /schema_version, catalog_missing), and the active generation stays the one composed before, nothing activated (h3)
 [[gate]]
 coverage = "Y"

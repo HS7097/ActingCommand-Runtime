@@ -249,6 +249,9 @@ pub struct EvaluationFacts {
 /// list"): also the readings the host computed for the pools read from rows of a list
 /// ([`LeftOutFacts::give_pool_readings`]), whose lists the projection leaves out; each list's key
 /// is left out for its pool's instance with them.
+///
+/// #477 LF-1 (register §1.509): also the pairs whose latest scheduled dispatch carried a
+/// `run_cap`, with when that run ended ([`LeftOutFacts::give_handed_runs`], [`HandedRuns`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
@@ -256,9 +259,65 @@ pub struct LeftOutFacts {
     void_targets: BTreeSet<String>,
     /// #455 P2: the readings given to the pools read from rows of a list, by pool id.
     pool_readings: GivenPoolReadings,
+    /// #477 LF-1: the pairs whose latest scheduled dispatch carried a `run_cap`.
+    handed_runs: HandedRuns,
+}
+
+/// #477 LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines"): the pairs whose
+/// latest scheduled dispatch carried a `run_cap` on its `policy_dispatch_parameters`, by instance
+/// alias and then task id, each with the time that run ended, `None` while it has not. A pool
+/// such a run's task consumes is not believed until it is read after that run's end: while one
+/// of them has not ended, or ended after the pool's reading was observed, the pool's reading is
+/// unknown (`fact_stale`) for every reader of the evaluation ([`PoolValues`]). The host notes them
+/// from the dispatches' recorded reasons ([`HandedRuns::note_dispatch`]) and gives them beside the
+/// left-out facts. Memory only: none of it enters a snapshot or decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HandedRuns {
+    runs: BTreeMap<String, BTreeMap<String, Option<u64>>>,
+}
+
+impl HandedRuns {
+    /// Notes the latest scheduled dispatch of `task_id` on `instance_id`, which ended at
+    /// `ended_at_unix_ms` (`None` while it runs), when its recorded `reasons` carry a `run_cap` on
+    /// `policy_dispatch_parameters`; any other dispatch is not noted.
+    pub fn note_dispatch<'r>(
+        &mut self,
+        task_id: &str,
+        instance_id: &str,
+        ended_at_unix_ms: Option<u64>,
+        reasons: impl IntoIterator<Item = &'r Outcome>,
+    ) {
+        let carried = reasons.into_iter().any(|reason| {
+            reason.is(PolicyCode::PolicyDispatchParameters) && reason.value("run_cap").is_some()
+        });
+        if carried {
+            self.runs
+                .entry(instance_id.to_owned())
+                .or_default()
+                .insert(task_id.to_owned(), ended_at_unix_ms);
+        }
+    }
+
+    /// Whether a reading of `pool_id` observed at `observed_at_unix_ms` misses a noted run of a
+    /// task of `tasks` that consumes the pool: one that has not ended, or ended after it.
+    fn unshown(&self, tasks: &[TaskSpec], pool_id: &str, observed_at_unix_ms: u64) -> bool {
+        self.runs.values().flatten().any(|(task_id, &ended)| {
+            ended.is_none_or(|ended| ended > observed_at_unix_ms)
+                && tasks.iter().any(|task| {
+                    task.id == *task_id
+                        && task.consumes.iter().any(|effect| effect.pool_id == pool_id)
+                })
+        })
+    }
 }
 
 impl LeftOutFacts {
+    /// #477 LF-1 (register §1.509): gives the evaluation the pairs whose latest scheduled dispatch
+    /// carried a `run_cap`.
+    pub fn give_handed_runs(&mut self, runs: HandedRuns) {
+        self.handed_runs = runs;
+    }
+
     /// #455 P2 (register §1.505, rulings 6 and 8): gives the evaluation the readings the host
     /// computed for the pools read from rows of a list. Each reading's list key is noted as left
     /// out for its pool's instance, so a pool whose reading is unknown raises no fact refresh
@@ -1349,12 +1408,38 @@ pub(crate) struct PoolReading<'a> {
 pub(crate) struct PoolValues<'a> {
     values: BTreeMap<&'a str, PoolReading<'a>>,
     given: &'a GivenPoolReadings,
+    /// #477 LF-1 (register §1.509): the pools whose current reading a run handed a `run_cap` does
+    /// not show ([`HandedRuns`]): unknown, `fact_stale`.
+    unread: BTreeSet<&'a str>,
 }
 
 impl<'a> PoolValues<'a> {
     /// The value of the pool `pool_id`, when the evaluation reads one.
     pub(crate) fn get(&self, pool_id: &str) -> Option<&PoolReading<'a>> {
         self.values.get(pool_id)
+    }
+
+    /// Why the pool `pool` has no value at `time`, as every reader names it: #477 LF-1,
+    /// `fact_stale` while a run handed a `run_cap` that its reading does not show makes it
+    /// unknown; otherwise its observation's own reason (a fact pool's record, Workflow #390
+    /// POOL-1; #455 P2, the reading the host gave a pool read from rows of a list). `None` for a
+    /// pool observed through an outcome and for a usable record.
+    pub(crate) fn unknown_reason(
+        &self,
+        pool: &PoolSpec,
+        facts: &EvaluationFacts,
+        time: EvaluationTime,
+    ) -> Option<UnknownReason> {
+        if self.unread.contains(pool.id.as_str()) {
+            return Some(UnknownReason::FactStale);
+        }
+        match &pool.observation {
+            ObservationRef::Fact { fact_key } => {
+                live_pool_unknown_reason(pool, fact_key, facts, time)
+            }
+            ObservationRef::ListRows { .. } => self.given.unknown_reason(pool, time),
+            ObservationRef::Outcome { .. } => None,
+        }
     }
 
     /// Every pool value, by pool id.
@@ -1396,7 +1481,49 @@ fn evaluation_pool_values<'a>(
             Some((snapshot.pool_id.as_str(), PoolReading { snapshot, bound }))
         })
         .collect();
-    PoolValues { values, given }
+    PoolValues {
+        values,
+        given,
+        unread: BTreeSet::new(),
+    }
+}
+
+impl<'a> PoolValues<'a> {
+    /// #477 LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines", "At each
+    /// evaluation"): these values less every pool read from a fact or from rows of a list whose
+    /// current reading misses a run that was handed a `run_cap` (`handed`, of a task of `tasks`
+    /// that consumes the pool: not ended, or ended after the reading was observed). Such a pool is
+    /// unknown, `fact_stale`, for every reader of the evaluation ([`Self::unknown_reason`]), until
+    /// a reading observed at or after that run's end.
+    fn without_unshown(
+        mut self,
+        pool_specs: &BTreeMap<&str, &PoolSpec>,
+        facts: &EvaluationFacts,
+        tasks: &[TaskSpec],
+        handed: &HandedRuns,
+    ) -> Self {
+        let unshown = self
+            .values
+            .keys()
+            .copied()
+            .filter(|pool_id| {
+                pool_specs.get(pool_id).is_some_and(|pool| {
+                    !pool.value_source.is_static()
+                        && matches!(
+                            pool.observation,
+                            ObservationRef::Fact { .. } | ObservationRef::ListRows { .. }
+                        )
+                        && pool_record_times(pool, facts, self.given)
+                            .is_some_and(|(observed, _)| handed.unshown(tasks, &pool.id, observed))
+                })
+            })
+            .collect::<Vec<_>>();
+        for pool_id in unshown {
+            self.values.remove(pool_id);
+            self.unread.insert(pool_id);
+        }
+        self
+    }
 }
 
 /// #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating pool
@@ -2295,7 +2422,15 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .iter()
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
-    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, &given, time);
+    // #477 LF-1 (register §1.509): a pool whose reading misses a run that was handed a `run_cap`
+    // is unknown for every reader of the evaluation.
+    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, &given, time)
+        .without_unshown(
+            &pool_specs,
+            facts,
+            &catalog_bundle.tasks.tasks,
+            &left_out.handed_runs,
+        );
     // #428 SCHED-C1f1 (register §1.303 SC1F-2): every consumption read from a fact, resolved once
     // from the facts this evaluation pins, for each task and instance its scope covers; every
     // reader of a consumption reads these amounts.
@@ -5519,8 +5654,12 @@ fn apply_priority_selection(
         &mut affected,
         memory,
     )?;
+    // LF-1 (register §1.509): the consumed pools whose lines take part in each judged candidate's
+    // spend values, read once the capped order has given its blocks.
+    let lines = spend_lines(catalog, facts, context, &ranked)?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
-    // the allowances read the same entries.
+    // the allowances read the same entries (LF-1: a pool whose lines take part takes the lines'
+    // gate's own reading instead).
     let unshown = if reserves_declared {
         reserve_unshown(catalog, facts, context, &reserves)?
     } else {
@@ -5531,17 +5670,23 @@ fn apply_priority_selection(
     }
     // SS-6: the spend values of the candidates the gate admitted, from the same reserve views and
     // pending consumption (the gate's own available amount, at the same instant) and each
-    // instance's resolved goals.
+    // instance's resolved goals; LF-1: and the lines of the pools they consume.
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
         // G-R2s: a left-out candidate's gaps are those of an instance without a record.
         let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
-        let spend = crate::resource_targets::spend_values(
+        let candidate_lines = lines.get(&candidate.work_index);
+        let spend = crate::resource_targets::spend_values_with(
             task,
             // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
             // which `run_cap` reads as one run's amount.
             reserves.get(&candidate.work_index).map(Vec::as_slice),
+            |pool_id| {
+                candidate_lines
+                    .and_then(|views| views.iter().find(|(id, _)| *id == pool_id))
+                    .map(|(_, view)| *view)
+            },
             |pool_id| {
                 crate::resource_targets::pending_total(
                     &unshown,
@@ -5614,6 +5759,62 @@ fn catalog_task<'a>(
                 "candidate task '{task_id}' is missing from the catalog"
             ))
         })
+}
+
+/// LF-1 (register §1.509): by work index, the pools whose lines take part in a candidate's spend
+/// values, each with its [`crate::resource_targets::LineView`] ([`spend_lines`]).
+type SpendLines<'a> = BTreeMap<usize, Vec<(&'a str, crate::resource_targets::LineView)>>;
+
+/// LF-1 (register §1.509; `contracts/scheduling/README.md`, "Task Reserves", "Capped spending
+/// order"): by work index, the pools each judged candidate consumes whose lines take part in its
+/// spend values ([`capped::line_view`]), each once, in its `consumes` order; a candidate of a
+/// capped block reads its block's pool as the head of the episode, the candidate the order
+/// dispatches with `capped_spend`. A candidate without such a pool, and every candidate the lines
+/// do not constrain (one that is not judged: a manual request, a chain rider, an unmarked task),
+/// has no entry.
+fn spend_lines<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &EvaluationFacts,
+    context: &PlacementContext<'_>,
+    candidates: &[PlacementCandidate],
+) -> PolicyEvaluationResult<SpendLines<'a>> {
+    let mut lines = SpendLines::new();
+    for candidate in candidates.iter().filter(|candidate| candidate.judged) {
+        let task = catalog_task(catalog, &candidate.task_id)?;
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == candidate.instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "judged candidate's instance '{}' is missing from the snapshot",
+                    candidate.instance_id
+                ))
+            })?;
+        let mut views: Vec<(&str, crate::resource_targets::LineView)> = Vec::new();
+        for effect in &task.consumes {
+            let pool_id = effect.pool_id.as_str();
+            if views.iter().any(|(seen, _)| *seen == pool_id) {
+                continue;
+            }
+            let pool = context.pool_specs.get(pool_id).ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "compiled catalog references missing pool '{pool_id}'"
+                ))
+            })?;
+            let head = candidate
+                .capped
+                .as_ref()
+                .is_some_and(|slot| slot.pool_id == pool_id);
+            if let Some(view) = capped::line_view(context, facts, instance, pool, task, head)? {
+                views.push((pool_id, view));
+            }
+        }
+        if !views.is_empty() {
+            lines.insert(candidate.work_index, views);
+        }
+    }
+    Ok(lines)
 }
 
 /// Workflow #411 B16 part 2: the consumption the reserved pools' latest readings do not show yet
@@ -6856,7 +7057,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(resource_suggestion(
                     spec,
                     facts,
-                    pool_values.given(),
+                    pool_values,
                     time,
                 )));
             };
@@ -7398,21 +7599,17 @@ fn scope_instance_id(scope: &ScopeSelector) -> Option<&str> {
     }
 }
 
+/// The reading a pool without a value asks for: its fact's key (#455 P2: a pool read from rows of
+/// a list, the list's key), with its unknown reason as the evaluation's pool values name it
+/// ([`PoolValues::unknown_reason`]; #477 LF-1: `fact_stale` after a run handed a `run_cap`).
 fn resource_suggestion(
     pool: &PoolSpec,
     facts: &EvaluationFacts,
-    given: &GivenPoolReadings,
+    values: &PoolValues<'_>,
     time: EvaluationTime,
 ) -> DetectionSuggestion {
-    let (fact_key, unknown_reason) = match &pool.observation {
-        ObservationRef::Fact { fact_key } => (
-            fact_key,
-            live_pool_unknown_reason(pool, fact_key, facts, time),
-        ),
-        // #455 P2 (register §1.505, rulings 3 and 11): a pool read from rows of a list reads as a
-        // ledger pool whose fact is the list: the list's key, with the reason of the reading the
-        // host gave it (`fact_missing` when none was given).
-        ObservationRef::ListRows { fact_key, .. } => (fact_key, given.unknown_reason(pool, time)),
+    let fact_key = match &pool.observation {
+        ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } => fact_key,
         ObservationRef::Outcome {
             task_id,
             outcome_key,
@@ -7424,7 +7621,7 @@ fn resource_suggestion(
             });
         }
     };
-    match unknown_reason {
+    match values.unknown_reason(pool, facts, time) {
         Some(unknown_reason) => DetectionSuggestion {
             scope: pool.scope.clone(),
             fact_key: fact_key.clone(),
@@ -11512,6 +11709,7 @@ pub(crate) mod tests {
             &PoolValues {
                 values: BTreeMap::new(),
                 given: &GivenPoolReadings::default(),
+                unread: BTreeSet::new(),
             },
             r7_time(now),
             &BTreeMap::new(),

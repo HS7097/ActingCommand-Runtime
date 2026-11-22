@@ -71,9 +71,8 @@ use super::fact_refresh::{self, AffectedCandidate};
 use super::{
     DecisionReason, DetectionSuggestion, EvaluationFacts, InstanceSnapshot, PlacementCandidate,
     PlacementContext, PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState,
-    TaskWork, UnknownReasonToken, live_pool_unknown_reason, min_wake, next_pool_projection_change,
-    offset_rank, project_pool_value, reason_with, resource_suggestion, scope_matches_instance,
-    unknown_token,
+    TaskWork, UnknownReasonToken, min_wake, next_pool_projection_change, offset_rank,
+    project_pool_value, reason_with, resource_suggestion, scope_matches_instance, unknown_token,
 };
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
 use crate::{
@@ -546,33 +545,26 @@ fn judge(
         });
     }
     if let Some(first) = readings.first() {
-        let (fact_key, unknown_reason) = match &first.observation {
-            ObservationRef::Fact { fact_key } => (
-                Some(fact_key.clone()),
-                live_pool_unknown_reason(first, fact_key, facts, context.time),
-            ),
-            ObservationRef::Outcome { .. } => (None, None),
-            // #455 P2 (register §1.505): a pool read from rows of a list, its list's key with the
-            // reason of the reading the host gave it.
-            ObservationRef::ListRows { fact_key, .. } => (
-                Some(fact_key.clone()),
-                context
-                    .pool_values
-                    .given()
-                    .unknown_reason(first, context.time),
-            ),
+        // #455 P2 (register §1.505): a pool read from rows of a list names its list's key. The
+        // reason is the one the evaluation's pool values give (#477 LF-1: `fact_stale` after a run
+        // handed a `run_cap`).
+        let fact_key = match &first.observation {
+            ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } => {
+                Some(fact_key.clone())
+            }
+            ObservationRef::Outcome { .. } => None,
         };
         return Ok(Judgement::Unknown {
             gap: Gap::ReadingUnknown {
                 pool_id: first.id.clone(),
                 fact_key,
-                unknown_reason,
+                unknown_reason: context
+                    .pool_values
+                    .unknown_reason(first, facts, context.time),
             },
             suggestions: readings
                 .iter()
-                .map(|pool| {
-                    resource_suggestion(pool, facts, context.pool_values.given(), context.time)
-                })
+                .map(|pool| resource_suggestion(pool, facts, context.pool_values, context.time))
                 .collect(),
         });
     }
