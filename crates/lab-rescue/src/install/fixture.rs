@@ -353,6 +353,10 @@ pub(super) struct Programs {
     /// replacing the default's member of its name (`standard_packs`, `standard_pack_schedule`;
     /// none by default).
     pub(super) check_config_report: RefCell<BTreeMap<&'static str, Value>>,
+    /// Workflow #429 RB-1: by build (`live`, or a commit), an object whose members replace the
+    /// members of their names in the `report` of that build's check-config when it passes, after
+    /// `check_config_report`'s (none by default).
+    pub(super) check_config_report_of: RefCell<BTreeMap<String, Value>>,
     /// The ledger head the head read and `events` read.
     pub(super) ledger_head: Cell<u64>,
     /// A build whose reader refuses a read that reaches this sequence (every read also reads
@@ -420,6 +424,7 @@ impl FakeHost {
                 check_config_notes: RefCell::new(Vec::new()),
                 check_config_causes_total: Cell::new(None),
                 check_config_report: RefCell::new(BTreeMap::new()),
+                check_config_report_of: RefCell::new(BTreeMap::new()),
                 ledger_head: Cell::new(100),
                 unreadable: RefCell::new(None),
                 verify_exit: Cell::new(0),
@@ -623,6 +628,13 @@ impl Host for FakeHost {
                         "standard_packs": {"games": []}});
                     for (name, member) in self.programs.check_config_report.borrow().iter() {
                         report[*name] = member.clone();
+                    }
+                    if let Some(Value::Object(members)) =
+                        self.programs.check_config_report_of.borrow().get(&build)
+                    {
+                        for (name, member) in members {
+                            report[name.as_str()] = member.clone();
+                        }
                     }
                     ran(
                         0,

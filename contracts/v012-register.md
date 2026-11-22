@@ -46836,6 +46836,138 @@ holds.
   retired entry of both sides. §1.507's `gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16`
   pins the range at [3, 25] now, as the five tests above do.
 
+### 1.514 Slice #429 RB-1 (0.12.80): the installer's plan refuses a deploy or a rollback to a build that does not name a subsystem the installed and kept schedules require (board #429; the rulings 1 to 7 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-429-rb1.md`; on main `0e25182e`, v0.12.79 with CV-2 of #477)
+
+This section takes 1.514 (1.509 and 1.515 belong to two other slices of 0.12.80). It ships in
+0.12.80. [install-cli.md](install-cli.md) ("Update and rollback", the plan's "Subsystems the
+schedules require"; "Interface checks"; "The rollback gate", part 1) is the contract, with
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`"). Why: §1.505 and §1.508 ("At
+deploy") traced what a rollback meets once a generation composed from a file that requires
+`pool_list_rows` or `catalog_business` is active (a Runtime of 0.12.77 or older does not start; one
+that starts without the name leaves the game without rules), and the plan's
+`rollback_window_bounded` and edges saw neither.
+
+**What it rests on** (the work order's three stop conditions, none met as worded).
+- *The target's subsystems come from the check-config the plan already runs.* Its report carries
+  `config_manifest.subsystems` (`name`, `enabled`) with a configuration it passes, and each build
+  composes with the enabled names (`apps/actingd/src/check_config.rs`; the workbench's
+  `enabled_subsystems`). Read at the tags: `v0.12.77` and `v0.12.78` name neither `pool_list_rows`
+  nor `catalog_business`, `v0.12.79` names `pool_list_rows` and not `catalog_business`
+  (`apps/actingd/src/config/manifest.rs`). A refusal prints no report.
+- *The fragments are read without a component the guards forbid.* A composed generation's
+  directory below `policy\catalogs\generations\<hex>\` (the contract crate's `CATALOG_STORE_PATH`
+  and `CATALOG_GENERATIONS_DIRECTORY`, by which the rescue module's composition check after a
+  placement reads a generation's record already) holds `fragments/<game>.json`, plain files. Which
+  generation is active is check-config's `policy_plan.active.catalog_hash`, the ledger's projection
+  as each of the two answers the plan already has previews it (the state database that holds the
+  pointer is `runtime-state` over `runtime-database`, which `c3b_client_device_authority_stays_behind_runtime`
+  keeps out of the installer).
+- *No new code.* The refusal is the plan's own: a failed edge row and `install_command_refused`
+  `interface_edge`.
+
+**Open: a generation that only a dispatch in flight pins** (put to the coordinator; not built). A
+start also compiles each generation a dispatch intent in flight still pins (`replay_admission` →
+`load_generation`, §1.505 "At deploy"). Which those are is held only in the ledger's
+`policy.dispatch_intent` records without their completion: the plan reads no ledger record (that
+takes `runtime-database`, which the guard above forbids, or a run of the live build's
+`actingledger`, which ruling 6 forbids), so it judges the active generation alone, and the contract
+says so ("Not seen").
+
+**The rules as built** (the coordinator's rulings).
+- *Names* (ruling 1). `requires::unnamed` (`crates/lab-rescue/src/install/requires.rs`), called by
+  `plan::plan` after the two check-configs, for an update and a rollback alike: the target's names
+  are the enabled rows of `config_manifest.subsystems` of its own answer (`Checked::report`); the
+  files are the `schedule.json` of each `game_id` of `policy.facts.instances` below
+  `standard_packs.root` (`place::packs_root`), by game, then each fragment of the generation the
+  target's and the live build's answers preview as active, by generation and game. Each is read by
+  the one reader, the contract crate's `parse_standard_pack_schedule`.
+- *The refusal* (ruling 2). One more edge row after `next_check_config`, `{interface: requires,
+  check: next_names_required, result: fail, parties: [{party: R*, source: check_config, range:
+  null}]}`, and the plan document's member `requires_missing`, one entry per file: `game`, `source`
+  (`root`, `generation`), `catalog_hash` (a fragment's), `path`, `missing` (in the file's order) and
+  `unread` (a file or a folder of fragments that could not be read: its failure as a warning). The
+  plan refuses `interface_edge` with the row counted; apply plans again and refuses the same before
+  the writer's first change; `undo` judged as a rollback, `status --check-rollback` and a composite's
+  automatic rollback plan the same way and carry on the plan's refusal alone (fix round 1). The plan's answer is no declared interface (`install-cli`
+  is declared by no build: revision 1 withdrawn, revision 2 LAB-7's), so no range moves; the member
+  lies in the plan document, which every answer carries as `plan`, beside its `edges`.
+- *A passing answer without subsystems* (ruling 3, a build without the member) names none: any
+  `requires` refuses it. A target whose check-config did not pass is not judged (fix round 1).
+- *No override* (ruling 4). The way out in the contract: place schedules that do not require the
+  name, let the Runtime activate a generation composed without it, plan again; the plan's
+  `requires_missing` then lists no `generation` entry.
+- *As on main* (ruling 5). Nothing missing: no row and no member, so the document, its `plan_id` and
+  every member and code are main's (test 5's golden).
+- *Reads only* (ruling 6): files and the two answers the plan already has. *No game named* (ruling 7).
+
+**Decided here** (each the smallest choice the rulings leave).
+- The games in use (`policy.facts.instances`), not every root below `standard_packs.root`: a start
+  reads only those (a root no instance binds is not read). A configured catalogue
+  (`policy.catalog`) is not told apart: those roots are read all the same, the stricter side.
+- No file there, or one the reader refuses, requires nothing: every Runtime refuses such a file, so
+  a rollback loses nothing by it, and check-config notes it. A file there that cannot be read, or a
+  folder of fragments that cannot be listed, fails the row (`unread`): the plan cannot show the
+  target names what it requires.
+- The active generation as both answers preview it, their union when they differ (they read one
+  ledger).
+
+**Tests** (apps gate map row "#429 RB-1"; `crates/lab-rescue/src/install/gate_429_rb1.rs`, the
+fake host of `fixture.rs`).
+
+| Test | What it shows |
+|---|---|
+| `rb1_t1_a_rollback_to_a_build_that_does_not_name_a_roots_requirement_is_refused_naming_both` (1) | The game root in use requires `pool_lines` and `catalog_business`; C1 names `pool_lines` and `pool_list_rows`: `rollback plan` refused `interface_edge`, `count` 1, the one failed row `requires` `next_names_required`, `requires_missing` `[{game, source root, path, missing [catalog_business]}]` |
+| `rb1_t2_a_deploy_of_an_older_build_is_refused_the_same_way` (2) | `update plan` to a target that does not name `pool_list_rows`: the same refusal and entry; `update apply` refused `interface_edge`, the live build unchanged |
+| `rb1_t3_a_kept_generation_that_requires_the_name_refuses_until_another_is_active` (3) | The root requires only `pool_lines`, the active generation's fragment `catalog_business` too: refused, the entry `source generation` with its `catalog_hash` and the fragment's path; once another generation is active (the first kept on disk): planned, the gate passing, no row, no member |
+| `rb1_t4_a_target_whose_answer_names_no_subsystems_is_refused_any_requirement` (4) | No `config_manifest` in the target's answer: a root that requires `pool_lines` refused with it missing; the same target and a root that requires nothing planned as on main |
+| `rb1_t5_a_plan_whose_schedules_require_only_named_subsystems_answers_as_on_main` (5) | Ruling 5's golden, IT-5's update from C1 to C2 on the neutral builds: the answer's seven members, the document's thirteen, its eleven edge rows (parties and ranges), the notice (`replaced` 5) and no warning; the same on a root whose game root and active generation require only names the target names |
+
+Touched (test support only): `fixture.rs` gains `Programs::check_config_report_of`, a report
+override for one build's check-config, and its initializer. No existing test is changed, renamed or
+retired; no golden is re-recorded.
+
+**What is not changed.** A plan between two builds that both name everything required: every
+member, row, code and the plan id. Apply beyond honouring the refusal; the gate's four parts; the
+`notice`; every declared interface range; the outcome catalogue (no code, word or key). The files
+other slices own (the policy crate's `resource_targets.rs`, `evaluator.rs`, `evaluator/capped.rs`,
+`evaluator/benefit.rs`, the host's `policy_host.rs`, the resource tools' `adopt`).
+
+**At deploy.** Nothing to configure. From this version the plan of a rollback (and of a deploy of
+an older build) refuses while an installed or kept schedule requires a subsystem the target does
+not name; a plan whose roots in use and active generation require nothing the target lacks is
+the plan it was. The plan of **this** version is the
+one that matters for rolling back from it (the live build's installer plans the rollback); a
+rollback planned by an older installer is not protected, nor is a generation that only a dispatch
+in flight pins (above). In the release notes' language:
+安装器的计划（部署、回滚）现在会核对：目标版本的 check-config 认得的子系统，是否覆盖了在用游戏根的 `schedule.json` 和当前生效目录代（含它保留的各游戏片段）里 `requires` 列出的每个名字；缺一个就以 `interface_edge` 拒绝，计划里的 `requires_missing` 逐个列出游戏、文件或目录代和缺的名字。没有覆盖开关：先放上不需要该名字的 `schedule.json`，等 Runtime 生效一个不含它的新目录代，再重新做计划。目标的 check-config 拒了配置时不做这项核对，照旧由配置那一关拒（更新是 `config_refused_by_target`，回滚是闸门的 `config` 部分），该做的是先还原配置。由仍在执行中的派发所钉住的旧目录代，这一版的计划还看不到。
+
+**Fix round 1** (the independent review of pull request #1876 and the coordinator's rulings on it).
+- *A target whose check-config did not pass is not judged* (the must-fix; the coordinator's ruling).
+  The first build took a refusal, which prints no report, for "names no subsystem" and listed every
+  required name as missing: an update, refused `config_refused_by_target` already, carried a false
+  `requires_missing`, and a rollback, which main refuses in the gate's part `config` (restore the
+  configuration first), was refused earlier as an interface edge whose way out sent a person to
+  change schedules. Ruling 3 is about a build without the answer's subsystems, not about a refused
+  configuration. `requires::unnamed` now answers nothing when `Checked::passed` is false: neither
+  row nor member, and both plans refuse as on main.
+- *Where the refusal is carried on* (ordered from "may fix"; the smaller honest choice). `undo`
+  judged as a rollback, `status --check-rollback` and a composite's automatic rollback after a
+  failed start keep only the plan's outcome (`interface_edge` with `count`); none of their answers
+  has a member to hold the list without a new wire member, so the contract now says that the list
+  is in the answer of the plan a person asks for (`rollback plan --to <commit>`), where it said they
+  "refuse with it". No code changes there.
+- *Tests* (the must-fix's one, and the three the review found missing; same file and gate row):
+
+| Test | What it shows |
+|---|---|
+| `rb1_fr1_a_target_that_refuses_the_configuration_is_refused_as_on_main_without_the_check` | The target C1's check-config refuses the configuration while the game root in use requires `pool_lines`: `rollback plan` refused `rollback_gate_failed` with the part `config` alone, the failed edge `next_check_config` alone, no `requires_missing`; an update to a target that refuses it: `config_refused_by_target`, no `requires` row, no member |
+| `rb1_fr1_a_schedule_or_a_fragment_that_cannot_be_read_refuses_and_says_why` | A `schedule.json` and a fragment that are folders: refused `interface_edge`, the row `requires`, two entries (`root`, `generation`) with `missing` empty and `unread` an outcome |
+| `rb1_fr1_a_subsystem_listed_as_not_enabled_is_not_named` | The target lists `catalog_business` with `enabled: false`: refused, `catalog_business` missing, `pool_lines` (enabled) not |
+| `rb1_fr1_two_answers_naming_different_active_generations_are_both_read` | The target's answer previews one generation, the live build's another: an entry for each, by hash |
+
+No existing test changed. The register's ruling-3 lines above and the contract's "What the target
+names", "A target whose check-config did not pass" and "The refusal" say the same.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -78,6 +78,18 @@ subsystems, for example `condition_edges`). A Runtime that loads the rules and d
 refuses the file with `schedule_requires_missing` at `/requires/<index>`. The resource tools
 have no Runtime manifest at hand: they report `requires` and leave the check to the Runtime.
 
+Workflow #429 RB-1 (since 0.12.80; register §1.514). **A rollback is refused while a required name
+is unknown to the target**, and so is an update to such a build. The installer's plan reads
+`requires` of the `schedule.json` of each game in use and of each fragment of the active catalogue
+generation (`fragments/<game>.json`, "The scheduler workbench" below), and refuses
+(`interface_edge`, its row `requires` `next_names_required`, its member `requires_missing` naming
+each game, file or generation and each missing name) when the target build's own check-config
+does not name one ([install-cli.md](install-cli.md), "Update and rollback", "Subsystems the
+schedules require"). The way back to such a build: place schedules that do not require the name,
+let the Runtime activate a generation composed without it, and plan again. The plan of the
+installer that rolls back decides: a rollback planned by an installer before 0.12.80 is not
+checked.
+
 A rule whose `trigger` or `feedback_stop` holds a `fact` predicate with a fact reference
 (`"value": {"type": "fact", "fact_key", "offset"}`, #386 CF-4,
 [scheduling/README.md](scheduling/README.md), "Fact references") requires `fact_reference`. The
