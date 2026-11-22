@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #477 LF-1 (0.12.79; register §1.509; the coordinator's rulings 1 to 6 of 11-22, no words of the
+// #477 LF-1 (0.12.80; register §1.509; the coordinator's rulings 1 to 6 of 11-22, no words of the
 // owner's behind them; coordinator work order `rd-1122/brief-477-lf1.md`;
 // contracts/scheduling/README.md, "Task Reserves", "Capped spending order";
 // contracts/remedies.md, section 4, "Spend values"): the turn cap a dispatch carries (`run_cap`)

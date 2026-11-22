@@ -45918,10 +45918,10 @@ v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in
 language:
 被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
 
-### 1.509 Slice #477 LF-1 (0.12.79): the turn cap a dispatch carries counts the lines of the pools its task consumes, so a stop line is written once, on the pool (board #477; the rulings 1 to 6 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-477-lf1.md` after the read-only study `rd-1122/study-477-step2.md`, its section 5 and the coordinator's disposition of it; on main `f773b3d1`)
+### 1.509 Slice #477 LF-1 (0.12.80): the turn cap a dispatch carries counts the lines of the pools its task consumes, so a stop line is written once, on the pool (board #477; the rulings 1 to 6 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-477-lf1.md` after the read-only study `rd-1122/study-477-step2.md`, its section 5 and the coordinator's disposition of it; on main `f773b3d1`)
 
-This section takes 1.509 (1.507, 1.512 and 1.513 belong to other slices of 0.12.79). It ships in
-0.12.79. [scheduling/README.md](scheduling/README.md) ("Task Reserves", the bullet "Spend values";
+This section takes 1.509 (1.507, 1.512 and 1.513 belong to other slices). It ships in 0.12.80.
+[scheduling/README.md](scheduling/README.md) ("Task Reserves", the bullet "Spend values";
 "Capped spending order", the bullet "What the head's run is handed"; item 7 of "Who reads it" of
 "A run's consumption read from a fact") and [remedies.md](remedies.md) (section 4, "Spend values":
 the sentence on who carries them, the rows `spend_allowance.<i>` and `run_cap`) are the contract;
@@ -46020,7 +46020,7 @@ them now; a package that reads `session.dispatch.schedule.run_cap` for such a ta
 (`contained_task_designated_effect_cap_unresolved`) and now presses or repeats that many turns. A
 task that reserves such a pool below its hard line carries the hard line's smaller allowance and
 cap. On the head of a capped episode a task that reserves the pool now stops where the episode is
-spent, not at its reserve. No installation's admissions change. A rollback to 0.12.78 meets nothing kept on disk
+spent, not at its reserve. No installation's admissions change. A rollback to 0.12.79 meets nothing kept on disk
 (the values are never stored) and hands such tasks no `run_cap` again.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)

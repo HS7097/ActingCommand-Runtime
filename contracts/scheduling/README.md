@@ -393,7 +393,7 @@ carries a fallback and the amount is never Unknown.
   7. *The spend values* (SS-6, [../remedies.md](../remedies.md), section 4): `spend_allowance` (the
      gate's available amount less the consumption its step 3 counts), the gate's hold of an
      allowance below the task's consumption, and `run_cap`, ⌊allowance ÷ one run's amount⌋, which
-     the run reads as `session.dispatch.schedule.run_cap`. #477 LF-1 (since 0.12.79): one run's
+     the run reads as `session.dispatch.schedule.run_cap`. #477 LF-1 (since 0.12.80): one run's
      amount of a pool whose lines take part in the spend values ("Task Reserves", "Spend
      values") is the one in effect as well.
   8. *The tie-break* ("Ties and chain heads"): a candidate's runs left, by `c`.
@@ -1352,7 +1352,7 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   an instance without a record instead; since G-R2x it carries the goal's gap as every task does.
   An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
-  #477 LF-1 (since 0.12.79; register §1.509): a pool's own lines take part too, so a rule needs
+  #477 LF-1 (since 0.12.80; register §1.509): a pool's own lines take part too, so a rule needs
   no reserve to bound its turns. For a judged candidate (the candidates the lines constrain,
   "Pool lines", "Who is held"), each pool it consumes that has a declared valuation and whose
   lines in effect on the candidate's instance are written (the instance's own set, else the
@@ -2709,7 +2709,7 @@ without a valuation is untouched.
   with the hold the round gives it otherwise (`capped_not_head`, or
   `capped_would_cross_hard_line` when the plan skips it). A more urgent tier, and a business
   candidate of a higher `B ÷ E`, go first as always.
-- **What the head's run is handed** (#477 LF-1, since 0.12.79; register §1.509; the
+- **What the head's run is handed** (#477 LF-1, since 0.12.80; register §1.509; the
   coordinator's rulings of 11-22, not the owner's words). The plan counts one run of each planned
   consumer. A package whose run repeats its turn reads how many from `run_cap`
   (`session.dispatch.schedule.run_cap`, [../remedies.md](../remedies.md), section 4), and for
