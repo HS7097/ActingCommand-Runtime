@@ -1703,3 +1703,11 @@ test = "actingcommand-lab-rescue::lib::install::gate_r15b_registry::r15b_every_c
 ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1: the test reads two sections of contract text the slice removes and goes with them)"
 reason = "Removed: it checked the registry sections \"Registered codes and words (Workflow #429 R-15b)\" of install-cli.md and stable-entry.md against the catalogue; the first section and the whole of stable-entry.md are removed, and the codes and words they listed left the catalogue with them."
 covered_by = "The outcome guard: G7 holds the enums that keep R-15b words (install_guard's player_holds, release_check's selection_schema_mismatch) to their catalogue vocabularies, and G1 every registry entry to its fragment; the four tests of gate_r15b_release stay in the same apps.toml row."
+
+# apps.toml, the row of #455 P1 (actingd's half), whose one test #455 P2 adapts and renames.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_p1::p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it"
+ruling = "#455 P2 (0.12.79; register §1.505; the coordinator's work order rd-1122/brief-455-p2.md, ruling 10: the Runtime names pool_list_rows and accepts a schedule.json that requires it)"
+reason = "Its requirement changed on purpose: it pinned that this build named no pool_list_rows and refused such a file with schedule_requires_missing; from P2 on the build names it, so the test asserts the opposite under a name that says so."
+covered_by = "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_p1::p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it (apps.toml, row #455 P2); a Runtime that does not name the subsystem still refuses the file at /requires/0, which the policy gate p1_t4 pins."

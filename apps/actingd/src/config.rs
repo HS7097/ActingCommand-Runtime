@@ -106,8 +106,8 @@ mod gate_479_f3a;
 // `instance add` composes (its fixture, crates/lab-rescue/tests/fixtures/inst5-application-id.json).
 #[cfg(test)]
 mod gate_452_inst5;
-// Test-only: #455 P1, this build names no `pool_list_rows`, so it refuses a `schedule.json` that
-// requires it.
+// Test-only: #455 P1, adapted by #455 P2: this build names `pool_list_rows`, so it composes a
+// `schedule.json` that requires it.
 #[cfg(test)]
 mod gate_455_p1;
 

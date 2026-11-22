@@ -926,6 +926,23 @@ impl InstanceFactStore {
         })
     }
 
+    /// #455 P2 (register §1.505, ruling 1): the readings of `catalog`'s pools read from rows of a
+    /// list, each computed from its instance's active list fact in this projection
+    /// ([`crate::pool_list_rows::pool_list_rows_readings`]); the list enters no projection.
+    pub(crate) fn list_pool_readings(
+        &self,
+        catalog: &actingcommand_policy::CompiledCatalog,
+    ) -> actingcommand_policy::GivenPoolReadings {
+        crate::pool_list_rows::pool_list_rows_readings(catalog, |instance_id, fact_key| {
+            self.active_record(
+                &FactScope::Instance {
+                    instance_id: instance_id.to_owned(),
+                },
+                fact_key,
+            )
+        })
+    }
+
     pub(crate) fn validate_pool_sources(
         &self,
         catalog: &actingcommand_policy::CompiledCatalog,

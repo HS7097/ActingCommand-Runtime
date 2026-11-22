@@ -35,8 +35,8 @@ use crate::codes::PolicyCode;
 use crate::evaluator::project_time_validity;
 use crate::source::{CatalogDocumentSource, parse_document};
 use crate::{
-    CompiledCatalog, EvaluationFacts, EvaluationTime, FactScalar, FactValue, InstanceSnapshot,
-    ObservedFact, PoolSpec, SchedulingDocumentKind, ScopeSelector,
+    CompiledCatalog, EvaluationFacts, EvaluationTime, FactScalar, FactValue, GivenPoolReadings,
+    InstanceSnapshot, ObservedFact, PoolSpec, SchedulingDocumentKind, ScopeSelector,
 };
 
 /// The goal document (Workflow #455 G-R2a): v2 targets with their own lifetimes, and entries.
@@ -380,6 +380,7 @@ pub(super) fn check_resource_targets_v3(
     document: &ResourceTargetsDocumentV3,
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
     time: EvaluationTime,
 ) -> Result<CheckedResourceTargets, ResourceTargetsError> {
     use ResourceTargetsRejectionReason as Reason;
@@ -416,7 +417,7 @@ pub(super) fn check_resource_targets_v3(
         .iter()
         .zip(&resolved)
         .map(|(target, (pool, fact_key))| {
-            target_condition(&projected, instance, target, pool, fact_key, time)
+            target_condition(&projected, given, instance, target, pool, fact_key, time)
         })
         .collect();
     let entries = document
@@ -437,9 +438,11 @@ pub(super) fn check_resource_targets_v3(
     })
 }
 
-/// What one target observes in the projection, as `ApplyResourceTargets` reports it.
+/// What one target observes in the projection, as `ApplyResourceTargets` reports it (#455 P2: in
+/// the projected facts and the readings given to the pools read from rows of a list).
 fn target_condition(
     projected: &EvaluationFacts,
+    given: &GivenPoolReadings,
     instance: &InstanceSnapshot,
     target: &ResourceTargetSpecV3,
     pool: &PoolSpec,
@@ -451,7 +454,7 @@ fn target_condition(
         target_id: target.id.clone(),
         resource: pool.id.clone(),
         fact_key: fact_key.to_owned(),
-        state: match observe_target(projected, instance, pool, fact_key, time) {
+        state: match observe_target(projected, given, instance, pool, fact_key, time) {
             TargetObservation::Known {
                 current,
                 observed_at_unix_ms,

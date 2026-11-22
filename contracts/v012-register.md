@@ -45526,6 +45526,182 @@ not, keeping the game's last good rules either way. A rollback meets nothing: no
 activated a catalogue with the kind (a configured one would have to be written after this deploy;
 a 0.12.77 start would then refuse that generation at its compile).
 
+### 1.505 Slice #455 P2 (0.12.79): the host computes the reading of a pool read from rows of a list before each evaluation, gives it to the evaluator, and every reader of a pool's reading takes it; the Runtime names `pool_list_rows` (board #455; the rulings 1 to 13 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-455-p2.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition, and P1's report; on main `9491d936`, the 0.12.78 release)
+
+This section takes 1.505, reserved for this slice (1.506 is ASLEEP-2's, in 0.12.78).
+[scheduling/README.md](scheduling/README.md) ("A pool read from rows of a list", rewritten from
+"What it means" to "In 0.12.78"; the capability bullets there and under "Pool lines"; the
+exception in "Record lists and the projection") is the contract;
+[scheduling/v2/README.md](scheduling/v2/README.md), [resource-targets.md](resource-targets.md)
+("A pool read from rows of a list", new; the `resource` row of the v1 table; the view's
+`targetable`), [instance-fact-store.md](instance-fact-store.md),
+[resource-readings.md](resource-readings.md), [standard-pack-schedule.md](standard-pack-schedule.md)
+("`requires`") and [actingd-check-config.md](actingd-check-config.md) (the row `pool_list_rows`)
+follow it. No `package` revision moves and no declared interface range: a feature of
+`schedule.json` goes by `requires` alone, as the pools' lines did.
+
+**Where the number is made** (rulings 1, 2, 3 and 4). In the host, before each evaluation, under
+the fact write gate the fact pools are projected under
+(`project_authoritative_policy_inputs_with_gaps_under_gate`, `crates/runtime-host/src/host/policy_dispatch.rs`):
+for each pool of the active catalog whose observation is `list_rows`,
+`InstanceFactStore::list_pool_readings` (`fact_store.rs`) reads the pool's instance's active list
+fact at the projection's ledger position (a historical one for an older position) and calls one
+pure function, `list_rows_reading` (`crates/runtime-host/src/pool_list_rows.rs`): for each declared
+row, the list's row whose key column holds the row's key (a text) gives its value column, an
+integer at least 0, times the factor; the reading is the sum. A key the list does not hold counts 0
+(a list is written whole or not at all). Unknown, never 0, each a closed word
+(`actingcommand_policy::ListRowsUnknown`): no list `fact_missing`; a confidence below the pool's
+`ledger_fact` minimum `fact_low_confidence`; a named row's value that is a text, a negative integer,
+another scalar or absent, or a sum beyond 2^53 − 1 (`MAX_LIST_ROWS_READING`), `type_mismatch`; a
+record that is no inline record list `type_mismatch`. A reading carries the list's observation
+time and expiry; the evaluator judges the expiry (`fact_expired`) and a sum a constant capacity
+cannot hold (`type_mismatch`), as for a fact reading. The skip of `inventory.list.` in the fact
+store's projection and the compile's refusal of every other member under the prefix are unchanged:
+no list enters the projection or `facts`.
+
+**Identity** (ruling 5). `project_fact_pools_with_readings` (`crates/policy/src/evaluator.rs`)
+writes each `Read` reading the pool can hold as the pool's snapshot where a fact pool's projected
+reading goes (`resources.pools`: the sum, observed when the list was; a caller's snapshot of the
+pool dropped as every `ledger_fact` pool's), so it enters `fact_snapshot_id`
+(`combined_policy_snapshot_id`, over the resources) and each instance's view identity
+(`dispatch_view_identity`, over the pools whose scope selects the instance) by the path that
+exists; no section of identity is added. `project_fact_pools` is that function with no reading,
+byte for byte the one of main.
+
+**The evaluator is given the reading** (ruling 6). `GivenPoolReadings` (pool id → the pool's
+instance, the list's key, `Read {value, observed_at_unix_ms, expires_at_unix_ms}` or
+`Unknown(ListRowsUnknown)`), memory only, beside the left-out facts:
+`LeftOutFacts::give_pool_readings`, which the policy cycle calls with the projection's readings.
+The evaluation projects them through the timeline's resets by the rule a fact obeys
+(`project_given_validity`, sharing `survives_resets` with `project_time_validity`: a reset that
+invalidates the list's key in the pool's scope at or after the list's observation leaves the pool
+`fact_missing`; one still to come bounds the expiry). Where the evaluator checks that a pool's
+snapshot is still backed by its record (`evaluation_pool_values`, now through
+`pool_record_times`), such a pool takes the given reading's observation and expiry. The pool values
+an evaluation reads travel with the readings (`PoolValues`), so every reader below reaches the
+reason of an unknown one (`GivenPoolReadings::unknown_reason`, in the order of
+`live_pool_unknown_reason`). Nothing in the policy crate reads a list, and nothing in it writes a
+weight.
+
+**Readers** (ruling 7; from `git grep` of `pool_values`, `pool_fact`, `ObservationRef`,
+`observe_target`, `project_fact_pools` and the study's section 1):
+
+| Reader | Where | Unknown reading |
+|---|---|---|
+| `resource_projection` (trigger, feedback stop) and its freshness | `evaluate_predicate` | Unknown, the suggestion (L, its reason): `trigger_unknown` / `feedback_stop_unknown` |
+| the suggestion a reason carries | `resource_suggestion` | (L, `fact_missing` without a reading, else its reason) |
+| the net benefit's cost term (regenerating pool) | `evaluator/benefit.rs` `judge` | `benefit_unknown` `reading_unknown` (pool, L, its reason) |
+| the pool's lines and the capped spending order; `capped_spend` | `evaluator/capped.rs` `lines` | `pool_line_held` `capped_cap_unknown` (L, its reason) |
+| the reserve gate | `reserve_views` | case 1: `resource_reserve_insufficient` without `amount_after` |
+| the consumption a reading does not show yet | `reserve_unshown`, `lines` (the snapshot's observation, the list's) | none (no reading, no unshown) |
+| the urgency and the tie-break | `resource_urgency_milli`, `tie_break::projected` | no urgency; the tie-break's bound unknown |
+| the evaluation's wake | `evaluate_scheduling` `pool_fresh_until` | no wake |
+| the forward projection | `forward.rs` `project_forward_with_readings` (the snapshot its start, every step given the readings) | the pool out of each step; the gap (its reason, L) |
+| a resource target's check and receipt | `resolve_target_pool` (admits the kind under L), `observe_target`, `check_resource_targets_with_readings` | `awaiting_observation` with the reading's reason |
+| the target's gap and weight in the evaluation | `resolve_instance_targets`, `resolve_v2`, `target_effects` | `pending` with the reading's reason |
+| the views; a goal entry's `current` | `targetable_resources_with_readings`, `active_resource_targets`, host `resource_target_view_of` (the goal page's `targetable`) | `pending` |
+| the idle plan's projection steps | `pool_projection_steps` (host `policy_host.rs`) | no step |
+| the clock slots' liveness | `clock_slot_live` (host `clock_slot.rs`) | not live |
+| the strategic report's pool metric | `strategy.rs` (reads `resources.pools`) | no value |
+
+The no-progress guard's capture (`NoProgressMemory::capture`) reads the pools without the
+readings: its basis is the facts a reading of another value releases it by, and a list is none, so
+a trigger such a pool makes true captures no basis and arms no guard that could hold its pair while
+the list changed. A `benefit_realization` task still needs a fact observation of each pool it
+consumes (the compile's refusal, unchanged).
+
+**No refresh is asked** (ruling 8). `give_pool_readings` notes each reading's list key as left out
+for its pool's instance, so a pool whose reading is unknown raises no fact refresh demand (the
+refresh asks the recognition maintenance package for its marked keys, and no mark may name the
+prefix): no `fact_refresh_*` reason, no `key_not_marked`. Refresh on demand is a later slice.
+
+**Expiry wakes** (ruling 9). The given reading's expiry enters the evaluation's wake
+(`pool_fresh_until`, as a fact reading's, a millisecond after it; test t3). A list's publication
+wakes the evaluation already: a list reading is a `fact.published` record, and every event of the
+fact family is `FactsChanged` (`policy_trigger_for_family`, `host/policy_wake.rs`), which the
+existing actingd test `resident_driver_coalesces_relevant_event_bursts_without_terminal_feedback`
+pins.
+
+**The Runtime names the subsystem** (ruling 10). `pool_list_rows` is an always-on row of
+`config.subsystems` (`apps/actingd/src/config/manifest.rs`), so the workbench and check-config
+compose a `schedule.json` that requires it. `validate_static_fact_pool_authority` (the evaluation's
+and the forward projection's) accepts such a pool: it is bound to its list, and a configured reading
+of it, or a configured fact under its list's key, is a second authority
+(`policy_pool_authority_conflict`), as for a fact pool. `fact_store.rs`' `validate_pool_sources`
+leaves the kind out, as before.
+
+**What a person sees** (ruling 11): a reason names the list's key as its `fact_key`; `capped_spend`
+and a goal entry's `current` show the sum; no member or word is added, no range of
+`runtime-client`, `ledger` or `runtime-outcomes` moves. No game, package or alias is named in code
+(ruling 13).
+
+| # | Shape | Kind | Code slice | Notes |
+|---|---|---|---|---|
+| P2-1 | `pool_list_rows` | `config.subsystems` row, always on | #455 P2 | P1's `requires` entry is now accepted |
+| P2-2 | `GivenPoolReadings`, `GivenPoolReading`, `GivenReadingState`, `ListRowsUnknown` | policy crate types, memory only | #455 P2 | beside `LeftOutFacts` |
+| P2-3 | `project_fact_pools_with_readings`, `project_forward_with_readings`, `check_resource_targets_with_readings`, `targetable_resources_with_readings` | policy crate functions | #455 P2 | the plain functions are these with no reading |
+
+**Tests** (policy gate row "#455 P2", `crates/policy/src/tests/gate_455_p2.rs`; host row "#455
+P2", `crates/runtime-host/src/tests/gate_455_p2.rs`; apps row "#455 P2"; no clock read).
+
+| Test | What it shows |
+|---|---|
+| host `p2_h1_the_reading_is_the_sum_of_the_declared_rows_and_a_key_the_list_does_not_hold_counts_0` (1) | one row; four rows of factors 200, 400, 1000 and 2000 out of the list's order; a key the list does not hold counts 0; a list of 300 rows; the list's observation and expiry |
+| host `p2_h2_a_reading_is_unknown_never_zero` (2) | no list `fact_missing`; confidence 499 below 500 `fact_low_confidence`; a text, a negative integer, a timestamp and an absent value `type_mismatch`; 2^53 − 1 read, beyond it by one row or two `type_mismatch` |
+| policy `p2_t3_the_lists_expiry_wakes_the_evaluation_and_then_reads_fact_expired` (2) | the evaluation's wake a millisecond after the list's expiry; then `trigger_unknown` with (L, `fact_expired`) |
+| policy `p2_t4_a_reset_that_invalidates_the_list_invalidates_the_reading` (2) | a reset after the list's observation: `fact_missing`; before it: the task runs |
+| policy `p2_t5_the_cost_term_reads_the_reading_and_names_the_list_when_unknown` (3) | known benefit on a reading; `benefit_unknown` `reading_unknown` (pool, L, `fact_low_confidence`; `type_mismatch` for a sum above the capacity) |
+| policy `p2_t6_the_lines_read_the_reading_and_capped_cap_unknown_names_the_list` (3) | `would_cross_hard_line` with `pool_reading` 100; runs on 500; `capped_cap_unknown` with L and `fact_low_confidence` |
+| policy `p2_t7_the_reserve_gate_reads_the_reading_and_holds_on_an_unknown_one` (3) | runs on 100; case 1 on an unknown reading |
+| policy `p2_t8_the_consumption_since_the_lists_observation_is_counted` (3) | a task dispatched after the list's observation is counted (`amount_after` 40, its `task_id`), one before it not |
+| policy `p2_t10_a_target_on_the_pool_is_checked_and_its_condition_is_the_reading` (3) | the target accepted; its condition 40 (observed when the list was, gap 60), `low_confidence`, `missing` without a reading |
+| policy `p2_t11_the_evaluations_target_is_applied_on_the_reading_and_pending_without_it` (3) | `resource_targets` names it applied (current 40, gap 60) and pending `low_confidence` |
+| policy `p2_t12_the_views_show_the_reading` (3) | targetable under L with the reading; the stored policy's condition |
+| host `p2_h6_a_targets_receipt_and_the_target_view_read_the_reading` (3) | `ApplyResourceTargets`' receipt condition and `ResourceTargetView` (the goal page's `targetable`, a goal entry's `current`) read 1400 |
+| policy `p2_t2_a_projection_reads_the_reading_and_an_unknown_one_suggests_the_list_without_a_refresh` (3, 4) | the trigger reads the reading; unknown: (L, `type_mismatch`) and no `fact_refresh_*`, which without the given reading is asked |
+| host `p2_h4_without_a_list_the_task_waits_with_the_lists_key_and_asks_no_refresh` (4) | on the host: `trigger_unknown`, (L, `fact_missing`), no `fact_refresh*` |
+| host `p2_h3_the_host_computes_the_reading_and_the_evaluation_takes_it` (4, 5) | a configured catalog accepted; no list in the projection or `facts`; the snapshot 1400 at the list's time; the reading; one position, one identity; the task dispatched |
+| policy `p2_t1_the_given_number_goes_where_a_fact_pools_projected_reading_goes` (4) | the snapshot where a fact pool's goes; none unknown, above capacity or without a reading; catalog-a's golden bytes |
+| host `p2_h5_a_catalog_without_the_kind_keeps_its_golden_bytes_and_identity` (4) | catalog-a's projected resources golden, no reading, identity unchanged by a published list |
+| host `p2_h7_a_new_reading_moves_the_instances_view_and_the_intent_is_stale` (4) | the list read again (1600): the identity moved and the intent is `policy_facts_stale` |
+| policy `p2_t9_the_forward_projection_starts_from_the_reading_and_carries_it` (4) | starts from the reading, runs once, names `fact_expired` of L; without it nothing runs and `fact_missing` |
+| actingd `gate_455_p1::p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it` (5) | the manifest names `pool_list_rows`; the composer given its subsystems composes the file |
+
+Touched existing tests (6): P1's actingd test `p1_this_runtime_names_no_pool_list_rows_and_refuses_a_file_that_requires_it`
+is adapted and renamed (above; its old name retired in `ci/retired-gates.toml`); its requirement
+changed on purpose. In `crates/policy/src/evaluator.rs`' own tests, `r7_evaluate` (used by the R7
+tests) hands `evaluate_predicate` an empty `PoolValues` in place of an empty map, and
+`resource_target_valuation_maps_milli_yields_before_rounding` hands `resolve_instance_targets` no
+reading: both signatures gained the readings; nothing they assert changed. `forward.rs`' tests import
+`evaluate` themselves (the module no longer does). P1's policy tests are unchanged: an entry point
+without readings still reads such a pool as missing.
+
+**What is not changed.** A pool that does not use the kind: its checks, its identity, every decision
+(`project_fact_pools` is the new function with no reading; the golden of t1 and h5). The projection
+and `facts` (no list enters). The compile's refusals for every other member under `inventory.list.`.
+The list facts' own limits (1024 rows; the evaluator's 256 bound does not apply to a list it never
+reads). The evaluator writes no weight. Every declared interface range.
+
+**At deploy.** Nothing changes for an installation until a `schedule.json` (or a configured
+catalog) names the kind: a catalogue without it projects, hashes and decides as on 0.12.78.
+Rollback (ruling 12), read at the tag `v0.12.78` (`9491d936`, this slice's base) and `v0.12.77`
+(`3285143f`): once a Runtime of this version has activated a catalogue generation that holds a
+`list_rows` pool,
+- **a rollback to v0.12.77 or older fails to start**: the start loads and compiles the active
+  generation (`load_verified_active` → `read_generation`), its compiler does not know the kind, and
+  the load answers the fatal `catalog_generation_invalid`;
+- **a rollback to v0.12.78 starts but schedules nothing**: its compiler knows the kind (P1), so the
+  generation loads; its workbench refuses the game's `schedule.json` (`schedule_requires_missing`,
+  no `pool_list_rows`) and keeps the game's last good rules, the active generation's fragment with
+  the pool; its `validate_static_fact_pool_authority` then refuses every evaluation's input
+  (`policy_pool_binding_invalid`), which is skipped (`policy_evaluation_skipped`) and, after
+  `scheduling.evaluation.escalate_after` skips in a row, `policy_evaluation_awaiting_person`, for
+  every instance, until a generation without the kind is active.
+- **The rollback gate does not see it**: `rollback_window_bounded` is the ledger range alone, and the
+  installer's plan checks the declared interface ranges, none of which this slice moves; a catalogue
+  generation is no interface. Before such a rollback a person removes the kind from the game's
+  `schedule.json` (or rolls the generation back) on this version first.
+
 ### 1.506 Slice #486 ASLEEP-2 (0.12.78): an instance whose application its idle action closed is asleep too; the close and wake loop seen in production on 11-21 (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-22, not the owner's words; the owner's words behind them, her order of 11-02 that an instance without a task is closed and her order of 11-22 that the scheduler must first run stably; coordinator work order `rd-1122/brief-486-asleep2.md`; on main `1dff8fcb`, merged with main `a2d31d86`)
 
 This section takes 1.506 (1.501 to 1.505 belong to other slices of 0.12.78). It ships in 0.12.78.

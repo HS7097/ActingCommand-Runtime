@@ -244,14 +244,38 @@ pub struct EvaluationFacts {
 /// `resource_target_root_uncomposed`. Fix round 3: the void is part of the decision identity
 /// (`targets_void_decision_id`) of such a candidate on an instance that holds a target record
 /// (fix round 4: only there, where it changes the decision); it enters no snapshot.
+///
+/// #455 P2 (register §1.505; `contracts/scheduling/README.md`, "A pool read from rows of a
+/// list"): also the readings the host computed for the pools read from rows of a list
+/// ([`LeftOutFacts::give_pool_readings`]), whose lists the projection leaves out; each list's key
+/// is left out for its pool's instance with them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
     /// G-R2s round 2: the instances whose target record is left out whole, by alias.
     void_targets: BTreeSet<String>,
+    /// #455 P2: the readings given to the pools read from rows of a list, by pool id.
+    pool_readings: GivenPoolReadings,
 }
 
 impl LeftOutFacts {
+    /// #455 P2 (register §1.505, rulings 6 and 8): gives the evaluation the readings the host
+    /// computed for the pools read from rows of a list. Each reading's list key is noted as left
+    /// out for its pool's instance, so a pool whose reading is unknown raises no fact refresh
+    /// demand: the refresh asks the instance's recognition maintenance package, whose marks never
+    /// name a list's key, and the package that reads the list is scheduled by its own rule.
+    pub fn give_pool_readings(&mut self, readings: GivenPoolReadings) {
+        for reading in readings.readings.values() {
+            self.insert(&reading.instance_id, &reading.fact_key);
+        }
+        self.pool_readings = readings;
+    }
+
+    /// #455 P2: the readings given to the pools read from rows of a list.
+    pub fn pool_readings(&self) -> &GivenPoolReadings {
+        &self.pool_readings
+    }
+
     /// Workflow #455 G-R2s round 2: leaves out the resource target record of the instance
     /// `instance_id` for every candidate of it, as long as its game's root cannot be composed.
     pub fn void_targets(&mut self, instance_id: &str) {
@@ -281,6 +305,141 @@ impl LeftOutFacts {
     /// Whether nothing was left out.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty() && self.void_targets.is_empty()
+    }
+}
+
+/// #455 P2 (register §1.505; `contracts/scheduling/README.md`, "A pool read from rows of a list"):
+/// what the host computed, before one evaluation, for each pool whose observation is `list_rows`,
+/// by pool id. The evaluator is given these readings and reads no list: the number goes where a
+/// fact pool's projected reading goes ([`project_fact_pools_with_readings`]), and every reader of
+/// a pool's reading takes the reading's freshness, or its reason, from here. Memory only: none of
+/// it enters a snapshot or decision identity beyond that number.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GivenPoolReadings {
+    readings: BTreeMap<String, GivenPoolReading>,
+}
+
+/// #455 P2: the reading the host computed for one pool read from rows of a list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GivenPoolReading {
+    /// The instance of the pool's scope, by alias.
+    pub instance_id: String,
+    /// The list's key, under `inventory.list.`.
+    pub fact_key: String,
+    pub state: GivenReadingState,
+}
+
+/// #455 P2: a pool's reading computed from a list's rows, or why there is none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GivenReadingState {
+    /// The sum of the declared rows, from the list observed at `observed_at_unix_ms`, fresh until
+    /// the list's own expiry.
+    Read {
+        value: u64,
+        observed_at_unix_ms: u64,
+        expires_at_unix_ms: Option<u64>,
+    },
+    /// No number, and why.
+    Unknown(ListRowsUnknown),
+}
+
+/// #455 P2 (register §1.505, ruling 3): why a pool read from rows of a list has no reading, each
+/// the reason a fact reading has for it (a list past its expiry is the evaluation's to judge, by
+/// the expiry given with the reading: `fact_expired`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListRowsUnknown {
+    /// The instance holds no list under the key, or a timeline reset invalidated it:
+    /// `fact_missing`.
+    FactMissing,
+    /// The list's confidence is below the pool's `ledger_fact` minimum: `fact_low_confidence`.
+    FactLowConfidence,
+    /// A named row's value is no non-negative integer, or the sum exceeds 2^53 − 1:
+    /// `type_mismatch`.
+    TypeMismatch,
+}
+
+impl ListRowsUnknown {
+    /// The fact reading's reason it is.
+    pub(crate) const fn reason(self) -> UnknownReason {
+        match self {
+            Self::FactMissing => UnknownReason::FactMissing,
+            Self::FactLowConfidence => UnknownReason::FactLowConfidence,
+            Self::TypeMismatch => UnknownReason::TypeMismatch,
+        }
+    }
+}
+
+/// #455 P2: a reading the host gave, read: its value, its observation time and its expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GivenRead {
+    pub(crate) value: u64,
+    pub(crate) observed_at_unix_ms: u64,
+    pub(crate) expires_at_unix_ms: Option<u64>,
+}
+
+impl GivenPoolReadings {
+    /// Gives the pool `pool_id` its reading; a later one for the same pool replaces it.
+    pub fn give(&mut self, pool_id: impl Into<String>, reading: GivenPoolReading) {
+        self.readings.insert(pool_id.into(), reading);
+    }
+
+    /// The reading given to the pool `pool_id`.
+    pub fn get(&self, pool_id: &str) -> Option<&GivenPoolReading> {
+        self.readings.get(pool_id)
+    }
+
+    /// Whether no pool was given a reading.
+    pub fn is_empty(&self) -> bool {
+        self.readings.is_empty()
+    }
+
+    /// `pool`'s reading when the host computed a number for it.
+    pub(crate) fn read(&self, pool: &PoolSpec) -> Option<GivenRead> {
+        match self.readings.get(&pool.id)?.state {
+            GivenReadingState::Read {
+                value,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+            } => Some(GivenRead {
+                value,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+            }),
+            GivenReadingState::Unknown(_) => None,
+        }
+    }
+
+    /// Why the `ledger_fact` pool `pool`, read from rows of a list, has no value at `time`, in the
+    /// order [`live_pool_unknown_reason`] gives a fact pool's: no reading given (`fact_missing`),
+    /// the reason the host gave, a list past its expiry (`fact_expired`), or a number above a
+    /// constant capacity (`type_mismatch`). `None` for a usable reading, and for a pool of another
+    /// value source.
+    pub(crate) fn unknown_reason(
+        &self,
+        pool: &PoolSpec,
+        time: EvaluationTime,
+    ) -> Option<UnknownReason> {
+        if pool.value_source.is_static() {
+            return None;
+        }
+        let Some(reading) = self.readings.get(&pool.id) else {
+            return Some(UnknownReason::FactMissing);
+        };
+        let (value, expires_at_unix_ms) = match reading.state {
+            GivenReadingState::Unknown(unknown) => return Some(unknown.reason()),
+            GivenReadingState::Read {
+                value,
+                expires_at_unix_ms,
+                ..
+            } => (value, expires_at_unix_ms),
+        };
+        if expires_at_unix_ms.is_some_and(|expiry| time.unix_ms > expiry) {
+            Some(UnknownReason::FactExpired)
+        } else if !usable_pool_value(pool, value) {
+            Some(UnknownReason::TypeMismatch)
+        } else {
+            None
+        }
     }
 }
 
@@ -966,12 +1125,40 @@ pub fn project_fact_pools(
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
 ) -> EvaluationResources {
+    project_fact_pools_with_readings(catalog, facts, resources, &GivenPoolReadings::default())
+}
+
+/// #455 P2 (register §1.505, ruling 5): [`project_fact_pools`] with the readings the host
+/// computed for the pools read from rows of a list. Such a pool's number goes where a fact pool's
+/// projected reading goes: a snapshot of the number, observed when the list was, for a reading the
+/// host computed and the pool can hold (as a fact reading's value must be: within a constant
+/// capacity), none otherwise; a caller's snapshot of the pool is dropped as every `ledger_fact`
+/// pool's. Without such a pool the projection is [`project_fact_pools`]'s, byte for byte.
+pub fn project_fact_pools_with_readings(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    readings: &GivenPoolReadings,
+) -> EvaluationResources {
     let mut projected = resources.clone();
     for pool in &catalog.catalog().pools.pools {
         if pool.value_source.is_static() {
             continue;
         }
         projected.pools.retain(|value| value.pool_id != pool.id);
+        if let ObservationRef::ListRows { .. } = &pool.observation {
+            if let Some(read) = readings
+                .read(pool)
+                .filter(|read| usable_pool_value(pool, read.value))
+            {
+                projected.pools.push(PoolValueSnapshot {
+                    pool_id: pool.id.clone(),
+                    value: read.value,
+                    observed_at_unix_ms: read.observed_at_unix_ms,
+                });
+            }
+            continue;
+        }
         if let Some(observation) = pool_fact(pool, facts)
             && let FactValue::Integer(value) = observation.value
             && usable_pool_reading(pool, value)
@@ -997,8 +1184,8 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
     else {
         return None;
     };
-    // #455 P1 (register §1.504): a `list_rows` pool reads no fact of its own; until the host
-    // computes its sum (a later slice) it has no value, and a caller's snapshot of it is not read.
+    // #455 P1 (register §1.504): a `list_rows` pool reads no fact of its own; #455 P2: the host
+    // gives it its reading ([`GivenPoolReadings`]), and a caller's snapshot of it is not read.
     let ObservationRef::Fact { fact_key } = &pool.observation else {
         return None;
     };
@@ -1009,15 +1196,36 @@ fn pool_fact<'a>(pool: &PoolSpec, facts: &'a EvaluationFacts) -> Option<&'a Obse
     })
 }
 
+/// The observation time and the expiry of the record a `ledger_fact` pool's value is read from:
+/// its own fact's ([`pool_fact`]); #455 P2: for a pool read from rows of a list, the list's, as
+/// the host gave them (`given`). `None` without one (and for a static pool).
+fn pool_record_times(
+    pool: &PoolSpec,
+    facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
+) -> Option<(u64, Option<u64>)> {
+    match &pool.observation {
+        ObservationRef::ListRows { .. } => given
+            .read(pool)
+            .map(|read| (read.observed_at_unix_ms, read.expires_at_unix_ms)),
+        ObservationRef::Fact { .. } | ObservationRef::Outcome { .. } => {
+            pool_fact(pool, facts).map(|fact| (fact.observed_at_unix_ms, fact.expires_at_unix_ms))
+        }
+    }
+}
+
 /// Whether the integer `value` read for `pool` is a usable pool value: within `0..=capacity`
 /// for a constant capacity, and (#386 CF-5) any non-negative integer for a capacity read from a
 /// fact, since a reading above it stays as read.
 fn usable_pool_reading(pool: &PoolSpec, value: i64) -> bool {
-    u64::try_from(value).is_ok_and(|value| {
-        pool.capacity
-            .constant()
-            .is_none_or(|capacity| value <= capacity)
-    })
+    u64::try_from(value).is_ok_and(|value| usable_pool_value(pool, value))
+}
+
+/// [`usable_pool_reading`] of a non-negative `value` (#455 P2: a sum the host computed).
+fn usable_pool_value(pool: &PoolSpec, value: u64) -> bool {
+    pool.capacity
+        .constant()
+        .is_none_or(|capacity| value <= capacity)
 }
 
 /// #386 CF-5: the capacity a pool's value is held to at one evaluation.
@@ -1104,27 +1312,51 @@ pub(crate) struct PoolReading<'a> {
     pub(crate) bound: PoolBound,
 }
 
+/// The pool values an evaluation reads ([`evaluation_pool_values`]), by pool id, and (#455 P2)
+/// the readings the host gave the pools read from rows of a list, as the timeline's resets leave
+/// them, which every reader of such a pool's freshness or unknown reason reads.
+pub(crate) struct PoolValues<'a> {
+    values: BTreeMap<&'a str, PoolReading<'a>>,
+    given: &'a GivenPoolReadings,
+}
+
+impl<'a> PoolValues<'a> {
+    /// The value of the pool `pool_id`, when the evaluation reads one.
+    pub(crate) fn get(&self, pool_id: &str) -> Option<&PoolReading<'a>> {
+        self.values.get(pool_id)
+    }
+
+    /// Every pool value, by pool id.
+    fn iter(&self) -> impl Iterator<Item = (&&'a str, &PoolReading<'a>)> {
+        self.values.iter()
+    }
+
+    /// #455 P2: the readings given to the pools read from rows of a list.
+    pub(crate) fn given(&self) -> &'a GivenPoolReadings {
+        self.given
+    }
+}
+
 /// The pool values an evaluation reads: a static pool's, or a live pool's while the record it
 /// reads is current. #386 CF-5: each with the capacity it is held to; a pool whose capacity fact
 /// gives no capacity has no value, and its `resource_projection` is Unknown with that fact's
-/// reason ([`resource_suggestion`]).
+/// reason ([`resource_suggestion`]). #455 P2: a pool read from rows of a list is current while the
+/// list its reading was computed from is (`given`, as the timeline's resets leave it).
 fn evaluation_pool_values<'a>(
     pool_specs: &BTreeMap<&str, &PoolSpec>,
     resources: &'a EvaluationResources,
     facts: &EvaluationFacts,
+    given: &'a GivenPoolReadings,
     time: EvaluationTime,
-) -> BTreeMap<&'a str, PoolReading<'a>> {
-    resources
+) -> PoolValues<'a> {
+    let values = resources
         .pools
         .iter()
         .filter_map(|snapshot| {
             let pool = pool_specs.get(snapshot.pool_id.as_str())?;
             let current = pool.value_source.is_static()
-                || pool_fact(pool, facts).is_some_and(|fact| {
-                    fact.observed_at_unix_ms <= time.unix_ms
-                        && fact
-                            .expires_at_unix_ms
-                            .is_none_or(|expiry| time.unix_ms <= expiry)
+                || pool_record_times(pool, facts, given).is_some_and(|(observed, expiry)| {
+                    observed <= time.unix_ms && expiry.is_none_or(|expiry| time.unix_ms <= expiry)
                 });
             if !current {
                 return None;
@@ -1132,7 +1364,8 @@ fn evaluation_pool_values<'a>(
             let bound = pool_bound(pool, facts, time).ok()?;
             Some((snapshot.pool_id.as_str(), PoolReading { snapshot, bound }))
         })
-        .collect()
+        .collect();
+    PoolValues { values, given }
 }
 
 /// #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating pool
@@ -1142,14 +1375,17 @@ fn evaluation_pool_values<'a>(
 /// `resource_projection` predicate names that step as its wake, and so does the benefit of a
 /// judged candidate that consumes such a pool: it is when the evaluation reads the pool again, no
 /// time a task is due. The Runtime's idle plan reads them to tell such a wake from one a time
-/// names. Empty when no pool the evaluation reads regenerates.
+/// names. Empty when no pool the evaluation reads regenerates. #455 P2: with the readings the
+/// host gave the pools read from rows of a list (`readings`), as the evaluation reads them.
 pub fn pool_projection_steps(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
+    readings: &GivenPoolReadings,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<BTreeSet<u64>> {
     let effective = project_time_validity(catalog, facts, time)?;
+    let given = project_given_validity(catalog, readings, &facts.instances, time)?;
     let pool_specs: BTreeMap<&str, &PoolSpec> = catalog
         .catalog()
         .pools
@@ -1158,7 +1394,8 @@ pub fn pool_projection_steps(
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
     let mut steps = BTreeSet::new();
-    for (pool_id, reading) in evaluation_pool_values(&pool_specs, resources, &effective, time) {
+    let values = evaluation_pool_values(&pool_specs, resources, &effective, &given, time);
+    for (pool_id, reading) in values.iter() {
         let Some(spec) = pool_specs.get(pool_id) else {
             continue;
         };
@@ -1181,28 +1418,9 @@ pub(crate) fn project_time_validity(
     facts: &EvaluationFacts,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<EvaluationFacts> {
-    let resets = catalog
-        .catalog()
-        .timeline
-        .events
-        .iter()
-        .filter(|event| !event.invalidates_fact_prefixes.is_empty())
-        .map(|event| Ok((event, invalidation_occurrences(event, time)?)))
-        .collect::<PolicyEvaluationResult<Vec<_>>>()?;
+    let resets = timeline_resets(catalog, time)?;
     let validity = |scope: &ScopeSelector, key: &str, observed: u64, expiry: &mut Option<u64>| {
-        for (event, (latest, next)) in &resets {
-            // Workflow #411 P19: a key below one of the event's `excludes_fact_prefixes` keeps
-            // its observation through the event.
-            if !scope_covers(&event.scope, scope, &facts.instances) || !event.invalidates_key(key) {
-                continue;
-            }
-            // Millisecond timestamps cannot order an observation at the reset instant.
-            if latest.is_some_and(|at| observed <= at) {
-                return false;
-            }
-            *expiry = min_wake(*expiry, next.and_then(|at| at.checked_sub(1)));
-        }
-        true
+        survives_resets(&resets, &facts.instances, scope, key, observed, expiry)
     };
     let mut projected = facts.clone();
     projected.facts.retain_mut(|fact| {
@@ -1241,6 +1459,95 @@ pub(crate) fn project_time_validity(
     Ok(projected)
 }
 
+/// The timeline events that invalidate fact prefixes, each with its latest occurrence at or
+/// before an evaluation's time and its next one (`invalidation_occurrences`).
+type TimelineResets<'a> = Vec<(&'a TimelineEvent, (Option<u64>, Option<u64>))>;
+
+/// The resets of `catalog`'s timeline at `time` ([`TimelineResets`]).
+fn timeline_resets(
+    catalog: &CompiledCatalog,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<TimelineResets<'_>> {
+    catalog
+        .catalog()
+        .timeline
+        .events
+        .iter()
+        .filter(|event| !event.invalidates_fact_prefixes.is_empty())
+        .map(|event| Ok((event, invalidation_occurrences(event, time)?)))
+        .collect::<PolicyEvaluationResult<TimelineResets<'_>>>()
+}
+
+/// Whether an observation of `key` in `scope` made at `observed` survives `resets`: a reset that
+/// covers the scope and invalidates the key, at or after the observation, removes it; the next
+/// occurrence of every such reset bounds its `expiry`. The one rule [`project_time_validity`]
+/// applies to a fact, an outcome and a task's settled run, and (#455 P2) [`project_given_validity`]
+/// to a list a pool's reading was computed from.
+fn survives_resets(
+    resets: &TimelineResets<'_>,
+    instances: &[InstanceSnapshot],
+    scope: &ScopeSelector,
+    key: &str,
+    observed: u64,
+    expiry: &mut Option<u64>,
+) -> bool {
+    for (event, (latest, next)) in resets {
+        // Workflow #411 P19: a key below one of the event's `excludes_fact_prefixes` keeps
+        // its observation through the event.
+        if !scope_covers(&event.scope, scope, instances) || !event.invalidates_key(key) {
+            continue;
+        }
+        // Millisecond timestamps cannot order an observation at the reset instant.
+        if latest.is_some_and(|at| observed <= at) {
+            return false;
+        }
+        *expiry = min_wake(*expiry, next.and_then(|at| at.checked_sub(1)));
+    }
+    true
+}
+
+/// #455 P2 (register §1.505, ruling 3): the readings the host gave the pools read from rows of a
+/// list as the timeline's resets leave them at `time`, by the rule a fact obeys
+/// ([`survives_resets`], the list's key in its pool's scope, at the list's observation time): a
+/// reading whose list a reset invalidated is gone, and the pool reads as one whose list is missing
+/// (`fact_missing`); a reset still to come bounds its expiry.
+pub(crate) fn project_given_validity(
+    catalog: &CompiledCatalog,
+    readings: &GivenPoolReadings,
+    instances: &[InstanceSnapshot],
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<GivenPoolReadings> {
+    let mut projected = readings.clone();
+    if projected.is_empty() {
+        return Ok(projected);
+    }
+    let resets = timeline_resets(catalog, time)?;
+    for reading in projected.readings.values_mut() {
+        let scope = ScopeSelector::Instance {
+            instance_id: reading.instance_id.clone(),
+        };
+        let GivenReadingState::Read {
+            observed_at_unix_ms,
+            expires_at_unix_ms,
+            ..
+        } = &mut reading.state
+        else {
+            continue;
+        };
+        if !survives_resets(
+            &resets,
+            instances,
+            &scope,
+            &reading.fact_key,
+            *observed_at_unix_ms,
+            expires_at_unix_ms,
+        ) {
+            reading.state = GivenReadingState::Unknown(ListRowsUnknown::FactMissing);
+        }
+    }
+    Ok(projected)
+}
+
 fn scope_covers(
     scope: &ScopeSelector,
     observed: &ScopeSelector,
@@ -1274,6 +1581,39 @@ pub fn evaluate(
     evaluate_with_eligibility(catalog, facts, resources, time, seed, |_| {
         Ok(CandidateEligibility::Eligible)
     })
+}
+
+/// #455 P2 (register §1.505): [`evaluate`] with the readings the host gave the pools read from
+/// rows of a list, inside `left_out` ([`LeftOutFacts::give_pool_readings`]); what the forward
+/// projection evaluates each of its steps with. With nothing left out it is [`evaluate`].
+pub(crate) fn evaluate_with_given_readings(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    left_out: &LeftOutFacts,
+) -> PolicyEvaluationResult<PolicyEvaluation> {
+    evaluate_scheduling(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        &BTreeSet::new(),
+        None,
+        None,
+        None,
+        &RunSlots::default(),
+        &OwedReruns::default(),
+        &InstanceHolds::default(),
+        &NoProgressGuards::default(),
+        &mut CappedMemory::default(),
+        &InstancePoolLines::default(),
+        left_out,
+        &DeviceGroups::default(),
+        |_| Ok(CandidateEligibility::Eligible),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1903,6 +2243,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .collect();
 
     let mut effective_facts = project_time_validity(catalog, facts, time)?;
+    // #455 P2 (register §1.505): the readings the host gave the pools read from rows of a list,
+    // as the same resets leave them.
+    let given = project_given_validity(catalog, left_out.pool_readings(), &facts.instances, time)?;
     // #486 ASLEEP-1 (register §1.497): an asleep instance is judged as if it were available
     // (placement, the order of the deferrals, the benefit gate, the pool lines, the no-progress
     // guard, the ranking, its fact refresh's own gates); the round selects nothing on it below.
@@ -1921,7 +2264,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .iter()
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
-    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
+    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, &given, time);
     // #428 SCHED-C1f1 (register §1.303 SC1F-2): every consumption read from a fact, resolved once
     // from the facts this evaluation pins, for each task and instance its scope covers; every
     // reader of a consumption reads these amounts.
@@ -1935,14 +2278,15 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .collect();
 
     // #386 CF-5: a capacity read from its fact wakes the evaluation when that reading expires,
-    // as the pool's own reading does.
+    // as the pool's own reading does. #455 P2 (ruling 9): so does the list a pool read from its
+    // rows was computed from, at the expiry the host gave.
     let pool_fresh_until = catalog_bundle
         .pools
         .pools
         .iter()
         .flat_map(|pool| {
             [
-                pool_fact(pool, facts).and_then(|fact| fact.expires_at_unix_ms),
+                pool_record_times(pool, facts, &given).and_then(|(_, expiry)| expiry),
                 pool_bound(pool, facts, time)
                     .ok()
                     .and_then(PoolBound::fresh_until),
@@ -3964,7 +4308,7 @@ enum PlacementResult {
 struct PlacementContext<'a> {
     profiles: &'a [ActivityProfile],
     pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
-    pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
+    pool_values: &'a PoolValues<'a>,
     hosts: &'a BTreeMap<&'a str, HostView>,
     time: EvaluationTime,
     seed: u64,
@@ -4616,6 +4960,7 @@ fn apply_priority_selection(
         let resolved = crate::resource_targets::resolve_instance_targets(
             catalog,
             facts,
+            context.pool_values.given(),
             instance,
             target_policy,
             time,
@@ -4666,6 +5011,7 @@ fn apply_priority_selection(
         let resolved = crate::resource_targets::resolve_instance_targets(
             catalog,
             facts,
+            context.pool_values.given(),
             instance,
             &without_record,
             time,
@@ -5950,7 +6296,7 @@ fn rank_task(
     instance: &InstanceSnapshot,
     profiles: &[ActivityProfile],
     pool_specs: &BTreeMap<&str, &PoolSpec>,
-    pool_values: &BTreeMap<&str, PoolReading<'_>>,
+    pool_values: &PoolValues<'_>,
     priority: i16,
     task_weight: u16,
     load: ResourceLoad,
@@ -6036,7 +6382,7 @@ fn deadline_urgency_milli(now: u64, deadline: u64) -> u16 {
 fn resource_urgency_milli(
     effect: &ResourceEffectSpec,
     specs: &BTreeMap<&str, &PoolSpec>,
-    values: &BTreeMap<&str, PoolReading<'_>>,
+    values: &PoolValues<'_>,
 ) -> Option<u16> {
     let spec = specs.get(effect.pool_id.as_str())?;
     if matches!(spec.projection, PoolProjection::NonRegenerating { .. }) {
@@ -6294,7 +6640,7 @@ fn evaluate_predicate(
     decision_scope: &ScopeSelector,
     facts: &EvaluationFacts,
     pool_specs: &BTreeMap<&str, &PoolSpec>,
-    pool_values: &BTreeMap<&str, PoolReading<'_>>,
+    pool_values: &PoolValues<'_>,
     time: EvaluationTime,
     timeline_events: &BTreeMap<&str, &TimelineEvent>,
     reasons: &mut Vec<DecisionReason>,
@@ -6477,7 +6823,10 @@ fn evaluate_predicate(
             })?;
             let Some(reading) = pool_values.get(pool_id.as_str()) else {
                 return Ok(PredicateEvaluation::unknown(resource_suggestion(
-                    spec, facts, time,
+                    spec,
+                    facts,
+                    pool_values.given(),
+                    time,
                 )));
             };
             let projected =
@@ -6488,9 +6837,9 @@ fn evaluate_predicate(
                 ))
             })?;
             // #386 CF-5: the pool's freshness ends at the earlier end of its reading's and of its
-            // capacity fact's.
+            // capacity fact's. #455 P2: a pool read from rows of a list, its list's.
             let mut fresh_until = min_wake(
-                pool_fact(spec, facts).and_then(|fact| fact.expires_at_unix_ms),
+                pool_record_times(spec, facts, pool_values.given()).and_then(|(_, expiry)| expiry),
                 reading.bound.fresh_until(),
             );
             let truth = match value {
@@ -7021,41 +7370,40 @@ fn scope_instance_id(scope: &ScopeSelector) -> Option<&str> {
 fn resource_suggestion(
     pool: &PoolSpec,
     facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
     time: EvaluationTime,
 ) -> DetectionSuggestion {
-    match &pool.observation {
-        ObservationRef::Fact { fact_key } => {
-            match live_pool_unknown_reason(pool, fact_key, facts, time) {
-                Some(unknown_reason) => DetectionSuggestion {
-                    scope: pool.scope.clone(),
-                    fact_key: fact_key.clone(),
-                    reason: unknown_token(unknown_reason).to_owned(),
-                },
-                None => {
-                    capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
-                        scope: pool.scope.clone(),
-                        fact_key: fact_key.clone(),
-                        reason: "resource_observation_missing".to_owned(),
-                    })
-                }
-            }
-        }
+    let (fact_key, unknown_reason) = match &pool.observation {
+        ObservationRef::Fact { fact_key } => (
+            fact_key,
+            live_pool_unknown_reason(pool, fact_key, facts, time),
+        ),
+        // #455 P2 (register §1.505, rulings 3 and 11): a pool read from rows of a list reads as a
+        // ledger pool whose fact is the list: the list's key, with the reason of the reading the
+        // host gave it (`fact_missing` when none was given).
+        ObservationRef::ListRows { fact_key, .. } => (fact_key, given.unknown_reason(pool, time)),
         ObservationRef::Outcome {
             task_id,
             outcome_key,
-        } => capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
-            scope: pool.scope.clone(),
-            fact_key: format!("outcome.{task_id}.{outcome_key}"),
-            reason: "resource_outcome_missing".to_owned(),
-        }),
-        // #455 P1 (register §1.504): no evaluation is given a list pool's reading before the host
-        // computes it (a later slice), so the pool reads as a ledger pool whose fact is missing,
-        // under the list's key.
-        ObservationRef::ListRows { fact_key, .. } => DetectionSuggestion {
+        } => {
+            return capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
+                scope: pool.scope.clone(),
+                fact_key: format!("outcome.{task_id}.{outcome_key}"),
+                reason: "resource_outcome_missing".to_owned(),
+            });
+        }
+    };
+    match unknown_reason {
+        Some(unknown_reason) => DetectionSuggestion {
             scope: pool.scope.clone(),
             fact_key: fact_key.clone(),
-            reason: unknown_token(UnknownReason::FactMissing).to_owned(),
+            reason: unknown_token(unknown_reason).to_owned(),
         },
+        None => capacity_suggestion(pool, facts, time).unwrap_or_else(|| DetectionSuggestion {
+            scope: pool.scope.clone(),
+            fact_key: fact_key.clone(),
+            reason: "resource_observation_missing".to_owned(),
+        }),
     }
 }
 
@@ -7729,13 +8077,15 @@ pub fn clock_slot_lapses(
 /// evaluated with `facts`, `resources` and `time` as `evaluate` evaluates it, is true once
 /// every counted clock (as `clock_slot_view` counts them) is counted due. A false or unknown
 /// trigger, for example a follower whose head failed or a task outside its timeline window, is
-/// not live; an instance missing from `facts` is not either.
+/// not live; an instance missing from `facts` is not either. #455 P2: with the readings the host
+/// gave the pools read from rows of a list (`readings`), as the evaluation reads them.
 pub fn clock_slot_live(
     catalog: &CompiledCatalog,
     task: &TaskSpec,
     instance_id: &str,
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
+    readings: &GivenPoolReadings,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<bool> {
     let placed = facts.instances.iter().any(|instance| {
@@ -7751,6 +8101,7 @@ pub fn clock_slot_live(
         .iter()
         .find(|state| state.task_id == task.id && state.instance_id == instance_id);
     let effective_facts = project_time_validity(catalog, facts, time)?;
+    let given = project_given_validity(catalog, readings, &facts.instances, time)?;
     let facts = &effective_facts;
     let bundle = catalog.catalog();
     let pool_specs: BTreeMap<&str, &PoolSpec> = bundle
@@ -7761,7 +8112,7 @@ pub fn clock_slot_live(
         .collect();
     // The pool values the evaluation reads: a static pool's, or a live pool's while the
     // record it reads is current (#386 CF-5: and while its capacity gives one).
-    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
+    let pool_values = evaluation_pool_values(&pool_specs, resources, facts, &given, time);
     let timeline_events: BTreeMap<&str, &TimelineEvent> = bundle
         .timeline
         .events
@@ -10093,6 +10444,7 @@ pub(crate) mod tests {
                 let resolved = crate::resource_targets::resolve_instance_targets(
                     &expected,
                     &observed,
+                    &crate::GivenPoolReadings::default(),
                     &observed.instances[0],
                     &policies["fixture-instance-a"],
                     time,
@@ -11126,7 +11478,10 @@ pub(crate) mod tests {
             },
             &base_facts(),
             &BTreeMap::new(),
-            &BTreeMap::new(),
+            &PoolValues {
+                values: BTreeMap::new(),
+                given: &GivenPoolReadings::default(),
+            },
             r7_time(now),
             &BTreeMap::new(),
             &mut reasons,

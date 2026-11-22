@@ -864,8 +864,10 @@ the run the same way.
   the selection's input, never the scheduler's. #455 P1 (0.12.78): a pool may declare that its
   inventory is read from rows of a list (an observation of the kind `list_rows`,
   [scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"); the list still
-  does not enter the projection, and its one other reader is the host, from #455 P2 on, which
-  computes the pool's number from the rows (in 0.12.78 nothing reads it for a pool).
+  does not enter the projection, and its one other reader is the host, from #455 P2 on (0.12.79),
+  which computes the pool's number from the rows before each evaluation (in 0.12.78 nothing read it
+  for a pool). Such a pool asks no refresh either: its unknown reading raises no fact refresh
+  demand, and the package that reads the list is scheduled by its own rule.
 
 ### Capacity and reserved keys
 

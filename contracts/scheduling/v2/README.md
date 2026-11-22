@@ -394,8 +394,11 @@ only: a pool's `observation` may be `{"kind": "list_rows", "fact_key": L, "key_c
 "value_column": V, "rows": [{"key": k, "factor": f}, …]}` beside a `ledger_fact` value source (its
 `minimum_confidence_milli` as for a fact observation): the pool's inventory is the sum over `rows`
 of the integer the column V holds in the row of the list reading L whose column K holds k, times
-f. No host computes that sum in 0.12.78 (a later slice does): until then the pool has no reading.
-Refused, each at its pointer: in a V1 document `unknown_field` at `observation/kind`; beside
+f. #455 P2 (since 0.12.79; register §1.505): the host computes that sum before each evaluation
+from the instance's list and gives it to the evaluation, which reads no list; a key the list does
+not hold counts 0, and a missing, low-confidence or expired list, a value that is no non-negative
+integer or a sum beyond 2^53 − 1 leaves the pool unknown, never 0 (`../README.md`). In 0.12.78 no
+host computed it and the pool had no reading. Refused, each at its pointer: in a V1 document `unknown_field` at `observation/kind`; beside
 `static_snapshot` `limit_exceeded` at the pool, as a `ledger_fact` pool without a fact observation
 is; a pool whose scope is not an instance `type_mismatch` at `observation/kind`; an L that is no
 identifier or not under `inventory.list.` `type_mismatch` at `observation/fact_key`; a K or V that
@@ -408,5 +411,5 @@ earlier row `duplicate_id`, at `observation/rows/<j>/key`; an f outside `1..=100
 other member `unknown_field`, a member of another type `type_mismatch` (the reader). The rows are
 kept and hashed in the order written. A `benefit_realization` task still needs a fact observation
 of each pool it consumes. A `schedule.json` whose pool writes the kind names `pool_list_rows` in
-`requires`, which no Runtime of 0.12.78 names. A pool without it serializes, hashes and decides
-exactly as before.
+`requires`, which a Runtime names from 0.12.79 on (#455 P2) and no Runtime of 0.12.78 names. A
+pool without it serializes, hashes and decides exactly as before.

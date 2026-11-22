@@ -51,8 +51,9 @@ use sha2::{Digest, Sha256};
 
 use super::{
     DecisionReason, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
-    FACT_REFRESH_TASK_ID, PolicyEvaluationResult, PoolReading, PredicateTruth, TaskRuntimeSnapshot,
-    evaluate_predicate, evaluation_pool_values, project_time_validity, reason_with,
+    FACT_REFRESH_TASK_ID, GivenPoolReadings, PolicyEvaluationResult, PoolValues, PredicateTruth,
+    TaskRuntimeSnapshot, evaluate_predicate, evaluation_pool_values, project_time_validity,
+    reason_with,
 };
 use crate::codes::PolicyCode;
 use crate::{
@@ -237,7 +238,12 @@ impl NoProgressMemory {
             .iter()
             .map(|pool| (pool.id.as_str(), pool))
             .collect();
-        let pool_values = evaluation_pool_values(&pool_specs, resources, &effective, time);
+        // #455 P2 (register §1.505): without the readings the host gave the pools read from rows
+        // of a list. A basis is the facts whose reading of another value releases the guard, and a
+        // list is no fact of the projection: a trigger such a pool makes true captures no basis,
+        // so no guard holds its pair while the list may have changed.
+        let given = GivenPoolReadings::default();
+        let pool_values = evaluation_pool_values(&pool_specs, resources, &effective, &given, time);
         let timeline_events: BTreeMap<&str, &TimelineEvent> = bundle
             .timeline
             .events
@@ -417,7 +423,7 @@ pub(super) struct Decision<'a> {
     pub(super) scope: &'a ScopeSelector,
     pub(super) facts: &'a EvaluationFacts,
     pub(super) pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
-    pub(super) pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
+    pub(super) pool_values: &'a PoolValues<'a>,
     pub(super) time: EvaluationTime,
     pub(super) timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
 }

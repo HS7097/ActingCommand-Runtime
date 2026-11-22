@@ -118,8 +118,11 @@ pool read from rows of a list"), requires `pool_list_rows`, alike: the composer 
 writes one while `requires` does not name it, `schedule_invalid` at the first such pool's
 `observation` in file order (for example `/pools/0/observation`). The observation passes through
 as written (it names no id and no scope; the composer fills the pool's), and the catalog compiler
-checks it, mapped back to the pool. **No Runtime of 0.12.78 names `pool_list_rows`** (#455 P2 adds
-it to `config.subsystems`): such a Runtime, and check-config, refuse a file that lists it with
+checks it, mapped back to the pool. A Runtime names `pool_list_rows` in `config.subsystems`,
+always on, from 0.12.79 (#455 P2, register §1.505): its workbench and check-config compose such a
+file, and the host computes the pool's reading from the instance's list before each evaluation
+([scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"). **No Runtime of
+0.12.78 names it**: such a Runtime, and its check-config, refuse a file that lists it with
 `schedule_requires_missing` at that entry, and the workbench keeps the game's last good rules
 ("The scheduler workbench"). The resource tools check no `requires`: `actinglab standard-pack
 check`, `compose` and `adopt` accept and carry the member. `standard-pack check` does not check

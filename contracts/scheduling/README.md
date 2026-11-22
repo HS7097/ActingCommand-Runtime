@@ -2375,25 +2375,51 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
 
 - **What it means.** The pool's inventory is `Σ f_j × v_j`, `v_j` the integer the column V holds
   in the row of the list reading L (in the pool's own scope, an instance) whose column K holds
-  `k_j`. L is read with at least the confidence C, as a `fact` observation reads its key. The host
-  computes that number before each evaluation and hands it to the evaluation as the pool's value;
-  the list itself does not enter the projection. **No host computes it in 0.12.78** (#455 P2
-  does, with what a missing list, a stale one, a key without a row and a sum over 2^53 − 1 give).
-- **Until then the pool has no reading: unknown, never 0.** A caller's snapshot of the pool is
-  not read (the fact projection drops it, as every `ledger_fact` pool's), and the list in the input
-  is not read either. Every reader meets the pool as a `ledger_fact` pool whose fact is missing,
-  under the list's key L with `fact_missing`: a `resource_projection` on it is Unknown with that
-  detection suggestion (`trigger_unknown` or `feedback_stop_unknown`, and the fact refresh's demand
-  for L, which no reader marks); a judged task that consumes it, when it regenerates, is
-  `benefit_unknown` `reading_unknown` (`pool_id`, `fact_key` L, `unknown_reason` `fact_missing`);
-  when it writes its lines, its judged candidates are held with `pool_line_held`
-  `capped_cap_unknown` (`fact_key` L, `fact_missing`); a reserve on it is case 1 of "Task
-  Reserves"; the forward projection leaves it out as a pool without a snapshot. A resource target
-  on it is refused `resource_not_observable`, as on a pool observed by an outcome
-  ([resource-targets.md](../resource-targets.md)). A Runtime given such a pool in a configured
-  catalog (`policy.catalog`, no composer in front of it) refuses each evaluation's input with
-  `policy_pool_binding_invalid`, its check that a `ledger_fact` pool reads a fact; a composed
-  catalog never holds one (below).
+  `k_j`. L is read with at least the confidence C, as a `fact` observation reads its key. The list
+  itself enters neither the projection nor the evaluation's `facts`.
+- **Who computes it, and when** (#455 P2, since 0.12.79, register §1.505; the coordinator's
+  rulings of 11-22, not the owner's words). The host, before each evaluation, under the fact write
+  gate it projects the fact pools under: it reads the instance's list fact L at the evaluation's
+  ledger position and computes the sum with one pure function. The number goes where a fact pool's
+  projected reading goes, the pool's snapshot in the evaluation's resources (its value the sum, its
+  observation the list's), so it enters the snapshot's identity and each instance's view identity
+  by the path a fact pool's reading takes; one moment at one ledger position gives one identity,
+  and a catalog without such a pool gives the bytes and identities it gave before. Beside the
+  left-out facts the evaluator is given, in memory only, each such pool's reading: the list's key,
+  its observation time and its expiry, or why there is none. The evaluator reads no list. A
+  forward projection starts from the same reading and carries it across its horizon as it carries
+  a fact reading.
+- **A key the list does not hold counts 0.** A list is written whole or not at all, so a key a
+  list read whole does not hold is not on the screen it was read from. (The cost: a name the
+  reading took for another valid key reads a held item as 0; a producer then runs once too often,
+  which its target caps and the next reading corrects, and a consumer is held by its reserve.)
+- **Unknown, never 0**, each a fact reading's reason under the list's key L: no list,
+  `fact_missing`; a list past its expiry, `fact_expired` (the evaluation judges it by the expiry
+  given with the reading); the list's confidence below C, `fact_low_confidence`; a named row's value
+  that is no non-negative integer, or a sum beyond 2^53 − 1, `type_mismatch` (and, as for a fact
+  reading, a sum a constant capacity cannot hold). A timeline reset that invalidates L in the pool's
+  scope at or after the list's observation leaves the pool without a reading (`fact_missing`), and
+  one still to come bounds its expiry, as for a fact. Freshness is the list's: the consumption a
+  reading does not show yet is that of every task dispatched since the list's observation.
+- **Every reader takes it**: a `resource_projection` on the pool; the net benefit's cost term of a
+  regenerating pool (`benefit_unknown` `reading_unknown` with L and the reason when unknown); the
+  pool's lines and the capped spending order (`pool_line_held` `capped_cap_unknown` with L and the
+  reason when unknown; `capped_spend` shows the sum); the reserve gate (case 1 when unknown); the
+  urgency and the tie-break; the forward projection; a resource target's check, gap, receipt and
+  views (the pool is observable under L; `awaiting_observation` with the reason when unknown); a
+  goal entry's `current`; the suggestion of an unknown reason (L with its reason). The no-progress
+  guard captures no basis from such a pool: its basis is facts, and a list is none.
+- **No refresh is asked for it.** The fact refresh asks the instance's recognition maintenance
+  package for the keys its marks write, and no mark may name a key under `inventory.list.`; so L is
+  left out for the pool's instance with the reading, and an unknown reading raises no refresh demand
+  (no `fact_refresh_*` reason). The package that reads the list is scheduled by its own rule;
+  refresh on demand is a later slice.
+- **Wakes.** The reading's expiry wakes the evaluation a millisecond after it, as a fact reading's
+  does; a list's publication wakes it as every fact publication does.
+- **In 0.12.78** (P1) no host computed the reading: every reader met the pool as a `ledger_fact`
+  pool whose fact is missing, under L with `fact_missing`, a resource target on it was refused
+  `resource_not_observable`, and a configured catalog holding one made each evaluation's input
+  `policy_pool_binding_invalid`. From 0.12.79 a configured catalog holding one is accepted.
 - **Refusals**, each at its pointer, with the compile's codes ([v2/README.md](v2/README.md)): in
   a V1 document `unknown_field` at `observation/kind`; beside `static_snapshot`, which would take
   the caller's fixed value and never the rows, `limit_exceeded` at the pool, as a `ledger_fact`
@@ -2411,10 +2437,10 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
 - **Capability.** The subsystem is `pool_list_rows`. A `schedule.json` whose pool writes the kind
   must list it in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the
   composer refuses the file without it (`schedule_invalid` at the first such pool's
-  `observation`). **No Runtime of 0.12.78 names the subsystem** (#455 P2 adds it to
-  `config.subsystems`), so every Runtime of this version refuses such a file
-  (`schedule_requires_missing` at that `requires` entry) and keeps the game's last good rules. A
-  Runtime of 0.12.77 refuses it there too; given a catalog with the kind, its reader refuses it
+  `observation`). A Runtime names it, always on, from 0.12.79 (#455 P2, `config.subsystems`), and
+  accepts such a file. No Runtime of 0.12.78 names it, so a Runtime of that version refuses such a
+  file (`schedule_requires_missing` at that `requires` entry) and keeps the game's last good rules.
+  A Runtime of 0.12.77 refuses it there too; given a catalog with the kind, its reader refuses it
   (`type_mismatch`: an unknown `kind`).
 - **Identity.** A pool without the kind serializes, hashes and decides exactly as before; a
   catalog without it compiles byte for byte as before.
@@ -2503,8 +2529,8 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   SCHED-C1c (since 0.12.53): `trigger_line` likewise with its own always-on subsystem
   `pool_trigger_line`, which a `schedule.json` whose pool writes it lists in `requires` (a Runtime
   that names `pool_lines` alone does not read it). #455 P1 (since 0.12.78): a pool whose
-  `observation` is `list_rows` likewise lists `pool_list_rows`, which no Runtime of 0.12.78 names
-  ("A pool read from rows of a list").
+  `observation` is `list_rows` likewise lists `pool_list_rows`, which a Runtime names from 0.12.79
+  (#455 P2) and no Runtime of 0.12.78 names ("A pool read from rows of a list").
 - **Identity.** A pool without the members serializes, and hashes, exactly as before.
 - For example, a pool whose cap is read, its stop line 40 below the cap and its hard line 76 below
   it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
@@ -3322,8 +3348,8 @@ long list must not stop the scheduler for every instance.
   refused. **The one exception** (#455 P1, since 0.12.78, register §1.504): a pool's observation
   of the kind `list_rows` names a key under the prefix, and only under it ("A pool read from rows
   of a list"). The list itself still does not enter the projection: the host hands the evaluation
-  the number it computes from the list's rows (#455 P2; in 0.12.78 no host computes it, and such a
-  pool has no reading).
+  the number it computes from the list's rows (#455 P2, since 0.12.79; in 0.12.78 no host computed
+  it, and such a pool had no reading).
 - **Another long record list stays one instance's.** A record list of more than 256 rows, the
   policy's own bound, is left out for the instances its scope applies to. The host records the
   warning `policy_fact_rows_exceeded` (since 0.12.55) once for each such record after a start,

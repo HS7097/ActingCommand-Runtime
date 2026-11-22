@@ -1521,3 +1521,22 @@ tests = [
     "actingcommand-policy::lib::tests::gate_486_asleep::asleep2_t6_on_a_closed_instance_an_untimed_gate_decides_as_on_the_instance_awake",
 ]
 incident = ["#486", "ASLEEP-2"]
+
+# #455 P2 (0.12.79; register §1.505; brief rd-1122/brief-455-p2.md; contracts/scheduling/README.md, "A pool read from rows of a list"), the evaluator's half, on a neutral V2 catalog of one instance whose pool is read from rows of a list, the readings given as the host gives them (beside the left-out facts), with no clock read: the reading's number is the pool's snapshot where a fact pool's goes (a caller's dropped; none for an unknown reading, a sum above a constant capacity or no reading), and catalog-a projects its golden bytes without readings (t1); a resource_projection reads it, and an unknown one is trigger_unknown with the list's key and its reason as the suggestion and no fact refresh demand, which without the given reading is asked (t2); the list's expiry wakes the evaluation a millisecond after it, then fact_expired (t3); a reset that invalidates the list's key after its observation makes it fact_missing, one before it does not (t4); the cost term (benefit known on a reading; benefit_unknown reading_unknown with the list's key and fact_low_confidence or type_mismatch) (t5); the lines (would_cross_hard_line with the reading) and capped_cap_unknown with the list's key and its reason (t6); the reserve gate holds on an unknown reading without an amount (t7); the consumption of a task dispatched after the list's observation is counted, one before it not (t8); the forward projection starts from the reading, runs the task once and names fact_expired of the list's key, and without the reading runs nothing and names fact_missing (t9); a resource target on the pool is accepted and its condition is the reading, low_confidence or missing (t10); the evaluation's target is applied on the reading and pending low_confidence (t11); the targetable view and the stored policy's condition show the reading (t12)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t1_the_given_number_goes_where_a_fact_pools_projected_reading_goes",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t2_a_projection_reads_the_reading_and_an_unknown_one_suggests_the_list_without_a_refresh",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t3_the_lists_expiry_wakes_the_evaluation_and_then_reads_fact_expired",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t4_a_reset_that_invalidates_the_list_invalidates_the_reading",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t5_the_cost_term_reads_the_reading_and_names_the_list_when_unknown",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t6_the_lines_read_the_reading_and_capped_cap_unknown_names_the_list",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t7_the_reserve_gate_reads_the_reading_and_holds_on_an_unknown_one",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t8_the_consumption_since_the_lists_observation_is_counted",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t9_the_forward_projection_starts_from_the_reading_and_carries_it",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t10_a_target_on_the_pool_is_checked_and_its_condition_is_the_reading",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t11_the_evaluations_target_is_applied_on_the_reading_and_pending_without_it",
+    "actingcommand-policy::lib::tests::gate_455_p2::p2_t12_the_views_show_the_reading",
+]
+incident = ["#455 P2"]

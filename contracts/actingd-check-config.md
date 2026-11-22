@@ -378,6 +378,13 @@ The members of `report`:
       lines", "The trigger line"); a `schedule.json` whose pool writes it
       requires it beside `pool_lines`, so it is composed only by a Runtime that
       names this row.
+    - `pool_list_rows` (#455 P2, since 0.12.79, register §1.505): always on
+      (`config_subsystem_always_on`). The Runtime gives a pool whose
+      `observation` is of the kind `list_rows` its reading, computed from its
+      instance's list before each evaluation
+      ([scheduling/README.md](scheduling/README.md), "A pool read from rows of
+      a list"); a `schedule.json` whose pool writes the kind requires it, so it
+      is composed only by a Runtime that names this row.
     - `consumption_fact` (#428 SCHED-C1f1, since 0.12.54, register §1.303):
       always on (`config_subsystem_always_on`). The Runtime reads a `consumes`
       entry's `amount` written as a fact with a fallback, one run's amount read

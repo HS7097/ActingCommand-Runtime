@@ -4593,6 +4593,7 @@ impl PolicyHost {
             &active.compiled,
             facts,
             resources,
+            left_out.pool_readings(),
             &evaluation,
             &pending_dispatch_intents,
             &in_flight,
@@ -4704,7 +4705,14 @@ impl PolicyHost {
         let pool_steps = if idle_sleepers.is_empty() {
             BTreeSet::new()
         } else {
-            actingcommand_policy::pool_projection_steps(&active.compiled, facts, resources, time)?
+            // #455 P2 (register §1.505): with the readings the evaluation was given.
+            actingcommand_policy::pool_projection_steps(
+                &active.compiled,
+                facts,
+                resources,
+                left_out.pool_readings(),
+                time,
+            )?
         };
         self.explanation.record_stopping(
             &evaluation,
