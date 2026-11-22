@@ -808,9 +808,10 @@ fn sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_ran
     // Workflow #463 SEL-GRID G2 (register §1.491) raises the build's range to 21, the lines of a
     // shared read's name boxes, Workflow #428 S168-LK (register §1.500) to 22, a linear step's
     // list reading, Workflow #455 G-SLx (register §1.501) to 23, a pack's variables beside an
-    // irreversible capability, and Workflow #477 CV-1 (register §1.507) to 24, a bundle that
-    // carries a version 2 package declaration; 20 stays within it.
-    assert_eq!(own, [3, SHARED_READ_REVISION + 4]);
+    // irreversible capability, Workflow #477 CV-1 (register §1.507) to 24, a bundle that carries
+    // a version 2 package declaration, and Workflow #477 LR-1 (register §1.513) to 25, a linear
+    // press step's count; 20 stays within it.
+    assert_eq!(own, [3, SHARED_READ_REVISION + 5]);
     assert!(package_edge_holds(own, needs));
     assert!(!package_edge_holds([3, SHARED_READ_REVISION - 1], needs));
     assert!(package_edge_holds(own, [3, SHARED_READ_REVISION - 1]));

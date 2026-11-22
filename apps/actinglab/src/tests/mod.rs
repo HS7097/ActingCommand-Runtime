@@ -307,6 +307,10 @@ mod gate_455_gslx;
 // a version 1 file as 16, and an installer of the earlier range refuses the former at its edge.
 #[path = "gate_477_cv1.rs"]
 mod gate_477_cv1;
+// Workflow #477 LR-1: the revision table counts a `linear_steps` press step's count as `package`
+// 25, and nothing else so.
+#[path = "gate_477_lr1.rs"]
+mod gate_477_lr1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

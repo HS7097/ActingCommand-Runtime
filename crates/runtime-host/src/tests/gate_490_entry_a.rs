@@ -648,6 +648,16 @@ fn entry_a_t2_a_threshold_of_one_pauses_a_step_failure_and_never_a_failure_at_th
 /// there: its intent.
 fn admit_at(host: &RuntimeHost, clock: &ManualRuntimeClock, at: u64, seed: u64) -> DispatchIntent {
     advance_manual_clock_to(clock, at);
+    // A claim on the policy instance's key (a recovery's, released on its own thread) may still
+    // be on its way out here: wait until nothing holds the key, so the admission below is not
+    // refused `dispatch_instance_contended` by it (seen once on a slow CI runner, 2026-11-22, in
+    // `entry_m3_b`). Every caller expects a grant; a claim that stays fails this wait loudly.
+    wait_until("nothing holds the policy instance's key", || {
+        host.instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("instance claims")
+            .0
+            .is_none()
+    });
     admit(host, at, seed, false).0
 }
 
