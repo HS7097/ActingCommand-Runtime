@@ -1069,7 +1069,11 @@ impl DeclarationReader {
                     (PoolValueSource::LedgerFact { .. }, ObservationRef::Fact { fact_key }) => {
                         Some((index, &pool.scope, fact_key))
                     }
-                    _ => None,
+                    // #455 P1 (register §1.504): a pool read from rows of a list publishes no fact
+                    // of its own key; the list reading that writes its rows is not this check's.
+                    (PoolValueSource::StaticSnapshot, _)
+                    | (_, ObservationRef::Outcome { .. })
+                    | (_, ObservationRef::ListRows { .. }) => None,
                 },
             )
             .collect::<Vec<_>>();

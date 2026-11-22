@@ -2375,16 +2375,33 @@ fn validate_pools(
                 descriptor,
             ));
         }
+        // #455 P1 (register §1.504): a `list_rows` observation is read as a ledger pool reads its
+        // fact, so it stands beside `ledger_fact` as a `fact` observation does.
         if let crate::PoolValueSource::LedgerFact {
             minimum_confidence_milli,
         } = pool.value_source
             && (!(1..=1_000).contains(&minimum_confidence_milli)
-                || !matches!(pool.observation, ObservationRef::Fact { .. }))
+                || !matches!(
+                    pool.observation,
+                    ObservationRef::Fact { .. } | ObservationRef::ListRows { .. }
+                ))
         {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 path.clone(),
                 "ledger fact pools require a fact observation and confidence in 1..=1000",
+                descriptor,
+            ));
+        }
+        // #455 P1: beside `static_snapshot` the pool would take the caller's fixed value and never
+        // its rows, so the pairing is refused as a ledger pool without a fact observation is.
+        if pool.value_source.is_static()
+            && matches!(pool.observation, ObservationRef::ListRows { .. })
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                path.clone(),
+                "a list_rows observation requires a ledger_fact value source",
                 descriptor,
             ));
         }
@@ -2416,6 +2433,13 @@ fn validate_pools(
                     diagnostics,
                 );
             }
+            ObservationRef::ListRows { .. } => validate_list_rows(
+                pool,
+                &format!("{path}/observation"),
+                map,
+                descriptor,
+                diagnostics,
+            ),
         }
         if let Some(delay) = &pool.group_delay
             && delay.minimum_delay_ms > delay.maximum_delay_ms
@@ -2457,6 +2481,138 @@ fn validate_pools(
             descriptor,
             diagnostics,
         );
+    }
+}
+
+/// #455 P1 (register §1.504; `contracts/scheduling/README.md`, "A pool read from rows of a list"):
+/// the pool's `list_rows` observation at `member` (`/pools/<i>/observation`). It is V2 only: a V1
+/// document is refused as `unknown_field` at `<member>/kind`, and nothing else is checked. Then,
+/// each at its pointer:
+/// - a pool whose scope is not an instance (a list reading is a fact of one instance only):
+///   `type_mismatch` at `<member>/kind`;
+/// - `fact_key` a bounded identifier and a list reading's key, under `inventory.list.`:
+///   `type_mismatch` at `<member>/fact_key`. It is the one member of a catalog that may name that
+///   prefix ([`validate_read_fact_key`] refuses it everywhere else), and it may name no other;
+/// - `key_column` and `value_column` each a row member's name as a list reading declares its
+///   columns (`^[a-z][a-z0-9_]{0,31}$`), `type_mismatch` at the column; the two the same,
+///   `type_mismatch` at `value_column`;
+/// - 1 to [`crate::MAX_POOL_LIST_ROWS`] `rows`, `limit_exceeded` at `<member>/rows`; each row's
+///   `key` a text of 1 to [`MAX_TEXT_BYTES`] bytes without a control character, a fact text's
+///   bound (`type_mismatch` when empty or with one, `limit_exceeded` when longer, at
+///   `<member>/rows/<j>/key`), never the key of an earlier row (`duplicate_id` there); its
+///   `factor` within `1..=`[`crate::MAX_POOL_LIST_ROW_FACTOR`] (`limit_exceeded` at
+///   `<member>/rows/<j>/factor`).
+///
+/// That the sum stays within the canonical integers is checked where it is computed.
+fn validate_list_rows(
+    pool: &PoolSpec,
+    member: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let ObservationRef::ListRows {
+        fact_key,
+        key_column,
+        value_column,
+        rows,
+    } = &pool.observation
+    else {
+        return;
+    };
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{member}/kind"),
+            "a list_rows observation requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !matches!(pool.scope, ScopeSelector::Instance { .. }) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            format!("{member}/kind"),
+            "a list_rows observation reads a list reading, a fact of one instance only",
+            descriptor,
+        ));
+    }
+    let key_path = format!("{member}/fact_key");
+    validate_identifier(map, &key_path, fact_key, descriptor, diagnostics);
+    if !actingcommand_contract::list_reading_fact_key_valid(fact_key) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            key_path,
+            format!("`{fact_key}` is no list reading's key under inventory.list."),
+            descriptor,
+        ));
+    }
+    for (name, column) in [("key_column", key_column), ("value_column", value_column)] {
+        if !actingcommand_contract::list_reading_column_valid(column) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::TypeMismatch,
+                format!("{member}/{name}"),
+                format!("`{column}` is no name of a list's column"),
+                descriptor,
+            ));
+        }
+    }
+    if key_column == value_column {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            format!("{member}/value_column"),
+            "a list_rows observation reads its value from another column than its key",
+            descriptor,
+        ));
+    }
+    if rows.is_empty() || rows.len() > crate::MAX_POOL_LIST_ROWS {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{member}/rows"),
+            format!(
+                "a list_rows observation names 1..={} rows",
+                crate::MAX_POOL_LIST_ROWS
+            ),
+            descriptor,
+        ));
+    }
+    let mut keys = HashSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        let row_path = format!("{member}/rows/{index}");
+        if row.key.is_empty() || row.key.chars().any(char::is_control) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::TypeMismatch,
+                format!("{row_path}/key"),
+                "a row's key is a text of at least one byte without a control character",
+                descriptor,
+            ));
+        } else if row.key.len() > MAX_TEXT_BYTES {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{row_path}/key"),
+                format!("a row's key holds at most {MAX_TEXT_BYTES} bytes"),
+                descriptor,
+            ));
+        }
+        if !keys.insert(row.key.as_str()) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::DuplicateId,
+                format!("{row_path}/key"),
+                "a list_rows observation names each row's key once",
+                descriptor,
+            ));
+        }
+        if !(1..=crate::MAX_POOL_LIST_ROW_FACTOR).contains(&row.factor) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{row_path}/factor"),
+                format!(
+                    "a row's factor must be within 1..={}",
+                    crate::MAX_POOL_LIST_ROW_FACTOR
+                ),
+                descriptor,
+            ));
+        }
     }
 }
 

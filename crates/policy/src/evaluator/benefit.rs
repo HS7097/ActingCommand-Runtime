@@ -546,13 +546,18 @@ fn judge(
         });
     }
     if let Some(first) = readings.first() {
-        let fact_key = match &first.observation {
-            ObservationRef::Fact { fact_key } => Some(fact_key.clone()),
-            ObservationRef::Outcome { .. } => None,
+        let (fact_key, unknown_reason) = match &first.observation {
+            ObservationRef::Fact { fact_key } => (
+                Some(fact_key.clone()),
+                live_pool_unknown_reason(first, fact_key, facts, context.time),
+            ),
+            ObservationRef::Outcome { .. } => (None, None),
+            // #455 P1 (register §1.504): a list pool has no reading before the host computes one
+            // (a later slice): its list's key, read as a missing fact.
+            ObservationRef::ListRows { fact_key, .. } => {
+                (Some(fact_key.clone()), Some(UnknownReason::FactMissing))
+            }
         };
-        let unknown_reason = fact_key
-            .as_deref()
-            .and_then(|key| live_pool_unknown_reason(first, key, facts, context.time));
         return Ok(Judgement::Unknown {
             gap: Gap::ReadingUnknown {
                 pool_id: first.id.clone(),
