@@ -4145,7 +4145,9 @@ impl Declaration<'_> {
     /// read by the contract crate's one reader ([`actingcommand_contract::parse_package_variables`])
     /// against the capabilities `provides` declares (already checked; none without it), and
     /// refused at the member that breaks a rule as `invalid_value`, its word
-    /// (`variables_invalid`, `variable_name_taken`, `variables_on_irreversible`) in the message.
+    /// (`variables_invalid`, `variable_name_taken`) in the message; Workflow #455 G-SLx: an
+    /// irreversible capability of `provides` refuses nothing since (`variables_on_irreversible`
+    /// until 0.12.77).
     fn variables(&self, value: &Value, provides: Option<&Value>) -> CliOutcome<()> {
         let provides: Vec<actingcommand_contract::ProvidedCapability> = match provides {
             None => Vec::new(),
@@ -6146,11 +6148,12 @@ mod tests {
 
     // Workflow #463 V1 (contracts/package-variables.md): the source parser's control gate takes
     // `variables` beside `provides`, read by the contract crate's one reader, with and without a
-    // reversible `provides`; it refuses a rule broken at the member's pointer in `control.json` as
-    // `invalid_value`, the rule's word ending its message: a member a variable does not have and a
-    // default off its step (`variables_invalid`), a name a parameter of `provides` has
-    // (`variable_name_taken`), and any variable on a package that provides an irreversible
-    // capability (`variables_on_irreversible`, at `/variables`). Names are made up.
+    // reversible `provides`, and (Workflow #455 G-SLx, register §1.501, where V1 refused it
+    // `variables_on_irreversible`) beside a `provides` that marks its capability irreversible; it
+    // refuses a rule broken at the member's pointer in `control.json` as `invalid_value`, the
+    // rule's word ending its message: a member a variable does not have and a default off its step
+    // (`variables_invalid`), and a name a parameter of `provides` has (`variable_name_taken`),
+    // whether that capability is irreversible or not. Names are made up.
     #[test]
     fn v1_source_parser_takes_variables_and_refuses_each_at_its_pointer() {
         let control = |provides: Option<Value>, variables: Value| {
@@ -6181,6 +6184,7 @@ mod tests {
         for accepted in [
             control(None, variables.clone()),
             control(Some(provides(false)), variables.clone()),
+            control(Some(provides(true)), variables.clone()),
         ] {
             validate_control_declarations(Path::new("control.json"), &accepted)
                 .unwrap_or_else(|error| panic!("{accepted}: {}", error.message));
@@ -6207,15 +6211,15 @@ mod tests {
             ),
             (
                 "a name a parameter has",
-                control(Some(provides(false)), parameter),
+                control(Some(provides(false)), parameter.clone()),
                 "/variables/1/name",
                 "variable_name_taken",
             ),
             (
-                "a package that provides an irreversible capability",
-                control(Some(provides(true)), variables.clone()),
-                "/variables",
-                "variables_on_irreversible",
+                "a name a parameter of an irreversible capability has",
+                control(Some(provides(true)), parameter),
+                "/variables/1/name",
+                "variable_name_taken",
             ),
         ] {
             let error = validate_control_declarations(Path::new("control.json"), &declaration)

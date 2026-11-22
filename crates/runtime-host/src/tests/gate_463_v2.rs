@@ -616,28 +616,14 @@ fn v2_host_a_dispatch_hands_its_run_the_set_value_and_a_start_reads_it_again() {
 // with the contract crate's reader. In each case the dispatch after a value is set through the
 // Lab (`item_a`) hands its run the default `item_b`, its record names who set the value and the
 // word, the run's snapshots hold `item_b`, and one `goal_value_not_applied` says the word: a
-// package no rule runs marks irreversible a capability the dispatched package provides unmarked
-// (`irreversible_by_root`); it declares `pick` differently (`declaration_conflict`); an entry of
-// the accepted `goals.json` uses the name `pick` for a heading (`goal_name_conflict`); its control
-// declaration cannot be read (item 3: `package_unreadable`, not `irreversible_by_root`).
+// package no rule runs declares `pick` differently (`declaration_conflict`); an entry of the
+// accepted `goals.json` uses the name `pick` for a heading (`goal_name_conflict`). Workflow #455
+// G-SLx (register §1.501, adapted): the two cases of a package no rule runs that marks
+// irreversible a capability the dispatched package provides unmarked (`irreversible_by_root`) and
+// of one whose control declaration cannot be read (`package_unreadable`) let the variable apply
+// now: `gslx_host_a_variable_of_an_irreversible_package_reaches_its_run`.
 #[test]
 fn v2_fix1_the_whole_root_keeps_a_variable_from_applying() {
-    fn held_marks_irreversible(packs: &Path) {
-        // Fix round 2 (item 9): an irreversible capability declares its parameters, or the
-        // package reader refuses the whole `provides` (`validate_provides`); without them the
-        // held package could not be read and the case read `package_unreadable`.
-        place_with_held(
-            packs,
-            Some(
-                json!([{"capability": "cap_x", "irreversible": true, "parameters": [
-                    {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
-                ]}]),
-            ),
-        );
-        patch_control(&packs.join(GAME_A).join(TASK), |control| {
-            control["provides"] = json!([{"capability": "cap_x"}]);
-        });
-    }
     fn held_declares_otherwise(packs: &Path) {
         place_with_held(packs, None);
         patch_control(&packs.join(GAME_A).join(HELD), |control| {
@@ -655,18 +641,6 @@ fn v2_fix1_the_whole_root_keeps_a_variable_from_applying() {
                                  "title": {"en": "Pick"}}]}),
         );
     }
-    fn held_unreadable(packs: &Path) {
-        place_with_held(packs, None);
-        write_json(
-            &packs.join(GAME_A).join(HELD).join("control.json"),
-            &json!({"schema_version": "Lab-1y.control.v2"}),
-        );
-    }
-    kept_from_applying(
-        "a package no rule runs marks the capability irreversible",
-        held_marks_irreversible,
-        VariableProblem::IrreversibleByRoot,
-    );
     kept_from_applying(
         "a package no rule runs declares the name otherwise",
         held_declares_otherwise,
@@ -677,11 +651,87 @@ fn v2_fix1_the_whole_root_keeps_a_variable_from_applying() {
         goals_take_the_name,
         VariableProblem::GoalNameConflict,
     );
-    kept_from_applying(
-        "a package of the root cannot be read",
-        held_unreadable,
-        VariableProblem::PackageUnreadable,
+}
+
+/// An irreversible capability with the parameter the package reader requires of one
+/// (`validate_provides`).
+fn irreversible_capability() -> Value {
+    json!([{"capability": "cap_x", "irreversible": true, "parameters": [
+        {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_1"}
+    ]}])
+}
+
+// Workflow #455 G-SLx (0.12.78; register §1.501; the brief's tests 1 and 2, rulings 1 and 3): the
+// workbench's judgement keeps no variable of a package that can do something irreversible from
+// applying, and the run reads it as any package's. In each case the dispatch without a set value
+// hands its run the default `item_b`; the dispatch after `item_a` is set through the Lab hands it
+// `item_a` (source `set`, who set it and when), the run's snapshots hold `item_a`, and no
+// `goal_value_not_applied` is written: the dispatched package marks the capability irreversible in
+// its own `provides` (every kernel before 0.12.78 refused it at admission,
+// `variables_on_irreversible`); a package no rule runs marks irreversible a capability the
+// dispatched package provides unmarked (until 0.12.77 `irreversible_by_root`); and a package no
+// rule runs cannot be read (until 0.12.77 `package_unreadable`, the safe side of the rule).
+#[test]
+fn gslx_host_a_variable_of_an_irreversible_package_reaches_its_run() {
+    fn marks_irreversible_itself(packs: &Path) {
+        place_game_root(packs);
+        patch_control(&packs.join(GAME_A).join(TASK), |control| {
+            control["provides"] = irreversible_capability();
+        });
+    }
+    fn held_marks_irreversible(packs: &Path) {
+        place_with_held(packs, Some(irreversible_capability()));
+        patch_control(&packs.join(GAME_A).join(TASK), |control| {
+            control["provides"] = json!([{"capability": "cap_x"}]);
+        });
+    }
+    fn held_unreadable(packs: &Path) {
+        place_with_held(packs, None);
+        write_json(
+            &packs.join(GAME_A).join(HELD).join("control.json"),
+            &json!({"schema_version": "Lab-1y.control.v2"}),
+        );
+    }
+    applies_as_set(
+        "the dispatched package marks the capability irreversible",
+        marks_irreversible_itself,
     );
+    applies_as_set(
+        "a package no rule runs marks the capability irreversible",
+        held_marks_irreversible,
+    );
+    applies_as_set("a package of the root cannot be read", held_unreadable);
+}
+
+// The case `case` of [`gslx_host_a_variable_of_an_irreversible_package_reaches_its_run`]: on the
+// root `place` places, `pick` applies.
+fn applies_as_set(case: &str, place: impl FnOnce(&Path)) {
+    let scene = Scene::with(place);
+    let (chain, context) = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "default",
+                "value_json": "\"item_b\""}]),
+        "{case}: nothing set"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_b"), "{case}: nothing set");
+    let set_at = next_eligible(&context);
+    scene.set_pick(json!("item_a"), set_at);
+    let (chain, context) = scene.evaluate_and_run(set_at, 8);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "set",
+                "value_json": "\"item_a\"", "set_unix_ms": set_at, "set_channel": "lab"}]),
+        "{case}"
+    );
+    assert_eq!(
+        run_values(&context),
+        [("pick".to_owned(), json!("item_a"))],
+        "{case}"
+    );
+    assert_eq!(overlaid_pick(&scene), text("item_a"), "{case}");
+    assert!(scene.failed(NOT_APPLIED).is_empty(), "{case}");
+    scene.close();
 }
 
 // The case `case` of [`v2_fix1_the_whole_root_keeps_a_variable_from_applying`]: the root `place`

@@ -418,7 +418,9 @@ Workflow #463 SEL-2L, register §1.480, so it computes 20 for a zip whose pack h
 row 21, the lines of a shared read's name boxes, Workflow #463 SEL-GRID G2, register §1.491, so it
 computes 21 for a zip whose pack declares them; row 22, a `linear_steps` task's list reading,
 Workflow #428 S168-LK, register §1.500, so it computes 22 for a zip whose `linear_steps` pack has
-one);
+one; row 23, a pack's variables beside a capability its own `provides` marks irreversible,
+Workflow #455 G-SLx, register §1.501, so it computes 23 for a zip whose pack holds that pair and
+for no other);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -476,6 +478,7 @@ as an element of its array.
 | 20 | task | `shared_ocr` of an element of `candidate_layouts` whose `kind` is `repeated_anchor`, in a pack of any execution mode (a Runtime before 20 refuses it in its declaration gate, `UnknownField`, in every pack): a member a row finds only beside its layout's `kind`, so read on its own (`anchored_shared_read`); a `fixed_slots` layout's `shared_ocr` keeps its revision (row 6 for its `preprocess`) | SEL-2L, §1.480; [selection-graph.md](selection-graph.md), "Shared OCR read" |
 | 21 | task | `lines` under `shared_ocr`, of a layout of either kind, in a pack of any execution mode (a Runtime before 21 refuses it in its declaration gate, `UnknownField` at `…/shared_ocr/lines`, in every pack); a shared read without it keeps its revision | SEL-GRID G2, §1.491; [selection-graph.md](selection-graph.md), "The lines of a name box" |
 | 22 | task | `read_list` under `operations` when it holds an object (a list reading), in a pack whose `control.json` `execution_mode` is `linear_steps` only (a page-graph list reading keeps row 8's revision): where the kernel's admission finds it (`TaskOperation.read_list`; `TaskProgram::validate_linear`, `LinearEffect::ReadList`), as rows 13 and 17 find a select step and a key step; a Runtime before 22 refuses it at admission, `contained_task_linear_invalid`, `reason=read_list` | S168-LK, §1.500; [linear-steps.md](linear-steps.md), "List reading steps" |
+| 23 | control | `variables` of the document, whatever it holds, beside an element of `provides` whose `irreversible` holds `true` (a Runtime before 23 refuses such a package at admission, `variables_on_irreversible`): two members of one file, so read on its own (`variables_beside_irreversible`); `variables` beside a capability marked `false` or not marked keeps row 14's revision, an irreversible capability without `variables` row 4's | G-SLx, §1.501; [package-variables.md](package-variables.md), "A package that can do something irreversible" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

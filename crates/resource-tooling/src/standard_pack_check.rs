@@ -91,12 +91,12 @@
 //!
 //! Workflow #463 V1 (register §1.378; contracts/package-variables.md): before the goal
 //! declaration, the root check of the variables the packages' control declarations declare: each
-//! problem (`variable_conflict`, `variable_out_of_limits`, `variable_cap_range` and, its fix round
-//! 1, `variable_irreversible_by_root`) is one `standard_pack_root_invalid` warning naming the
-//! package's `control.json`, and the answer's `variable_provenance` lists each variable that
-//! applies by its default's origin (and, fix round 1, under `not_applying` each variable of a
-//! package that counts as irreversible by the whole root). A root whose packages declare no
-//! variable answers as before.
+//! problem (`variable_conflict`, `variable_out_of_limits`, `variable_cap_range`) is one
+//! `standard_pack_root_invalid` warning naming the package's `control.json`, and the answer's
+//! `variable_provenance` lists each variable that applies by its default's origin. A root whose
+//! packages declare no variable answers as before. Workflow #455 G-SLx (register §1.501): until
+//! 0.12.77 (since V1 fix round 1) also `variable_irreversible_by_root`, and under `not_applying`
+//! each variable of a package that counted as irreversible by the whole root; neither since.
 //!
 //! Workflow #477 PC-1 (register §1.438; contracts/pack-catalog.md): last, the game root's package
 //! declaration `pack-catalog.json`, read by the contract crate's reader against the registry and

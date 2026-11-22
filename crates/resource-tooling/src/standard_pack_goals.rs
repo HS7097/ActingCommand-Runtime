@@ -6,11 +6,11 @@
 //! (`parse_standard_pack_goals`), and hold an accepted file's references to the game root
 //! (`check_standard_pack_goal_references`): the pools and rules of `schedule.json`, which the
 //! composition has accepted, each rule with the package it runs; and every package of
-//! `bundle.json` with the capabilities its control declaration provides and their `irreversible`
-//! marks, read by the Runtime's metadata reader (G-R1 fix round 1: the whole root, so that a
-//! capability any package marks irreversible makes every package that provides it irreversible),
-//! and (Workflow #463 V1) the variables it declares, which a `variable` entry places. Nothing here
-//! reads or writes a value.
+//! `bundle.json`, read by the Runtime's metadata reader, with (Workflow #463 V1) the variables it
+//! declares, which a `variable` entry places. Workflow #455 G-SLx (register §1.501): what a
+//! package provides and its `irreversible` marks are no reference of the goal check any more;
+//! until 0.12.77 an entry that governed, reached or followed a package that can do something
+//! irreversible was `goal_governs_irreversible`. Nothing here reads or writes a value.
 //!
 //! `standard-pack check` reports each problem as a `standard_pack_root_invalid` warning and never
 //! fails the root for it ([`goal_warnings`]); `package bundle` refuses a refused file as it
@@ -20,9 +20,9 @@
 //! runs the root check of the variables the root's packages declare ([`variable_report`]): each
 //! problem is a `standard_pack_root_invalid` warning naming the package's `control.json`, the root
 //! is checked as before, and the answer lists each variable that applies by its default's origin.
-//! Its fix round 1: the packages are judged by the rule of irreversibility over the whole root, the
-//! one the goal check uses, and a variable of a package that counts as irreversible is listed as
-//! not applying.
+//! Its fix round 1 judged the packages by the rule of irreversibility over the whole root and
+//! listed a variable of a package that counted as irreversible as not applying, until Workflow
+//! #455 G-SLx (register §1.501), since which such a variable applies as any other.
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
@@ -35,7 +35,6 @@ use actingcommand_contract::{
     goal_variables, judge_root_variables, parse_standard_pack_goals, parse_standard_pack_schedule,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
-use actingcommand_policy::standard_pack_rule_followers;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -61,28 +60,17 @@ pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-/// What every package of a game root declares, as the Runtime's metadata reader reads it, in
-/// registry order.
-struct PackageDeclarations {
-    /// Each package with what the rule of irreversibility judges of it (G-R1 fix round 1;
-    /// Workflow #455 G-R2s fix round 3: and every capability its remedies list).
-    capabilities: BTreeMap<String, DeclaredCapabilities>,
-    /// Workflow #463 V1: each package with the variables it declares and the fact keys its
-    /// designated effects read their caps from.
-    variables: Vec<RootPackageVariables>,
-}
-
 /// Reads every package of `root` (`pack_directory` is where a registry entry's directory lies)
-/// with the Runtime's metadata reader; a package it refuses is `package_invalid` naming its
-/// directory.
-fn package_declarations(
+/// with the Runtime's metadata reader, in registry order: each package with (Workflow #463 V1)
+/// the variables it declares and the fact keys its designated effects read their caps from; a
+/// package it refuses is `package_invalid` naming its directory. Workflow #455 G-SLx (register
+/// §1.501): until 0.12.77 also what the rule of irreversibility judged of each package, which no
+/// reader here needs since.
+fn package_variables(
     root: &StandardPackRoot,
     pack_directory: &dyn Fn(&str) -> PathBuf,
-) -> LabResult<PackageDeclarations> {
-    let mut declarations = PackageDeclarations {
-        capabilities: BTreeMap::new(),
-        variables: Vec::new(),
-    };
+) -> LabResult<Vec<RootPackageVariables>> {
+    let mut variables = Vec::new();
     for package_id in root.registry.package_ids() {
         let entry = root.registry.get(package_id).ok_or_else(|| {
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
@@ -94,26 +82,23 @@ fn package_declarations(
             Instant::now() + PACK_DEADLINE,
         )
         .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
-        declarations
-            .capabilities
-            .insert(package_id.to_owned(), read.declared_capabilities());
-        declarations.variables.push(RootPackageVariables {
+        variables.push(RootPackageVariables {
             package_id: package_id.to_owned(),
             variables: read.variables,
             cap_fact_keys: read.cap_fact_keys,
         });
     }
-    Ok(declarations)
+    Ok(variables)
 }
 
 /// The problems of the goal declaration `goals` (the bytes of `goals.json`) of the game root
 /// `root` of `game`, in file order: the reader's, or, for a file the reader accepts, its
 /// references'. `schedule` is `schedule.json`'s bytes and path when the root holds one (the
-/// composition has accepted it); each of its rules is held with the rules that follow it
-/// (`standard_pack_rule_followers`, G-R1 fix round 2, Workflow #455 G-R2s fix round 1);
-/// `pack_directory` is where a registry entry's directory lies. Workflow #463 V1: no entry takes
-/// a table any more, so no table is read. Empty for a file that keeps every rule. A package that
-/// cannot be read is the caller's error, not a problem of the file.
+/// composition has accepted it); each of its rules is held with the package it runs (Workflow #455
+/// G-SLx, register §1.501: no longer with the rules that follow it); `pack_directory` is where a
+/// registry entry's directory lies. Workflow #463 V1: no entry takes a table any more, so no
+/// table is read. Empty for a file that keeps every rule. A package that cannot be read is the
+/// caller's error, not a problem of the file.
 pub(crate) fn goal_issues(
     game: &str,
     root: &StandardPackRoot,
@@ -125,14 +110,13 @@ pub(crate) fn goal_issues(
         Ok(declared) => declared,
         Err(issues) => return Ok(issues),
     };
-    // G-R1 fix round 1: what every package of the root provides, each capability with its
-    // `irreversible` mark, in registry order as the remedy report reads them. The references
-    // judge irreversibility per capability across the whole root (contracts/remedies.md §2.3).
-    // Workflow #455 G-R2s fix round 3: and every capability its remedies list.
-    let declarations = package_declarations(root, pack_directory)?;
-    let mut references = GoalReferences::new(declarations.capabilities);
+    // G-R1 fix round 1: every package of the root, each read by the Runtime's metadata reader in
+    // registry order as the remedy report reads them (one it refuses is the check's error).
+    let variables = package_variables(root, pack_directory)?;
+    let mut references =
+        GoalReferences::new(root.registry.package_ids().map(str::to_owned).collect());
     // Workflow #463 V1: every variable a package declares, which a placement names.
-    references.variables = goal_variables(&declarations.variables);
+    references.variables = goal_variables(&variables);
     if let Some((bytes, path)) = schedule {
         let schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
@@ -145,18 +129,13 @@ pub(crate) fn goal_issues(
             );
             references.pools.insert(pool.id.clone(), valued);
         }
-        // G-R1 fix round 2: each rule's followers; Workflow #455 G-R2s fix round 1: every rule
-        // that follows it by a chain link, the lists the composer's irreversible mark reads.
-        let mut followers_of = standard_pack_rule_followers(&schedule);
         for rule in &schedule.rules {
-            // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to; fix
-            // round 2: and with the rules that follow it, whose packages it is held to as well.
+            // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to.
             references.rules.insert(
                 rule.id.clone(),
                 GoalRule {
                     package_id: rule.package_id.clone(),
                     fixed_value: rule.fixed_value_milli.is_some(),
-                    followers: followers_of.remove(rule.id.as_str()).unwrap_or_default(),
                 },
             );
         }
@@ -291,20 +270,19 @@ pub(crate) fn refuse_goals(
 /// order; and the provenance listing of the variables that apply, `None` when no package declares
 /// one. `goals` is the root's `goals.json` when it holds one: the names an accepted file uses for
 /// anything but a placement are no variable's (a refused file applies no entry, so it takes none).
-/// Fix round 1: the packages are judged by the rule of irreversibility over the whole root, from
-/// what the reader read of every package (`IrreversiblePackages::new`, the one copy the goal
-/// check holds a placement to), so a variable of a package that counts as irreversible is
-/// `variable_irreversible_by_root` and the listing marks it as not applying. Workflow #463 V2 fix
-/// round 2: through the contract crate's one judgement of a root's variables
+/// Workflow #463 V2 fix round 2: through the contract crate's one judgement of a root's variables
 /// (`judge_root_variables`), which the Runtime's scheduler workbench calls too, with the goal
-/// document absent, accepted or refused as read here.
+/// document absent, accepted or refused as read here. Workflow #455 G-SLx (register §1.501):
+/// until 0.12.77 (since V1 fix round 1) the packages were also judged by the rule of
+/// irreversibility over the whole root, and a variable of a package that counted as irreversible
+/// was `variable_irreversible_by_root` and listed as not applying; neither since.
 pub(crate) fn variable_report(
     game: &str,
     root: &StandardPackRoot,
     goals: Option<&[u8]>,
     pack_directory: &dyn Fn(&str) -> PathBuf,
 ) -> LabResult<(Vec<Outcome>, Option<VariableOrigins>)> {
-    let declarations = package_declarations(root, pack_directory)?;
+    let variables = package_variables(root, pack_directory)?;
     let read = goals.map(|bytes| parse_standard_pack_goals(bytes, game));
     // Workflow #463 V2 fix round 2: the goal document as the contract crate's one judgement
     // takes it, the Runtime's own. A `goals.json` that cannot be read never reaches here: it is
@@ -314,15 +292,7 @@ pub(crate) fn variable_report(
         Some(Ok(accepted)) => RootGoalDocument::Accepted(accepted),
         Some(Err(_)) => RootGoalDocument::Refused,
     };
-    // Every package of the root was read (one the reader refuses is the check's error).
-    let irreversible = IrreversiblePackages::new(
-        declarations
-            .capabilities
-            .into_iter()
-            .map(|(package_id, declared)| (package_id, Some(declared)))
-            .collect(),
-    );
-    let checked = judge_root_variables(&declarations.variables, document, &irreversible).checked;
+    let checked = judge_root_variables(&variables, document).checked;
     let mut warnings = Vec::with_capacity(checked.issues.len());
     for found in &checked.issues {
         let entry = root
@@ -337,8 +307,7 @@ pub(crate) fn variable_report(
         let path = pack_directory(&entry.directory).join(PACKAGE_CONTROL_FILE);
         warnings.push(root_issue_outcome(game, &path, &found.issue));
     }
-    let declares = declarations
-        .variables
+    let declares = variables
         .iter()
         .any(|package| !package.variables.is_empty());
     Ok((warnings, declares.then(|| checked.provenance())))

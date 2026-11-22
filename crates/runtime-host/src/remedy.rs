@@ -405,7 +405,6 @@ fn variable_table(
                     package_id: declarations.package_id.clone(),
                     variables: declarations.variables.clone(),
                     cap_fact_keys: declarations.cap_fact_keys.clone(),
-                    capabilities: declarations.declared_capabilities(),
                 }),
                 None if unread.contains(task.id.as_str()) => None,
                 None => return None,
