@@ -191,6 +191,9 @@ mod tests {
     // #477 CV-2 (0.12.80; register §1.508): a `schedule.json` that names `catalog_business` takes
     // its rules' business part from the root's version 2 `pack-catalog.json`.
     mod gate_477_cv2;
+    // #477 LF-1 (0.12.80; register §1.509): the turn cap a dispatch carries counts the lines of the
+    // pools its task consumes.
+    mod gate_477_lf1;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'

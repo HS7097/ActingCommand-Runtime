@@ -503,6 +503,27 @@ file and one of version 1 refused, a new entry its display only, fix round 1; `s
 refused until a later slice writes the adopted entry: [pack-catalog.md](pack-catalog.md), "Who
 writes it"), and the composer, in the tools and the Runtime alike, reads it there ("`requires`").
 
+**How many turns a sweep runs** (#477 LF-1, since 0.12.80; register §1.509). A package whose run
+repeats one turn until it has spent enough (a sweep of a regenerating pool) reads how many from
+`session.dispatch.schedule.run_cap` ([remedies.md](remedies.md), section 4, "Spend values"; as a
+`max_repeats` fact cap, [resource-declarations.md](resource-declarations.md), "Fact caps"). The
+Runtime computes it from the lines written on the pool, so a resource repository writes the
+consumer's one run's amount in its `consumes` and the lines on the pool, once: `stop_line` and
+`hard_line` (and `trigger_line`) beside the pool's `valuation`, or an instance's own lines
+([scheduling/README.md](scheduling/README.md), "Lines for one instance"). The rule needs no
+`reserves` for that and repeats no line: below the trigger line a judged consumer may spend down
+to the hard line; on the head of the pool's capped episode its turns stop once the episode is
+spent (the pool at or below its stop line and below its trigger line, the turn that crosses
+included), never below the hard line
+([scheduling/README.md](scheduling/README.md), "Capped spending order", "What the head's run is
+handed"). A rule writes `reserves` only for a floor of its own above the pool's hard line. After
+a run that was told its turns, every pool the rule consumes is unknown to the Runtime until it
+is read after that run's end ([scheduling/README.md](scheduling/README.md), "Pool lines", "At
+each evaluation"), so nothing that needs its value is dispatched from a reading the turns made
+stale. A reading the run wrote itself does not count; where the fact refresh can serve the
+pool's key one more reading run reads it, and a pool whose reading only a package's own rule
+brings waits for that rule.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's
