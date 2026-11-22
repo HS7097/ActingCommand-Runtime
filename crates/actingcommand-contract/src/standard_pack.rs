@@ -199,6 +199,20 @@ crate::outcome_vocabulary! {
         /// `standard-pack catalog --displays` reads has the id of a group of the catalog with
         /// another title (an error: the line adds a group and never renames one).
         CatalogGroupTitleDiffers => "catalog_group_title_differs",
+        /// Workflow #477 CV-1 (since 0.12.79): a business part of a version 2 `pack-catalog.json`
+        /// (or an item of the values file `standard-pack catalog --values` reads) writes a fixed
+        /// value beside a second value of the same run, which the compiler refuses beside a
+        /// rule's: the realization mark, or a production of a pool whose valuation
+        /// `schedule.json` declares or leaves pending (an error).
+        CatalogValueConflict => "catalog_value_conflict",
+        /// CV-1: a per-rule business part of a version 2 `pack-catalog.json` (or an item of the
+        /// values file) names a `rule_id` that is no rule of `schedule.json` running the entry's
+        /// package (an error of the reader; the writer leaves such a part out and warns).
+        CatalogRuleUnknown => "catalog_rule_unknown",
+        /// CV-1: an item of the values file names a business part the catalog does not write: an
+        /// entry's own part where the entry writes none, or a rule's part where the entry writes
+        /// neither it nor an own part (an error).
+        CatalogPartAbsent => "catalog_part_absent",
         /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
         /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
         /// template target's `template` is not `loading/<file>.png`.

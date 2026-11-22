@@ -1711,3 +1711,11 @@ test = "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_p1::p
 ruling = "#455 P2 (0.12.79; register §1.505; the coordinator's work order rd-1122/brief-455-p2.md, ruling 10: the Runtime names pool_list_rows and accepts a schedule.json that requires it)"
 reason = "Its requirement changed on purpose: it pinned that this build named no pool_list_rows and refused such a file with schedule_requires_missing; from P2 on the build names it, so the test asserts the opposite under a name that says so."
 covered_by = "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_p1::p2_this_runtime_names_pool_list_rows_and_composes_a_file_that_requires_it (apps.toml, row #455 P2); a Runtime that does not name the subsystem still refuses the file at /requires/0, which the policy gate p1_t4 pins."
+
+# host.toml, the row of #405 IDLE-1P (review N-1); #486 ASLEEP-3 fix round 2 renames one test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_reading"
+ruling = "#486 ASLEEP-3 (0.12.79; register §1.512; the coordinator's rulings 1 and 4 of fix rounds 1 and 2: a reading alone wakes no instance at a start, and the ordinary check of a restored instance leaves its readings out)"
+reason = "Renamed: its name said the start wakes the instance for a reading alone, which the rulings withdraw; the test now asserts that the start stops the running emulator and wakes nothing."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading, in the same host.toml row."

@@ -45,6 +45,13 @@
 //! `schema_version` and may carry groups, which the line adds (`groups_added`, with `--displays`
 //! only); a `--refresh` id an answer could not name (over 256 bytes, or with a control character)
 //! is a usage error before the root is read, its value not echoed.
+//!
+//! Workflow #477 CV-1 (register §1.507): `--schema-version 2` writes version 2 (a file of version 2
+//! keeps it without the flag), converting a file of version 1, each entry's business part then
+//! its rules' (`converted`); `--values <file>` (an absolute path) replaces the named parts' value
+//! and marks, refused as the display file is (`standard_pack_catalog_display_refused`, naming the
+//! values file), and a usage error on a line that writes version 1. The answer gains `converted`
+//! and `values_written`, each only with its option.
 
 use crate::standard_pack_check::{catalog_refused, read_bounded, root_invalid};
 use crate::{
@@ -56,10 +63,10 @@ use actingcommand_contract::outcome::{
     Detail, IoOp, KeyKind, NAME_MAX_BYTES, Outcome, key_text_fits,
 };
 use actingcommand_contract::{
-    CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits, CatalogMergeRefusal, LabError,
-    LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
-    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem,
-    StandardPackRegistry, StandardPackRootIssue, catalog_display_outcome,
+    CatalogDisplayFile, CatalogDisplayFileIssue, CatalogEdits, CatalogMergeRefusal,
+    CatalogValuesFile, LabError, LabErrorClass, LabResult, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    StandardPackProblem, StandardPackRegistry, StandardPackRootIssue, catalog_display_outcome,
     merge_standard_pack_catalog, parse_standard_pack_schedule, retired_ui_outcome,
 };
 use serde_json::{Value, json};
@@ -130,11 +137,22 @@ pub fn write_standard_pack_catalog(
     let displays = request
         .displays
         .as_deref()
-        .map(read_display_file)
+        .map(|path| read_input_file(DISPLAYS_FLAG, path))
+        .transpose()?;
+    // Workflow #477 CV-1: the values file, read whole as the display file is.
+    let values = request
+        .values
+        .as_deref()
+        .map(|path| read_input_file(VALUES_FLAG, path))
         .transpose()?;
     let edits = CatalogEdits {
         refresh: &request.refresh,
         displays: displays.as_ref().map(|(path, bytes)| CatalogDisplayFile {
+            path: path.as_path(),
+            bytes: bytes.as_slice(),
+        }),
+        version_2: request.version_2,
+        values: values.as_ref().map(|(path, bytes)| CatalogValuesFile {
             path: path.as_path(),
             bytes: bytes.as_slice(),
         }),
@@ -160,7 +178,24 @@ pub fn write_standard_pack_catalog(
         // Fix round 1: the first refusal names the file it is in (`schedule.json` for a rule's
         // pool that file does not declare).
         CatalogMergeRefusal::Root(issues) => catalog_refused(&game, &root, issues),
-        CatalogMergeRefusal::Display { path, issues } => display_refused(&game, &path, issues),
+        CatalogMergeRefusal::Display { path, issues } => display_refused(
+            &game,
+            &path,
+            issues,
+            "the display file is checked by the catalog's own display checks",
+        ),
+        // Workflow #477 CV-1: the values file's refusal is the display file's, naming its file.
+        CatalogMergeRefusal::Values { path, issues } => display_refused(
+            &game,
+            &path,
+            issues,
+            "the values file is checked by the catalog's own value and mark checks",
+        ),
+        CatalogMergeRefusal::ValuesNeedVersion2 => LabError::usage(format!(
+            "{VALUES_FLAG} writes a fixed value and marks, which only a catalog of version 2 \
+             carries: {} is of version 1 or absent; give {VERSION_FLAG} 2 to write version 2",
+            path.display()
+        )),
     })?;
     let changed = existing.as_deref() != Some(merge.bytes.as_slice());
     let mut warnings = merge
@@ -213,6 +248,8 @@ pub fn write_standard_pack_catalog(
         refreshed: (!request.refresh.is_empty()).then_some(merge.refreshed),
         display_written: request.displays.is_some().then_some(merge.display_written),
         groups_added: request.displays.is_some().then_some(merge.groups_added),
+        converted: request.version_2.then_some(merge.converted),
+        values_written: request.values.is_some().then_some(merge.values_written),
         document,
         warnings,
     })
@@ -238,21 +275,28 @@ fn refresh_ids_fit(refresh: &[String]) -> LabResult<()> {
     }
 }
 
-/// Workflow #477 PC-2: the display file `--displays` names, an absolute path, and its bytes. A
-/// relative path, a file that does not exist, cannot be read or exceeds the package input byte
-/// limit is a usage error naming it (`validation_failed`), as a root file's is; its content is the
-/// contract crate's to check.
-fn read_display_file(path: &Path) -> LabResult<(PathBuf, Vec<u8>)> {
+/// Workflow #477 PC-2: the flag of the display file. Workflow #477 CV-1: the flags of the values
+/// file and of the version asked for, which the refusals name.
+const DISPLAYS_FLAG: &str = "--displays";
+const VALUES_FLAG: &str = "--values";
+const VERSION_FLAG: &str = "--schema-version";
+
+/// Workflow #477 PC-2: the display file `--displays` names, an absolute path, and its bytes; CV-1:
+/// and so the values file `--values` names (`flag` the one that names it). A relative path, a file
+/// that does not exist, cannot be read or exceeds the package input byte limit is a usage error
+/// naming it (`validation_failed`), as a root file's is; its content is the contract crate's to
+/// check.
+fn read_input_file(flag: &str, path: &Path) -> LabResult<(PathBuf, Vec<u8>)> {
     if !path.is_absolute() {
         return Err(LabError::usage(format!(
-            "--displays {} is no absolute path",
+            "{flag} {} is no absolute path",
             path.display()
         )));
     }
     match read_bounded(path)? {
         Some(bytes) => Ok((path.to_owned(), bytes)),
         None => Err(LabError::usage(format!(
-            "--displays {}: no such file",
+            "{flag} {}: no such file",
             path.display()
         ))),
     }
@@ -261,15 +305,20 @@ fn read_display_file(path: &Path) -> LabResult<(PathBuf, Vec<u8>)> {
 /// Workflow #477 PC-2: the refusal `standard_pack_catalog_display_refused` of the display file at
 /// `path` of the game root of `game`, with its first error (the contract crate answers at least
 /// one), of the class usage or validation: the line names a file that cannot be written into the
-/// catalog as it stands.
-fn display_refused(game: &str, path: &Path, issues: Vec<CatalogDisplayFileIssue>) -> LabError {
+/// catalog as it stands. Workflow #477 CV-1: the same refusal of the values file (`checks` what
+/// the message says the file is checked by).
+fn display_refused(
+    game: &str,
+    path: &Path,
+    issues: Vec<CatalogDisplayFileIssue>,
+    checks: &str,
+) -> LabError {
     let first = issues.into_iter().next().unwrap_or_else(whole_display_file);
     refused(
         first.outcome(game, path),
         LabErrorClass::UsageValidation,
         format!(
-            "{}: standard_pack_problem={} json_pointer={} (the display file is checked by the \
-             catalog's own display checks before anything is written)",
+            "{}: standard_pack_problem={} json_pointer={} ({checks} before anything is written)",
             path.display(),
             first.problem,
             first.pointer

@@ -247,6 +247,15 @@ pub struct StandardPackCatalogRequest {
     /// displays whole, their business part untouched, and whose groups the catalog's `groups` gain
     /// when they do not hold them.
     pub displays: Option<PathBuf>,
+    /// Workflow #477 CV-1 (register §1.507): `--values <file>`, an absolute path: a values file
+    /// (`{schema_version: actingcommand.pack-catalog-values.v1, packs: [{package_id, rule_id?,
+    /// value?, limited?, realization?}]}`) whose items replace the named parts' value and marks
+    /// whole, the entry point of the model's export; it needs a catalog of version 2.
+    pub values: Option<PathBuf>,
+    /// CV-1: `--schema-version 2`: the line writes version 2, converting a file of version 1 (each
+    /// entry's business part then its rules'); without it a file keeps its version and a new one is
+    /// of version 1.
+    pub version_2: bool,
 }
 
 /// Workflow #477 PC-1: the answer of `standard-pack catalog`.
@@ -288,6 +297,15 @@ pub struct StandardPackCatalogResponse {
     /// the catalog's `groups`, in its order (empty when it adds none). Absent without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups_added: Option<Vec<String>>,
+    /// Workflow #477 CV-1: with `--schema-version 2`, the entries of a version 1 file the line
+    /// converted, in its order (empty when the file was of version 2 already or there was none).
+    /// Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub converted: Option<Vec<String>>,
+    /// CV-1: with `--values`, the parts whose value and marks the file replaced, each
+    /// `{package_id, rule_id?}`, in its order. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values_written: Option<Vec<actingcommand_contract::CatalogPartAddress>>,
     /// With `--plan`: the document the line would write.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<Value>,

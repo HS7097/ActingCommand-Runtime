@@ -236,13 +236,26 @@ pub(crate) const STATUS_SWITCHES: [&str; 1] = [INSTALLATION_FLAG];
 const STATUS: &str = "standard-pack status";
 /// Workflow #477 PC-1: the flags `standard-pack catalog` takes, and the one of them that takes no
 /// value, which takes none from the next word but `true` or `false` (`FlagArgs::parse_switches`).
-/// Workflow #477 PC-2: and `--refresh`, repeatable, and `--displays`.
-pub(crate) const CATALOG_FLAGS: [&str; 4] = ["--root", "--plan", REFRESH_FLAG, DISPLAYS_FLAG];
+/// Workflow #477 PC-2: and `--refresh`, repeatable, and `--displays`. Workflow #477 CV-1: and
+/// `--values` and `--schema-version`.
+pub(crate) const CATALOG_FLAGS: [&str; 6] = [
+    "--root",
+    "--plan",
+    REFRESH_FLAG,
+    DISPLAYS_FLAG,
+    VALUES_FLAG,
+    SCHEMA_VERSION_FLAG,
+];
 pub(crate) const CATALOG_SWITCHES: [&str; 1] = ["--plan"];
 /// Workflow #477 PC-2: the package whose entry's business part is brought up to date from its
 /// rules, once per package; and the display file whose entries replace named entries' displays.
 const REFRESH_FLAG: &str = "--refresh";
 const DISPLAYS_FLAG: &str = "--displays";
+/// Workflow #477 CV-1: the values file whose items replace named parts' value and marks; and the
+/// version the line writes, whose one value is [`SCHEMA_VERSION_2`].
+const VALUES_FLAG: &str = "--values";
+const SCHEMA_VERSION_FLAG: &str = "--schema-version";
+const SCHEMA_VERSION_2: &str = "2";
 
 pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
@@ -279,13 +292,15 @@ pub(crate) fn adopt_options() -> [&'static str; 9] {
 }
 
 /// Workflow #477 PC-1: the flags of `standard-pack catalog`. Workflow #477 PC-2: `--refresh` and
-/// `--displays`.
-pub(crate) fn catalog_options() -> [&'static str; 4] {
+/// `--displays`. Workflow #477 CV-1: `--values` and `--schema-version`.
+pub(crate) fn catalog_options() -> [&'static str; 6] {
     [
         "--root <a resource repository's checkout (applications.json and packs/; the file is written at its root) or a built game root (<game>/ with bundle.json); never inside an installation>",
         "--plan (answers the pack-catalog.json it would write; writes nothing)",
         "--refresh <package_id> (repeatable, once per package: its entry's consumes and produces computed again from its rules, its display and its place kept; answered in refreshed, a package without an entry added; one the registry does not hold or named twice refused standard_pack_catalog_refresh_refused, package_not_listed or package_repeated)",
         "--displays <absolute path of {schema_version: actingcommand.pack-catalog-displays.v1, groups?: [{id, title}], packs: [{package_id, title, summary, group?, risk?}]}> (each named entry's display replaced whole, its business part untouched; a group not in the catalog added, answered in groups_added; one there with another title refused)",
+        "--values <absolute path of {schema_version: actingcommand.pack-catalog-values.v1, packs: [{package_id, rule_id?, value?: {milli, origin?}, limited?, realization?}]}> (version 2 only: each named part's value and marks replaced whole, its effects untouched, answered in values_written; refused as a display file is, standard_pack_catalog_display_refused)",
+        "--schema-version 2 (writes version 2: the business part in full, a version 1 file converted, each entry's business part its rules', answered in converted; without it a file keeps its version)",
     ]
 }
 
@@ -466,6 +481,22 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     } else {
         None
     };
+    // Workflow #477 CV-1: the values file, as the display file; the version, whose one value is 2.
+    let values = if flags.given(VALUES_FLAG) {
+        Some(flags.required_path(VALUES_FLAG)?)
+    } else {
+        None
+    };
+    let version_2 = match flags.values(SCHEMA_VERSION_FLAG).first() {
+        None => false,
+        Some(version) if version == SCHEMA_VERSION_2 => true,
+        Some(_) => {
+            return Err(CliError::usage(format!(
+                "{SCHEMA_VERSION_FLAG} takes {SCHEMA_VERSION_2}, the one version standard-pack \
+                 catalog writes on request"
+            )));
+        }
+    };
     if !plan {
         crate::dry_run_gate::refuse(
             global,
@@ -479,6 +510,8 @@ fn run_catalog(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         plan,
         refresh,
         displays,
+        values,
+        version_2,
     })?;
     serde_json::to_value(response).map_err(|error| {
         CliError::device(format!(

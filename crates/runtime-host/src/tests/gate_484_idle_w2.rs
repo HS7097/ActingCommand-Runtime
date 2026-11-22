@@ -630,11 +630,34 @@ fn idle_w2_the_wake_says_why_it_came_the_first_that_holds() {
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::ActionChanged));
-    // A start with no usable record owes the wake at its time.
+    // A start with no usable record owes the wake. #486 ASLEEP-3 (0.12.79, register §1.512, ruling
+    // 3, and its fix round 1, ruling 1; adapted): not at the start's time: it waits for the start's
+    // first plan, a reading alone wakes it no more than a sleeping instance, and it comes as a
+    // sleeping instance's, here at the plan's own time, which has come.
+    let reading_alone = IdlePlan {
+        due_now: false,
+        next_wake_unix_ms: None,
+        reading_due_unix_ms: Some(now),
+        ..far
+    };
+    let time_come = IdlePlan {
+        next_wake_unix_ms: Some(now + LEAD_MS),
+        ..far
+    };
     let mut planner = IdlePlanner::default();
     planner.restore_owed(ALIAS, IdleAction::CloseApp, now);
     assert_eq!(
         planner.check(ALIAS, &PRODUCTION, free(), None, now),
+        None,
+        "no wake before the start's first plan"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(reading_alone), now),
+        None,
+        "no wake for a reading alone"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(time_come), now),
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::OwedAtStart));
@@ -642,6 +665,16 @@ fn idle_w2_the_wake_says_why_it_came_the_first_that_holds() {
     let mut planner = closed(Some(now - MINUTE_MS), true);
     assert_eq!(
         planner.check(ALIAS, &PRODUCTION, free(), None, now),
+        None,
+        "no wake before the start's first plan"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(reading_alone), now),
+        None,
+        "no wake for a reading alone"
+    );
+    assert_eq!(
+        planner.check(ALIAS, &PRODUCTION, free(), Some(time_come), now),
         Some(WAKE)
     );
     assert_eq!(planner.woken_by(ALIAS), Some(IdleWakeCause::OwedAtStart));
