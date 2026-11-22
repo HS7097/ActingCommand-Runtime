@@ -393,7 +393,9 @@ carries a fallback and the amount is never Unknown.
   7. *The spend values* (SS-6, [../remedies.md](../remedies.md), section 4): `spend_allowance` (the
      gate's available amount less the consumption its step 3 counts), the gate's hold of an
      allowance below the task's consumption, and `run_cap`, ⌊allowance ÷ one run's amount⌋, which
-     the run reads as `session.dispatch.schedule.run_cap`.
+     the run reads as `session.dispatch.schedule.run_cap`. #477 LF-1 (since 0.12.79): one run's
+     amount of a pool whose lines take part in the spend values ("Task Reserves", "Spend
+     values") is the one in effect as well.
   8. *The tie-break* ("Ties and chain heads"): a candidate's runs left, by `c`.
   9. *Forward projection* ("Forward Planning And Maintenance", "Pool Projection"): it reads the
      amount once, from the facts it starts from, and holds it across its horizon, as it holds a
@@ -1350,6 +1352,18 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   an instance without a record instead; since G-R2x it carries the goal's gap as every task does.
   An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
+  #477 LF-1 (since 0.12.79; register §1.509): a pool's own lines take part too, so a rule needs
+  no reserve to bound its turns. For a judged candidate (the candidates the lines constrain,
+  "Pool lines", "Who is held"), each pool it consumes that has a declared valuation and whose
+  lines in effect on the candidate's instance are written (the instance's own set, else the
+  catalog's; not the defaults) has the floor of its hard line, whether or not the task reserves
+  it; where it does, the floor is the larger of the hard line and `at_least`. Its allowance is
+  `projected − pending − floor`, at least 0, at the same entry, and `run_cap` counts it as it
+  counts a reserved pool; on the head of the pool's capped episode its turns stop where the
+  episode is spent ("Capped spending order", "What the head's run is handed"). The lines' gate
+  holds a candidate whose run would cross the hard line, so a dispatched one's allowance pays for
+  at least one run here too. A pool without lines, a pool without a valuation and a candidate
+  the lines do not constrain hand exactly what they handed before.
 
 ## Shared Run Limits (Workflow #427-B)
 
@@ -2695,6 +2709,24 @@ without a valuation is untouched.
   with the hold the round gives it otherwise (`capped_not_head`, or
   `capped_would_cross_hard_line` when the plan skips it). A more urgent tier, and a business
   candidate of a higher `B ÷ E`, go first as always.
+- **What the head's run is handed** (#477 LF-1, since 0.12.79; register §1.509; the
+  coordinator's rulings of 11-22, not the owner's words). The plan counts one run of each planned
+  consumer. A package whose run repeats its turn reads how many from `run_cap`
+  (`session.dispatch.schedule.run_cap`, [../remedies.md](../remedies.md), section 4), and for
+  the pool of the block it is handed the turns the plan would take with that consumer alone, run
+  by run: from `r`, the pool's projected amount less the other tasks' consumption its reading
+  does not show yet, as many runs of `c` as bring the reading to where the episode is spent
+  (`r ≤ S` and `r < T`, the episode's rule above), and never one that would end below the floor
+  (the hard line, or the task's reserve of the pool where that is larger):
+  `min(⌈(r − s) ÷ c⌉, ⌊(r − floor) ÷ c⌋)`, `s` the largest reading the rule reads as spent: `S`,
+  or `T − 1` when the stop line is the trigger line (one run that leaves exactly `S = T` does not
+  end the episode). Every candidate of the block is handed it, since the one the order dispatches
+  is the head of what it dispatches. Below the trigger line with no episode under way the turns
+  are `⌊(r − floor) ÷ c⌋` ("Task Reserves", "Spend values"). For example, `S` 140, `H` 104, `T`
+  the capacity 180, read at 180, `c` 15: ⌈40 ÷ 15⌉ = 3 runs (to 135; ⌊40 ÷ 15⌋ = 2 would stop at
+  150 and leave the episode under way), the floor allows ⌊76 ÷ 15⌋ = 5: 3. With `S` = `T` = 160
+  read at 175: ⌈(175 − 159) ÷ 15⌉ = 2. The order, the plan, the block, every hold and the
+  episode's rule are unchanged: only the values on `policy_dispatch_parameters` are.
 - **A stopped consumer** (Workflow #429 R-6b, since 0.12.55): a consumer whose run a
   `StopInstanceRun` stopped was dispatched in its round (its `last_dispatched_unix_ms`), so the
   plan counts its whole consumption and the round does not list it again; what it spent before

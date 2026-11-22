@@ -102,6 +102,7 @@ use super::{
     with_values,
 };
 use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
+use crate::resource_targets::{LineView, PoolLines};
 use crate::{
     CompiledCatalog, FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec,
 };
@@ -517,6 +518,9 @@ pub(super) fn assign_leads(candidates: &mut [PlacementCandidate]) {
 #[derive(Debug, Clone, Copy)]
 struct Lines {
     capacity: u64,
+    /// LF-1 (register §1.509): the pool's projected amount at the evaluation, which the spend
+    /// values read ([`line_view`]).
+    projected: u64,
     /// The projected amount less the consumption the reading does not show yet.
     reading: i128,
     stop: u64,
@@ -543,6 +547,13 @@ impl Lines {
     /// Whether `reading` is spent down: at or below the stop line and below the trigger line.
     fn spent(&self, reading: i128) -> bool {
         reading <= i128::from(self.stop) && reading < i128::from(self.trigger())
+    }
+
+    /// LF-1 (register §1.509): the largest reading [`Self::spent`] reads as spent: the stop line,
+    /// or one below the trigger line when the stop line is the trigger line (the lines read hold
+    /// `H < S ≤ T`, so `T ≥ 1`).
+    fn spent_at(&self) -> u64 {
+        self.stop.min(self.trigger().saturating_sub(1))
     }
 
     /// SCHED-C1c: the room a run has from the cap above the hard line, `cap − H`.
@@ -1015,6 +1026,7 @@ fn lines(
     }
     Ok(Ok(Lines {
         capacity,
+        projected,
         reading,
         stop: u64::try_from(stop).map_err(|_| PolicyEvaluationError::overflow("a stop line"))?,
         hard: u64::try_from(hard).map_err(|_| PolicyEvaluationError::overflow("a hard line"))?,
@@ -1024,6 +1036,56 @@ fn lines(
             .map_err(|_| PolicyEvaluationError::overflow("a trigger line"))?,
         source,
     }))
+}
+
+/// LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines", "Capped spending
+/// order"; `contracts/remedies.md`, section 4, "Spend values"): the lines of `pool` on `instance`
+/// as the spend values of a judged candidate of `task` read them, when they take part: the pool
+/// has a declared valuation and covers the instance, `task` is one of its consumers (it declares a
+/// consumption of the pool above 0, as [`consumers`] reads it), and its lines in effect there are
+/// written (the instance's own set, else the catalog's: [`lines`]), not the defaults. `head`: the
+/// candidate is of the pool's capped block, whose candidate the order dispatches with
+/// `capped_spend`. `None` when they take no part; [`LineView::Unknown`] while a value they read
+/// gives none or the lines read break their rules (the lines' gate holds the candidate then).
+pub(super) fn line_view(
+    context: &PlacementContext<'_>,
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    pool: &PoolSpec,
+    task: &TaskSpec,
+    head: bool,
+) -> PolicyEvaluationResult<Option<LineView>> {
+    if pool.declared_valuation().is_none()
+        || !scope_matches_instance(&pool.scope, instance)
+        || crate::resource_targets::consumption_milli(task, &pool.id, Amounts::Declared)? == 0
+    {
+        return Ok(None);
+    }
+    let lines = match lines(context, facts, instance, pool)? {
+        Ok(Lines {
+            source: LinesSource::Defaults,
+            ..
+        })
+        | Err(
+            LinesProblem::Unknown { written: false, .. }
+            | LinesProblem::Invalid {
+                source: LinesSource::Defaults,
+                ..
+            },
+        ) => return Ok(None),
+        Ok(lines) => lines,
+        Err(_) => return Ok(Some(LineView::Unknown)),
+    };
+    Ok(Some(LineView::Known(PoolLines {
+        projected: lines.projected,
+        consumes: crate::resource_targets::consumption(
+            task,
+            &pool.id,
+            context.amounts.on(&instance.instance_id),
+        )?,
+        hard_line: lines.hard,
+        spent_at: head.then_some(lines.spent_at()),
+    })))
 }
 
 /// One line's value: a constant itself; a reference the integer its fact of the pool's scope

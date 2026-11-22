@@ -469,7 +469,8 @@ fn sched_c1f1_t2_one_evaluation_reads_a_usable_record_or_the_fallback() {
 //   on its fallback A (3000) is the head and its `capped_spend` says `consumption` 10 `fallback`;
 // - a reserve of 160 at 170: `amount_after` 150 holds A (`resource_reserve_insufficient`,
 //   `consumption` 20 `fact`), where its fallback would leave 160; a reserve of 100 admits it with
-//   SS-6's `run_cap` ⌊70 ÷ 20⌋ = 3 (7 on the fallback);
+//   SS-6's `run_cap` ⌊66 ÷ 20⌋ = 3 (6 on the fallback): #477 LF-1 (register §1.509), the pool's
+//   hard line 104, above the reserve, is the floor of its allowance (170 − 104 = 66);
 // - the forward projection's first step leaves the pool at 150 (160 on the fallback).
 #[test]
 fn sched_c1f1_t3_every_reader_reads_the_amount_in_effect() {
@@ -619,7 +620,7 @@ fn sched_c1f1_t3_every_reader_reads_the_amount_in_effect() {
         .value("run_cap")
         .cloned()
     };
-    assert_eq!(run_cap(&roomy.clone_world().evaluate()), Some(json!(7)));
+    assert_eq!(run_cap(&roomy.clone_world().evaluate()), Some(json!(6)));
     with_cost(&mut roomy, 20);
     assert_eq!(run_cap(&roomy.evaluate()), Some(json!(3)));
 

@@ -1542,3 +1542,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_p2::p2_t14_capped_spend_shows_the_reading",
 ]
 incident = ["#455 P2"]
+
+# #477 LF-1 (0.12.79; register §1.509; brief rd-1122/brief-477-lf1.md; contracts/scheduling/README.md, "Task Reserves", "Capped spending order"; contracts/remedies.md, section 4, "Spend values"), on a neutral V2 catalog of one or two instances whose valued pool's capacity is read from its fact (180), with no clock read: a judged task that reserves nothing on a pool with lines (140, 104) read at 175 carries the allowance 71 and run_cap 7, and 51 and 5 with another task's 20 pending (t1); the head of a capped episode at 180 carries run_cap 3 (to or below the stop line: the hard line would allow 5, rounding down only 2), 2 where the hard line 136 binds, and 2 where the stop line is the trigger line 160 read at 175 (the contract's rule r ≤ S and r < T), the allowance the hard line's (t2); below the trigger line 160 at 155 the hard line's 3, not the stop line's 1 (t3); a reserve of 120 above the hard line gives 55 and 5, one of 50 below it the hard line's 71 and 7 (t4); an instance's own lines {150, 120} give 55 and 5 on that instance and the catalog's 71 and 7 on the other (t5); an unknown reading or line gives no allowance and no run_cap, a reserved pool's known projection included (t6); the example catalog keeps its V1 and V2 golden identities, a valued pool without lines at its capacity keeps its capped_spend byte for byte and carries no policy_dispatch_parameters, with a reserve SS-6's 80 and 8 byte for byte, an unjudged task on a lined pool carries none, and SS-6's own fixture with reserves only carries SS-6's 900 and 30 byte for byte (t7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t1_a_lined_pool_without_a_reserve_floors_its_allowance_at_the_hard_line",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t2_the_head_of_a_capped_episode_runs_to_its_stop_line_and_never_below_its_hard_line",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t3_below_the_trigger_line_the_floor_is_the_hard_line",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t4_the_larger_of_the_reserve_and_the_hard_line_is_the_floor",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t5_an_instances_own_lines_give_the_floor_on_that_instance",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t6_an_unknown_reading_or_line_gives_no_run_cap",
+    "actingcommand-policy::lib::tests::gate_477_lf1::lf1_t7_a_pool_without_lines_and_a_task_with_reserves_only_keep_their_values",
+]
+incident = ["#477 LF-1"]

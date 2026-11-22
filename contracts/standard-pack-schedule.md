@@ -436,6 +436,21 @@ game's business rules:
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
 
+**How many turns a sweep runs** (#477 LF-1, since 0.12.79; register §1.509). A package whose run
+repeats one turn until it has spent enough (a sweep of a regenerating pool) reads how many from
+`session.dispatch.schedule.run_cap` ([remedies.md](remedies.md), section 4, "Spend values"; as a
+`max_repeats` fact cap, [resource-declarations.md](resource-declarations.md), "Fact caps"). The
+Runtime computes it from the lines written on the pool, so a resource repository writes the
+consumer's one run's amount in its `consumes` and the lines on the pool, once: `stop_line` and
+`hard_line` (and `trigger_line`) beside the pool's `valuation`, or an instance's own lines
+([scheduling/README.md](scheduling/README.md), "Lines for one instance"). The rule needs no
+`reserves` for that and repeats no line: below the trigger line a judged consumer may spend down
+to the hard line; on the head of the pool's capped episode its turns stop once the episode is
+spent (the pool at or below its stop line and below its trigger line, the turn that crosses
+included), never below the hard line
+([scheduling/README.md](scheduling/README.md), "Capped spending order", "What the head's run is
+handed"). A rule writes `reserves` only for a floor of its own above the pool's hard line.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's

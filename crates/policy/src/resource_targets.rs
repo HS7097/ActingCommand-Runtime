@@ -4010,9 +4010,11 @@ fn reserve_insufficient(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SpendValues {
     /// `(i, allowance)` for each entry `i` of the task's `consumes` whose pool the task also
-    /// reserves and whose projected amount is known: the reserve gate's available amount (that
-    /// projection less the other tasks' consumption the reading does not show yet) less the
-    /// reserve's `at_least`, at least 0. In `consumes` order.
+    /// reserves, or (LF-1, register §1.509) whose lines take part ([`LineView`]), and whose
+    /// projected amount is known: the gate's available amount (that projection less the other
+    /// tasks' consumption the reading does not show yet) less the pool's floor (the reserve's
+    /// `at_least`, the hard line, or the larger of the two where both are), at least 0. In
+    /// `consumes` order.
     pub(crate) spend_allowances: Vec<(usize, u64)>,
     /// `(j, gap)` for each entry `j` of the task's `produces` whose pool an active goal covering
     /// the task holds with a known gap (0 when met). In `produces` order.
@@ -4059,16 +4061,89 @@ fn saturated_integer(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// SS-6: the [`SpendValues`] of a selected dispatch of `task`. `views` are the reserve views the
-/// reserve gate judged the candidate by (`None` when the task declares no reserves) and
-/// `pending` answers, per pool, the consumption of the instance's other tasks that the pool's
-/// latest reading does not show yet ([`pending_total`], the gate's step 3). So the allowance is
-/// the gate's own available amount at the same evaluation instant, `projected − pending`, less
-/// the reserve line: the package is never told it may spend below the line, and an allowance
-/// below the task's declared consumption of the pool, 0 included, is a candidate the gate holds
-/// (`projected − consumes − pending < at_least`). `pools` are the catalog's pools, for their base
-/// weight; `gap` answers the active goal's gap on a pool for the task
-/// ([`InstanceTargets::goal_gap`]). Integer arithmetic only, saturating: nothing panics or wraps.
+/// LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines", "Capped spending
+/// order"; `contracts/remedies.md`, section 4, "Spend values"): one pool a judged candidate
+/// consumes whose lines take part in its spend values, whether or not the task reserves it: a
+/// pool with a declared valuation whose lines in effect on the candidate's instance are written
+/// (the instance's own set, else the catalog's; never the defaults). A pool without lines, a pool
+/// without a valuation and a candidate the lines do not constrain have none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineView {
+    /// The pool's capacity, its reading or one of its lines gives no value at the evaluation, or
+    /// the lines read break their rules: the lines' gate holds such a candidate.
+    Unknown,
+    /// The lines in effect, as the lines' gate reads them.
+    Known(PoolLines),
+}
+
+/// LF-1: what the spend values read of a pool's lines in effect on the candidate's instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PoolLines {
+    /// The pool's projected amount at the evaluation, as a reserve view's `projected`.
+    pub(crate) projected: u64,
+    /// The task's consumption of the pool per run in effect on the instance (`⌈C/1000⌉`), as a
+    /// reserve view's `consumes`.
+    pub(crate) consumes: u64,
+    /// The hard line `H`: the floor of the pool's allowance, or the reserve's `at_least` where
+    /// the task reserves the pool and that is larger.
+    pub(crate) hard_line: u64,
+    /// On the head of the pool's capped episode (a candidate of its block, which the capped order
+    /// dispatches with `capped_spend`): the largest reading the episode's rule reads as spent
+    /// (`r ≤ S` and `r < T`: the stop line `S`, or `T − 1` when the stop line is the trigger
+    /// line `T`). `None` everywhere else.
+    pub(crate) spent_at: Option<u64>,
+}
+
+/// LF-1: what one pool the task consumes gives its spend values.
+enum PoolSpend {
+    /// The task does not reserve the pool and its lines take no part.
+    Apart,
+    /// The pool's projected amount, or one of its lines, gives no value.
+    Unknown,
+    /// The pool's allowance; one run's amount of it in effect on the instance; and, on the head
+    /// of its capped episode, what the pool holds above the reading the episode is spent at.
+    Known {
+        allowance: u64,
+        consumes: u64,
+        above_spent: Option<u64>,
+    },
+}
+
+/// LF-1: the [`PoolSpend`] of one pool from its reserve view (`view`, when the task reserves it)
+/// and its lines (`line`, when they take part); `pending` is the consumption of the instance's
+/// other tasks that the pool's latest reading does not show yet. The available amount is
+/// `projected − pending`; the floor is the reserve's `at_least`, the hard line, or the larger of
+/// the two; the allowance is the available amount less the floor, at least 0. A reserved pool
+/// without lines reads exactly as SS-6 read it.
+fn pool_spend(view: Option<&ReserveView>, line: Option<LineView>, pending: u64) -> PoolSpend {
+    match (view, line) {
+        (None, None) => PoolSpend::Apart,
+        (_, Some(LineView::Unknown)) => PoolSpend::Unknown,
+        (Some(view), None) => match spend_allowance(view, pending) {
+            Some(allowance) => PoolSpend::Known {
+                allowance,
+                consumes: view.consumes,
+                above_spent: None,
+            },
+            None => PoolSpend::Unknown,
+        },
+        (view, Some(LineView::Known(lines))) => {
+            let available = lines.projected.saturating_sub(pending);
+            let floor = view.map_or(lines.hard_line, |view| view.at_least.max(lines.hard_line));
+            PoolSpend::Known {
+                allowance: available.saturating_sub(floor),
+                consumes: lines.consumes,
+                above_spent: lines
+                    .spent_at
+                    .map(|spent_at| available.saturating_sub(spent_at)),
+            }
+        }
+    }
+}
+
+/// SS-6's [`spend_values_with`] of a task none of whose consumed pools' lines take part: what the
+/// gate tests of SS-6 read.
+#[cfg(test)]
 pub(crate) fn spend_values(
     task: &TaskSpec,
     views: Option<&[ReserveView]>,
@@ -4076,15 +4151,45 @@ pub(crate) fn spend_values(
     pools: &[PoolSpec],
     gap: impl Fn(&str) -> Option<u64>,
 ) -> SpendValues {
-    let allowance = |pool_id: &str| -> Option<u64> {
-        reserve_view(views, pool_id).and_then(|view| spend_allowance(view, pending(pool_id)))
+    spend_values_with(task, views, |_| None, pending, pools, gap)
+}
+
+/// SS-6: the [`SpendValues`] of a selected dispatch of `task`. `views` are the reserve views the
+/// reserve gate judged the candidate by (`None` when the task declares no reserves); LF-1
+/// (register §1.509): `lines` answers, per pool, its [`LineView`] when its lines take part; and
+/// `pending` answers, per pool, the consumption of the instance's other tasks that the pool's
+/// latest reading does not show yet ([`pending_total`], the gate's step 3). So the allowance is
+/// the gate's own available amount at the same evaluation instant, `projected − pending`, less
+/// the pool's floor: the package is never told it may spend below the reserve line or the hard
+/// line, and an allowance below the task's declared consumption of the pool, 0 included, is a
+/// candidate a gate holds (the reserve gate's `projected − consumes − pending < at_least`; the
+/// lines' gate's `r − c < H`, its reading `r` taking off every task's unshown consumption, so
+/// never above `projected − pending`). `pools` are the catalog's pools, for their base weight;
+/// `gap` answers the active goal's gap on a pool for the task ([`InstanceTargets::goal_gap`]).
+/// Integer arithmetic only, saturating: nothing panics or wraps.
+pub(crate) fn spend_values_with(
+    task: &TaskSpec,
+    views: Option<&[ReserveView]>,
+    lines: impl Fn(&str) -> Option<LineView>,
+    pending: impl Fn(&str) -> u64,
+    pools: &[PoolSpec],
+    gap: impl Fn(&str) -> Option<u64>,
+) -> SpendValues {
+    let spend = |pool_id: &str| {
+        let view = reserve_view(views, pool_id);
+        let line = lines(pool_id);
+        if view.is_none() && line.is_none() {
+            return PoolSpend::Apart;
+        }
+        pool_spend(view, line, pending(pool_id))
     };
     let spend_allowances = task
         .consumes
         .iter()
         .enumerate()
-        .filter_map(|(index, effect)| {
-            allowance(effect.pool_id.as_str()).map(|amount| (index, amount))
+        .filter_map(|(index, effect)| match spend(effect.pool_id.as_str()) {
+            PoolSpend::Known { allowance, .. } => Some((index, allowance)),
+            PoolSpend::Apart | PoolSpend::Unknown => None,
         })
         .collect();
     let gaps_remaining = task
@@ -4096,7 +4201,7 @@ pub(crate) fn spend_values(
     SpendValues {
         spend_allowances,
         gaps_remaining,
-        run_cap: run_cap(task, views, &allowance, pools, &gap),
+        run_cap: run_cap(task, &spend, pools, &gap),
     }
 }
 
@@ -4132,57 +4237,69 @@ fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64>
         .filter(|amount| *amount > 0)
 }
 
-/// SS-6: one run's amount of the reserved pool of `view` by `task`: the view's consumption, the
-/// sum of the task's integer per-run `amount`s on the pool, when every entry of the pool declares
-/// one; SCHED-C1f1 (register §1.303, "Who reads it" item 7): an `amount` read from a fact is an
-/// integer, and the view holds it as it is in effect on the candidate's instance. `None` when an
-/// entry declares no integer amount (an `expected_amount_milli` or a pending one) or the amount
-/// is 0.
-fn run_amount(task: &TaskSpec, view: &ReserveView) -> Option<u64> {
+/// SS-6: one run's amount of `pool_id` by `task`: `consumes`, the task's consumption of the pool
+/// per run as its reserve view or (LF-1) its [`PoolLines`] hold it, the sum of its integer
+/// per-run `amount`s on the pool, when every entry of the pool declares one; SCHED-C1f1 (register
+/// §1.303, "Who reads it" item 7): an `amount` read from a fact is an integer, and the view holds
+/// it as it is in effect on the candidate's instance. `None` when an entry declares no integer
+/// amount (an `expected_amount_milli` or a pending one) or the amount is 0.
+fn run_amount(task: &TaskSpec, pool_id: &str, consumes: u64) -> Option<u64> {
     task.consumes
         .iter()
-        .filter(|effect| effect.pool_id == view.pool_id)
+        .filter(|effect| effect.pool_id == pool_id)
         .all(|effect| effect.units().is_some() || effect.fact_amount().is_some())
-        .then_some(view.consumes)
+        .then_some(consumes)
         .filter(|amount| *amount > 0)
 }
 
-/// SS-6 `run_cap`: the spend term, the least over the pools of the task's `consumes` that it also
-/// reserves of ⌊allowance / the task's declared consumption of the pool per run⌋, at most the
-/// goal term ([`goal_runs`]) when there is one, and at most the designated effect cap's ceiling
-/// [`MAX_DESIGNATED_EFFECT_REPEATS`] (1,000), so a package that reads it as a `max_repeats` fact
-/// cap never ends on that cap's range check. `None` when the task reserves none of the pools it
-/// consumes, when one such pool's projected amount is unknown, or when a declaration it needs is
-/// incomplete: a consumed pool, or a goal-driven produced pool with an open gap, without an
-/// integer per-run `amount` on every entry. SS-2g (register §1.232): so a task that reserves a
-/// pool it consumes by `expected_amount_milli` gets no `run_cap`, as a goal-driven production
-/// declared by expectation gives none; its `spend_allowance` is unchanged and stops the spend.
-/// SCHED-C1f1: one run's amount is the one in effect on the candidate's instance, which its
-/// reserve view holds ([`run_amount`]), an integer, so an amount read from a fact gives a
-/// `run_cap`.
+/// SS-6 `run_cap`: the spend term, the least over the pools of the task's `consumes` that take
+/// part (that it also reserves, or, LF-1, whose lines take part, `spend`) of the runs each pays
+/// for, at most the goal term ([`goal_runs`]) when there is one, and at most the designated effect
+/// cap's ceiling [`MAX_DESIGNATED_EFFECT_REPEATS`] (1,000), so a package that reads it as a
+/// `max_repeats` fact cap never ends on that cap's range check. A pool pays for ⌊allowance / the
+/// task's declared consumption of the pool per run⌋; LF-1, on the head of the pool's capped
+/// episode, at most ⌈what the pool holds above the reading the episode is spent at / that
+/// consumption⌉: enough runs to end the episode ("Capped spending order", its plan taken run by
+/// run), never below the floor. `None` when no pool it consumes takes part, when one such pool's
+/// projected amount or one of its lines is unknown, or when a declaration it needs is incomplete:
+/// a consumed pool, or a goal-driven produced pool with an open gap, without an integer per-run
+/// `amount` on every entry. SS-2g (register §1.232): so a task that reserves a pool it consumes by
+/// `expected_amount_milli` gets no `run_cap`, as a goal-driven production declared by expectation
+/// gives none; its `spend_allowance` is unchanged and stops the spend. SCHED-C1f1: one run's
+/// amount is the one in effect on the candidate's instance, which its reserve view and its lines
+/// hold ([`run_amount`]), an integer, so an amount read from a fact gives a `run_cap`.
 fn run_cap(
     task: &TaskSpec,
-    views: Option<&[ReserveView]>,
-    allowance: &impl Fn(&str) -> Option<u64>,
+    spend: &impl Fn(&str) -> PoolSpend,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
     let mut seen = BTreeSet::new();
-    let mut spend: Option<u64> = None;
+    let mut least: Option<u64> = None;
     for effect in &task.consumes {
         if !seen.insert(effect.pool_id.as_str()) {
             continue;
         }
-        let Some(view) = reserve_view(views, &effect.pool_id) else {
-            continue;
+        let (allowance, consumes, above_spent) = match spend(effect.pool_id.as_str()) {
+            PoolSpend::Apart => continue,
+            PoolSpend::Unknown => return None,
+            PoolSpend::Known {
+                allowance,
+                consumes,
+                above_spent,
+            } => (allowance, consumes, above_spent),
         };
-        let runs = allowance(effect.pool_id.as_str())? / run_amount(task, view)?;
-        spend = Some(spend.map_or(runs, |spend| spend.min(runs)));
+        let per_run = run_amount(task, &effect.pool_id, consumes)?;
+        let above_floor = allowance / per_run;
+        let runs = above_spent.map_or(above_floor, |above| {
+            above_floor.min(above.div_ceil(per_run))
+        });
+        least = Some(least.map_or(runs, |least| least.min(runs)));
     }
-    let spend = spend?;
+    let runs = least?;
     let cap = match goal_runs(task, pools, gap)? {
-        Some(needed) => spend.min(needed),
-        None => spend,
+        Some(needed) => runs.min(needed),
+        None => runs,
     };
     Some(cap.min(u64::from(MAX_DESIGNATED_EFFECT_REPEATS)))
 }

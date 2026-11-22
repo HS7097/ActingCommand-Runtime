@@ -5519,10 +5519,14 @@ fn apply_priority_selection(
         &mut affected,
         memory,
     )?;
+    // LF-1 (register §1.509): the consumed pools whose lines take part in each judged candidate's
+    // spend values, read once the capped order has given its blocks.
+    let lines = spend_lines(catalog, facts, context, &ranked)?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
-    // the allowances read the same entries.
-    let unshown = if reserves_declared {
-        reserve_unshown(catalog, facts, context, &reserves)?
+    // the allowances read the same entries; LF-1: so do the allowances of the pools whose lines
+    // take part.
+    let unshown = if reserves_declared || !lines.is_empty() {
+        reserve_unshown(catalog, facts, context, &reserves, &lines)?
     } else {
         crate::resource_targets::UnshownConsumption::new()
     };
@@ -5531,17 +5535,23 @@ fn apply_priority_selection(
     }
     // SS-6: the spend values of the candidates the gate admitted, from the same reserve views and
     // pending consumption (the gate's own available amount, at the same instant) and each
-    // instance's resolved goals.
+    // instance's resolved goals; LF-1: and the lines of the pools they consume.
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
         // G-R2s: a left-out candidate's gaps are those of an instance without a record.
         let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
-        let spend = crate::resource_targets::spend_values(
+        let candidate_lines = lines.get(&candidate.work_index);
+        let spend = crate::resource_targets::spend_values_with(
             task,
             // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
             // which `run_cap` reads as one run's amount.
             reserves.get(&candidate.work_index).map(Vec::as_slice),
+            |pool_id| {
+                candidate_lines
+                    .and_then(|views| views.iter().find(|(id, _)| *id == pool_id))
+                    .map(|(_, view)| *view)
+            },
             |pool_id| {
                 crate::resource_targets::pending_total(
                     &unshown,
@@ -5616,19 +5626,79 @@ fn catalog_task<'a>(
         })
 }
 
+/// LF-1 (register §1.509): by work index, the pools whose lines take part in a candidate's spend
+/// values, each with its [`crate::resource_targets::LineView`] ([`spend_lines`]).
+type SpendLines<'a> = BTreeMap<usize, Vec<(&'a str, crate::resource_targets::LineView)>>;
+
+/// LF-1 (register §1.509; `contracts/scheduling/README.md`, "Task Reserves", "Capped spending
+/// order"): by work index, the pools each judged candidate consumes whose lines take part in its
+/// spend values ([`capped::line_view`]), each once, in its `consumes` order; a candidate of a
+/// capped block reads its block's pool as the head of the episode, the candidate the order
+/// dispatches with `capped_spend`. A candidate without such a pool, and every candidate the lines
+/// do not constrain (one that is not judged: a manual request, a chain rider, an unmarked task),
+/// has no entry.
+fn spend_lines<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &EvaluationFacts,
+    context: &PlacementContext<'_>,
+    candidates: &[PlacementCandidate],
+) -> PolicyEvaluationResult<SpendLines<'a>> {
+    let mut lines = SpendLines::new();
+    for candidate in candidates.iter().filter(|candidate| candidate.judged) {
+        let task = catalog_task(catalog, &candidate.task_id)?;
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == candidate.instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "judged candidate's instance '{}' is missing from the snapshot",
+                    candidate.instance_id
+                ))
+            })?;
+        let mut views: Vec<(&str, crate::resource_targets::LineView)> = Vec::new();
+        for effect in &task.consumes {
+            let pool_id = effect.pool_id.as_str();
+            if views.iter().any(|(seen, _)| *seen == pool_id) {
+                continue;
+            }
+            let pool = context.pool_specs.get(pool_id).ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "compiled catalog references missing pool '{pool_id}'"
+                ))
+            })?;
+            let head = candidate
+                .capped
+                .as_ref()
+                .is_some_and(|slot| slot.pool_id == pool_id);
+            if let Some(view) = capped::line_view(context, facts, instance, pool, task, head)? {
+                views.push((pool_id, view));
+            }
+        }
+        if !views.is_empty() {
+            lines.insert(candidate.work_index, views);
+        }
+    }
+    Ok(lines)
+}
+
 /// Workflow #411 B16 part 2: the consumption the reserved pools' latest readings do not show yet
 /// (`crate::resource_targets::unshown_consumption`), which the reserve gate's step 3 takes and,
-/// SS-6, the allowances take too.
+/// SS-6, the allowances take too; LF-1 (register §1.509): with the pools whose lines take part in
+/// a candidate's spend values (`lined`, [`spend_lines`]), whose allowances take it as well. The
+/// reserve gate reads the entries of its reserved pools only.
 fn reserve_unshown<'a>(
     catalog: &'a CompiledCatalog,
     facts: &'a EvaluationFacts,
     context: &PlacementContext<'_>,
     reserves: &'a BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+    lined: &SpendLines<'a>,
 ) -> PolicyEvaluationResult<crate::resource_targets::UnshownConsumption<'a>> {
     let pools = reserves
         .values()
         .flatten()
         .map(|view| view.pool_id.as_str())
+        .chain(lined.values().flatten().map(|(pool_id, _)| *pool_id))
         .collect::<BTreeSet<_>>();
     crate::resource_targets::unshown_consumption(
         &catalog.catalog().tasks.tasks,
