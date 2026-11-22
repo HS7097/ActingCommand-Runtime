@@ -2109,19 +2109,17 @@ fn asleep2_r3_the_loop_of_11_21_closes_once_and_queues_no_wake_for_an_untimed_ga
             .expect("the close ended and its claim still holds the key");
         assert_eq!(closes(&replay.state), 1, "{case}: the close");
 
-        // Inside the close's own claim (four seconds after it in production): the claim holds the
-        // task with no wake, and the plan counts it not due. On main the look ahead behind the
-        // claim, which reads no benefit gate and no pool line, counted it due, and the check
-        // queued the wake at once.
+        // Inside the close's own claim (four seconds after it in production): the instance is
+        // asleep, so the evaluation judges it as available and the task's own gate holds it with
+        // no wake (the decision ends with the gate's code, not with the claim's
+        // `dispatch_instance_held`: CI on the head before this fix), and the plan counts it not
+        // due. On main the claim held the task, the look ahead behind it, which reads no benefit
+        // gate and no pool line, counted it due, and the check queued the wake at once.
         let in_claim = closed_at + 500;
         assert_eq!(
-            deferred_by(
-                &replay.cycle(in_claim),
-                task,
-                HostCode::DispatchInstanceHeld.as_str()
-            ),
+            deferred_by(&replay.cycle(in_claim), task, code),
             None,
-            "{case}: the close's claim holds the task with no wake"
+            "{case}: inside the close's claim the task's own gate holds it with no wake"
         );
         let held = replay.plan();
         assert!(!held.due_now, "{case}: not due behind the claim: {held:?}");
