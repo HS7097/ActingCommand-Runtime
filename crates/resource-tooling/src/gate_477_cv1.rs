@@ -383,7 +383,7 @@ fn cv1_each_quantity_form_round_trips_and_the_bounds_are_a_rule_s() {
     let many = (0..129)
         .map(|index| format!("pool.neutral.n{index}"))
         .collect::<Vec<_>>();
-    let wide = facts(Vec::new(), &many);
+    let wide = self::facts(Vec::new(), &many);
     let side = |count: usize| {
         Value::Array(
             many.iter()
