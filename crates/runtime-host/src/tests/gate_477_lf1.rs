@@ -144,7 +144,7 @@ fn list_read_at(observed_at: u64, snapshot: &str) -> FactRecord {
 /// A start of the policy instance's host over `root` on `clock`.
 fn open(root: &TempDir, instance: InstanceId, clock: &Arc<ManualRuntimeClock>) -> RuntimeHost {
     RuntimeHost::start(
-        config(root).with_runtime_clock(Arc::clone(clock)),
+        config(root).with_runtime_clock(Arc::<ManualRuntimeClock>::clone(clock)),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance,
