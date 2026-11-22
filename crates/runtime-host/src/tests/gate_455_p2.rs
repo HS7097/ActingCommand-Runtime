@@ -8,7 +8,8 @@
 // - the sum of the declared rows, each value times its factor; a key the whole list does not hold
 //   counts 0; a list of more than 256 rows is computed as any other (h1);
 // - unknown, never zero: no list, a confidence below the pool's minimum, a value that is no
-//   non-negative integer, a sum beyond 2^53 − 1 (h2);
+//   non-negative integer, a sum beyond 2^53 − 1, and (fix round 1) a list not keyed by the pool's
+//   columns (h2);
 // - a catalog configured with such a pool is accepted; the number is in the evaluation's resources
 //   and the list in neither its facts nor its projection; one moment at one ledger position gives
 //   one identity; the evaluation takes the reading (h3);
@@ -19,15 +20,23 @@
 // - a resource target's receipt and the resource target view (whose targetable row a goal entry's
 //   `current` shows) read the reading (h6);
 // - the reading is in each instance's view identity: an intent evaluated before the list is read
-//   again is stale (h7).
+//   again is stale (h7);
+// - fix round 1 (coordinator brief rd-1122/brief-1868-fix1.md, items C2 and D): no probe is
+//   planned for the list's key (h8), and a goal entry on the pool shows the reading as its
+//   `current` (h9).
 //
 // The keys, columns and rows are made up; times are fixed Unix milliseconds on a manual Runtime
 // clock, and nothing sleeps.
 
+use super::gate_442_rem1::write_package;
+use super::gate_rl1b::{GAME_A, SERVER_A, bundle, profiles, rule, write_json};
 use super::*;
 use crate::PolicyTrigger;
 use crate::pool_list_rows::{MAX_LIST_ROWS_READING, list_rows_reading};
-use actingcommand_contract::{FactScalar, ResourceTargetConditionState};
+use actingcommand_contract::{
+    FactScalar, ResourceTargetConditionState, ResourceTargetObservation,
+    ResourceTargetPendingReason,
+};
 use actingcommand_policy::{
     GivenReadingState, ListRowsUnknown, PolicyEvaluation, PoolListRow, TaskDecision,
 };
@@ -203,6 +212,37 @@ fn p2_h2_a_reading_is_unknown_never_zero() {
             "{rows:?}"
         );
     }
+    // Fix round 1 (review of #1868, must fix 1): a list keyed by another column than the pool's
+    // `key_column` (`name`, not `id`), and one none of whose rows carries its `value_column`
+    // (`amount`, not `count`, the declared key absent), are not lists of these columns: unknown,
+    // never a known 0. An empty list holds no key and reads 0.
+    let scalar = |text: &str| FactScalar::String(text.to_owned());
+    let other_key = list(
+        vec![BTreeMap::from([
+            ("name".to_owned(), scalar("item_a")),
+            ("count".to_owned(), FactScalar::Integer(7)),
+        ])],
+        READ_AT,
+        "snapshot:p2-h2-key-column",
+    );
+    assert_eq!(
+        reading(&item, Some(&other_key)),
+        unknown(ListRowsUnknown::TypeMismatch)
+    );
+    let other_value = list(
+        vec![BTreeMap::from([
+            ("id".to_owned(), scalar("item_z")),
+            ("amount".to_owned(), FactScalar::Integer(7)),
+        ])],
+        READ_AT,
+        "snapshot:p2-h2-value-column",
+    );
+    assert_eq!(
+        reading(&item, Some(&other_value)),
+        unknown(ListRowsUnknown::TypeMismatch)
+    );
+    let empty = list(Vec::new(), READ_AT, "snapshot:p2-h2-empty");
+    assert_eq!(reading(&item, Some(&empty)), read(0));
 }
 
 // ---- The host fixture: catalog-a declared V2, its task due while the pool read from rows of a
@@ -236,7 +276,10 @@ fn list_pool() -> serde_json::Value {
 }
 
 /// The fixture catalog declared V2 (its events valid from 0), its pools [`list_pool`] alone, its
-/// task due while [`LISTED`] holds at least 1000 and producing 1 of it.
+/// task due while [`LISTED`] holds at least 1000 and producing 1 of it, its profiles without
+/// goals. Fix round 1: the fixture's one goal names the pool [`list_pool`] replaces, so the
+/// catalog was refused `dangling_reference` at `/profiles/0/goals/0/metric/pool_id`, and every
+/// test starting from it failed at the activation.
 fn list_sources() -> CatalogSources {
     let mut sources = policy_sources(1);
     for source in [
@@ -275,13 +318,29 @@ fn list_sources() -> CatalogSources {
         if document.get("pools").is_some() {
             document["pools"] = serde_json::json!([list_pool()]);
         }
+        if let Some(profiles) = document
+            .get_mut("profiles")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for profile in profiles {
+                profile["goals"] = serde_json::json!([]);
+            }
+        }
         source.bytes = serde_json::to_vec_pretty(&document).expect("the fixture's bytes");
     }
     sources
 }
 
-/// A host of the policy instance on the fixture's manual clock, with `sources` active.
+/// A host of the policy instance on the fixture's manual clock, with `sources` active. Fix round
+/// 1: `sources` compiled first by the compiler the staging runs, so a refusal names its issues
+/// (the host's `catalog_compile_failed` carries none).
 fn start(root: &TempDir, sources: &CatalogSources) -> RuntimeHost {
+    if let Err(failure) = actingcommand_policy::compile_catalog(sources) {
+        panic!(
+            "the fixture's catalog compiles: {:?}",
+            failure.diagnostics()
+        );
+    }
     let host = RuntimeHost::start(
         config(root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0))),
         Arc::new(FakeProvider::one(
@@ -574,6 +633,224 @@ fn p2_h7_a_new_reading_moves_the_instances_view_and_the_intent_is_stale() {
             .unwrap_err()
             .code(),
         "policy_facts_stale"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// A neutral key the policy instance holds no fact under, read beside the pool in test 8.
+const CONTROL_KEY: &str = "resource.probe_control";
+
+// Test 8, the probe's planning signal (fix round 1, item C2). The task is due while the pool holds
+// at least 1000 or while the instance's `resource.probe_control` is below 20; neither the list nor
+// that fact is read, and both are suggested. The cycle reserves the detection budget for the fact
+// alone: no `planning_fact_unknown` names the list's key, which the left-out set covers for the
+// instance.
+#[test]
+fn p2_h8_no_probe_is_planned_for_the_lists_key() {
+    let root = TempDir::new().expect("tempdir");
+    let mut sources = list_sources();
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("the fixture's tasks");
+    let projected = tasks["tasks"][0]["trigger"].clone();
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "any",
+        "predicates": [projected, {
+            "kind": "fact",
+            "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+            "fact_key": CONTROL_KEY,
+            "comparison": "less_than",
+            "value": {"type": "integer", "value": 20},
+            "max_age_ms": 900_000
+        }]
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the fixture's tasks");
+    let host = start(&root, &sources);
+    let mut resources = policy_resources();
+    resources.pools.clear();
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::Recovery,
+        )
+        .expect("a policy cycle");
+    let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+    let suggested = &decision(evaluation).detection_suggestions;
+    for key in [LIST_KEY, CONTROL_KEY] {
+        assert!(
+            suggested
+                .iter()
+                .any(|suggestion| suggestion.fact_key == key),
+            "{key}: {suggested:?}"
+        );
+    }
+    let planned = cycle
+        .detection_planning_signals
+        .iter()
+        .map(|signal| {
+            signal
+                .outcome
+                .value("fact_key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        planned,
+        [CONTROL_KEY],
+        "{:?}",
+        cycle.detection_planning_signals
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+/// Test 9's package and rule: game A's one package, due at every evaluation, producing 1 of
+/// [`LISTED`].
+const COMPOSED: &str = "fixture.listed";
+
+/// Places game A's root below `packs`: its bundle, its `schedule.json` (naming `pool_list_rows`)
+/// with the one rule, [`LISTED`] without its scope and the fixture's profiles without goals, the
+/// package, and a `goals.json` whose one resource entry `listed` governs [`LISTED`].
+fn place_listed_root(packs: &std::path::Path) {
+    let game = packs.join(GAME_A);
+    write_json(
+        &game.join("bundle.json"),
+        &bundle(GAME_A, SERVER_A, &[COMPOSED]),
+    );
+    let mut due = rule(COMPOSED, COMPOSED, 100, Some(LISTED));
+    due["trigger"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 1,
+                     "anchor_ms": 0}
+    });
+    let mut pool = list_pool();
+    pool.as_object_mut()
+        .expect("a pool object")
+        .shift_remove("scope");
+    write_json(
+        &game.join("schedule.json"),
+        &serde_json::json!({
+            "schema_version": "actingcommand.schedule.v1",
+            "requires": [actingcommand_policy::POOL_LIST_ROWS_SUBSYSTEM],
+            "rules": [due],
+            "pools": [pool],
+            "activity": profiles("", None),
+            "timeline": [],
+            "held": []
+        }),
+    );
+    write_package(&game.join(COMPOSED), COMPOSED, None, None);
+    write_json(
+        &game.join("goals.json"),
+        &serde_json::json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+                            "entries": [{"name": "listed", "type": "resource",
+                                         "governs": {"pool": LISTED},
+                                         "title": {"en": "Listed"}}]}),
+    );
+}
+
+/// Test 9's facts: the policy instance on game A's server, offering the standard packs'
+/// operation.
+fn composed_facts() -> EvaluationFacts {
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    facts.instances = vec![InstanceSnapshot {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        server_id: SERVER_A.to_owned(),
+        game_id: GAME_A.to_owned(),
+        host_id: "fixture-host-a".to_owned(),
+        available: true,
+        capability_operation_ids: vec![actingcommand_policy::STANDARD_PACK_OPERATION_ID.to_owned()],
+        preferred_task_ids: Vec::new(),
+    }];
+    facts
+}
+
+/// The observation the policy instance's goal page shows on its entry `listed`, read with
+/// `GoalView` on a connection of the CLI.
+fn listed_on_the_goal_page(host: &RuntimeHost) -> ResourceTargetObservation {
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::GoalView {
+        instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+    });
+    let receipt = client.send(&request);
+    let Some(RuntimeResult::GoalViewed { view }) = receipt.result() else {
+        panic!("a goal view: {receipt:?}");
+    };
+    let entry = view
+        .entries
+        .iter()
+        .find(|entry| entry.name == "listed")
+        .unwrap_or_else(|| panic!("the entry `listed`: {view:?}"));
+    entry
+        .resource
+        .as_ref()
+        .and_then(|state| state.observation.clone())
+        .unwrap_or_else(|| panic!("the pool's observation: {entry:?}"))
+}
+
+// Test 9, a goal entry's `current` (fix round 1, item D). In composer mode over one game root
+// whose `goals.json` places a resource entry on the pool read from rows of a list, the first cycle
+// composes the root. Before the list is read the entry shows no current, the pool pending
+// `missing`; once the list is published it shows the reading, 1400, observed when the list was.
+#[test]
+fn p2_h9_a_goal_entry_on_the_pool_shows_the_reading_as_its_current() {
+    let state_root = TempDir::new().expect("state root");
+    let packs = TempDir::new().expect("standard-pack root");
+    place_listed_root(packs.path());
+    let mut resources = policy_resources();
+    resources.pools.clear();
+    let host = RuntimeHost::start(
+        config(&state_root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                composed_facts(),
+                resources.clone(),
+            ))
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
+            .with_standard_packs_root(Some(packs.path().to_owned()))
+            .with_standard_pack_schedule(true),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("the composer-mode host");
+    host.capacity_sampler_for_test().expect("capacity owner")().expect("capacity sample");
+    host.evaluate_policy_cycle_with_test_inputs(
+        &composed_facts(),
+        &resources,
+        EvaluationTime {
+            unix_ms: POLICY_NOW_UNIX_MS,
+            monotonic_ms: POLICY_NOW_UNIX_MS,
+        },
+        6,
+        PolicyTrigger::FactsChanged,
+    )
+    .expect("the cycle that composes the root");
+
+    let before = listed_on_the_goal_page(&host);
+    assert_eq!(
+        (before.current, before.pending),
+        (None, Some(ResourceTargetPendingReason::Missing))
+    );
+    host.publish_list_reading_for_test(fixture_list())
+        .expect("the list");
+    let after = listed_on_the_goal_page(&host);
+    assert_eq!(
+        (after.current, after.observed_at_unix_ms, after.pending),
+        (Some(1_400), Some(READ_AT), None)
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");

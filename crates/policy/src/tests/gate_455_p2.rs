@@ -15,7 +15,10 @@
 //   with an unknown reading (t7) and the consumption a reading does not show yet (t8);
 // - the forward projection starts from it and carries it as a fact reading (t9);
 // - a resource target's check and receipt condition (t10), its gap in the evaluation, applied and
-//   pending (t11), and the views (t12).
+//   pending (t11), and the views (t12);
+// - fix round 1 (coordinator brief rd-1122/brief-1868-fix1.md, items C1 and D): the no-progress
+//   guard's basis takes the reading as a fact pool's takes its fact (t13), and `capped_spend`
+//   shows it (t14).
 //
 // The keys, columns and ids are made up; nothing reads a clock.
 
@@ -29,13 +32,14 @@ use crate::{
     CompiledCatalog, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
     FactRefreshInputs, FactRefreshSettings, FactValue, ForwardEvidenceGap, ForwardProjectionConfig,
     GivenPoolReading, GivenPoolReadings, GivenReadingState, HostResourceSnapshot, InstanceHolds,
-    InstancePoolLines, LeftOutFacts, ListRowsUnknown, NoProgressGuards, ObservedFact, OwedReruns,
-    PolicyEvaluation, PolicyEvaluationError, PoolValueSnapshot, RemedyPlan, RunSlots,
-    SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, StoredResourceTargets, TaskDecision,
-    TaskRuntimeSnapshot, TaskTerminalState, active_resource_targets, check_resource_targets,
-    check_resource_targets_with_readings, compile_catalog, evaluate_with_left_out_facts,
-    parse_resource_targets, project_fact_pools, project_fact_pools_with_readings, project_forward,
-    project_forward_with_readings, targetable_resources_with_readings,
+    InstancePoolLines, LeftOutFacts, ListRowsUnknown, NoProgressGuards, NoProgressMemory,
+    ObservedFact, OwedReruns, PolicyEvaluation, PolicyEvaluationError, PoolValueSnapshot,
+    RemedyPlan, RunSlots, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, StoredResourceTargets,
+    TaskDecision, TaskRuntimeSnapshot, TaskTerminalState, active_resource_targets,
+    check_resource_targets, check_resource_targets_with_readings, compile_catalog,
+    evaluate_with_left_out_facts, parse_resource_targets, project_fact_pools,
+    project_fact_pools_with_readings, project_forward, project_forward_with_readings,
+    targetable_resources_with_readings,
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -534,6 +538,114 @@ fn p2_t12_the_views_show_the_reading() {
     );
 }
 
+/// Test 13's fact of A that the same pool reads in the catalog it is compared with.
+const COUNTED: &str = "resource.counted";
+/// Test 13's task's admitted run.
+const RAN_AT: u64 = NOW + 1_000;
+
+// Test 13, the no-progress guard (fix round 1, item C1). A task due while the pool holds at least
+// 1000, over a reading of 1400, runs once and its run is admitted; the list is not read again.
+// The guard holds the task as it holds the same task over the same pool read from its own fact
+// of 1400: `policy_no_progress` naming the one basis key (the list's key, or the fact's) with the
+// admission's reading. A list (or fact) read again later with the same sum holds it still; one
+// read with another sum (1600) releases the guard, and the task runs again.
+#[test]
+fn p2_t13_the_no_progress_guard_holds_a_task_on_the_reading_as_on_a_fact() {
+    let due = || task(TASK, at_least(1_000), &[], &[]);
+    let mut counted = list_pool(10_000, none());
+    counted["observation"] = json!({"kind": "fact", "fact_key": COUNTED});
+    for (case, catalog, key, listed) in [
+        (
+            "a pool read from rows of a list",
+            catalog(vec![due()], vec![list_pool(10_000, none())], Vec::new()),
+            LIST_KEY,
+            true,
+        ),
+        (
+            "the same pool read from its fact",
+            catalog(vec![due()], vec![counted], Vec::new()),
+            COUNTED,
+            false,
+        ),
+    ] {
+        let inputs = |value, read_at, tasks| guard_inputs(listed, value, read_at, tasks);
+        let mut memory = NoProgressMemory::default();
+        let (facts, given) = inputs(1_400, READ_AT, Vec::new());
+        let first = guarded_cycle(&catalog, &mut memory, &facts, &given, NOW);
+        let intent = first
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == TASK && intent.instance_id == A)
+            .unwrap_or_else(|| panic!("{case}: the task runs: {first:#?}"));
+        memory.admit(TASK, A, &intent.decision_id, RAN_AT);
+        assert!(
+            memory.armed(TASK, A).is_some(),
+            "{case}: the guard is armed"
+        );
+
+        for (at, read_at) in [
+            (NOW + 10 * MINUTE_MS, READ_AT),
+            (NOW + 20 * MINUTE_MS, NOW + 15 * MINUTE_MS),
+        ] {
+            let (facts, given) = inputs(1_400, read_at, vec![ran(TASK, RAN_AT)]);
+            let round = guarded_cycle(&catalog, &mut memory, &facts, &given, at);
+            assert!(dispatched(&round).is_empty(), "{case} at {at}: {round:#?}");
+            let held = coded(decision(&round, TASK), "policy_no_progress");
+            assert_eq!(
+                held.value("basis_readings"),
+                Some(&json!([{
+                    "fact_key": key,
+                    "reading_value": "{\"type\":\"integer\",\"value\":1400}",
+                    "observed_at_unix_ms": READ_AT,
+                }])),
+                "{case} at {at}"
+            );
+            assert_eq!(
+                held.value("served_by_dispatch_unix_ms"),
+                Some(&json!(RAN_AT)),
+                "{case} at {at}"
+            );
+        }
+
+        let (facts, given) = inputs(1_600, NOW + 25 * MINUTE_MS, vec![ran(TASK, RAN_AT)]);
+        let again = guarded_cycle(&catalog, &mut memory, &facts, &given, NOW + 30 * MINUTE_MS);
+        assert_eq!(dispatched(&again), [TASK], "{case}: {again:#?}");
+        assert!(
+            memory.armed(TASK, A).is_none(),
+            "{case}: another sum released the guard"
+        );
+    }
+}
+
+// Test 14, what `capped_spend` shows (fix round 1, item D). A judged consumer of the pool read from
+// rows of a list (capacity 1000, stop line 800, trigger line 900, hard line 100) is the head of
+// the capped round its reading of 950 begins, and its `capped_spend` shows that reading.
+#[test]
+fn p2_t14_capped_spend_shows_the_reading() {
+    let mut pool = list_pool(1_000, none());
+    pool["stop_line"] = json!(800);
+    pool["trigger_line"] = json!(900);
+    pool["hard_line"] = json!(100);
+    let catalog = catalog(
+        vec![judged(task(TASK, clock(), &[(LISTED, 1)], &[(VALUED, 5)]))],
+        vec![pool, valued_pool()],
+        Vec::new(),
+    );
+    let evaluation = round(&catalog, &facts(Vec::new()), &readings(read(950)), NOW);
+    assert!(dispatched(&evaluation).contains(&TASK), "{evaluation:#?}");
+    let spend = coded(decision(&evaluation, TASK), "capped_spend");
+    for (member, value) in [
+        ("pool_id", json!(LISTED)),
+        ("pool_reading", json!(950)),
+        ("pool_capacity", json!(1_000)),
+        ("stop_line", json!(800)),
+        ("trigger_line", json!(900)),
+        ("hard_line", json!(100)),
+    ] {
+        assert_eq!(spend.value(member), Some(&value), "{member}: {spend:?}");
+    }
+}
+
 // ---- The readings, as the host gives them
 
 fn read(value: u64) -> GivenReadingState {
@@ -938,6 +1050,88 @@ fn round_with(
     left_out: &LeftOutFacts,
     at: u64,
 ) -> PolicyEvaluation {
+    guarded_round(
+        catalog,
+        facts,
+        resources,
+        left_out,
+        &NoProgressGuards::default(),
+        at,
+    )
+}
+
+/// Test 13's inputs of a reading of `value` read at `read_at`, with the task states `tasks`: with
+/// `listed`, the reading of [`LISTED`] on A as the host gives it; else A's fact [`COUNTED`].
+fn guard_inputs(
+    listed: bool,
+    value: u64,
+    read_at: u64,
+    tasks: Vec<TaskRuntimeSnapshot>,
+) -> (EvaluationFacts, GivenPoolReadings) {
+    if listed {
+        let state = GivenReadingState::Read {
+            value,
+            observed_at_unix_ms: read_at,
+            expires_at_unix_ms: Some(NOW + HOUR_MS),
+        };
+        return (facts(tasks), readings(state));
+    }
+    let fact = ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: A.to_owned(),
+        },
+        fact_key: COUNTED.to_owned(),
+        value: FactValue::Integer(i64::try_from(value).expect("a small reading")),
+        observed_at_unix_ms: read_at,
+        expires_at_unix_ms: Some(NOW + HOUR_MS),
+        confidence_milli: 1000,
+    };
+    (facts_with(vec![fact], tasks), GivenPoolReadings::default())
+}
+
+/// One evaluated cycle at `at` as the host runs it with the guard on for A: the memory observes
+/// the facts and `readings`, the round evaluates with the armed guards and `readings` beside the
+/// left-out facts, the memory forgets the guards the round released and captures the basis of
+/// each new intent with `readings`.
+fn guarded_cycle(
+    catalog: &CompiledCatalog,
+    memory: &mut NoProgressMemory,
+    facts: &EvaluationFacts,
+    readings: &GivenPoolReadings,
+    at: u64,
+) -> PolicyEvaluation {
+    memory
+        .observe_with_readings(catalog, facts, readings, time(at), |alias| alias == A)
+        .unwrap_or_else(|error| panic!("the memory observes: {error}"));
+    let guards = memory.guards();
+    let resources = resources(catalog, facts, readings);
+    let mut left_out = LeftOutFacts::default();
+    left_out.give_pool_readings(readings.clone());
+    let round = guarded_round(catalog, facts, &resources, &left_out, &guards, at);
+    memory.forget_released(&guards);
+    memory
+        .capture_with_readings(
+            catalog,
+            facts,
+            &resources,
+            readings,
+            time(at),
+            &round.dispatch_intents,
+            |alias| alias == A,
+        )
+        .unwrap_or_else(|error| panic!("the memory captures: {error}"));
+    round
+}
+
+/// [`round_with`] with the no-progress guards `guards`.
+fn guarded_round(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    left_out: &LeftOutFacts,
+    guards: &NoProgressGuards,
+    at: u64,
+) -> PolicyEvaluation {
     let refresh = FactRefreshInputs {
         settings: FactRefreshSettings {
             enabled: true,
@@ -965,7 +1159,7 @@ fn round_with(
         &RunSlots::default(),
         &OwedReruns::default(),
         &InstanceHolds::default(),
-        &NoProgressGuards::default(),
+        guards,
         &mut CappedMemory::default(),
         &InstancePoolLines::default(),
         left_out,

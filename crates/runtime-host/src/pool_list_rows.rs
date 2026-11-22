@@ -14,7 +14,11 @@
 //!   it does not hold is not on the screen it was read from.
 //! - **Unknown, never zero.** No list: `fact_missing`; a confidence below the pool's `ledger_fact`
 //!   minimum: `fact_low_confidence`; a named row's value that is not a non-negative integer, or a
-//!   sum beyond 2^53 − 1: `type_mismatch`. A list past its expiry is the evaluation's to judge
+//!   sum beyond 2^53 − 1: `type_mismatch`. Fix round 1 (review of #1868): so is a list that is not
+//!   keyed as the pool declares it: one of its rows carries no text under `key_column`, or none of
+//!   them carries `value_column` (a column name the package does not write would otherwise read
+//!   every key as one the list does not hold, a known 0). An empty list holds no key: it reads 0.
+//!   A list past its expiry is the evaluation's to judge
 //!   (`fact_expired`), by the expiry given with the reading, as are a timeline reset's
 //!   invalidation and a number a constant capacity cannot hold.
 //! - **Freshness is the list's**: its observation time, its expiry, its confidence.
@@ -97,6 +101,14 @@ pub(crate) fn list_rows_reading(
     else {
         return unknown(ListRowsUnknown::TypeMismatch);
     };
+    // Fix round 1: a list keyed otherwise than the pool declares is no list of these columns.
+    let unkeyed = listed
+        .iter()
+        .any(|entry| !matches!(entry.get(key_column), Some(FactScalar::String(_))));
+    let unvalued = listed.iter().all(|entry| !entry.contains_key(value_column));
+    if !listed.is_empty() && (unkeyed || unvalued) {
+        return unknown(ListRowsUnknown::TypeMismatch);
+    }
     let mut sum = 0_u128;
     for row in rows {
         // A key the whole list does not hold counts 0.

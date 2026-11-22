@@ -124,10 +124,14 @@ file, and the host computes the pool's reading from the instance's list before e
 ([scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"). **No Runtime of
 0.12.78 names it**: such a Runtime, and its check-config, refuse a file that lists it with
 `schedule_requires_missing` at that entry, and the workbench keeps the game's last good rules
-("The scheduler workbench"). The resource tools check no `requires`: `actinglab standard-pack
-check`, `compose` and `adopt` accept and carry the member. `standard-pack check` does not check
-that a package of the root reads the list L with the columns K and V: the check reads a package's
-reading marks only (`resource_readings`), not its list readings.
+("The scheduler workbench") when the active generation holds another file of the game; after a
+rollback from 0.12.79 the refused file is the one the active generation was composed from, so
+there is none to keep and the game has no rules (register §1.505, "At deploy"). The resource tools
+check no `requires`: `actinglab standard-pack check`, `compose` and `adopt` accept and carry the
+member. `standard-pack check` does not check that a package of the root reads the list L with the
+columns K and V: the check reads a package's reading marks only (`resource_readings`), not its list
+readings. At evaluation a list not keyed by them (a row without a text under K, or no row with V)
+leaves the pool unknown, `type_mismatch` (#455 P2 fix round 1), never a known 0.
 
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer

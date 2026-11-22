@@ -4102,10 +4102,17 @@ impl PolicyHost {
         );
         // SS-4 (register §1.231; `scheduling/README.md`, "No-progress guard"): an instance with
         // the guard off keeps none, and every guard a basis reading of another value released is
-        // gone; the armed ones hold their pairs in this evaluation.
+        // gone; the armed ones hold their pairs in this evaluation. #455 P2 fix round 1 (register
+        // §1.505): with the readings given the pools read from rows of a list, so a list read
+        // again with another sum releases a guard whose basis holds its key.
         let no_progress_on = |alias: &str| no_progress_enabled.get(alias).copied().unwrap_or(false);
-        self.no_progress
-            .observe(&active.compiled, facts, time, no_progress_on)?;
+        self.no_progress.observe_with_readings(
+            &active.compiled,
+            facts,
+            fact_refresh.left_out.pool_readings(),
+            time,
+            no_progress_on,
+        )?;
         let no_progress_guards = self.no_progress.guards();
         // SS-2h (register §1.289; `scheduling/README.md`, "Capped spending order"): the capped
         // episodes the evaluation reads and updates, taken out for the call and put back after it,
@@ -4554,11 +4561,13 @@ impl PolicyHost {
             }
         }
         // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
-        // arms the pair's guard (`commit_admission`).
-        self.no_progress.capture(
+        // arms the pair's guard (`commit_admission`). #455 P2 fix round 1: and the readings given
+        // the pools read from rows of a list, as this evaluation read them.
+        self.no_progress.capture_with_readings(
             &active.compiled,
             facts,
             resources,
+            left_out.pool_readings(),
             time,
             &pending_dispatch_intents,
             no_progress_on,
@@ -4568,6 +4577,7 @@ impl PolicyHost {
             &self.detection_quota,
             &active.compiled,
             facts,
+            left_out,
             &evaluation,
             &pending_dispatch_intents,
             time.unix_ms,
@@ -7535,11 +7545,18 @@ impl DetectionQuotaState {
     }
 }
 
+/// The detection planning signals of `evaluation`: per suggestion of a decision on an instance
+/// with no ordinary intent, a `planning_fact_unknown` reservation of the instance's detection
+/// budget. #455 P2 fix round 1 (register §1.505): none for a key `left_out` covers for the
+/// instance (a list a pool's reading is computed from, or a record list left out for its rows):
+/// no probe reads it, so no allowance is taken and nothing is written for it.
+#[allow(clippy::too_many_arguments)]
 fn preview_detection_planning_signals(
     store: &CatalogStore,
     state: &DetectionQuotaState,
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
+    left_out: &actingcommand_policy::LeftOutFacts,
     evaluation: &PolicyEvaluation,
     pending_dispatch_intents: &[DispatchIntent],
     now_unix_ms: u64,
@@ -7582,6 +7599,9 @@ fn preview_detection_planning_signals(
                 )
             })?;
         for suggestion in &decision.detection_suggestions {
+            if left_out.covers(instance_id, &suggestion.fact_key) {
+                continue;
+            }
             let reservation_id = detection_signal_id(
                 "reserved",
                 &[

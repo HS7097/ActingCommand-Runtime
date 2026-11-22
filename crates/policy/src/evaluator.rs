@@ -353,8 +353,9 @@ pub enum ListRowsUnknown {
     FactMissing,
     /// The list's confidence is below the pool's `ledger_fact` minimum: `fact_low_confidence`.
     FactLowConfidence,
-    /// A named row's value is no non-negative integer, or the sum exceeds 2^53 − 1:
-    /// `type_mismatch`.
+    /// A named row's value is no non-negative integer, the sum exceeds 2^53 − 1, or (fix round 1)
+    /// the list is not keyed as the pool declares it (a row without a text under its key column,
+    /// or no row with its value column): `type_mismatch`.
     TypeMismatch,
 }
 
@@ -391,6 +392,36 @@ impl GivenPoolReadings {
     /// Whether no pool was given a reading.
     pub fn is_empty(&self) -> bool {
         self.readings.is_empty()
+    }
+
+    /// #455 P2 fix round 1: each pool read from rows of the list `fact_key` of the instance
+    /// `instance_id` that the host computed a number for, with that reading, in the order of the
+    /// pools' ids.
+    pub(crate) fn list_reads<'s>(
+        &'s self,
+        instance_id: &'s str,
+        fact_key: &'s str,
+    ) -> impl Iterator<Item = (&'s str, GivenRead)> + 's {
+        self.readings.iter().filter_map(move |(pool_id, reading)| {
+            if reading.instance_id != instance_id || reading.fact_key != fact_key {
+                return None;
+            }
+            match reading.state {
+                GivenReadingState::Read {
+                    value,
+                    observed_at_unix_ms,
+                    expires_at_unix_ms,
+                } => Some((
+                    pool_id.as_str(),
+                    GivenRead {
+                        value,
+                        observed_at_unix_ms,
+                        expires_at_unix_ms,
+                    },
+                )),
+                GivenReadingState::Unknown(_) => None,
+            }
+        })
     }
 
     /// `pool`'s reading when the host computed a number for it.

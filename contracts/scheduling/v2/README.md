@@ -397,7 +397,8 @@ of the integer the column V holds in the row of the list reading L whose column 
 f. #455 P2 (since 0.12.79; register §1.505): the host computes that sum before each evaluation
 from the instance's list and gives it to the evaluation, which reads no list; a key the list does
 not hold counts 0, and a missing, low-confidence or expired list, a value that is no non-negative
-integer or a sum beyond 2^53 − 1 leaves the pool unknown, never 0 (`../README.md`). In 0.12.78 no
+integer, a sum beyond 2^53 − 1 or (fix round 1) a list not keyed by K and V (a row without a text
+under K, or no row with V) leaves the pool unknown, never 0 (`../README.md`). In 0.12.78 no
 host computed it and the pool had no reading. Refused, each at its pointer: in a V1 document `unknown_field` at `observation/kind`; beside
 `static_snapshot` `limit_exceeded` at the pool, as a `ledger_fact` pool without a fact observation
 is; a pool whose scope is not an instance `type_mismatch` at `observation/kind`; an L that is no
