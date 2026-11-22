@@ -221,6 +221,10 @@ pub(super) struct PendingIdleAction {
     /// IDLE-3 (#447): the gap the step is taken from (`idle_action::action_min_gap_ms`; a rest's
     /// `idle.return_home_min_gap_ms`), which the latest plan is held to again on the key.
     min_gap_ms: u64,
+    /// #486 ASLEEP-3 fix round 2 (register §1.512, ruling 4): the ordinary check's action on an
+    /// instance the start restored closed, which the latest plan is held to on the key with its
+    /// reading left out, as it was decided (`IdlePlanner::readings_apart`).
+    readings_apart: bool,
     /// The game and the server the instance's policy identity names, when one does.
     identity: Option<(String, String)>,
     /// Shared by the claim's request and the action's own requests.
@@ -548,6 +552,8 @@ impl HostShared {
             let Some(step) = step else {
                 continue;
             };
+            // #486 ASLEEP-3 fix round 2 (ruling 4): an action decided with the readings left out.
+            let readings_apart = planner.readings_apart(&alias);
             let pending = |work: IdleWork,
                            next_due_unix_ms: Option<u64>,
                            wake_at_unix_ms: Option<u64>,
@@ -560,6 +566,7 @@ impl HostShared {
                     next_due_unix_ms,
                     wake_at_unix_ms,
                     min_gap_ms,
+                    readings_apart,
                     identity: identities.get(&alias).cloned(),
                     causation_id: self
                         .events
@@ -1680,6 +1687,13 @@ impl HostShared {
         let (plan, counted) = {
             let policy = lock(self.policy()?, IdleLocation::Action)?;
             (policy.idle_plan(alias), policy.idle_runs_counted(alias))
+        };
+        // #486 ASLEEP-3 fix round 2 (register §1.512, ruling 4): the ordinary check's action on an
+        // instance the start restored closed is held to the plan's tasks alone, as it was decided.
+        let plan = if pending.readings_apart {
+            plan.map(crate::idle_action::IdlePlan::without_reading)
+        } else {
+            plan
         };
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
         Ok(crate::idle_action::stands_on_key(

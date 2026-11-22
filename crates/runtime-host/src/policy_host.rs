@@ -1592,11 +1592,30 @@ fn deferred_wake(eligibility: &CandidateEligibility) -> Option<u64> {
     }
 }
 
+/// #486 ASLEEP-3 fix round 2 (register §1.512, ruling 2; `runtime-config.md`, "What wakes an idle
+/// instance"): of the dispatches the journal holds (`admissions`: each one's instance, task and
+/// ledger sequence of its admission, when admitted), the latest admission of a scheduled task's run
+/// on `alias`, which answers an idle wake; the fact refresh's reading runs are left out, so the
+/// reading an awake instance refreshes answers no wake for a task that was not dispatched. None
+/// when there is none.
+pub(crate) fn latest_task_admission<'a>(
+    admissions: impl IntoIterator<Item = (&'a str, &'a str, Option<u64>)>,
+    alias: &str,
+) -> Option<u64> {
+    admissions
+        .into_iter()
+        .filter(|&(instance_id, task_id, _)| {
+            instance_id == alias && task_id != FACT_REFRESH_TASK_ID
+        })
+        .filter_map(|(_, _, admitted)| admitted)
+        .max()
+}
+
 /// #486 ASLEEP-3 (register §1.512, ruling 3; `runtime-config.md`, "What wakes an idle instance"):
 /// for the idle plan alone, a task candidate that a later position of the order of the deferrals
 /// defers with no time of its own while no hold of its instance defers it (`eligibility`: a
-/// suspended package, a closed pack schedule's row with no end, an owed rerun's pacing, the quiet
-/// before a blackout, a remedy round, a denial with no release) counts as held back by a later
+/// suspended package, a closed pack schedule's row with no end, an owed rerun's pacing, a remedy
+/// round, a denial with no release) counts as held back by a later
 /// position that names no time (`held_ahead`, `None`), as #484's look ahead counts such a candidate
 /// behind a hold: not due, no wake of its own. Before, the plan counted an eligible decision with no
 /// wake due, and so woke a sleeping instance for a task the next evaluation would hold back again
@@ -3775,13 +3794,19 @@ impl PolicyHost {
     /// #486 ASLEEP-1 (register §1.497, ruling 6): the ledger sequence of the latest admission of
     /// a scheduled run on `alias` the dispatch journal holds (it keeps every open dispatch and each
     /// pair's latest intent); none when it holds none. The idle check reads one later than a
-    /// wake's as that wake answered.
+    /// wake's as that wake answered. #486 ASLEEP-3 fix round 2 (register §1.512, ruling 2): a
+    /// scheduled task's run only, never the fact refresh's reading ([`latest_task_admission`]).
     pub(crate) fn idle_latest_admission(&self, alias: &str) -> Option<u64> {
-        self.seen_dispatches
-            .values()
-            .filter(|dispatch| dispatch.data.instance_id == alias)
-            .filter_map(|dispatch| dispatch.admitted_sequence)
-            .max()
+        latest_task_admission(
+            self.seen_dispatches.values().map(|dispatch| {
+                (
+                    dispatch.data.instance_id.as_str(),
+                    dispatch.data.task_id.as_str(),
+                    dispatch.admitted_sequence,
+                )
+            }),
+            alias,
+        )
     }
 
     /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
@@ -4433,9 +4458,7 @@ impl PolicyHost {
                 if let Some(gate) =
                     blackout.quiet_gate(&active.compiled, instance, intent, time, deadline_ms)?
                 {
-                    let quiet = gate.eligibility(&intent.instance_id, refresh);
-                    hold_back_untimed(&mut held_ahead, sleepers, intent, &quiet);
-                    return Ok(quiet);
+                    return Ok(gate.eligibility(&intent.instance_id, refresh));
                 }
                 // Workflow #411 B15 R4 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 8a): a remedy round holds the task, or stopped it for a person, after

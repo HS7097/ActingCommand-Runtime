@@ -1703,3 +1703,11 @@ test = "actingcommand-lab-rescue::lib::install::gate_r15b_registry::r15b_every_c
 ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1: the test reads two sections of contract text the slice removes and goes with them)"
 reason = "Removed: it checked the registry sections \"Registered codes and words (Workflow #429 R-15b)\" of install-cli.md and stable-entry.md against the catalogue; the first section and the whole of stable-entry.md are removed, and the codes and words they listed left the catalogue with them."
 covered_by = "The outcome guard: G7 holds the enums that keep R-15b words (install_guard's player_holds, release_check's selection_schema_mismatch) to their catalogue vocabularies, and G1 every registry entry to its fragment; the four tests of gate_r15b_release stay in the same apps.toml row."
+
+# host.toml, the row of #405 IDLE-1P (review N-1); #486 ASLEEP-3 fix round 2 renames one test.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_reading"
+ruling = "#486 ASLEEP-3 (0.12.79; register §1.512; the coordinator's rulings 1 and 4 of fix rounds 1 and 2: a reading alone wakes no instance at a start, and the ordinary check of a restored instance leaves its readings out)"
+reason = "Renamed: its name said the start wakes the instance for a reading alone, which the rulings withdraw; the test now asserts that the start stops the running emulator and wakes nothing."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading, in the same host.toml row."

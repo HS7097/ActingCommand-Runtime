@@ -31,8 +31,9 @@
 //!   no start before the release less the lead, one start at it.
 //! - 9: ruling 6 in the planner: after a wake that started the emulator, with no run admitted,
 //!   the emulator is not stopped again (`auto` takes `close_app` at most, its lighter tiers as
-//!   they are) and one warning is due; a run admitted after the wake, a Runtime start, a catalog's
-//!   activation and another idle configuration each let the stop be taken again.
+//!   they are) and one warning is due; a run admitted after the wake, a Runtime start and another
+//!   idle configuration each let the stop be taken again (a catalog's activation did too until #486
+//!   ASLEEP-3's fix round 2).
 //! - 10: a Runtime start with the instance asleep: the first evaluations after it defer the task by
 //!   its budget, and the restored planner keeps its wake and starts nothing.
 //! - 11: an asleep instance under a person's pause is not woken (`WakeHeld`), its task due behind
@@ -55,8 +56,9 @@
 //!   instance is restored stopped with its wake, is prepared by nothing and so is in no unavailable
 //!   instances' set, and is asleep (the task deferred by its budget, not `instance_unavailable`) with
 //!   no wake for nothing; its wake then starts the emulator, the night's check withholds the stop
-//!   once, and a catalogue's activation answers the wake: the next check stops the emulator. The
-//!   activated catalogue adds a judged task with no effect on an interval clock, whose benefit is
+//!   once, and (#486 ASLEEP-3 fix round 2, adapted) a catalogue's activation answers the wake no
+//!   more: the check at the hold's end still withholds the stop, the check past it stops the
+//!   emulator. The activated catalogue adds a judged task with no effect on an interval clock, whose benefit is
 //!   unknown and whose trigger names a time a millisecond away: on this instance (its idle action
 //!   can stop its emulator) that decision names no wake, so the stop is taken with its wake at the
 //!   budget's release less the lead (fix round 1, ruling 2).
@@ -79,7 +81,9 @@ use actingcommand_contract::{
     SubscriptionCursor,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
-use actingcommand_policy::{EligibilityState, PolicyCode, SchedulingDecisionState, TaskDecision};
+use actingcommand_policy::{
+    EligibilityState, FACT_REFRESH_TASK_ID, PolicyCode, SchedulingDecisionState, TaskDecision,
+};
 use actingcommand_runtime_config::{
     AutoGaps, DefaultsFile, IdleAction, IdleConfig, annotate_settable, mechanism_rows,
     render_parameters,
@@ -1015,17 +1019,16 @@ fn asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once() {
         "no stop was withheld"
     );
 
-    // A catalog's activation and another idle configuration each answer the wake; a Runtime
-    // start keeps none (its planner restores no memory of a wake).
-    let mut activated = woken(&STOP);
-    activated.forget_unanswered_wakes();
+    // Another idle configuration answers the wake; a Runtime start keeps none (its planner
+    // restores no memory of a wake). #486 ASLEEP-3 fix round 2 (ruling 1; adapted): a catalog's
+    // activation answers no wake any more (the planner has no such end), which `asleep_r2` shows
+    // through the host.
     let changed = IdleConfig {
         stop_emulator_wake_lead_ms: 2 * LEAD_MS,
         ..STOP
     };
     let mut reconfigured = woken(&STOP);
     for (case, planner, config) in [
-        ("an activation", &mut activated, &STOP),
         ("an idle change", &mut reconfigured, &changed),
         ("a Runtime start", &mut IdlePlanner::default(), &STOP),
     ] {
@@ -1718,15 +1721,19 @@ fn asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wak
         "one instance_idle_stop_withheld"
     );
 
-    // A catalogue's activation answers the wake: the next check stops the emulator. The activated
-    // catalogue adds a judged task on an interval clock whose benefit is unknown: on this instance
-    // (its idle action can stop its emulator) its decision names no wake in the idle plan (fix
-    // round 1, ruling 2), so the stop is taken and its wake is the budget's release less the lead.
+    // #486 ASLEEP-3 fix round 2 (ruling 1; adapted): a catalogue's activation answers the wake no
+    // more (it answered it from ASLEEP-1 to ASLEEP-3's first round): the check at the hold's end,
+    // ten minutes after the first withholding check, still withholds the stop; the check just past
+    // it stops the emulator. The activated catalogue adds a judged task on an interval clock whose
+    // benefit is unknown: on this instance (its idle action can stop its emulator) its decision names
+    // no wake in the idle plan (ASLEEP-1 fix round 1, ruling 2), so the stop's wake is the budget's
+    // release less the lead.
     replay
         .host
         .activate_policy_catalog(&sources_of(2, &[budget_task(), judged_interval_task()]))
         .expect("activate the second catalogue");
-    let cycle = replay.cycle(at(3, 1, 10));
+    let hold_end = at(3, 1, 10);
+    let cycle = replay.cycle(hold_end);
     let judged = decision(&cycle, JUDGED);
     assert!(
         judged.reasons.last().is_some_and(|reason| {
@@ -1735,12 +1742,22 @@ fn asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wak
         }),
         "the benefit gate holds the judged task: {judged:#?}"
     );
+    assert!(
+        replay.claims_free(),
+        "the activation did not answer the wake: still withheld at the hold's end"
+    );
+    assert_eq!(stops(&replay.state), 0, "not stopped at the hold's end");
+    replay.cycle(hold_end + 1);
     assert_eq!(
         replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
         Some(1),
-        "the stop after the activation ended"
+        "the stop past the hold ended"
     );
-    assert_eq!(stops(&replay.state), 1, "the activation answered the wake");
+    assert_eq!(
+        stops(&replay.state),
+        1,
+        "the hold's end let the stop be taken"
+    );
     assert_eq!(
         kept_rows(&replay.host),
         Some(vec![stopped_row(at(3, 6, 0) - LEAD_MS)]),
@@ -1780,8 +1797,9 @@ fn asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wak
 //   checks do not close the application again and one `instance_idle_stop_withheld` names
 //   `close_app`; the day's admitted runs answer it and the application is closed again.
 // - h12 (test 3, the planner): the same in the pure planner, a wake whose startup package did not
-//   run to its end binding nothing, `auto` resting at home at most, a catalog's activation
-//   answering the wake, and a wake after `stop_emulator` bound by no startup package's run.
+//   run to its end binding nothing, `auto` resting at home at most, the wake's hold ending it
+//   (#486 ASLEEP-3 fix round 2: a catalog's activation answered it before), and a wake after
+//   `stop_emulator` bound by no startup package's run.
 // - r6 (test 4): an instance with `idle.action` `none` and an awake `close_app` instance decide and
 //   plan as before.
 
@@ -2479,24 +2497,36 @@ fn asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_wa
         "the close not taken is warned"
     );
 
-    // A catalog's activation answers the wake.
-    let mut activated = woken_and(&CLOSE, true);
-    activated.forget_unanswered_wakes();
+    // #486 ASLEEP-3 fix round 2 (ruling 1; adapted): a catalog's activation answers the wake no
+    // more; the wake's hold ends it: withheld at the first check, the close is taken past its end.
+    let mut expiring = woken_and(&CLOSE, true);
+    assert_eq!(
+        expiring.check(
+            ALIAS,
+            &CLOSE,
+            free(),
+            Some(plan_at(first, false, Some(far))),
+            first
+        ),
+        None,
+        "withheld within its hold"
+    );
+    let past = expiring.hold_end(ALIAS).expect("the hold's end") + 1;
     assert!(
         matches!(
-            activated.check(
+            expiring.check(
                 ALIAS,
                 &CLOSE,
                 free(),
-                Some(plan_at(first, false, Some(far))),
-                first
+                Some(plan_at(past, false, Some(far))),
+                past
             ),
             Some(IdleStep::Act {
                 action: IdleAction::CloseApp,
                 ..
             })
         ),
-        "an activation answers the wake"
+        "past its hold the close is taken"
     );
 
     // A wake after `stop_emulator` is bound by its emulator's start alone: a startup package's run
@@ -3464,10 +3494,28 @@ fn asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_end
     );
 }
 
+/// #486 ASLEEP-3 fix round 2: what the loop's checks read as the latest admission of a scheduled
+/// run on the instance (`IdleView::latest_admission`).
+#[derive(Clone, Copy)]
+enum Admissions {
+    /// No run is ever admitted on the instance.
+    NoRun,
+    /// A dispatch of the task is never admitted, and a reading's run (the scheduler's fact refresh)
+    /// is admitted after every wake, read as the host reads them (`latest_task_admission`: a
+    /// scheduled task's run only, ruling 2).
+    Readings,
+    /// The same journal read as before fix round 2, when a reading's admission answered a wake.
+    ReadingsAnswering,
+}
+
 /// #486 ASLEEP-3, the loop bound under `config`: a check every minute for two hours; awake, the
 /// plan shows no work, so the check would stop the emulator; stopped, the wake predicate always
-/// says due; no run is ever admitted. The stops, the wakes and the warnings.
-fn two_hour_loop(config: &IdleConfig) -> (u32, u32, u32) {
+/// says due; no task's run is ever admitted, and `admissions` says what else is. The stops, the
+/// wakes and the warnings. A catalog's activation, every few minutes in production, reaches the
+/// idle planner no more (fix round 2, ruling 1: `switch_policy_catalog` calls nothing of it), so
+/// the loop is the same with any number of them; `asleep_r2` shows an activation leaving a hold
+/// through the host.
+fn two_hour_loop(config: &IdleConfig, admissions: Admissions) -> (u32, u32, u32) {
     /// Where the instance stands between two checks of the loop.
     #[derive(Clone, Copy)]
     enum Standing {
@@ -3480,13 +3528,35 @@ fn two_hour_loop(config: &IdleConfig) -> (u32, u32, u32) {
     let mut planner = IdlePlanner::default();
     let mut standing = Standing::Awake;
     let (mut stops_taken, mut wakes, mut warnings) = (0_u32, 0_u32, 0_u32);
+    // The dispatch journal of the instance: its task's dispatch, never admitted, and the readings.
+    let mut journal: Vec<(&str, &str, Option<u64>)> = vec![(ALIAS, TASK, None)];
+    let mut sequence = 100_u64;
     let mut now = start;
     while now <= end {
+        let latest_admission = match admissions {
+            Admissions::NoRun => None,
+            Admissions::Readings => {
+                crate::policy_host::latest_task_admission(journal.iter().copied(), ALIAS)
+            }
+            Admissions::ReadingsAnswering => journal
+                .iter()
+                .filter(|(instance_id, _, _)| *instance_id == ALIAS)
+                .filter_map(|(_, _, admitted)| *admitted)
+                .max(),
+        };
+        let shown = |view: IdleView| IdleView {
+            latest_admission,
+            ..view
+        };
         match standing {
             Standing::Awake => {
-                if let Some(step) =
-                    planner.check(ALIAS, config, free(), Some(plan_at(now, false, None)), now)
-                {
+                if let Some(step) = planner.check(
+                    ALIAS,
+                    config,
+                    shown(free()),
+                    Some(plan_at(now, false, None)),
+                    now,
+                ) {
                     assert!(
                         matches!(
                             step,
@@ -3510,7 +3580,7 @@ fn two_hour_loop(config: &IdleConfig) -> (u32, u32, u32) {
                     planner.check_with_due_task(
                         ALIAS,
                         config,
-                        stopped(),
+                        shown(stopped()),
                         Some(plan_at(now, true, None)),
                         now,
                         Some(TASK),
@@ -3521,10 +3591,21 @@ fn two_hour_loop(config: &IdleConfig) -> (u32, u32, u32) {
                 planner.wake_started_emulator(ALIAS);
                 wakes += 1;
                 standing = Standing::Woken;
+                // The awake instance's reading is refreshed: its run admitted after the wake.
+                if !matches!(admissions, Admissions::NoRun) {
+                    sequence += 1;
+                    journal.push((ALIAS, FACT_REFRESH_TASK_ID, Some(sequence)));
+                }
             }
             Standing::Woken => {
                 assert_eq!(
-                    planner.check(ALIAS, config, leased(), Some(plan_at(now, true, None)), now),
+                    planner.check(
+                        ALIAS,
+                        config,
+                        shown(leased()),
+                        Some(plan_at(now, true, None)),
+                        now
+                    ),
                     None
                 );
                 standing = Standing::Awake;
@@ -3540,15 +3621,30 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
     // The first stop, then one after each hold: 10 minutes from the first withholding check, then
     // 20 and 40; the fourth hold, 80 minutes, outlasts the two hours (11-21's loop went round
     // eleven times in sixteen minutes). Fix round 1 (ruling 2): the same with a wake lead of 0, the
-    // bound depending on no setting.
-    for (case, config) in [
-        ("the factory lead", STOP),
-        ("a lead of 0", stop_with_lead(0)),
+    // bound depending on no setting. Fix round 2 (rulings 1 to 3): the same as production goes, a
+    // reading's run admitted after every wake (and catalogs activated as often as placements come,
+    // which no longer reach the planner).
+    for (case, config, admissions) in [
+        ("the factory lead", STOP, Admissions::NoRun),
+        ("a lead of 0", stop_with_lead(0), Admissions::NoRun),
+        (
+            "a reading's run admitted after every wake",
+            STOP,
+            Admissions::Readings,
+        ),
     ] {
         assert_eq!(
-            two_hour_loop(&config),
+            two_hour_loop(&config, admissions),
             (4, 4, 4),
             "{case}: four stops, four wakes and one warning each"
         );
     }
+    // Had a reading's admission answered the wake (before fix round 2), each wake would have been
+    // answered before the next check and the loop would have gone round at its natural rate: a stop
+    // every three minutes, none withheld.
+    assert_eq!(
+        two_hour_loop(&STOP, Admissions::ReadingsAnswering),
+        (41, 40, 0),
+        "the loop the reading's answer let run"
+    );
 }

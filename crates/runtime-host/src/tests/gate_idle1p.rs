@@ -53,8 +53,12 @@
 //! through the host (their start's check takes a plan: a task due, or the plan's own time come) and
 //! O-2 in the planner (its restart's check takes a plan whose time has come). Fix round 1 (ruling
 //! 1: a reading alone wakes no instance, at a start either): N-1 both, whose start's plan with no
-//! task wake while the reading waits now wakes nothing; the wake comes with a plan that has a task
-//! due, and what follows it is as before.
+//! task wake while the reading waits now wakes nothing; for `close_app` the wake comes with a plan
+//! that has a task due, and what follows it is as before. Fix round 2 (ruling 4: the ordinary check
+//! of a restored instance leaves its readings out): N-1 with `stop_emulator` (renamed
+//! `idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading`)
+//! has X's running emulator stopped at the start's first plan, and the next plan keeps it closed
+//! with its proper wake.
 //!
 //! L-1 to L-3 go through the host with the scripted emulator of `gate_idle1_host` (X's idle action
 //! `stop_emulator`, its configured emulator start and a startup package) on a manual clock; each
@@ -877,68 +881,6 @@ fn await_key(host: &RuntimeHost, claim: RequestId) {
     }
 }
 
-/// #405 O-2, review M-1: waits until X's startup claim `claim` has given X's key up and X is free.
-/// After the claim was requested, X's key is released twice: by the wake's configured emulator
-/// start, which hands it to the claim, then by the claim (its run's release, completed or failed,
-/// or the claim's own after a refused preparation). A release is recorded once the key is free;
-/// the release holds X's admission guard until it returns, so the guard is then taken and let go.
-fn await_startup_claim_end(host: &RuntimeHost, x: InstanceId, claim: RequestId) {
-    let mut after = of_request(host, claim)
-        .first()
-        .map(PersistedEvent::sequence)
-        .expect("the startup claim's request");
-    for release in ["the wake's start's release", "the startup claim's release"] {
-        after = await_release(host, x, after, release);
-    }
-    let admission = host
-        .instance_admission_for_test(X_ALIAS)
-        .expect("X's admission guard");
-    drop(admission.lock().expect("X's admission guard"));
-}
-
-/// The sequence of X's next key release after `after` (`what`); each wait is a ledger subscription
-/// that answers as soon as one is written, as in [`await_key`].
-fn await_release(host: &RuntimeHost, x: InstanceId, after: u64, what: &str) -> u64 {
-    let query = EventQuery {
-        event_type: Some(EventType::LeaseReleased),
-        instance_id: Some(x),
-        from_sequence: Some(after + 1),
-        ..EventQuery::default()
-    };
-    let empty_answers = WAIT
-        .as_millis()
-        .div_ceil(u128::from(MAX_RUNTIME_SUBSCRIPTION_WAIT_MS));
-    for _ in 0..empty_answers {
-        let subscription = RuntimeSubscriptionRequest::new(
-            query.clone(),
-            ProjectionProfile::Forensic,
-            SubscriptionCursor::default(),
-            MAX_RUNTIME_SUBSCRIPTION_WAIT_MS,
-            1,
-        )
-        .expect("subscription request");
-        let receipt = send(
-            host,
-            RuntimeOperation::SubscribeEvents {
-                request: subscription,
-            },
-            4_404,
-        );
-        let Some(RuntimeResult::EventBatch { batch }) = receipt.result() else {
-            panic!("an event batch: {receipt:?}");
-        };
-        if !batch.timed_out() {
-            return host
-                .query_persisted_events_for_test(query)
-                .expect("X's key releases")
-                .first()
-                .map(PersistedEvent::sequence)
-                .expect(what);
-        }
-    }
-    panic!("{what}: X's key was not released within the wait");
-}
-
 /// X paused with `reason`, as a person or the installer's hold pauses it.
 pub(super) fn pause_x(host: &RuntimeHost, reason: &str) {
     let receipt = send(
@@ -960,16 +902,15 @@ pub(super) fn pause_x(host: &RuntimeHost, reason: &str) {
 
 /// Review N-1 through the host on X (`stop_emulator`): a start that cannot use a record (an
 /// earlier start kept none), with X's only work waiting for a status reading that expired
-/// meanwhile. Its plan has no task due and no task wake. #486 ASLEEP-3 fix round 1 (0.12.79,
-/// register §1.512, ruling 1; adapted): the reading alone wakes nothing at the start either, nor
-/// does the ordinary check stop X's running emulator while the reading is due; X stays closed
-/// until a task really comes due, which wakes it. Its wake's configured emulator start finds X's
-/// emulator running and starts nothing; since review M-1 (0.12.25) it still queues X's startup
-/// package once, and X stays woken until that claim has given X's key up (#405 O-2). The next
-/// plan, after the reading, then closes X again with its proper wake: the task's next wake minus
-/// the lead.
+/// meanwhile. Its plan has no task due and no task wake. #486 ASLEEP-3 fix rounds 1 and 2
+/// (0.12.79, register §1.512, rulings 1 and 4; adapted, and renamed from
+/// `idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_reading`): the
+/// reading alone wakes nothing at the start, and the ordinary check, which leaves the reading out
+/// of its judgement, stops X's emulator, which in fact runs, with no wake planned and no startup
+/// package first. The next plan, after the reading, keeps X closed with its proper wake: the
+/// task's next wake minus the lead.
 #[test]
-fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_reading() {
+fn idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading() {
     let root = TempDir::new().expect("tempdir");
     let clock = Arc::new(ManualRuntimeClock::new(NOW_UNIX_MS, 0));
     let x = instance_id();
@@ -981,9 +922,6 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
     let started_at = NOW_UNIX_MS + MINUTE_MS;
     clock.set_unix_ms(started_at);
     let state = x_state();
-    state
-        .emulator
-        .script_read(running_state(FAKE_EMULATOR_PORT));
     let host = start(&root, &clock, x, &state, false).expect("the start");
     let expired = x_explained(status_expired(), started_at);
     let plan = expired[X_ALIAS];
@@ -991,52 +929,21 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
         !plan.due_now && plan.next_wake_unix_ms.is_none() && plan.reading_due_unix_ms.is_some(),
         "no task due or waking, the reading held back: {plan:?}"
     );
-    // The start's first check: #486 ASLEEP-3 fix round 1 (adapted), the reading alone wakes
-    // nothing, and with the reading due the ordinary check takes no action either.
+    // The start's first check: no wake for the reading alone; the ordinary check, the reading
+    // left out, stops X's running emulator.
     host.check_idle_instances_for_test(&expired)
         .expect("the start's check");
-    assert!(
-        idle_records(&host, x, 0).is_empty(),
-        "no wake and no action for the reading alone"
-    );
-    assert_eq!(stops(&state), 0, "X's emulator is left as it is");
-    // A task of X comes due: the wake.
-    host.check_idle_instances_for_test(&x_due_plan_at(started_at))
-        .expect("the check with a task due");
-    // #405 O-2 (0.12.25, adapted): woken, X is kept closed and woken until its wake's claims
-    // have ended (what follows depends on which check finds it free first). The start's first
-    // plan replaced the time the start owed the wake at with the plan's wake, none.
     assert_eq!(
-        kept_history(&host)[..3],
-        [
-            vec![x_row(Some(started_at))],
-            vec![x_row(None)],
-            vec![x_woken_row(started_at)]
-        ],
-        "X is restored closed owing its wake to the start, then waits with no wake, then is woken"
+        host.await_idle_action_ends_for_test(1, WAIT),
+        Some(1),
+        "X's idle action ended"
     );
+    assert_eq!(stops(&state), 1, "the ordinary check stopped X's emulator");
     assert_eq!(
         idle_records(&host, x, 0),
-        wake_records(),
-        "one wake, for the task due"
+        [action_record()],
+        "one action and no wake for the reading alone"
     );
-    await_wake_start_end(&host);
-    assert!(
-        !state
-            .emulator
-            .calls()
-            .contains(&EmulatorCall::Control(EmulatorInstanceAction::Start)),
-        "X's running emulator is not started"
-    );
-    // Review M-1 (0.12.25, adapted): the wake's start, which found X's emulator running, still
-    // queued the startup package once, and X stays woken while that claim holds it (#405 O-2):
-    // the next plan meets X free only once the claim has given X's key up.
-    assert_eq!(
-        startups_scheduled(&host, x, 0),
-        1,
-        "the wake's start queues the startup package once"
-    );
-    await_startup_claim_end(&host, x, startup_claim(&host, x));
 
     // The next plan, after the reading: the task wakes at the fresh status's expiry + 1.
     let fresh_at = started_at + MINUTE_MS;
@@ -1045,19 +952,21 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
     host.check_idle_instances_for_test(&x_explained(status_fresh(expiry), fresh_at))
         .expect("the next check");
     assert_eq!(
-        host.await_idle_action_ends_for_test(1, WAIT),
-        Some(1),
-        "X's idle action ended"
+        kept_history(&host)[..3],
+        [
+            vec![x_row(Some(started_at))],
+            vec![x_row(None)],
+            vec![x_row(Some(expiry + 1 - STOP_EMULATOR_LEAD_MS))]
+        ],
+        "X is restored closed owing its wake to the start, stopped with no wake, then kept closed \
+         with its proper wake"
     );
-    assert_eq!(stops(&state), 1, "X is closed again");
+    assert_eq!(stops(&state), 1, "not stopped again");
     assert_eq!(
-        kept_rows(&host),
-        Some(vec![x_row(Some(expiry + 1 - STOP_EMULATOR_LEAD_MS))]),
-        "X is kept closed with its proper wake"
+        idle_records(&host, x, 0),
+        [action_record()],
+        "no wake for the fresh plan either"
     );
-    let mut expected = wake_records();
-    expected.push(action_record());
-    assert_eq!(idle_records(&host, x, 0), expected);
     host.close().expect("close the host");
 }
 
