@@ -463,7 +463,13 @@ to the hard line; on the head of the pool's capped episode its turns stop once t
 spent (the pool at or below its stop line and below its trigger line, the turn that crosses
 included), never below the hard line
 ([scheduling/README.md](scheduling/README.md), "Capped spending order", "What the head's run is
-handed"). A rule writes `reserves` only for a floor of its own above the pool's hard line.
+handed"). A rule writes `reserves` only for a floor of its own above the pool's hard line. After
+a run that was told its turns, every pool the rule consumes is unknown to the Runtime until it
+is read after that run's end ([scheduling/README.md](scheduling/README.md), "Pool lines", "At
+each evaluation"), so nothing that needs its value is dispatched from a reading the turns made
+stale. A reading the run wrote itself does not count; where the fact refresh can serve the
+pool's key one more reading run reads it, and a pool whose reading only a package's own rule
+brings waits for that rule.
 
 ## Composition
 

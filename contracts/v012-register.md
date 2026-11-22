@@ -46024,10 +46024,11 @@ when it places a zip of 16 to 23 that carries none or replaces it with that zip'
 ### 1.509 Slice #477 LF-1 (0.12.80): the turn cap a dispatch carries counts the lines of the pools its task consumes, so a stop line is written once, on the pool (board #477; the rulings 1 to 6 are the coordinator's of 11-22, no words of the owner's behind them; coordinator work order `rd-1122/brief-477-lf1.md` after the read-only study `rd-1122/study-477-step2.md`, its section 5 and the coordinator's disposition of it; on main `f773b3d1`)
 
 This section takes 1.509 (1.507, 1.512 and 1.513 belong to other slices). It ships in 0.12.80.
-[scheduling/README.md](scheduling/README.md) ("Task Reserves", the bullet "Spend values";
-"Capped spending order", the bullet "What the head's run is handed"; item 7 of "Who reads it" of
-"A run's consumption read from a fact") and [remedies.md](remedies.md) (section 4, "Spend values":
-the sentence on who carries them, the rows `spend_allowance.<i>` and `run_cap`) are the contract;
+[scheduling/README.md](scheduling/README.md) ("Task Reserves", the gate's step 1 and the bullet
+"Spend values"; "Pool lines", the bullet "At each evaluation"; "Capped spending order", the
+bullet "What the head's run is handed"; items 2 and 7 of "Who reads it" of "A run's consumption
+read from a fact") and [remedies.md](remedies.md) (section 4, "Spend values": the sentence on who
+carries them, the rows `spend_allowance.<i>` and `run_cap`) are the contract;
 [standard-pack-schedule.md](standard-pack-schedule.md) ("How many turns a sweep runs", new)
 follows it. No `package` revision moves, no declared interface range, no configuration key, no
 code, no catalog member: nothing is declared anew, so no `requires` name and no catalog hash moves.
@@ -46045,8 +46046,8 @@ pool's stop line in its `reserves`, two places that drift apart.
   else the catalog's `stop_line` and `hard_line`; not the defaults), takes part in its spend values
   whether or not the task reserves it. Its floor is the hard line as read at the evaluation; where
   the task reserves the pool, the larger of the hard line and `at_least`. Its allowance is the
-  lines' gate's own reading `r` less the floor, at least 0 (fix round 1 below; first built as
-  `projected − pending − floor`, `pending` the other tasks' unshown consumption), handed as
+  lines' gate's own reading `r` less the floor, at least 0 (after the two reviews, below; first
+  built as `projected − pending − floor`, `pending` the other tasks' unshown consumption), handed as
   `spend_allowance.<i>` at its `consumes` entry.
 - *The turns* (ruling 2). On the head of the pool's capped episode (a candidate of the pool's
   block: the one the order dispatches with `capped_spend` is the head of what it dispatches) the
@@ -46064,7 +46065,8 @@ pool's stop line in its `reserves`, two places that drift apart.
   lined), at most the goal term where there is one, at most 1,000; absent when none takes part,
   when one's projection or one of its lines gives no value, and when one is consumed by an amount
   that is not an integer (an `expected_amount_milli` or a pending one).
-- *Admissions* (ruling 4, replaced where it touches them by fix round 1's ruling 3 below). The
+- *Admissions* (ruling 4; after the two reviews a pool read before the end of a run told its
+  turns is unknown, below). The
   lines' gate holds a judged candidate whose run would leave `r − c < H`, and the capped block
   holds only candidates that fit above `H`; so a dispatched candidate's allowance on such a pool,
   taken from the same `r`, pays for at least one run, and on the head the episode is not spent,
@@ -46074,38 +46076,56 @@ pool's stop line in its `reserves`, two places that drift apart.
   valuation (its lines change no decision, "Without a valuation"), a candidate that is not judged,
   and a task with reserves only: every value, record and identity as before.
 
-**Fix round 1** (after the one independent review of #1872, `rd-1122/review-1872.md`; the
-coordinator's rulings 1 to 4 of 11-22, not the owner's words). The review traced two ways the
-first build told a run more turns than the gate would admit one by one: the allowance took off
-the other tasks' unshown consumption only (the reserve path of SS-6 did so on main already), and
-each unshown dispatch counted one run though it was handed N. Capacity 180, `S` 140, `H` 104, 15
-a run: read at 134, then the task ran once (really 119): the gate admitted (119 − 15 = 104) while
-`run_cap` was ⌊30 ÷ 15⌋ = 2, ending at 89; read at 180, the head swept 3 turns (really 135) and the
-pool was not read again: `r` 165, the head again, 3 more turns, 90.
-- *Ruling 1.* A dispatch that was handed a `run_cap` of N counts N runs of its consumption (at
-  least one) of each pool that took part in that cap (its `spend_allowances` entries) wherever
-  consumption a reading does not show yet is counted: the lines' gate's `r`, the reserve gate's
-  step 3, the capped plan's dispatched members, the allowance. A dispatch that carried no
-  `run_cap` counts one run, as before. It is an upper bound, which the pool's next reading
-  corrects. Where a later evaluation learns it: each dispatch's recorded reason chain carries its
-  `policy_dispatch_parameters`; the host reads, for each pair's latest admitted dispatch at the
-  inputs' position, its `run_cap` and entries from its resident journal
-  (`PolicyHost::handed_turns`, keyed and timed as the pair's task snapshot) and gives them to the
-  evaluation beside the left-out facts (`LeftOutFacts::give_handed_turns`, `HandedTurns`); the
-  evaluator counts them only for the dispatch whose admission time is the snapshot's
-  `last_dispatched_unix_ms`. No wire member, no record and no fact is new.
-- *Ruling 2.* One number for the gate and for the cap: a pool whose lines take part takes its
-  allowance from the lines' gate's own `r` (every unshown dispatch, the task's own included, by
-  ruling 1's count) less the floor; the reserve path takes off every task's unshown consumption
-  too, the task's own included (`unshown_total` in place of `pending_total`). The reserve gate's
-  step 3 still leaves the candidate's own dispatch out, so after it an allowance whose floor is a
-  reserve can be below one run (0 included): the run is told to spend nothing, never below the
-  line.
-- *Ruling 3.* So admissions change in exactly this: after a dispatch handed N turns, the pool
-  counts N turns as spent until it is read again (before: one).
-- *Ruling 4.* A candidate in the blocks of two pools is the head of the pool whose
-  `capped_spend` it carries; the other pool hands it `⌊(r − floor) ÷ c⌋`, which may take that
-  pool past its stop line, never below its floor. Left in the code, stated in the contract.
+**After the two reviews of #1872** (`rd-1122/review-1872.md` and `rd-1122/review-1872-r2.md`; the
+coordinator's ruling of 11-22 that replaces fix round 1's rulings 1 to 3, not the owner's words).
+The first review traced how the first build told a run more turns than the gates would admit one
+by one: an unshown dispatch counted one run though it was handed N. Capacity 180, `S` 140, `H`
+104, 15 a run: read at 180, the head swept 3 turns (really 135) and the pool was not read again:
+`r` 165, the head again, 3 more turns, 90. Fix round 1 counted N runs for a dispatch handed N; the
+second review still found turns handed from a reading a run had made stale (its reserve example:
+two dispatches of one pair since one reading), and a second round that would have invalidated
+the reading at the run's settlement stopped on the fact store's rules (an invalidation is the
+store's own, by a pack's `invalidate_on` or an adjustment rule). The ruling:
+- *A run told its turns leaves its pools unread.* While a (task, instance) pair whose task
+  consumes a pool (any entry of its `consumes`, whether or not the pool took part in the cap) has
+  a latest scheduled dispatch that carried a `run_cap` and that has not ended, or ended after the
+  pool's reading was observed, the evaluation reads that pool as unknown: `unknown_reason`
+  `fact_stale` under the pool's own key (a pool read from a fact or from rows of a list, not a
+  static value). A reading the run wrote while it ran does not lift it; one observed at or after
+  its end does. A dispatch that carried no `run_cap` counts one run, as on main.
+- *Where.* In the evaluation's pool values (`PoolValues::without_unshown`, applied once as
+  `evaluate_scheduling` builds them), the one place that decides what a pool reading is worth;
+  every reader asks them (`PoolValues::get`, and `PoolValues::unknown_reason` for the reason): the
+  triggers and their detection suggestions, the net benefit's gap, the lines (`capped_cap_unknown`,
+  an episode under way waits), the reserve gate's step 1 and the spend values (no
+  `spend_allowance`, no `run_cap`). The pair is matched by the task's id in the active catalog
+  against every instance, so a pool whose scope covers several instances is unknown on all of
+  them.
+- *What the host gives.* Per pair, whether its latest admitted dispatch at the inputs' ledger
+  position carried a `run_cap` on its recorded `policy_dispatch_parameters`, and when that run
+  ended (the observation of its settlement, once recorded at or before that position), or that it
+  has not: `PolicyHost::handed_runs`, from the resident journal, keyed as the pair's task snapshot,
+  given beside the left-out facts (`LeftOutFacts::give_handed_runs`, `HandedRuns`). The evaluator
+  held no end time of a pair's latest scheduled run (the completed window it reads is hidden for
+  an owed rerun), and the host hands it without a wire member, so the work order's stop condition
+  was not met. No record, event, wire member or fact-store change; a start rebuilds the journal
+  from the ledger and gives the same.
+- *Taken out of fix round 1.* The count of N runs everywhere (the lines' reading, the reserve
+  gate's step 3, the capped plan's dispatched members, the allowance) and the reserve path's
+  `unshown_total`: the reserve path is SS-6's again (`pending_total`, the other tasks' unshown
+  consumption), and a dispatch counts one run as on main. Kept: the host's reading of what each
+  pair's latest dispatch was handed (now only whether it carried a `run_cap`, and its end); the
+  lines' allowance is the lines' gate's own `r` less the floor (fix round 1's ruling 2 for a pool
+  whose lines take part); and its ruling 4: a candidate in the blocks of two pools is the head of
+  the pool whose `capped_spend` it carries, and the other pool hands it `⌊(r − floor) ÷ c⌋`, which
+  may take that pool past its stop line, never below its floor (left in the code, stated in the
+  contract).
+- *Known limits* (stated in the contract, "Pool lines", "At each evaluation"). A package that runs
+  one turn whatever its `run_cap` still leaves the pool unknown until the next reading. A run whose
+  settlement is not recorded keeps it unknown until it is (a start settles an earlier epoch's
+  runs). A later dispatch of the pair that was handed no `run_cap` takes the place of the one that
+  was, and a pair whose latest admitted dispatch the journal no longer holds is not noted. The
+  resource targets' conditions and a goal's gap read the pool's own observation, as before.
 
 **A worked example.** A valued pool of capacity 180, `stop_line` 140, `hard_line` 104, no
 `trigger_line` (180); a judged rule consuming 15 a run, no `reserves`. Read at 175 (no episode):
@@ -46115,21 +46135,24 @@ runs (180 − 45 = 135 ≤ 140; ⌊40 ÷ 15⌋ = 2 would stop at 150 and the nex
 episode under way), the floor allows ⌊76 ÷ 15⌋ = 5: `run_cap` 3. With `hard_line` 136 the floor
 binds: ⌊44 ÷ 15⌋ = 2. With the stop line at a trigger line of 160, read at 175: one run leaves 160,
 not below 160, so ⌈(175 − 159) ÷ 15⌉ = 2 (145). A reserve of 120 on the same pool read at 175 raises
-the floor: 175 − 120 = 55. Fix round 1: after the head's sweep of 3 at 180 with no new reading the
-next evaluation reads 180 − 45 = 135, spent: no head, and below the trigger line ⌊(135 − 104) ÷
-15⌋ = 2 turns (105); read at 134 after the task's own run, the gate reads 119 and hands 1 turn (104).
+the floor: 175 − 120 = 55. After the two reviews: after the head's sweep of 3 at 180 the pool is
+unknown (`fact_stale`) and nothing that needs it is dispatched until a reading observed after
+the run's end; read then at 135, the episode is spent and the task is handed ⌊(135 − 104) ÷ 15⌋
+= 2 turns (105). Read at 134 before a run of the task that was handed no `run_cap`, the gate
+reads 119 and hands 1 turn (104).
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
-| The values | `crates/policy/src/resource_targets.rs` (`LineView`, `PoolLines`, `pool_spend`, `spend_values_with`, `run_amount`, `run_cap`; `spend_values` kept for SS-6's tests; fix round 1: `unshown_consumption` with the handed turns, `unshown_total`) |
-| The lines in effect | `crates/policy/src/evaluator/capped.rs` (`line_view`, from `lines`, the one reading of a pool's lines; `Lines::spent_at`; fix round 1: `lines` counts the handed turns, `dispatched_amounts` and `Round::plan` for a dispatched member) |
-| Handing them on | `crates/policy/src/evaluator.rs` (`spend_lines`, `SpendLines`; the spend values' loop of the score stage; fix round 1: `HandedTurns`, `LeftOutFacts::give_handed_turns`, `reserve_unshown` with them) |
-| The turns a dispatch was handed (fix round 1) | `crates/runtime-host/src/policy_host.rs` (`PolicyHost::handed_turns`); `crates/runtime-host/src/host/policy_dispatch.rs` (the evaluated cycle gives them) |
+| The values | `crates/policy/src/resource_targets.rs` (`LineView`, `PoolLines` with the lines' gate's `reading`, `pool_spend`, `spend_values_with`, `run_amount`, `run_cap`; `spend_values` kept for SS-6's tests) |
+| The lines in effect | `crates/policy/src/evaluator/capped.rs` (`line_view`, from `lines`, the one reading of a pool's lines; `Lines::spent_at`; `lines` names the pool values' reason for an unknown pool) |
+| Handing them on | `crates/policy/src/evaluator.rs` (`spend_lines`, `SpendLines`; the spend values' loop of the score stage) |
+| A pool a run told its turns has spent from (after the two reviews) | `crates/policy/src/evaluator.rs` (`HandedRuns`, `LeftOutFacts::give_handed_runs`, `PoolValues::without_unshown`, `PoolValues::unknown_reason`, `resource_suggestion` reading it); `crates/policy/src/evaluator/benefit.rs` (the gap's and the suggestions' reason from it) |
+| The runs a dispatch was handed a `run_cap` for | `crates/runtime-host/src/policy_host.rs` (`PolicyHost::handed_runs`); `crates/runtime-host/src/host/policy_dispatch.rs` (the evaluated cycle gives them) |
 
-**Tests** (incident `#477 LF-1`: `crates/policy/src/tests/gate_477_lf1.rs`, policy gate map; no
-clock read).
+**Tests** (incident `#477 LF-1`: `crates/policy/src/tests/gate_477_lf1.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_477_lf1.rs`, host gate map; no clock read).
 
 | Test | What it shows |
 |---|---|
@@ -46140,28 +46163,32 @@ clock read).
 | `lf1_t5_an_instances_own_lines_give_the_floor_on_that_instance` (5) | A's set {150, 120}: 55 and 5 on A; the catalog's 71 and 7 on B |
 | `lf1_t6_an_unknown_reading_or_line_gives_no_run_cap` (6) | `LineView::Unknown`: no allowance and no `run_cap`, a reserve view's known projection included; a reserved pool's unknown projection as before |
 | `lf1_t7_a_pool_without_lines_and_a_task_with_reserves_only_keep_their_values` (7) | catalog-a's V1 and V2 golden identities; a valued pool without lines at its capacity: `capped_spend`'s detail byte for byte, no `policy_dispatch_parameters`, with a reserve of 100 SS-6's 80 and 8 byte for byte; an unjudged task on a lined pool carries none; SS-6's own fixture with reserves only: 900 and 30 byte for byte |
-| `lf1_t8_a_reading_older_than_the_tasks_own_dispatch_counts_that_dispatch` (fix 1) | Read at 134, the task's own run after it: the gate reads 119, `run_cap` 1, allowance 15 (the pool ends at 104) |
-| `lf1_t9_after_a_sweep_without_a_new_reading_the_head_is_not_handed_it_again` (fix 1) | The head handed 3 at 180, no new reading: a minute later the episode is spent (135), no `capped_spend`, `run_cap` 2, allowance 31 (105) |
-| `lf1_t10_the_next_member_of_the_block_reads_the_turns_the_head_was_handed` (fix 1) | A reserving 150 handed 2 at 180 (reserved and lined on the head); B a minute later reads 150: rank 2 of round 1, `run_cap` 1, allowance 46 |
-| `lf1_t11_a_pool_both_reserved_and_lined_on_the_head` (fix 1) | Reserve 150: 30 and 2; reserve 50: 76 and 3 |
-| `lf1_t12_a_dispatch_counts_the_turns_it_was_handed_and_one_run_without_them` (fix 1) | Handed 2 after a reading of 134: held `would_cross_hard_line`, `amount_after` 89; no `run_cap`, no entry on the pool, another admission time: one run, `run_cap` 1 |
-| `lf1_t13_the_reserve_path_takes_the_tasks_own_unshown_dispatch_off` (fix 1) | A reserve of 100 without lines, read at 175 after the task's own run: 65 and 6; handed 3: 45 and 4 |
+| `lf1_t8_a_run_without_run_cap_leaves_the_pool_known_and_counts_one_run` (reviews) | Read at 134, then a run of the task handed no `run_cap`: the pool known, that run counted once, the gate reads 119, `run_cap` 1, allowance 15 (the pool ends at 104) |
+| `lf1_t9_after_a_run_handed_a_run_cap_its_pool_is_unknown_and_nothing_is_handed` (reviews) | The head handed 3 at 180, its run ended, no new reading: a minute later the pool is unknown `fact_stale` under its key; the block's next member held `capped_cap_unknown` (episode 1, round 1 waits); nothing dispatched or handed; the head's trigger suggests the key |
+| `lf1_t10_only_a_reading_observed_after_the_runs_end_makes_the_pool_known` (reviews) | A reading observed during the run keeps the pool unknown; one observed after its end (135) makes it known: the episode spent, `run_cap` ⌊31 ÷ 15⌋ = 2, allowance 31 |
+| `lf1_t11_a_pool_both_reserved_and_lined_on_the_head` | Reserve 150: 30 and 2; reserve 50: 76 and 3 |
+| `lf1_t12_a_run_still_in_flight_keeps_the_pool_unknown` (reviews) | Read at 175, a run handed a `run_cap` dispatched after it and not ended: another judged consumer held `capped_cap_unknown` (`fact_stale`, the key); nothing dispatched |
+| `lf1_t13_every_pool_the_task_consumes_is_unknown_and_a_task_that_reserves_it_waits` (reviews) | A pool without lines that took no part in the cap of a run of a task consuming it: unknown; a task reserving 100 of it waits `resource_reserve_insufficient` without `amount_after`; nothing dispatched |
+| `lf1_t14_two_dispatches_of_one_pair_since_the_reading_hand_out_nothing_between_them` (reviews) | Reserve 100, no lines, read at 170: `run_cap` 7; not read again, the evaluations a minute and two minutes later dispatch nothing |
+| `lf1_h1_a_run_handed_a_run_cap_leaves_its_pool_unknown_until_read_after_its_end` (host, reviews) | Through the host: a pool read from rows of a list (1400), a task consuming 400 and reserving 200 handed `run_cap` 3, admitted and settled; the next evaluation, the list still fresh, holds the task (`fact_stale` suggestion of the list's key, no intent); the same at two evaluations after a restart; a list read after the run's end releases the pool |
 
 Adapted: `sched_c1f1_t3_every_reader_reads_the_amount_in_effect` (SCHED-C1f1's test 3), its case "a
 reserve of 100 admits it with SS-6's `run_cap`": the pool's hard line (104) is above the reserve,
 so it is the floor (ruling 1): on the fallback 10 the cap is ⌊66 ÷ 10⌋ = 6 where it was ⌊70 ÷ 10⌋
 = 7; the case read from the fact (20) stays 3. Every other existing test is unchanged; SS-6's
 gate tests read `spend_values`, kept under `cfg(test)` as `spend_values_with` with no lines.
-Fix round 1: LF-1's own `lf1_t6` names the view's member `reading` (was `projected`), with the
-same numbers; no existing test pinned one run for a dispatch handed a `run_cap` or the task's own
-dispatch left out of an allowance, since none gave the evaluation a handed dispatch or asserted an
-allowance after the task's own unshown run.
+After the two reviews: LF-1's own `lf1_t6` names the view's member `reading` (was `projected`),
+with the same numbers; fix round 1's tests 8 to 13, which pinned a count of N runs or the reserve
+path's `unshown_total`, are replaced by tests 8 to 14 above (test 11 kept). No test of main
+changes: none gave the evaluation a run handed a `run_cap`, so its pool values are as before (one
+unit test's literal of `PoolValues` gains the empty `unread`).
 
-**What does not change.** Admissions, but fix round 1's ruling 3 (a dispatch handed N turns
-counts N until the pool is read again); the capped spending order (its listing, the plan's rule,
-block, holds and the episode's rule); a pool without lines with no handed dispatch; the goal
-term; the ceiling of 1,000; every declared interface range; the catalog's bytes and hash; no wire
-member; no game, package or alias is named in code (ruling 6).
+**What does not change.** Admissions, but this: a pool read before the end of a run that was told
+its turns is unknown until it is read again (before: known, that run counted once); the count of
+consumption not shown yet (one run a dispatch); the capped spending order (its listing, the
+plan's rule, block, holds and the episode's rule); a pool no run told its turns has spent from;
+the goal term; the ceiling of 1,000; every declared interface range; the catalog's bytes and
+hash; no record, event or wire member; no game, package or alias is named in code (ruling 6).
 
 **At deploy.** Nothing to configure. A task that consumes, as a judged candidate, a valued pool
 with lines and reserved nothing carried no `run_cap` and no `spend_allowance` before and carries
@@ -46170,15 +46197,14 @@ them now; a package that reads `session.dispatch.schedule.run_cap` for such a ta
 (`contained_task_designated_effect_cap_unresolved`) and now presses or repeats that many turns. A
 task that reserves such a pool below its hard line carries the hard line's smaller allowance and
 cap. On the head of a capped episode a task that reserves the pool now stops where the episode is
-spent, not at its reserve. Admissions change in one way (fix round 1, ruling 3): after a dispatch
-that was handed a `run_cap` of N, every pool that took part counts N runs of it as spent until it
-is read again (before: one run), in the lines' gate, the reserve gate and the capped plan; so
-another consumer of the pool, or the same task again, may wait for the pool's next reading where
-it ran before. And a task's allowance now takes its own unshown dispatch off, so a task that
-reserves a pool and runs again before the pool is read is handed fewer turns, possibly 0. A
-package that reads the pool at its end, as [resource-readings.md](resource-readings.md) asks,
-sees none of this after its run. A rollback to 0.12.79 meets nothing kept on disk (the values
-and the handed turns are never stored) and hands such tasks no `run_cap` again.
+spent, not at its reserve. Admissions change in one way (after the two reviews): after a run that
+was told its turns, every pool its task consumes is read again before anything that needs its
+value is dispatched from it on that instance (or, for a pool covering several, on any of them); a
+reading the run wrote itself does not count. Where the fact refresh can serve the pool's key that
+is one more reading run; a pool whose reading only a package's own rule brings waits for that
+rule, so its consumers, the same task included, wait where they ran before. A rollback to 0.12.79
+meets nothing kept on disk (the values and the handed runs are never stored) and hands such tasks
+no `run_cap` again.
 
 ### 1.512 Slice #486 ASLEEP-3 (0.12.79): a stop withheld after a wake that no scheduled run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a start (board #486; the rules below are the coordinator's rulings 1 to 5 of 11-22, not the owner's words; coordinator work order `rd-1122/brief-486-asleep3.md`; on main `9491d936`, the v0.12.78 release)
 

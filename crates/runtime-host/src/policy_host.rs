@@ -3767,18 +3767,17 @@ impl PolicyHost {
         }
     }
 
-    /// #477 LF-1 fix round 1 (register §1.509, ruling 1; `contracts/scheduling/README.md`, "Pool
-    /// lines", "Task Reserves"): the turns the latest admitted dispatch of each (task, instance)
-    /// pair at or before the ledger position `through` was handed, read from its recorded
-    /// `policy_dispatch_parameters` (its `run_cap` and the entries of its `spend_allowances`),
-    /// keyed as the pair's task snapshot is ([`Self::task_runtime_snapshots`]: the task's own id
-    /// in the active catalog, else the one its `continues_from` gives, Workflow #372 K5) and timed
-    /// by its admission, the snapshot's `last_dispatched_unix_ms`. The evaluation counts such a
-    /// dispatch's turns as consumption a pool's reading does not show yet. Read from the resident
-    /// journal: a pair whose latest dispatch it no longer holds is not noted, and that dispatch
-    /// counts one run, as before.
-    pub(crate) fn handed_turns(&self, through: u64) -> actingcommand_policy::HandedTurns {
-        let mut handed = actingcommand_policy::HandedTurns::default();
+    /// #477 LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines", "At each
+    /// evaluation"): the pairs whose latest admitted dispatch at or before the ledger position
+    /// `through` carried a `run_cap` on its recorded `policy_dispatch_parameters`, keyed as the
+    /// pair's task snapshot is ([`Self::task_runtime_snapshots`]: the task's own id in the active
+    /// catalog, else the one its `continues_from` gives, Workflow #372 K5), each with the instant
+    /// its run ended (its execution's observation, once completed at or before `through`), or
+    /// none while it has not. The evaluation holds a pool such a run's task consumes unknown until
+    /// a reading observed at or after that end. Read from the resident journal: a pair whose
+    /// latest dispatch it no longer holds is not noted.
+    pub(crate) fn handed_runs(&self, through: u64) -> actingcommand_policy::HandedRuns {
+        let mut handed = actingcommand_policy::HandedRuns::default();
         let Some(active) = self.active.as_ref() else {
             return handed;
         };
@@ -3817,13 +3816,15 @@ impl PolicyHost {
             }
         }
         for ((task_id, instance_id), (_, dispatch)) in latest {
-            let Some(admission) = dispatch.admission.as_ref() else {
-                continue;
-            };
+            let ended_at_unix_ms = dispatch
+                .completed_sequence
+                .filter(|sequence| *sequence <= through)
+                .and(dispatch.execution.as_ref())
+                .map(|execution| execution.observed_at_unix_ms);
             handed.note_dispatch(
                 task_id,
                 instance_id,
-                admission.activity.admitted_at_unix_ms,
+                ended_at_unix_ms,
                 dispatch.data.reasons.iter().map(|reason| &reason.0),
             );
         }

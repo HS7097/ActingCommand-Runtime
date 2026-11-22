@@ -256,6 +256,9 @@ mod gate_486_asleep;
 // #455 P2 (0.12.79; register §1.505): the host computes the reading of a pool read from rows of a
 // list before each evaluation and gives it to the evaluator.
 mod gate_455_p2;
+// #477 LF-1 (0.12.80; register §1.509): after a run handed a `run_cap` its pool is unknown to the
+// evaluation until it is read after that run's end, through the host and across a restart.
+mod gate_477_lf1;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

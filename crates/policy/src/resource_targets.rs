@@ -3774,16 +3774,13 @@ pub(crate) type UnshownConsumption<'a> = BTreeMap<(&'a str, &'a str), Vec<(&'a s
 /// each task of the catalog that consumes the pool and whose latest dispatch on the instance is
 /// at or after the pool's observation (`observed_at`), with its consumption, in task id order. A
 /// pool without an observation has none. SCHED-C1f1: each task's consumption in effect on the
-/// instance (`amounts`). #477 LF-1 fix round 1 (register §1.509, ruling 1): a dispatch handed a
-/// `run_cap` that the pool took part in counts that many runs of it (`handed`,
-/// [`crate::HandedTurns::runs`]); any other dispatch one run, as before.
+/// instance (`amounts`).
 pub(crate) fn unshown_consumption<'a>(
     tasks: &'a [TaskSpec],
     states: &'a [TaskRuntimeSnapshot],
     pools: &BTreeSet<&'a str>,
     observed_at: impl Fn(&str) -> Option<u64>,
     amounts: &ConsumptionAmounts,
-    handed: &crate::HandedTurns,
 ) -> PolicyEvaluationResult<UnshownConsumption<'a>> {
     let mut unshown = UnshownConsumption::new();
     for state in states {
@@ -3797,8 +3794,7 @@ pub(crate) fn unshown_consumption<'a>(
             if observed_at(pool_id).is_none_or(|observed| dispatched < observed) {
                 continue;
             }
-            let consumes = consumption(task, pool_id, amounts.on(&state.instance_id))?
-                .saturating_mul(handed.runs(task, &state.instance_id, dispatched, pool_id));
+            let consumes = consumption(task, pool_id, amounts.on(&state.instance_id))?;
             if consumes > 0 {
                 unshown
                     .entry((state.instance_id.as_str(), pool_id))
@@ -3816,7 +3812,7 @@ pub(crate) fn unshown_consumption<'a>(
 /// The consumption of `pool_id` on `instance_id` that the pool's latest reading does not show
 /// yet, by every task but `task_id`: what the reserve gate's step 3 takes from what a run of
 /// `task_id` leaves ([`hold_reserves`]), each `(task, consumption)` in task id order. SS-6 reads
-/// the same entries ([`unshown_total`]), the task's own among them.
+/// the same entries ([`pending_total`]), so its allowance is the gate's own number.
 fn pending_consumption<'a>(
     unshown: &'a UnshownConsumption<'a>,
     instance_id: &'a str,
@@ -3831,21 +3827,15 @@ fn pending_consumption<'a>(
         .copied()
 }
 
-/// SS-6: the consumption of `pool_id` on `instance_id` that the pool's latest reading does not
-/// show yet, by every task, saturating. #477 LF-1 fix round 1 (register §1.509, ruling 2): the
-/// task whose spend values read it is among them (before, SS-6 left it out as the reserve gate's
-/// step 3 does), so its allowance takes off its own unshown dispatch, as the lines' gate's reading
-/// does.
-pub(crate) fn unshown_total<'a>(
-    unshown: &'a UnshownConsumption<'a>,
-    instance_id: &'a str,
-    pool_id: &'a str,
+/// SS-6: the sum of [`pending_consumption`], saturating.
+pub(crate) fn pending_total(
+    unshown: &UnshownConsumption<'_>,
+    instance_id: &str,
+    pool_id: &str,
+    task_id: &str,
 ) -> u64 {
-    unshown
-        .get(&(instance_id, pool_id))
-        .into_iter()
-        .flatten()
-        .fold(0_u64, |sum, (_, consumes)| sum.saturating_add(*consumes))
+    pending_consumption(unshown, instance_id, pool_id, task_id)
+        .fold(0_u64, |sum, (_, consumes)| sum.saturating_add(consumes))
 }
 
 /// One candidate the reserve gate judges.
@@ -4021,11 +4011,10 @@ fn reserve_insufficient(
 pub(crate) struct SpendValues {
     /// `(i, allowance)` for each entry `i` of the task's `consumes` whose pool the task also
     /// reserves, or (LF-1, register §1.509) whose lines take part ([`LineView`]), and whose
-    /// projected amount is known: the available amount (that projection less every task's
-    /// consumption the reading does not show yet, the task's own included; for a pool whose
-    /// lines take part, the lines' gate's own reading, the same number) less the pool's floor
-    /// (the reserve's `at_least`, the hard line, or the larger of the two where both are), at
-    /// least 0. In `consumes` order.
+    /// projected amount is known: the gate's available amount (that projection less the other
+    /// tasks' consumption the reading does not show yet) less the pool's floor (the reserve's
+    /// `at_least`, the hard line, or the larger of the two where both are), at least 0. In
+    /// `consumes` order.
     pub(crate) spend_allowances: Vec<(usize, u64)>,
     /// `(j, gap)` for each entry `j` of the task's `produces` whose pool an active goal covering
     /// the task holds with a known gap (0 when met). In `produces` order.
@@ -4090,9 +4079,9 @@ pub(crate) enum LineView {
 /// LF-1: what the spend values read of a pool's lines in effect on the candidate's instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PoolLines {
-    /// Fix round 1 (ruling 2): the lines' gate's own reading `r`, at least 0: the pool's projected
-    /// amount at the evaluation less every task's consumption its reading does not show yet, the
-    /// candidate's own included, a dispatch handed a `run_cap` by that many runs.
+    /// The lines' gate's own reading `r`, at least 0: the pool's projected amount at the
+    /// evaluation less every task's consumption its reading does not show yet, the candidate's
+    /// own included, so the allowance and the gate read one number.
     pub(crate) reading: u64,
     /// The task's consumption of the pool per run in effect on the instance (`⌈C/1000⌉`), as a
     /// reserve view's `consumes`.
@@ -4124,11 +4113,11 @@ enum PoolSpend {
 
 /// LF-1: the [`PoolSpend`] of one pool from its reserve view (`view`, when the task reserves it)
 /// and its lines (`line`, when they take part); `pending` is the consumption of the instance's
-/// tasks, the task's own included (fix round 1, ruling 2), that the pool's latest reading does
-/// not show yet. The available amount is, for a pool whose lines take part, the lines' gate's own
-/// reading (which takes off the same consumption), and otherwise `projected − pending`; the floor
-/// is the reserve's `at_least`, the hard line, or the larger of the two; the allowance is the
-/// available amount less the floor, at least 0.
+/// other tasks that the pool's latest reading does not show yet. The available amount is, for a
+/// pool whose lines take part, the lines' gate's own reading `r`, and otherwise
+/// `projected − pending`; the floor is the reserve's `at_least`, the hard line, or the larger of
+/// the two; the allowance is the available amount less the floor, at least 0. A reserved pool
+/// without lines reads exactly as SS-6 read it.
 fn pool_spend(view: Option<&ReserveView>, line: Option<LineView>, pending: u64) -> PoolSpend {
     match (view, line) {
         (None, None) => PoolSpend::Apart,
@@ -4171,19 +4160,18 @@ pub(crate) fn spend_values(
 /// SS-6: the [`SpendValues`] of a selected dispatch of `task`. `views` are the reserve views the
 /// reserve gate judged the candidate by (`None` when the task declares no reserves); LF-1
 /// (register §1.509): `lines` answers, per pool, its [`LineView`] when its lines take part; and
-/// `pending` answers, per pool, the consumption of the instance's tasks that the pool's latest
-/// reading does not show yet ([`unshown_total`]): fix round 1 (rulings 1 and 2), the task's own
-/// included, and a dispatch handed a `run_cap` counted by that many runs of each pool that took
-/// part in it. So the allowance is, at the same evaluation instant, the gate's own number less
-/// the pool's floor: for a pool whose lines take part the lines' gate's reading `r`, which takes
-/// off the same consumption, and otherwise `projected − pending`. The package is never told it
-/// may spend below the reserve line or the hard line, and `run_cap` never tells a run more turns
-/// than the gates would admit one by one. The lines' gate holds a candidate whose run would leave
-/// `r − c < H`, so a dispatched one's allowance on a pool whose lines take part pays for at least
-/// one run; the reserve gate does not count the task's own unshown dispatch, so an allowance of a
-/// reserved pool may now be below one run (0 included) after such a dispatch. `pools` are the
-/// catalog's pools, for their base weight; `gap` answers the active goal's gap on a pool for the
-/// task ([`InstanceTargets::goal_gap`]).
+/// `pending` answers, per pool, the consumption of the instance's other tasks that the pool's
+/// latest reading does not show yet ([`pending_total`], the gate's step 3). So the allowance is
+/// the gate's own available amount at the same evaluation instant less the pool's floor: the
+/// reserve gate's `projected − pending`, and for a pool whose lines take part the lines' gate's
+/// own reading `r` (every task's unshown consumption taken off). The package is never told it
+/// may spend below the reserve line or the hard line, and an allowance below the task's declared
+/// consumption of the pool, 0 included, is a candidate a gate holds (the reserve gate's
+/// `projected − consumes − pending < at_least`; the lines' gate's `r − c < H`). A pool a run
+/// handed a `run_cap` has spent from reads unknown until it is read after that run's end
+/// ([`crate::HandedRuns`]), so no value is computed from a reading the run's turns made stale.
+/// `pools` are the catalog's pools, for their base weight;
+/// `gap` answers the active goal's gap on a pool for the task ([`InstanceTargets::goal_gap`]).
 /// Integer arithmetic only, saturating: nothing panics or wraps.
 pub(crate) fn spend_values_with(
     task: &TaskSpec,

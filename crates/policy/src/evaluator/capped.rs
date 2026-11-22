@@ -97,9 +97,8 @@ use super::tie_break::TieKey;
 use super::{
     Amounts, ConsumptionAmounts, DecisionReason, EvaluationFacts, InstanceSnapshot,
     PlacementCandidate, PlacementContext, PolicyEvaluationError, PolicyEvaluationResult,
-    SchedulingDecisionState, TaskWork, UnknownReasonToken, live_pool_unknown_reason, pool_bound,
-    project_pool_value, reason_with, scope_matches_identity, scope_matches_instance, unknown_token,
-    with_values,
+    SchedulingDecisionState, TaskWork, UnknownReasonToken, pool_bound, project_pool_value,
+    reason_with, scope_matches_identity, scope_matches_instance, unknown_token, with_values,
 };
 use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
 use crate::resource_targets::{LineView, PoolLines};
@@ -357,14 +356,12 @@ impl Round {
     /// hold after it) and any other planned. Indices into `order`, in plan order. With nothing
     /// passed or dispatched it is the plan the round began with. SCHED-C1f1 (register §1.303
     /// SC1F-3, ruling 2): each member's consumption is the one in effect at this evaluation
-    /// (`amounts`), not the one its order was frozen with. #477 LF-1 fix round 1 (register
-    /// §1.509, ruling 1): a dispatched member counts what its dispatch counts (`spent`: its
-    /// consumption in effect times the runs it was handed, [`dispatched_amounts`]).
+    /// (`amounts`), not the one its order was frozen with.
     fn plan(
         &self,
         lines: Lines,
         (dispatched, assumed): (&BTreeSet<usize>, &BTreeSet<usize>),
-        (amounts, spent): (&MemberAmounts, &MemberAmounts),
+        amounts: &MemberAmounts,
     ) -> (Vec<usize>, Vec<(usize, i128)>) {
         let mut planned = Vec::new();
         let mut skipped = Vec::new();
@@ -376,7 +373,7 @@ impl Round {
             let consumed = i128::from(member.in_effect(amounts));
             if dispatched.contains(&index) {
                 planned.push(index);
-                reading -= i128::from(member.in_effect(spent));
+                reading -= consumed;
                 continue;
             }
             if lines.spent(reading) {
@@ -655,9 +652,6 @@ pub(super) fn plan(
                 &pool.id,
                 context.amounts.on(&instance.instance_id),
             )?;
-            // #477 LF-1 fix round 1 (register §1.509, ruling 1): what each consumer's latest
-            // dispatch counts of the pool, which a round's plan takes for a member it dispatched.
-            let spent = dispatched_amounts(context, instance, &pool.id, &consumers, &in_effect);
             let lines = match lines(context, facts, instance, pool)? {
                 Ok(lines) => lines,
                 // SCHED-C1d: an episode under way waits on an unknown value: its judged candidates
@@ -726,7 +720,7 @@ pub(super) fn plan(
                 context,
                 memory,
                 &key,
-                (lines, &in_effect, &spent),
+                (lines, &in_effect),
                 &candidates,
                 work,
                 &consumers,
@@ -749,7 +743,7 @@ pub(super) fn plan(
             };
             let offered = view.decide(
                 (&pool.id, instance),
-                (lines, (&in_effect, &spent), context.amounts),
+                (lines, &in_effect, context.amounts),
                 ranked,
                 &candidates,
                 &mut decided,
@@ -900,39 +894,6 @@ fn member_amounts(
         .collect()
 }
 
-/// #477 LF-1 fix round 1 (register §1.509, ruling 1): each of `consumers`' consumption of
-/// `pool_id` that its latest dispatch on `instance` counts, by task id: its consumption in effect
-/// (`in_effect`) times the runs that dispatch was handed of the pool
-/// ([`super::HandedTurns::runs`]); one run for a dispatch handed none, and for a consumer never
-/// dispatched.
-fn dispatched_amounts(
-    context: &PlacementContext<'_>,
-    instance: &InstanceSnapshot,
-    pool_id: &str,
-    consumers: &[Consumer<'_>],
-    in_effect: &MemberAmounts,
-) -> MemberAmounts {
-    consumers
-        .iter()
-        .map(|consumer| {
-            let consumed = in_effect.get(&consumer.task.id).copied().unwrap_or(0);
-            let runs = context
-                .last_results
-                .get(&(consumer.task.id.as_str(), instance.instance_id.as_str()))
-                .and_then(|state| state.last_dispatched_unix_ms)
-                .map_or(1, |dispatched| {
-                    context.left_out.handed_turns().runs(
-                        consumer.task,
-                        &instance.instance_id,
-                        dispatched,
-                        pool_id,
-                    )
-                });
-            (consumer.task.id.clone(), consumed.saturating_mul(runs))
-        })
-        .collect()
-}
-
 /// `⌈C/1000⌉`, the whole units a consumption in thousandths reads.
 fn units(consumed_milli: u128) -> PolicyEvaluationResult<u64> {
     u64::try_from(consumed_milli.div_ceil(1_000))
@@ -982,21 +943,19 @@ fn lines(
         {
             return Ok(Err(unknown(Some(reference.fact_key.clone()), Some(reason))));
         }
+        // #455 P2 (register §1.505): a pool read from rows of a list names its list's key. The
+        // reason is the one the evaluation's pool values give (#477 LF-1: `fact_stale` after a
+        // run handed a `run_cap`).
         return Ok(Err(match &pool.observation {
-            ObservationRef::Fact { fact_key } => unknown(
-                Some(fact_key.clone()),
-                live_pool_unknown_reason(pool, fact_key, facts, context.time),
-            ),
+            ObservationRef::Fact { fact_key } | ObservationRef::ListRows { fact_key, .. } => {
+                unknown(
+                    Some(fact_key.clone()),
+                    context
+                        .pool_values
+                        .unknown_reason(pool, facts, context.time),
+                )
+            }
             ObservationRef::Outcome { .. } => unknown(None, None),
-            // #455 P2 (register §1.505): a pool read from rows of a list, its list's key with the
-            // reason of the reading the host gave it.
-            ObservationRef::ListRows { fact_key, .. } => unknown(
-                Some(fact_key.clone()),
-                context
-                    .pool_values
-                    .given()
-                    .unknown_reason(pool, context.time),
-            ),
         }));
     };
     let Ok(projected) =
@@ -1007,32 +966,22 @@ fn lines(
     let capacity = reading.bound.capacity();
     // The consumption the reading does not show yet: every task dispatched on the instance at or
     // after the reading's observation (the reserve gate's step 3); SCHED-C1f1: each by its own
-    // amount in effect on the instance; #477 LF-1 fix round 1 (register §1.509): a dispatch
-    // handed a `run_cap` that this pool took part in by that many runs ([`super::HandedTurns`]).
+    // amount in effect on the instance.
     let mut unshown = 0_i128;
     for state in &facts.tasks {
-        if state.instance_id != instance.instance_id {
+        if state.instance_id != instance.instance_id
+            || state
+                .last_dispatched_unix_ms
+                .is_none_or(|dispatched| dispatched < reading.snapshot.observed_at_unix_ms)
+        {
             continue;
         }
-        let Some(dispatched) = state
-            .last_dispatched_unix_ms
-            .filter(|dispatched| *dispatched >= reading.snapshot.observed_at_unix_ms)
-        else {
-            continue;
-        };
         if let Some((_, task)) = context.tasks.get(state.task_id.as_str()) {
-            let runs = context.left_out.handed_turns().runs(
-                task,
-                &instance.instance_id,
-                dispatched,
-                &pool.id,
-            );
-            let consumed = i128::from(crate::resource_targets::consumption(
+            unshown += i128::from(crate::resource_targets::consumption(
                 task,
                 &pool.id,
                 context.amounts.on(&instance.instance_id),
             )?);
-            unshown = unshown.saturating_add(consumed.saturating_mul(i128::from(runs)));
         }
     }
     let reading = i128::from(projected) - unshown;
@@ -1122,8 +1071,7 @@ pub(super) fn line_view(
         Err(_) => return Ok(Some(LineView::Unknown)),
     };
     Ok(Some(LineView::Known(PoolLines {
-        // Fix round 1 (register §1.509, ruling 2): the gate's own reading, every unshown dispatch
-        // taken off (the candidate's own too), at least 0.
+        // The lines' gate's own reading, at least 0: the cap and the gate read one number.
         reading: u64::try_from(lines.reading.max(0)).unwrap_or(u64::MAX),
         consumes: crate::resource_targets::consumption(
             task,
@@ -1202,14 +1150,13 @@ type PairCandidates<'a, 'b> = BTreeMap<&'b str, (usize, &'b Known<'a>, &'b Consu
 /// The transitions of one pair's episode at the evaluation (module doc): `None` when the pool is
 /// not in a capped round now (below the cap, or the episode ended), else the round to decide by.
 /// SCHED-C1f1 (register §1.303 SC1F-3): the round's plan and the head's check read each member's
-/// consumption in effect (`in_effect`); its frozen order stays. #477 LF-1 fix round 1: a member
-/// the round dispatched counts what its dispatch counts (`spent`).
+/// consumption in effect (`in_effect`); its frozen order stays.
 #[allow(clippy::too_many_arguments)]
 fn step<'m>(
     context: &PlacementContext<'_>,
     memory: &'m mut CappedMemory,
     key: &(String, String),
-    (lines, in_effect, spent): (Lines, &MemberAmounts, &MemberAmounts),
+    (lines, in_effect): (Lines, &MemberAmounts),
     candidates: &PairCandidates<'_, '_>,
     work: &mut [TaskWork],
     consumers: &[Consumer<'_>],
@@ -1313,7 +1260,7 @@ fn step<'m>(
         }
         let dispatched = dispatched_of(round);
         let remaining = round
-            .plan(lines, (&dispatched, &BTreeSet::new()), (in_effect, spent))
+            .plan(lines, (&dispatched, &BTreeSet::new()), in_effect)
             .0
             .into_iter()
             .filter(|index| !dispatched.contains(index))
@@ -1356,7 +1303,7 @@ fn step<'m>(
     } else {
         dispatched_of(round)
     };
-    let (planned, skipped) = round.plan(lines, (&dispatched, &BTreeSet::new()), (in_effect, spent));
+    let (planned, skipped) = round.plan(lines, (&dispatched, &BTreeSet::new()), in_effect);
     let remaining = planned
         .into_iter()
         .filter(|index| !dispatched.contains(index))
@@ -1433,11 +1380,7 @@ fn start_round(
         offered: Vec::new(),
     };
     if round
-        .plan(
-            lines,
-            (&BTreeSet::new(), &BTreeSet::new()),
-            (in_effect, in_effect),
-        )
+        .plan(lines, (&BTreeSet::new(), &BTreeSet::new()), in_effect)
         .0
         .is_empty()
     {
@@ -1451,17 +1394,12 @@ impl RoundView<'_> {
     /// no candidates (module doc). SCHED-C1f1 (register §1.303 SC1F-3, SC1F-4): the block's fit
     /// and the plan of its fallbacks read each member's consumption in effect (`in_effect`), and
     /// every reason given to a task whose consumption of the pool is read from a fact names it
-    /// (`amounts`). #477 LF-1 fix round 1: the plan of the fallbacks counts a dispatched member by
-    /// what its dispatch counts (`spent`).
+    /// (`amounts`).
     #[allow(clippy::too_many_arguments)]
     fn decide(
         &self,
         (pool_id, instance): (&str, &InstanceSnapshot),
-        (lines, (in_effect, spent), amounts): (
-            Lines,
-            (&MemberAmounts, &MemberAmounts),
-            &ConsumptionAmounts,
-        ),
+        (lines, in_effect, amounts): (Lines, &MemberAmounts, &ConsumptionAmounts),
         ranked: &[PlacementCandidate],
         candidates: &PairCandidates<'_, '_>,
         decided: &mut [Decided],
@@ -1510,7 +1448,7 @@ impl RoundView<'_> {
                 assumed.extend(block.iter().map(|(index, _)| *index));
                 fallback = true;
                 group = round
-                    .plan(lines, (&self.dispatched, &assumed), (in_effect, spent))
+                    .plan(lines, (&self.dispatched, &assumed), in_effect)
                     .0
                     .into_iter()
                     .filter(|index| !self.dispatched.contains(index))
