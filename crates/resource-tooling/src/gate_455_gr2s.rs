@@ -269,6 +269,7 @@ fn issues(
         GAME,
         root,
         Some((schedule, schedule_path.as_path())),
+        None,
         goals,
         &|directory: &str| game_root.join(directory),
     )

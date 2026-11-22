@@ -1343,6 +1343,14 @@ pub const MAX_POOL_LIST_ROW_FACTOR: u64 = 1_000_000;
 /// file (`schedule_requires_missing`) and keeps the game's last good rules.
 pub const POOL_LIST_ROWS_SUBSYSTEM: &str = "pool_list_rows";
 
+/// Workflow #477 CV-2 (register §1.508; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime whose composer takes a game root's business part
+/// from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none of its
+/// rules' business members, and the composer takes each rule's from the catalog. No Runtime of
+/// 0.12.79 names it, so every Runtime of that version refuses such a file
+/// (`schedule_requires_missing`) and keeps the game's last good rules.
+pub const CATALOG_BUSINESS_SUBSYSTEM: &str = "catalog_business";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GroupDelayPolicy {

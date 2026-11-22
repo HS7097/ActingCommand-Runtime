@@ -1425,6 +1425,7 @@ fn compose(schedule: Value) -> Result<StandardPackComposition, crate::StandardPa
             root: &root,
             maintenance: &maintenance,
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let instances = std::collections::BTreeMap::from([(

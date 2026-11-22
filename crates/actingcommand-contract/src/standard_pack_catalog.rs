@@ -56,6 +56,12 @@
 //! file are the child module `v2`'s; version 1 is read, written and compared as before, byte for
 //! byte. Every reader reads both versions; a zip that carries a version 2 file declares `package`
 //! 24 ([`catalog_package_revision`]). No Runtime component reads the file.
+//!
+//! Workflow #477 CV-2 (register §1.508; 0.12.80): a game root whose `schedule.json` names
+//! `catalog_business` in `requires` takes its rules' business part from its version 2 file, and
+//! the composer, which every reader that composes a root runs, the Runtime's included, reads the
+//! file for it ([`take_catalog_business`]); a root that does not name it is composed as before and
+//! its file is read by no Runtime component.
 
 use crate::codes::SharedCode;
 use crate::outcome::{KeyKind, Outcome, VocabularyToken, key_text_fits};
@@ -77,8 +83,9 @@ use std::path::{Path, PathBuf};
 mod v2;
 
 pub use v2::{
-    CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart, CatalogScheduleFacts,
-    CatalogValue, CatalogValuesFile,
+    CatalogBusinessPlaces, CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart,
+    CatalogScheduleFacts, CatalogValue, CatalogValuesFile, SCHEDULE_RULE_BUSINESS_MEMBERS,
+    standard_pack_catalog_cut_differences, take_catalog_business,
 };
 
 /// The game root's package declaration (Workflow #477 PC-1).
@@ -218,6 +225,10 @@ crate::outcome_vocabulary! {
         /// CV-1: a rule of the package and the version 2 part that stands for it differ in the
         /// realization mark.
         RealizationDiffers => "realization_differs",
+        /// Workflow #477 CV-2 (`standard-pack catalog --cut`): a rule of the package and the
+        /// version 2 part that stands for it hold the same effects on that side in another order,
+        /// which the composed task keeps.
+        OrderDiffers => "order_differs",
     }
 }
 
@@ -1652,6 +1663,13 @@ pub struct CatalogEdits<'a> {
     pub version_2: bool,
     /// CV-1: the values file whose items replace the named parts' value and marks (`values`).
     pub values: Option<CatalogValuesFile<'a>>,
+    /// Workflow #477 CV-2 fix round 1 (register §1.508): the root's `schedule.json` names
+    /// `catalog_business`, so its rules write no business part and none is taken from them: a new
+    /// entry of version 2 holds its display only, no business part, which is none, as for a package
+    /// without an entry ([`merge_standard_pack_catalog`]). The writer refuses before the merge
+    /// every other line that would take one from them (`--refresh`, a missing file, a file of
+    /// version 1).
+    pub switched: bool,
 }
 
 /// Workflow #477 PC-2: the display file a line of `standard-pack catalog` gives: where it is,
@@ -1901,6 +1919,9 @@ pub struct StandardPackCatalogMerge {
 /// [`CatalogMergeRefusal::ValuesNeedVersion2`]): the values file, read after the display file and
 /// checked by the catalog's own checks ([`CatalogMergeRefusal::Values`]); each part it names takes
 /// its value and its marks whole, after the displays ([`StandardPackCatalogMerge::values_written`]).
+///
+/// Workflow #477 CV-2 fix round 1 (register §1.508): of a switched root
+/// ([`CatalogEdits::switched`]) a new entry of version 2 holds its display only, no business part.
 pub fn merge_standard_pack_catalog(
     game: &str,
     registry: &StandardPackRegistry,
@@ -2200,6 +2221,9 @@ pub fn merge_standard_pack_catalog(
                 }
                 json!(business)
             }
+            // Workflow #477 CV-2 fix round 1: of a switched root, whose rules write no business
+            // part, a new entry holds none: its display only.
+            CatalogVersion::V2 if edits.switched => Value::Object(Map::new()),
             // CV-1: a new entry of version 2 holds the parts its rules give.
             CatalogVersion::V2 => {
                 let parts =

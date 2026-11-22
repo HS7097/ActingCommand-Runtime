@@ -1542,3 +1542,16 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_p2::p2_t14_capped_spend_shows_the_reading",
 ]
 incident = ["#455 P2"]
+
+# #477 CV-2 (0.12.80; register §1.508; brief rd-1122/brief-477-cv2.md; contracts/standard-pack-schedule.md, "`requires`"), the composer's half, on neutral rules and one valued pool with no clock read: a root whose schedule.json names catalog_business and whose rules write no business member, composed with its version 2 pack-catalog.json, gives the four documents byte for byte, the compiled catalog, its hash, the rules digest, the manifest, the coverage and the provenance of the same root whose rules write the members themselves after their other members: an entry's own part (consumes, a fixed value the model wrote, limited), a per-rule part (consumes, a fixed value of the pack), the entry's own part beside it (produces), and a rule whose package has no entry (no effect, no value) (t1); a switched rule writing consumes, produces, limited, realization, a fixed value with its origin or a fixed value alone is refused catalog_business_member at that member in schedule.json, one case each, and a switched root with a version 1 catalog catalog_version_1 at /schema_version and with none catalog_missing, both in pack-catalog.json (t2); an effect above its pool's constant capacity, the compiler's effect_incompatible, names /rules/<i>/<side>/0 in schedule.json written in the rules and /packs/1/rules/0/consumes/0 and /packs/1/produces/0 in pack-catalog.json taken from the catalog, one for one (t3); a fixed value whose part's origin is model is the model's in the provenance, one without origin the pack's, as when the rules wrote them (t5); catalog-a's task as the rule of a root that does not name the subsystem composes to its golden tasks document, and the same root with a catalog no reader takes composes byte for byte the same (t7); fix round 1: t1 compares the followers, the pending rules and the consumption facts too, and rules that write their effects right after feedback_stop (where adopt writes them) compose to the same compiled catalog, hash, digest, manifest, coverage, provenance, followers, pending rules and consumption facts and the same tasks document member for member, in another member order (t1, effects in the middle)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t1_a_switched_root_composes_to_the_bytes_of_its_rules",
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t1_effects_written_in_the_middle_of_a_rule_compose_the_same",
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t2_each_refusal_has_its_pointer_and_word",
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t3_a_compiler_diagnostic_on_a_catalog_effect_names_the_catalog",
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t5_a_model_origin_in_the_catalog_is_reported_as_a_rule_s",
+    "actingcommand-policy::lib::tests::gate_477_cv2::cv2_t7_a_root_that_is_not_switched_keeps_its_golden_bytes",
+]
+incident = ["#477 CV-2"]

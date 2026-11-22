@@ -1640,6 +1640,7 @@ fn compose(schedule: Value) -> Result<StandardPackComposition, crate::StandardPa
             root: &root,
             maintenance: &maintenance,
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let instances = BTreeMap::from([(

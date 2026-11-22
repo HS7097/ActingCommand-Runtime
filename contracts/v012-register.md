@@ -46021,6 +46021,181 @@ file, its `check` and build refuse the root, and its installer refuses a zip tha
 no Runtime of any release, and an earlier installer handles it as any root file (it sets it aside
 when it places a zip of 16 to 23 that carries none or replaces it with that zip's version 1 file).
 
+### 1.508 Slice #477 CV-2 (0.12.80): a `schedule.json` that names `catalog_business` takes every rule's business part from the root's version 2 `pack-catalog.json`, in the tools and the Runtime alike; one command proves a root's cut-over loses nothing and makes it (Workflow #477; the owner's words are only "one cut-over, no coexistence", for the four resource repositories; the rulings 1 to 9 are the coordinator's of 11-22, not the owner's; coordinator work order `rd-1122/brief-477-cv2.md` after the read-only study `rd-1122/study-477-step2.md`, its sections 2 and 3, design A, and the coordinator's disposition at its end; on main `b34a707b`, v0.12.78 with P2 of #455, CV-1 of #477 and ASLEEP-3 of #486)
+
+This section takes 1.508 (1.509 and 1.513 belong to two other slices of this version).
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`", "Who writes the fixed value
+and the marks", "The cut-over", "Provenance", "Composition", "The scheduler workbench") and
+[pack-catalog.md](pack-catalog.md) ("Who reads it", "Differences from `schedule.json`", "Who writes
+it", "What the later slices add") are the contract; [actingd-check-config.md](actingd-check-config.md)
+(the `config.subsystems` row) follows it. Why: CV-1 (§1.507) made the catalogue able to carry a
+package's whole business part and `--refresh` copy the rules' into it, but nothing scheduled from
+it; this slice is the switch, per root, with no period in which a root is read both ways.
+
+**The switch** (ruling 1). One name in `requires`, `catalog_business`
+(`actingcommand_policy::CATALOG_BUSINESS_SUBSYSTEM`). Of a file that names it (and that the given
+subsystems name too, when given) the composer's `read_game` calls, right after the schedule's
+reader and before every other check, the contract crate's `take_catalog_business`
+(`standard_pack_catalog_v2.rs`): a rule that writes `consumes`, `produces`, `limited`,
+`realization`, `fixed_value_origin` or `fixed_value_milli` (`SCHEDULE_RULE_BUSINESS_MEMBERS`, the
+first in that order) is refused; the root's catalogue is read by the one reader,
+`parse_standard_pack_catalog_with`, against the registry and the schedule itself; each rule takes
+`CatalogParts::for_rule`'s part (its per-rule part, else the entry's own, else an empty one): its
+`consumes` and `produces` appended after its other members (each effect as `ResourceEffectSpec`
+serializes it), `"limited": true` after them, its realization mark and its fixed value with its
+origin into the fields the reader would have filled. A part with the realization mark or a value
+for a rule declaring itself maintenance is refused there, as the reader refuses either beside the
+declaration. A file that does not name it is not touched and its catalogue not read: no root mixes
+the two readings, and nothing of the old reading is removed (ruling 8).
+
+| Case | Code, word | File, pointer |
+|---|---|---|
+| a switched rule writes a business member | `standard_pack_root_invalid`, `catalog_business_member` (new) | `schedule.json`, `/rules/<i>/<member>` |
+| a switched root holds no catalogue | `standard_pack_root_invalid`, `catalog_missing` (new) | `pack-catalog.json`, the whole document |
+| its catalogue is of version 1 | `standard_pack_root_invalid`, `catalog_version_1` (new) | `pack-catalog.json`, `/schema_version` |
+| its catalogue is refused by its reader | `standard_pack_root_invalid`, the reader's first word | `pack-catalog.json`, its pointer |
+| a maintenance rule's part with the realization mark or a value | `standard_pack_root_invalid`, `schedule_invalid` | `pack-catalog.json`, the part's `realization` or `value` |
+| the cut finds a difference (below) | `validation_failed`, the differences in its details | — |
+
+No new code (the third stop condition did not hold): three new words of `standard_pack_problem`,
+each one cause, and one of `catalog_difference`, `order_differs`.
+
+**Byte for byte** (ruling 2). The rule holds what the schedule's reader would have given it had it
+written the part, so every check after it and the composition see that file: the same documents
+(member for member when the rule writes `consumes` and `produces` after its other members), the same
+compiled catalogue, catalogue hash and rules digest, coverage, followers and provenance. Every
+refusal at a member a rule took from the catalogue is placed there by `CatalogBusinessPlaces`
+(`/rules/<i>/<member><rest>` → `/packs/<e>/<member><rest>`, `/packs/<e>/rules/<r>/<member><rest>`;
+`value` for `fixed_value_milli`, `value/origin` for its origin): the composer's own refusals in
+`read_game` (`requires`, a mark or value on a maintenance-role package) and the compiler's
+diagnostics (`Composed::located_issue`, after `locate` mapped a task's `benefit_*` member back to the
+rule's), the problem word and the developer text unchanged. The compiled catalogue's warnings, all
+of them a pool's, are placed in `schedule.json` as before.
+
+**One implementation, every reader** (ruling 3). `StandardPackGameFiles` gains `catalog` (the
+root's `pack-catalog.json`'s bytes, read only for a switched file); each caller reads the file
+beside `schedule.json` when `standard_pack_schedule_takes_catalog` says the file names the
+subsystem, and the composer does the rest:
+
+| Caller | How it reaches the one implementation |
+|---|---|
+| the workbench (`refresh_standard_pack_rules`) | `read_schedule_game` reads and marks the catalogue of a switched root; `composer_inputs` gives it; a fallback restores the generation's kept one |
+| check-config's preview (`preview_standard_pack_schedule`) | `read_schedule_game`, `composer_inputs` |
+| check-config's composition and `actingd suspended` (`compose_configured_standard_packs`) | `read_schedule_game`, `composer_inputs` |
+| `actingctl packs`, `ac_packs` (`lab-ops` `composed_installation`) | `schedule_game` reads the catalogue of a switched file |
+| `standard-pack check`, `package bundle --schedule` (the `bundle` step of `standard-pack build` and of `resource verify` among them), `standard-pack adopt`'s check (`report_schedule` → `compose_check`) | `switched_catalog`: the `pack-catalog.json` beside the `schedule.json` path (adopt's check tree holds none: below) |
+| the check of the root the `bundle` step installs (`check_standard_pack_root` of `installed/<game>/`) | the catalogue the zip carries: `standard-pack build` carries the repository's always (PC-1), `resource verify` (fix round 1) when its `schedule.json` names `catalog_business` (`switched_root` → `carry_catalog`, and its `interfaces.json` then declares the file's revision too) |
+| `standard-pack ready`, `standard-pack status`, `place --plan`'s readiness (`Rules::of` → `compose_per_server`) | `switched_catalog`, then the composer with the live build's subsystems for I4 |
+| `standard-pack compose` (`read_game_root`) | `switched_catalog` |
+| the goal check (`goal_issues`: `standard-pack check`, `package bundle --goals`, the build's goals step) | `take_catalog_business` itself, so a `tier` entry's rule has its fixed value: the root's file, the one beside `--schedule`, the checkout's beside `goals.json` |
+| `standard-pack catalog --cut` | `compose_per_server` twice |
+| the installer's `place` | its own checks read no business member (classification, the catalogue's reader), and its post-placement check is check-config's and `standard-pack check`'s above |
+| `scheduling compile`, `resource validate` | compose nothing |
+
+A refusal in the catalogue names its path (`issue.file`) wherever a caller names a refusal's file:
+the workbench's records, check-config's problems, the tools' `standard_pack_root_invalid`.
+
+**The Runtime** (ruling 4). The configuration manifest names `catalog_business`, always on
+(`apps/actingd/src/config/manifest.rs`). A Runtime that does not name it reads the file as written
+and refuses it at `requires`, `schedule_requires_missing`, as 0.12.79 does.
+
+**The workbench** (ruling 5). A root its last composed read found switched has `pack-catalog.json`
+in its marks (`GameMarks::catalog`, length and modification time, marked by `read_schedule_game`
+just before the file is read; a metadata failure is the root's own), so a placement that changes
+only the catalogue is read and composed at the next check. A composed generation keeps each
+switched file's catalogue as `fragment-catalogs/<game>.json` (`PolicyHost::stage_composed`, the
+directory only when there is one; `composed_fragment_catalog`). A switched root whose catalogue is
+missing or refused is refused as a file that does not compose is: one record per pair of the two
+files' sha256, naming `pack-catalog.json`, and the game falls back to the active generation's
+fragment with the catalogue kept with it, also when `schedule.json` did not change. A root that is
+not switched is stat'ed, read, recorded and kept exactly as before.
+
+**Provenance** (ruling 6). A fixed value's origin is the part's `value.origin`; `benefit_provenance`
+and `config.catalog_provenance` keep their form and their ids (the rules').
+
+**The cut** (ruling 7): `standard-pack catalog --cut [--plan]` (the tool's `cut`; with any other
+option `validation_failed`), `cut_standard_pack_catalog`. On a root not switched: composes it as it
+stands and with the switched `schedule.json` made in memory (`switched_schedule`: the six members
+off every rule, `catalog_business` last in `requires`, after `schema_version` when the file has
+none; written two-space indented, its line ends kept), by `compose_per_server` with the root's
+registry, root files and `bundle.json`'s maintenance entries, its packages' declarations taken as
+read (since G-R2x no composed task reads them). It writes the file only when the rules digests, the
+catalogue hashes and the provenance are equal and `standard_pack_catalog_cut_differences` finds no
+rule, held ones and packages without an entry included, that writes other than its part (the
+catalogue's words, rule by rule, and `order_differs` for the same effects in another order, which the
+compiled task keeps). Otherwise nothing is written and the line is refused `validation_failed` with
+`details.differences` and `details.warnings` (`standard_pack_catalog_schedule_differs` each). A root
+already switched is answered as done, `unchanged`. My stricter rule than the ruling's: equal
+compositions with a held rule that differs are refused too, since the held rule would run otherwise
+once unheld. On a switched root `standard-pack check` compares nothing.
+
+**The writer on a switched root** (fix round 1, the coordinator's ruling on the independent
+review's second point: the writer never derives a business part from the rules, which write none).
+`--refresh`, a line on a root without `pack-catalog.json` (the composer's `catalog_missing`) and a
+line on a file that is not of version 2 (`catalog_version_1`), with `--schema-version 2` or
+without, are refused `validation_failed` before anything is written (`switched_refused`: the
+message names the root switched, says what the line would take from the rules, and that the
+business part must be restored, not rebuilt); a new entry of a version 2 file gets its display only
+(`CatalogEdits::switched`: `merge_standard_pack_catalog` writes no business part for it, which is
+none, as for a package without an entry); the writer gives no difference. After the cut-over a
+repository gives a package its business part by editing its entry (effects, per-rule parts), which
+`standard-pack check` reads by the one reader, and by `--values` (the fixed value and the marks);
+`pack-catalog.md`, "Who writes it". `standard-pack adopt` is refused on a switched root, read from
+the code, not run: its check tree carries no catalogue, so a first adoption (its rule writes
+`consumes` and `produces`) is `adopt_refused` (`rule_refused`) caused by `standard_pack_root_invalid`
+`catalog_business_member`, and a re-adoption that names no business member
+`standard_pack_root_invalid` `catalog_missing`.
+
+**Tests** (policy gate row "#477 CV-2", host gate row "#477 CV-2", apps gate row "#477 CV-2").
+
+| Test | What it shows |
+|---|---|
+| `cv2_t1_a_switched_root_composes_to_the_bytes_of_its_rules` (1) | An entry's own part, a per-rule part, the own part beside it, a rule without an entry: the four documents byte for byte, the compiled catalogue, its hash, the digest, the manifest, coverage and provenance |
+| `cv2_t2_each_refusal_has_its_pointer_and_word` (2) | Each of the six members, one case each, `catalog_business_member`; `catalog_version_1`; `catalog_missing` |
+| `cv2_t3_a_compiler_diagnostic_on_a_catalog_effect_names_the_catalog` (3) | `effect_incompatible` at `/rules/1/consumes/0` and `/rules/2/produces/0` written, at `/packs/1/rules/0/consumes/0` and `/packs/1/produces/0` taken |
+| `cv2_t5_a_model_origin_in_the_catalog_is_reported_as_a_rule_s` (5) | `model` and the pack's origin as when the rules wrote them |
+| `cv2_t7_a_root_that_is_not_switched_keeps_its_golden_bytes` (7) | catalog-a's task's golden tasks document; the same with a catalogue no reader takes |
+| `cv2_h1_a_switched_root_is_composed_and_activated_and_its_catalog_alone_recomposes` (4, 5) | Activated with the catalogue's production and value staged, the catalogue kept, provenance `model`, check-config's preview at the record's digest; a catalogue-only placement activates again |
+| `cv2_h2_a_runtime_that_does_not_name_the_subsystem_answers_requires_missing` (4) | `schedule_requires_missing` at `/requires/0`, no task |
+| `cv2_h3_a_refused_or_missing_catalog_keeps_the_games_last_good_rules` (4) | `catalog_version_1`, then `catalog_missing`, at `pack-catalog.json`, the active generation kept |
+| `cv2_this_runtime_names_catalog_business_and_composes_a_switched_root` (4) | The manifest names it; the composer with those subsystems composes the catalogue's production |
+| `cv2_cut_equal_results_write_the_file_and_a_second_line_answers_done` (6) | Written, the six members off, `catalog_business` named; `standard-pack compose` of the result at the cut's digest; a second line `unchanged` |
+| `cv2_cut_a_difference_writes_nothing_and_names_the_rule` (6) | `validation_failed`, `quantity_differs` naming the rule, nothing written; no catalogue `catalog_missing` |
+| `cv2_cut_plan_writes_nothing` (6) | `planned`, the switched document, nothing written |
+| `cv2_t1_effects_written_in_the_middle_of_a_rule_compose_the_same` (1, fix round 1) | Effects right after `feedback_stop`: the same compiled catalogue, hash, digest, manifest, coverage, provenance, followers, pending rules and consumption facts, the tasks document member for member; t1 compares the last three too |
+| `cv2_fr1_the_writer_makes_no_catalog_for_a_switched_root` (fix round 1) | Refused `validation_failed`, switched, restored not rebuilt, with and without `--schema-version 2`, nothing written |
+| `cv2_fr1_the_writer_converts_no_version_1_catalog_of_a_switched_root` (fix round 1) | The same for a version 1 file, its bytes kept |
+| `cv2_fr1_a_new_package_of_a_switched_root_gets_its_display_only` (fix round 1) | `{package_id}` alone, the other entries as written |
+| `cv2_resource_verify_carries_a_switched_roots_catalog` (`apps/actinglab`, `gate_464_p2`; fix round 1) | Every step passed, the catalogue in the zip byte for byte, `package` [24, 24] |
+
+Touched (8), each only for the new member or parameter: every initializer of `StandardPackGameFiles`
+(`catalog: None`) in the policy gates `gate_386_cf4`, `gate_386_cf5`, `gate_411_p19`,
+`gate_455_gr2s`, `gate_455_p1`, `gate_ord1`, `gate_rl1a`, `gate_sched_c1a`, `gate_sched_c1c`,
+`gate_sched_c1f1`, `gate_ss2b`, `gate_ss2c`, `gate_ss2d`, `gate_ss2h`, `gate_ss4`, `gate_ss5`, the
+host's `gate_rl1b` (two) and actingd's `gate_455_p1` and `gate_rl1c`; and the resource tooling's
+`gate_455_gr2s`, whose `goal_issues` call gains `None`. No assertion changes.
+
+**What is not changed** (must not change). A root that does not name `catalog_business`: its
+composition, its bytes and every decision (the golden of test 7, and the catalogue given beside it
+not read); every reader of such a root reads no catalogue it did not read before; the evaluator and
+the policy crate's `resource_targets.rs` (another slice's); every declared interface range (no
+`package` revision: a feature of `schedule.json` goes by `requires`); the composition record's
+shape. `standard-pack adopt` still writes a rule's value into `schedule.json`: on a switched root
+its own check then refuses it (above, "The writer on a switched root"); writing the adoption's entry
+is a later slice's. `resource verify` of a repository whose `schedule.json` does not name
+`catalog_business` writes every byte it wrote before.
+
+**At deploy.** Nothing changes for an installation until a root is switched: no repository's
+`schedule.json` names `catalog_business` before it runs the cut. Once a switched root is active, a
+rollback to a Runtime that does not name the subsystem (0.12.79 or older) refuses that game's
+`schedule.json` at `requires` (`schedule_requires_missing`) and, as §1.505's "At deploy" describes
+for `pool_list_rows`, keeps no last good rules when the active generation was composed from the
+switched file: the game is composed with no rule. (While no generation has been activated since the
+cut, the active generation's fragment is still the file of before the cut, whose digest it shares,
+and the older Runtime falls back to it.) The rollback gate does not see it yet: it checks the ledger
+range and the declared interface ranges, none of which this slice moves; that is another slice's.
+An older Runtime ignores a generation's `fragment-catalogs/`.
+
 ### 1.512 Slice #486 ASLEEP-3 (0.12.79): a stop withheld after a wake that no scheduled run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a start (board #486; the rules below are the coordinator's rulings 1 to 5 of 11-22, not the owner's words; coordinator work order `rd-1122/brief-486-asleep3.md`; on main `9491d936`, the v0.12.78 release)
 
 This section takes 1.512 (1.505 and 1.507 belong to two other slices of 0.12.79). It ships in

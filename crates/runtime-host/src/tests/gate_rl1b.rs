@@ -1043,6 +1043,7 @@ fn rl1b_a9_the_first_composition_switches_from_a_configured_catalog_with_the_sam
             root: &root,
             maintenance: &[],
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     let composed = compose_standard_pack_rules(&StandardPackComposeInput {
@@ -1373,6 +1374,7 @@ fn compose_a(bench: &Bench, bound: &[Bound]) -> actingcommand_policy::StandardPa
             root: &root,
             maintenance: &[],
             irreversible: &irreversible,
+            catalog: None,
         },
     )]);
     compose_standard_pack_rules(&StandardPackComposeInput {

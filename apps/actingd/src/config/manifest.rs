@@ -224,6 +224,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // Workflow #477 CV-2 (register §1.508): this build's composer takes a game root's business
+        // part from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none
+        // of its rules' business members, so an older Runtime refuses the file instead of
+        // composing its rules without their effects, values and marks.
+        subsystem(
+            actingcommand_policy::CATALOG_BUSINESS_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCHED-C1f1 (register §1.303): this build reads a `consumes` entry's `amount` written as
         // a fact with a fallback (one run's amount read from the instance's fact at each
         // evaluation); a `schedule.json` whose rule writes one requires it, so an older Runtime
