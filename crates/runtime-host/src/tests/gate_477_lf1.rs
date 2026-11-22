@@ -30,8 +30,13 @@ const TASK: &str = "fixture.observe";
 const READ_AT: u64 = POLICY_NOW_UNIX_MS - 10_000;
 /// How long a list read stays fresh.
 const FRESH_MS: u64 = 60_000;
-/// The Runtime clock when the run is settled: its end is at most this.
-const SETTLED_AT: u64 = POLICY_NOW_UNIX_MS + 20_000;
+/// How long the run takes on both of the Runtime clock's readings: shorter than the dispatch
+/// lease's lifetime in the tests' configuration (5 s), so the lease is still the dispatch's when
+/// the run ends it, as other host tests take a dispatch from its admission to its end; a longer
+/// step lets the lease lapse and the lease sweep end it first (`lease_mismatch` at the release).
+const RUN_MS: u64 = 3_000;
+/// The Runtime clock when the run is settled, its end.
+const SETTLED_AT: u64 = POLICY_NOW_UNIX_MS + RUN_MS;
 
 /// [`LISTED`], the policy instance's, read from rows `item_a` × 200 and `item_b` × 400 of
 /// [`LIST_KEY`], valued.
@@ -240,7 +245,7 @@ fn lf1_h1_a_run_handed_a_run_cap_leaves_its_pool_unknown_until_read_after_its_en
     else {
         panic!("the task is granted");
     };
-    clock.advance(SETTLED_AT - POLICY_NOW_UNIX_MS);
+    clock.advance(RUN_MS);
     host.complete_policy_dispatch(&intent_now.decision_id)
         .expect("complete the dispatch");
     host.release_policy_dispatch_lease_for_test(&context)
