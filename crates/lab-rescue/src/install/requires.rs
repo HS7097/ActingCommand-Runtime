@@ -7,8 +7,9 @@
 //! one refuses the file (`contracts/standard-pack-schedule.md`, "`requires`"); a start compiles the
 //! active catalogue generation, which the scheduler workbench composed from such files and keeps
 //! with each game's file as composed (`fragments/<game>.json` of its directory). The target's
-//! subsystems come from the check-config answer the plan already asks it for; the schedules are
-//! read from disk by this build's reader. Nothing is written and nothing is run; no game is named.
+//! subsystems come from the check-config answer the plan already asks it for, and only from one
+//! that passed (fix round 1); the schedules are read from disk by this build's reader. Nothing is
+//! written and nothing is run; no game is named.
 
 use super::files;
 use super::place;
@@ -78,7 +79,10 @@ pub(super) struct Unnamed {
 /// check-config answer `target` does not name, or that could not be read: first the
 /// `schedule.json` of each game in use below `standard_packs.root`, by game, then each fragment of
 /// the active generation as the answers `target` and `live` preview it, by generation and game.
-/// Empty when every name is named: the plan is then the plan it was.
+/// Empty when every name is named: the plan is then the plan it was. Fix round 1 (the
+/// coordinator's ruling): empty too when `target` did not pass. Such an answer judged nothing and
+/// names nothing because it refused the configuration, and both plans refuse already for that
+/// reason (an update `config_refused_by_target`, a rollback the gate's part `config`), as on main.
 pub(super) fn unnamed(
     paths: &Paths,
     config: &Value,
@@ -86,6 +90,9 @@ pub(super) fn unnamed(
     target: &Checked,
     live: Option<&Checked>,
 ) -> Vec<Unnamed> {
+    if !target.passed() {
+        return Vec::new();
+    }
     let named = subsystems_named(target);
     let mut found = Vec::new();
     // A configuration that names no standard-pack root has no game root a start would read.
@@ -163,9 +170,9 @@ fn required(path: &Path) -> Result<Vec<String>, Outcome> {
     }
 }
 
-/// The subsystems the build whose check-config answered `checked` names: the enabled rows of its
-/// report's `config_manifest.subsystems`, the set a start of that build gives the composer. An
-/// answer without them names none: a refusal, which prints no report, or a build before them.
+/// The subsystems the build whose check-config answered `checked`, a passing answer, names: the
+/// enabled rows of its report's `config_manifest.subsystems`, the set a start of that build gives
+/// the composer. A passing answer without them (a build before them) names none.
 fn subsystems_named(checked: &Checked) -> BTreeSet<String> {
     checked
         .report

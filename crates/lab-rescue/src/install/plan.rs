@@ -927,7 +927,8 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
     // Workflow #429 RB-1 (register §1.514): the target names every subsystem the schedules a
     // start of it would read require (the games in use, the active generation's fragments), by its
     // own check-config answer; one failed row and the member `requires_missing` when it does not,
-    // and nothing when it does, so such a plan is the plan it was.
+    // and nothing when it does, so such a plan is the plan it was. Fix round 1: not judged when the
+    // target's check-config did not pass, which refuses both plans already, as on main.
     let unnamed = requires::unnamed(
         paths,
         &config,

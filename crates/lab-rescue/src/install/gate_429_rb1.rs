@@ -21,6 +21,15 @@
 // - `rb1_t5_...`: ruling 5's golden, IT-5's update from C1 to C2 on the neutral builds: the answer's
 //   members, the plan document's members, every edge row, the notice and no warning as on main; the
 //   same for a root whose game root and active generation require only names the target names.
+// Fix round 1 (the independent review of #1876 and the coordinator's rulings on it):
+// - `rb1_fr1_a_target_that_refuses_...`: a target whose check-config refuses the configuration is
+//   not judged: the rollback is refused in the gate's part `config` and the update
+//   `config_refused_by_target`, as on main, with no `requires` row and no `requires_missing`;
+// - `rb1_fr1_a_schedule_or_a_fragment_...`: a `schedule.json` and a fragment that are there and
+//   cannot be read refuse, each entry saying why (`unread`);
+// - `rb1_fr1_a_subsystem_listed_as_not_enabled_...`: a row `enabled: false` names nothing;
+// - `rb1_fr1_two_answers_naming_...`: the target's and the live build's answers preview two active
+//   generations: both are read.
 // The machine is the fake host of `fixture.rs`; every root is a temporary folder with neutral files.
 
 use super::fixture::{BuildSpec, C1, C2, FakeHost, code, live_root, run, word, write_json};
@@ -203,38 +212,63 @@ fn hash_of(digit: char) -> String {
     format!("sha256:{}", String::from(digit).repeat(64))
 }
 
-/// Writes the fragment of [`GAME`] of the generation `catalog_hash` below `state_root`, where the
-/// Runtime's catalogue store keeps a composed generation's fragments, requiring `names`; its path.
-fn write_generation(state_root: &Path, catalog_hash: &str, names: &[&str]) -> PathBuf {
+/// The folder of the fragments of the generation `catalog_hash` below `state_root`, where the
+/// Runtime's catalogue store keeps a composed generation's fragments.
+fn fragments_dir(state_root: &Path, catalog_hash: &str) -> PathBuf {
     let hex = catalog_hash
         .strip_prefix("sha256:")
         .expect("a catalog hash");
-    let fragments = actingcommand_contract::CATALOG_STORE_PATH
+    actingcommand_contract::CATALOG_STORE_PATH
         .iter()
         .fold(state_root.to_path_buf(), |path, part| path.join(part))
         .join(actingcommand_contract::CATALOG_GENERATIONS_DIRECTORY)
         .join(hex)
-        .join("fragments");
-    fs::create_dir_all(&fragments).expect("the generation's fragments");
-    let path = fragments.join(format!("{GAME}.json"));
+        .join("fragments")
+}
+
+/// Writes the fragment of [`GAME`] of the generation `catalog_hash` below `state_root`, requiring
+/// `names`; its path.
+fn write_generation(state_root: &Path, catalog_hash: &str, names: &[&str]) -> PathBuf {
+    let folder = fragments_dir(state_root, catalog_hash);
+    fs::create_dir_all(&folder).expect("the generation's fragments");
+    let path = folder.join(format!("{GAME}.json"));
     write_json(&path, &schedule(names));
     path
 }
 
-/// The check-config of the build `build` (`live`, or a commit) names `subsystems`, each enabled,
-/// as its report's `config_manifest` lists them.
-fn answers_names(host: &FakeHost, build: &str, subsystems: &[&str]) {
-    let rows = subsystems
+/// The check-config of the build `build` (`live`, or a commit) lists `rows` (a name, and whether
+/// it is enabled) as its report's `config_manifest.subsystems`.
+fn answers_rows(host: &FakeHost, build: &str, rows: &[(&str, bool)]) {
+    let listed = rows
         .iter()
-        .map(|name| {
-            json!({"name": name, "enabled": true, "outcome": {"code": "config_subsystem_always_on",
-                "category": "info", "values": {}}})
+        .map(|(name, enabled)| {
+            json!({"name": name, "enabled": enabled, "outcome": {
+                "code": "config_subsystem_always_on", "category": "info", "values": {}}})
         })
         .collect::<Vec<_>>();
     host.programs.check_config_report_of.borrow_mut().insert(
         build.to_owned(),
-        json!({"config_manifest": {"subsystems": rows, "parameters": []}}),
+        json!({"config_manifest": {"subsystems": listed, "parameters": []}}),
     );
+}
+
+/// The check-config of the build `build` (`live`, or a commit) names `subsystems`, each enabled.
+fn answers_names(host: &FakeHost, build: &str, subsystems: &[&str]) {
+    let rows = subsystems
+        .iter()
+        .map(|name| (*name, true))
+        .collect::<Vec<_>>();
+    answers_rows(host, build, &rows);
+}
+
+/// The check-config of the build `build` (`live`, or a commit) alone previews the generation
+/// `catalog_hash` as the active one (the other members of its report kept).
+fn previews_active(host: &FakeHost, build: &str, catalog_hash: &str) {
+    let mut answers = host.programs.check_config_report_of.borrow_mut();
+    // A build without an entry gets `null`, which the index below makes an object.
+    let members = answers.entry(build.to_owned()).or_default();
+    members["policy_plan"] = json!({"plan": null, "approvals": null, "active": {
+        "catalog_id": "standard-packs", "catalog_version": 2, "catalog_hash": catalog_hash}});
 }
 
 /// Every check-config previews the generation `catalog_hash` as the active one.
@@ -270,6 +304,22 @@ fn failed_edges(answer: &super::Answer) -> Vec<(String, String)> {
 /// The one failed row of a refusal for a subsystem the target does not name.
 fn requires_row() -> Vec<(String, String)> {
     vec![("requires".to_owned(), "next_names_required".to_owned())]
+}
+
+/// The failed parts of a refused rollback gate.
+fn gate_parts(answer: &super::Answer) -> Vec<String> {
+    answer
+        .outcome
+        .value("rollback_gate_parts")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The names of the members of `value`, an object, sorted.
@@ -552,4 +602,173 @@ fn rb1_t5_a_plan_whose_schedules_require_only_named_subsystems_answers_as_on_mai
     set_active(&host, &first);
     answers_names(&host, C2, &["pool_lines", "catalog_business"]);
     assert_as_on_main(&plan_update(&host, &named_root));
+}
+
+// Fix round 1, the must-fix: a target whose check-config refuses the configuration is not judged.
+// The rollback is refused in the gate's part `config` and the update `config_refused_by_target`,
+// as on main, though the game root in use requires a name: no `requires` row, no member.
+#[test]
+fn rb1_fr1_a_target_that_refuses_the_configuration_is_refused_as_on_main_without_the_check() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = updated(temp.path(), &host, "fr1-config");
+    own_start_log(&root);
+    let packs = temp.path().join("fr1-config-packs");
+    configure(&root, &packs);
+    root_requires(&packs, &["pool_lines"]);
+    host.programs
+        .refuse_check_config
+        .replace(vec![C1.to_owned()]);
+
+    let refused = plan_rollback(&host, &root);
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["config"], "{refused:?}");
+    assert_eq!(
+        failed_edges(&refused),
+        [("actingd-config".to_owned(), "next_check_config".to_owned())],
+        "{refused:?}"
+    );
+    assert!(requires_missing(&refused).is_null(), "{refused:?}");
+
+    let other = prepared(
+        temp.path(),
+        "fr1-update",
+        &BuildSpec::new(C1),
+        &BuildSpec::new(C2),
+        &host,
+    );
+    let other_packs = temp.path().join("fr1-update-packs");
+    configure(&other, &other_packs);
+    root_requires(&other_packs, &["pool_lines"]);
+    host.programs
+        .refuse_check_config
+        .replace(vec![C2.to_owned()]);
+    let refused_update = plan_update(&host, &other);
+    assert_refused(
+        &refused_update,
+        "install_update_plan",
+        "config_refused_by_target",
+    );
+    assert_eq!(
+        failed_edges(&refused_update),
+        [("actingd-config".to_owned(), "next_check_config".to_owned())],
+        "{refused_update:?}"
+    );
+    assert!(
+        requires_missing(&refused_update).is_null(),
+        "{refused_update:?}"
+    );
+}
+
+// Fix round 1: a `schedule.json` and a fragment that are there and cannot be read (folders in the
+// files' places) refuse the plan, each entry saying why.
+#[test]
+fn rb1_fr1_a_schedule_or_a_fragment_that_cannot_be_read_refuses_and_says_why() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(
+        temp.path(),
+        "fr1-unread",
+        &BuildSpec::new(C1),
+        &BuildSpec::new(C2),
+        &host,
+    );
+    let packs = temp.path().join("fr1-unread-packs");
+    configure(&root, &packs);
+    let schedule_path = packs.join(GAME).join("schedule.json");
+    fs::create_dir_all(&schedule_path).expect("a folder in the schedule's place");
+    let first = hash_of('1');
+    let fragment = fragments_dir(&state_root_of(&root), &first).join(format!("{GAME}.json"));
+    fs::create_dir_all(&fragment).expect("a folder in the fragment's place");
+    set_active(&host, &first);
+    answers_names(&host, C2, &["pool_lines", "catalog_business"]);
+
+    let refused = plan_update(&host, &root);
+    assert_refused(&refused, "install_update_plan", "interface_edge");
+    assert_eq!(failed_edges(&refused), requires_row(), "{refused:?}");
+    let entries = requires_missing(&refused)
+        .as_array()
+        .unwrap_or_else(|| panic!("the entries: {refused:?}"));
+    assert_eq!(entries.len(), 2, "{refused:?}");
+    for (entry, source, path) in [
+        (&entries[0], "root", &schedule_path),
+        (&entries[1], "generation", &fragment),
+    ] {
+        assert_eq!(entry["game"], GAME, "{entry}");
+        assert_eq!(entry["source"], source, "{entry}");
+        assert_eq!(entry["path"], super::files::plain(path), "{entry}");
+        assert_eq!(entry["missing"], json!([]), "{entry}");
+        assert!(entry["unread"]["outcome"]["code"].is_string(), "{entry}");
+    }
+    assert_eq!(entries[0]["catalog_hash"], Value::Null, "{refused:?}");
+    assert_eq!(entries[1]["catalog_hash"], first.as_str(), "{refused:?}");
+}
+
+// Fix round 1: a subsystem the target lists with `enabled: false` is not named.
+#[test]
+fn rb1_fr1_a_subsystem_listed_as_not_enabled_is_not_named() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(
+        temp.path(),
+        "fr1-disabled",
+        &BuildSpec::new(C1),
+        &BuildSpec::new(C2),
+        &host,
+    );
+    let packs = temp.path().join("fr1-disabled-packs");
+    configure(&root, &packs);
+    let path = root_requires(&packs, &["pool_lines", "catalog_business"]);
+    answers_rows(
+        &host,
+        C2,
+        &[("pool_lines", true), ("catalog_business", false)],
+    );
+
+    let refused = plan_update(&host, &root);
+    assert_refused(&refused, "install_update_plan", "interface_edge");
+    assert_eq!(failed_edges(&refused), requires_row(), "{refused:?}");
+    assert_eq!(
+        requires_missing(&refused),
+        &json!([{"game": GAME, "source": "root", "path": super::files::plain(&path),
+            "missing": ["catalog_business"]}]),
+        "{refused:?}"
+    );
+}
+
+// Fix round 1: the target's answer previews one active generation and the live build's another:
+// both are read, each a fragment's entry, by generation.
+#[test]
+fn rb1_fr1_two_answers_naming_different_active_generations_are_both_read() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(
+        temp.path(),
+        "fr1-active",
+        &BuildSpec::new(C1),
+        &BuildSpec::new(C2),
+        &host,
+    );
+    let state_root = state_root_of(&root);
+    let first = hash_of('1');
+    let second = hash_of('2');
+    let first_fragment = write_generation(&state_root, &first, &["catalog_business"]);
+    let second_fragment = write_generation(&state_root, &second, &["pool_list_rows"]);
+    answers_names(&host, C2, &["pool_lines"]);
+    previews_active(&host, C2, &first);
+    previews_active(&host, "live", &second);
+
+    let refused = plan_update(&host, &root);
+    assert_refused(&refused, "install_update_plan", "interface_edge");
+    assert_eq!(failed_edges(&refused), requires_row(), "{refused:?}");
+    assert_eq!(
+        requires_missing(&refused),
+        &json!([
+            {"game": GAME, "source": "generation", "catalog_hash": first,
+                "path": super::files::plain(&first_fragment), "missing": ["catalog_business"]},
+            {"game": GAME, "source": "generation", "catalog_hash": second,
+                "path": super::files::plain(&second_fragment), "missing": ["pool_list_rows"]},
+        ]),
+        "{refused:?}"
+    );
 }

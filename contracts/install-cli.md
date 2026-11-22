@@ -285,12 +285,17 @@ stopped, and until INST-3 it leaves the configuration alone.
   "`requires`": a Runtime that does not name one refuses the file, and a start compiles the active
   catalogue generation composed from such files).
   - *What the target names*: the enabled rows of `config_manifest.subsystems` in its own
-    check-config answer, the one above (the set a start of that build gives the composer). An
-    answer without them names none, so any `requires` refuses it: a refusal (which prints no
-    report) or a build without the member. 0.12.77, 0.12.78 and 0.12.79 print it with a
+    check-config answer, the one above (the set a start of that build gives the composer); a row
+    `enabled: false` names nothing. A passing answer without them (a build without the member)
+    names none, so any `requires` refuses it. 0.12.77, 0.12.78 and 0.12.79 print it with a
     configuration they pass (read at their tags); 0.12.77 and 0.12.78 name neither
     `pool_list_rows` nor `catalog_business`, 0.12.79 names `pool_list_rows` and not
     `catalog_business`.
+  - *A target whose check-config did not pass* (fix round 1, the coordinator's ruling): the check
+    does not run, so there is neither row nor member. Its answer judged nothing (a refusal prints
+    no report), and both plans refuse already for the true reason, as before: an update
+    `config_refused_by_target`, a rollback the gate's part `config` (`rollback_gate_failed`), for
+    which a person restores the configuration first.
   - *What is read*: the `schedule.json` of each game in use (each `game_id` of
     `policy.facts.instances`) below `standard_packs.root`; and each fragment
     (`fragments/<game>.json`) of the active generation's directory in the state root's catalogue
@@ -310,9 +315,13 @@ stopped, and until INST-3 it leaves the configuration alone.
     `unread` (its failure as a warning; `game` absent for the folder, `missing` empty). The plan
     refuses `interface_edge` with that row counted; apply, which plans again, refuses the same
     before any change; a rollback's gate is not reached. `undo` judged as a rollback, `status
-    --check-rollback` and a composite's automatic rollback plan the same way and refuse with it.
-    When nothing is missing there is neither row nor member: the plan is the plan it was. The
-    check writes nothing and runs nothing beyond the two check-configs above.
+    --check-rollback` and a composite's automatic rollback plan the same way and carry on the
+    plan's refusal alone, its outcome `install_command_refused` `interface_edge` with `count` (the
+    answer of `undo`, the cause of a refused automatic rollback's `rollback_gate_failed`, `refused`
+    of `status --check-rollback`), not `requires_missing`: the list is in the answer of the plan a
+    person asks for (`rollback plan --to <commit>`). The two answers' active generations are both read when they differ. When
+    nothing is missing there is neither row nor member: the plan is the plan it was. The check
+    writes nothing and runs nothing beyond the two check-configs above.
   - *The way out* (no flag passes it): place schedules that do not require the name, let the
     Runtime of the live build compose and activate a generation without it (its workbench's next
     check after the placement), and plan again. A person sees that the state no longer holds such
