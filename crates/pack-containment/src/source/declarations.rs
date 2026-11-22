@@ -867,11 +867,13 @@ impl Declaration<'_> {
     /// otherwise; and a press step declares no retry (`retryable` `true` is `InvalidValue` at it),
     /// since a retry would press again after a press it cannot tell was taken. Its value is a whole
     /// number from 1 to 1000 (another type `InvalidType`, a number out of that range
-    /// `InvalidValue`), or `{"fact_key": "session.dispatch.parameter.<name>", "minus"?: <1 to
-    /// 1000>}`, `<name>` a variable's name, the remedy token form (a key outside it `InvalidValue`
-    /// at `fact_key`, a `minus` out of range `InvalidValue` at it; `UnknownField`, `MissingField`
-    /// and `InvalidType` at their members). Runtime admission holds the mode and takes the step
-    /// into its plan.
+    /// `InvalidValue`), or `{"fact_key": <key>, "minus"?: <1 to 1000>}`, `<key>` a key a page
+    /// graph's fact cap takes (fix round 1: `actingcommand_contract::validate_fact_cap_key`, the
+    /// one definition, `session.dispatch.schedule.run_cap` and `session.dispatch.parameter.<name>`
+    /// among them; another key `InvalidValue` at `fact_key`, a `minus` out of range `InvalidValue`
+    /// at it; `UnknownField`, `MissingField` and `InvalidType` at their members). Where the step
+    /// stands in its task is [`Self::presses_entered`]'s. Runtime admission holds the mode and
+    /// takes the step into its plan.
     fn presses(
         &self,
         operation: &Map<String, Value>,
@@ -909,10 +911,11 @@ impl Declaration<'_> {
         let fact_pointer = child(&presses_pointer, "fact_key");
         let fact_key = self.required(parameter, &presses_pointer, "fact_key")?;
         self.string(fact_key, &fact_pointer)?;
+        // Fix round 1 (the coordinator's ruling): the keys a page graph's fact cap takes, by the
+        // one definition of that check (`session.dispatch.schedule.run_cap` among them).
         if !fact_key
             .as_str()
-            .and_then(|key| key.strip_prefix(actingcommand_contract::VARIABLE_FACT_KEY_PREFIX))
-            .is_some_and(actingcommand_contract::remedy_token_valid)
+            .is_some_and(|key| actingcommand_contract::validate_fact_cap_key(key).is_ok())
         {
             return Err(invalid(&fact_pointer));
         }
@@ -921,6 +924,41 @@ impl Declaration<'_> {
             self.unsigned(minus, &minus_pointer)?;
             if !minus.as_u64().is_some_and(in_range) {
                 return Err(invalid(&minus_pointer));
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #477 LR-1 fix round 1 (`contracts/linear-steps.md`, "Pressing on one page"; the
+    /// coordinator's ruling on the review of the slice): a press step's presses add to the number
+    /// its page shows when the step begins, so the run opens that page itself before it presses: a
+    /// step that declares `presses` stands after a step of the same task, `operations` at
+    /// `pointer`, that leads into its page from another page (its declared destination, `to` or
+    /// `expect_after.page_id`, that page and its `from` another, as written); never first. A page
+    /// left open by an earlier run is then never pressed on again. `InvalidValue` at the member
+    /// otherwise.
+    fn presses_entered(&self, operations: &[Value], pointer: &str) -> CliOutcome<()> {
+        for (index, operation) in operations.iter().enumerate() {
+            let Some(page) = operation
+                .as_object()
+                .filter(|object| declares(object, PRESSES_MEMBER))
+                .and_then(|object| object.get("from"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let entered = operations[..index]
+                .iter()
+                .filter_map(Value::as_object)
+                .any(|earlier| {
+                    earlier.get("from").and_then(Value::as_str) != Some(page)
+                        && declared_destinations(earlier).any(|declared| names_page(declared, page))
+                });
+            if !entered {
+                return Err(self.error(
+                    &child(&child(pointer, &index.to_string()), PRESSES_MEMBER),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
             }
         }
         Ok(())
@@ -3402,19 +3440,34 @@ fn stays_on_its_page(operation: &Map<String, Value>) -> bool {
     else {
         return false;
     };
-    let names_from = |page: &Value| match page {
-        Value::String(page) => page == from,
-        Value::Array(pages) => matches!(pages.as_slice(), [Value::String(page)] if page == from),
+    let mut destinations = declared_destinations(operation).peekable();
+    destinations.peek().is_some() && destinations.all(|declared| names_page(declared, from))
+}
+
+/// Workflow #477 LR-1: the destinations the operation `operation` declares, its `to` and its
+/// `expect_after.page_id`, those present and not `null`.
+fn declared_destinations(operation: &Map<String, Value>) -> impl Iterator<Item = &Value> {
+    [
+        operation.get("to"),
+        operation
+            .get("expect_after")
+            .and_then(|expectation| expectation.get("page_id")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|value| !value.is_null())
+}
+
+/// Workflow #477 LR-1: whether the page declaration `declared`, a page or a list of pages, names
+/// the one page `page`, as written.
+fn names_page(declared: &Value, page: &str) -> bool {
+    match declared {
+        Value::String(written) => written == page,
+        Value::Array(pages) => {
+            matches!(pages.as_slice(), [Value::String(written)] if written == page)
+        }
         _ => false,
-    };
-    let to = operation.get("to").filter(|value| !value.is_null());
-    let expected = operation
-        .get("expect_after")
-        .and_then(|expectation| expectation.get("page_id"))
-        .filter(|value| !value.is_null());
-    (to.is_some() || expected.is_some())
-        && to.is_none_or(names_from)
-        && expected.is_none_or(names_from)
+    }
 }
 
 /// Workflow #411 B28: the shape the member a declaration refusal names must have, when the
@@ -5128,11 +5181,15 @@ impl Declaration<'_> {
                 "stability_termination" => self.stability(value, &pointer)?,
                 "recovery" if !value.is_null() => self.recovery(value, &pointer)?,
                 "operations" => {
-                    for (index, operation) in self.array(value, &pointer)?.iter().enumerate() {
+                    let operations = self.array(value, &pointer)?;
+                    for (index, operation) in operations.iter().enumerate() {
                         let pointer = child(&pointer, &index.to_string());
                         self.operation(operation, &pointer, canonical)?;
                         self.path_drag_in_frame(operation, &pointer, frame)?;
                     }
+                    // Workflow #477 LR-1 fix round 1: a press step after a step that enters its
+                    // page.
+                    self.presses_entered(operations, &pointer)?;
                 }
                 "anchors" | "verify_templates" | "color_probes" | "ocr_targets" => {
                     for (index, target) in self.array(value, &pointer)?.iter().enumerate() {

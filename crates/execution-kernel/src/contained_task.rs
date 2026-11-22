@@ -11737,8 +11737,8 @@ struct TaskOperation {
     #[serde(default)]
     optional: Option<linear::TaskOptional>,
     /// Workflow #477 LR-1: how often a click step whose page after its press is its page before
-    /// it presses there (a whole number, or a dispatch parameter less `minus`); admitted only
-    /// under `linear_steps`.
+    /// it presses there (a whole number, or the value of a fact cap's key less `minus`); admitted
+    /// only under `linear_steps`.
     #[serde(default)]
     presses: Option<linear::TaskPresses>,
     /// Workflow #390 EXEC-2: the screen is watched for a while after the operation's destination

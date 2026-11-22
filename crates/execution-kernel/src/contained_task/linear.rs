@@ -93,10 +93,12 @@
 //!
 //! Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"; the coordinator's
 //! rulings in the work order): a click step whose `to` is its `from` may declare `presses`, how
-//! often it presses on its page: a constant, or the value of a dispatch parameter
-//! (`session.dispatch.parameter.<name>`) less its `minus`, never below 0. The declaration gate holds
-//! the member's form and the step it stands on; admission takes the step into the plan, the one
-//! click step exempt from `to_equals_from`. The counts are read once, before the run's first
+//! often it presses on its page: a constant, or the value of a fact key a page graph's fact cap
+//! takes (fix round 1: the scheduler's `session.dispatch.schedule.run_cap`, a variable's
+//! `session.dispatch.parameter.<name>`) less its `minus`, never below 0. The declaration gate holds
+//! the member's form and the step it stands on (fix round 1: after a step that leads into its page
+//! from another page, never first); admission takes the step into the plan, the one click step
+//! exempt from `to_equals_from`. The counts are read once, before the run's first
 //! capture, as a page graph reads its designated effects' fact caps
 //! ([`super::designated_effects`]); a count that cannot be read ends the run there with
 //! `contained_task_designated_effect_cap_unresolved`. The step presses that many times, each press
@@ -188,8 +190,8 @@ pub(super) const PRESSES_MEMBER: &str = "presses";
 
 /// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): how often a press
 /// step that stays on its page presses, as the package writes it: a whole number, or the value of a
-/// dispatch parameter less `minus`. The declaration gate holds its form and its ranges; admission
-/// takes it into the plan ([`LinearPresses`]).
+/// fact key a page graph's fact cap takes less `minus`. The declaration gate holds its form and its
+/// ranges; admission takes it into the plan ([`LinearPresses`]).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub(super) enum TaskPresses {
@@ -197,7 +199,8 @@ pub(super) enum TaskPresses {
     Parameter(TaskPressesParameter),
 }
 
-/// `{"fact_key": "session.dispatch.parameter.<name>", "minus"?: <whole number>}`.
+/// `{"fact_key": "session.dispatch.schedule.run_cap", "minus"?: <whole number>}`, or another key a
+/// fact cap takes (`session.dispatch.parameter.<name>`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskPressesParameter {
@@ -1239,6 +1242,22 @@ impl TaskProgram {
                 presses,
             });
         }
+        // Workflow #477 LR-1 fix round 1 (the coordinator's ruling on the review): a press step's
+        // presses add to what its page shows when it begins, so an earlier step of the plan leads
+        // into its page from another page (never the first step); the declaration gate refuses one
+        // as written first, and admission compares the pages it resolved.
+        for (index, step) in steps.iter().enumerate() {
+            if step.presses.is_some()
+                && !steps[..index]
+                    .iter()
+                    .any(|earlier| earlier.to == step.to && earlier.from != step.from)
+            {
+                return Err(invalid(
+                    "presses_not_entered",
+                    Some(&self.operations[index]),
+                ));
+            }
+        }
         if steps[0].from != entry {
             return Err(invalid("entry_page", Some(&self.operations[0])));
         }
@@ -2267,9 +2286,12 @@ impl PreparedContainedTask {
     /// 0, on the one it started on, and that frame is the next step's decision frame. An ending
     /// page that passes ends the step on it, the presses left not made. A press whose page does not
     /// come ends the run as a click step's last attempt ends it ([`Self::linear_attempt_failed`]),
-    /// the presses made before it recorded; a press step declares no retry (the declaration gate).
-    /// Nothing reads the count the screen shows: a press the game did not take only makes the
-    /// presses fewer, never more.
+    /// the presses made before it recorded and (fix round 1) its `attempts` the number of presses
+    /// made; a press step declares no retry (the declaration gate). With a step gap, a fresh frame
+    /// before a press on which the step's page does not pass ends the run with
+    /// `contained_task_page_unknown`, as for a click step. Nothing reads the count the screen shows:
+    /// the presses are never more than the count resolved, and they add to the number the screen
+    /// shows when the step begins, which an earlier step of the plan opens (fix round 1).
     fn run_linear_presses<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2316,7 +2338,7 @@ impl PreparedContainedTask {
             post_input_delay: Duration::from_millis(operation.post_delay_ms.unwrap_or(0))
                 .max(window_min),
         };
-        for _ in 0..count {
+        for press in 1..=count {
             // The guard's deadline is fixed at each press, as at a click step's start.
             let step_timing = run
                 .timing
@@ -2350,12 +2372,14 @@ impl PreparedContainedTask {
                     )?;
                     return Ok(LinearStepEnd::Reached(Box::new(reached)));
                 }
+                // Fix round 1: the failure's `attempts` is the press whose page did not come, the
+                // number of presses made.
                 Err(miss) => {
                     return Err(self
                         .linear_attempt_failed(
                             runtime,
                             (run, &mut loading),
-                            (step_index, 1),
+                            (step_index, press),
                             (operation, step),
                             candidates,
                             miss,

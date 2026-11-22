@@ -3,15 +3,18 @@
 // Workflow #477 LR-1 (0.12.79; register §1.513; contracts/linear-steps.md, "Pressing on one page";
 // the coordinator's rulings in the work order of board #477, not the owner's words): a click step of
 // a `linear_steps` task whose `to` is its `from` may declare `presses`, how often it presses on its
-// page: a whole number, or the value of `session.dispatch.parameter.<name>` less `minus`, never
-// below 0, read before the run's first capture as a page graph reads a designated effect's fact
-// cap. After each press come the step's post-input wait and the arrival of its own page; a count of
-// 0 presses nothing and the step is done; a count that cannot be read ends the run with
-// `contained_task_designated_effect_cap_unresolved` before any press; a press whose page does not
-// come ends the run as a click step's last attempt does, the presses made before it recorded. The
-// declaration gate refuses the member at its pointer on a step that is no press, on one that leaves
-// its page, and a constant, a key or a `minus` out of its range. A package without the member runs
-// as before.
+// page: a whole number, or the value of a key a page graph's fact cap takes (fix round 1: the
+// scheduler's `session.dispatch.schedule.run_cap`, a variable's `session.dispatch.parameter.<name>`)
+// less `minus`, never below 0, read before the run's first capture as a page graph reads a
+// designated effect's fact cap. After each press come the step's post-input wait and the arrival of
+// its own page; a count of 0 presses nothing and the step is done; a count that cannot be read ends
+// the run with `contained_task_designated_effect_cap_unresolved` before any press; a press whose
+// page does not come ends the run as a click step's last attempt does, the presses made before it
+// recorded and counted in its `attempts`. The declaration gate refuses the member at its pointer on
+// a step that is no press, on one that leaves its page, (fix round 1) on one no earlier step leads
+// into from another page, and a constant, a key or a `minus` out of its range; a page graph refuses
+// it at admission; the root check holds a variable a count reads to a cap's range. A package without
+// the member runs as before.
 //
 // Every expected value comes from those rulings and the package values below, never from the code.
 // The packages are synthetic `neutral` packages admitted by the kernel's whole admission
@@ -23,18 +26,21 @@
 // (EXEC-I4): the device shows `screens[n]` after `n` inputs, each segment's last frame repeating;
 // the runtime around it answers the run's fact snapshot as the host does (`selection_state`).
 
+use super::tests::admission_deadline;
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
 use actingcommand_contract::{
     FactContent, FactRecord, FactValue, InstanceFactContext, InstanceFactSnapshot,
-    ResourceDeclarationReason,
+    ResourceDeclarationReason, RootPackageVariables, StandardPackProblem, check_root_variables,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
 
 const CONFIRMATION_FAILED: &str = ExecutionKernelCode::PageConfirmationFailed.as_str();
 const UNRESOLVED: &str = ExecutionKernelCode::ContainedTaskDesignatedEffectCapUnresolved.as_str();
+const OPERATION_INVALID: &str = ExecutionKernelCode::ContainedTaskOperationInvalid.as_str();
 
 const WIDTH: u32 = 2;
 const STEP_MS: u64 = 5_000;
@@ -42,15 +48,19 @@ const ARRIVAL_MS: u64 = 1_000;
 const TASK_MS: u64 = 60_000;
 const NOW_UNIX_MS: u64 = 1_000_000;
 const INSTANCE: &str = "neutral.instance";
-// The dispatch parameter the press count reads: the package's integer variable `turns`.
+// Fix round 1: the schedule value a policy dispatch hands its run, the turns its allowances pay
+// for (SS-6), which the press count reads.
+const RUN_CAP_KEY: &str = "session.dispatch.schedule.run_cap";
+// The key of the package variable `turns`, which the root check holds to a cap's range.
 const TURNS_KEY: &str = "session.dispatch.parameter.turns";
 // The detector pages.
 const LIST_PAGE: &str = "neutral/list";
 const DONE_PAGE: &str = "neutral/done";
-// The detail `page_confirmation_failed` gives the end of a press whose page did not come
-// (contracts/linear-steps.md, "Failure codes"), as it gives a click step's one attempt.
+// The detail `page_confirmation_failed` gives the end of the second press, whose page did not come
+// (contracts/linear-steps.md, "Failure codes"), as it gives a click step's attempt; fix round 1:
+// `attempts` is the number of presses made.
 const PLUS_UNCONFIRMED: &str =
-    "operation=plus attempts=1 after_page=<unrecognized> hit_error_page=false transition=none";
+    "operation=plus attempts=2 after_page=<unrecognized> hit_error_page=false transition=none";
 
 const HOME: [u8; 3] = [255, 0, 255];
 const LIST: [u8; 3] = [255, 0, 0];
@@ -91,12 +101,17 @@ fn control(package_id: &str, max_steps: usize) -> Value {
     })
 }
 
-// The press path's control: three operations and the integer variable `turns`, from 0 to 1000,
-// which a run reads as `session.dispatch.parameter.turns`.
+// The press path's control: three operations.
 fn press_control() -> Value {
-    let mut control = control("neutral.linear.press", 3);
+    control("neutral.linear.press", 3)
+}
+
+// The press path's control with the integer variable `turns`, from 0 to `max`, which a run reads
+// as `session.dispatch.parameter.turns`.
+fn variable_control(max: i64) -> Value {
+    let mut control = press_control();
     control["variables"] = json!([{"name": "turns", "type": "integer", "title": {"en": "Turns"},
-                                   "min": 0, "max": 1000, "default": 1}]);
+                                   "min": 0, "max": max, "default": 1}]);
     control
 }
 
@@ -211,6 +226,25 @@ fn package(control: &Value, task: &Value) -> Vec<u8> {
 // The package as contained task admission prepares it, or its refusal.
 fn load(control: &Value, task: &Value) -> Result<PreparedContainedTask, ContainedTaskError> {
     PreparedContainedTask::load(INSTANCE, &package(control, task))
+}
+
+// Fix round 1: the declarations the root check reads of the package (`read_remedy_declarations`,
+// the Runtime's metadata reader, on the package's zip written to the system's temporary directory
+// under a name of this process and `name`, removed once read), or its refusal.
+fn read_declarations(
+    name: &str,
+    control: &Value,
+    task: &Value,
+) -> Result<RemedyDeclarations, ContainedTaskError> {
+    let path = std::env::temp_dir().join(format!(
+        "actingcommand-gate-477-lr1-{}-{name}.zip",
+        std::process::id()
+    ));
+    std::fs::write(&path, package(control, task)).expect("the package's zip file");
+    let read =
+        PreparedContainedTask::read_remedy_declarations(INSTANCE, &path, admission_deadline());
+    std::fs::remove_file(&path).expect("the package's zip file removed");
+    read
 }
 
 fn admitted(case: &str, control: &Value, task: &Value) -> PreparedContainedTask {
@@ -349,10 +383,9 @@ fn recognitions_after(
     after
 }
 
-// The records of the run's fact snapshot as the host overlays them for a dispatch that hands the
-// variable `turns` the value `turns` (`dispatched_run_parameters`, `with_variables`, `overlay`):
-// the one record `session.dispatch.parameter.turns`, an integer.
-fn dispatched_turns(package: &PreparedContainedTask, turns: i64) -> Vec<FactRecord> {
+// The records of the run's fact snapshot as the host overlays the run's `parameters` on the
+// instance's records (`RunParameters::overlay`), here on none.
+fn overlaid(parameters: &RunParameters) -> Vec<FactRecord> {
     let mut snapshot = InstanceFactSnapshot {
         snapshot_id: "snapshot:lr1".to_owned(),
         ledger_position: 1,
@@ -363,25 +396,36 @@ fn dispatched_turns(package: &PreparedContainedTask, turns: i64) -> Vec<FactReco
         },
         records: Vec::new(),
     };
-    package
-        .dispatched_run_parameters(Vec::new(), NOW_UNIX_MS - 1_000)
-        .with_variables(package.dispatched_variable_values(&[("turns".to_owned(), json!(turns))]))
-        .overlay(&mut snapshot, NOW_UNIX_MS);
+    parameters.overlay(&mut snapshot, NOW_UNIX_MS);
+    snapshot.records
+}
+
+// Fix round 1: the records for a policy dispatch whose schedule value `run_cap` is `run_cap`
+// (`dispatched_run_parameters`, `with_dispatch_schedule`, SS-6): the one record
+// `session.dispatch.schedule.run_cap`, an integer.
+fn dispatched_run_cap(package: &PreparedContainedTask, run_cap: i64) -> Vec<FactRecord> {
+    let records = overlaid(
+        &package
+            .dispatched_run_parameters(Vec::new(), NOW_UNIX_MS - 1_000)
+            .with_dispatch_schedule(
+                vec![("run_cap".to_owned(), FactValue::Integer(run_cap))],
+                NOW_UNIX_MS - 1_000,
+            ),
+    );
     assert_eq!(
-        snapshot
-            .records
+        records
             .iter()
             .map(|record| (record.key.as_str(), &record.content))
             .collect::<Vec<_>>(),
         [(
-            TURNS_KEY,
+            RUN_CAP_KEY,
             &FactContent::Inline {
-                value: FactValue::Integer(turns)
+                value: FactValue::Integer(run_cap)
             }
         )],
-        "turns {turns}"
+        "run cap {run_cap}"
     );
-    snapshot.records
+    records
 }
 
 // The scripted device behind a runtime that answers the run's fact snapshot as the host does
@@ -504,58 +548,60 @@ fn lr1_a_constant_count_presses_three_times_and_the_page_is_confirmed_after_each
     assert_eq!(device.fact_reads, 0);
 }
 
-// Test 2 (rulings 1, 2 and 5): `plus` reads the dispatch parameter `turns` with `minus` 1, the value
-// a dispatch hands the run overlaid as the host overlays it. A value of 4 presses three times; of 1
+// Test 2 (rulings 1, 2 and 5; fix round 1, the coordinator's ruling 1): `plus` reads the
+// scheduler's `run_cap` (`session.dispatch.schedule.run_cap`) with `minus` 1, the value a policy
+// dispatch hands the run overlaid as the host overlays it. A run cap of 4 presses three times; of 1
 // and of 0 nothing: the step starts and finishes on the list with no effect between, and `start`
 // decides on the frame `plus` started on. Each run reads the snapshot once and is Completed on done
 // after three steps.
 #[test]
-fn lr1_the_dispatch_parameter_less_one_presses_three_times_for_four_and_none_for_one_or_zero() {
+fn lr1_the_schedules_run_cap_less_one_presses_three_times_for_four_and_none_for_one_or_zero() {
     let prepared = admitted(
-        "a dispatch parameter",
+        "the run cap",
         &press_control(),
-        &press_task(press_step(json!({"fact_key": TURNS_KEY, "minus": 1}))),
+        &press_task(press_step(json!({"fact_key": RUN_CAP_KEY, "minus": 1}))),
     );
-    for (turns, presses) in [(4, 3), (1, 0), (0, 0)] {
-        let records = dispatched_turns(&prepared, turns);
+    for (run_cap, presses) in [(4, 3), (1, 0), (0, 0)] {
+        let records = dispatched_run_cap(&prepared, run_cap);
         let mut device = FactDevice::new(press_screens(presses), Some(records));
 
-        let outcome = prepared
-            .run(&mut device)
-            .unwrap_or_else(|error| panic!("turns {turns}: expected a normal end, got {error:?}"));
+        let outcome = prepared.run(&mut device).unwrap_or_else(|error| {
+            panic!("run cap {run_cap}: expected a normal end, got {error:?}")
+        });
 
-        assert_eq!(outcome, completed(DONE_PAGE, 3), "turns {turns}");
+        assert_eq!(outcome, completed(DONE_PAGE, 3), "run cap {run_cap}");
         assert_eq!(
             step_lines(&device.script),
             press_path_lines(presses),
-            "turns {turns}"
+            "run cap {run_cap}"
         );
         assert_eq!(
             device.script.inputs().len(),
             2 + presses,
-            "turns {turns}: {:?}",
+            "run cap {run_cap}: {:?}",
             device.script.inputs()
         );
-        assert_eq!(device.fact_reads, 1, "turns {turns}");
+        assert_eq!(device.fact_reads, 1, "run cap {run_cap}");
     }
 }
 
-// Test 3 (ruling 3): the count cannot be read: with no fact snapshot, and with a snapshot that holds
-// no record of the key, the run ends with `contained_task_designated_effect_cap_unresolved`, naming
-// `plus` and the key (and, for the missing record, `unknown_reason` `fact_missing`), after
-// `RunStarted` and before any capture, step start or input.
+// Test 3 (ruling 3; fix round 1): the count cannot be read: with no fact snapshot, and in a run
+// without dispatch values (the snapshot as the host overlays a run's defaults: no `run_cap`), the
+// run ends with `contained_task_designated_effect_cap_unresolved`, naming `plus` and the key (and,
+// for the missing record, `unknown_reason` `fact_missing`), after `RunStarted` and before any
+// capture, step start or input.
 #[test]
 fn lr1_a_count_that_cannot_be_read_ends_the_run_before_any_press() {
     let prepared = admitted(
-        "a dispatch parameter",
+        "the run cap",
         &press_control(),
-        &press_task(press_step(json!({"fact_key": TURNS_KEY, "minus": 1}))),
+        &press_task(press_step(json!({"fact_key": RUN_CAP_KEY, "minus": 1}))),
     );
     for (case, records, extra) in [
         ("no fact snapshot", None, json!({})),
         (
-            "no record of the key",
-            Some(Vec::new()),
+            "a run without dispatch values",
+            Some(overlaid(&prepared.default_run_values())),
             json!({"unknown_reason": "fact_missing"}),
         ),
     ] {
@@ -564,7 +610,7 @@ fn lr1_a_count_that_cannot_be_read_ends_the_run_before_any_press() {
         let error = failed(case, prepared.run(&mut device));
 
         assert_eq!(error.code().as_str(), UNRESOLVED, "{case}: {error}");
-        let mut expected = json!({"pack_operation_id": "plus", "fact_key": TURNS_KEY});
+        let mut expected = json!({"pack_operation_id": "plus", "fact_key": RUN_CAP_KEY});
         for (key, value) in extra.as_object().expect("extra values") {
             expected[key] = value.clone();
         }
@@ -590,9 +636,10 @@ fn lr1_a_count_that_cannot_be_read_ends_the_run_before_any_press() {
 // Test 4 (rulings 3 and 5): `plus` declares 3, and after its second press the screen shows done,
 // not the list. That press's arrival on the list runs out and the closing decision follows, as after
 // a click step's last attempt; the run fails with `page_confirmation_failed`, the click step's
-// detail, the arrival's postcondition timing and the word `other_page_shown` (done, another page of
-// the package, stands still on the decision's last frame). The records hold the two presses, and
-// `plus` finishes on no page; no third press and no `start`.
+// detail with (fix round 1) `attempts=2`, the presses made, the arrival's postcondition timing and
+// the word `other_page_shown` (done, another page of the package, stands still on the decision's
+// last frame). The records hold the two presses, and `plus` finishes on no page; no third press and
+// no `start`.
 #[test]
 fn lr1_the_page_lost_after_the_second_press_ends_the_run_as_a_click_steps_last_attempt() {
     let prepared = admitted(
@@ -645,10 +692,11 @@ fn lr1_the_page_lost_after_the_second_press_ends_the_run_as_a_click_steps_last_a
 // Test 5 (ruling 6): the declaration gate, which admission runs first, refuses the member at its
 // pointer with `resource_declaration_invalid`, `InvalidValue`: on a step that is no press (a key
 // step) and on one that leaves its page (the list to done), at `/operations/1/presses`; a constant
-// of 0 and of 1001 there too; a key outside `session.dispatch.parameter.` at
+// of 0 and of 1001 there too; (fix round 1) a key no fact cap takes, one of no fact family, at
 // `/operations/1/presses/fact_key`; a `minus` of 1001 at `/operations/1/presses/minus`; and a press
-// step that declares a retry at `/operations/1/retryable`. The press path with 3 is admitted and
-// counts `package` 25 (the Lab's revision table, `gate_477_lr1` of actinglab's tests).
+// step that declares a retry at `/operations/1/retryable`. The press path with 3, with the run cap
+// and with a variable's key is admitted, and counts `package` 25 (the Lab's revision table,
+// `gate_477_lr1` of actinglab's tests).
 #[test]
 fn lr1_the_declaration_gate_refuses_each_misplaced_or_out_of_range_count_at_its_pointer() {
     let key_step = json!({"id": "plus", "from": "list", "to": "list",
@@ -681,13 +729,13 @@ fn lr1_the_declaration_gate_refuses_each_misplaced_or_out_of_range_count_at_its_
             "/operations/1/presses",
         ),
         (
-            "a key outside the parameter prefix",
-            press_step(json!({"fact_key": "session.example.turns"})),
+            "a key no fact cap takes",
+            press_step(json!({"fact_key": "example.turns"})),
             "/operations/1/presses/fact_key",
         ),
         (
             "a minus of 1001",
-            press_step(json!({"fact_key": TURNS_KEY, "minus": 1001})),
+            press_step(json!({"fact_key": RUN_CAP_KEY, "minus": 1001})),
             "/operations/1/presses/minus",
         ),
         (
@@ -715,11 +763,13 @@ fn lr1_the_declaration_gate_refuses_each_misplaced_or_out_of_range_count_at_its_
             "{case}"
         );
     }
-    admitted(
-        "the press path",
-        &press_control(),
-        &press_task(press_step(json!(3))),
-    );
+    for (case, presses) in [
+        ("a constant", json!(3)),
+        ("the run cap", json!({"fact_key": RUN_CAP_KEY, "minus": 1})),
+        ("a variable's key", json!({"fact_key": TURNS_KEY})),
+    ] {
+        admitted(case, &press_control(), &press_task(press_step(presses)));
+    }
 }
 
 // Test 6 (the work order's "must not change"): a package without the member, the plain path of
@@ -765,4 +815,100 @@ fn lr1_a_package_without_the_member_runs_byte_for_byte_as_before() {
         device.script.inputs()
     );
     assert_eq!(device.fact_reads, 0);
+}
+
+// Fix round 1, test 7 (the review's missing test; the coordinator's ruling 3): the root check reads
+// a press step's key as a cap's. The press path whose count reads the package's integer variable
+// `turns` (`session.dispatch.parameter.turns`, `minus` 1), read by the Runtime's metadata reader as
+// the root check reads every package of a root (`read_remedy_declarations`), answers that key among
+// its cap keys; the root check (`check_root_variables`) then refuses the variable
+// (`variable_cap_range` at `/variables/0/max`) when its `max` is 2000, above a cap's 1000, and lets
+// it apply when its `max` is 1000.
+#[test]
+fn lr1_fix1_the_root_check_holds_a_variable_a_press_count_reads_to_a_caps_range() {
+    let task = press_task(press_step(json!({"fact_key": TURNS_KEY, "minus": 1})));
+    for (case, max, issues, applied) in [
+        ("max 1000", 1000, Vec::new(), vec!["turns"]),
+        (
+            "max 2000",
+            2000,
+            vec![(StandardPackProblem::VariableCapRange, "/variables/0/max")],
+            Vec::new(),
+        ),
+    ] {
+        let read = read_declarations(&format!("max{max}"), &variable_control(max), &task)
+            .unwrap_or_else(|error| panic!("{case}: refused: {error}"));
+        assert_eq!(read.cap_fact_keys, [TURNS_KEY], "{case}");
+        let checked = check_root_variables(
+            &[RootPackageVariables {
+                package_id: read.package_id,
+                variables: read.variables,
+                cap_fact_keys: read.cap_fact_keys,
+            }],
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            checked
+                .issues
+                .iter()
+                .map(|issue| (issue.issue.problem, issue.issue.pointer.as_str()))
+                .collect::<Vec<_>>(),
+            issues,
+            "{case}"
+        );
+        assert_eq!(
+            checked
+                .applied
+                .iter()
+                .map(|variable| variable.name.as_str())
+                .collect::<Vec<_>>(),
+            applied,
+            "{case}"
+        );
+    }
+}
+
+// Fix round 1, test 8 (the review's missing test): a page-graph package (`navigable_route`) on the
+// same path, whose `plus` writes the member, passes the declaration gate, which reads no mode, and
+// is refused at admission with `contained_task_operation_invalid`, `operation=plus presses requires
+// linear_steps`.
+#[test]
+fn lr1_fix1_a_page_graph_package_that_writes_the_member_is_refused_at_admission() {
+    let mut page_graph = press_control();
+    page_graph["execution_mode"] = json!("navigable_route");
+    let error = match load(&page_graph, &press_task(press_step(json!(3)))) {
+        Ok(_) => panic!("a page graph with a press count: admitted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code().as_str(), OPERATION_INVALID, "{error}");
+    assert_eq!(
+        error.detail(),
+        Some("operation=plus presses requires linear_steps"),
+        "{error}"
+    );
+}
+
+// Fix round 1, test 9 (the coordinator's ruling 2): a press step that no earlier step of its task
+// leads into from another page, the path's first step on its entry page, is refused by the
+// declaration gate at `/operations/0/presses` (`resource_declaration_invalid`, `InvalidValue`): its
+// presses would add to a number a run before it may have left on that page.
+#[test]
+fn lr1_fix1_a_press_step_no_earlier_step_leads_into_is_refused_the_first_step_included() {
+    let first = task(
+        "list",
+        "done",
+        vec![press_step(json!(3)), tap("start", "list", "done")],
+    );
+    let error = match load(&control("neutral.linear.press", 2), &first) {
+        Ok(_) => panic!("a first press step: admitted"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code().as_str(),
+        SharedCode::ResourceDeclarationInvalid.as_str(),
+        "{error}"
+    );
+    let issue = error.declaration_issue().expect("the declaration issue");
+    assert_eq!(issue.field_path, "/operations/0/presses");
+    assert_eq!(issue.reason, ResourceDeclarationReason::InvalidValue);
 }
