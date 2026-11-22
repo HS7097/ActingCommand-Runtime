@@ -180,7 +180,11 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #455 G-SLx (0.12.78, register §1.501) raises it to 23: a pack's variables beside a
 ///   capability its own `provides` marks irreversible, which every Runtime before it refuses at
 ///   admission (`contained_task_control_invalid`, `reason=variables_on_irreversible`); a pack
-///   without such a pair keeps its revision, so [3, 23].
+///   without such a pair keeps its revision, so [3, 23]. Workflow #477 LR-1 (0.12.79, register
+///   §1.513) raises it to 25 (24 is another slice of the same release): a `linear_steps` press
+///   step's count (`presses`), which every Runtime before it refuses at its declaration gate
+///   (`UnknownField` at `/operations/<i>/presses`); a pack without one keeps its revision, so
+///   [3, 25].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -231,7 +235,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 9]),
-    ("package", [3, 23]),
+    ("package", [3, 25]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];

@@ -45688,6 +45688,176 @@ v0.12.77 meets nothing kept on disk (the asleep set and ruling 3's memory are in
 language:
 被闲置动作关掉应用的实例也按「睡着」处理：调度照常判它的每个候选（收益、池子水位、无进展都照读），只有真能派的任务才把它唤醒（原因码 `instance_asleep_wake_due`，唤醒记录 `task_due`）；关应用进行中被关应用自己的占用挡着时，不再把收益、水位这类没有时刻的门挡住的任务算成到期。能关应用的实例（`close_app`、`auto`）上，这类门挡住的任务不再定唤醒时刻。唤醒后启动包跑完、之后一直没有排程任务被准入时，不再把应用关掉（`auto` 最多回主页），记一条警告 `instance_idle_stop_withheld`（`idle_action` 为 `close_app`）。修好了 11-21 那种关了又开、开了又关的循环；回滚到 0.12.77 循环会回来。能关应用或停模拟器的实例上，会自己回复的资源池「下一格回复」不再算唤醒时刻，实例终于能闲下来；池子够了、任务真能派时才唤醒（比恰好够的那一刻晚一个唤醒提前量）。
 
+### 1.513 Slice #477 LR-1 (0.12.79): a press step of a linear package presses a number of times on its page, the number a constant or a dispatch parameter (board #477; the rules below are the coordinator's rulings 1 to 8 in the work order, not the owner's words; coordinator work order `rd-1122/brief-477-lr1.md`, after the read-only study `rd-1122/study-477-step2.md`, its section 6 with the coordinator's disposition, and the resource channel's answer that no game needs a repeated block and every game sets its count on one page; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.513 (1.507 to 1.512 belong to other slices of 0.12.79). It ships in 0.12.79
+and takes `package` 25 (24 is the revision of another slice of this release, built at the same
+time; a build that has both declares [3, 25] and reads both). It is the execution kernel's linear
+steps and the declaration gate's: a click step of a `linear_steps` task that stays on its page may
+declare `presses`, and the run presses that many times there. [linear-steps.md](linear-steps.md)
+("Pressing on one page") is the contract, with [package-variables.md](package-variables.md) ("The
+overlay" and the root check's `variable_cap_range`), [component-interfaces.md](component-interfaces.md)
+(the `package` row 25) and [resource-verify.md](resource-verify.md) (row 25).
+
+**What it rests on** (read in the code; the work order's three stop conditions, none met).
+- *A step that stays on its page is expressed without changing how today's packages are read.* A
+  list reading is today's one step whose `to` is its `from`; a click step so declared was refused
+  (`to_equals_from`), and one that declares no `presses` still is. The source parser passes an
+  operation's members it does not read on as declared (`canonical_task` clones the task and
+  rewrites the click, the guard, `to` and `expect_after` only, the pages as written), derives no
+  navigation edge from an operation whose `to` is its `from` (`is_page_change`) and no page
+  operation from one that names a `to`, so it needs no change.
+- *The linear executor reads the dispatch parameter where the page graph reads it, through no file
+  another slice owns.* The page graph reads its fact caps through the runtime's `selection_state`
+  seam (`designated_effects.rs`), into which the host overlays the run's parameters and variables
+  for every run whatever its mode (`RuntimeContainedTask::selection_state`, `run_parameters.overlay`,
+  in `crates/runtime-host/src/host/contained_task.rs`, not touched); the plan reads its counts through
+  the same two functions, made the one reading of both (`PreparedContainedTask::cap_facts`,
+  `CapFacts::read`).
+- *No ending needs a new code.* An unread count ends with `contained_task_designated_effect_cap_unresolved`
+  and its values; a lost page with what a click step's last attempt ends with; the refusals are the
+  declaration gate's `resource_declaration_invalid` with existing reasons and admission's existing
+  codes and details.
+- *The host takes several effects of one step.* Its evidence refuses a second effect completion with
+  no frame persisted since the first (`effect_completed`, `CaptureSummaryPhaseConflict`); each press's
+  arrival captures a frame before the next press, as a retry's attempt does, and a list reading
+  already writes several intents in one step.
+
+**The rule** (the coordinator's rulings).
+- *The member* (ruling 1). `presses` on a click step whose `to`, and `expect_after.page_id` when
+  declared, is its `from`: a whole number from 1 to 1000, or `{"fact_key":
+  "session.dispatch.parameter.<name>", "minus"?: <1 to 1000>}`, the value read as `max_repeats:
+  {fact_key}` reads its cap (the same range, an unexpired integer from 0 to 1000 of the run's fact
+  snapshot), less `minus`, never below 0. The root check is the same: `read_remedy_declarations`
+  answers a count's key among `cap_fact_keys`, so a variable a count reads is held to an `integer`
+  from 0 to at most 1000 (`variable_cap_range`) as one a cap reads.
+- *The run* (ruling 2). The counts are read once, before the run's first capture
+  (`PreparedContainedTask::linear_press_counts`); a press step's `StepStarted` is written once, then
+  each press goes through a click step's one attempt: its input on the frame its page passed on
+  last (a step gap's fresh frame first, the guard, a declared recheck, the effect intent, the input,
+  the effect completion), its post-input wait and the arrival of its own page, whose frame the next
+  press decides on (`run_linear_presses`). A count of 0 presses nothing: the step starts and finishes
+  on the frame it started on, counted. A step without the member runs as before.
+- *Endings* (ruling 3). The count unread: `contained_task_designated_effect_cap_unresolved`
+  (`pack_operation_id`, `fact_key`, and `unknown_reason` or `count` and `limit_count`), before any
+  capture and any press. The page not confirmed after a press: the closing decision and the end a
+  click step's last attempt gives (`page_confirmation_failed`, or
+  `contained_task_linear_unrecorded_screen`), its detail `operation=<id> attempts=1 ...`; the extracted
+  `linear_attempt_failed` is that end, the click step's and the press step's one implementation.
+- *Ruling 4.* Nothing reads the count the screen shows; the contract says that a press the game did
+  not take makes the turns fewer, never more.
+- *Evidence* (ruling 5). Each press is one `EffectIntent` and one `EffectCompleted` of the step's
+  `step_index` and operation id, each followed by the arrival's recognition of the step's page; the
+  count resolved is the number of those pairs between the step's one `StepStarted` and its
+  `StepFinished` naming its page, none for 0; a dispatched value is in the admission record's
+  `variables`. No record, member or value is added.
+- *The declaration gate* (ruling 6; `Declaration::presses`, after the operation's other members):
+  `InvalidValue` at `/operations/<i>/presses` on a step that is no press (another effect beside it,
+  or a click of no pressing kind) and on one that leaves its page (`stays_on_its_page`: `from` a page
+  and every declared destination that page as written), and for a constant outside 1..=1000; at
+  `/operations/<i>/presses/fact_key` for a key outside `session.dispatch.parameter.<name>`; at
+  `/operations/<i>/presses/minus` for a `minus` outside 1..=1000; `InvalidType`, `MissingField` and
+  `UnknownField` for a wrong shape. Admission: `presses requires linear_steps`
+  (`contained_task_operation_invalid`) in another mode; under `linear_steps` `operation_effect` beside
+  another effect and `to_equals_from` for a resolved destination that is another page, both behind
+  the gate. A package that uses the member counts `package` 25; an older Runtime refuses it at its
+  gate (`UnknownField` at `/operations/<i>/presses`).
+- *Writing it* (ruling 7). The recording tools do not write it; `record amend` takes no such member;
+  a person or an agent writes it by hand or with `actinglab package edit` (a JSON pointer `--add`).
+- *Ruling 8.* No game, package or alias is named in code, contract or test.
+
+**Decided here** (each the smallest choice the rulings leave; none is the owner's).
+- A press is a click of the kinds `point`, `rect`, `specific_rect`, `offset`, `target` and
+  `target_center`: a drag, a swipe and a long press (whose hold may repeat on a "+") are none.
+- A press step declares no retry: `retryable: true` beside `presses` is `InvalidValue` at
+  `/operations/<i>/retryable` (a retry decision would press again after a press it cannot tell was
+  taken, which ruling 4's "never more" forbids). An optional press step and one right before a run of
+  optional steps are refused by the existing `optional_candidates`, so no rule is added for them.
+- `minus` is from 1 to 1000 (absent, none), as a constant is from 1 to 1000; a value read is from 0.
+- The counts are read before the entry's capture, so an unread count costs no frame; the snapshot
+  is asked for once whatever the number of press steps.
+- Each press takes a click's first attempt: a step gap (ACT-2), when the runtime gives one, comes
+  before every press; each press has a loading allowance of its own; the guard's deadline is fixed
+  at each press.
+- A press step on the entry page ends no reading segment (`reading_segments`): its presses join the
+  segment after it, so a requested key set never runs the business without them.
+- On a last press step an ending page that passes after a press ends the step there and the run on
+  it, the remaining presses not made; the closing decision of a press step awaits its page once
+  (`linear_closing_pages` adds the step's own page only when no candidate is it, which for every
+  other step it never is).
+- `read_remedy_declarations` reads the member with the kernel's own type (`TaskPresses`) and refuses
+  one that does not read with `contained_task_program_invalid`, as the task's own reader does.
+
+**Codes and words.** No code, key, value or vocabulary word is added, and the index check is current.
+`contained_task_designated_effect_cap_unresolved` (error, `declaration_error`, a refusal of the run
+before any input, exit 1 where a process ends on it) keeps its keys and values; the new detail of
+`contained_task_operation_invalid` (`operation=<id> presses requires linear_steps`) is a detail,
+like `key requires linear_steps`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The member, the plan, the run | `crates/execution-kernel/src/contained_task/linear.rs`: `PRESSES_MEMBER`, `TaskPresses`, `LinearPresses`, `LinearStep::presses`, `TaskProgram::validate_linear`, `LinearPlan::reading_segments`, `PreparedContainedTask::linear_press_counts`, `run_linear_steps`, `run_linear_presses`, `linear_attempt_failed` (extracted from `run_linear_step`, unchanged), `linear_closing_pages` |
+| The one fact cap reading | `crates/execution-kernel/src/contained_task/designated_effects.rs`: `CapFacts::read`, `PreparedContainedTask::cap_facts` (by operation id) |
+| The operation's member and the other modes | `crates/execution-kernel/src/contained_task.rs`: `TaskOperation::presses`, `TaskProgram::validate` (`presses requires linear_steps`) |
+| The root check's keys | `crates/execution-kernel/src/contained_task/remedies.rs`: `press_fact_keys`, `RemedyDeclarations::cap_fact_keys` |
+| The declaration gate | `crates/pack-containment/src/source/declarations.rs`: `Declaration::presses`, `stays_on_its_page`, `PRESS_CLICK_KINDS` |
+| The revision | `distribution/windows/component-interfaces.json` `package` [3, 25]; `apps/actinglab/src/resource_verify/revision.rs`: the row `presses` under `operations`, `linear_steps`, `PRESSES_REVISION` |
+| Texts | [linear-steps.md](linear-steps.md) (the introduction, the admission table, "Execution", "Reading marks", "Pressing on one page", "Failure codes", "Ledger", "Older builds", "Tools", "What a linear task cannot express"); [package-variables.md](package-variables.md) (the root check, "The overlay"); [component-interfaces.md](component-interfaces.md) (the `package` row 25); [resource-verify.md](resource-verify.md) (row 25) |
+
+**The `package` revision.** A Runtime before this one (0.12.78, read on main `9491d936`) refuses the
+member at its declaration gate, `resource_declaration_invalid` `UnknownField` at
+`/operations/<i>/presses`, before `PackageAdmitted` and any input, at every run, in a package of any
+mode; its installer, whose range ends at 23, refuses a bundle that declares 25 at its `package` edge
+(`interface_edge`), in the plan, before the hold and any write. This build declares [3, 25];
+`standard-pack build` computes 25 for a zip whose `linear_steps` pack has an operation that declares
+`presses`, and keeps every other zip's revision. `place` and admission check nothing new.
+
+**Tests** (exec gate map row "#477 LR-1"; synthetic `neutral` packages in KP-1's fixture, 2 x 1
+frames, pixel 0 the page; the kernel's scripted runtime and clock, and a runtime around it that
+answers the run's fact snapshot as the host does; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_477_lr1::lr1_a_constant_count_presses_three_times_and_the_page_is_confirmed_after_each` (1) | `plus` with 3: one `StepStarted`, three intent and completion pairs of step 1, the list awaited alone and passing after each press, `StepFinished` on the list, `start` deciding there; Completed on done after three steps, five inputs, no fact read |
+| `lr1_the_dispatch_parameter_less_one_presses_three_times_for_four_and_none_for_one_or_zero` (2) | `minus` 1 over the variable `turns` overlaid as a dispatch hands it: 4 presses three times, 1 and 0 none (the step starting and finishing on the list with no effect between); one snapshot read each; Completed on done |
+| `lr1_a_count_that_cannot_be_read_ends_the_run_before_any_press` (3) | no snapshot, and a snapshot without the key: `contained_task_designated_effect_cap_unresolved` with `pack_operation_id` `plus`, `fact_key` and (the missing record) `unknown_reason` `fact_missing`; after `RunStarted`, no capture, step start or input |
+| `lr1_the_page_lost_after_the_second_press_ends_the_run_as_a_click_steps_last_attempt` (4) | done after the second of three presses: `page_confirmation_failed`, the click step's detail, the arrival's postcondition timing (1000 ms), `other_page_shown`; the two presses recorded, `plus` finishing on `<unrecognized>`, three inputs |
+| `lr1_the_declaration_gate_refuses_each_misplaced_or_out_of_range_count_at_its_pointer` (5) | `InvalidValue` at `/operations/1/presses` for a key step, a step from the list to done and the constants 0 and 1001; at `.../presses/fact_key` for `session.example.turns`; at `.../presses/minus` for 1001; at `/operations/1/retryable` for a retried press step; the press path with 3 admitted |
+| `lr1_a_package_without_the_member_runs_byte_for_byte_as_before` (6) | KP-1's plain path (`open`, then the trusted tap `back`): Completed on done after two steps, two taps, no fact read, its step and effect records byte for byte the golden of eight lines |
+| `apps/actinglab/src/tests/gate_477_lr1.rs` `lr1_a_press_count_of_a_linear_steps_pack_needs_revision_25_and_nothing_else_does` (5) | 25 for a constant and for the parameter form in a `linear_steps` pack; the same click step without it, and the member in a `navigable_route` pack, 3 |
+
+Adapted, the requirement moving the shipped range [3, 23] to [3, 25]:
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 8`), `gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`
+(`SHARED_READ_REVISION + 5`), the rescue module's `gate_463_v1::v1_the_build_declares_package_through_revision_14`,
+the Lab's `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`
+and actinglab-architecture's `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`.
+Every other existing test is unchanged; `run_linear_step`'s end of a missed last attempt moved into
+`linear_attempt_failed` as it was, and the page graph's cap reading took an operation id where it
+took the effect, so `gate_390_out2` and the linear gates pin what they pinned. No golden re-recorded.
+
+**What is not changed.** A package without the member: its declaration checks, its bytes (the source
+parser and the recording tools are not touched), its admission and every run; the page graph's
+`max_repeats` and its records; every declared interface range but `package` (to 25); the host, the
+policy, the scheduler and the Lab's recording; the ledger, `runtime-client`, `actingd-config` and
+`runtime-outcomes`.
+
+**What later slices owe.** The recording tools' writing of the member (a request form of `record
+mark` or a step action, with its self-check); a reading of the count the screen shows, if a game
+needs one; a repeated block of steps, which no game needs today.
+
+**At deploy.** Nothing to configure, and nothing changes for an installation until a package uses the
+member: no package in production carries it (every build refused it), and every package without it
+is read and run byte for byte as before. A package with it is adopted only once this build is live.
+A rollback to v0.12.78 meets such a package as an older Runtime does: its installer refuses a bundle
+that declares 25 at the `package` edge, and a placed one (from a bundle that declared less) is refused
+at every admission with `resource_declaration_invalid` (`UnknownField` at `/operations/<i>/presses`),
+before any input; so the rollback stays open while no root is placed from such a bundle (the
+`package` row 25). In the release notes' language:
+线性包（录制出来的包）里停在同一页的点击步，现在可以写 `presses` 让它在这一页上连按若干次：写一个常数（1 到 1000），或者读一个派发参数 `session.dispatch.parameter.<名字>`（和页图包 `max_repeats` 读上限一样，0 到 1000 的整数），可再减一个 `minus`（比如数字从 1 起时，扫荡 N 回合就按 N−1 下），不会小于 0；0 就一下都不按、这一步照样算完成。每按一下都等这一页再确认一次；读不出次数就在任何截图和点击之前以 `contained_task_designated_effect_cap_unresolved` 结束；按完某一下页面不见了，就和普通点击步最后一次尝试一样结束。不核对屏幕上显示的次数：没按上只会少跑，不会多跑。声明检查在错位（不是点击、离开本页、带重试）或数值越界时在对应位置拒绝。包的修订升到 25：带这个成员的包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`UnknownField`）。录制工具这一版还不写它。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

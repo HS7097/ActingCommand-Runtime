@@ -90,7 +90,22 @@
 //! ends the run with its code at the stage `read_list`. A plan with a reading counts no arrival for
 //! it in its sampling budget and never leaves out, for a requested key set, the segment that holds
 //! it. A task without a reading is admitted and run as before.
+//!
+//! Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"; the coordinator's
+//! rulings in the work order): a click step whose `to` is its `from` may declare `presses`, how
+//! often it presses on its page: a constant, or the value of a dispatch parameter
+//! (`session.dispatch.parameter.<name>`) less its `minus`, never below 0. The declaration gate holds
+//! the member's form and the step it stands on; admission takes the step into the plan, the one
+//! click step exempt from `to_equals_from`. The counts are read once, before the run's first
+//! capture, as a page graph reads its designated effects' fact caps
+//! ([`super::designated_effects`]); a count that cannot be read ends the run there with
+//! `contained_task_designated_effect_cap_unresolved`. The step presses that many times, each press
+//! a click step's input followed by its post-input wait and the arrival of the step's own page
+//! ([`PreparedContainedTask::run_linear_presses`]); a press whose page does not come ends the run
+//! as a click step's last attempt does. A count of 0 presses nothing. Nothing reads the count the
+//! screen shows. A task without the member is admitted and run as before.
 
+use super::designated_effects::CapFacts;
 use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::observation_window::StillScreen;
 use super::{
@@ -167,6 +182,40 @@ pub(super) struct TaskOptional {
     settle_ms: u64,
 }
 
+/// Workflow #477 LR-1: the operation member that declares how often a press step presses on its
+/// page.
+pub(super) const PRESSES_MEMBER: &str = "presses";
+
+/// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): how often a press
+/// step that stays on its page presses, as the package writes it: a whole number, or the value of a
+/// dispatch parameter less `minus`. The declaration gate holds its form and its ranges; admission
+/// takes it into the plan ([`LinearPresses`]).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(super) enum TaskPresses {
+    Constant(u32),
+    Parameter(TaskPressesParameter),
+}
+
+/// `{"fact_key": "session.dispatch.parameter.<name>", "minus"?: <whole number>}`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TaskPressesParameter {
+    fact_key: String,
+    #[serde(default)]
+    minus: Option<u32>,
+}
+
+impl TaskPresses {
+    /// The fact key the count is read from, when it is no constant.
+    pub(super) fn fact_key(&self) -> Option<&str> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Parameter(parameter) => Some(parameter.fact_key.as_str()),
+        }
+    }
+}
+
 /// The admitted path; every page is the detector page id admission resolved.
 pub(super) struct LinearPlan {
     target: String,
@@ -193,6 +242,17 @@ struct LinearStep {
     /// Workflow #407 LOAD-4: the pages the step's confirmation adds as loading pages
     /// (`loading.add`, then its wait page), as the detector names them.
     loading_added: Vec<String>,
+    /// Workflow #477 LR-1: how often a press step presses on its page; `None` for every other
+    /// step.
+    presses: Option<LinearPresses>,
+}
+
+/// Workflow #477 LR-1: an admitted press step's count: a constant, or the value read under
+/// `fact_key` before the run's first capture less `minus` (0 when the package declares none),
+/// never below 0.
+enum LinearPresses {
+    Constant(u32),
+    Parameter { fact_key: String, minus: u32 },
 }
 
 /// A maximal run of consecutive optional operations (Workflow #339 §3.1). The operation before
@@ -365,7 +425,9 @@ impl LinearPlan {
     /// operations whose first step leaves a page, which ends on that page and returns to it on
     /// the way has one segment per return: each leaves the entry page, reaches its pages and
     /// comes back. Every operation of such a path is in one segment. Any other path is not
-    /// segmented and always runs whole.
+    /// segmented and always runs whole. Workflow #477 LR-1: a press step on the entry page does not
+    /// leave it, so it ends no segment: its presses belong to the segment of the steps after it, and
+    /// after the path's last return it is in none and always runs.
     fn reading_segments(&self) -> Vec<std::ops::Range<usize>> {
         let Some(LinearFrom::Page(entry)) = self.steps.first().map(|step| &step.from) else {
             return Vec::new();
@@ -376,7 +438,7 @@ impl LinearPlan {
         let mut segments = Vec::new();
         let mut start = 0;
         for (index, step) in self.steps.iter().enumerate() {
-            if step.to == *entry {
+            if step.to == *entry && step.presses.is_none() {
                 segments.push(start..index + 1);
                 start = index + 1;
             }
@@ -1033,6 +1095,20 @@ impl TaskProgram {
             {
                 return Err(invalid("key_retry", Some(operation)));
             }
+            // Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): a press
+            // count is a click step's; the declaration gate refuses it beside any other effect, and
+            // its form, first.
+            let presses = match &operation.presses {
+                None => None,
+                Some(_) if !matches!(effect, LinearEffect::Click) => {
+                    return Err(invalid("operation_effect", Some(operation)));
+                }
+                Some(TaskPresses::Constant(count)) => Some(LinearPresses::Constant(*count)),
+                Some(TaskPresses::Parameter(parameter)) => Some(LinearPresses::Parameter {
+                    fact_key: parameter.fact_key.clone(),
+                    minus: parameter.minus.unwrap_or(0),
+                }),
+            };
             let from = if operation.from == ANY_PAGE {
                 if index != 0 {
                     return Err(invalid("any_from", Some(operation)));
@@ -1058,9 +1134,12 @@ impl TaskProgram {
                 _ => return Err(invalid("destination", Some(operation))),
             };
             // Workflow #428 S168-LK: a list reading alone stays on its page (its `to` is its
-            // `from`, checked with its members above).
-            if matches!(&from, LinearFrom::Page(page) if *page == to)
-                && !matches!(effect, LinearEffect::ReadList)
+            // `from`, checked with its members above). Workflow #477 LR-1: and a press step, which
+            // must; the declaration gate refuses one whose destination is written as another page
+            // first.
+            let stays = matches!(&from, LinearFrom::Page(page) if *page == to);
+            if (stays && !matches!(effect, LinearEffect::ReadList) && presses.is_none())
+                || (presses.is_some() && !stays)
             {
                 return Err(invalid("to_equals_from", Some(operation)));
             }
@@ -1157,6 +1236,7 @@ impl TaskProgram {
                 optional,
                 run: None,
                 loading_added,
+                presses,
             });
         }
         if steps[0].from != entry {
@@ -1443,6 +1523,41 @@ impl PreparedContainedTask {
             .into()),
         }
     }
+
+    /// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"; the coordinator's
+    /// rulings 1 and 3): how often each step of `plan` presses, in path order, `None` for a step
+    /// that declares no count. A constant is its count. A dispatch parameter's value is read once,
+    /// for every such step, from the instance's fact snapshot the runtime gives the run, as a page
+    /// graph reads its designated effects' fact caps (an unexpired integer from 0 to 1000,
+    /// [`CapFacts::read`]), and the step's `minus` is taken off it, never below 0. A value that
+    /// cannot be read ends the run here, after `RunStarted` and before any capture, input or effect
+    /// intent, with `contained_task_designated_effect_cap_unresolved`, naming the step
+    /// (`pack_operation_id`) and the key (`fact_key`) with why (`unknown_reason`, or `count` and
+    /// `limit_count`). A plan without such a step reads nothing.
+    fn linear_press_counts<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        plan: &LinearPlan,
+    ) -> Result<Vec<Option<u32>>, ContainedTaskRunError<R::Error>> {
+        let mut facts: Option<CapFacts> = None;
+        let mut counts = Vec::with_capacity(plan.steps.len());
+        for (step, operation) in plan.steps.iter().zip(&self.program.operations) {
+            counts.push(match &step.presses {
+                None => None,
+                Some(LinearPresses::Constant(count)) => Some(*count),
+                Some(LinearPresses::Parameter { fact_key, minus }) => {
+                    let read = match facts.take() {
+                        Some(read) => read,
+                        None => self.cap_facts(runtime, &operation.id, fact_key)?,
+                    };
+                    let value = read.read(&operation.id, fact_key);
+                    facts = Some(read);
+                    Some(value?.saturating_sub(*minus))
+                }
+            });
+        }
+        Ok(counts)
+    }
 }
 
 /// Workflow #339 §3.2: the maximal runs of optional operations, the operation before each run
@@ -1508,6 +1623,9 @@ impl PreparedContainedTask {
         plan: &LinearPlan,
         mut run: LinearRun,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        // Workflow #477 LR-1: every press step's count, read before the run's first capture; a
+        // count that cannot be read ends the run here, before any input.
+        let press_counts = self.linear_press_counts(runtime, plan)?;
         // Workflow #428 DIAG-SI: an admitted plan always has a first step.
         let first = plan
             .steps
@@ -1615,15 +1733,27 @@ impl PreparedContainedTask {
                 run.restart_segment = true;
             }
             let candidates = plan.candidates(current, &handled);
-            let reached = match self.run_linear_step(
-                runtime,
-                &mut run,
-                dispatched,
-                operation,
-                step,
-                &candidates,
-                observation,
-            )? {
+            let ended = match press_counts.get(current).copied().flatten() {
+                // Workflow #477 LR-1: a press step presses its count on its page.
+                Some(count) => self.run_linear_presses(
+                    runtime,
+                    &mut run,
+                    (dispatched, count),
+                    (operation, step),
+                    &candidates,
+                    observation,
+                )?,
+                None => self.run_linear_step(
+                    runtime,
+                    &mut run,
+                    dispatched,
+                    operation,
+                    step,
+                    &candidates,
+                    observation,
+                )?,
+            };
+            let reached = match ended {
                 LinearStepEnd::Reached(reached) => *reached,
                 // Workflow #463 K1 (`contracts/linear-steps.md`, "Select steps"): the run ends
                 // Completed on the select step's page with its `on_empty` key, the step counted,
@@ -1928,51 +2058,18 @@ impl PreparedContainedTask {
                 || miss.skip_target_seen
                 || attempt >= max_attempts
             {
-                // Workflow #463 U1 (fix round 2, rule 4): where the end here is
-                // `page_confirmation_failed` (the last attempt's arrival, after a seen
-                // intermediate page or skip target), the closing decision classifies it first.
-                // A missed intermediate page makes no closing decision, so its own end below
-                // never meets a screen the package never recorded. Workflow #469 K1 fix round 2:
-                // a seen intermediate page or skip target is another page seen since the input.
-                let closing = self
-                    .linear_closing(
+                // Workflow #463 U1 (fix round 2, rule 4): the closing decision classifies the end
+                // first ([`Self::linear_attempt_failed`]).
+                return Err(self
+                    .linear_attempt_failed(
                         runtime,
                         (run, &mut loading),
-                        step,
+                        (step_index, attempt),
+                        (operation, step),
                         candidates,
-                        (miss.kind, miss.loading_limit.is_some()),
+                        miss,
                     )?
-                    .with_page_seen_since_input(
-                        miss.kind == LinearMissKind::AfterIntermediate || miss.skip_target_seen,
-                    );
-                Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
-                return Err(match (miss.kind, &step.transition, miss.loading_limit) {
-                    // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading
-                    // allowance, the intermediate page's included, is the confirmation's failure
-                    // with the loading values.
-                    (
-                        LinearMissKind::Intermediate,
-                        Some(LinearTransition::Page { page, .. }),
-                        None,
-                    ) => ContainedTaskError::with_detail(
-                        INTERMEDIATE_UNOBSERVED,
-                        format!(
-                            "operation={} attempts={attempt} intermediate_page={page}",
-                            operation.id
-                        ),
-                    )
-                    .with_timing(postcondition_timing(miss.elapsed, miss.limit)),
-                    (kind, _, loading_limit) => closing_end(
-                        operation,
-                        step,
-                        (attempt, kind == LinearMissKind::AfterIntermediate),
-                        (awaited.as_str(), run.unrecorded_end),
-                        closing,
-                        (miss.elapsed, miss.limit),
-                        loading_limit,
-                    ),
-                }
-                .into());
+                    .into());
             }
             // The retry decision (§5.5): the gate first, then this step's own page. The gate is
             // the intermediate page, or every candidate (Workflow #339 §3.5).
@@ -2158,6 +2255,176 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"; the coordinator's
+    /// rulings 2 to 4): a press step, whose page after its press is its page before it, pressed
+    /// `count` times from the frame on which its page passed (none for a count of 0). Its
+    /// `StepStarted` is written once. Each press is a click step's one attempt: its input
+    /// ([`Self::linear_input`]: a step gap's fresh frame, the guard and a declared recheck on the
+    /// frame the step's page passed on last, the effect intent, the input and the effect
+    /// completion), its post-input wait and its arrival over the step's candidates (its own page;
+    /// at the path's end the ending pages before it, Workflow #463 K2), whose frame the next press
+    /// decides on. The step finishes on the frame its last arrival passed on, or, with a count of
+    /// 0, on the one it started on, and that frame is the next step's decision frame. An ending
+    /// page that passes ends the step on it, the presses left not made. A press whose page does not
+    /// come ends the run as a click step's last attempt ends it ([`Self::linear_attempt_failed`]),
+    /// the presses made before it recorded; a press step declares no retry (the declaration gate).
+    /// Nothing reads the count the screen shows: a press the game did not take only makes the
+    /// presses fewer, never more.
+    fn run_linear_presses<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: &mut LinearRun,
+        (step_index, count): (u32, u32),
+        (operation, step): (&TaskOperation, &LinearStep),
+        candidates: &LinearCandidates<'_>,
+        observation: Option<PageObservation>,
+    ) -> Result<LinearStepEnd, ContainedTaskRunError<R::Error>> {
+        let deadline = run.timing.deadline();
+        // The step's pacing and budget clock, taken once at its start, as a click step's are.
+        run.pacing = runtime
+            .step_pacing()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        run.timing = run
+            .timing
+            .with_pace(paced_step(runtime, run.timing.pace(), run.pacing)?);
+        let run = *run;
+        let pace = run.timing.pace();
+        runtime.update_run_progress(step_index.saturating_add(1));
+        if budget_now(runtime, pace) >= deadline {
+            return Err(self
+                .task_timeout_error(runtime, TaskTimingStage::Dispatch, deadline, None, pace)
+                .into());
+        }
+        runtime
+            .record(ContainedTaskTrace::StepStarted {
+                step_index,
+                operation_label: operation.id.clone(),
+                from_page: step.from.label().to_owned(),
+                phase: None,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let mut frame = observation
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code()))?;
+        let timing = operation.effective_timing(&self.control);
+        let window_min = match &step.transition {
+            Some(LinearTransition::Window { min, .. }) => *min,
+            _ => Duration::ZERO,
+        };
+        let arrival = LinearArrival {
+            budget: Duration::from_millis(timing.timeout.milliseconds),
+            interval: Duration::from_millis(timing.interval.milliseconds),
+            post_input_delay: Duration::from_millis(operation.post_delay_ms.unwrap_or(0))
+                .max(window_min),
+        };
+        for _ in 0..count {
+            // The guard's deadline is fixed at each press, as at a click step's start.
+            let step_timing = run
+                .timing
+                .with_deadline(budget_observation_now(runtime, pace) + run.step_timeout);
+            self.linear_input(
+                runtime,
+                run,
+                (step_index, 1),
+                operation,
+                &frame,
+                step_timing,
+                None,
+            )?;
+            // Workflow #407 LOAD-4: each press's own allowance for its loading pages.
+            let mut loading = LoadingAllowance::for_linear_input(
+                self,
+                operation,
+                run.pacing,
+                &step.loading_added,
+            );
+            self.linear_post_input_delay(runtime, run, arrival.post_input_delay)?;
+            match self.linear_after_input(runtime, run, step, candidates, arrival, &mut loading)? {
+                Ok(reached) if reached.page_label == step.to => frame = reached,
+                // Workflow #463 K2: at the path's end an ending page passed; the step ends on it.
+                Ok(reached) => {
+                    Self::linear_step_finished(
+                        runtime,
+                        step_index,
+                        operation,
+                        &reached.page_label,
+                    )?;
+                    return Ok(LinearStepEnd::Reached(Box::new(reached)));
+                }
+                Err(miss) => {
+                    return Err(self
+                        .linear_attempt_failed(
+                            runtime,
+                            (run, &mut loading),
+                            (step_index, 1),
+                            (operation, step),
+                            candidates,
+                            miss,
+                        )?
+                        .into());
+                }
+            }
+        }
+        Self::linear_step_finished(runtime, step_index, operation, &frame.page_label)?;
+        Ok(LinearStepEnd::Reached(Box::new(frame)))
+    }
+
+    /// The end of an attempt whose wait missed with no retry decision after it: the last attempt,
+    /// or one that saw its intermediate page or a run's skip target (Workflow #339 §3.5: the input
+    /// took effect, and another input would not help). Workflow #463 U1 (fix round 2, rule 4):
+    /// where the end is `page_confirmation_failed` (the arrival, or the next page after a seen
+    /// intermediate page or skip target), the closing decision classifies it first; a missed
+    /// intermediate page makes none, so its own end never meets a screen the package never
+    /// recorded. Workflow #469 K1 fix round 2: a seen intermediate page or skip target is another
+    /// page seen since the input. The step then finishes on no page, and the failure is returned
+    /// for the run to end with. Workflow #477 LR-1: a press of a press step whose page does not
+    /// come ends here, as a click step's last attempt does.
+    fn linear_attempt_failed<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+        (step_index, attempt): (u32, u32),
+        (operation, step): (&TaskOperation, &LinearStep),
+        candidates: &LinearCandidates<'_>,
+        miss: LinearMiss,
+    ) -> Result<ContainedTaskError, ContainedTaskRunError<R::Error>> {
+        let awaited = candidates.awaited(miss.skip_target_seen);
+        let closing = self
+            .linear_closing(
+                runtime,
+                (run, loading),
+                step,
+                candidates,
+                (miss.kind, miss.loading_limit.is_some()),
+            )?
+            .with_page_seen_since_input(
+                miss.kind == LinearMissKind::AfterIntermediate || miss.skip_target_seen,
+            );
+        Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
+        Ok(match (miss.kind, &step.transition, miss.loading_limit) {
+            // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading allowance, the
+            // intermediate page's included, is the confirmation's failure with the loading values.
+            (LinearMissKind::Intermediate, Some(LinearTransition::Page { page, .. }), None) => {
+                ContainedTaskError::with_detail(
+                    INTERMEDIATE_UNOBSERVED,
+                    format!(
+                        "operation={} attempts={attempt} intermediate_page={page}",
+                        operation.id
+                    ),
+                )
+                .with_timing(postcondition_timing(miss.elapsed, miss.limit))
+            }
+            (kind, _, loading_limit) => closing_end(
+                operation,
+                step,
+                (attempt, kind == LinearMissKind::AfterIntermediate),
+                (awaited.as_str(), run.unrecorded_end),
+                closing,
+                (miss.elapsed, miss.limit),
+                loading_limit,
+            ),
+        })
+    }
+
     /// Workflow #463 U1, fix round 2 (`contracts/linear-steps.md`, "A screen the package never
     /// recorded"): the closing decision of a step whose failed wait of kind `kind` (ended on the
     /// attempt's loading allowance when `loading_ended`) ends the run with
@@ -2237,7 +2504,11 @@ impl PreparedContainedTask {
             return Err(ConfirmationProblem::UnjudgedTimeShort);
         }
         let mut pages = candidates.pages.clone();
-        pages.push(own_page.as_str());
+        // Workflow #477 LR-1: a press step's own page is its candidate already, awaited once; every
+        // other step's own page is none of its candidates (admission keeps them apart).
+        if !pages.contains(&own_page.as_str()) {
+            pages.push(own_page.as_str());
+        }
         Ok(pages)
     }
 

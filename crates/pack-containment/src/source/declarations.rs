@@ -76,6 +76,27 @@ const READ_LIST_REFUSED_MEMBERS: &[&str] = &[
 /// mode), since a step plan admits a list reading.
 const READ_LIST_OTHER_EFFECTS: &[&str] = &["click", "application", "select", "wait", "key"];
 
+/// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): the operation member
+/// that declares how often a press step presses on its page, and the members of its parameter
+/// form.
+const PRESSES_MEMBER: &str = "presses";
+const PRESSES_PARAMETER_MEMBERS: &[&str] = &["fact_key", "minus"];
+/// Workflow #477 LR-1: the click kinds that press a control once (a point, a box, an offset from a
+/// target, a target); a drag, a swipe and a long press press no count.
+const PRESS_CLICK_KINDS: &[&str] = &[
+    "point",
+    "rect",
+    "specific_rect",
+    "offset",
+    "target",
+    "target_center",
+];
+/// Workflow #477 LR-1: the effects beside which a press count is refused (a list reading's too,
+/// [`read_list_member`]).
+const PRESS_OTHER_EFFECTS: &[&str] = &["application", "select", "wait", "key"];
+/// Workflow #477 LR-1: the `from` of an application entry, any screen, which is no page.
+const ANY_PAGE: &str = "any";
+
 /// Workflow #450 FL-1b: the members of a `field_lists` entry, every one required.
 const FIELD_LIST_MEMBERS: &[&str] = &[
     "id",
@@ -592,6 +613,8 @@ impl Declaration<'_> {
                 read_list_member(),
                 // Workflow #463 KP-1 (`contracts/linear-steps.md`, "Key steps"): a key step.
                 "key",
+                // Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page").
+                PRESSES_MEMBER,
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -828,6 +851,76 @@ impl Declaration<'_> {
                 "on_max_runs" if !value.is_null() => self.on_max_runs(value, &pointer)?,
                 "key" if !value.is_null() => self.key_effect(value, &pointer)?,
                 _ => {}
+            }
+        }
+        // Workflow #477 LR-1: a press count, once the step's effect and its pages are checked.
+        if let Some(presses) = object.get(PRESSES_MEMBER).filter(|value| !value.is_null()) {
+            self.presses(object, presses, pointer)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"; the coordinator's
+    /// ruling 6): the `presses` of the operation `operation` at `pointer`. It stands only on a
+    /// press, a click of a kind that presses once ([`PRESS_CLICK_KINDS`]) and no other effect, and
+    /// only on a step that stays on its page ([`stays_on_its_page`]): `InvalidValue` at the member
+    /// otherwise; and a press step declares no retry (`retryable` `true` is `InvalidValue` at it),
+    /// since a retry would press again after a press it cannot tell was taken. Its value is a whole
+    /// number from 1 to 1000 (another type `InvalidType`, a number out of that range
+    /// `InvalidValue`), or `{"fact_key": "session.dispatch.parameter.<name>", "minus"?: <1 to
+    /// 1000>}`, `<name>` a variable's name, the remedy token form (a key outside it `InvalidValue`
+    /// at `fact_key`, a `minus` out of range `InvalidValue` at it; `UnknownField`, `MissingField`
+    /// and `InvalidType` at their members). Runtime admission holds the mode and takes the step
+    /// into its plan.
+    fn presses(
+        &self,
+        operation: &Map<String, Value>,
+        value: &Value,
+        pointer: &str,
+    ) -> CliOutcome<()> {
+        let presses_pointer = child(pointer, PRESSES_MEMBER);
+        let invalid = |at: &str| self.error(at, ResourceDeclarationReason::InvalidValue);
+        let other_effect = PRESS_OTHER_EFFECTS
+            .iter()
+            .copied()
+            .chain([read_list_member()])
+            .any(|effect| declares(operation, effect));
+        let press = operation
+            .get("click")
+            .and_then(|click| click.get("kind"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| PRESS_CLICK_KINDS.contains(&kind));
+        if other_effect || !press || !stays_on_its_page(operation) {
+            return Err(invalid(&presses_pointer));
+        }
+        if operation.get("retryable") == Some(&Value::Bool(true)) {
+            return Err(invalid(&child(pointer, "retryable")));
+        }
+        let most = u64::from(actingcommand_contract::MAX_DESIGNATED_EFFECT_REPEATS);
+        let in_range = |count: u64| (1..=most).contains(&count);
+        if !value.is_object() {
+            self.unsigned(value, &presses_pointer)?;
+            if !value.as_u64().is_some_and(in_range) {
+                return Err(invalid(&presses_pointer));
+            }
+            return Ok(());
+        }
+        let parameter = self.object(value, &presses_pointer, PRESSES_PARAMETER_MEMBERS)?;
+        let fact_pointer = child(&presses_pointer, "fact_key");
+        let fact_key = self.required(parameter, &presses_pointer, "fact_key")?;
+        self.string(fact_key, &fact_pointer)?;
+        if !fact_key
+            .as_str()
+            .and_then(|key| key.strip_prefix(actingcommand_contract::VARIABLE_FACT_KEY_PREFIX))
+            .is_some_and(actingcommand_contract::remedy_token_valid)
+        {
+            return Err(invalid(&fact_pointer));
+        }
+        if let Some(minus) = parameter.get("minus").filter(|value| !value.is_null()) {
+            let minus_pointer = child(&presses_pointer, "minus");
+            self.unsigned(minus, &minus_pointer)?;
+            if !minus.as_u64().is_some_and(in_range) {
+                return Err(invalid(&minus_pointer));
             }
         }
         Ok(())
@@ -3295,6 +3388,33 @@ fn child(pointer: &str, field: &str) -> String {
 /// Workflow #463 K-c: whether `object` declares `member`, present and not `null`.
 fn declares(object: &Map<String, Value>, member: &str) -> bool {
     object.get(member).is_some_and(|value| !value.is_null())
+}
+
+/// Workflow #477 LR-1 (`contracts/linear-steps.md`, "Pressing on one page"): whether the operation
+/// `operation` stays on its page: its `from` is a page (not `any`), and it declares where its press
+/// leads, each destination it declares (`to`, `expect_after.page_id`) naming that one page as its
+/// `from` writes it. Runtime admission compares the pages it resolves as well.
+fn stays_on_its_page(operation: &Map<String, Value>) -> bool {
+    let Some(from) = operation
+        .get("from")
+        .and_then(Value::as_str)
+        .filter(|from| *from != ANY_PAGE)
+    else {
+        return false;
+    };
+    let names_from = |page: &Value| match page {
+        Value::String(page) => page == from,
+        Value::Array(pages) => matches!(pages.as_slice(), [Value::String(page)] if page == from),
+        _ => false,
+    };
+    let to = operation.get("to").filter(|value| !value.is_null());
+    let expected = operation
+        .get("expect_after")
+        .and_then(|expectation| expectation.get("page_id"))
+        .filter(|value| !value.is_null());
+    (to.is_some() || expected.is_some())
+        && to.is_none_or(names_from)
+        && expected.is_none_or(names_from)
 }
 
 /// Workflow #411 B28: the shape the member a declaration refusal names must have, when the
