@@ -83,9 +83,9 @@ use std::path::{Path, PathBuf};
 mod v2;
 
 pub use v2::{
-    CatalogBusinessPlaces, CatalogPart, CatalogPartAddress, CatalogParts, CatalogRulePart,
-    CatalogScheduleFacts, CatalogValue, CatalogValuesFile, SCHEDULE_RULE_BUSINESS_MEMBERS,
-    standard_pack_catalog_cut_differences, take_catalog_business,
+    AdoptionCatalog, CatalogAdoption, CatalogBusinessPlaces, CatalogPart, CatalogPartAddress,
+    CatalogParts, CatalogRulePart, CatalogScheduleFacts, CatalogValue, CatalogValuesFile,
+    SCHEDULE_RULE_BUSINESS_MEMBERS, standard_pack_catalog_cut_differences, take_catalog_business,
 };
 
 /// The game root's package declaration (Workflow #477 PC-1).

@@ -184,6 +184,12 @@ mod gate_477_cv1;
 #[cfg(test)]
 mod gate_477_cv2;
 
+// Workflow #477 CV-2b (register §1.515): `standard-pack adopt` on a switched root writes the
+// adopted rule's business part into `pack-catalog.json`, the same bytes adopting before the
+// cut-over and cutting over give.
+#[cfg(test)]
+mod gate_477_cv2b;
+
 // Workflow #477 LR-1 (register §1.513): the root check holds a variable a press count reads to a
 // cap's range.
 #[cfg(test)]

@@ -21,13 +21,18 @@
 //! where a refusal of a member taken from here lies in the file ([`CatalogBusinessPlaces`]); and
 //! what `standard-pack catalog --cut` lists of a rule whose part would compose otherwise
 //! ([`standard_pack_catalog_cut_differences`]).
+//!
+//! Workflow #477 CV-2b (register §1.515; `contracts/standard-pack-authoring.md`, "On a switched
+//! root"): `standard-pack adopt` on a switched root reads a rule's business part here and writes
+//! the adopted rule's here, by the same reader and the same part of a rule the writer's `--refresh`
+//! makes ([`AdoptionCatalog`]).
 
 use super::{
     CatalogBusiness, CatalogDifference, CatalogDisplayFileIssue, CatalogPool,
     CatalogScheduleDifference, CatalogSide, CatalogVersion, Check, MAX_PACK_CATALOG_RULE_PARTS,
     MAX_PACK_CATALOG_VALUE_ITEMS, MAX_STANDARD_PACK_CATALOG_BYTES, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_CATALOG_VALUES_SCHEMA_VERSION, StandardPackCatalog, at,
-    parse_standard_pack_catalog_with, read_document, standard_pack_schedule_pools,
+    parse_standard_pack_catalog_with, read_catalog, read_document, standard_pack_schedule_pools,
 };
 use crate::resource_effect::{
     EffectDirection, MAX_EFFECT_QUANTITY, MAX_EFFECTS_PER_TASK, MAX_SCHEDULING_IDENTIFIER_BYTES,
@@ -1364,4 +1369,266 @@ fn same_order(rule: &ScheduleRule, part: &CatalogPart, side: CatalogSide) -> boo
         && written.iter().zip(held).all(|(item, effect)| {
             ResourceEffectSpec::deserialize(item).is_ok_and(|read| read == *effect)
         })
+}
+
+/// Workflow #477 CV-2b (register §1.515; `contracts/standard-pack-authoring.md`, "On a switched
+/// root"; the coordinator's rulings 1, 5 and 6): the version 2 `pack-catalog.json` of a switched
+/// game root as `standard-pack adopt` reads it before it lays out the root it checks. The file is
+/// read by its one reader (`read_catalog`) without the root's registry, which the adoption has
+/// not made yet, and without the facts of `schedule.json`: every `package_not_listed` is set aside,
+/// as the writer's merge sets it aside, and the check of the root as it would be written reads the
+/// file again with the registry and every reference to `schedule.json`
+/// ([`take_catalog_business`]), so nothing is written that its reader refuses.
+#[derive(Debug, Clone)]
+pub struct AdoptionCatalog {
+    document: Map<String, Value>,
+    catalog: StandardPackCatalog,
+}
+
+/// CV-2b: the file once [`AdoptionCatalog::adopted`] wrote an adopted rule's business part into
+/// it.
+#[derive(Debug, Clone)]
+pub struct CatalogAdoption {
+    /// The file as the adoption writes it: the document, every member in its order, two-space
+    /// indented, and a line feed, as the writer writes it.
+    pub bytes: Vec<u8>,
+    /// The pointer of the package's entry (`/packs/<e>`); an entry the adoption adds is the last.
+    pub pointer: String,
+    /// The entry as it was; `None` for an entry the adoption adds.
+    pub before: Option<Value>,
+    /// The entry as written.
+    pub after: Value,
+}
+
+impl AdoptionCatalog {
+    /// `bytes`, the `pack-catalog.json` of the game directory `game`, read as above: the reader's
+    /// first error but `package_not_listed` refuses it, as [`take_catalog_business`] refuses a file
+    /// its reader refuses; then a file of version 1, `catalog_version_1` at its `schema_version`.
+    pub fn read(bytes: &[u8], game: &str) -> Result<Self, StandardPackRootIssue> {
+        let registry = StandardPackRegistry::default();
+        let read = read_catalog(bytes, game, &registry, None, None);
+        if let Some(first) = read
+            .errors
+            .into_iter()
+            .find(|issue| !matches!(issue.problem, StandardPackProblem::PackageNotListed))
+        {
+            return Err(first);
+        }
+        if read.catalog.version() != CatalogVersion::V2 {
+            return Err(StandardPackRootIssue::new(
+                STANDARD_PACK_CATALOG_FILE,
+                StandardPackProblem::CatalogVersion1,
+                "/schema_version",
+            ));
+        }
+        let document = read.document.ok_or_else(|| {
+            StandardPackRootIssue::new(
+                STANDARD_PACK_CATALOG_FILE,
+                StandardPackProblem::Malformed,
+                "",
+            )
+        })?;
+        Ok(Self {
+            document,
+            catalog: read.catalog,
+        })
+    }
+
+    /// The entry of `package_id` as the file writes it; `None` when it lists none.
+    pub fn entry(&self, package_id: &str) -> Option<Value> {
+        self.document
+            .get("packs")
+            .and_then(Value::as_array)
+            .and_then(|packs| packs.iter().find(|entry| names_package(entry, package_id)))
+            .cloned()
+    }
+
+    /// The members a `schedule.json` rule of `package_id` whose id is `rule_id` holds once the
+    /// part that stands for it here is given to it, as [`take_catalog_business`] gives it (its
+    /// per-rule part, else its entry's own part, else none, an empty part): `consumes` and
+    /// `produces` (each effect as the one type of an effect writes it), `"limited": true` and
+    /// `"realization": true` where the part marks them, and its fixed value as `fixed_value_milli`,
+    /// with `"fixed_value_origin": "model"` for one the model wrote.
+    pub fn rule_members(&self, package_id: &str, rule_id: &str) -> Map<String, Value> {
+        let empty = CatalogPart::default();
+        let part = self
+            .catalog
+            .entry(package_id)
+            .and_then(|entry| entry.parts.as_ref())
+            .and_then(|parts| parts.for_rule(rule_id))
+            .unwrap_or(&empty);
+        let mut members = Map::new();
+        members.insert("consumes".to_owned(), effect_list(&part.consumes));
+        members.insert("produces".to_owned(), effect_list(&part.produces));
+        if part.limited {
+            members.insert(LIMITED.to_owned(), Value::Bool(true));
+        }
+        if part.realization {
+            members.insert(
+                SCHEDULE_RULE_REALIZATION_MEMBER.to_owned(),
+                Value::Bool(true),
+            );
+        }
+        if let Some(value) = part.value {
+            members.insert(
+                SCHEDULE_RULE_FIXED_VALUE_MEMBER.to_owned(),
+                Value::from(value.milli),
+            );
+            if value.origin == ScheduleValueOrigin::Model {
+                members.insert(
+                    SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER.to_owned(),
+                    Value::String(SCHEDULE_VALUE_ORIGIN_MODEL.to_owned()),
+                );
+            }
+        }
+        members
+    }
+
+    /// The file once the business part of the adopted rule, the `index`th of `schedule` (the
+    /// `schedule.json` the adoption writes, read with that rule's business members as the
+    /// adoption wrote them, which the written file leaves out), is written into it: the part the
+    /// rule writes, by the writer's own reading of a rule (the part `--refresh` makes of it,
+    /// `rules_parts`). `before` is the rule's id before the adoption, `None` for a rule it adds.
+    ///
+    /// - Ruling 5: a rule adopted before, its id kept, whose part is the one that stood for it is
+    ///   no change, `None`, whatever the entry holds.
+    /// - Ruling 1: the part is its entry's own part when the package is run by that one rule and
+    ///   the entry holds no per-rule part; otherwise the rule's per-rule part, the one keyed by its
+    ///   id before the adoption replaced. Where the rule has none, each other rule of the package
+    ///   that the own part stood for gets a copy of it as its own per-rule part, in the file's
+    ///   order with the adopted rule's, and the entry keeps no own part: every rule composes as
+    ///   before but the adopted one, and the entry is the one `--refresh` makes of the package's
+    ///   rules when they differ.
+    /// - Ruling 6: the entry's other members, its display, are written as they stand
+    ///   (`with_business`); a package without an entry gets one, `{package_id}` and its business
+    ///   part, after the others.
+    ///
+    /// A rule whose part cannot be written is `schedule_invalid` at its member in `schedule.json`
+    /// (`rules_parts`' refusal).
+    pub fn adopted(
+        &self,
+        schedule: &StandardPackSchedule,
+        index: usize,
+        before: Option<&str>,
+    ) -> Result<Option<CatalogAdoption>, StandardPackRootIssue> {
+        let Some(rule) = schedule.rules.get(index) else {
+            return Err(StandardPackRootIssue::new(
+                STANDARD_PACK_SCHEDULE_FILE,
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}"),
+            ));
+        };
+        let part = rule_part(rule, index)?;
+        let package_id = rule.package_id.as_str();
+        let mut parts = self
+            .catalog
+            .entry(package_id)
+            .and_then(|entry| entry.parts.clone())
+            .unwrap_or_default();
+        let empty = CatalogPart::default();
+        let stood = before
+            .and_then(|rule_id| parts.for_rule(rule_id))
+            .unwrap_or(&empty);
+        if before == Some(rule.id.as_str()) && *stood == part {
+            return Ok(None);
+        }
+        let runs = schedule
+            .rules
+            .iter()
+            .filter(|other| other.package_id == package_id)
+            .map(|other| other.id.as_str())
+            .collect::<Vec<_>>();
+        let keyed = before.and_then(|rule_id| {
+            parts
+                .rules
+                .iter()
+                .position(|standing| standing.rule_id == rule_id)
+        });
+        let adopted = CatalogRulePart {
+            rule_id: rule.id.clone(),
+            part,
+        };
+        match keyed {
+            _ if runs.len() == 1 && parts.rules.is_empty() => parts.own = Some(adopted.part),
+            Some(position) => {
+                if let Some(slot) = parts.rules.get_mut(position) {
+                    *slot = adopted;
+                }
+            }
+            None => {
+                let own = parts.own.take();
+                let mut added = Vec::new();
+                for rule_id in runs {
+                    if rule_id == adopted.rule_id {
+                        added.push(adopted.clone());
+                    } else if let Some(own) = &own
+                        && !parts
+                            .rules
+                            .iter()
+                            .any(|standing| standing.rule_id == rule_id)
+                    {
+                        added.push(CatalogRulePart {
+                            rule_id: rule_id.to_owned(),
+                            part: own.clone(),
+                        });
+                    }
+                }
+                parts.rules.extend(added);
+            }
+        }
+        let malformed = |pointer: &str| {
+            StandardPackRootIssue::new(
+                STANDARD_PACK_CATALOG_FILE,
+                StandardPackProblem::Malformed,
+                pointer,
+            )
+        };
+        let mut document = self.document.clone();
+        let packs = document
+            .get_mut("packs")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| malformed("/packs"))?;
+        let found = packs
+            .iter()
+            .position(|entry| names_package(entry, package_id));
+        let (position, before_entry, after_entry) = match found {
+            Some(position) => {
+                let entry = packs
+                    .get(position)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                let written = Value::Object(with_business(&entry, &parts));
+                (position, Some(Value::Object(entry)), written)
+            }
+            None => {
+                let mut entry = Map::new();
+                entry.insert(
+                    "package_id".to_owned(),
+                    Value::String(package_id.to_owned()),
+                );
+                entry.extend(parts.members());
+                (packs.len(), None, Value::Object(entry))
+            }
+        };
+        if position < packs.len() {
+            packs[position] = after_entry.clone();
+        } else {
+            packs.push(after_entry.clone());
+        }
+        let mut bytes =
+            serde_json::to_vec_pretty(&Value::Object(document)).map_err(|_| malformed(""))?;
+        bytes.push(b'\n');
+        Ok(Some(CatalogAdoption {
+            bytes,
+            pointer: format!("/packs/{position}"),
+            before: before_entry,
+            after: after_entry,
+        }))
+    }
+}
+
+/// Whether the entry `entry` is the one of `package_id`.
+fn names_package(entry: &Value, package_id: &str) -> bool {
+    entry.get("package_id").and_then(Value::as_str) == Some(package_id)
 }

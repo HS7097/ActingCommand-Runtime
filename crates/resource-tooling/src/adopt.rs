@@ -127,6 +127,18 @@
 //!   **One root check**: the readiness of the check tree's game root takes the warnings of the
 //!   check of that root this call ran, after which nothing under the root was written, instead of
 //!   checking it again (`standard_pack_ready::judge_checked_readiness`).
+//! - **On a switched root** (Workflow #477 CV-2b, register §1.515,
+//!   `contracts/standard-pack-authoring.md`, "On a switched root"): of a checkout whose
+//!   `schedule.json` names `catalog_business`, the call reads its version 2 `pack-catalog.json`
+//!   (missing or of version 1: `repository_invalid` caused by `catalog_missing` or
+//!   `catalog_version_1`), reads the package's rule with the business part the catalog gives it,
+//!   and writes every business member it would write into the rule into the catalog's part for
+//!   that rule instead (`AdoptionCatalog::adopted`: the entry's
+//!   own part for the package's one rule, else a per-rule part), the rule without them; a word
+//!   `requires` gains goes before `catalog_business`. The check of the tree composes both files as
+//!   they would be written, and the catalog is renamed into place right before `schedule.json`
+//!   ([`root_order`]). A root that does not name `catalog_business` is adopted as before, byte for
+//!   byte.
 
 use crate::codes::{AdoptCasesState, AdoptProblem, ResourceToolingCode};
 use crate::package_directory::PACK_DEADLINE;
@@ -142,14 +154,16 @@ use crate::{
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
-    BundleMaintenance, LabError, LabErrorClass, LabResult, MaintenanceUse,
-    SCHEDULE_RULE_FIXED_VALUE_MEMBER, SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER,
-    SCHEDULE_RULE_MAINTENANCE_MEMBER, SCHEDULE_RULE_REALIZATION_MEMBER,
-    SCHEDULE_VALUE_ORIGIN_MODEL, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule, StandardPackClassification,
-    StandardPackRegistry, StandardPackRoot, StandardPackSchedule, canonical_json_bytes,
+    AdoptionCatalog, BundleMaintenance, CatalogAdoption, LabError, LabErrorClass, LabResult,
+    MaintenanceUse, SCHEDULE_RULE_BUSINESS_MEMBERS, SCHEDULE_RULE_FIXED_VALUE_MEMBER,
+    SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER, SCHEDULE_RULE_MAINTENANCE_MEMBER,
+    SCHEDULE_RULE_REALIZATION_MEMBER, SCHEDULE_VALUE_ORIGIN_MODEL, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule,
+    StandardPackClassification, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
+    StandardPackRootIssue, StandardPackSchedule, canonical_json_bytes,
     package_id_names_one_path_segment, parse_standard_pack_interrupts,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     reserved_package_id, standard_pack_maintenance_packages,
@@ -157,10 +171,11 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{PreparedContainedTask, TaskPackageDescriptor};
 use actingcommand_pack_containment::Containment;
 use actingcommand_policy::{
-    BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitGap, CONSUMPTION_FACT_SUBSYSTEM, CompiledCatalog,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
-    MAX_QUEUE_WAIT_MEMBER, POOL_FACT_REFERENCE_SUBSYSTEM, PolicyCode, QUEUE_WAIT_SUBSYSTEM,
-    SCHEDULE_RULE_LIMITED_MEMBER, is_judged_rule, is_manual_request,
+    BENEFIT_FIXED_VALUE_SUBSYSTEM, BenefitGap, CATALOG_BUSINESS_SUBSYSTEM,
+    CONSUMPTION_FACT_SUBSYSTEM, CompiledCatalog, FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE,
+    FACT_UNKNOWN_PROBE_SUBSYSTEM, MAX_QUEUE_WAIT_MEMBER, POOL_FACT_REFERENCE_SUBSYSTEM, PolicyCode,
+    QUEUE_WAIT_SUBSYSTEM, SCHEDULE_RULE_LIMITED_MEMBER, is_judged_rule, is_manual_request,
+    standard_pack_schedule_takes_catalog,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -884,7 +899,8 @@ pub struct StandardPackAdoptResponse {
     /// The package was adopted before, and this adoption replaces its directory.
     pub replaced: bool,
     pub review: RecordingReview,
-    /// The package's rule as `schedule.json` holds it after the adoption.
+    /// The package's rule as `schedule.json` holds it after the adoption (Workflow #477 CV-2b: of
+    /// a switched root without its business part, which `catalog_entry` holds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule: Option<Value>,
     /// Its `held` entry, for the class `held`.
@@ -893,6 +909,11 @@ pub struct StandardPackAdoptResponse {
     /// Its `maintenance.json` entry, for the class `maintenance` with `uses`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maintenance: Option<Value>,
+    /// Workflow #477 CV-2b: of a switched root, the package's entry of `pack-catalog.json` after
+    /// the adoption, its rules' business part in it; absent for any other root, and for a package
+    /// the file lists no entry for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_entry: Option<Value>,
     /// The entries of the root files the adoption removed (a held entry a decision of another
     /// class lifts, a `maintenance.json` entry a decision of another class ends), in order.
     pub removed_entries: Vec<RootEntryChange>,
@@ -1421,6 +1442,7 @@ fn adopt_in_stages(
 
     // The rule, the held entry and the maintenance entry as they would be written.
     let plan = Plan::make(&PlanInputs {
+        repo: &repo,
         root: &root,
         package: &package,
         package_id: &package_id,
@@ -1629,10 +1651,11 @@ fn adopt_in_stages(
     stages.enter(AdoptStage::Write);
     let mut changed = vec![pack_relative.clone()];
     for name in root_order(class == AdoptClass::Maintenance) {
-        let changes = if name == STANDARD_PACK_SCHEDULE_FILE {
-            plan.schedule_bytes.is_some()
-        } else {
-            plan.maintenance_bytes.is_some()
+        let changes = match name {
+            STANDARD_PACK_SCHEDULE_FILE => plan.schedule_bytes.is_some(),
+            // Workflow #477 CV-2b: only on a switched root.
+            STANDARD_PACK_CATALOG_FILE => plan.catalog_bytes.is_some(),
+            _ => plan.maintenance_bytes.is_some(),
         };
         if changes {
             changed.push(name.to_owned());
@@ -1667,6 +1690,10 @@ fn adopt_in_stages(
                 plan: &plan,
                 read_schedule: root.schedule_bytes.as_deref(),
                 read_maintenance: &root.maintenance_bytes,
+                read_catalog: root
+                    .catalog
+                    .as_ref()
+                    .map(|catalog| catalog.bytes.as_slice()),
                 maintenance_first: class == AdoptClass::Maintenance,
             },
             worktree,
@@ -1755,9 +1782,10 @@ fn adopt_in_stages(
         class,
         replaced,
         review,
-        rule: plan.rule.clone().map(Value::Object),
+        rule: plan.written_rule().map(Value::Object),
         held: plan.held.clone(),
         maintenance: plan.maintenance_entry.clone(),
+        catalog_entry: plan.catalog_entry.clone(),
         removed_entries: plan.removed.clone(),
         replaced_entries: plan.replaced.clone(),
         requires_added: plan.requires_added.clone(),
@@ -1840,6 +1868,52 @@ struct Repository {
     /// What interrupted adoptions left below `packs/` ([`leftovers`]); a leftover root file is
     /// refused when the checkout is read.
     leftovers: Vec<String>,
+    /// Workflow #477 CV-2b: of a switched root (its `schedule.json` names `catalog_business`), its
+    /// `pack-catalog.json`, of version 2, which holds its rules' business part; `None` otherwise.
+    catalog: Option<SwitchedCatalog>,
+}
+
+/// Workflow #477 CV-2b (`contracts/standard-pack-authoring.md`, "On a switched root"): the
+/// `pack-catalog.json` of a switched root as the call read it: its bytes, and the file as the
+/// contract crate's one reader reads it for an adoption.
+struct SwitchedCatalog {
+    bytes: Vec<u8>,
+    read: AdoptionCatalog,
+}
+
+impl SwitchedCatalog {
+    /// The checkout `repo`'s `pack-catalog.json` (game `game`), which its switched `schedule.json`
+    /// takes every rule's business part from. A root without it, or with one of version 1, is
+    /// refused `repository_invalid` at it, its cause `standard_pack_root_invalid` with the words
+    /// the composer and the writer use (`catalog_missing`, `catalog_version_1`); one its reader
+    /// refuses, with the reader's first error: its business part lives there alone and is
+    /// restored, never made again from the rules, which write none.
+    fn read(repo: &Path, game: &str) -> LabResult<Self> {
+        let path = repo.join(STANDARD_PACK_CATALOG_FILE);
+        let refused_at = |issue: StandardPackRootIssue| {
+            refused(
+                adopt(AdoptProblem::RepositoryInvalid)
+                    .entry(STANDARD_PACK_CATALOG_FILE)
+                    .json_pointer(bounded_pointer(&issue.pointer))
+                    .caused_by(root_issue_outcome(game, &path, &issue)),
+                format!(
+                    "{STANDARD_PACK_CATALOG_FILE}: {issue}; the root is switched: its \
+                     schedule.json names {CATALOG_BUSINESS_SUBSYSTEM}, so its rules write no \
+                     business part, which lives in {STANDARD_PACK_CATALOG_FILE} of version 2 \
+                     alone and must be restored, not rebuilt; nothing was written"
+                ),
+            )
+        };
+        let Some(bytes) = optional_file(&path, STANDARD_PACK_CATALOG_FILE)? else {
+            return Err(refused_at(StandardPackRootIssue {
+                file: STANDARD_PACK_CATALOG_FILE,
+                problem: StandardPackProblem::CatalogMissing,
+                pointer: String::new(),
+            }));
+        };
+        let read = AdoptionCatalog::read(&bytes, game).map_err(refused_at)?;
+        Ok(Self { bytes, read })
+    }
 }
 
 impl Repository {
@@ -1864,7 +1938,10 @@ impl Repository {
             .iter()
             .find(|left| !left.starts_with(&pack_prefix))
         {
-            return Err(repository_invalid(part, interrupted(repo, &leftovers)));
+            return Err(repository_invalid(
+                part,
+                interrupted(repo, &with_catalog_part(repo, leftovers.clone())),
+            ));
         }
         let schedule_path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
         let schedule_bytes = optional_file(&schedule_path, STANDARD_PACK_SCHEDULE_FILE)?;
@@ -1880,6 +1957,24 @@ impl Repository {
             })?,
             None => StandardPackSchedule::default(),
         };
+        // Workflow #477 CV-2b: a switched root's catalog, whose `.part` an interrupted call left is
+        // that call's root file as the others are ("If a call was interrupted").
+        let switched = schedule
+            .requires
+            .iter()
+            .any(|name| name == CATALOG_BUSINESS_SUBSYSTEM);
+        let catalog = if switched {
+            let left = with_catalog_part(repo, leftovers.clone());
+            if let Some(part) = left
+                .iter()
+                .find(|left_part| !left_part.starts_with(&pack_prefix))
+            {
+                return Err(repository_invalid(part, interrupted(repo, &left)));
+            }
+            Some(SwitchedCatalog::read(repo, &game)?)
+        } else {
+            None
+        };
         let roles = maintenance_roles(repo, &game, &maintenance);
         Ok(Self {
             game,
@@ -1894,6 +1989,7 @@ impl Repository {
             },
             other_roles: roles.others,
             leftovers,
+            catalog,
         })
     }
 
@@ -1943,6 +2039,20 @@ fn leftovers(repo: &Path) -> LabResult<Vec<String>> {
     Ok(left)
 }
 
+/// Workflow #477 CV-2b: `leftovers` ([`leftovers`]) with `pack-catalog.json.part` first, when it is
+/// there and the checkout's `schedule.json` names `catalog_business`: on a switched root adopt
+/// writes the catalog as one of its root files, and an interrupted call leaves its `.part` as it
+/// leaves theirs. On any other root adopt writes no catalog and its `.part` is not looked at.
+fn with_catalog_part(repo: &Path, mut leftovers: Vec<String>) -> Vec<String> {
+    let part = format!("{STANDARD_PACK_CATALOG_FILE}.{PART}");
+    let switched = fs::read(repo.join(STANDARD_PACK_SCHEDULE_FILE))
+        .is_ok_and(|bytes| standard_pack_schedule_takes_catalog(&bytes));
+    if switched && fs::symlink_metadata(repo.join(&part)).is_ok() {
+        leftovers.insert(0, part);
+    }
+    leftovers
+}
+
 /// The message of a refusal for what an interrupted adoption left: each leftover by name, what it
 /// tells of that call, and the steps to take from there, each of which a later call accepts
 /// (`contracts/standard-pack-authoring.md`, "If a call was interrupted"). A root file's `.part` is
@@ -1965,18 +2075,37 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
                 .to_owned(),
         );
     }
-    let parts = [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE]
-        .into_iter()
+    // Workflow #477 CV-2b: on a switched root the catalog is a root file the call writes, and its
+    // `.part` is among the leftovers only there ([`with_catalog_part`]).
+    let catalog_part = leftovers.contains(&format!("{STANDARD_PACK_CATALOG_FILE}.{PART}"));
+    let root_files: &[&str] = if catalog_part {
+        &[
+            STANDARD_PACK_CATALOG_FILE,
+            STANDARD_PACK_SCHEDULE_FILE,
+            MAINTENANCE_FILE,
+        ]
+    } else {
+        &[STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE]
+    };
+    let parts = root_files
+        .iter()
+        .copied()
         .filter(|name| leftovers.contains(&format!("{name}.{PART}")))
         .collect::<Vec<_>>();
     if parts.is_empty() {
         return said.join("; ");
     }
+    let renames = if catalog_part {
+        "renames pack-catalog.json, schedule.json and maintenance.json one after the other \
+         (pack-catalog.json right before schedule.json, maintenance.json first for the class \
+         maintenance and last for the others)"
+    } else {
+        "renames schedule.json and maintenance.json one after the other"
+    };
     said.push(format!(
         "that call put its packs/<package_id> in place before it wrote its first root .part, \
-         writes every root .part before it renames the first, and renames schedule.json and \
-         maintenance.json one after the other, so {parts:?} were not renamed and are as they were \
-         before that call"
+         writes every root .part before it renames the first, and {renames}, so {parts:?} were \
+         not renamed and are as they were before that call"
     ));
     let mut trusted = Vec::new();
     let mut cut_off = false;
@@ -2004,6 +2133,28 @@ fn interrupted(repo: &Path, leftovers: &[String]) -> String {
          file and every root file is as it was before that call; renaming does not finish that \
          adoption"
             .to_owned()
+    } else if catalog_part {
+        // Workflow #477 CV-2b: the root files with no `.part` left, of the three.
+        let others = root_files
+            .iter()
+            .copied()
+            .filter(|name| !trusted.contains(name))
+            .collect::<Vec<_>>();
+        if others.is_empty() {
+            "all three were written whole and none was renamed: renaming each over its file, \
+             pack-catalog.json before schedule.json, finishes that adoption and nothing more is \
+             run"
+            .to_owned()
+        } else {
+            format!(
+                "{others:?} were renamed by that call, or were not to change in it, or were to \
+                 change and the call stopped before it wrote their .part: when each already is as \
+                 that call decided it (the package's rule, held entry or maintenance.json entry \
+                 there, or gone where the call ended one), renaming each .part left over its file, \
+                 pack-catalog.json before schedule.json, finishes that adoption and nothing more \
+                 is run; when one is not, renaming does not finish it"
+            )
+        }
     } else if let [one] = trusted.as_slice() {
         let other = if *one == STANDARD_PACK_SCHEDULE_FILE {
             MAINTENANCE_FILE
@@ -2064,9 +2215,10 @@ fn new_directory_step(pack: &str, who: &str) -> String {
 
 /// Whether the `.part` of the root file `name` that an interrupted call left in `repo` is that
 /// file whole, as a finished write of adopt leaves it: a file that reads as that root file
-/// (`schedule.json` by the schedule reader, `maintenance.json` as its list of entries) and is in
-/// the canonical form, its final newline included. A `.part` cut off by a crash ends before its
-/// last bracket or its final newline, so it is not. Fix round 4 (the outcome guard's G2): `Err` is
+/// (`schedule.json` by the schedule reader, `maintenance.json` as its list of entries, Workflow
+/// #477 CV-2b `pack-catalog.json` as a document of version 2) and is in the canonical form, its
+/// final newline included. A `.part` cut off by a crash ends before its last bracket or its final
+/// newline, so it is not. Fix round 4 (the outcome guard's G2): `Err` is
 /// the module's own outcome-carrying refusal, `adopt_refused` `repository_invalid` at that `.part`
 /// (`entry` `<name>.part`, the operating system's refusal as the cause where there is one), its
 /// message saying why not, in words, which [`interrupted`] folds into its own.
@@ -2102,6 +2254,18 @@ fn finished_part(repo: &Path, name: &str) -> LabResult<()> {
             .map_err(|issue| {
                 repository_invalid(&part, format!("it does not read as schedule.json: {issue}"))
             })
+    } else if name == STANDARD_PACK_CATALOG_FILE {
+        // Workflow #477 CV-2b: a switched root's catalog, of version 2.
+        if value.get(SCHEMA_VERSION).and_then(Value::as_str)
+            == Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2)
+        {
+            Ok(())
+        } else {
+            Err(repository_invalid(
+                &part,
+                "it does not read as pack-catalog.json of version 2".to_owned(),
+            ))
+        }
     } else {
         serde_json::from_value::<Vec<BundleMaintenance>>(value)
             .map(|_| ())
@@ -3600,7 +3764,9 @@ struct Plan {
     /// The entries the bundle declares, and the bytes of `maintenance.json` when it changes.
     check_maintenance: Vec<BundleMaintenance>,
     maintenance_bytes: Option<Vec<u8>>,
-    /// The package's rule after the adoption, as written.
+    /// The package's rule after the adoption, as written. Workflow #477 CV-2b: of a switched root,
+    /// with its business part, which `pack-catalog.json` holds and `schedule.json` does not
+    /// ([`Self::written_rule`]), as the composer reads the rule.
     rule: Option<Map<String, Value>>,
     held: Option<Value>,
     maintenance_entry: Option<Value>,
@@ -3612,10 +3778,22 @@ struct Plan {
     derived: Vec<DerivedMember>,
     drift: Vec<DerivedDrift>,
     model_kept: Vec<String>,
+    /// Workflow #477 CV-2b: the root is switched and the rule's business part is written into
+    /// `pack-catalog.json`, not into the rule.
+    switched: bool,
+    /// CV-2b: of a switched root, the bytes of `pack-catalog.json` the check composes (as read
+    /// when the adoption leaves the file as it is), and those adopt writes when it changes.
+    check_catalog: Option<Vec<u8>>,
+    catalog_bytes: Option<Vec<u8>>,
+    /// CV-2b: of a switched root, the package's entry of `pack-catalog.json` after the adoption;
+    /// `None` when it has none.
+    catalog_entry: Option<Value>,
 }
 
 /// What [`Plan::make`] reads.
 struct PlanInputs<'a> {
+    /// Workflow #477 CV-2b: the checkout, which a refusal of the root as it would be written names.
+    repo: &'a Path,
     root: &'a Repository,
     package: &'a Package,
     package_id: &'a str,
@@ -3647,6 +3825,21 @@ impl Plan {
                 document
             }
         };
+        // Workflow #477 CV-2b (`contracts/standard-pack-authoring.md`, "On a switched root"): of a
+        // switched root, every business member the adoption writes into its rule goes into the
+        // catalog's part for that rule instead. A rule of the package that writes a business member
+        // there itself is not touched: the check of the tree refuses it as the composer does
+        // (`catalog_business_member`), as before this slice.
+        let routing = root.catalog.as_ref().filter(|_| {
+            inputs.existing.rule.is_none_or(|index| {
+                document
+                    .get(RULES)
+                    .and_then(Value::as_array)
+                    .and_then(|rules| rules.get(index))
+                    .and_then(Value::as_object)
+                    .is_none_or(|rule| !writes_business(rule))
+            })
+        });
         let mut plan = Self {
             check_schedule: None,
             schedule_bytes: None,
@@ -3662,7 +3855,15 @@ impl Plan {
             derived: Vec::new(),
             drift: Vec::new(),
             model_kept: Vec::new(),
+            switched: routing.is_some(),
+            check_catalog: root.catalog.as_ref().map(|catalog| catalog.bytes.clone()),
+            catalog_bytes: None,
+            catalog_entry: routing.and_then(|catalog| catalog.read.entry(inputs.package_id)),
         };
+        // CV-2b: where the package's rule stands in the file as it would be written, and its id as
+        // the call read it (none for a rule the call adds).
+        let mut rule_index = None;
+        let mut rule_id_read = None;
         let tier = match inputs.class {
             AdoptClass::Maintenance => Tier::Maintenance,
             _ => Tier::Business,
@@ -3712,6 +3913,17 @@ impl Plan {
                 ));
             };
             let before = rule.clone();
+            rule_id_read = before.get(ID).and_then(Value::as_str).map(str::to_owned);
+            // Workflow #477 CV-2b: of a switched root, the rule with its business part as the
+            // composer gives it the catalog's, for this call's own reading of the rule (a value the
+            // model wrote, what the decision changes, the words `requires` needs, the coverage and
+            // the value's wait); `schedule.json` is written without it.
+            if let Some(catalog) = routing {
+                rule.extend(catalog.read.rule_members(
+                    inputs.package_id,
+                    rule_id_read.as_deref().unwrap_or_default(),
+                ));
+            }
             // A fixed value the model wrote is kept as it is, and answered.
             if rule
                 .get(SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER)
@@ -3752,15 +3964,23 @@ impl Plan {
             if let Some(slot) = array_member(&mut document, RULES)?.get_mut(index) {
                 *slot = Value::Object(rule.clone());
             }
-            if rule != before {
+            // CV-2b: the entry as `schedule.json` holds it, of a switched root without its
+            // business part.
+            let written = if routing.is_some() {
+                without_business(&rule)
+            } else {
+                rule.clone()
+            };
+            if written != before {
                 plan.replaced.push(RootEntryChange {
                     file: STANDARD_PACK_SCHEDULE_FILE.to_owned(),
                     json_pointer: format!("/{RULES}/{index}"),
                     before: Value::Object(before),
-                    after: Some(Value::Object(rule.clone())),
+                    after: Some(Value::Object(written)),
                 });
             }
             plan.rule = Some(rule);
+            rule_index = Some(index);
         } else if wants_rule {
             let decision = inputs.decision.ok_or_else(|| {
                 refused(
@@ -3777,7 +3997,9 @@ impl Plan {
                 .unwrap_or(inputs.package_id)
                 .to_owned();
             let rule = plan.new_rule(inputs, decision, &inputs_of_rule(&rule_id))?;
-            array_member(&mut document, RULES)?.push(Value::Object(rule.clone()));
+            let rules = array_member(&mut document, RULES)?;
+            rule_index = Some(rules.len());
+            rules.push(Value::Object(rule.clone()));
             plan.rule = Some(rule);
         }
 
@@ -3860,9 +4082,62 @@ impl Plan {
             plan.requires_added = missing.clone();
             let words = missing.into_iter().map(Value::String).collect::<Vec<_>>();
             if document.get(REQUIRES).is_some_and(Value::is_array) {
-                array_member(&mut document, REQUIRES)?.extend(words);
+                // Workflow #477 CV-2b: before `catalog_business`, which a cut-over names last, so
+                // that a switched root names them as adopting before the cut-over and cutting over
+                // would; at the end of a file that does not name it, as before.
+                let names = array_member(&mut document, REQUIRES)?;
+                let at = names
+                    .iter()
+                    .position(|name| name.as_str() == Some(CATALOG_BUSINESS_SUBSYSTEM))
+                    .unwrap_or(names.len());
+                let tail = names.split_off(at);
+                names.extend(words);
+                names.extend(tail);
             } else {
                 document = after_schema_version(document, REQUIRES, Value::Array(words));
+            }
+        }
+
+        // Workflow #477 CV-2b (`contracts/standard-pack-authoring.md`, "On a switched root"): of a
+        // switched root the rule's business part is written into the catalog's part for the rule
+        // (`AdoptionCatalog::adopted`, from the rule as the file holds it with its business members,
+        // read by the schedule's one reader, as the writer's `--refresh` reads a rule), and the rule
+        // is written without it.
+        if let Some(catalog) = routing
+            && let Some(index) = rule_index
+        {
+            let full_bytes = canonical(&Value::Object(document.clone()))?;
+            let as_written = parse_standard_pack_schedule(&full_bytes)
+                .map_err(|issue| root_refused(inputs.repo, &root.game, &issue))?;
+            let adoption = catalog
+                .read
+                .adopted(&as_written, index, rule_id_read.as_deref())
+                .map_err(|issue| root_refused(inputs.repo, &root.game, &issue))?;
+            if let Some(Value::Object(rule)) = array_member(&mut document, RULES)?.get_mut(index) {
+                let stripped = without_business(rule);
+                *rule = stripped;
+            }
+            if let Some(adoption) = adoption
+                && adoption.bytes != catalog.bytes
+            {
+                require_canonical(&catalog.bytes, STANDARD_PACK_CATALOG_FILE)?;
+                let CatalogAdoption {
+                    bytes,
+                    pointer,
+                    before,
+                    after,
+                } = adoption;
+                if let Some(before) = before {
+                    plan.replaced.push(RootEntryChange {
+                        file: STANDARD_PACK_CATALOG_FILE.to_owned(),
+                        json_pointer: pointer,
+                        before,
+                        after: Some(after.clone()),
+                    });
+                }
+                plan.catalog_entry = Some(after);
+                plan.check_catalog = Some(bytes.clone());
+                plan.catalog_bytes = Some(bytes);
             }
         }
 
@@ -3986,6 +4261,18 @@ impl Plan {
             .and_then(|rule| rule.get(ID))
             .and_then(Value::as_str)
             .map(str::to_owned)
+    }
+
+    /// The package's rule as `schedule.json` holds it after the adoption: Workflow #477 CV-2b, of
+    /// a switched root without its business part, which `pack-catalog.json` holds.
+    fn written_rule(&self) -> Option<Map<String, Value>> {
+        self.rule.as_ref().map(|rule| {
+            if self.switched {
+                without_business(rule)
+            } else {
+                rule.clone()
+            }
+        })
     }
 
     /// A first rule: the decision's members, the derived ones, in the order a rule is written.
@@ -5329,6 +5616,12 @@ fn check_tree(inputs: &CheckInputs<'_>, stages: &mut Stages<'_>) -> LabResult<Ch
         }
         None => None,
     };
+    // Workflow #477 CV-2b: of a switched root, the catalog as it would be written beside
+    // `schedule.json`, which the bundle's composition takes the rules' business part from.
+    if let Some(bytes) = &inputs.plan.check_catalog {
+        let path = staged_root.join(STANDARD_PACK_CATALOG_FILE);
+        write_new(&path, bytes).map_err(|error| tree_failed(&path, &error, IoOp::Write))?;
+    }
     stages.enter(AdoptStage::Bundle);
     let present = |name: &str| {
         let path = inputs.repo.join(name);
@@ -5393,6 +5686,12 @@ fn check_tree(inputs: &CheckInputs<'_>, stages: &mut Stages<'_>) -> LabResult<Ch
             copy_tree(&source, &installed.join(&name))?;
         }
     }
+    // Workflow #477 CV-2b: of a switched root, the catalog in the installed layout too, as the
+    // build carries it into the zip and `place` lays it beside `bundle.json`.
+    if let Some(bytes) = &inputs.plan.check_catalog {
+        let target = installed.join(STANDARD_PACK_CATALOG_FILE);
+        write_new(&target, bytes).map_err(|error| tree_failed(&target, &error, IoOp::Write))?;
+    }
     stages.enter(AdoptStage::RootCheck);
     let (answer, compiled) = check_standard_pack_root_with_catalog(StandardPackCheckRequest {
         root: installed.clone(),
@@ -5413,29 +5712,35 @@ fn check_tree(inputs: &CheckInputs<'_>, stages: &mut Stages<'_>) -> LabResult<Ch
 /// repository.
 fn composed(mut error: LabError, tree: &Path) -> LabError {
     let cause = cause_of(&error);
-    let at_schedule = error.code == SharedCode::StandardPackRootInvalid.as_str()
-        && text_value(&cause, "path")
-            .and_then(|path| Path::new(path).file_name())
-            .and_then(|name| name.to_str())
-            == Some(STANDARD_PACK_SCHEDULE_FILE);
-    if !at_schedule {
+    // Workflow #477 CV-2b: or `pack-catalog.json`, which of a switched root the check composes
+    // beside it, as it would be written; no other root's check tree holds one.
+    let file = text_value(&cause, "path")
+        .and_then(|path| Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .and_then(|name| {
+            [STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_CATALOG_FILE]
+                .into_iter()
+                .find(|root_file| *root_file == name)
+        })
+        .filter(|_| error.code == SharedCode::StandardPackRootInvalid.as_str());
+    let Some(file) = file else {
         error.message = format!(
             "{}; nothing was written in the repository; the check tree is at {}",
             error.message,
             tree.display()
         );
         return error;
-    }
+    };
     let pointer = text_value(&cause, "json_pointer")
         .map(bounded_pointer)
         .unwrap_or_default();
     refused(
         adopt(AdoptProblem::RuleRefused)
-            .entry(STANDARD_PACK_SCHEDULE_FILE)
+            .entry(file)
             .json_pointer(pointer.clone())
             .caused_by(cause),
         format!(
-            "the composer refuses schedule.json as it would be written at {pointer:?}: {}; the \
+            "the composer refuses {file} as it would be written at {pointer:?}: {}; the \
              check tree is at {}",
             error.message,
             tree.display()
@@ -5498,21 +5803,36 @@ struct WriteInputs<'a> {
     /// plan was computed from.
     read_schedule: Option<&'a [u8]>,
     read_maintenance: &'a [u8],
+    /// Workflow #477 CV-2b: of a switched root, `pack-catalog.json` as the call read it.
+    read_catalog: Option<&'a [u8]>,
     /// The class is maintenance: `maintenance.json` is renamed before `schedule.json`
     /// ([`root_order`]).
     maintenance_first: bool,
 }
 
-/// The order the two root files are renamed in: first the file that gives the package its new
-/// role (`maintenance.json` for the class maintenance, `schedule.json` for the others), then the
-/// file that ends its old one, so that a call interrupted between the two renames leaves the
-/// `.part` of the file not renamed, which the next call tells, and never ends the old role before
-/// the new one is written.
-fn root_order(maintenance_first: bool) -> [&'static str; 2] {
+/// The order the root files are renamed in: first the file that gives the package its new role
+/// (`maintenance.json` for the class maintenance, `schedule.json` for the others), then the file
+/// that ends its old one, so that a call interrupted between the two renames leaves the `.part` of
+/// the file not renamed, which the next call tells, and never ends the old role before the new one
+/// is written. Workflow #477 CV-2b: `pack-catalog.json`, which only a switched root's adoption
+/// changes, right before `schedule.json`: a call interrupted after it renamed the catalog and
+/// before it renamed `schedule.json` leaves a catalog whose new part stands for no rule that runs
+/// yet (a package's first rule) or that the old `requires` does not cover (the composer refuses
+/// it), never a new rule without its business part, which would compose as a rule with none; and
+/// it leaves `schedule.json.part`, which the next call tells.
+fn root_order(maintenance_first: bool) -> [&'static str; 3] {
     if maintenance_first {
-        [MAINTENANCE_FILE, STANDARD_PACK_SCHEDULE_FILE]
+        [
+            MAINTENANCE_FILE,
+            STANDARD_PACK_CATALOG_FILE,
+            STANDARD_PACK_SCHEDULE_FILE,
+        ]
     } else {
-        [STANDARD_PACK_SCHEDULE_FILE, MAINTENANCE_FILE]
+        [
+            STANDARD_PACK_CATALOG_FILE,
+            STANDARD_PACK_SCHEDULE_FILE,
+            MAINTENANCE_FILE,
+        ]
     }
 }
 
@@ -5531,20 +5851,23 @@ fn write_adoption(
     worktree: &dyn AdoptWorktree,
 ) -> LabResult<(Option<PathBuf>, Vec<PathBuf>)> {
     let mut done: Vec<PathBuf> = Vec::new();
-    let root_writes = root_order(inputs.maintenance_first).map(|name| {
-        if name == STANDARD_PACK_SCHEDULE_FILE {
-            (
-                name,
-                inputs.plan.schedule_bytes.as_deref(),
-                inputs.read_schedule,
-            )
-        } else {
-            (
-                name,
-                inputs.plan.maintenance_bytes.as_deref(),
-                Some(inputs.read_maintenance),
-            )
-        }
+    let root_writes = root_order(inputs.maintenance_first).map(|name| match name {
+        STANDARD_PACK_SCHEDULE_FILE => (
+            name,
+            inputs.plan.schedule_bytes.as_deref(),
+            inputs.read_schedule,
+        ),
+        // Workflow #477 CV-2b: written only on a switched root.
+        STANDARD_PACK_CATALOG_FILE => (
+            name,
+            inputs.plan.catalog_bytes.as_deref(),
+            inputs.read_catalog,
+        ),
+        _ => (
+            name,
+            inputs.plan.maintenance_bytes.as_deref(),
+            Some(inputs.read_maintenance),
+        ),
     });
     // Before the first write: each root file it will rename is still the one it read.
     for (name, bytes, read) in root_writes {
@@ -5851,6 +6174,39 @@ fn array_member<'a>(
                 format!("schedule.json: {member} is no list"),
             )
         })
+}
+
+/// Workflow #477 CV-2b: whether `rule` writes one of a rule's business members
+/// (`SCHEDULE_RULE_BUSINESS_MEMBERS`), which a rule of a switched root writes none of.
+fn writes_business(rule: &Map<String, Value>) -> bool {
+    SCHEDULE_RULE_BUSINESS_MEMBERS
+        .iter()
+        .any(|member| rule.contains_key(*member))
+}
+
+/// Workflow #477 CV-2b: `rule` without its business members (`SCHEDULE_RULE_BUSINESS_MEMBERS`),
+/// every other member as it stands, in its order: the rule as a switched `schedule.json` holds it.
+fn without_business(rule: &Map<String, Value>) -> Map<String, Value> {
+    rule.iter()
+        .filter(|(name, _)| !SCHEDULE_RULE_BUSINESS_MEMBERS.contains(&name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// Workflow #477 CV-2b: the refusal of the root of the checkout `repo` (game `game`) as it would
+/// be written: `rule_refused`, at `issue`'s member of the root file it names, the issue
+/// (`standard_pack_root_invalid`) its cause. Nothing was written.
+fn root_refused(repo: &Path, game: &str, issue: &StandardPackRootIssue) -> LabError {
+    refused(
+        adopt(AdoptProblem::RuleRefused)
+            .entry(issue.file)
+            .json_pointer(bounded_pointer(&issue.pointer))
+            .caused_by(root_issue_outcome(game, &repo.join(issue.file), issue)),
+        format!(
+            "{} as it would be written: {issue}; nothing was written",
+            issue.file
+        ),
+    )
 }
 
 /// A root file adopt must change is in the canonical form already.

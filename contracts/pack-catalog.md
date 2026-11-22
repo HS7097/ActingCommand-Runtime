@@ -30,6 +30,10 @@ business part from the root's version 2 file ([standard-pack-schedule.md](standa
 same both ways ("Who writes it"). A root that does not name it is composed as before and its file
 is read by no Runtime component.
 
+Workflow #477 CV-2b (Runtime 0.12.80; [v012-register.md](v012-register.md) §1.515; the
+coordinator's rulings): on a switched root `standard-pack adopt` writes the adopted rule's business
+part into this file instead of into the rule ("Who writes it").
+
 ## The owner's six answers
 
 Each choice below follows one of the owner's answers for this slice (board #477, her ruling of
@@ -573,12 +577,17 @@ Workflow #477 CV-2 (0.12.80; register §1.508; the coordinator's ruling 7; the t
 - **Giving a package its business part after the cut-over**: its effects (`consumes`, `produces`,
   a per-rule part's `rules`) are written into its entry by editing the file, which `standard-pack
   check` (and the build, `place` and the composer) then reads by the one reader; its fixed value and
-  its marks by `--values` (CV-1). `standard-pack adopt` does not write the catalog yet (writing an
-  adopted package's entry is a later slice's) and is refused on a switched root, by its check tree,
-  which carries no catalog: a first adoption, whose rule writes `consumes` and `produces`, as
-  `adopt_refused` (`adopt_problem` `rule_refused`) caused by `standard_pack_root_invalid`
-  `catalog_business_member` at the rule's member; a re-adoption that names no business member as
-  `standard_pack_root_invalid` `catalog_missing` at the check tree's `pack-catalog.json`.
+  its marks by `--values` (CV-1). Workflow #477 CV-2b (0.12.80; register §1.515): **`standard-pack
+  adopt` writes an adopted package's business part here**, effects, value and marks, whatever its
+  decision gives or derives for the rule, and `schedule.json` gets the rule without them
+  ([standard-pack-authoring.md](standard-pack-authoring.md), "On a switched root"). So after the
+  switch the business part is written by three: `adopt` (effects, values and marks of the rule it
+  adopts, into the entry's own part when the package is run by that one rule and the entry holds no
+  per-rule part, else into the rule's per-rule part), `--values` (values and marks) and an edit of
+  the file. Adopting into a root not switched, `--refresh` of the package and `--cut` give the
+  same file, byte for byte, as `--cut` and then adopting. A switched root without the file or with
+  one of version 1 is refused by `adopt` as by this writer: `repository_invalid` caused by
+  `standard_pack_root_invalid` `catalog_missing` or `catalog_version_1`.
 
 ## `ui.json` is retired
 
@@ -634,7 +643,9 @@ members a client read are where they were.
   business members (the old reading).
 - **A business part per value of a package variable**: each value will be a rule, so it is a
   per-rule part of version 2's shape; nothing more is added for it.
-- **The adoption's entries**: `standard-pack adopt` writes the entry of the package it adopts (on
-  a switched root it is refused until then: "Who writes it").
+- **The adoption's entries**: here since Workflow #477 CV-2b (0.12.80), on a switched root:
+  `standard-pack adopt` writes the business part of the rule it adopts into its package's entry
+  ("Who writes it"). On a root that does not name `catalog_business` it writes no entry; the entry
+  is brought up to the rules by `--refresh`, as before the cut-over.
 - **The model writer's entries**: the model's export writes the values and the marks through
   `--values` (CV-1), and the quantities.

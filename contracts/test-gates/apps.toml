@@ -2988,3 +2988,17 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_477_cv2::cv2_this_runtime_names_catalog_business_and_composes_a_switched_root",
 ]
 incident = ["#477 CV-2"]
+
+# #477 CV-2b (0.12.80; register §1.515; brief rd-1122/brief-477-cv2b.md; contracts/standard-pack-authoring.md, "On a switched root"; contracts/pack-catalog.md, "Who writes it"): standard-pack adopt on a checkout whose schedule.json names catalog_business writes the adopted rule's business part into pack-catalog.json instead of into the rule. The proof (ruling 2): adopting into the root not switched, standard-pack catalog --refresh of the package and --cut give, byte for byte, the schedule.json, the pack-catalog.json, every other file of the checkout and the composition (standard-pack compose: rules digest, catalog hash, documents) that --cut first and then the adoption give: a first adoption, requires naming benefit_fixed_value before catalog_business, the entry {package_id, consumes, produces, value, limited} after the others, written in the order pack directory, pack-catalog.json, schedule.json, the answer's rule without its business part and catalog_entry the entry (1); a re-adoption that changes the value, the own part's value replaced, its effects and mark kept, the entry answered among replaced_entries (2); a re-adoption of the first of a package's two rules whose entry held one own part: the per-rule parts of both rules in the file's order and no own part (3); an adoption whose effect the catalog's reader refuses (an amount 0) is refused rule_refused at pack-catalog.json caused by catalog_out_of_limits and writes nothing; a call that stops before it renames schedule.json.part has renamed the catalog, left schedule.json as it was and its .part, which the next call refuses repository_invalid at it (4, ruling 3); a root not switched holding a catalog of version 2 is adopted byte for byte as before: #464 P1's golden of its first adoption, the catalog's bytes kept, no catalog_entry (5, ruling 4); a re-adoption naming only the trigger changes schedule.json and not one byte of the catalog, and one without a decision writes neither (6, ruling 5); a switched root whose catalog is missing, or of version 1, is refused repository_invalid at pack-catalog.json caused by standard_pack_root_invalid catalog_missing, or catalog_version_1 at /schema_version, nothing written (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r2_a_first_adoption_into_a_switched_root_equals_adopting_then_cutting_over",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r2_a_readoption_that_changes_the_value_equals_adopting_then_cutting_over",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r2_a_readoption_of_one_of_two_rules_equals_adopting_then_cutting_over",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r3_an_adoption_that_would_not_compose_writes_neither_file",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r4_a_root_that_is_not_switched_is_adopted_byte_for_byte_as_before",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_r5_a_readoption_without_a_business_member_leaves_the_catalog_alone",
+    "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_a_switched_root_without_a_catalog_of_version_2_is_refused_with_its_word",
+]
+incident = ["#477 CV-2b"]
