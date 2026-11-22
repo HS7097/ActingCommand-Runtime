@@ -351,7 +351,7 @@ process.
 
 No installer command writes, moves, renames, keeps or lists `install\identity.json`
 ([install-cli.md](install-cli.md), "Layout"): the update, the rollback, an undo, `status`,
-`leftovers` and `place` leave it as it is, and the A/B clean (R-15d) never touches it. The readers
+`leftovers` and `place` leave it as it is. The readers
 of `install\` that list the folder are `install leftovers` (it lists only names that carry a kept
 marker, `.old-`, `.rolledback-`, `.abandoned-`, `.prev-`, `.finished-`, `.part`) and the gate tests'
 tree comparisons; none refuses an unknown file and none needed a change. An identity file

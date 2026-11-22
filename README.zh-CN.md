@@ -148,14 +148,13 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 42 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 41 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
 ### apps（11）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | apps/acib | actingcommand-ios-bridge | bin `acib` | 项目自己的 iOS 调试桥（Workflow #479 ACIB-0，自 v0.12.72 起），在 Runtime 之外单独的程序：基于 `idevice` 库的十一条命令（`NOTICE.md`），九条只读（`screenshot` 是 Workflow #479 ACIB-1，自 v0.12.73 起；`orientation` 是 ACIB-2、`running` 是 ACIB-3，自 v0.12.74 起；`probe` 是 ACIB-3b，自 v0.12.75 起），两条会改手机上在跑的东西：`launch` 和 `stop`（ACIB-3，自 v0.12.74 起）；`running`、`launch`、`stop` 改经安装代理和开发工具服务（ACIB-3c，自 v0.12.75 起）；`stop` 按 `--via` 指名的形式发结束请求（`primitive` 是默认，另有 `library`、`archived`），另开一条连接看清单，照实答应用还在不在跑，README 列出这个程序永不调用的库调用，由一条读源码的测试守着（ACIB-3d，自 v0.12.76 起）；用加盐的键指名手机、把画面写到标准输出（ACIB-2，自 v0.12.74 起）；CI 里单独构建、单独上传，不进发版的两个压缩包（`apps/acib/README.md`） |
-| apps/actingcommand-entry | actingcommand-entry | lib | A/B 安装根固定入口的结果码（`contracts/stable-entry.md`）；两个入口程序加入之前只是放这些码的库 |
 | apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产命令行，MCP 服务（`mcp-serve`、`mcp-config`）、看门狗的命令（`watchdog …`，取自 `crates/watchdog`），以及安装工具 `install` 连同 `mcp-entry`、`start`、`restart`、`agent-channel`，原样由 `crates/lab-rescue` 回答（Workflow #434 LAB-3） |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，46 个顶层分派臂、109 条命令；它的 CLI 模块用操作表的短词回答从 actingctl 来的操作，`actinglab serve --stdio` 每行答一个 `{op, params}`（Workflow #434 LAB-2）；两者还对程序所在的根提供 `crates/lab-rescue` 的 39 行救急操作（Workflow #434 LAB-3；`new` 自 Workflow #453 S4 起；`instance add` 自 Workflow #421 INST-5 起；`state-root claim` 自 Workflow #453 S12 起；`mcp config`、`mcp entries`、`mcp plan` 自 Workflow #434 LAB-5G5b 起；`emulators` 自 Workflow #453 S10 起；`vision manifest`、`vision check` 自 Workflow #453 S7 起；`vision place` 自 Workflow #453 S9 起）；每条命令行都打印 CLI 模块的行，默认给人看，带 `--json` 是一行 JSON，退出码 0、1、2；只有带 `--via` 的命令行（MCP 的 actinglab 子进程）在 LAB-7 之前保留信封（Workflow #434 LAB-2b、LAB-5A） |

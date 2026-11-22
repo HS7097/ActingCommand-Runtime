@@ -45322,6 +45322,75 @@ range); a `goals.json` whose entries govern such a package: its `standard-pack c
 such a package's variables not applying, and its bundle tools refuse the file. The records this
 build writes have no new code, word, member or shape, so v0.12.77 reads them.
 
+### 1.502 Slice #429 AB-1 (0.12.78): the A/B install layer that nothing calls is removed (Workflow #429; the owner's words of 2026-11-21 on board #429, quoted below; the rules are the coordinator's rulings in the work order, not the owner's words; coordinator work order `rd-1121/brief-429-ab1.md`, after the read-only inventory `rd-1121/study-ab-removal.md`; on main `3285143f`, the v0.12.77 release)
+
+This section takes 1.502: §1.500 is pull request #1860's and §1.501 pull request G-SLx's.
+
+**What is removed, and on whose words.** On 10-31 the owner approved an A/B (two slot)
+installation for production (her items 131 and 132); R-15b (0.12.35, §1.237) froze its
+contracts, and the slices that build slots, activate and convert (R-15c to R-15e) were never
+written: production stayed a single-location installation. Asked on 11-21 whether it should
+still be built, the owner answered (2026-11-21): 「8，废除吧，连代码也直接剔除也可以」. Removed:
+install-cli.md's section "The A/B layout" and the sentences that existed only for it;
+`contracts/stable-entry.md`; the A/B sentences of runtime-watchdog.md, lab-two-entries.md,
+contracts/README.md and state-root-installation.md; the contract crate's
+`installation/selection_v2.rs` (`InstallSelectionV2`, `InstallSlotDocument` and their constants);
+the workspace member `apps/actingcommand-entry`; the A/B-only codes, locations and words of
+`crates/lab-ops/src/codes.rs`, `apps/actingd/src/codes.rs` and the contract crate; the operation
+table's rows `convert`, `clean` and `prepare` (planned, never served; 194 rows are 191) and the
+A/B remark and source `actingctl install restart` of the row `restart`. Moved, word for word, to
+the single location's text of install-cli.md: the #452 entries ("Layout"), the single
+location's words of `install_operation_kind` and `install_step_kind` ("Outcome codes"), and the
+paragraph on `tools\actingwatch.exe` without its A/B sentence ("Locks and the watchdog";
+state-root-installation.md names it).
+
+**Codes.** Every removed entry was pending since 0.12.35 and in no release file: by the
+catalogue's rule a release file holds only the settled and retired entries its release binds,
+and G9 holds a later catalogue only to those ([runtime-outcomes.md](runtime-outcomes.md),
+"Catalog files"), so they leave with their registry entries (G1) and no `retired` entry, as
+PKG-S2 and NAV-3a removed theirs: the contract's five (`install_selection_v2_invalid`,
+`install_slot_document_mismatch`, `install_member_identity_invalid`,
+`install_member_pairing_mismatch`, `install_slot_document_invalid`), the ten `entry_*` codes with
+the fragment `actingcommand-entry.json`, its `fragments` entry and its owner in the domain
+`entry_` (which other owners keep), actingd's `unlock_owner_install_unfinished`, the five
+locations `install_prepare`, `install_convert_plan`, `install_convert_apply`, `install_clean`
+and `install_restart`, and `install_command_refused`'s optional value `attempt_phase`. Words:
+29 vocabularies no kept key names; of kept vocabularies, the words only the A/B layout used and
+no kept code emits (G7 holds each enum equal to its vocabulary, and no release file holds a
+word): 28 of `install_refusal`, 19 of `install_caveat`, 4 of `install_guard`, 4 of
+`install_operation_kind` and 18 of `install_step_kind`. The key table only grows: the eleven keys
+R-15b added stay, with `install_attempt_phase`, `entry_child_state` and `install_member`. The
+catalogue holds 4051 codes (3961 active) where it held 4067 (3977), and 1774 locations where it
+held 1779; the index was edited by hand and `ci/outcome_codes_index.py --check` says "is
+current".
+
+**Kept** (ruling 5): every document of the single location and its version; `refuse_ab`,
+`layout_ab_unsupported` and `not_single_location`; `install status`'s `layout` and the watchdog
+report's `layout`, `generation` and `slot`; the version 1 selection reader and everything that
+calls it, with its released codes and the watchdog smoke, which go with LAB-7 (#1741); the
+release reader's UI branch with `selection_schema_mismatch` and its text, which AB-2 takes;
+`apps/mcp-entry` and `apps/mcp-entry-g2`. Also kept, against the inventory: `ui_edges` with
+`gate_r15a_ui_edges` and install-cli.md's "UI edges" (gate_429_r0b_pairing's console pairing
+calls `ui_edges`); the guard word `player_holds` (player-hold.md and the `player-hold` row name it
+as #421's guard); the row `up`'s remark (its A/B start is the version 1 reader's).
+
+**Withdrawn numbers** ([component-interfaces.md](component-interfaces.md)): `install-selection`
+2, `tools-layout` 4, `install-cli` 1 and `install-root` 1, each frozen for the A/B layout in
+0.12.35, declared by no build, withdrawn in 0.12.78, the number not used again; `install-cli` 2
+is written to stand alone. No declared range moves: `distribution/windows/component-interfaces.json`
+is untouched, `install-selection` [1, 1] and `install-control` [0, 0] stay.
+
+**Tests.** No new test. Retired (`ci/retired-gates.toml`): the eight tests of
+`gate_r15b_selection` (contract.toml) and `gate_r15b_registry` (apps.toml), which read the
+removed text; nine entries. `gate_434_lab2` (`clean` is now a word no row begins with: the same refusal naming
+it) and `gate_434_lab3` (`!serves("clean")`) still hold; only their comments changed.
+
+**At deploy.** Nothing changes for a single-location installation: every path of
+`crates/lab-rescue/src/install` it uses answers as on main (no journal holds the four removed
+guard ids, which no build evaluated). A person sees that an installation is single-location in
+`install status`'s member `layout`, `single`. A rollback to v0.12.77 meets nothing
+new: no document, journal kind, code or interface range of this build is one v0.12.77 lacks.
+
 ### 1.504 Slice #455 P1 (0.12.78): a pool may declare that its inventory is read from rows of a list (`observation.kind` `list_rows`): the declaration, the compile's checks and the composer's `requires`; no Runtime gives it a reading yet (board #455; the rulings 1 to 9 are the coordinator's of 11-21, no words of the owner's behind them; coordinator work order `rd-1121/brief-455-p1.md` after the read-only study `rd-1121/study-455-pool-from-list.md` and its closing disposition; on main `3285143f`, the 0.12.77 release)
 
 This section takes 1.504: §1.500 to §1.503 belong to other slices of this version.

@@ -9,10 +9,11 @@
 //   parameters: the longest name, the instance and the other positionals in order, options and
 //   switches (Workflow #434 LAB-5A: a row's declared flags handed on as written, for a row
 //   actinglab's own command serves); words and flags the row does not take,
-//   a reserved row, a row not served (the rescue module's `clean`, LAB-3) and actinglab's old
-//   `config get` are refused with `actingctl_usage_invalid` naming the word. `main`'s route: the
-//   module's operations and `serve` go to the module, the short words of a row actinglab's own
-//   command serves go to that command in its words.
+//   a reserved row, a word that is no row (`clean`, a rescue row not served until Workflow #429
+//   AB-1 withdrew it with the A/B layout, 0.12.78) and actinglab's old `config get` are refused
+//   with `actingctl_usage_invalid` naming the word. `main`'s route: the module's operations and
+//   `serve` go to the module, the short words of a row actinglab's own command serves go to that
+//   command in its words.
 // - `cli_json_matches_op_output`: through `main`'s entry, a core word prints its line for people
 //   by default (into a pipe too) and with `--json` the line `lab-ops` builds for it; a row
 //   actinglab's own command serves answers that command's line, as its own words do (LAB-2b: the
@@ -198,8 +199,9 @@ fn cli_short_words_parse() {
             unknown.clone()
         )
     );
-    // A reserved row (`batch`) and a row of a source not built (the rescue module's `clean`;
-    // Workflow #434 LAB-3 serves `deploy`, which this line named before).
+    // A reserved row (`batch`) and a word that is no row (`clean`, a rescue row of a source not
+    // built until Workflow #429 AB-1 withdrew it, 0.12.78; Workflow #434 LAB-3 serves `deploy`,
+    // which this line named before).
     assert_eq!(
         refused(&["batch", "neutral.a", "steps.json"]).1,
         json!("batch")
