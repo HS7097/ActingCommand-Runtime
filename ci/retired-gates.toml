@@ -1587,3 +1587,68 @@ test = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2s_host_a_decla
 ruling = "Workflow #455 G-R2x (0.12.77; register §1.499; the coordinator's work order rd-1121/brief-455-gr2x.md, rulings 2 and 4)"
 reason = "Renamed and adapted: the package whose metadata fails no longer marks its game; the warning and the check that goes on are kept."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_455_gr2s::gr2x_host_a_declaration_file_whose_metadata_fails_is_warned_and_the_check_goes_on, in the host.toml row of #455 G-R2x."
+
+# contract.toml, the row of Workflow #429 R-15b (install selection v2 and the slot document; Workflow #429 AB-1 removes them).
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_selection_v2_round_trips_and_names_its_slot"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1: the A/B installation is abolished, the owner's words of 11-21 on board #429)"
+reason = "Removed with what it tested: InstallSelectionV2 and the slot document (the contract crate's installation/selection_v2.rs), which nothing read and nothing wrote."
+covered_by = "none: the A/B layout's selection v2 is withdrawn; the version 1 selection it was to replace keeps its own tests (contract.toml row K8 and the v1 reader's callers' rows)."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_each_rule_of_the_selection_refuses_with_its_code"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, rulings 1 and 4)"
+reason = "Removed with what it tested: the rules of selection v2 and their codes (install_selection_v2_invalid, install_slot_document_mismatch, install_member_identity_invalid), which left the catalogue with it."
+covered_by = "none: nothing reads a selection v2 any more; install_selection_json_invalid and install_selection_size_invalid stay the v1 reader's, tested by its own rows."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_the_selection_takes_16_kib_and_not_one_byte_more"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1)"
+reason = "Removed with what it tested: the bound of a selection v2 read (MAX_INSTALL_SELECTION_BYTES, which the v1 reader keeps)."
+covered_by = "none for v2, which is withdrawn; the v1 reader reads the same bound."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_runtime_paired_with_the_tools_of_another_build_is_refused"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, rulings 1 and 4)"
+reason = "Removed with what it tested: the members' pairing of selection v2 (install_member_pairing_mismatch), which left the catalogue with it."
+covered_by = "none: a single-location root pairs its Runtime and Tools by their manifests' one commit, checked by the update plan's own rows."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_selection_follows_its_baseline_by_one_generation"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1)"
+reason = "Removed with what it tested: the generation rule of selection v2 (validate_successor), which no writer ever called."
+covered_by = "none: selection v2 is withdrawn."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_slot_document_round_trips_and_refuses_each_rule"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, rulings 1 and 4)"
+reason = "Removed with what it tested: the slot document SLOT.json (InstallSlotDocument) and install_slot_document_invalid, which left the catalogue with it."
+covered_by = "none: the slot document is withdrawn with the A/B layout."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_slot_document_matches_only_the_selection_of_its_slot_and_members"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1)"
+reason = "Removed with what it tested: InstallSlotDocument::matches_selection, which no reader ever called."
+covered_by = "none: the slot document is withdrawn with the A/B layout."
+
+[[retired]]
+fragment = "contract"
+test = "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_the_environment_names_and_bounds_are_fixed"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1)"
+reason = "Removed with what it pinned: the fixed entries' two variables (INSTALL_OPERATION_ENV, ENTRY_NO_DIALOG_ENV) and the bounds of selection v2 and the slot document, all removed with the A/B layout."
+covered_by = "none: the fixed entries and their variables are withdrawn; the v1 selection's own variables stay with the v1 reader."
+
+# apps.toml, the row of Workflow #429 R-15b (the release reader's UI side and the registry; Workflow #429 AB-1 removes the registry).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered"
+ruling = "Workflow #429 AB-1 (0.12.78; register §1.502; the coordinator's work order rd-1121/brief-429-ab1.md, ruling 1: the test reads two sections of contract text the slice removes and goes with them)"
+reason = "Removed: it checked the registry sections \"Registered codes and words (Workflow #429 R-15b)\" of install-cli.md and stable-entry.md against the catalogue; the first section and the whole of stable-entry.md are removed, and the codes and words they listed left the catalogue with them."
+covered_by = "The outcome guard: G7 holds the enums that keep R-15b words (install_guard's player_holds, release_check's selection_schema_mismatch) to their catalogue vocabularies, and G1 every registry entry to its fragment; the four tests of gate_r15b_release stay in the same apps.toml row."

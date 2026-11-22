@@ -81,10 +81,8 @@ mod gate_r15a_ui_edges;
 // Test-only: Workflow #429 R-0b, this build's `runtime-client` floor against consoles at 2, 3, 4.
 #[cfg(test)]
 mod gate_429_r0b_pairing;
-// Test-only: Workflow #429 R-15b, the release reader's UI side (A.4 b) and the registry of the
-// contract's codes and words.
-#[cfg(test)]
-mod gate_r15b_registry;
+// Test-only: Workflow #429 R-15b, the release reader's UI side (A.4 b). Its registry test of the
+// contract's codes and words left with the A/B layout (Workflow #429 AB-1, 0.12.78).
 #[cfg(test)]
 mod gate_r15b_release;
 // Test-only: Workflow #434 LAB-3, the register's named tests of the rescue module and the

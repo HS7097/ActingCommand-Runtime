@@ -810,13 +810,11 @@ crate::outcome_codes! {
         InstallConfigGenerationMismatch => "install_config_generation_mismatch": error / none,
         InstallProviderGenerationMismatch => "install_provider_generation_mismatch": error / none,
         InstallSelectionSizeInvalid => "install_selection_size_invalid": error / none,
-        // Workflow #429 R-15b (since 0.12.35): the refusals of `InstallSelectionV2` and
-        // `InstallSlotDocument` (contracts/install-cli.md, "The A/B layout").
-        InstallSelectionV2Invalid => "install_selection_v2_invalid": error / none,
-        InstallSlotDocumentMismatch => "install_slot_document_mismatch": error / none,
-        InstallMemberIdentityInvalid => "install_member_identity_invalid": error / none,
-        InstallMemberPairingMismatch => "install_member_pairing_mismatch": error / none,
-        InstallSlotDocumentInvalid => "install_slot_document_invalid": error / none,
+        // Workflow #429 AB-1 (0.12.78): `install_selection_v2_invalid`,
+        // `install_slot_document_mismatch`, `install_member_identity_invalid`,
+        // `install_member_pairing_mismatch` and `install_slot_document_invalid`, the refusals of the
+        // A/B layout's selection v2 and slot document, left the catalogue with them (pending, held
+        // by no release).
         // Workflow #434 LAB-6S4a: `install_previous_transition_mismatch`,
         // `invalid_install_transition_status`, `invalid_install_timeout` and
         // `invalid_install_transition_id` are retired in 0.12.63 with the installer's transition
