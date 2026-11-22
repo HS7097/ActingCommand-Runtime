@@ -10,8 +10,9 @@
 //! The reader's checks ([`Check::parts`]), the business part the rules give
 //! ([`rules_parts`], the writer's `--refresh`), the differences from the rules
 //! ([`part_differences`]) and the values file (`--values`, [`read_values_file`]) are here; the
-//! envelope, the display part and the merge are the parent's, one rule for both versions. No
-//! Runtime component reads the file.
+//! envelope, the display part and the merge are the parent's, one rule for both versions. Since
+//! CV-2 (below) the Runtime's composer reads the file of a switched root; of any other root no
+//! Runtime component reads it.
 //!
 //! Workflow #477 CV-2 (register §1.508; `contracts/standard-pack-schedule.md`, "`requires`"): a
 //! `schedule.json` whose `requires` names `catalog_business` writes none of its rules' business

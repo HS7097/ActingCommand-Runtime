@@ -60,6 +60,10 @@
 //! only when the two compositions are byte for byte the same (the rules digest, the catalog hash,
 //! who wrote each value) and no rule differs from the part that would stand for it; otherwise it
 //! writes nothing and is refused with every difference, rule by rule, by the catalog's own words.
+//! Fix round 1 (the coordinator's ruling): on a switched root the writer never takes a business part
+//! from the rules, which write none: `--refresh`, a missing file and a file of version 1 are refused
+//! `validation_failed` ([`switched_refused`]: the file is restored, not rebuilt), and a new entry
+//! gets its display only.
 
 use crate::standard_pack_check::{catalog_refused, read_bounded, root_invalid};
 use crate::standard_pack_schedule::compose_per_server;
@@ -77,12 +81,13 @@ use actingcommand_contract::{
     CatalogMergeRefusal, CatalogScheduleDifference, CatalogScheduleFacts, CatalogValuesFile,
     DeclaredCapabilities, IrreversiblePackages, LabError, LabErrorClass, LabResult,
     SCHEDULE_RULE_BUSINESS_MEMBERS, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
-    StandardPackRootBytes, StandardPackRootIssue, catalog_display_outcome,
-    merge_standard_pack_catalog, parse_standard_pack_catalog_with, parse_standard_pack_schedule,
-    read_standard_pack_root, retired_ui_outcome, standard_pack_catalog_cut_differences,
+    STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem,
+    StandardPackRegistry, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    catalog_display_outcome, merge_standard_pack_catalog, parse_standard_pack_catalog_with,
+    parse_standard_pack_schedule, read_standard_pack_root, retired_ui_outcome,
+    standard_pack_catalog_cut_differences,
 };
 use actingcommand_policy::{
     CATALOG_BUSINESS_SUBSYSTEM, StandardPackComposeFailure, standard_pack_schedule_takes_catalog,
@@ -131,14 +136,36 @@ pub fn write_standard_pack_catalog(
             .any(|name| name == CATALOG_BUSINESS_SUBSYSTEM)
     });
     if cut && !request.refresh.is_empty() {
-        return Err(LabError::usage(format!(
-            "--refresh: {} names {CATALOG_BUSINESS_SUBSYSTEM}, so its rules write no business part \
-             to bring an entry back to; the entry in {STANDARD_PACK_CATALOG_FILE} is the only copy",
-            schedule_path.display()
-        )));
+        return Err(switched_refused(
+            &schedule_path,
+            "--refresh would bring entries back to them",
+        ));
     }
     let path = root.join(STANDARD_PACK_CATALOG_FILE);
     let existing = read_bounded(&path)?;
+    // CV-2 fix round 1 (the coordinator's ruling): nor is a missing file made, or one of version 1
+    // converted or brought up to date, from them; a new entry of the file of version 2 gets its
+    // display only (`CatalogEdits::switched`).
+    if cut {
+        match existing.as_deref() {
+            None => {
+                return Err(switched_refused(
+                    &schedule_path,
+                    &format!("{} is missing and would be made of them", path.display()),
+                ));
+            }
+            Some(bytes) if !version_2(bytes) => {
+                return Err(switched_refused(
+                    &schedule_path,
+                    &format!(
+                        "{} is not of version 2 and would be written of them",
+                        path.display()
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
     let retired_path = root.join(STANDARD_PACK_RETIRED_UI_FILE);
     let retired = read_bounded(&retired_path)?;
     // A leftover `ui.json` that is no JSON gives no display; its warning names it either way.
@@ -168,6 +195,7 @@ pub fn write_standard_pack_catalog(
             path: path.as_path(),
             bytes: bytes.as_slice(),
         }),
+        switched: cut,
     };
     let merge = merge_standard_pack_catalog(
         &game,
@@ -296,6 +324,29 @@ fn writable_root(root: &Path) -> LabResult<PathBuf> {
         ));
     }
     Ok(root)
+}
+
+/// Workflow #477 CV-2 fix round 1 (register §1.508; the coordinator's ruling): the refusal of a
+/// line that would take a business part from the rules of a switched root, whose `schedule.json`
+/// (`schedule_path`) names `catalog_business` and whose rules write none (`what`: what the line
+/// would do with them): `validation_failed`, nothing written. The root's business part lives in
+/// its catalog alone, which is restored (from version control, a build's zip or a backup), never
+/// rebuilt from the rules.
+fn switched_refused(schedule_path: &Path, what: &str) -> LabError {
+    LabError::usage(format!(
+        "the root is switched: {} names {CATALOG_BUSINESS_SUBSYSTEM}, so its rules write no \
+         business part and {what}; its business part lives in {STANDARD_PACK_CATALOG_FILE} alone \
+         and must be restored, not rebuilt",
+        schedule_path.display()
+    ))
+}
+
+/// CV-2 fix round 1: whether the catalog `bytes` declares version 2.
+fn version_2(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(bytes).is_ok_and(|document| {
+        document.get("schema_version").and_then(Value::as_str)
+            == Some(STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2)
+    })
 }
 
 /// The answer's `status` of a cut a root has had already (its `schedule.json` names

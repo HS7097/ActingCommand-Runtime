@@ -46083,7 +46083,8 @@ subsystem, and the composer does the rest:
 | check-config's preview (`preview_standard_pack_schedule`) | `read_schedule_game`, `composer_inputs` |
 | check-config's composition and `actingd suspended` (`compose_configured_standard_packs`) | `read_schedule_game`, `composer_inputs` |
 | `actingctl packs`, `ac_packs` (`lab-ops` `composed_installation`) | `schedule_game` reads the catalogue of a switched file |
-| `standard-pack check`, `package bundle --schedule`, the build's `bundle` step and its check of the installed root, `standard-pack adopt`'s check (`report_schedule` → `compose_check`) | `switched_catalog`: the `pack-catalog.json` beside the `schedule.json` path |
+| `standard-pack check`, `package bundle --schedule` (the `bundle` step of `standard-pack build` and of `resource verify` among them), `standard-pack adopt`'s check (`report_schedule` → `compose_check`) | `switched_catalog`: the `pack-catalog.json` beside the `schedule.json` path (adopt's check tree holds none: below) |
+| the check of the root the `bundle` step installs (`check_standard_pack_root` of `installed/<game>/`) | the catalogue the zip carries: `standard-pack build` carries the repository's always (PC-1), `resource verify` (fix round 1) when its `schedule.json` names `catalog_business` (`switched_root` → `carry_catalog`, and its `interfaces.json` then declares the file's revision too) |
 | `standard-pack ready`, `standard-pack status`, `place --plan`'s readiness (`Rules::of` → `compose_per_server`) | `switched_catalog`, then the composer with the live build's subsystems for I4 |
 | `standard-pack compose` (`read_game_root`) | `switched_catalog` |
 | the goal check (`goal_issues`: `standard-pack check`, `package bundle --goals`, the build's goals step) | `take_catalog_business` itself, so a `tier` entry's rule has its fixed value: the root's file, the one beside `--schedule`, the checkout's beside `goals.json` |
@@ -46126,8 +46127,24 @@ compiled task keeps). Otherwise nothing is written and the line is refused `vali
 `details.differences` and `details.warnings` (`standard_pack_catalog_schedule_differs` each). A root
 already switched is answered as done, `unchanged`. My stricter rule than the ruling's: equal
 compositions with a held rule that differs are refused too, since the held rule would run otherwise
-once unheld. On a switched root the writer refuses `--refresh` (its rules hold nothing to copy) and
-gives no difference, and `standard-pack check` compares nothing.
+once unheld. On a switched root `standard-pack check` compares nothing.
+
+**The writer on a switched root** (fix round 1, the coordinator's ruling on the independent
+review's second point: the writer never derives a business part from the rules, which write none).
+`--refresh`, a line on a root without `pack-catalog.json` (the composer's `catalog_missing`) and a
+line on a file that is not of version 2 (`catalog_version_1`), with `--schema-version 2` or
+without, are refused `validation_failed` before anything is written (`switched_refused`: the
+message names the root switched, says what the line would take from the rules, and that the
+business part must be restored, not rebuilt); a new entry of a version 2 file gets its display only
+(`CatalogEdits::switched`: `merge_standard_pack_catalog` writes no business part for it, which is
+none, as for a package without an entry); the writer gives no difference. After the cut-over a
+repository gives a package its business part by editing its entry (effects, per-rule parts), which
+`standard-pack check` reads by the one reader, and by `--values` (the fixed value and the marks);
+`pack-catalog.md`, "Who writes it". `standard-pack adopt` is refused on a switched root, read from
+the code, not run: its check tree carries no catalogue, so a first adoption (its rule writes
+`consumes` and `produces`) is `adopt_refused` (`rule_refused`) caused by `standard_pack_root_invalid`
+`catalog_business_member`, and a re-adoption that names no business member
+`standard_pack_root_invalid` `catalog_missing`.
 
 **Tests** (policy gate row "#477 CV-2", host gate row "#477 CV-2", apps gate row "#477 CV-2").
 
@@ -46145,6 +46162,11 @@ gives no difference, and `standard-pack check` compares nothing.
 | `cv2_cut_equal_results_write_the_file_and_a_second_line_answers_done` (6) | Written, the six members off, `catalog_business` named; `standard-pack compose` of the result at the cut's digest; a second line `unchanged` |
 | `cv2_cut_a_difference_writes_nothing_and_names_the_rule` (6) | `validation_failed`, `quantity_differs` naming the rule, nothing written; no catalogue `catalog_missing` |
 | `cv2_cut_plan_writes_nothing` (6) | `planned`, the switched document, nothing written |
+| `cv2_t1_effects_written_in_the_middle_of_a_rule_compose_the_same` (1, fix round 1) | Effects right after `feedback_stop`: the same compiled catalogue, hash, digest, manifest, coverage, provenance, followers, pending rules and consumption facts, the tasks document member for member; t1 compares the last three too |
+| `cv2_fr1_the_writer_makes_no_catalog_for_a_switched_root` (fix round 1) | Refused `validation_failed`, switched, restored not rebuilt, with and without `--schema-version 2`, nothing written |
+| `cv2_fr1_the_writer_converts_no_version_1_catalog_of_a_switched_root` (fix round 1) | The same for a version 1 file, its bytes kept |
+| `cv2_fr1_a_new_package_of_a_switched_root_gets_its_display_only` (fix round 1) | `{package_id}` alone, the other entries as written |
+| `cv2_resource_verify_carries_a_switched_roots_catalog` (`apps/actinglab`, `gate_464_p2`; fix round 1) | Every step passed, the catalogue in the zip byte for byte, `package` [24, 24] |
 
 Touched (8), each only for the new member or parameter: every initializer of `StandardPackGameFiles`
 (`catalog: None`) in the policy gates `gate_386_cf4`, `gate_386_cf5`, `gate_411_p19`,
@@ -46159,8 +46181,9 @@ not read); every reader of such a root reads no catalogue it did not read before
 the policy crate's `resource_targets.rs` (another slice's); every declared interface range (no
 `package` revision: a feature of `schedule.json` goes by `requires`); the composition record's
 shape. `standard-pack adopt` still writes a rule's value into `schedule.json`: on a switched root
-its own check then refuses the rule (`catalog_business_member`); writing the adoption's entry is a
-later slice's.
+its own check then refuses it (above, "The writer on a switched root"); writing the adoption's entry
+is a later slice's. `resource verify` of a repository whose `schedule.json` does not name
+`catalog_business` writes every byte it wrote before.
 
 **At deploy.** Nothing changes for an installation until a root is switched: no repository's
 `schedule.json` names `catalog_business` before it runs the cut. Once a switched root is active, a

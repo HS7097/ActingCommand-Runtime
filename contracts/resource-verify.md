@@ -289,7 +289,12 @@ actinglab [--json] standard-pack build --repo <checkout> --source-repository <ow
     the installed root's check's warnings. A repository that still holds `ui.json` gets the
     `bundle` step's warning `standard_pack_ui_retired`, and the zip never carries that file.
     `package bundle` still has no flag for the catalog: the build adds it to the zip, as it adds
-    the tables;
+    the tables. Workflow #477 CV-2 fix round 1 (register §1.508): `resource verify` carries it
+    too, by the same rule, when the repository's `schedule.json` names `catalog_business` (its
+    rules take their business part from the file, and the installed root's check composes them
+    with it), and its `interfaces.json` then declares the highest of its 3, 10 or 14 and the
+    file's revision (24 for version 2); a repository whose `schedule.json` does not name it is
+    verified as before, byte for byte;
   - `interfaces.json` declares the `package` revision the zip's content needs ("The `package`
     revision" below), not resource verify's 3, 10 or (Workflow #455 GOALS-PACK-1) 14.
 - **Clean, and bound to its commit.** The `checkout` precondition refuses a tree with a change, an

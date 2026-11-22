@@ -826,7 +826,11 @@ naming this file.
   rule differs from its part, else it is refused (`validation_failed`) with each difference rule
   by rule in `details.differences` and nothing is written; `status` `unchanged` for a root cut
   over already. Bring every entry up to its rules (`refresh`) first. Once a root is cut over, its
-  business part is edited in the catalog only (`refresh` no longer has rules to copy from).
+  business part is edited in the catalog only (effects in the file, `values` for the value and the
+  marks): the tool takes nothing from the rules, so `refresh`, a root without the file and a file
+  of version 1 are refused (`validation_failed`: restore the file, do not rebuild it), and a new
+  package's entry gets its display only; `ac_standard_pack_adopt` is refused on such a root until a
+  later slice writes the adopted entry.
 - **Regression cases** (#463 RC-1, 0.12.69; `contracts/resource-regression-case.md`).
   `ac_resource_regression` (`repo`, `game`, `case`, `package_id`) runs the regression cases of a
   resource repository's checkout offline, through a child: each case `regression/<game>/<case>/`

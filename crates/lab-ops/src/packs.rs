@@ -962,7 +962,8 @@ impl Rows {
     /// then listed as without the file. Each display defect of a file that reads is
     /// `standard_pack_catalog_display_invalid`. A root that still holds `ui.json` gets one
     /// `standard_pack_ui_retired` (the game, the file's path): nothing reads that file. No Runtime
-    /// component reads either file.
+    /// component reads `ui.json`; Workflow #477 CV-2: the Runtime's composer reads
+    /// `pack-catalog.json` of a root whose `schedule.json` names `catalog_business`, of no other.
     fn game_catalog(
         &mut self,
         directory: &Path,

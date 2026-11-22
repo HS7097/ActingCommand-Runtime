@@ -497,9 +497,11 @@ every entry of its version 2 catalog up to its rules (`standard-pack catalog --r
 composes the root as it stands and switched and writes the switched `schedule.json` (its rules
 without their business members, `catalog_business` in `requires`) only when the two are byte for
 byte the same and no rule differs from its part. From then on the root's business part, its effects,
-values and marks, is written in `pack-catalog.json` alone (`--values` for the model's values and
-marks, `--refresh` refused), and the composer, in the tools and the Runtime alike, reads it there
-("`requires`").
+values and marks, is written in `pack-catalog.json` alone (effects by editing the entry, `--values`
+for the model's values and marks; the writer takes nothing from the rules: `--refresh`, a missing
+file and one of version 1 refused, a new entry its display only, fix round 1; `standard-pack adopt`
+refused until a later slice writes the adopted entry: [pack-catalog.md](pack-catalog.md), "Who
+writes it"), and the composer, in the tools and the Runtime alike, reads it there ("`requires`").
 
 ## Composition
 

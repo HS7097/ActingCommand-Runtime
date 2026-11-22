@@ -10,12 +10,18 @@
 // - a rule whose part says otherwise: nothing is written and the refusal names the rule, by the
 //   catalog's words; a root without a catalog is refused at it, `catalog_missing` (2);
 // - `--plan`: nothing is written, the switched file is answered (3).
+// Fix round 1 (the coordinator's ruling on the independent review's second point): on a switched
+// root the catalog's writer never takes a business part from the rules, which write none:
+// - a missing catalog is not made, `validation_failed`, the root named switched (4);
+// - a catalog of version 1 is neither converted nor brought up to date (5);
+// - a new package's entry holds its display only, the other entries as written (6).
 // A made-up game `neutral`, server `test`; every package, pool, rule and key is a placeholder. No
 // clock is read and nothing sleeps.
 
 use crate::{
-    StandardPackCatalogCutRequest, StandardPackCatalogCutResponse, StandardPackComposeRequest,
-    compose_standard_packs, cut_standard_pack_catalog,
+    StandardPackCatalogCutRequest, StandardPackCatalogCutResponse, StandardPackCatalogRequest,
+    StandardPackCatalogResponse, StandardPackComposeRequest, compose_standard_packs,
+    cut_standard_pack_catalog, write_standard_pack_catalog,
 };
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_policy::{BENEFIT_FIXED_VALUE_SUBSYSTEM, CATALOG_BUSINESS_SUBSYSTEM};
@@ -314,4 +320,118 @@ fn cv2_cut_plan_writes_nothing() {
         "{document}"
     );
     assert_eq!(schedule_bytes(&root), before);
+}
+
+/// A third package, run on a root cut over by a rule of its own, without an entry in the catalog.
+const NEW: &str = "neutral.new";
+
+/// A plain line of `standard-pack catalog` on `root`, with `--schema-version 2` when `version_2`.
+fn write(root: &Path, version_2: bool) -> LabResult<StandardPackCatalogResponse> {
+    write_standard_pack_catalog(StandardPackCatalogRequest {
+        root: root.to_owned(),
+        plan: false,
+        refresh: Vec::new(),
+        displays: None,
+        values: None,
+        version_2,
+    })
+}
+
+/// The root of [`game_root`] with its version 2 catalog, cut over by `--cut`.
+fn switched_root() -> (TempDir, PathBuf) {
+    let (temp, root) = game_root(Some(&catalog(1)));
+    assert_eq!(done(&root, false).status, "written");
+    (temp, root)
+}
+
+/// `error` is the writer's refusal of a line on a switched root: `validation_failed`, the root
+/// named switched and its business part to be restored, not rebuilt.
+fn refused_as_switched(error: &LabError) {
+    assert_eq!(error.code, "validation_failed", "{}", error.message);
+    assert!(
+        error.message.contains("the root is switched")
+            && error.message.contains("restored, not rebuilt"),
+        "{}",
+        error.message
+    );
+}
+
+/// Fix round 1 (4): a switched root whose catalog is gone (as it answers `catalog_missing`) does
+/// not get one made of its rules, which write no business part: the line is refused, with
+/// `--schema-version 2` too, and nothing is written.
+#[test]
+fn cv2_fr1_the_writer_makes_no_catalog_for_a_switched_root() {
+    let (_temp, root) = switched_root();
+    let file = root.join("pack-catalog.json");
+    fs::remove_file(&file).expect("the catalog removed");
+    for version_2 in [false, true] {
+        let error = write(&root, version_2).expect_err("the line is refused");
+        refused_as_switched(&error);
+        assert!(!file.exists(), "nothing is written");
+    }
+}
+
+/// Fix round 1 (5): a switched root whose catalog is of version 1 (as it answers
+/// `catalog_version_1`) has it neither converted by `--schema-version 2` nor brought up to date
+/// without it: each line is refused and the file keeps its bytes.
+#[test]
+fn cv2_fr1_the_writer_converts_no_version_1_catalog_of_a_switched_root() {
+    let (_temp, root) = switched_root();
+    let file = root.join("pack-catalog.json");
+    write_json(
+        &file,
+        &json!({
+            "schema_version": "actingcommand.pack-catalog.v1",
+            "game": GAME,
+            "packs": [
+                {"package_id": COLLECT, "consumes": [], "produces": [effect("produce", 2)]},
+                {"package_id": SPEND, "consumes": [effect("consume", 1)], "produces": []}
+            ]
+        }),
+    );
+    let before = fs::read(&file).expect("the file");
+    for version_2 in [true, false] {
+        let error = write(&root, version_2).expect_err("the line is refused");
+        refused_as_switched(&error);
+        assert_eq!(fs::read(&file).expect("the file"), before);
+    }
+}
+
+/// Fix round 1 (6): a package new to a switched root (in `bundle.json`, run by a rule that writes
+/// no business member) gets an entry of its display only, no business part, which is none, as for
+/// a package without an entry; the entries there are kept as written.
+#[test]
+fn cv2_fr1_a_new_package_of_a_switched_root_gets_its_display_only() {
+    let (_temp, root) = switched_root();
+    let bundle_path = root.join("bundle.json");
+    let mut bundle = read_json(&bundle_path);
+    bundle["packs"]
+        .as_array_mut()
+        .expect("the packs")
+        .push(json!({
+            "package_id": NEW, "server": SERVER, "entry_task_id": "task",
+            "path": format!("packs/{NEW}"), "file_count": 3, "byte_count": 64
+        }));
+    write_json(&bundle_path, &bundle);
+    let schedule_path = root.join("schedule.json");
+    let mut schedule = read_json(&schedule_path);
+    let mut new_rule = rule(NEW, Vec::new(), Vec::new());
+    for member in BUSINESS {
+        new_rule.as_object_mut().expect("a rule").remove(member);
+    }
+    schedule["rules"]
+        .as_array_mut()
+        .expect("the rules")
+        .push(new_rule);
+    write_json(&schedule_path, &schedule);
+    let file = root.join("pack-catalog.json");
+    let before = read_json(&file);
+    let answer = write(&root, false)
+        .unwrap_or_else(|error| panic!("the line: {}: {}", error.code, error.message));
+    assert_eq!(answer.status, "written");
+    assert_eq!(answer.added, [NEW]);
+    let after = read_json(&file);
+    assert_eq!(after["packs"][0], before["packs"][0]);
+    assert_eq!(after["packs"][1], before["packs"][1]);
+    assert_eq!(after["packs"][2], json!({"package_id": NEW}));
 }

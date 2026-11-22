@@ -358,6 +358,10 @@ fn cv2_t1_a_switched_root_composes_to_the_bytes_of_its_rules() {
     assert_eq!(before.manifest(), after.manifest());
     assert_eq!(before.benefit_coverage(), after.benefit_coverage());
     assert_eq!(before.benefit_provenance(), after.benefit_provenance());
+    // Fix round 1 (the independent review): and what the composer derives beside them.
+    assert_eq!(before.benefit_followers(), after.benefit_followers());
+    assert_eq!(before.benefit_pending(), after.benefit_pending());
+    assert_eq!(before.consumption_facts(), after.consumption_facts());
 
     // What the catalog gave each rule, as the composed tasks hold it.
     let tasks = &after.compiled().catalog().tasks.tasks;
@@ -378,6 +382,70 @@ fn cv2_t1_a_switched_root_composes_to_the_bytes_of_its_rules() {
     assert_eq!(task(SHARED_B).benefit_fixed_value_milli, None);
     assert!(task(BARE).consumes.is_empty() && task(BARE).produces.is_empty());
     assert_eq!(task(BARE).benefit_fixed_value_milli, None);
+}
+
+/// Test 1, fix round 1 (the independent review): rules that write their effects in the middle, right
+/// after `feedback_stop` (where `standard-pack adopt` writes them), their value and mark after the
+/// other members: the switched root, whose rules take the part at their end, composes to the same
+/// compiled catalog, hash, rules digest, manifest, coverage, provenance, followers, pending rules
+/// and consumption facts, and the same tasks document member for member, in another member order
+/// (the sources keep the order they are given; nothing decides by it).
+#[test]
+fn cv2_t1_effects_written_in_the_middle_of_a_rule_compose_the_same() {
+    let (own, shared_a, shared_own) = (own_part(), shared_a_part(), shared_own_part());
+    let none = Part::default();
+    let middle = |id: &str, package: &str, part: &Part| {
+        let mut rule = Map::new();
+        for (name, value) in bare_rule(id, package) {
+            let after_stop = name == "feedback_stop";
+            rule.insert(name, value);
+            if after_stop {
+                rule.insert("consumes".to_owned(), Value::Array(part.consumes.clone()));
+                rule.insert("produces".to_owned(), Value::Array(part.produces.clone()));
+            }
+        }
+        if let Some((milli, model)) = part.value {
+            rule.insert("fixed_value_milli".to_owned(), json!(milli));
+            if model {
+                rule.insert("fixed_value_origin".to_owned(), json!("model"));
+            }
+        }
+        if part.limited {
+            rule.insert("limited".to_owned(), json!(true));
+        }
+        Value::Object(rule)
+    };
+    let written = schedule(
+        vec![
+            middle(OWN, OWN, &own),
+            middle(SHARED_A, SHARED, &shared_a),
+            middle(SHARED_B, SHARED, &shared_own),
+            middle(BARE, BARE, &none),
+        ],
+        &WRITTEN,
+    );
+    let switched = schedule(rules(true, &own, &shared_a, &shared_own), &TAKEN);
+    let catalog = catalog(&own, &shared_a, &shared_own);
+    let before =
+        compose(&written, None).unwrap_or_else(|failure| panic!("the rules compose: {failure}"));
+    let after = compose(&switched, Some(&catalog))
+        .unwrap_or_else(|failure| panic!("the catalog's parts compose: {failure}"));
+    assert_eq!(before.compiled(), after.compiled());
+    assert_eq!(
+        before.compiled().catalog_hash(),
+        after.compiled().catalog_hash()
+    );
+    assert_eq!(before.rules_digest(), after.rules_digest());
+    assert_eq!(before.manifest(), after.manifest());
+    assert_eq!(before.benefit_coverage(), after.benefit_coverage());
+    assert_eq!(before.benefit_provenance(), after.benefit_provenance());
+    assert_eq!(before.benefit_followers(), after.benefit_followers());
+    assert_eq!(before.benefit_pending(), after.benefit_pending());
+    assert_eq!(before.consumption_facts(), after.consumption_facts());
+    let tasks = |composition: &StandardPackComposition| {
+        serde_json::from_slice::<Value>(&composition.sources().tasks.bytes).expect("tasks JSON")
+    };
+    assert_eq!(tasks(&before), tasks(&after), "member for member");
 }
 
 /// Test 2 (ruling 1): a switched rule that writes one of the six members is refused at it in

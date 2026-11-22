@@ -306,9 +306,11 @@ such a root gives the composer the root's file, read beside `schedule.json`, and
 each rule's business part from it by the one reader below (`take_catalog_business` of the contract
 crate): the Runtime's scheduler workbench, which marks the file with the root's and keeps it with
 the generation it composed, check-config and `actingd suspended`; and `standard-pack check`,
-`compose`, `ready`, `status`, the build's `bundle` step and the check of the root it installs,
-`package bundle --schedule` (the file beside the `schedule.json` it names), `actingctl packs` and
-`ac_packs`. For any other root the rest of this section holds as it was:
+`compose`, `ready`, `status`, the `bundle` step of `standard-pack build` and of `resource verify`
+and the check of the root each installs (fix round 1: `resource verify` carries the file into its
+zip, as the build does, for a switched root only, and its `interfaces.json` then declares the
+file's revision too), `package bundle --schedule` (the file beside the `schedule.json` it names),
+`actingctl packs` and `ac_packs`. For any other root the rest of this section holds as it was:
 
 None of the Runtime's components: its root reader, its startup and run preparation, the policy
 crate, the scheduler workbench and check-config never open it, so the file never changes a run,
@@ -560,10 +562,23 @@ Workflow #477 CV-2 (0.12.80; register §1.508; the coordinator's ruling 7; the t
   in file order) and `document` (with `--plan`). A root whose `schedule.json` names
   `catalog_business` already is answered `unchanged`, done, and nothing more is read. Under the
   global `--dry-run` only `--plan` runs.
-- **A root cut over** has its business part here alone: the writer refuses `--refresh` on it
-  (`validation_failed`; its rules hold nothing to bring an entry back to) and gives no difference;
-  a new entry gets an empty part, as its rules give it. Edit the business part through the file's
-  writer (`--values` for the value and the marks).
+- **A root cut over** has its business part here alone, and the writer never takes one from its
+  rules, which write none (fix round 1, the coordinator's ruling): `--refresh`, a line on a root
+  without the file (which the composer answers `catalog_missing`) and a line on a file of version 1
+  (`catalog_version_1`), with `--schema-version 2` or without, are each refused `validation_failed`
+  before anything is written, the message naming the root switched and its business part to be
+  restored (from version control, a build's zip or a backup), not rebuilt; a new entry (a package
+  new to the registry) gets its display only, no business part, which is none, as for a package
+  without an entry; and the writer gives no difference.
+- **Giving a package its business part after the cut-over**: its effects (`consumes`, `produces`,
+  a per-rule part's `rules`) are written into its entry by editing the file, which `standard-pack
+  check` (and the build, `place` and the composer) then reads by the one reader; its fixed value and
+  its marks by `--values` (CV-1). `standard-pack adopt` does not write the catalog yet (writing an
+  adopted package's entry is a later slice's) and is refused on a switched root, by its check tree,
+  which carries no catalog: a first adoption, whose rule writes `consumes` and `produces`, as
+  `adopt_refused` (`adopt_problem` `rule_refused`) caused by `standard_pack_root_invalid`
+  `catalog_business_member` at the rule's member; a re-adoption that names no business member as
+  `standard_pack_root_invalid` `catalog_missing` at the check tree's `pack-catalog.json`.
 
 ## `ui.json` is retired
 
@@ -619,6 +634,7 @@ members a client read are where they were.
   business members (the old reading).
 - **A business part per value of a package variable**: each value will be a rule, so it is a
   per-rule part of version 2's shape; nothing more is added for it.
-- **The adoption's entries**: `standard-pack adopt` writes the entry of the package it adopts.
+- **The adoption's entries**: `standard-pack adopt` writes the entry of the package it adopts (on
+  a switched root it is refused until then: "Who writes it").
 - **The model writer's entries**: the model's export writes the values and the marks through
   `--values` (CV-1), and the quantities.

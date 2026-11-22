@@ -776,6 +776,103 @@ fn p2_pack_catalog_is_carried_and_one_wrong_in_its_business_part_fails_the_build
     );
 }
 
+// Workflow #477 CV-2 fix round 1 (register §1.508; the independent review's first point): a commit
+// whose `schedule.json` names `catalog_business` (its two rules write no business member) and
+// whose version 2 `pack-catalog.json` gives each package its production passes `resource verify`:
+// the zip carries the catalog byte for byte, as `standard-pack build`'s does, so that the check of
+// the installed root composes the rules with it (without it the check answered `catalog_missing`),
+// and the zip declares `package` [24, 24], the catalog's revision.
+#[test]
+fn cv2_resource_verify_carries_a_switched_roots_catalog() {
+    let fixture = Fixture::new();
+    let pool = "pool.neutral.switched";
+    let rule = |package_id: &str| {
+        let id = format!("{package_id}.rule");
+        json!({
+            "id": id.as_str(),
+            "package_id": package_id,
+            "priority": 100,
+            "trigger": {
+                "kind": "clock",
+                "schedule": {
+                    "kind": "interval",
+                    "clock_source": {"kind": "local"},
+                    "every_ms": 3600000,
+                    "anchor_ms": 0
+                }
+            },
+            "feedback_stop": {
+                "kind": "outcome",
+                "task_id": id.as_str(),
+                "outcome_key": "completed",
+                "comparison": "eq",
+                "value": {"type": "boolean", "value": true}
+            },
+            "on_failure": {
+                "action": "continue",
+                "retry_limit": 2,
+                "retry_backoff_ms": 30000,
+                "escalation_threshold": 3
+            },
+            "sensitive": false,
+            "next_run_clamp_ms": 86400000,
+            "yield_points": [],
+            "expected_duration_ms": 60000,
+            "cooldown_ms": 1000,
+            "load_profile": {"kind": "light"},
+            "strategic_weight_milli": 1000
+        })
+    };
+    let entry = |package_id: &str| {
+        json!({
+            "package_id": package_id,
+            "consumes": [],
+            "produces": [{
+                "pool_id": pool,
+                "direction": "produce",
+                "amount": 1,
+                "observation_source": "scan_verified",
+                "confidence_milli": 1000
+            }]
+        })
+    };
+    fixture.write_json(
+        "schedule.json",
+        &json!({
+            "schema_version": "actingcommand.schedule.v1",
+            "requires": ["catalog_business"],
+            "rules": [rule(PACK_A), rule(PACK_B)],
+            "pools": [{
+                "id": pool,
+                "capacity": 1000,
+                "projection": {"kind": "none"},
+                "observation": {"kind": "fact", "fact_key": "resource.neutral.switched"},
+                "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 500},
+                "group_delay": {"minimum_delay_ms": 60000, "maximum_delay_ms": 300000}
+            }],
+            "activity": [],
+            "timeline": [],
+            "held": []
+        }),
+    );
+    fixture.write_json(
+        "pack-catalog.json",
+        &json!({
+            "schema_version": "actingcommand.pack-catalog.v2",
+            "game": "neutral",
+            "packs": [entry(PACK_A), entry(PACK_B)]
+        }),
+    );
+    let catalog = fs::read(fixture.repo().join("pack-catalog.json")).unwrap();
+    let head = fixture.commit("a root cut over");
+    let (verified, report) = fixture.verify("switched");
+    assert_eq!(verified.exit_code(), 0, "{}", verified.envelope_json());
+    assert_eq!(step(&report, "bundle")["counts"]["package_revision"], 24);
+    let entries = zip_entries(&fixture.work("switched").join("out").join(zip_name(&head)));
+    assert_eq!(entries.get("pack-catalog.json"), Some(&catalog));
+    assert_eq!(declared_package(&entries), json!([24, 24]));
+}
+
 // Fix round 1, the review's first and second points: one test per row of the revision table
 // (`apps/actinglab/src/resource_verify/revision.rs`; contracts/resource-verify.md, "The `package`
 // revision"). Each builds the zip entries `content_revision` reads: a base whose content needs

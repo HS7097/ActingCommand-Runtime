@@ -50,6 +50,12 @@
 //! carried); the zip names it among its root files (`build.json`'s `root_files`), the installed
 //! root's check reads it, and its SHA-256 is the placement's item digest. `ui.json` is carried no
 //! more: a repository that still holds one gets the warning `standard_pack_ui_retired`.
+//!
+//! Workflow #477 CV-2 fix round 1 (register §1.508): `resource verify` carries the file too, as
+//! the build does, when the repository's `schedule.json` names `catalog_business` (its rules take
+//! their business part from the file, and the installed root's check composes them with it), and
+//! its `interfaces.json` then declares the highest of what its root carries and the file's
+//! revision. A repository whose `schedule.json` does not name it is verified as before.
 
 use super::revision::content_revision;
 use super::steps::{
@@ -68,9 +74,10 @@ use actingcommand_contract::{
     NOTICES_PACKAGE_REVISION, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry,
-    notice_relative_path, parse_standard_pack_catalog_with, read_standard_pack_tables,
-    retired_ui_outcome,
+    catalog_package_revision, notice_relative_path, parse_standard_pack_catalog_with,
+    read_standard_pack_tables, retired_ui_outcome,
 };
+use actingcommand_policy::standard_pack_schedule_takes_catalog;
 use actingcommand_resource_tooling::{
     BundleGoalsRequest, BundleGoalsVerdict, PackageBundleRequest, ResourceToolingCode,
     StandardPackCheckRequest, StandardPackNotices, StandardPackRootFiles, check_bundle_goals,
@@ -314,6 +321,10 @@ fn lay_out(
     if inputs.steps_for == StepsFor::Build {
         carry_tables(inputs.repo, &game, &mut entries, run)?;
         carried_catalog = carry_catalog(inputs.repo, &game, &mut entries, run)?;
+    } else if switched_root(inputs.repo)? {
+        // Workflow #477 CV-2 fix round 1: `resource verify` carries the catalog of a root whose
+        // rules take their business part from it, which the installed root's check composes with.
+        carried_catalog = carry_catalog(inputs.repo, &game, &mut entries, run)?;
     }
     // Workflow #444 NOTICES-3: what the check of the installed root must count of the notices
     // directory the zip carries; nothing without it.
@@ -329,10 +340,16 @@ fn lay_out(
         }
     });
     // Workflow #464 P2: `standard-pack build` declares the revision its content needs; Workflow
-    // #455 GOALS-PACK-1: `resource verify` the highest of what its root carries.
+    // #455 GOALS-PACK-1: `resource verify` the highest of what its root carries (Workflow #477 CV-2
+    // fix round 1: a switched root's catalog's too).
     let revision = match inputs.steps_for {
         StepsFor::Verify => {
-            package_revision(notices, root_files.contains(&STANDARD_PACK_GOALS_FILE))
+            let carried = package_revision(notices, root_files.contains(&STANDARD_PACK_GOALS_FILE));
+            entries
+                .get(STANDARD_PACK_CATALOG_FILE)
+                .map_or(carried, |bytes| {
+                    carried.max(catalog_package_revision(bytes))
+                })
         }
         StepsFor::Build => content_revision(&entries),
     };
@@ -661,6 +678,21 @@ fn carry_catalog(
             Ok(false)
         }
     }
+}
+
+/// Workflow #477 CV-2 fix round 1 (register §1.508): whether the repository `repo`'s
+/// `schedule.json` names `catalog_business`, so that its rules take their business part from
+/// `pack-catalog.json` and `resource verify`'s zip carries that file as `standard-pack build`'s
+/// does ([`carry_catalog`]). A repository without the file, or with one its reader refuses (which
+/// `package bundle` refused already), is not.
+fn switched_root(repo: &Path) -> Result<bool, Outcome> {
+    let path = repo.join(STANDARD_PACK_SCHEDULE_FILE);
+    if !is_file(&path) {
+        return Ok(false);
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| read_failed(&path, &error, BundleProblem::RootFileDiffers))?;
+    Ok(standard_pack_schedule_takes_catalog(&bytes))
 }
 
 /// The index and copy checks (`bundle.ps1:316-380`); every difference is recorded. `notices`:
