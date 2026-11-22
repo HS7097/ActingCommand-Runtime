@@ -3438,7 +3438,9 @@ actingcommand_contract::outcome_codes! {
         /// first time (`operation` `check_idle_instances`). Keys `alias`, `idle_action`
         /// (`stop_emulator`, the stop not taken), `idle_wake_cause` (why the wake came), `task_id`
         /// (the task it named, with `task_due`), `at_unix_ms` (when it was queued). A
-        /// `device_state_observed` record under the instance and the same report line.
+        /// `device_state_observed` record under the instance and the same report line. #486
+        /// ASLEEP-3 (since 0.12.79; register §1.512): `next_eligible_unix_ms`, when the wake's hold
+        /// ends and the check takes the action again.
         StopWithheld => "instance_idle_stop_withheld": warning / none,
     }
 }

@@ -46021,6 +46021,218 @@ file, its `check` and build refuse the root, and its installer refuses a zip tha
 no Runtime of any release, and an earlier installer handles it as any root file (it sets it aside
 when it places a zip of 16 to 23 that carries none or replaces it with that zip's version 1 file).
 
+### 1.512 Slice #486 ASLEEP-3 (0.12.79): a stop withheld after a wake that no scheduled run answered expires by itself; a task its pack's closed schedule holds back wakes nothing at a start (board #486; the rules below are the coordinator's rulings 1 to 5 of 11-22, not the owner's words; coordinator work order `rd-1122/brief-486-asleep3.md`; on main `9491d936`, the v0.12.78 release)
+
+This section takes 1.512 (1.505 and 1.507 belong to two other slices of 0.12.79). It ships in
+0.12.79. [runtime-config.md](runtime-config.md) ("What wakes an idle instance": the paragraphs "The
+withheld action expires by itself", "A later position that names no time" and "At a start", new,
+and the sentences on the start's owed wake, the warning's members and "Across a start") and
+[scheduling/README.md](scheduling/README.md) ("An asleep instance", the bullets "A later position
+that names no time" and "At a start") are the contract.
+
+**What happened** (production, v0.12.78, 11-22, the first hour after its deploy; one instance whose
+idle action is `stop_emulator`). The deploy restarted the Runtime at 16:36 JST. The start restored
+the instance as closed and its first check woke it once (`instance_idle_action`, `queue_idle_wake`,
+`idle_wake_cause` `task_due`, naming a task). The startup package ended at 16:38:39; one second
+later the check recorded `instance_idle_stop_withheld` (`stop_emulator`, `task_due`, the same
+task), and from then on the schedule explanation showed that task `deferred`, eligibility true,
+reason `pack_schedule_closed` (its pack's schedule closed by the resource side, with no end). Half
+an hour later the emulator still ran: no scheduled run had been admitted on the instance.
+
+**The reading, checked in the code.**
+- *The withheld stop had no end of its own* (the coordinator's first reading: right). ASLEEP-1's
+  and ASLEEP-2's backstop (`UnansweredWake`, `withhold_stop`, `withhold_close`) ended only by an
+  admitted scheduled run, another idle configuration, a catalog's activation or a Runtime start.
+- *Why the task counted due* (the second reading: right, and not the start's alone). The predicate
+  is the idle plan's (`IdleDraft::add`): an eligible decision with no wake of its own later than
+  the evaluation is due. It was made for a hold of the instance (positions 1 and 2), which #484's
+  look ahead refines; on an instance that no hold holds, the evaluation's own closure answers the
+  later positions, and one that names no time (position 5's closed pack schedule with a row with no
+  end, whose deferral carries `next_wake_unix_ms` none; so do a suspended package, an owed rerun's
+  pacing, the quiet gate, a remedy round and an availability denial with no release) left the
+  decision eligible with no wake, which the plan counted due. The asleep instance at the start
+  (restored `stop_emulator`, not prepared, withdrawn `backend_selfcheck:unchecked`, judged as
+  available) was under no hold, so its pack-closed task counted due: the gates it left out are
+  every position of the order of the deferrals that names no time. Inside the startup package's
+  claim (a hold) the look ahead read position 5 and counted the task held back, so the plan read at
+  16:38:40 had no work and the check withheld the stop.
+- *And the start's own wake.* The record of the start could not be used (none, another start's,
+  or unreadable: the coordinator's reading of the module documentation, "Across a start"; which of
+  the three the ledger does not say here), so the start restored every configured instance closed
+  owing its wake at the start's time (review N-1, `restore_owed`); that wake comes at the first
+  check whatever the plan says (`wake`'s `wake_at <= now`), with `task_due` as its cause only
+  because the plan counted the task due. An instance restored woken (#405 O-2) owes its wake the
+  same way.
+- *None of it lies in another implementer's file*: the plan is built in
+  `crates/runtime-host/src/policy_host.rs` (`evaluate`, the closure and `held_ahead`) and
+  `schedule_explanation.rs`, the planner is `idle_action.rs`.
+
+**The rule.**
+- *The hold* (ruling 1; `crates/runtime-host/src/idle_action.rs`). An unanswered wake withholds the
+  action for its hold alone, counted from the first check that withholds it
+  (`UnansweredWake::withhold`, `hold_until_unix_ms`); strictly after its end it withholds nothing
+  (`hold_passed`), and the check takes the action as if no wake had been. The hold
+  (`unanswered_hold_ms`) is the larger of twice the wake lead in effect of the action the wake
+  brought the instance back from (`IdleConfig::wake_lead_ms`) and 10 minutes (`HOLD_FLOOR_MS`, fix
+  round 1), doubled for each consecutive unanswered wake of the instance before it (`streak`: a
+  wake that still stands unanswered when the next one is bound passes its streak on, counting
+  itself when it started what it woke), at most two hours (`HOLD_CAP_MS`, fix round 1). What
+  answers a wake (the admission of a scheduled task's run on the instance, another idle
+  configuration) clears it and so ends the streak; since fix round 2 a catalog's activation
+  (`switch_policy_catalog` no longer calls the planner; `forget_unanswered_wakes` is gone) and the
+  admission of a fact refresh reading (`PolicyHost::idle_latest_admission` through
+  `latest_task_admission`) answer nothing. A wake whose start met a hold (`wake_held`) is not kept,
+  as before. No key.
+- *The record* (ruling 2). `instance_idle_stop_withheld` keeps its code and members and gains the
+  optional value `next_eligible_unix_ms` (an existing key): the hold's end
+  (`IdlePlanner::hold_end`, `withheld_stop_outcome`). The stop after an expired hold is the
+  ordinary `instance_idle_action` (`run_idle_action`). No code added; the catalogue's description
+  and handling say so (the index checked current); `runtime-outcomes` stays 1, an optional value
+  being added within it.
+- *A later position that names no time* (ruling 3 and fix round 1's ruling 3; `policy_host.rs`,
+  `hold_back_untimed`). On an instance whose idle action can put it to sleep (`idle_sleepers`),
+  awake or asleep, and on every asleep one, a task candidate positions 3, 5, 6, 8a or 8 defer
+  with no time of their own (position 7, the quiet gate, always names its time; fix round 2 takes
+  it off the list), while no hold of positions 1 or 2 defers it, is put in `IdleHeldAhead`
+  with no time, so the plan counts it as #484's look ahead counts such a candidate behind a hold:
+  not due, no wake. "Eligible with no wake is due" stays for a hold of the instance itself. The
+  decision, its reason and wake, the not-run explanation and every dispatch are unchanged; position
+  4b's entry block still counts due (ASLEEP-1 fix round 2); an instance whose idle action is `none`
+  (or one it cannot take) and the fact refresh are as before. No code is compared: the position
+  that answered decides.
+- *The start's owed wake* (ruling 3; `idle_action.rs`, `check_with_due_task`, `wake`). A wake the
+  start owes (`owed_at_start`: restored woken, or with no usable record) waits for the start's
+  first plan (a check with none returns nothing) and comes as a sleeping instance's: for a task the
+  plan counts due, a switched action, or the plan's own time less the lead; the time the start owed
+  it at (`restore_owed`'s, or the time it was woken) is no planned wake, though the record keeps it
+  until a check replaces it. A reading alone never wakes it (fix round 1, ruling 1: review N-1's
+  wake at the start, kept in the first round, is dropped). The known limit, accepted: an instance
+  none of whose tasks can become selectable without a fresh reading sleeps until a task with a
+  real time (a clock, a cooldown's end) comes due.
+- *Its emulator in fact on* (ruling 3, the coordinator's ruling on the question). An instance so
+  restored after `stop_emulator` whose emulator state is on with its endpoint bound
+  (`IdleView::emulator_on`), not in use, for which no wake comes, gets the ordinary check's action
+  (`act_on_restored`: `decide` as on an active instance): taken, its emulator is stopped with its
+  wake from the plan and it owes the start nothing more; not taken (a task near, a pause, no plan
+  that counts its last work), it stays closed owing its wake, and only an unsupported action's one
+  warning passes (a rest is not taken there). No startup package runs first. `close_app` has no such
+  case: its closed state is the application's, which the emulator says nothing of. Fix round 2
+  (ruling 4): its readings are left out of that judgement (`IdlePlan::without_reading`) and of the
+  check on the action's key (`IdlePlanner::readings_apart`, `PendingIdleAction::readings_apart`,
+  `idle_step_stands`), so an instance for which only readings wait is stopped; an action that does
+  not stand on its key leaves it closed, owing its wake (`abandoned`).
+- *Across a restart* (ruling 4): the streak and the hold are forgotten (a new planner); carrying
+  them in `host.idle_state` is more than a line (a new member of its rows and of `kept_idle`).
+- *Neutral* (ruling 5): no instance, game or package is named in code.
+
+**The hold's values** (`idle.stop_emulator_wake_lead_ms` or `idle.close_app_wake_lead_ms` in
+effect): with a lead of 5 minutes or less (the factory lead, and 0) 10, 20, 40, 80, then 120
+minutes for each further unanswered wake; with a lead of 30 minutes 60, then 120; with the
+longest lead, one hour, 120 from the first.
+
+**The loop's bound.** With a plan that always counts a task due when the instance sleeps and none
+when it is awake, and no run ever admitted, a check every minute gives in two hours four stops
+(the first, then one 10, 20 and 40 minutes after each first withholding check) and four wakes,
+each wake one warning; the fourth hold, 80 minutes, outlasts the two hours, and after it one cycle
+every two hours. Since fix round 1 no setting lowers it (a lead of 0 gives the same); since fix
+round 2 neither do catalogs activated as often as placements come nor a reading's run admitted
+after every wake, which answer no wake: only a scheduled task's run admitted on the instance
+starts the doubling over. Had a reading's admission answered the wake, the same loop would have
+gone round every three minutes, 41 stops in two hours. On 11-21 the loop went round eleven times in
+sixteen minutes. Ending a hold cannot bring that back: each round needs a hold to pass.
+
+**What does not change** (the work order's list; fix round 1's ruling 3 relaxes the second item
+for exactly that rule). An instance whose idle action is `none` (it sleeps in no set and its plan
+reads no new entry). An instance never woken for nothing: its stops and wakes and their records
+and times are main's, but for a start's owed wake and, fix round 1, an instance whose only
+due-looking task a later position holds back with no time, which now becomes idle. ASLEEP-2's judgement of a sleeping instance (the
+evaluator's set and branch, the look ahead behind a hold, the benefit-held and pool-step rules) and
+its rule about a regenerating pool's next step. The wake lead. Every declared interface range; no
+configuration key.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The hold and its streak | `crates/runtime-host/src/idle_action.rs` (`HOLD_FIRST_LEADS`, `HOLD_FLOOR_MS`, `HOLD_CAP_MS`, `unanswered_hold_ms`, `UnansweredWake::{streak, hold_ms, hold_until_unix_ms, hold_passed, withhold}`, `withhold_stop`, `withhold_close`, `check_with_due_task`, `IdlePlanner::hold_end`) |
+| The record | `crates/runtime-host/src/host/idle.rs` (`withheld_stop_outcome`, `check_idle`); `crates/runtime-host/src/codes.rs` (`IdleCode::StopWithheld`'s text); `contracts/outcome-codes/runtime-host.json` |
+| A later position that names no time | `crates/runtime-host/src/policy_host.rs` (`hold_back_untimed`, `evaluate`'s closure) |
+| The start's owed wake and the emulator in fact on | `crates/runtime-host/src/idle_action.rs` (`check_with_due_task`, `wake`, `act_on_restored`); `crates/runtime-host/src/host/idle.rs` (the module text, `restore_idle_state`'s) |
+
+**Tests** (incident `#486 ASLEEP-3`: `crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate
+map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `asleep3_r8_a_start_restores_the_instance_closed_and_its_closed_pack_schedule_wakes_nothing` (1) | The incident's replay: an earlier start that keeps no idle state, then a start with the instance's emulator running restores it closed after `stop_emulator`; its task's package closed by an `EditPackSchedule` row with no end; the evaluation defers it `pack_schedule_closed` (eligibility true, no wake, not `instance_unavailable`); the plan not due, no task named; no wake record, no emulator start, one stop by the ordinary check, kept stopped with no wake; asleep a later evaluation still defers it and nothing wakes it |
+| `asleep3_r9_a_wake_no_run_answers_withholds_the_stop_for_its_hold_and_then_stops` (2) | ASLEEP-1's replay to the wake that started the emulator; no run admitted: the first check withholds the stop, its warning's `next_eligible_unix_ms` that check plus twice the lead; withheld at that end; one millisecond after it the ordinary stop (`instance_idle_action`), records stop, wake, warning, stop |
+| `asleep3_r10_an_awake_instance_whose_pack_schedule_is_closed_sleeps_and_wakes_when_it_reopens` (fix round 1, ruling 3) | The replay instance awake on its first start, its only task's package closed by a row with no end: deferred `pack_schedule_closed`, the plan not due and no wake, the host's own check stops the emulator; the schedule reopened: `instance_asleep_wake_due` at the evaluation's time, one wake `task_due`, its start starts the emulator and its startup package runs; awake, the task is dispatched |
+| `asleep3_h13_each_unanswered_wake_doubles_the_hold_up_to_its_cap_and_a_run_ends_the_streak` (3) | The planner, consecutive unanswered wakes, each withheld up to its end and the stop taken just after: 10, 20, 40, 80, 120 and 120 minutes with the factory lead and with a lead of 0; 60, 120 and 120 with a lead of 30 minutes; after three of them an admitted run: the next hold 10 minutes again |
+| `asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in_two_hours` (4) | The loop bound: a check a minute for two hours, a plan due whenever the instance sleeps and none while it is awake, no task's run admitted: four stops, four wakes, four warnings, with the factory lead, with a lead of 0, and (fix round 2) with a reading's run admitted after every wake read through `latest_task_admission`; read as before fix round 2 (the reading answering the wake) the same journal gives 41 stops, 40 wakes and no warning |
+
+Test 5: `asleep2_r3_the_loop_of_11_21_closes_once_and_queues_no_wake_for_an_untimed_gate` is
+unchanged; so are r1 and r5 (they check at the hold's end at the latest, which the strict end keeps
+withheld, and answer the wake by the day's task runs). Fix round 2 (ruling 1) adapts the three
+ASLEEP tests that pinned a catalog's activation answering the wake:
+`asleep_h9_a_wake_no_run_answers_keeps_the_emulator_running_and_warns_once` loses its case "an
+activation" (the planner has no such end any more), `asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_warns_once`
+replaces its activation case by the hold's end (withheld within it, the close taken past it), and
+`asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wake` (its name kept)
+now asserts that after the activation the check at the hold's end still withholds the stop and the
+check just past it stops the emulator. Adapted (test 6), each because ruling 3 changes what it pinned, the start's owed wake at the
+start's time: `gate_idle1p`'s `idle1p_l3_an_unknown_state_at_start_is_not_treated_as_open` and
+`idle1p_m2_a_record_an_older_build_outlived_leaves_the_instance_closed` (no wake before the plan;
+with it, X's running emulator stopped by the ordinary check with its wake from the plan),
+`idle1p_o2_a_restart_while_the_wake_is_queued_runs_the_startup_package_after_it` (its two checks
+take a plan with a task due), `idle1p_m1_a_stop_emulator_wake_a_pause_holds_queues_the_startup_package_after_the_resume`
+(its start's check takes a plan whose own time has come) and
+`idle1p_o2_a_woken_instance_is_kept_closed_until_its_wakes_claims_end` (its restart's check takes a
+plan whose time has come); `gate_484_idle_w2`'s `idle_w2_the_wake_says_why_it_came_the_first_that_holds`
+(the owed and the woken case: no wake with no plan nor for a reading alone, then `owed_at_start`
+at the plan's own time). Fix round 1 (ruling 1) adapts the two N-1 tests of `gate_idle1p`, which
+pinned review N-1's wake at the start for a reading alone:
+`idle1p_n1_the_wakes_startup_claim_waits_behind_a_pause_or_the_install_hold` (that plan now wakes
+nothing; the wake comes with a plan that has a task due, its startup claim behind the pause as
+before), and the `stop_emulator` one, which fix round 2 (rulings 4 and 5) renames
+`idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading`
+(retired name in `ci/retired-gates.toml`): the start's first plan, the reading left out, stops X's
+running emulator with no wake, and the next plan keeps it closed with its proper wake; the two
+helpers only it used (`await_startup_claim_end`, `await_release`) go with its old body.
+
+**Fix round 2** (the coordinator's rulings 1 to 7 on the independent review `rd-1122/review-1869.md`).
+1: a catalog's activation answers no wake and clears neither the hold nor its streak. 2: only the
+admission of a scheduled task's run answers a wake; a reading's does not. 3: the loop test runs
+with a reading admitted after every wake (an activation no longer reaches the planner). 4: the
+ordinary check of a restored instance leaves readings out. 5: the N-1 test renamed. 6: position 7
+off the list of gates that name no time (its call in `hold_back_untimed`'s sites removed). 7: "At
+deploy" below corrected.
+
+**Fix round 1** (the coordinator's rulings 1 to 3 on the first round's report). Ruling 1: the
+reading-only wake at a start, which the first round kept for review N-1, is dropped, with its known
+limit written above and in the contract. Ruling 2: the hold has a floor of 10 minutes and a fixed
+cap of two hours, so the loop bound depends on no setting. Ruling 3: an awake instance's idle plan
+uses the same judgement as an asleep one's: a candidate a later position holds back with no time
+is not due on any instance whose idle action can sleep; when the gate opens the evaluation selects
+the task, and a sleeping instance is woken by the rule that exists. The replay of 11-21
+(`asleep2_r3`) is unchanged.
+
+**At deploy.** No new key: nothing to configure. The deploy from 0.12.78 restarts the Runtime,
+which forgets every hold: an instance whose stop or close v0.12.78 was withholding is, after the
+restart, an awake instance like any other, stopped or closed by the first plan that allows it, not
+after one more hold. From then on a wake no scheduled task's run answers withholds the action for
+its hold (10 minutes from the first withholding check with the factory lead, never less; the
+warning names its end), and neither catalog activations nor readings shorten the doubling. A start
+that cannot use its record (not this deploy's: v0.12.78 leaves a record this build reads) no
+longer wakes every configured instance at once: each waits for the first plan, a reading alone
+wakes none, and one restored after `stop_emulator` whose emulator runs is stopped by the ordinary
+check if the plan allows, its readings left out. An instance, awake or asleep, whose only
+due-looking task a closed pack schedule, a suspension or another untimed later gate holds back is
+neither kept awake nor woken for it: production instances whose packs the resource side holds
+closed now idle. A rollback to v0.12.78 meets nothing kept on disk (the hold and its streak are
+memory only, `host.idle_state` keeps its shape) and brings back the withheld stop with no end. In
+the release notes' language:
+唤醒后一直没有排程任务被准入时，停模拟器（或关应用）不再一直扣着：从第一次扣下起按住一段时间（取唤醒提前量的两倍和 10 分钟中较大的，连续每多一次没人接的唤醒翻一倍，最多 2 小时），到时照常停，警告 `instance_idle_stop_withheld` 里新带 `next_eligible_unix_ms` 说明按到几点；只有排程任务的运行被准入才清零，激活目录、读数运行都不算。能闲置的实例上（醒着或睡着），被任务包排程关闭（没有结束时间）、暂停中的包这类没有时刻的门挡住的任务不再算到期：醒着的会照常闲置，睡着的不会被它唤醒；门一开，调度就选中它、照常唤醒。Runtime 启动时恢复成关闭、欠着唤醒的实例，要等启动后第一次评估，只有真能派的任务（或计划里的唤醒时刻）才唤醒它，单是读数到期不唤醒；模拟器其实开着的停模拟器实例，由普通的闲置检查直接停掉，不先跑启动包。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -74,7 +74,12 @@
 //!   when it can be dispatched now: one a pause or a held key defers while a later gate (a spent
 //!   budget, a backoff, the activity interval among them) would hold it back wakes nothing, so an
 //!   evaluation inside the action's own claim, a client's run or a start's preparation no longer
-//!   wakes the application the action just closed. An instance
+//!   wakes the application the action just closed. #486 ASLEEP-3 (0.12.79, register §1.512,
+//!   ruling 2): the one `instance_idle_stop_withheld` of a wake no scheduled run answered says when
+//!   its hold ends (`next_eligible_unix_ms`: from the first check that withheld the action, the
+//!   larger of twice the wake lead in effect and 10 minutes, doubled for each consecutive unanswered
+//!   wake of the instance before it, at most two hours); the action taken after it is an ordinary
+//!   `instance_idle_action`. An instance
 //!   whose action in effect cannot bring it back (no startup package, or for `stop_emulator` no
 //!   configured emulator start) never acts and gets one `instance_idle_action_unsupported`
 //!   warning (`member` naming what it lacks) per action in effect, not a silent skip.
@@ -112,7 +117,16 @@
 //!   (0.12.25): a woken instance stays in the record, closed and woken, until its startup
 //!   package has run, so a restart while the startup package waits queued in memory (behind a
 //!   pause or a deploy's hold) wakes it again. The configured emulator start at start leaves an
-//!   emulator the action holds stopped to its wake.
+//!   emulator the action holds stopped to its wake. #486 ASLEEP-3 (0.12.79, register §1.512,
+//!   ruling 3; production v0.12.78 on 11-22: a deploy's start restored an instance closed whose
+//!   emulator in fact ran, and its first check woke it for a task its pack's closed schedule held
+//!   back): a wake the start owes (restored woken, or with no usable record) waits for the start's
+//!   first plan and comes as a sleeping instance's (a task the evaluation, judged with every gate
+//!   the dispatch applies, counts due; a switched action; the plan's own time), never at the time
+//!   the start owed it at, and (fix round 1) never for a reading alone. One restored after
+//!   `stop_emulator` whose emulator in fact runs, and for which no wake comes, gets the ordinary
+//!   check's action (its emulator stopped, with its wake from the plan) with no startup package
+//!   first.
 //! - **A startup package queued behind a pause** (W2-B, 0.12.26; review W1-6 M1): the same record
 //!   keeps each instance whose startup package an emulator start (an operator's `start` /
 //!   `restart`, or a configured start) queued behind a scheduling pause, from the hand-off until
@@ -207,6 +221,10 @@ pub(super) struct PendingIdleAction {
     /// IDLE-3 (#447): the gap the step is taken from (`idle_action::action_min_gap_ms`; a rest's
     /// `idle.return_home_min_gap_ms`), which the latest plan is held to again on the key.
     min_gap_ms: u64,
+    /// #486 ASLEEP-3 fix round 2 (register §1.512, ruling 4): the ordinary check's action on an
+    /// instance the start restored closed, which the latest plan is held to on the key with its
+    /// reading left out, as it was decided (`IdlePlanner::readings_apart`).
+    readings_apart: bool,
     /// The game and the server the instance's policy identity names, when one does.
     identity: Option<(String, String)>,
     /// Shared by the claim's request and the action's own requests.
@@ -332,14 +350,24 @@ fn wake_outcome(
 /// the idle check did not stop the instance's emulator again, no scheduled run having been
 /// admitted on the instance since. #486 ASLEEP-2 (register §1.506, ruling 3): `action`, the action
 /// the wake brought the instance back from and the check did not take again (`stop_emulator`, or
-/// `close_app`).
-fn withheld_stop_outcome(alias: &str, action: IdleAction, withheld: &WithheldStop) -> Outcome {
+/// `close_app`). #486 ASLEEP-3 (register §1.512, ruling 2): `hold_end`, when the hold of the wake
+/// ends and the check takes that action again (`next_eligible_unix_ms`).
+fn withheld_stop_outcome(
+    alias: &str,
+    action: IdleAction,
+    withheld: &WithheldStop,
+    hold_end: Option<u64>,
+) -> Outcome {
     let outcome = Outcome::new(IdleCode::StopWithheld)
         .operation(IdleLocation::Check)
         .alias(alias)
         .idle_action(action.as_str())
         .idle_wake_cause(withheld.cause)
         .at_unix_ms(withheld.woken_at_unix_ms);
+    let outcome = match hold_end {
+        Some(at) => outcome.next_eligible_unix_ms(at),
+        None => outcome,
+    };
     match withheld.task_id.as_deref() {
         Some(task_id) => outcome.task_id(task_id),
         None => outcome,
@@ -506,12 +534,17 @@ impl HostShared {
             // instance's emulator, the first time the check did not stop that emulator again
             // because no scheduled run has been admitted on the instance since (#486 ASLEEP-2,
             // ruling 3: or of a wake whose startup package started its application, the first time
-            // the check did not close it again). A record that fails is this instance's failure
-            // (#419).
+            // the check did not close it again). #486 ASLEEP-3 (register §1.512, ruling 2): with
+            // when its hold ends. A record that fails is this instance's failure (#419).
             if let Some((withheld_action, withheld)) = planner.take_withheld(&alias)
                 && let Err(error) = self.record_idle(
                     self.idle_links(instance_id)?,
-                    withheld_stop_outcome(&alias, withheld_action, &withheld),
+                    withheld_stop_outcome(
+                        &alias,
+                        withheld_action,
+                        &withheld,
+                        planner.hold_end(&alias),
+                    ),
                 )
             {
                 self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
@@ -519,6 +552,8 @@ impl HostShared {
             let Some(step) = step else {
                 continue;
             };
+            // #486 ASLEEP-3 fix round 2 (ruling 4): an action decided with the readings left out.
+            let readings_apart = planner.readings_apart(&alias);
             let pending = |work: IdleWork,
                            next_due_unix_ms: Option<u64>,
                            wake_at_unix_ms: Option<u64>,
@@ -531,6 +566,7 @@ impl HostShared {
                     next_due_unix_ms,
                     wake_at_unix_ms,
                     min_gap_ms,
+                    readings_apart,
                     identity: identities.get(&alias).cloned(),
                     causation_id: self
                         .events
@@ -833,9 +869,12 @@ impl HostShared {
     ///   build wrote under its owner epoch is one), the start does not know what the action left:
     ///   every such instance whose action in effect could have run on it (not `none`, its startup
     ///   package configured, and for `stop_emulator` its emulator start) comes back idle, closed
-    ///   rather than open, owing its wake at the start's time (review N-1): the start's first idle
-    ///   check wakes it once, its startup package waiting behind any pause, and the next plan
-    ///   closes it again with its wake;
+    ///   rather than open, owing its wake to the start (review N-1; the record keeps the start's
+    ///   time): #486 ASLEEP-3 (register §1.512, ruling 3), the first idle check with the start's
+    ///   first plan wakes it as a sleeping instance is woken (a task due, a switched action, the
+    ///   plan's time; a reading alone never), its startup package waiting behind any pause; one
+    ///   restored after `stop_emulator` whose emulator in fact runs gets the ordinary check's action
+    ///   instead when no wake comes;
     /// - on the ledger's first start nothing was closed.
     ///
     /// W2-B (0.12.26): that current record also names the instances whose startup package an
@@ -954,12 +993,13 @@ impl HostShared {
                 }
             }
             None => {
-                // Review N-1: each such instance owes its wake at the start, so the start's first
-                // idle check brings it back once through its startup package (which waits behind
-                // any pause or install hold, as after every wake), and the next plan closes it
-                // again with its proper wake. Without it, an instance whose only work waits for a
-                // status reading that expired meanwhile would get no wake at all.
-                // #484 IDLE-W2: a wake the start owes (`owed_at_start`).
+                // Review N-1: each such instance owes its wake to the start. #486 ASLEEP-3 (register
+                // §1.512, ruling 3; fix round 1, ruling 1): the start's first plan decides it as for a
+                // sleeping instance (a task due, a switched action, the plan's time; a reading alone
+                // never), its startup package waiting behind any pause or install hold as after
+                // every wake. The known limit: an instance none of whose tasks can be selected
+                // without a fresh reading sleeps until a task with a real time comes due. #484
+                // IDLE-W2: a wake the start owes (`owed_at_start`).
                 let started_at_unix_ms = self.runtime_clock_sample()?.unix_ms;
                 for (alias, (action, wakeable)) in &configured {
                     if *action != IdleAction::None && *wakeable {
@@ -1647,6 +1687,13 @@ impl HostShared {
         let (plan, counted) = {
             let policy = lock(self.policy()?, IdleLocation::Action)?;
             (policy.idle_plan(alias), policy.idle_runs_counted(alias))
+        };
+        // #486 ASLEEP-3 fix round 2 (register §1.512, ruling 4): the ordinary check's action on an
+        // instance the start restored closed is held to the plan's tasks alone, as it was decided.
+        let plan = if pending.readings_apart {
+            plan.map(crate::idle_action::IdlePlan::without_reading)
+        } else {
+            plan
         };
         let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
         Ok(crate::idle_action::stands_on_key(
